@@ -219,6 +219,22 @@ synthetic entry (empty GECOS) whose UID it derives from the name — the same UI
 | Members of the privileged groups `sudo`, `admin`, `wheel` | NSS `getent group`; Himmelblau's OIDC provider never synthesizes groups, and `gpasswd` removes members from `/etc/group` |
 | Package scripts | no user or group lookups |
 
+## Login history
+
+Off by default (ADR 0037 decision 6, plan M8d decisions 14–20). An organization administrator switches it on under
+*Login & privileges* → *Login history* and chooses how long entries are kept (7–365 days, default 90); the setting
+shows the privacy notice — switch it on only with the agreement of the works council or the equivalent body.
+
+- **What is recorded.** While it is on, the agent reports every session start of a directory user (the bundle's
+  login resource carries `report_every_session`): user name and session start, once per logind session. While it is
+  off, the agent reports a user at most once per 24 hours, which only refreshes `device_user_seen` (lock coverage).
+- **Where to see it.** The device page's *Logins* tab (`GET /api/v1/devices/{id}/logins`) lists user and time,
+  newest first, searchable and filterable by user. Readers of the organization see it; reading it is not audited.
+- **Retention.** The worker deletes entries older than the configured days every 6 hours and records
+  `retention.purged` (store `device_login_event`, the number deleted, the cutoff) when it deleted something.
+- **Switching it off** asks for confirmation and deletes every recorded login of the organization at once
+  (`settings.login_changed` with `login_history_deleted`). Backups may keep deleted rows for their retention.
+
 ## Device reports
 
 The device detail in the portal shows the latest login and sudo report of the agent (*Latest reports of the agent*);

@@ -278,6 +278,7 @@ fleetd-deb: ## Build the fleetd Debian package fleet-osquery (amd64) with fleetc
 agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd, sign them with the development release key and upload and publish them
 	@test -n "$(filter-out 0.0.0-dev,$(VERSION))" || { echo "usage: make agent-release VERSION=x.y.z [TAGS=...]"; exit 1; }
 	@test -z "$(REVOKE_TAGS)" || { echo "agent-release never builds paddock-revoke with REVOKE_TAGS ($(REVOKE_TAGS))"; exit 1; }
+	@test -z "$(filter paddock_testbroken_supervisor,$(subst $(comma), ,$(TAGS)))" || { echo "agent-release never builds a broken supervisor (TAGS=$(TAGS))"; exit 1; }
 	$(MAKE) --no-print-directory deb VERSION=$(VERSION) TAGS='$(TAGS)'
 	$(MAKE) --no-print-directory fleetd-deb
 	go run ./test/acceptance/cmd/agentrelease --version $(VERSION) --publish \
@@ -332,8 +333,9 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 dev-seed: ## Create organizations acme and globex and assign the dev users
 	go run ./test/acceptance/cmd/devseed
 
-# Guard against hangs; suite ~55 min since M6. Slower machines (CI runners) raise ACCEPTANCE_TIMEOUT.
-ACCEPTANCE_TIMEOUT ?= 75m
+# Guard against hangs; the suite takes ~85 min on a development machine and ~82 min on a GitHub runner since M8x
+# (measured 2026-10-18). Keep at least 20 % headroom when gates are added.
+ACCEPTANCE_TIMEOUT ?= 120m
 
 # paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.
 PADDOCKCTL_LDFLAGS = -s -w -X main.version=$(VERSION)
@@ -971,3 +973,7 @@ scan-images: image image-compiler image-pgbackrest ## trivy: OS packages and Go 
 		docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(TRIVY_CACHE):/root/.cache/trivy \
 			$(TRIVY_IMAGE) image $(TRIVY_ARGS) $$img || exit 1; \
 	done
+
+.PHONY: upstream-check
+upstream-check: ## Compare the pins of versions.env, the Himmelblau default, fleetd and the Fleet NVD release with upstream
+	go run ./tools/upstreamwatch check

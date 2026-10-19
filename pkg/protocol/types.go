@@ -93,6 +93,13 @@ type AgentUpdate struct {
 	SHA256  string `json:"sha256"`  // hex SHA-256 of the binary
 	Size    int64  `json:"size"`    // bytes
 	Minisig string `json:"minisig"` // standard base64 of the .minisig file
+	// Requested is set when an administrator asked this device to install the release now (plan M8d decision 27):
+	// the offer ignores the rollout wave, and the agent ignores its update policy for it. Older agents ignore it. A
+	// device that already runs the release gets its own version marked requested while the request is open, so that
+	// it may upgrade paddock-supervisor and fleetd under the manual policy.
+	Requested bool `json:"requested,omitempty"`
+	// RequestedAt is when the request was made; the agent handles each request once.
+	RequestedAt *time.Time `json:"requested_at,omitempty"`
 }
 
 // BundleRef points to a bundle newer than the applied one.
@@ -172,6 +179,45 @@ const (
 	EventTamperServiceStopped = "tamper.service_stopped"
 	// Update management (plan M5b decision 6): one finished run of regular or security updates.
 	EventUpdatesRun = "updates.run"
+	// Supervisor package update (plan M8d decision 33): the outcome of one installation of the current release's
+	// paddock-supervisor package; only sent by agents that received supervisor_packages in a bundle.
+	EventAgentSupervisorUpdated = "agent.supervisor_updated"
+	// Uninstall (plan M8d decision 40): the final report of `paddockd uninstall`, sent once after the command
+	// uninstall; the device is retired by it.
+	EventAgentUninstalled = "agent.uninstalled"
+)
+
+// Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
+// the removal did not start.
+const (
+	UninstallCompleted = "completed"
+	UninstallPartial   = "partial"
+	// UninstallHelperFailed: the agent could not start the removal; nothing was removed.
+	UninstallHelperFailed = "helper_failed"
+)
+
+// MaxUninstallSteps bounds the steps of EventAgentUninstalled.
+const MaxUninstallSteps = 32
+
+// AgentUninstalled is the data of agent.uninstalled.
+type AgentUninstalled struct {
+	CommandID  string            `json:"command_id"`
+	Mode       string            `json:"mode"`
+	Outcome    string            `json:"outcome"`
+	LocalAdmin string            `json:"local_admin"` // removed, kept, kept_last_admin
+	TPM        string            `json:"tpm"`         // cleared, requested_at_next_boot, skipped_in_use, not_requested, failed
+	Steps      map[string]string `json:"steps"`       // step name → done, skipped or failed:<message>
+}
+
+// Outcomes of EventAgentSupervisorUpdated.
+const (
+	SupervisorOutcomeUpdated       = "updated"
+	SupervisorOutcomeInstallFailed = "install_failed"
+	SupervisorOutcomeRolledBack    = "rolled_back"
+	// SupervisorOutcomeRolledBackUnreachable: the new supervisor ran stable, but the agent could not reach the server
+	// within the wait, so the helper rolled back; the agent retries the version later (design contract 8, ADR 0037
+	// amendment 2026-10-18).
+	SupervisorOutcomeRolledBackUnreachable = "rolled_back_unreachable"
 )
 
 // Kinds and results of UpdatesRun.
@@ -216,6 +262,8 @@ var EventTypes = []string{
 	EventRevocationTrustPinnedTOFU, EventRevocationRefused,
 	EventTamperServiceStopped,
 	EventUpdatesRun,
+	EventAgentSupervisorUpdated,
+	EventAgentUninstalled,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass
@@ -228,12 +276,15 @@ const (
 	DiskUnmanaged     = "unmanaged"       // encrypted, but not installed with the Paddock autoinstall
 	DiskTPMMissing    = "tpm_missing"     // no TPM 2.0: the disk keeps its passphrase
 	DiskTPMPINMissing = "tpm_pin_missing" // the boot PIN was skipped: the disk keeps its passphrase
-	DiskEscrowPending = "escrow_pending"  // recovery key, a header or the keyslot set not yet as required
-	DiskCompliant     = "compliant"       // TPM2+PIN and recovery key only, escrowed with the current header of every volume
+	// DiskUnlockModeMismatch: the disk is enrolled for the other unlock mode than its policy (plan M8d decision 48).
+	DiskUnlockModeMismatch = "unlock_mode_mismatch"
+	DiskEscrowPending      = "escrow_pending" // recovery key, a header or the keyslot set not yet as required
+	DiskCompliant          = "compliant"      // the mode's TPM keyslot and the recovery key only, escrowed with the current header of every volume
 )
 
 // DiskStates are the states in DiskHealth.
-var DiskStates = []string{DiskNotEncrypted, DiskUnmanaged, DiskTPMMissing, DiskTPMPINMissing, DiskEscrowPending, DiskCompliant}
+var DiskStates = []string{DiskNotEncrypted, DiskUnmanaged, DiskTPMMissing, DiskTPMPINMissing, DiskUnlockModeMismatch,
+	DiskEscrowPending, DiskCompliant}
 
 // DiskHealth is the disk encryption of the device in the check-in health (health.disk, plan M4b decision 8).
 // State, LUKSVersion, Tokens and Keyslots are those of the root volume; Volumes lists every LUKS volume, the root
@@ -245,6 +296,12 @@ type DiskHealth struct {
 	Keyslots    int          `json:"keyslots"`
 	Volumes     []DiskVolume `json:"volumes,omitempty"`
 	Unresolved  []string     `json:"unresolved,omitempty"`
+	// UnlockMode is the unlock mode the agent applied (tpm_pin or tpm_only, plan M8d decision 48); "" from older
+	// agents.
+	UnlockMode string `json:"unlock_mode,omitempty"`
+	// BootSeparate tells, in state not_encrypted only, whether /boot is a file system of its own (the layout an
+	// in-place encryption could convert, ADR 0038).
+	BootSeparate *bool `json:"boot_separate,omitempty"`
 }
 
 // DiskVolume is one LUKS volume in health.disk. Escrowed is true when the server stored a header of its current

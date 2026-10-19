@@ -57,3 +57,13 @@ UEFI with Secure Boot and a TPM 2.0.
 3. The agent enrolls the device with `/etc/paddock/enroll.json` (and deletes it), creates a recovery key, escrows
    the recovery key and the LUKS header, and then removes the temporary passphrase. From the next boot on, the
    device asks only for the boot PIN.
+
+## Encrypting an installed device
+
+Paddock does not encrypt a running device in place (ADR 0038). A device that is not encrypted — the portal shows
+*Not encrypted* and the attention page *Disk encryption not compliant* — is encrypted by reinstalling it with the
+Paddock autoinstall after a backup of its data; the same applies to a device encrypted outside Paddock (*Encrypted,
+not managed*), whose recovery key and header Paddock does not hold. In-place conversion is planned for devices whose
+`/boot` is a file system of its own (the disk card names such devices; milestone M8e). Never run `cryptsetup
+reencrypt` by hand on a Paddock device: the agent would report the new keyslots as tampering, and no recovery key or
+header of the result would be escrowed.

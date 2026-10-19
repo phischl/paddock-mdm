@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	domaindevice "github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
@@ -178,7 +179,7 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	issued := seq - 1 // the value the device should have sent
 	hb := ingest.Heartbeat{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: g.d.Now().UTC(),
-		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion,
+		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion, Arch: boundedArch(req.Arch),
 		SchemaVersions: boundedSchemaVersions(req.SchemaVersions), Health: req.Health,
 		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq,
 		CloneSuspected: dev.headers.Seq < issued-1, DeliveredCommands: delivered,
@@ -302,7 +303,12 @@ func validateResult(req protocol.CommandResult) error {
 }
 
 // agentUpdate offers the release of the current rollout to an eligible device (plan M2b decision 21): its rollout
-// bucket is inside the current wave, it reports another agent version and there is an artifact for its arch.
+// bucket is inside the current wave, it reports another agent version and there is an artifact for its arch. A device
+// an administrator asked to update now (plan M8d decision 27) is offered the release outside its wave, marked
+// requested. A device that already runs the release gets it marked requested while its request is open, so that it
+// may upgrade paddock-supervisor and fleetd under the manual policy (review finding 5); the agent never stages its
+// own version. The request is read only for a device that does not run a newer agent, so devices ahead of the offer
+// cost no second Valkey round trip.
 func (g *gateway) agentUpdate(r *http.Request, dev device, req protocol.CheckinRequest) (*protocol.AgentUpdate, error) {
 	if g.d.Artifacts == nil || req.Arch == "" {
 		return nil, nil
@@ -311,7 +317,22 @@ func (g *gateway) agentUpdate(r *http.Request, dev device, req protocol.CheckinR
 	if err != nil || !ok {
 		return nil, err
 	}
-	art, ok := offer.For(dev.id, req.Arch, req.AgentVersion)
+	current := req.AgentVersion == offer.Version
+	if !offer.Newer(req.AgentVersion) && !current {
+		return nil, nil
+	}
+	version, at, requested, err := g.d.Cache.UpdateRequest(r.Context(), dev.id)
+	if err != nil {
+		return nil, err
+	}
+	requested = requested && version == offer.Version
+	var art agentrelease.Artifact
+	if current {
+		art, ok = offer.Artifacts[req.Arch]
+		ok = ok && requested && offer.Status != agentrelease.RolloutHalted
+	} else {
+		art, ok = offer.For(dev.id, req.Arch, req.AgentVersion, requested)
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -319,7 +340,11 @@ func (g *gateway) agentUpdate(r *http.Request, dev device, req protocol.CheckinR
 	if err != nil {
 		return nil, err
 	}
-	return &protocol.AgentUpdate{Version: offer.Version, URL: url, SHA256: art.SHA256, Size: art.Size, Minisig: art.Minisig}, nil
+	out := &protocol.AgentUpdate{Version: offer.Version, URL: url, SHA256: art.SHA256, Size: art.Size, Minisig: art.Minisig}
+	if requested {
+		out.Requested, out.RequestedAt = true, &at
+	}
+	return out, nil
 }
 
 func (g *gateway) bundleRef(r *http.Request, dev device, applied int64) (*protocol.BundleRef, error) {
@@ -380,6 +405,14 @@ func (g *gateway) events(w http.ResponseWriter, r *http.Request) {
 
 // boundedSchemaVersions keeps at most 16 plausible schema versions (1–1000) of a check-in; anything else a device
 // sends is dropped.
+// boundedArch keeps a known architecture only; anything else is stored as unknown ("").
+func boundedArch(arch string) string {
+	if arch == protocol.ArchAMD64 || arch == protocol.ArchARM64 {
+		return arch
+	}
+	return ""
+}
+
 func boundedSchemaVersions(in []int) []int {
 	out := []int{}
 	for _, v := range in {

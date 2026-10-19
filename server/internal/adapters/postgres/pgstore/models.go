@@ -177,19 +177,33 @@ type ChangeSet struct {
 	Plan           json.RawMessage
 }
 
+type ComponentTarget struct {
+	Component string
+	Version   string
+	Source    string
+	UpdatedAt time.Time
+}
+
 type Device struct {
-	ID                uuid.UUID
-	OrganizationID    uuid.UUID
-	Hostname          string
-	State             string
-	BundleSeq         int64
-	HardwareUuid      *string
-	MachineID         *string
-	OsRelease         json.RawMessage
-	EnrollmentTokenID uuid.NullUUID
-	EnrolledAt        time.Time
-	StateChangedAt    time.Time
-	LoginsSuspended   bool
+	ID                          uuid.UUID
+	OrganizationID              uuid.UUID
+	Hostname                    string
+	State                       string
+	BundleSeq                   int64
+	HardwareUuid                *string
+	MachineID                   *string
+	OsRelease                   json.RawMessage
+	EnrollmentTokenID           uuid.NullUUID
+	EnrolledAt                  time.Time
+	StateChangedAt              time.Time
+	LoginsSuspended             bool
+	AgentUpdateRequestedVersion *string
+	AgentUpdateRequestedAt      *time.Time
+	UninstallRequestedAt        *time.Time
+	UninstallMode               *string
+	UninstallCommandID          uuid.NullUUID
+	UninstalledAt               *time.Time
+	RetiredReason               *string
 }
 
 type DeviceAlert struct {
@@ -224,12 +238,16 @@ type DeviceEventSeen struct {
 }
 
 type DeviceGroup struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	Name           string
-	Description    string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	Name               string
+	Description        string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	StalenessWarningH  *int32
+	StalenessCriticalH *int32
+	AgentUpdatePolicy  *string
+	DiskUnlockMode     *string
 }
 
 type DeviceGroupMember struct {
@@ -256,6 +274,13 @@ type DeviceInventoryRef struct {
 	OsVersion      string
 	FleetdVersion  string
 	SyncedAt       time.Time
+	HardwareVendor string
+	HardwareModel  string
+	HardwareSerial string
+	CpuBrand       string
+	CpuCores       int32
+	MemoryBytes    int64
+	DiskTotalBytes int64
 }
 
 type DeviceLoginAssignment struct {
@@ -263,6 +288,22 @@ type DeviceLoginAssignment struct {
 	DeviceID       uuid.UUID
 	SubjectType    string
 	SubjectID      uuid.UUID
+}
+
+type DeviceLoginEvent struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Username       string
+	At             time.Time
+}
+
+type DeviceOwner struct {
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	UserID         uuid.UUID
+	AssignedAt     time.Time
+	AssignedBy     uuid.NullUUID
 }
 
 type DeviceStatus struct {
@@ -278,6 +319,8 @@ type DeviceStatus struct {
 	PresumedSelfLockedAt *time.Time
 	PresumedLostAt       *time.Time
 	AgentVersionKey      *string
+	Arch                 string
+	ComponentsOutdated   []string
 }
 
 type DeviceUserSeen struct {
@@ -428,6 +471,10 @@ type OrganizationLoginSetting struct {
 	RotateAfterRevealHours *int32
 	NoticeText             string
 	BootPinMinLength       int32
+	LoginHistoryEnabled    bool
+	LoginHistoryDays       int32
+	DiskUnlockMode         string
+	LoginHistoryEnabledAt  *time.Time
 }
 
 type OrganizationManagedFileSetting struct {
@@ -447,6 +494,7 @@ type OrganizationUpdateSetting struct {
 	StalenessCriticalH    int32
 	UpdatedAt             time.Time
 	UpdatedBy             uuid.NullUUID
+	AgentUpdatePolicy     string
 }
 
 type OsvSyncState struct {

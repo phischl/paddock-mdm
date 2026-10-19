@@ -156,8 +156,10 @@ type compileTarget struct {
 	state     string
 	seq       int64
 	suspended bool
-	v2        bool // the agent reports bundle schema 2
-	forced    bool // a forced state change targets the device (plan M6c decision 19)
+	v2        bool   // the agent reports bundle schema 2
+	agent     string // the agent version of the last check-in
+	forced    bool   // a forced state change targets the device (plan M6c decision 19)
+	request   updateRequest
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -194,7 +196,13 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Inventory, err = c.inventory(ctx, q); err != nil {
 			return err
 		}
+		if keys.Supervisor, err = supervisorPackages(ctx, q); err != nil {
+			return err
+		}
 		if keys.Updates, err = loadUpdates(ctx, q); err != nil {
+			return err
+		}
+		if keys.Disk, err = loadDisk(ctx, q); err != nil {
 			return err
 		}
 		rows, err := q.ListCompileTargets(ctx, ids)
@@ -207,7 +215,8 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		}
 		for _, row := range rows {
 			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
-				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID]}
+				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
+				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
 			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
@@ -345,6 +354,8 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	var omitted []omittedEntry
 	var v2 v2Trust
 	var updatesSection *bundle.UpdatesSpec
+	var diskSection *bundle.DiskSpec
+	agent := bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}
 	if t.v2 {
 		v2 = keys
 		id, err := identity.get(ctx)
@@ -360,14 +371,19 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		resources = append(resources, extra...)
 		if keys.Updates != nil {
 			updatesSection = keys.Updates.section(groups)
+			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
+		}
+		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.id, t.agent, t.request, c.now())
+		if keys.Disk != nil {
+			diskSection = keys.Disk.section(groups)
 		}
 		bundle.SortResources(resources)
 	}
 	b := bundle.Bundle{
 		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
-		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources, Keys: v2.Keys,
-		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection,
+		Agent: agent, Resources: resources, Keys: v2.Keys,
+		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection, Disk: diskSection,
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -398,8 +414,14 @@ type v2Trust struct {
 	DMS        *bundle.DMS        `json:"-"` // per organization, not part of the reconcile digest
 	// Inventory is the same for every organization; a new fleetd package recompiles every device (reconcile digest).
 	Inventory *bundle.Inventory `json:"inventory"`
+	// Supervisor are the supervisor packages of the current rollout and the share of devices its waves reached; a new
+	// wave recompiles every device (reconcile digest).
+	Supervisor *supervisorRelease `json:"supervisor"`
 	// Updates are the organization's update settings and holds (plan M5b decision 4), not part of the digest.
 	Updates *orgUpdates `json:"-"`
+	// Disk is the organization's disk unlock mode and its groups' overrides (plan M8d decision 46), not part of the
+	// digest.
+	Disk *orgDisk `json:"-"`
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap

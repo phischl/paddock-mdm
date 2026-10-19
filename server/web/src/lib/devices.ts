@@ -21,6 +21,12 @@ export const contactFilter: ListFilter = {
 }
 
 /** The security update filter (plan M7c amendment 2026-10-10): the overview's "Security updates overdue" links to it. */
+/** The component filter of the device list (plan M8d decision 56). */
+export const componentFilter: ListFilter = {
+  kind: 'enum', key: 'component_outdated', label: 'devices.componentFilter', hint: 'devices.components.targetHint',
+  options: [{ value: 'true', title: 'devices.components.status.outdated' }],
+}
+
 export const securityFilter: ListFilter = {
   kind: 'enum', key: 'security_updates', label: 'devices.securityFilter', options: [{ value: 'overdue', title: 'devices.securityUpdates.overdue' }],
 }
@@ -28,6 +34,16 @@ export const securityFilter: ListFilter = {
 /** The device group filter; options are the organization's groups. */
 export function groupFilter(groups: { id: string; name: string }[]): ListFilter {
   return { kind: 'enum', key: 'device_group_id', label: 'devices.group', options: groups.map((g) => ({ value: g.id, title: g.name })) }
+}
+
+/** The owner filter of the device list (plan M8d decision 5); options are the organization's users. */
+export function ownerFilter(users: { id: string; username: string }[]): ListFilter {
+  return { kind: 'enum', key: 'owner_id', label: 'devices.ownerFilter', options: users.map((u) => ({ value: u.id, title: u.username })) }
+}
+
+/** The owners of a list row joined for the Owners column. */
+export function ownerNames(d: Device): string {
+  return d.owners.map((o) => o.username).join(', ')
 }
 
 /** One page of devices for DataList. */
@@ -40,6 +56,8 @@ export async function listDevices(p: ListParams): Promise<Page<Device>> {
           device_group_id: ((p.device_group_id as string[] | undefined) ?? [])[0], disk_state: p.disk_state as DiskState[],
           contact: p.contact as DeviceContact[],
           security_updates: ((p.security_updates as string[] | undefined) ?? [])[0] as 'overdue' | undefined,
+          owner_id: ((p.owner_id as string[] | undefined) ?? [])[0],
+          component_outdated: ((p.component_outdated as string[] | undefined) ?? [])[0] === 'true' ? true : undefined,
         },
       },
     }),
@@ -108,6 +126,29 @@ export async function setDeviceGroups(id: string, groupIDs: string[]): Promise<s
     body: { device_group_ids: groupIDs },
   })
   return error ? problemCode(error) : null
+}
+
+/** Replaces the owners of a device; null on success, otherwise the problem code. */
+export async function setDeviceOwners(id: string, userIDs: string[]): Promise<string | null> {
+  const { error } = await api.PUT('/api/v1/devices/{id}/owners', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
+    body: { user_ids: userIDs },
+  })
+  return error ? problemCode(error) : null
+}
+
+/** Asks the device to install the offered agent release at its next check-in (plan M8d decision 26); null on
+ * success, otherwise the problem code and detail. */
+export async function requestAgentUpdate(id: string): Promise<{ problem: string; detail?: string } | null> {
+  const { error } = await api.POST('/api/v1/devices/{id}/update-agent', { params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } } })
+  return error ? { problem: problemCode(error), detail: (error as { detail?: string } | undefined)?.detail } : null
+}
+
+/** The message key of a refused update-now request: the two expected refusals have their own texts. */
+export function agentUpdateProblemKey(res: { problem: string; detail?: string }): string | null {
+  if (res.detail === 'no agent release is being offered') return 'devices.updateAgent.noRelease'
+  if (res.detail?.startsWith('the device already runs')) return 'devices.updateAgent.upToDate'
+  return null
 }
 
 /** All device groups by name (selection lists), paged through the list contract (at most its depth limit). */

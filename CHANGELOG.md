@@ -53,9 +53,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Users whose username does not end with one of the organization's domains are marked "No organization domain"
   (they cannot sign in on devices), the user page explains why, and the Users page of an organization without a
   domain shows a banner. Users in the API carry `domain_match`.
+- A weekly upstream version watch compares the pinned container images, the Himmelblau version, fleetd and the Fleet
+  NVD release with upstream and keeps one GitHub issue with the label `upstream` per outdated pin, naming the gates
+  to run before the bump; `make upstream-check` prints the same comparison locally.
+- A device has owners: the users responsible for it, set on the device page (at most 20, audited as
+  `device.owners_changed`), shown and filterable in the device list, searchable by user name, and listed under
+  *Devices owned* on the user page. Owners get no login or sudo rights through this setting.
+- The device page shows the hardware facts the inventory reports (manufacturer, model, serial number, processor,
+  memory, disk size); the device search finds a device by its serial number. Free disk space, uptime and network
+  addresses stay in Fleet.
+- A device group can override the organization's contact thresholds (*Contact thresholds*, with a laptop preset of
+  5 days / 35 days): its members are warned and presumed lost by the group's values, a device in several groups takes
+  the most lenient ones, and `device.stale_warning` / `device.stale_critical` name the source of the threshold.
+- Login history (off by default): `PUT /api/v1/settings/login` takes `login_history_enabled` and
+  `login_history_days` (7–365, default 90); while it is on every session start a device reports is stored and listed
+  by `GET /api/v1/devices/{id}/logins`; the worker deletes older entries every 6 hours (`retention.purged`, store
+  `device_login_event`), and switching it off deletes every entry at once. Sessions that started before the switch-on
+  or outside the retention period are not stored, and a login time from a device's clock is capped at the server's
+  time plus 5 minutes.
+- *Login & privileges* has a *Login history* section with the privacy notice (works council agreement), and the device
+  page a *Logins* tab. With the history on, agents of this release report every session start instead of once per
+  user and day.
+- Agent update policy (*Updates* → *Agent updates*, `agent_update_policy` of the update settings and of device groups,
+  also in the declarative document): with *Manual*, devices install no agent release, and no newer fleetd, unless an
+  administrator requests it for the device; *Automatic* (default) follows the rollout waves. A group set to manual
+  wins over automatic.
+- *Update agent now* on the device page (`POST /api/v1/devices/{id}/update-agent`, organization administrators and
+  operators, audited as `device.agent_update_requested`): the device installs the offered agent release at its next
+  check-in, outside its rollout wave and regardless of the update policy, with the usual self-test, probation and
+  rollback. The request ends with the device's report or after 24 hours.
+- Devices update `paddock-supervisor` themselves, in the waves of the release's rollout: once a device's wave is
+  reached, an agent of that release installs the package through a transient unit, waits up to 10 minutes for its
+  next check-in and restores the previous supervisor otherwise (audited as `device.supervisor_updated` or
+  `device.supervisor_update_failed`). Supervisor upgrades that failed on the device count toward the rollout's failure
+  threshold (a rollback only because the server was unreachable does not), and a
+  halted rollout offers no supervisor package. The update policy applies, and *Update agent now* also brings the
+  supervisor package to a device outside the current wave and stays open until the supervisor followed; a failed version is not installed again, except after a rollback only because the server
+  was unreachable, which is retried after 24 hours, up to 3 times.
+- Devices can be removed from Paddock from the portal (*Danger zone* → *Remove Paddock*, organization administrators
+  with a step-up and the typed hostname, `POST /api/v1/devices/{id}/uninstall`) in two modes, leave as is or reset,
+  and the request can be cancelled until the device received it, or requested again or cancelled once the device's
+  removal report is 24 hours overdue (`report_overdue`, which also withdraws a command the device received but did
+  not answer yet); a cancelled removal never starts on the device. The device is
+  retired after it reported the removal of the open request (`device.uninstalled`, `device.retired` with reason
+  `uninstalled`); a removal report without such a request is audited and retires nothing. Pending removals appear on
+  the attention page. Lock and Destroy take precedence: requesting one cancels a pending removal (recorded on
+  `revocation.requested` as `uninstall_cancelled` with the removal's `uninstall_command_id`), and the device page
+  warns when the device had already
+  received the removal and may have removed `paddock-revoke`.
+- Agents of this release carry out the removal in the transient unit `paddock-uninstall`: they stop and purge
+  Paddock's services and packages, keep every user file and the disk encryption, keep the managed local administrator
+  when it is the last local administrator, and leave a summary in `/root/paddock-uninstall/result.json`.
+- Runbook `docs/operations/uninstall.md`: both removal modes step by step, what stays, the last-administrator guard,
+  the TPM clear and its firmware fallback, cancelling, and what to do when a device's removal report never arrived.
+- Disk unlock mode for new installations (*Login & privileges → Disk encryption*, device groups can override it, also
+  in the declarative document): TPM + boot PIN (default) or TPM only, with a security notice. The autoinstall embeds
+  the mode of the token's group, bundles carry it, and devices whose keyslots do not match are reported as
+  `unlock_mode_mismatch`; `docs/operations/disk-recovery.md` describes the conversion with the recovery key.
+- Agents of this release set up a `tpm_only` installation at its first boot without a PIN dialogue (the TPM unlocks
+  the disk while Secure Boot is unchanged), count the recovery key and the mode's TPM keyslot as compliant, and report
+  a disk enrolled for the other mode as `unlock_mode_mismatch`; they never enroll or wipe a TPM keyslot of an
+  installed device.
+- The disk encryption card tells for an unencrypted device, and for one encrypted outside Paddock, that a reinstall
+  with the Paddock autoinstall is needed, and names devices with a separate `/boot` as candidates for the in-place
+  encryption planned for a later release; nothing on the disk changes.
+- Agents report the installed versions of paddockd, the supervisor, paddock-revoke, Himmelblau and fleetd at every
+  check-in. The server keeps the expected versions (the current release, the newest fleetd package, the compiler's
+  Himmelblau version; `GET /api/platform/v1/component-targets`), the device detail lists every component with its
+  status, and `GET /api/v1/devices?component_outdated=true` finds devices with an outdated component.
+- The device page shows the panel *Components* (installed and expected version of the agent, the supervisor,
+  paddock-revoke, Himmelblau and fleetd with their status), the device list a *Components* column and the filter
+  *Component outdated*, and the platform's *Agent releases* page the card *Rollout targets*. The target is the last
+  completed release (a running rollout does not move it), and a component newer than its target counts as up to
+  date; all three places say so.
 
 ### Changed
 
+- Upgrade order for the device lifecycle release (M8d): update the server first, then the agents. Every protocol and
+  bundle change is additive; older agents ignore the new bundle fields, and the new event types
+  (`agent.supervisor_updated`, `agent.uninstalled`) are only sent after a bundle section or command of this release.
 - A portal sign-in reuses an existing Authentik session that was authenticated with a second factor instead of asking
   for the password again; a session without a second factor is still refused.
 - Devices install Himmelblau 4.0.6 by default (`PADDOCK_HIMMELBLAU_VERSION`, previously 4.0.4): a device code
@@ -75,6 +151,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When Valkey stalls or is unreachable, the device API now answers 503 with `Retry-After` (problem code
+  `backpressure`) instead of 500. Devices back off and retry instead of reporting a server fault.
 - The permission profile form no longer leaves an unhandled error in the browser console when the root-equivalence
   preview cannot reach the server; the preview just stays empty.
 - A release public key or another secret file of a Paddock service with mode 0600 made the roles fail with

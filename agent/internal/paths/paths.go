@@ -46,11 +46,35 @@ func (l Layout) Staging() string { return l.Join("/var/lib/paddock/staging") }
 // UpdateRequest asks the supervisor to install a staged release.
 func (l Layout) UpdateRequest() string { return l.Join("/var/lib/paddock/staging/request.json") }
 
+// Packages holds downloaded Debian packages until dpkg installed them (fleetd, the supervisor).
+func (l Layout) Packages() string { return l.Join("/var/lib/paddock/packages") }
+
+// SupervisorUpgrade marks a running supervisor upgrade (plan M8d decision 31).
+func (l Layout) SupervisorUpgrade() string {
+	return l.Join("/var/lib/paddock/state/supervisor-upgrade.json")
+}
+
+// SupervisorUpgradeResult is written by `paddockd supervisor-upgrade` when it finished (plan M8d decision 31).
+func (l Layout) SupervisorUpgradeResult() string {
+	return l.Join("/var/lib/paddock/state/supervisor-upgrade-result.json")
+}
+
+// UninstallPlan is the plan of an accepted uninstall command; UninstallBinary the copy of paddockd that runs it from
+// /run, so that removing the paddock-agent package does not remove the running helper (plan M8d decision 39).
+func (l Layout) UninstallPlan() string { return l.Join("/run/paddock/uninstall/plan.json") }
+
+// UninstallBinary is the copy of paddockd the uninstall helper runs as.
+func (l Layout) UninstallBinary() string { return l.Join("/run/paddock/uninstall/paddockd") }
+
 // Socket is the health socket.
 func (l Layout) Socket() string { return l.Join("/run/paddock/agent.sock") }
 
 // LastCheckin is touched after every successful check-in.
 func (l Layout) LastCheckin() string { return l.Join("/run/paddock/last-checkin") }
+
+// LastCheckinFailed holds the time of the last check-in that did not reach the server (no answer, or 502–504 from the
+// reverse proxy); the supervisor upgrade helper tells an unreachable server from a broken supervisor by it.
+func (l Layout) LastCheckinFailed() string { return l.Join("/run/paddock/last-checkin-failed") }
 
 // EnrollConfig is the enrollment configuration the Paddock autoinstall leaves for the first start of the agent
 // (plan M4b decision 7).

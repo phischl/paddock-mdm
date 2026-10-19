@@ -179,3 +179,80 @@ func TestConsoleClosed(t *testing.T) {
 		t.Fatal("the marker must stay when the console fails")
 	}
 }
+
+// tpmOnlyTools fakes the tools for unlock mode tpm_only: systemd-cryptenroll must come without a PIN.
+type tpmOnlyTools struct {
+	tools
+	calls    int
+	failures int
+}
+
+func (f *tpmOnlyTools) Command(ctx context.Context, env []string, name string, args ...string) (string, string, int, error) {
+	if name != "systemd-cryptenroll" {
+		return f.tools.Command(ctx, env, name, args...)
+	}
+	if strings.Join(args, " ") != "--tpm2-device=auto --tpm2-pcrs=7 --unlock-key-file="+f.keyFile+" /dev/sda3" || len(env) != 0 {
+		return "", "", -1, errors.New("unexpected enrollment " + strings.Join(append(env, args...), " "))
+	}
+	f.calls++
+	if f.calls <= f.failures {
+		return "", "TPM2 operation failed", 1, nil
+	}
+	return "", "", 0, nil
+}
+
+func tpmOnlyFixture(t *testing.T, failures int) (*fixture, *tpmOnlyTools) {
+	t.Helper()
+	f := newFixture(t, "8")
+	if err := os.WriteFile(f.layout.DiskSetupConfig(), []byte(`{"boot_pin_min_length":8,"unlock_mode":"tpm_only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tt := &tpmOnlyTools{tools: tools{keyFile: f.layout.InstallPassphrase()}, failures: failures}
+	return f, tt
+}
+
+func (f *fixture) runWith(t *testing.T, tt *tpmOnlyTools) error {
+	t.Helper()
+	return disksetup.Run(context.Background(), disksetup.Options{
+		Layout: f.layout, Tools: tt, In: strings.NewReader(""), Out: &f.out,
+		Echo:        func(on bool) error { f.echo = append(f.echo, on); return nil },
+		TPM2Present: func() bool { return true },
+	})
+}
+
+// TestTPMOnly (plan M8d decision 47): unlock mode tpm_only prints the binding text, enrolls the TPM without a PIN and
+// without asking anything, and removes the marker.
+func TestTPMOnly(t *testing.T) {
+	f, tt := tpmOnlyFixture(t, 0)
+	if err := f.runWith(t, tt); err != nil {
+		t.Fatal(err)
+	}
+	want := "Paddock disk encryption setup\n\nThe disk of this device is encrypted and unlocks automatically with the\n" +
+		"security chip (TPM) of this device while Secure Boot stays unchanged.\nNo PIN is needed. IT keeps a recovery key for this device.\n\n" +
+		"Enrolling the TPM unlock. This takes a few seconds ...\n"
+	if !strings.HasPrefix(f.out.String(), want) || strings.Contains(f.out.String(), "Boot PIN:") || len(f.echo) != 0 {
+		t.Fatalf("console:\n%s", f.out.String())
+	}
+	if tt.calls != 1 || f.pending() {
+		t.Fatalf("enrollments %d, pending %v", tt.calls, f.pending())
+	}
+}
+
+// TestTPMOnlyFailuresKeepMarker: after MaxEnrollFailures failed attempts the device starts with its passphrase and
+// tries again at the next boot; a later success removes the marker.
+func TestTPMOnlyFailuresKeepMarker(t *testing.T) {
+	f, tt := tpmOnlyFixture(t, disksetup.MaxEnrollFailures)
+	if err := f.runWith(t, tt); err != nil {
+		t.Fatal(err)
+	}
+	if tt.calls != disksetup.MaxEnrollFailures || !f.pending() || !strings.Contains(f.out.String(), "tries again at the next start") {
+		t.Fatalf("enrollments %d, pending %v:\n%s", tt.calls, f.pending(), f.out.String())
+	}
+	f, tt = tpmOnlyFixture(t, disksetup.MaxEnrollFailures-1)
+	if err := f.runWith(t, tt); err != nil {
+		t.Fatal(err)
+	}
+	if tt.calls != disksetup.MaxEnrollFailures || f.pending() {
+		t.Fatalf("enrollments %d, pending %v", tt.calls, f.pending())
+	}
+}

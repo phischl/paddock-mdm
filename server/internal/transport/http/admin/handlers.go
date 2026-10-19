@@ -11,6 +11,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
@@ -38,6 +39,9 @@ type handlers struct {
 	userGroups    *app.UserGroups
 	logins        *app.Logins
 	loginSettings *app.LoginSettings
+	loginHistory  *app.LoginHistory
+	agentUpdates  *app.AgentUpdates
+	uninstalls    *app.Uninstalls
 	privileges    *app.Privileges
 
 	commands    *app.DeviceCommands
@@ -165,7 +169,13 @@ func (h *handlers) ListDeviceGroups(ctx context.Context, req adminapi.ListDevice
 }
 
 func (h *handlers) CreateDeviceGroup(ctx context.Context, req adminapi.CreateDeviceGroupRequestObject) (adminapi.CreateDeviceGroupResponseObject, error) {
-	g, err := h.groups.Create(ctx, req.Body.Name, req.Body.Description)
+	policy := app.DeviceGroupPolicy{
+		AgentUpdatePolicy: (*string)(req.Body.AgentUpdatePolicy), DiskUnlockMode: (*string)(req.Body.DiskUnlockMode),
+	}
+	if s := req.Body.Staleness; s != nil {
+		policy.Staleness = &app.GroupStaleness{WarningH: s.WarningH, CriticalH: s.CriticalH}
+	}
+	g, err := h.groups.Create(ctx, req.Body.Name, req.Body.Description, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +194,18 @@ func (h *handlers) GetDeviceGroup(ctx context.Context, req adminapi.GetDeviceGro
 }
 
 func (h *handlers) UpdateDeviceGroup(ctx context.Context, req adminapi.UpdateDeviceGroupRequestObject) (adminapi.UpdateDeviceGroupResponseObject, error) {
-	g, err := h.groups.Update(ctx, req.Id, req.Body.Name, req.Body.Description)
+	var patch app.DeviceGroupPolicyPatch
+	var err error
+	if patch.Staleness, err = rawChange[app.GroupStaleness]("staleness", req.Body.Staleness); err != nil {
+		return nil, err
+	}
+	if patch.AgentUpdatePolicy, err = rawChange[string]("agent_update_policy", req.Body.AgentUpdatePolicy); err != nil {
+		return nil, err
+	}
+	if patch.DiskUnlockMode, err = rawChange[string]("disk_unlock_mode", req.Body.DiskUnlockMode); err != nil {
+		return nil, err
+	}
+	g, err := h.groups.Update(ctx, req.Id, req.Body.Name, req.Body.Description, patch)
 	if err != nil {
 		return nil, err
 	}
@@ -198,8 +219,29 @@ func (h *handlers) DeleteDeviceGroup(ctx context.Context, req adminapi.DeleteDev
 	return adminapi.DeleteDeviceGroup204Response{}, nil
 }
 
+// rawChange decodes a field of a partial update whose null differs from its absence: absent keeps the value, null
+// clears it (plan M8d decision 11).
+func rawChange[T any](field string, raw json.RawMessage) (app.Change[T], error) {
+	if len(raw) == 0 {
+		return app.Change[T]{}, nil
+	}
+	if string(raw) == "null" {
+		return app.Change[T]{Set: true}, nil
+	}
+	var v T
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return app.Change[T]{}, problem.InvalidRequest.WithDetail(field + " is malformed")
+	}
+	return app.Change[T]{Set: true, Value: &v}, nil
+}
+
 func toDeviceGroup(g pgstore.DeviceGroup) adminapi.DeviceGroup {
-	return adminapi.DeviceGroup{Id: g.ID, Name: g.Name, Description: g.Description, CreatedAt: g.CreatedAt.UTC(), UpdatedAt: g.UpdatedAt.UTC()}
+	out := adminapi.DeviceGroup{Id: g.ID, Name: g.Name, Description: g.Description, CreatedAt: g.CreatedAt.UTC(), UpdatedAt: g.UpdatedAt.UTC(),
+		AgentUpdatePolicy: (*adminapi.AgentUpdatePolicy)(g.AgentUpdatePolicy), DiskUnlockMode: (*adminapi.DiskUnlockMode)(g.DiskUnlockMode)}
+	if p := app.PolicyOf(g).Staleness; p != nil {
+		out.Staleness = &adminapi.DeviceGroupStaleness{WarningH: p.WarningH, CriticalH: p.CriticalH}
+	}
+	return out
 }
 
 func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEventsRequestObject) (adminapi.ListAuditEventsResponseObject, error) {

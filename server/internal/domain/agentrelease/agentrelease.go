@@ -242,11 +242,18 @@ type Artifact struct {
 // For returns the artifact a device with arch and agent version should update to, if it is eligible and the release
 // is newer than its agent (PDK-025): the supervisor refuses anything else as a downgrade. An agent version that is no
 // semantic version is offered the release, as the supervisor lets any signed release replace such an agent.
-func (o Offer) For(device uuid.UUID, arch, agentVersion string) (Artifact, bool) {
+// A requested device (update now, plan M8d decision 27) skips the wave check; a halted rollout offers nothing.
+func (o Offer) For(device uuid.UUID, arch, agentVersion string, requested bool) (Artifact, bool) {
 	a, ok := o.Artifacts[arch]
-	if !ok || (versionPattern.MatchString(agentVersion) && semver.Compare(o.Version, agentVersion) <= 0) ||
-		!Eligible(device, Percent(o.Status, o.Waves, o.CurrentWave)) {
+	if !ok || !o.Newer(agentVersion) || o.Status == RolloutHalted ||
+		(!requested && !Eligible(device, Percent(o.Status, o.Waves, o.CurrentWave))) {
 		return Artifact{}, false
 	}
 	return a, true
+}
+
+// Newer reports whether the offered release is newer than agentVersion; an agent version that is no semantic version
+// counts as older.
+func (o Offer) Newer(agentVersion string) bool {
+	return !versionPattern.MatchString(agentVersion) || semver.Compare(o.Version, agentVersion) > 0
 }

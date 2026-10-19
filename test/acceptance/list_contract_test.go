@@ -92,7 +92,10 @@ func TestListContract(t *testing.T) {
 	}
 	userGroup := listContractUserGroup(t, sessions[false])
 	cve := seedListInventory(t, member.DeviceID)
-	parents := map[string]string{"/api/v1/device-groups/{id}/devices": parentGroup, "/api/v1/user-groups/{id}/members": userGroup,
+	owner, _ := localUserIn(t, sessions[false], "list-owner", "acme.test")
+	expectStatus(t, call(t, sessions[false], http.MethodPut, "/api/v1/devices/"+member.DeviceID+"/owners",
+		map[string]any{"user_ids": []string{owner}}), http.StatusOK, "")
+	parents := map[string]string{"/api/v1/users/{id}/devices": owner, "/api/v1/devices/{id}/logins": member.DeviceID, "/api/v1/device-groups/{id}/devices": parentGroup, "/api/v1/user-groups/{id}/members": userGroup,
 		"/api/v1/devices/{id}/commands": member.DeviceID, "/api/v1/devices/{id}/software": member.DeviceID,
 		"/api/v1/devices/{id}/vulnerabilities": member.DeviceID, "/api/v1/vulnerabilities/{cve}/devices": cve}
 	order := newCollation(t)

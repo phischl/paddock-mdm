@@ -1,4 +1,15 @@
 {
+  "updateSettings": {
+    "agentUpdates": {
+      "title": "Agent-Updates",
+      "automatic": "Automatisch: Geräte installieren jedes Agent-Release, das die Plattform ausrollt, in ihrer Welle",
+      "manual": "Manuell: Geräte installieren ein Agent-Release nur, wenn ein Administrator es pro Gerät anfordert",
+      "hint": "Die Richtlinie gilt auch für die Pakete des Supervisors und von fleetd. Gerätegruppen können sie überschreiben. Geräte mit altem Agent erscheinen unter Handlungsbedarf."
+    },
+    "staleness": {
+      "groupsHint": "Gerätegruppen können diese Schwellen überschreiben, zum Beispiel für Laptops."
+    }
+  },
   "app": {
     "name": "Paddock",
     "skipToContent": "Zum Inhalt springen",
@@ -123,6 +134,23 @@
     "typeToConfirm": "Geben Sie zur Bestätigung {text} ein"
   },
   "deviceGroups": {
+    "agentUpdates": {
+      "label": "Agent-Updates"
+    },
+    "inherit": "Einstellung der Organisation",
+    "staleness": {
+      "title": "Kontaktschwellen",
+      "override": "Schwellen der Organisation für diese Gruppe überschreiben",
+      "warning": "Warnung nach (Stunden)",
+      "critical": "Kritisch nach (Stunden)",
+      "laptopPreset": "Laptop-Voreinstellung (5 Tage / 35 Tage)",
+      "hint": "Ein Gerät in mehreren Gruppen übernimmt den mildesten Wert seiner Gruppen. Ohne Überschreibung gelten die Schwellen der Organisation.",
+      "effective": "Wirksam: Warnung nach {warning} h, kritisch nach {critical} h ({source})",
+      "sources": {
+        "organization": "Organisation",
+        "device_group": "Gerätegruppe"
+      }
+    },
     "title": "Gerätegruppen",
     "count": "{count, plural, =0 {Keine Gerätegruppen} one {# Gerätegruppe} other {# Gerätegruppen}}",
     "create": "Gerätegruppe anlegen",
@@ -137,6 +165,9 @@
     "empty": {
       "title": "Noch keine Gerätegruppen",
       "description": "Gruppen begrenzen Konfiguration, zurückgehaltene Pakete und Anmelderegeln auf eine Menge von Geräten."
+    },
+    "unlockMode": {
+      "label": "Entsperrmodus der Festplatte"
     }
   },
   "validation": {
@@ -186,9 +217,13 @@
     "lockout_confirmation_required": "Diese Änderung würde Ihre eigene Adresse aus der Freigabeliste entfernen.",
     "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten.",
     "session_store_unavailable": "Das Portal erreicht seinen Sitzungsspeicher nicht. Versuchen Sie es gleich noch einmal.",
-    "disclaimer_outdated": "Der Hinweistext hat sich geändert. Lesen Sie den neuen Text und bestätigen Sie erneut."
+    "disclaimer_outdated": "Der Hinweistext hat sich geändert. Lesen Sie den neuen Text und bestätigen Sie erneut.",
+    "tpm_in_use_by_disk": "Die Festplatte dieses Geräts wird mit dem TPM entsperrt; er kann nicht gelöscht werden."
   },
   "audit": {
+    "retention": {
+      "purged": "{deleted, plural, one {# abgelaufener Eintrag} other {# abgelaufene Einträge}} von {store} gelöscht"
+    },
     "title": "Audit-Protokoll",
     "from": "Von",
     "to": "Bis",
@@ -240,6 +275,8 @@
       "use_denied": "Eine Anfrage mit dem API-Token {name} wurde abgelehnt: {reason, select, revoked {das Token ist widerrufen} expired {das Token ist abgelaufen} creator_inactive {sein Ersteller ist deaktiviert oder hat die nötige Rolle verloren} other {{reason}}}"
     },
     "device": {
+      "agent_update_requested": "{actor} hat {hostname} aufgefordert, Agent {version} jetzt zu installieren",
+      "owners_changed": "{actor} hat die Besitzer von {hostname} geändert",
       "enrolled": "Das Gerät {hostname} hat sich registriert",
       "approved": "{actor} hat das Gerät {hostname} freigegeben",
       "rejected": "{actor} hat das Gerät {hostname} abgelehnt",
@@ -255,6 +292,8 @@
       "agent_rolled_back": "Das Gerät {target} hat Agent {version} auf {from_version} zurückgesetzt",
       "agent_rollback_failed": "Das Gerät {target} konnte Agent {version} nicht auf {from_version} zurücksetzen; es läuft weiter mit {version} und versucht es erneut",
       "agent_events_dropped": "Das Gerät {target} hat {count, number} Ereignisse verworfen, während der Server nicht erreichbar war",
+      "supervisor_updated": "Das Gerät {target} hat Supervisor {version} installiert (vorher {from_version})",
+      "supervisor_update_failed": "Das Gerät {target} konnte Supervisor {version} nicht installieren und behält {from_version} ({outcome})",
       "login_assignment_changed": "{actor} hat geändert, wer sich an {hostname} anmelden darf",
       "logins_suspended": "{actor} hat die Anmeldungen an {hostname} ausgesetzt",
       "logins_resumed": "{actor} hat die Anmeldungen an {hostname} wieder zugelassen",
@@ -285,7 +324,10 @@
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
       "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",
-      "header_object_rejected": "Der hinterlegte LUKS-Header von {hostname} wurde abgewiesen: seine Größe weicht von der angekündigten ab"
+      "header_object_rejected": "Der hinterlegte LUKS-Header von {hostname} wurde abgewiesen: seine Größe weicht von der angekündigten ab",
+      "uninstall_requested": "{actor} hat angefordert, Paddock von {hostname} zu entfernen ({mode})",
+      "uninstall_cancelled": "{actor} hat die Entfernung von Paddock von {hostname} zurückgezogen",
+      "uninstalled": "Das Gerät {target} hat Paddock entfernt ({mode}, {outcome})"
     },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
@@ -443,6 +485,7 @@
     "artifacts": "Artefakte",
     "packages": "Debian-Pakete",
     "noPackages": "Keine Debian-Pakete; mit diesem Release können keine Geräte über die Paddock-Autoinstallation installiert werden.",
+    "supervisorFollows": "Geräte installieren das Supervisor-Paket dieses Releases nach seinem Agent, in denselben Wellen, wenn die Update-Richtlinie ihrer Organisation es erlaubt.",
     "package": "Paket",
     "createdBy": "Angelegt",
     "createdFacts": "{at} von {by}",
@@ -480,6 +523,11 @@
     "empty": {
       "title": "Noch keine Agent-Releases",
       "description": "Laden Sie ein signiertes Release hoch, um einen gestaffelten Rollout zu starten."
+    },
+    "targets": {
+      "title": "Rollout-Ziele",
+      "himmelblauHint": "Gesetzt über PADDOCK_HIMMELBLAU_VERSION des Compilers; Geräte installieren sie beim nächsten Apply.",
+      "none": "Noch kein Agent-Release hat einen Rollout abgeschlossen."
     }
   },
   "loginDenied": {
@@ -500,6 +548,40 @@
     "back": "Zur Startseite"
   },
   "devices": {
+    "updateAgent": {
+      "label": "Agent jetzt aktualisieren",
+      "title": "Agent jetzt aktualisieren",
+      "confirm": "{version} dem Gerät {hostname} beim nächsten Check-in anbieten, außerhalb der Rollout-Welle und unabhängig von der Update-Richtlinie? Der Supervisor installiert es wie üblich mit Selbsttest, Probezeit und automatischem Rollback.",
+      "requested": "Update auf {version} angefordert {at}; das Gerät holt es beim nächsten Check-in ab.",
+      "noRelease": "Derzeit wird kein Agent-Release angeboten.",
+      "upToDate": "Das Gerät läuft bereits mit dem angebotenen Release.",
+      "offered": "Das aktuelle Agent-Release"
+    },
+    "logins": {
+      "user": "Benutzer",
+      "at": "Angemeldet",
+      "off": "Der Anmeldeverlauf ist für diese Organisation ausgeschaltet.",
+      "offLink": "Unter „Anmeldung & Rechte“ einschalten.",
+      "empty": "Noch keine Anmeldungen aufgezeichnet."
+    },
+    "hardware": {
+      "manufacturer": "Hersteller",
+      "model": "Modell",
+      "serial": "Seriennummer",
+      "cpu": "Prozessor",
+      "cpuCores": "{cores, plural, one {# Kern} other {# Kerne}}",
+      "memory": "Arbeitsspeicher",
+      "disk": "Festplattengröße",
+      "pending": "Vom Inventar noch nicht gemeldet"
+    },
+    "owners": {
+      "title": "Besitzer",
+      "column": "Besitzer",
+      "hint": "Wer für dieses Gerät verantwortlich ist. Besitzer erhalten über diese Einstellung keine Anmelde- oder sudo-Rechte.",
+      "saved": "Besitzer gespeichert.",
+      "none": "Kein Besitzer zugewiesen."
+    },
+    "ownerFilter": "Besitzer",
     "title": "Geräte",
     "back": "Zurück zu den Geräten",
     "hostname": "Hostname",
@@ -649,7 +731,8 @@
         "tpm_missing": "Kein TPM: nur Passphrase",
         "tpm_pin_missing": "Boot-PIN übersprungen",
         "escrow_pending": "Wird eingerichtet",
-        "compliant": "Konform"
+        "compliant": "Konform",
+        "unlock_mode_mismatch": "Die Festplatte ist für den anderen Entsperrmodus eingerichtet, als ihre Richtlinie vorsieht. Ein Operator ändert ihn am Gerät mit dem Wiederherstellungsschlüssel (siehe Runbook)."
       },
       "notReported": "Noch nicht gemeldet",
       "keyslots": "Keyslots",
@@ -693,6 +776,20 @@
         "copy": "Kopieren",
         "copied": "Kopiert",
         "close": "Ausblenden"
+      },
+      "unlockMode": "Entsperrmodus",
+      "unlockModes": {
+        "tpm_pin": "TPM + Boot-PIN",
+        "tpm_only": "Nur TPM"
+      },
+      "unlockModeMismatch": "Entsperrmodus weicht von der Richtlinie ab",
+      "unlockModeRunbook": "Runbook: Entsperrmodus ändern",
+      "notEncrypted": {
+        "reinstall": "Dieses Gerät ist nicht verschlüsselt. Verschlüsseln Sie es, indem Sie es nach einer Sicherung mit dem Paddock-Autoinstall neu installieren; Paddock verschlüsselt ein laufendes Gerät nicht nachträglich.",
+        "conversionPlanned": "Sein Festplattenlayout (separates /boot) kommt für die nachträgliche Verschlüsselung in Frage, die für ein späteres Release geplant ist."
+      },
+      "unmanaged": {
+        "reinstall": "Dieses Gerät wurde außerhalb von Paddock verschlüsselt: Kein Wiederherstellungsschlüssel und kein Header sind hinterlegt, und eine Sperre lässt sich nicht aufheben. Installieren Sie es mit dem Paddock-Autoinstall neu, um seine Verschlüsselung zu verwalten."
       }
     },
     "revocation": {
@@ -715,6 +812,10 @@
         "destroy": "Die Vernichtung wurde angefordert. Sie wartet auf der Seite Widerrufe auf die Freigabe durch einen zweiten Administrator."
       },
       "presumedSelfLocked": "Das Gerät hat Paddock seit vor {at} nicht erreicht und hat sich vermutlich selbst gesperrt (Totmannschalter).",
+      "uninstallCancelled": {
+        "before_delivery": "Das ausstehende Entfernen von Paddock wurde abgebrochen: Sperren und Vernichten haben Vorrang.",
+        "after_delivery": "Das ausstehende Entfernen von Paddock wurde abgebrochen, das Gerät hatte es aber bereits erhalten. Es hat das Widerrufsmodul möglicherweise schon entfernt; dann kann die Sperre oder Vernichtung darauf nicht ausgeführt werden."
+      },
       "timeline": "Widerrufe dieses Geräts",
       "steps": "Fortschritt",
       "timelineSteps": {
@@ -762,6 +863,11 @@
         "title": "Außer Betrieb nehmen",
         "explanation": "Außerbetriebnahme widerruft die Identität des Geräts dauerhaft, es erhält keine Konfiguration mehr. Das lässt sich nicht rückgängig machen.",
         "label": "Außer Betrieb nehmen …"
+      },
+      "uninstall": {
+        "title": "Paddock entfernen",
+        "explanation": "Entfernt den Paddock-Agent mit einem signierten Befehl vom Gerät und nimmt das Gerät außer Betrieb. Sie wählen, ob das Gerät so bleibt, wie es ist, oder zurückgesetzt wird. Benutzerdaten werden nie gelöscht.",
+        "label": "Paddock entfernen …"
       }
     },
     "contactFilter": "Kontakt",
@@ -777,6 +883,7 @@
       "unknown": "unbekannt"
     },
     "tabs": {
+      "logins": "Anmeldungen",
       "overview": "Übersicht",
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
@@ -817,7 +924,73 @@
     "securityFilter": "Sicherheitsupdates",
     "securityUpdates": {
       "overdue": "Überfällig (kein erfolgreicher Lauf in 48 h)"
-    }
+    },
+    "uninstall": {
+      "title": "Paddock von {hostname} entfernen",
+      "leave": {
+        "label": "Gerät so lassen, wie es ist",
+        "explanation": "Entfernt Agent, Supervisor, fleetd und Paddocks eigene Dateien. Behält jedes lokale Konto einschließlich des lokalen Administrators (sein Passwort bleibt abrufbar), die sudo-Rechte der Notfallkonten, Himmelblau und Verzeichnis-Anmeldungen, verwaltete Dateien und die Festplattenverschlüsselung mit PIN und Wiederherstellungsschlüssel."
+      },
+      "reset": {
+        "label": "System zurücksetzen",
+        "explanation": "Alles wie bei „so lassen“ und zusätzlich: Himmelblau und seine Konfiguration werden entfernt (Verzeichnisbenutzer können sich nicht mehr anmelden; ihre Home-Verzeichnisse bleiben), unveränderte verwaltete Dateien werden entfernt, und der lokale Administrator wird entfernt, außer er ist der letzte lokale Administrator. Die Festplattenverschlüsselung wird nie verändert."
+      },
+      "clearTpm": {
+        "label": "Auch den TPM löschen (nur möglich, solange die Festplatte nicht damit entsperrt wird)",
+        "disabledTpmDisk": "Nicht verfügbar: Die Festplatte dieses Geräts wird mit dem TPM entsperrt. Ein Löschen ließe nur den Wiederherstellungsschlüssel übrig."
+      },
+      "keepLocalAdmin": {
+        "label": "Das Konto des lokalen Administrators behalten"
+      },
+      "confirmLabel": "Paddock entfernen",
+      "typed": "Geben Sie den Hostnamen zur Bestätigung ein. Das Gerät wird außer Betrieb genommen, sobald es die Entfernung meldet.",
+      "pending": "Entfernung angefordert ({mode}) — {status}. Das Gerät entfernt Paddock beim nächsten Check-in und wird dann außer Betrieb genommen.",
+      "modes": {
+        "leave": "so lassen",
+        "reset": "zurücksetzen"
+      },
+      "cancel": {
+        "label": "Anforderung zurückziehen",
+        "title": "Entfernung zurückziehen",
+        "confirm": "Entfernung von Paddock von {hostname} zurückziehen? Nur möglich, solange das Gerät den Befehl nicht erhalten hat."
+      },
+      "done": "Paddock wurde am {at} entfernt ({mode}); lokaler Administrator: {localAdmin}; TPM: {tpm}.",
+      "localAdmin": {
+        "removed": "entfernt",
+        "kept": "behalten",
+        "kept_last_admin": "behalten (letzter lokaler Administrator)"
+      },
+      "tpm": {
+        "cleared": "gelöscht",
+        "requested_at_next_boot": "Löschen beim nächsten Start angefordert",
+        "skipped_in_use": "nicht gelöscht (die Festplatte wird damit entsperrt)",
+        "not_requested": "nicht angefordert",
+        "failed": "Löschen fehlgeschlagen"
+      }
+    },
+    "components": {
+      "title": "Komponenten",
+      "column": "Komponenten",
+      "installed": "Installiert",
+      "expected": "Erwartet",
+      "names": {
+        "paddockd": "Agent (paddockd)",
+        "paddock_supervisor": "Supervisor",
+        "paddock_revoke": "Widerrufsmodul (paddock-revoke)",
+        "himmelblau": "Himmelblau",
+        "fleetd": "fleetd (osquery)"
+      },
+      "status": {
+        "ok": "Aktuell",
+        "outdated": "Veraltet",
+        "missing": "Nicht installiert",
+        "unknown": "Nicht gemeldet"
+      },
+      "outdatedCount": "{count, plural, one {# veraltet} other {# veraltet}}",
+      "hint": "Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach.",
+      "targetHint": "Ziel = letztes abgeschlossenes Release. Ein laufender Rollout verschiebt es nicht; eine Komponente, die neuer als ihr Ziel ist, gilt als aktuell."
+    },
+    "componentFilter": "Komponente veraltet"
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -1092,6 +1265,9 @@
     }
   },
   "users": {
+    "ownedDevices": {
+      "title": "Geräte im Besitz"
+    },
     "title": "Benutzer",
     "noDomain": "Keine Organisationsdomain",
     "noDomainDetail": "Der Benutzername {username} endet nicht auf eine der Domains der Organisation ({domains}). Der Benutzer kann sich nicht an Geräten anmelden: Die Anmeldekomponente akzeptiert nur name@domain. Benennen Sie den Benutzer in der Identitätsquelle um, oder lassen Sie einen Plattformadministrator die Domain der Organisation hinzufügen.",
@@ -1261,6 +1437,15 @@
     }
   },
   "loginSettings": {
+    "loginHistory": {
+      "title": "Anmeldeverlauf",
+      "enabled": "Aufzeichnen, welche Verzeichnisbenutzer sich wann an welchem Gerät anmelden",
+      "days": "Verlauf aufbewahren für (Tage)",
+      "notice": "Der Anmeldeverlauf sind personenbezogene Daten Ihrer Beschäftigten: Jeder Sitzungsstart wird mit Benutzername, Gerät und Zeitpunkt für die obige Dauer gespeichert und danach gelöscht. Schalten Sie ihn nur mit Zustimmung Ihres Betriebsrats oder der entsprechenden Stelle ein und informieren Sie die Benutzer. Er ist standardmäßig aus; Benutzersperren hängen nicht davon ab.",
+      "disableConfirm": "Anmeldeverlauf ausschalten? Jede aufgezeichnete Anmeldung dieser Organisation wird sofort gelöscht.",
+      "disableConfirmLabel": "Ausschalten und löschen",
+      "daysInvalid": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein."
+    },
     "title": "Anmeldung & Rechte",
     "updatedAt": "Zuletzt geändert {at}",
     "login": "Geräteanmeldung",
@@ -1290,7 +1475,14 @@
     "diskEncryption": "Festplattenverschlüsselung",
     "bootPinLength": "Mindestlänge der Boot-PIN",
     "bootPinLengthHint": "Die Boot-PIN entsperrt die Festplatte bei jedem Start. Mit der Paddock-Autoinstallation installierte Geräte fragen sie beim ersten Start ab; ab jetzt erzeugte Autoinstallationen verwenden diese Länge.",
-    "saved": "Anmeldeeinstellungen gespeichert."
+    "saved": "Anmeldeeinstellungen gespeichert.",
+    "unlockMode": {
+      "label": "Entsperrmodus der Festplatte für neue Installationen",
+      "tpm_pin": "TPM + Boot-PIN: Die Festplatte fragt bei jedem Start nach einer PIN",
+      "tpm_only": "Nur TPM: Die Festplatte entsperrt sich automatisch, solange Secure Boot unverändert ist",
+      "hint": "Gilt ab jetzt für Geräte, die mit dem Paddock-Autoinstall installiert werden. Gerätegruppen können ihn überschreiben. Installierte Geräte behalten ihren Modus, bis ein Operator ihn am Gerät ändert.",
+      "tpmOnlyNotice": "Nur TPM schützt die Daten gegen eine ausgebaute Festplatte, nicht gegen jemanden, der das Gerät in der Hand hat: Sie entsperrt sich beim Start, und die Anmeldemaske ist die verbleibende Hürde. Verwenden Sie ihn für geteilte Geräte und Kioske, nicht für Laptops mit personenbezogenen Daten."
+    }
   },
   "commands": {
     "title": "Befehle",
@@ -1301,7 +1493,8 @@
     "types": {
       "rotate_admin_password": "Passwort des lokalen Administrators rotieren",
       "delete_self_lock": "Token des Totmannschalters löschen",
-      "install_now": "Pakete sofort installieren"
+      "install_now": "Pakete sofort installieren",
+      "uninstall": "Paddock entfernen"
     },
     "statuses": {
       "pending": "Ausstehend",
@@ -1525,7 +1718,8 @@
       "revocation_pending": "Sperre oder Vernichtung wartet",
       "revocation_expired": "Sperre oder Vernichtung abgelaufen",
       "agent_rollback_pending": "Agent-Rücksetzung ausstehend",
-      "agent_not_running": "Agent läuft nicht"
+      "agent_not_running": "Agent läuft nicht",
+      "uninstall_pending": "Entfernung von Paddock ausstehend"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1539,7 +1733,8 @@
       "revocation_pending": "Gerät öffnen",
       "revocation_expired": "Gerät öffnen",
       "agent_rollback_pending": "Gerät öffnen",
-      "agent_not_running": "Gerät öffnen"
+      "agent_not_running": "Gerät öffnen",
+      "uninstall_pending": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

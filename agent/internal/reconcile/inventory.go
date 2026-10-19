@@ -56,6 +56,10 @@ type Inventory struct {
 	// BundlesURL is https://bundles.<domain>[:port], the public package store.
 	BundlesURL string
 	Now        func() time.Time
+	// UpdatesAllowed reports whether the device may upgrade fleetd now (plan M8d decision 23): its agent update policy
+	// is automatic, or an administrator requested an update since the last check-in. nil allows. A missing fleetd is
+	// installed regardless; the policy only holds back upgrades.
+	UpdatesAllowed func() bool
 
 	// applied is the spec of the last successful Apply: a file that differs from the same spec was changed
 	// outside Paddock. stopped is set while a service stop is reported.
@@ -124,7 +128,7 @@ func (i *Inventory) Plan(ctx context.Context, r bundle.Resource) ([]string, erro
 			changes = append(changes, "file "+f.path)
 		}
 	}
-	if i.Sys.PackageVersion(FleetdPackage) != s.Package.Version {
+	if i.wantsPackage(s.Package) {
 		return append(changes, "package "+s.Package.Version), nil
 	}
 	units, err := unitChanges(ctx, i.Sys, FleetdUnit, true, true)
@@ -148,7 +152,7 @@ func (i *Inventory) Apply(ctx context.Context, r bundle.Resource) Result {
 	if err != nil {
 		return errorResult(r.ID, err)
 	}
-	if i.Sys.PackageVersion(FleetdPackage) != s.Package.Version {
+	if i.wantsPackage(s.Package) {
 		if err := i.installPackage(ctx, s.Package); err != nil {
 			return errorResult(r.ID, fmt.Errorf("install fleetd %s: %w", s.Package.Version, err))
 		}
@@ -171,6 +175,16 @@ func (i *Inventory) Apply(ctx context.Context, r bundle.Resource) Result {
 		return Result{ID: r.ID, Status: OK}
 	}
 	return Result{ID: r.ID, Status: Changed}
+}
+
+// wantsPackage reports whether the bundle's fleetd package is to be installed: it is missing, or another version is
+// installed and the update policy allows the upgrade.
+func (i *Inventory) wantsPackage(p bundle.InventoryPackage) bool {
+	installed := i.Sys.PackageVersion(FleetdPackage)
+	if installed == p.Version {
+		return false
+	}
+	return installed == "" || i.UpdatesAllowed == nil || i.UpdatesAllowed()
 }
 
 // writeFiles writes fleetd's files that differ and restarts fleetd if it is installed. A file that differs from the

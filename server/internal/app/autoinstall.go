@@ -14,6 +14,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/autoinstall"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/disk"
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -61,7 +62,7 @@ func (a *Autoinstall) Generate(ctx context.Context, req AutoinstallRequest) ([]b
 		if err := autoinstall.Validate(req.Release, req.Hostname, req.Locale, req.KeyboardLayout, req.Timezone); err != nil {
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}
-		cfg, err := a.enrollmentConfig(ctx, q, req.EnrollmentConfig)
+		cfg, tok, err := a.enrollmentConfig(ctx, q, req.EnrollmentConfig)
 		if err != nil {
 			return err
 		}
@@ -85,10 +86,15 @@ func (a *Autoinstall) Generate(ctx context.Context, req AutoinstallRequest) ([]b
 		if err != nil {
 			return err
 		}
+		mode, err := tokenUnlockMode(ctx, q, tok, settings.DiskUnlockMode)
+		if err != nil {
+			return err
+		}
+		rec.SetParam("unlock_mode", mode)
 		out, err = autoinstall.Render(autoinstall.Input{
 			Release: req.Release, Hostname: req.Hostname, Locale: req.Locale, KeyboardLayout: req.KeyboardLayout,
 			Timezone: req.Timezone, EnrollmentConfig: cfg, AgentVersion: rows[0].Version, Packages: packages,
-			BootPINMinLength: int(settings.BootPinMinLength),
+			BootPINMinLength: int(settings.BootPinMinLength), UnlockMode: mode,
 		}, a.now())
 		return err
 	})
@@ -98,27 +104,46 @@ func (a *Autoinstall) Generate(ctx context.Context, req AutoinstallRequest) ([]b
 // enrollmentConfig checks that cfg is an enrollment configuration of the caller's organization whose token can still
 // enroll a device, and returns it as the device will read it. A token of another organization is not found, exactly
 // like a token that does not exist.
-func (a *Autoinstall) enrollmentConfig(ctx context.Context, q *pgstore.Queries, cfg protocol.EnrollmentConfig) ([]byte, error) {
+func (a *Autoinstall) enrollmentConfig(ctx context.Context, q *pgstore.Queries, cfg protocol.EnrollmentConfig) ([]byte, pgstore.EnrollmentToken, error) {
+	var none pgstore.EnrollmentToken
 	org, err := orgOf(ctx)
 	if err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	u, err := url.Parse(cfg.ServerURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || len(cfg.BundleKeys) == 0 {
-		return nil, problem.InvalidRequest.WithDetail("enrollment_config must have an https server_url and bundle_keys, as created with the enrollment token")
+		return nil, none, problem.InvalidRequest.WithDetail("enrollment_config must have an https server_url and bundle_keys, as created with the enrollment token")
 	}
 	if cfg.OrganizationID != org.String() || cfg.Token == "" {
-		return nil, problem.NotFound.WithDetail("the enrollment token of enrollment_config does not exist")
+		return nil, none, problem.NotFound.WithDetail("the enrollment token of enrollment_config does not exist")
 	}
 	tok, err := q.GetEnrollmentTokenBySecret(ctx, enrollment.HashSecret(cfg.Token))
 	if db.IsNoRows(err) {
-		return nil, problem.NotFound.WithDetail("the enrollment token of enrollment_config does not exist")
+		return nil, none, problem.NotFound.WithDetail("the enrollment token of enrollment_config does not exist")
 	}
 	if err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	if err := usable(tok, a.now()); err != nil {
-		return nil, err
+		return nil, none, err
 	}
-	return json.Marshal(cfg)
+	raw, err := json.Marshal(cfg)
+	return raw, tok, err
+}
+
+// tokenUnlockMode is the disk unlock mode of a device installed with the token (plan M8d decision 45): the override
+// of the token's device group, else the organization's mode.
+func tokenUnlockMode(ctx context.Context, q *pgstore.Queries, tok pgstore.EnrollmentToken, org string) (string, error) {
+	if !tok.DeviceGroupID.Valid {
+		return disk.EffectiveUnlockMode(org, nil), nil
+	}
+	g, err := q.GetDeviceGroup(ctx, tok.DeviceGroupID.UUID)
+	if err != nil {
+		return "", err
+	}
+	var groups []string
+	if g.DiskUnlockMode != nil {
+		groups = append(groups, *g.DiskUnlockMode)
+	}
+	return disk.EffectiveUnlockMode(org, groups), nil
 }

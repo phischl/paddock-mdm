@@ -32,17 +32,19 @@ type Enroll struct {
 // gateway issued; ReportedSeq the Paddock-Seq the device sent. CloneSuspected is set when ReportedSeq is older than
 // the last issued value minus one (architecture §6.4).
 type Heartbeat struct {
-	DeviceID             uuid.UUID       `json:"device_id"`
-	OrganizationID       uuid.UUID       `json:"organization_id"`
-	ReceivedAt           time.Time       `json:"received_at"`
-	AppliedBundleVersion int64           `json:"applied_bundle_version"`
-	AgentVersion         string          `json:"agent_version"`
-	SchemaVersions       []int           `json:"schema_versions,omitempty"`
-	Health               json.RawMessage `json:"health,omitempty"`
-	EventSeqHigh         int64           `json:"event_seq_high"`
-	Seq                  int64           `json:"seq"`
-	ReportedSeq          int64           `json:"reported_seq"`
-	CloneSuspected       bool            `json:"clone_suspected"`
+	DeviceID             uuid.UUID `json:"device_id"`
+	OrganizationID       uuid.UUID `json:"organization_id"`
+	ReceivedAt           time.Time `json:"received_at"`
+	AppliedBundleVersion int64     `json:"applied_bundle_version"`
+	AgentVersion         string    `json:"agent_version"`
+	SchemaVersions       []int     `json:"schema_versions,omitempty"`
+	// Arch is the architecture the agent reported (plan M8d decision 25).
+	Arch           string          `json:"arch,omitempty"`
+	Health         json.RawMessage `json:"health,omitempty"`
+	EventSeqHigh   int64           `json:"event_seq_high"`
+	Seq            int64           `json:"seq"`
+	ReportedSeq    int64           `json:"reported_seq"`
+	CloneSuspected bool            `json:"clone_suspected"`
 	// DeliveredCommands are the commands the check-in response carried (plan M4a decision 3).
 	DeliveredCommands []uuid.UUID `json:"delivered_commands,omitempty"`
 }

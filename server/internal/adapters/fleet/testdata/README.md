@@ -7,3 +7,6 @@ stack and trimmed to the fields the adapter reads:
 - `get_host.json`: the host detail of paddock-u2404 with three of its packages, one of them with a matched CVE. The
   policy results were added in the shape Fleet returns them (`response` pass, fail, or empty before the host answered),
   because the recording predates Paddock's policies.
+- The hardware facts of `get_host.json` (`hardware_*`, `cpu_*`, `memory`, `gigs_total_disk_space`) and the fields the
+  adapter must not read (free disk space, uptime, addresses) were added in the shape Fleet returns them (plan M8d
+  decision 6), because the recording predates the hardware facts.

@@ -52,8 +52,13 @@ func (c *Compiler) Reconcile(ctx context.Context) error {
 	// The fleetd package is platform data; any organization's transaction reads it.
 	if len(orgs) > 0 {
 		err = c.pool.InOrg(systemContext(ctx, orgs[0]), func(ctx context.Context, q *pgstore.Queries) error {
-			keys.Inventory, err = c.inventory(ctx, q)
-			return err
+			if keys.Inventory, err = c.inventory(ctx, q); err != nil {
+				return err
+			}
+			if keys.Supervisor, err = supervisorPackages(ctx, q); err != nil {
+				return err
+			}
+			return c.himmelblauTarget(ctx, q)
 		})
 		if err != nil {
 			return err

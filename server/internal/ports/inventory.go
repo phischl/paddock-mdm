@@ -32,6 +32,15 @@ type HostInventory struct {
 	Software     []SoftwarePackage
 	// Policies are the results of the policies the host has answered.
 	Policies []PolicyResult
+	Hardware HostHardware
+}
+
+// HostHardware are the asset facts of a host (ADR 0037 decision 7): empty strings and zero values when the
+// inventory system does not report them.
+type HostHardware struct {
+	Vendor, Model, Serial, CPUBrand string
+	CPUCores                        int
+	MemoryBytes, DiskTotalBytes     int64
 }
 
 // SoftwarePackage is one installed package with the vulnerabilities matched to it.

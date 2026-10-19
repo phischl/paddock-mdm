@@ -27,6 +27,7 @@ func (h *handlers) UpdateUpdateSettings(ctx context.Context, req adminapi.Update
 	s, err := h.updates.UpdateSettings(ctx, updates.Settings{
 		SecurityDailyAt: b.SecurityDailyAt, RegularSchedule: b.RegularSchedule, RegularUpdatesEnabled: b.RegularUpdatesEnabled,
 		MaxRandomDelayMin: b.MaxRandomDelayMin, StalenessWarningH: b.StalenessWarningH, StalenessCriticalH: b.StalenessCriticalH,
+		AgentUpdatePolicy: string(deref(b.AgentUpdatePolicy, "")),
 	})
 	if err != nil {
 		return nil, err
@@ -38,7 +39,7 @@ func toUpdateSettings(s app.UpdateSettings) adminapi.UpdateSettings {
 	return adminapi.UpdateSettings{
 		SecurityDailyAt: s.SecurityDailyAt, RegularSchedule: s.RegularSchedule, RegularUpdatesEnabled: s.RegularUpdatesEnabled,
 		MaxRandomDelayMin: s.MaxRandomDelayMin, StalenessWarningH: s.StalenessWarningH, StalenessCriticalH: s.StalenessCriticalH,
-		UpdatedAt: utcPtr(s.UpdatedAt),
+		AgentUpdatePolicy: adminapi.AgentUpdatePolicy(s.AgentUpdatePolicy), UpdatedAt: utcPtr(s.UpdatedAt),
 	}
 }
 

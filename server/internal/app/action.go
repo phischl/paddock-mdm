@@ -363,6 +363,15 @@ func (r *ActionRunner) RunTxRefusal(ctx context.Context, scope Scope, spec Actio
 // nothing is recorded and RecordOnce returns false.
 func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
 	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	return r.RecordOnceWith(ctx, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) (bool, error) {
+		return claim(ctx, q)
+	})
+}
+
+// RecordOnceWith is RecordOnce for a claim that also changes state through the recorder (target, params, state
+// changes), such as a system transition that must be recorded at most once.
+func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
+	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -370,7 +379,7 @@ func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
 	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
 	recorded := false
 	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		fresh, err := claim(ctx, q)
+		fresh, err := claim(ctx, q, rec)
 		if err != nil || !fresh {
 			return err
 		}

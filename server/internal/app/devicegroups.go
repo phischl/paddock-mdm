@@ -10,7 +10,9 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/devicegroup"
+	"github.com/phischl/paddock-mdm/server/internal/domain/disk"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
+	"github.com/phischl/paddock-mdm/server/internal/domain/updates"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -32,6 +34,110 @@ var (
 	SpecDeviceGroupUpdate = ActionSpec{Code: audit.CodeDeviceGroupUpdated, AllowedRoles: RolesWrite}
 	SpecDeviceGroupDelete = ActionSpec{Code: audit.CodeDeviceGroupDeleted, AllowedRoles: RolesAdmin}
 )
+
+// GroupStaleness is a device group's override of the contact thresholds, in hours (plan M8d decision 11).
+type GroupStaleness struct {
+	WarningH, CriticalH int
+}
+
+// DeviceGroupPolicy are the policy overrides of a device group (plan M8d decision 11); a nil field inherits the
+// organization's setting.
+type DeviceGroupPolicy struct {
+	Staleness         *GroupStaleness
+	AgentUpdatePolicy *string
+	DiskUnlockMode    *string
+}
+
+// Change is one field of a partial update: Set false keeps the stored value, Set with a nil Value clears it.
+type Change[T any] struct {
+	Set   bool
+	Value *T
+}
+
+// DeviceGroupPolicyPatch changes some policy overrides of a device group.
+type DeviceGroupPolicyPatch struct {
+	Staleness         Change[GroupStaleness]
+	AgentUpdatePolicy Change[string]
+	DiskUnlockMode    Change[string]
+}
+
+// PolicyOf returns the stored policy overrides of a device group.
+func PolicyOf(g pgstore.DeviceGroup) DeviceGroupPolicy {
+	var p DeviceGroupPolicy
+	if g.StalenessWarningH != nil && g.StalenessCriticalH != nil {
+		p.Staleness = &GroupStaleness{WarningH: int(*g.StalenessWarningH), CriticalH: int(*g.StalenessCriticalH)}
+	}
+	p.AgentUpdatePolicy, p.DiskUnlockMode = g.AgentUpdatePolicy, g.DiskUnlockMode
+	return p
+}
+
+func (p DeviceGroupPolicyPatch) apply(old DeviceGroupPolicy) DeviceGroupPolicy {
+	if p.Staleness.Set {
+		old.Staleness = p.Staleness.Value
+	}
+	if p.AgentUpdatePolicy.Set {
+		old.AgentUpdatePolicy = p.AgentUpdatePolicy.Value
+	}
+	if p.DiskUnlockMode.Set {
+		old.DiskUnlockMode = p.DiskUnlockMode.Value
+	}
+	return old
+}
+
+// validate checks the overrides with the bounds of the organization's settings; the message names the field.
+func (p DeviceGroupPolicy) validate() error {
+	if s := p.Staleness; s != nil {
+		if err := updates.ValidateThresholds("staleness.", s.WarningH, s.CriticalH); err != nil {
+			return problem.InvalidRequest.WithDetail(err.Error())
+		}
+	}
+	if p.AgentUpdatePolicy != nil && !updates.ValidUpdatePolicy(*p.AgentUpdatePolicy) {
+		return problem.InvalidRequest.WithDetail("agent_update_policy must be automatic or manual")
+	}
+	if p.DiskUnlockMode != nil && !disk.ValidUnlockMode(*p.DiskUnlockMode) {
+		return problem.InvalidRequest.WithDetail("disk_unlock_mode must be tpm_pin or tpm_only")
+	}
+	return nil
+}
+
+// record sets the policy params of device_group.created and device_group.updated (null when unset).
+func (p DeviceGroupPolicy) record(rec Recorder) {
+	var warning, critical any
+	if p.Staleness != nil {
+		warning, critical = p.Staleness.WarningH, p.Staleness.CriticalH
+	}
+	rec.SetParam("staleness_warning_h", warning)
+	rec.SetParam("staleness_critical_h", critical)
+	rec.SetParam("agent_update_policy", nullableParam(p.AgentUpdatePolicy))
+	rec.SetParam("disk_unlock_mode", nullableParam(p.DiskUnlockMode))
+}
+
+func nullableParam(s *string) any {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
+
+// store writes the overrides of a device group.
+func (p DeviceGroupPolicy) store(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (pgstore.DeviceGroup, error) {
+	params := pgstore.SetDeviceGroupPoliciesParams{ID: id, AgentUpdatePolicy: p.AgentUpdatePolicy, DiskUnlockMode: p.DiskUnlockMode}
+	if s := p.Staleness; s != nil {
+		w, c := int32(s.WarningH), int32(s.CriticalH) //nolint:gosec // validated: at most 2160
+		params.StalenessWarningH, params.StalenessCriticalH = &w, &c
+	}
+	return q.SetDeviceGroupPolicies(ctx, params)
+}
+
+// bundleRelevant reports whether a change of the overrides changes what the compiler renders for the members: the
+// agent update policy and the disk unlock mode are bundle fields, the thresholds are read by the worker.
+func (p DeviceGroupPolicy) bundleRelevant(old DeviceGroupPolicy) bool {
+	return !equalPtr(p.AgentUpdatePolicy, old.AgentUpdatePolicy) || !equalPtr(p.DiskUnlockMode, old.DiskUnlockMode)
+}
+
+func equalPtr(a, b *string) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
+}
 
 // List returns one page of device groups and the capped number of matches (ADR 0018).
 func (d *DeviceGroups) List(ctx context.Context, page ListPage) (Listed[pgstore.DeviceGroup], error) {
@@ -70,8 +176,8 @@ func (d *DeviceGroups) Get(ctx context.Context, id uuid.UUID) (pgstore.DeviceGro
 	return g, err
 }
 
-// Create creates a device group (audited: device_group.created).
-func (d *DeviceGroups) Create(ctx context.Context, name string, description *string) (pgstore.DeviceGroup, error) {
+// Create creates a device group with its policy overrides (audited: device_group.created).
+func (d *DeviceGroups) Create(ctx context.Context, name string, description *string, policy DeviceGroupPolicy) (pgstore.DeviceGroup, error) {
 	var g pgstore.DeviceGroup
 	spec := SpecDeviceGroupCreate
 	spec.Params = map[string]any{"name": name}
@@ -82,7 +188,11 @@ func (d *DeviceGroups) Create(ctx context.Context, name string, description *str
 			desc = strings.TrimSpace(*description)
 		}
 		rec.SetParam("name", name)
+		policy.record(rec)
 		if err := validateGroup(name, desc); err != nil {
+			return err
+		}
+		if err := policy.validate(); err != nil {
 			return err
 		}
 		org, err := orgOf(ctx)
@@ -99,13 +209,15 @@ func (d *DeviceGroups) Create(ctx context.Context, name string, description *str
 			return err
 		}
 		rec.SetTarget(audit.Target{Type: "device_group", ID: g.ID.String(), Display: g.Name})
-		return nil
+		g, err = policy.store(ctx, q, g.ID)
+		return err
 	})
 	return g, err
 }
 
-// Update renames a device group or changes its description (audited: device_group.updated).
-func (d *DeviceGroups) Update(ctx context.Context, id uuid.UUID, name, description *string) (pgstore.DeviceGroup, error) {
+// Update renames a device group, changes its description or its policy overrides (audited: device_group.updated). A
+// change of the agent update policy or the disk unlock mode recompiles the members.
+func (d *DeviceGroups) Update(ctx context.Context, id uuid.UUID, name, description *string, patch DeviceGroupPolicyPatch) (pgstore.DeviceGroup, error) {
 	var g pgstore.DeviceGroup
 	spec := SpecDeviceGroupUpdate
 	spec.Target = &audit.Target{Type: "device_group", ID: id.String()}
@@ -127,14 +239,28 @@ func (d *DeviceGroups) Update(ctx context.Context, id uuid.UUID, name, descripti
 			rec.SetParam("old_name", old.Name)
 		}
 		rec.SetParam("description_changed", newDesc != old.Description)
+		oldPolicy := PolicyOf(old)
+		policy := patch.apply(oldPolicy)
+		policy.record(rec)
 		if err := validateGroup(newName, newDesc); err != nil {
 			return err
 		}
-		g, err = q.UpdateDeviceGroup(ctx, pgstore.UpdateDeviceGroupParams{ID: id, Name: newName, Description: newDesc})
-		if db.IsUniqueViolation(err, "device_group_organization_id_name_key") {
-			return problem.NameTaken.WithDetail("a device group with this name exists")
+		if err := policy.validate(); err != nil {
+			return err
 		}
-		return notFound(err)
+		if _, err = q.UpdateDeviceGroup(ctx, pgstore.UpdateDeviceGroupParams{ID: id, Name: newName, Description: newDesc}); err != nil {
+			if db.IsUniqueViolation(err, "device_group_organization_id_name_key") {
+				return problem.NameTaken.WithDetail("a device group with this name exists")
+			}
+			return notFound(err)
+		}
+		if g, err = policy.store(ctx, q, id); err != nil {
+			return err
+		}
+		if policy.bundleRelevant(oldPolicy) {
+			rec.StateChanged(statechange.ScopeDeviceGroup, id)
+		}
+		return nil
 	})
 	return g, err
 }

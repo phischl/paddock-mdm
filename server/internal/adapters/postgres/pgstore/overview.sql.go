@@ -109,7 +109,7 @@ func (q *Queries) OverviewDevices(ctx context.Context) (OverviewDevicesRow, erro
 const overviewEncryption = `-- name: OverviewEncryption :one
 SELECT count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' = 'compliant')::int AS encrypted,
        count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' = 'not_encrypted')::int AS not_encrypted,
-       count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' IN ('unmanaged', 'tpm_missing', 'tpm_pin_missing', 'escrow_pending'))::int AS partial,
+       count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' IN ('unmanaged', 'tpm_missing', 'tpm_pin_missing', 'unlock_mode_mismatch', 'escrow_pending'))::int AS partial,
        count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' IS NULL)::int AS not_reported
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.state = 'active'

@@ -431,6 +431,7 @@ func (ex *configExec) updateSettings(ctx context.Context) error {
 	in := updates.Settings{
 		SecurityDailyAt: s.SecurityDailyAt, RegularSchedule: s.RegularSchedule, RegularUpdatesEnabled: s.RegularUpdatesEnabled,
 		MaxRandomDelayMin: s.MaxRandomDelayMin, StalenessWarningH: s.StalenessWarningH, StalenessCriticalH: s.StalenessCriticalH,
+		AgentUpdatePolicy: s.AgentUpdatePolicy,
 	}
 	if err := in.Validate(); errors.Is(err, updates.ErrSchedule) {
 		return problem.InvalidSchedule.WithDetail(err.Error())
@@ -443,6 +444,7 @@ func (ex *configExec) updateSettings(ctx context.Context) error {
 		MaxRandomDelayMin:     int32(in.MaxRandomDelayMin),  //nolint:gosec // validated
 		StalenessWarningH:     int32(in.StalenessWarningH),  //nolint:gosec // validated
 		StalenessCriticalH:    int32(in.StalenessCriticalH), //nolint:gosec // validated
+		AgentUpdatePolicy:     in.AgentUpdatePolicy,
 		UpdatedBy:             uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.ID != uuid.Nil},
 	})
 	return err
@@ -474,6 +476,16 @@ func (ex *configExec) loginSettings(ctx context.Context) error {
 		return problem.InvalidRequest.WithDetail(err.Error())
 	}
 	cur := ex.st.doc.Settings.Login
+	// The document leaves out what it cannot express yet: the login history keeps its stored state, the unlock mode
+	// when the document omits it.
+	row, err := ex.q.GetLoginSettings(ctx)
+	if err != nil {
+		return err
+	}
+	unlockMode := row.DiskUnlockMode
+	if in.DiskUnlockMode != nil {
+		unlockMode = *in.DiskUnlockMode
+	}
 	if cur.LocalAdminUsername != in.LocalAdminUsername {
 		locked, err := ex.q.OrganizationHasActiveLocalAdmin(ctx)
 		if err != nil {
@@ -483,13 +495,14 @@ func (ex *configExec) loginSettings(ctx context.Context) error {
 			return problem.SettingLocked.WithDetail("local_admin_username cannot change: devices have an active password for " + cur.LocalAdminUsername)
 		}
 	}
-	_, err := ex.q.UpdateLoginSettings(ctx, pgstore.UpdateLoginSettingsParams{
+	_, err = ex.q.UpdateLoginSettings(ctx, pgstore.UpdateLoginSettingsParams{
 		HelloEnabled: in.HelloEnabled, HelloPinMinLength: int32(in.HelloPinMinLength), //nolint:gosec // validated 6–32
 		UserLockSessionAction: in.UserLockSessionAction, BreakGlassAccounts: in.BreakGlassAccounts,
 		SudoersDAllowlist: in.SudoersDAllowlist, SudoLectureText: in.SudoLectureText,
 		LocalAdminUsername: in.LocalAdminUsername, LocalAdminRotationDays: int32(in.LocalAdminRotationDays), //nolint:gosec // validated 1–365
 		RotateAfterRevealHours: int32Ptr(in.RotateAfterRevealHours), NoticeText: in.NoticeText,
-		BootPinMinLength: int32(in.BootPinMinLength), //nolint:gosec // validated 6–32
+		BootPinMinLength:    int32(in.BootPinMinLength), //nolint:gosec // validated 6–32
+		LoginHistoryEnabled: row.LoginHistoryEnabled, LoginHistoryDays: row.LoginHistoryDays, DiskUnlockMode: unlockMode,
 	})
 	return err
 }

@@ -93,6 +93,14 @@ The raw step-up tokens are deleted 30 days after their request reached a final s
   and *Cancel request* to its requester; each needs a step-up and the typed hostname.
 - ***Dead man's switch*** holds the organization's switch (below).
 
+A device with a pending Lock or Destroy cannot be uninstalled (409 `invalid_state`), and the agent refuses an
+uninstall command for 24 hours after it handed a revocation to `paddock-revoke` (`docs/operations/uninstall.md`).
+Lock and Destroy take precedence over a removal and are never blocked by one: the request cancels a removal without
+a removal report in the same step (recorded on `revocation.requested` as `uninstall_cancelled` with the removal's
+`uninstall_command_id`). If the device had already received the removal command, the device page warns that it may
+already have removed `paddock-revoke` (`uninstall_cancelled: after_delivery` in the response); check whether the
+device still reports `paddock_revoke` before relying on the lock.
+
 ## Restoring a locked device
 
 A Lock erases every keyslot, also the TPM2+PIN token and the recovery key; the device asks for its PIN at the next

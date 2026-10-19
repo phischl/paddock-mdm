@@ -137,6 +137,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
 	stepUpTokens := stepupproof.NewStore(vk)
 	sessionStore := sessions.NewStore(vk)
+	releases := app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development())
 	accounts := app.NewAccounts(runner, orgPool, platformPool, sessionStore)
 	escrowAccess := app.NewEscrowAccess(escrowreader.NewClient(escrowReaderURL, escrowReaderToken), stepUpTokens)
 	keys := &admin.Keyring{}
@@ -174,12 +175,13 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		UserGroups:     app.NewUserGroups(runner, orgPool, ak),
 		Logins:         app.NewLogins(runner, orgPool, ak),
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
+		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
 		Commands:       app.NewDeviceCommands(orgPool),
 		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:    app.NewAutoinstall(runner, orgPool, bundlesURL),
 		Disk:           app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
-		Revocations:    app.NewRevocations(runner, orgPool, stepUpTokens, revocationEnabled),
+		Revocations:    app.NewRevocations(runner, orgPool, stepUpTokens, devicecache.New(vk), revocationEnabled),
 		DMS:            app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
 		Updates:        app.NewUpdates(runner, orgPool),
 		Attention:      app.NewAttention(orgPool),
@@ -187,7 +189,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		SecurityReview: app.NewSecurityReview(orgPool),
 		Inventory:      app.NewInventory(orgPool),
 		Accounts:       accounts,
-		Releases:       app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development()),
+		Releases:       releases,
+		AgentUpdates:   app.NewAgentUpdates(runner, orgPool, devicecache.New(vk)),
+		Uninstalls:     app.NewUninstalls(runner, orgPool, devicecache.New(vk)),
 		AuditLog:       app.NewAuditLog(auditReader, orgPool),
 		IPAllowlist:    ipAllowlist,
 		IPGuard:        ipGuard,

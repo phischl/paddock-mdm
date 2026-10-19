@@ -80,8 +80,11 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    `paddock_inventory_unmapped_hosts` (ops port, `/metrics`). A reinstalled device that enrolled again keeps its
    hardware UUID: retire the old device so that its host maps again;
 4. stores, per mapped device and under its organization, the OS version, the fleetd (or osquery) version, the last
-   time Fleet saw the host, the installed packages, the matched CVEs and the policy results; what the host no longer
-   reports is deleted. Fleet's host IDs appear only in `device_inventory_ref.external_id`;
+   time Fleet saw the host, its hardware facts (manufacturer, model, serial number, processor and physical cores,
+   memory size, total disk size; ADR 0037 decision 7), the installed packages, the matched CVEs and the policy results;
+   what the host no longer reports is deleted. Fleet's host IDs appear only in `device_inventory_ref.external_id`.
+   Free disk space, uptime and network addresses are not copied. The device page shows the hardware facts in its
+   identity panel, and the device search matches the serial number;
 5. reports, once per failure, `device.tamper_agent_not_running` for every active device whose `paddock_agent_running`
    policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch). The reported failure
    stays on the attention page and on the device as *Agent not running* (kind `agent_not_running`) until the policy

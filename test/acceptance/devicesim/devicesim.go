@@ -41,6 +41,8 @@ type Device struct {
 	ClockOffset time.Duration
 	// Arch is reported in check-ins; empty (the default) keeps the device out of agent rollouts.
 	Arch string
+	// AgentVersion is reported in check-ins; empty reports 0.0.0-devicesim.
+	AgentVersion string
 	// SchemaVersions are the bundle schemas the device reports and accepts; nil means [bundle.SchemaVersion], the
 	// schema of today's agent.
 	SchemaVersions []int
@@ -200,7 +202,7 @@ func (d *Device) Checkin(ctx context.Context) (protocol.CheckinResponse, Respons
 		health = json.RawMessage(`{"reconcile":"ok"}`)
 	}
 	res, err := d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/checkin", Body: protocol.CheckinRequest{
-		AppliedBundleVersion: d.Applied, AgentVersion: "0.0.0-devicesim", SchemaVersions: d.schemaVersions(),
+		AppliedBundleVersion: d.Applied, AgentVersion: d.agentVersion(), SchemaVersions: d.schemaVersions(),
 		Health: health, Arch: d.Arch,
 	}})
 	if err != nil || res.Status != http.StatusOK {
@@ -291,4 +293,11 @@ func (d *Device) EscrowStatus(ctx context.Context, escrowID string) (string, Res
 	var s escrow.Status
 	err = json.Unmarshal(res.Body, &s)
 	return s.Status, res, err
+}
+
+func (d *Device) agentVersion() string {
+	if d.AgentVersion == "" {
+		return "0.0.0-devicesim"
+	}
+	return d.AgentVersion
 }

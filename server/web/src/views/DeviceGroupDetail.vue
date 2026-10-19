@@ -7,10 +7,11 @@ import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import InstallNowDialog from '../components/InstallNowDialog.vue'
 import { api, problemCode, type Device, type DeviceGroup } from '../api/client'
+import { effectiveStaleness } from '../lib/deviceGroups'
 import { listGroupDevices, stateFilter } from '../lib/devices'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
-import { installNowGroup } from '../lib/updates'
+import { getUpdateSettings, installNowGroup } from '../lib/updates'
 import { useSessionStore } from '../stores/session'
 import { deviceStatus } from '../lib/status'
 
@@ -30,11 +31,17 @@ async function install(packages: string[]): Promise<{ problem: string; detail?: 
 }
 const group = ref<DeviceGroup | null>(null)
 const problem = ref('')
+const orgSettings = ref<{ staleness_warning_h: number; staleness_critical_h: number } | null>(null)
 onMounted(async () => {
-  const { data, error } = await api.GET('/api/v1/device-groups/{id}', { params: { path: { id: id.value } } })
+  const [{ data, error }, settings] = await Promise.all([
+    api.GET('/api/v1/device-groups/{id}', { params: { path: { id: id.value } } }),
+    getUpdateSettings().catch(() => 'unavailable'),
+  ])
   group.value = data ?? null
   problem.value = data ? '' : problemCode(error)
+  orgSettings.value = typeof settings === 'string' ? null : settings
 })
+const staleness = computed(() => (group.value ? effectiveStaleness(group.value, orgSettings.value) : null))
 
 const fetchMembers = computed(() => listGroupDevices(id.value))
 const columns: ListColumn[] = [
@@ -79,6 +86,15 @@ const columns: ListColumn[] = [
       </p>
       <p class="summary">
         {{ group.description }}
+      </p>
+      <p
+        v-if="staleness"
+        data-testid="group-effective-staleness"
+      >
+        {{ t('deviceGroups.staleness.effective', {
+          warning: staleness.warning, critical: staleness.critical,
+          source: t('deviceGroups.staleness.sources.' + staleness.source),
+        }) }}
       </p>
       <h2>{{ t('deviceGroups.members') }}</h2>
       <DataList

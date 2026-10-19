@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/sudoers"
 	"github.com/phischl/paddock-mdm/pkg/timeticket"
 	"github.com/phischl/paddock-mdm/server/internal/compiler"
+	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 )
@@ -352,6 +354,29 @@ func TestVisudo(t *testing.T) {
 }
 
 // TestRevocationFlag: PADDOCK_REVOCATION_ENABLED reaches v2 bundles as revocation.enabled (plan M4c decision 1).
+// TestLoginHistoryFlag: the login resource asks for every session start while the organization records its login
+// history; off, the field is absent (plan M8d decision 17).
+func TestLoginHistoryFlag(t *testing.T) {
+	w := newWorld(t)
+	w.exec("UPDATE organization SET domains = '{c.test}' WHERE id = $1", w.org)
+	d := w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	b := w.fetch(d)
+	if spec[bundle.LoginSpec](t, b, "login").ReportEverySession {
+		t.Fatal("report_every_session set while the history is off")
+	}
+	for _, r := range b.Resources {
+		if r.ID == "login" && strings.Contains(string(r.Spec), "report_every_session") {
+			t.Fatalf("login spec carries the field: %s", r.Spec)
+		}
+	}
+	w.exec("UPDATE organization_login_settings SET login_history_enabled = true WHERE organization_id = $1", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if !spec[bundle.LoginSpec](t, w.fetch(d), "login").ReportEverySession {
+		t.Fatal("report_every_session missing while the history is on")
+	}
+}
+
 func TestRevocationFlag(t *testing.T) {
 	w := newWorldConfig(t, func(c *compiler.Config) { c.RevocationEnabled = true })
 	d := w.v2Device("{1,2}")
@@ -470,5 +495,166 @@ func TestUpdatesSection(t *testing.T) {
 	}
 	if b := w.fetch(v1); b.Updates != nil {
 		t.Fatalf("v1 bundle with updates %+v", b.Updates)
+	}
+}
+
+// TestAgentUpdatePolicy (plan M8d decision 22): organization manual renders manual; a group with automatic lifts it;
+// a group with manual wins over automatic; automatic without overrides is absent.
+func TestAgentUpdatePolicy(t *testing.T) {
+	w := newWorld(t)
+	g1, g2 := w.g1, w.g2
+	both, auto, plain := w.v2Device("{1,2}", g1, g2), w.v2Device("{1,2}", g1), w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := w.fetch(plain).Agent.UpdatePolicy; p != "" {
+		t.Fatalf("default policy %q", p)
+	}
+	w.exec("INSERT INTO organization_update_settings (organization_id, agent_update_policy) VALUES ($1, 'manual')", w.org)
+	w.exec("UPDATE device_group SET agent_update_policy = 'automatic' WHERE id = $1", g1)
+	w.exec("UPDATE device_group SET agent_update_policy = 'manual' WHERE id = $1", g2)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for d, want := range map[uuid.UUID]string{plain: "manual", auto: "automatic", both: "manual"} {
+		if got := w.fetch(d).Agent.UpdatePolicy; got != want {
+			t.Errorf("policy %q, want %q", got, want)
+		}
+	}
+	w.exec("UPDATE organization_update_settings SET agent_update_policy = 'automatic' WHERE organization_id = $1", w.org)
+	w.exec("UPDATE device_group SET agent_update_policy = NULL")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := w.fetch(both).Agent.UpdatePolicy; p != "" {
+		t.Fatalf("back to automatic: %q", p)
+	}
+}
+
+// TestSupervisorPackages (plan M8d decision 30): v2 bundles of devices with a semantic agent version carry the
+// paddock-supervisor package of the current release per arch once its waves reached the device; none while the
+// rollout is halted, and none for an agent version that is not semantic.
+func TestSupervisorPackages(t *testing.T) {
+	w := newWorld(t)
+	v := "7.0." + strconv.FormatInt(time.Now().UnixNano()%1000000, 10)
+	sum := strings.Repeat("ab", 32)
+	w.exec("INSERT INTO agent_release (version, status, created_by, published_at) VALUES ($1, 'published', 't', now())", v)
+	w.exec(`INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key)
+		VALUES ($1, 'paddock-supervisor', 'amd64', $2, 10, 'm', $3)`, v, sum, "packages/"+v+"/paddock-supervisor_"+v+"_amd64.deb")
+	w.exec("INSERT INTO agent_rollout (version, status, started_by, started_at) VALUES ($1, 'completed', 't', now() + interval '1 day')", v)
+	t.Cleanup(func() { w.exec("UPDATE agent_rollout SET status = 'halted' WHERE version = $1", v) })
+	semantic, other := w.v2Device("{1,2}"), w.v2Device("{1,2}")
+	w.exec("UPDATE device_status SET agent_version = $2 WHERE device_id = $1", semantic, v)
+	w.exec("UPDATE device_status SET agent_version = '0.0.0dev' WHERE device_id = $1", other)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	got := w.fetch(semantic).Agent.SupervisorPackages
+	want := bundle.PackageRef{Version: v, URLPath: "packages/" + v + "/paddock-supervisor_" + v + "_amd64.deb", SHA256: sum}
+	if len(got) != 1 || got["amd64"] != want {
+		t.Fatalf("supervisor packages %+v", got)
+	}
+	if p := w.fetch(other).Agent.SupervisorPackages; p != nil {
+		t.Fatalf("device without a semantic agent version got %+v", p)
+	}
+	w.exec("UPDATE agent_rollout SET status = 'halted' WHERE version = $1", v)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := w.fetch(semantic).Agent.SupervisorPackages; p != nil {
+		t.Fatalf("halted release still rendered: %+v", p)
+	}
+
+	// A running rollout carries the package only once its waves reached the device's bucket (design contract 6,
+	// ADR 0037 amendment 2026-10-18).
+	b := agentrelease.Bucket(semantic)
+	w.exec("UPDATE agent_rollout SET status = 'running', waves = $2, current_wave_index = 0 WHERE version = $1", v, []int{b, b + 1})
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := w.fetch(semantic).Agent.SupervisorPackages; p != nil {
+		t.Fatalf("device outside the current wave got %+v", p)
+	}
+
+	// An open update-now request for the release lifts the wave gate for the device, as for the agent offer; a
+	// request for another version or an expired one does not, and a halted rollout carries nothing (review 2
+	// finding C).
+	for _, tc := range []struct {
+		version, age string
+		want         bool
+	}{
+		{v, "1 hour", true}, {"6.9.9", "1 hour", false}, {v, "25 hours", false},
+	} {
+		w.exec("UPDATE device SET agent_update_requested_version = $2, agent_update_requested_at = now() - $3::interval WHERE id = $1",
+			semantic, tc.version, tc.age)
+		w.mustCompile(statechange.ScopeDevice, semantic)
+		if got := w.fetch(semantic).Agent.SupervisorPackages; (len(got) == 1 && got["amd64"] == want) != tc.want {
+			t.Fatalf("request %s %s ago: supervisor packages %+v", tc.version, tc.age, got)
+		}
+	}
+	w.exec("UPDATE device SET agent_update_requested_version = $2, agent_update_requested_at = now() WHERE id = $1", semantic, v)
+	w.exec("UPDATE agent_rollout SET status = 'halted' WHERE version = $1", v)
+	w.mustCompile(statechange.ScopeDevice, semantic)
+	if p := w.fetch(semantic).Agent.SupervisorPackages; p != nil {
+		t.Fatalf("halted rollout with an update-now request rendered %+v", p)
+	}
+	w.exec("UPDATE device SET agent_update_requested_version = NULL, agent_update_requested_at = NULL WHERE id = $1", semantic)
+	w.exec("UPDATE agent_rollout SET status = 'running' WHERE version = $1", v)
+
+	w.exec("UPDATE agent_rollout SET current_wave_index = 1 WHERE version = $1", v)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := w.fetch(semantic).Agent.SupervisorPackages; len(got) != 1 || got["amd64"] != want {
+		t.Fatalf("device inside the current wave got %+v", got)
+	}
+}
+
+// TestDiskUnlockMode (plan M8d decision 46): every v2 bundle carries disk.unlock_mode, the organization's mode unless
+// a group of the device overrides it; tpm_pin wins across groups.
+func TestDiskUnlockMode(t *testing.T) {
+	w := newWorld(t)
+	g1, g2 := w.g1, w.g2
+	both, only, plain := w.v2Device("{1,2}", g1, g2), w.v2Device("{1,2}", g2), w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if d := w.fetch(plain).Disk; d == nil || d.UnlockMode != "tpm_pin" {
+		t.Fatalf("default disk section %+v", d)
+	}
+	w.exec("UPDATE organization_login_settings SET disk_unlock_mode = 'tpm_only' WHERE organization_id = $1", w.org)
+	w.exec("UPDATE device_group SET disk_unlock_mode = 'tpm_pin' WHERE id = $1", g1)
+	w.exec("UPDATE device_group SET disk_unlock_mode = 'tpm_only' WHERE id = $1", g2)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for d, want := range map[uuid.UUID]string{plain: "tpm_only", only: "tpm_only", both: "tpm_pin"} {
+		if got := w.fetch(d).Disk; got == nil || got.UnlockMode != want {
+			t.Errorf("disk %+v, want %s", got, want)
+		}
+	}
+}
+
+// TestHimmelblauTarget (plan M8d decision 53): the reconcile round records the compiler's Himmelblau version as the
+// component target.
+func TestHimmelblauTarget(t *testing.T) {
+	w := newWorld(t)
+	w.exec("DELETE FROM component_target WHERE component = 'himmelblau'")
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var version, source string
+	if err := w.super.QueryRow(context.Background(), "SELECT version, source FROM component_target WHERE component = 'himmelblau'").
+		Scan(&version, &source); err != nil || version != "4.0.4" || source != "PADDOCK_HIMMELBLAU_VERSION" {
+		t.Fatalf("target %q %q, %v", version, source, err)
+	}
+}
+
+// TestComponentTargetGrants (PDK-328): only the platform role writes component_target; the compiler writes the
+// himmelblau row through its function only, and the worker and the compiler have no direct access to the table.
+func TestComponentTargetGrants(t *testing.T) {
+	w := newWorld(t)
+	for _, tc := range []struct {
+		role, privilege string
+		want            bool
+	}{
+		{"paddock_platform", "INSERT", true}, {"paddock_platform", "DELETE", true},
+		{"paddock_compiler", "SELECT", false}, {"paddock_compiler", "INSERT", false}, {"paddock_compiler", "UPDATE", false},
+		{"paddock_compiler", "DELETE", false},
+		{"paddock_worker", "SELECT", false}, {"paddock_worker", "INSERT", false}, {"paddock_worker", "UPDATE", false},
+		{"paddock_worker", "DELETE", false},
+	} {
+		var got bool
+		if err := w.super.QueryRow(context.Background(), "SELECT has_table_privilege($1, 'component_target', $2)", tc.role, tc.privilege).
+			Scan(&got); err != nil || got != tc.want {
+			t.Errorf("%s %s on component_target: %v (%v), want %v", tc.role, tc.privilege, got, err, tc.want)
+		}
+	}
+	var config []string
+	if err := w.super.QueryRow(context.Background(), `SELECT proconfig FROM pg_proc WHERE proname = 'paddock_component_targets'`).
+		Scan(&config); err != nil || len(config) != 1 || config[0] != "search_path=public, pg_temp" {
+		t.Fatalf("paddock_component_targets() config %v, %v", config, err)
 	}
 }

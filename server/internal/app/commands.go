@@ -169,6 +169,18 @@ func (d *DeviceCommands) Expire(ctx context.Context, now time.Time) ([]pgstore.E
 	return out, err
 }
 
+// Cancelled returns the commands of the context's organization cancelled since a time (worker): they are removed
+// from cmd:<device_id> (plan M8d decision 38).
+func (d *DeviceCommands) Cancelled(ctx context.Context, since time.Time) ([]pgstore.ListCancelledDeviceCommandsRow, error) {
+	var out []pgstore.ListCancelledDeviceCommandsRow
+	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		out, err = q.ListCancelledDeviceCommands(ctx, since)
+		return err
+	})
+	return out, err
+}
+
 // MarkDelivered records that a check-in response carried the commands and revocation tokens (worker).
 func (d *DeviceCommands) MarkDelivered(ctx context.Context, hb ingest.Heartbeat) error {
 	if len(hb.DeliveredCommands) == 0 {

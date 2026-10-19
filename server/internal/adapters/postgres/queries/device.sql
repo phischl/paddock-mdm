@@ -15,12 +15,25 @@ SELECT * FROM device WHERE id = @id FOR UPDATE;
 -- name: ListDevices :many
 SELECT sqlc.embed(device), device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
-       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact
+       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact,
+       -- The owners as UserRef objects for the list column (plan M8d decision 3).
+       (SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'username', u.username, 'display_name', u.display_name)
+                                  ORDER BY u.username), '[]'::jsonb)
+        FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners,
+       -- Hardware facts (plan M8d decision 8): NULL while no inventory row exists.
+       inv.hardware_vendor, inv.hardware_model, inv.hardware_serial, inv.cpu_brand, inv.cpu_cores, inv.memory_bytes,
+       inv.disk_total_bytes,
+       -- The components older than their targets at the last heartbeat (plan M8d decision 54).
+       coalesce(device_status.components_outdated, '{}')::text[] AS components_outdated
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
+LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
 WHERE (sqlc.narg(q_pattern)::text IS NULL
        OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
-       OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+       OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR inv.hardware_serial ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
+                  AND (u.username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\' OR u.display_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')))
   AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
   AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
   AND (sqlc.narg(contacts)::text[] IS NULL
@@ -33,6 +46,10 @@ WHERE (sqlc.narg(q_pattern)::text IS NULL
   AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m
         WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
+  AND (sqlc.narg(owner_id)::uuid IS NULL OR EXISTS (
+        SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = sqlc.narg(owner_id)::uuid))
+  AND (sqlc.narg(component_outdated)::boolean IS NULL
+       OR (cardinality(device_status.components_outdated) > 0) = sqlc.narg(component_outdated)::boolean)
 ORDER BY
   CASE WHEN @sort::text = 'hostname' THEN hostname END ASC,
   CASE WHEN @sort::text = '-hostname' THEN hostname END DESC,
@@ -49,9 +66,13 @@ LIMIT @max_rows OFFSET @skip_rows;
 SELECT count(*) FROM (
   SELECT 1 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
   LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
+  LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
   WHERE (sqlc.narg(q_pattern)::text IS NULL
          OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
-         OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+         OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR inv.hardware_serial ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
+                    AND (u.username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\' OR u.display_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')))
     AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
     AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
     AND (sqlc.narg(contacts)::text[] IS NULL
@@ -63,6 +84,10 @@ SELECT count(*) FROM (
     AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_group_member m
           WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
+    AND (sqlc.narg(owner_id)::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = sqlc.narg(owner_id)::uuid))
+    AND (sqlc.narg(component_outdated)::boolean IS NULL
+         OR (cardinality(device_status.components_outdated) > 0) = sqlc.narg(component_outdated)::boolean)
   LIMIT @count_limit
 ) matching;
 
@@ -123,3 +148,21 @@ SELECT k.key_id, k.public_key, k.status AS key_status, d.id AS device_id, d.stat
 FROM device_identity_key k JOIN device d ON d.id = k.device_id
 WHERE d.state <> 'pending' AND (sqlc.narg(device_id)::uuid IS NULL OR d.id = sqlc.narg(device_id)::uuid)
 ORDER BY k.key_id;
+
+-- Update now (plan M8d decisions 26 and 29).
+
+-- name: SetAgentUpdateRequest :exec
+UPDATE device SET agent_update_requested_version = @version, agent_update_requested_at = now() WHERE id = @id;
+
+-- name: ClearAgentUpdateRequest :execrows
+-- The device reported the outcome of the requested version.
+UPDATE device SET agent_update_requested_version = NULL, agent_update_requested_at = NULL
+WHERE id = @device_id AND agent_update_requested_version = @version;
+
+-- name: ExpireAgentUpdateRequests :execrows
+UPDATE device SET agent_update_requested_version = NULL, agent_update_requested_at = NULL
+WHERE agent_update_requested_at < @before::timestamptz;
+
+-- name: ListAgentUpdateRequests :many
+SELECT id, agent_update_requested_version, agent_update_requested_at FROM device
+WHERE agent_update_requested_at IS NOT NULL ORDER BY id;

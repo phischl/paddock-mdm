@@ -135,6 +135,31 @@ onMounted(async () => {
           :error-messages="message('staleness_critical_h')"
           data-testid="staleness-critical"
         />
+        <p class="pd-type-caption pd-muted">
+          {{ t('updateSettings.staleness.groupsHint') }}
+        </p>
+      </fieldset>
+      <fieldset
+        :disabled="!session.canDelete"
+        data-testid="agent-update-policy"
+      >
+        <legend>{{ t('updateSettings.agentUpdates.title') }}</legend>
+        <v-radio-group
+          v-model="form.agent_update_policy"
+          hide-details
+        >
+          <v-radio
+            value="automatic"
+            :label="t('updateSettings.agentUpdates.automatic')"
+          />
+          <v-radio
+            value="manual"
+            :label="t('updateSettings.agentUpdates.manual')"
+          />
+        </v-radio-group>
+        <p class="pd-type-caption pd-muted">
+          {{ t('updateSettings.agentUpdates.hint') }}
+        </p>
       </fieldset>
       <p
         v-if="problem"

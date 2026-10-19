@@ -192,7 +192,7 @@ tunnel.
 `./paddock check` runs `paddock-server prod-check` from the server image of `versions.env` over this host's rendered
 configuration. It prints one PASS/FAIL line per item and exits 1 on any FAIL. It refuses: `compose.dev.yaml` in the
 configuration; `PADDOCK_ENV` other than `production`; development-only variables (`PADDOCK_STEPUP_WINDOW`,
-`PADDOCK_STEPUP_MAX_AUTH_AGE`, `PADDOCK_STALENESS_UNIT`, `PADDOCK_REAPER_THRESHOLD`, `PADDOCK_OSV_SYNC_INTERVAL`,
+`PADDOCK_STEPUP_MAX_AUTH_AGE`, `PADDOCK_STALENESS_UNIT`, `PADDOCK_RETENTION_UNIT`, `PADDOCK_REAPER_THRESHOLD`, `PADDOCK_OSV_SYNC_INTERVAL`,
 `PADDOCK_TEST_*`); `PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
 missing, empty or readable by every user of the host (symbolic links resolved; `.secrets/` must stay 0700); a path
 below `/run/secrets/` that a service names (in a variable or as the `sslrootcert` of a DSN) without mounting that

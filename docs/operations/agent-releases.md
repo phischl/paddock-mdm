@@ -331,6 +331,78 @@ Once the rollback is made, the device reports `device.agent_rolled_back` and the
 disappears when the device reports another agent version. The rollout counts the device once as failed, whether it
 reported `rollback_failed`, `rolled_back` or both.
 
+## Update policy
+
+An organization chooses whether its devices take agent releases automatically (*Updates* → *Agent updates*,
+`agent_update_policy` of the update settings, also in the declarative document; ADR 0037 decision 1):
+
+- **Automatic** (default): devices install every release the platform rolls out, in their wave.
+- **Manual**: devices install an agent release only when an administrator requests it per device (*Update agent
+  now*). The same policy holds back the supervisor package and fleetd upgrades; a missing fleetd is still installed.
+
+A device group can override the organization's policy; a device in several groups is `manual` when any of them says
+so, and `automatic` when a group says so on a `manual` organization. The bundle carries the result
+(`agent.update_policy`, absent for automatic). An agent on `manual` logs `agent update offer ignored by the
+organization's policy` once per offered version. Devices left on an old agent appear on the attention page as
+`agent_outdated` and leave the support window after N-2 minor releases (426 `agent_unsupported`, residual risk RR-51).
+
+## Update now
+
+*Update agent now* on the device page (`POST /api/v1/devices/{id}/update-agent`, organization administrators and
+operators, audited as `device.agent_update_requested`) asks one active device to install the release the platform
+currently offers at its next check-in — outside its rollout wave and regardless of the update policy, with the usual
+self-test, probation and rollback. It is refused (409 `invalid_state`) while no release is offered (no rollout, or a
+halted one), when the device already runs the release, or when the release has no artifact for the device's
+architecture. The request ends with the device's report of that version (`device.agent_updated`, `…update_failed` or
+`…rolled_back`) or after 24 hours; an earlier failure of the same version on the device is retried once per request.
+
+## Supervisor package
+
+A device updates `paddock-supervisor` from the current release (ADR 0037 decision 3, amendment 2026-10-18): while a
+release's rollout runs or after it completed, the v2 bundle of every device whose agent reports a semantic version
+and whose rollout bucket the waves reached carries the release's `paddock-supervisor` package per architecture
+(`agent.supervisor_packages`, SHA-256 in the signed bundle) — the same wave gate as the agent offer, so the
+supervisor never goes to every device at once. An open *Update agent now* request for the release lifts the wave
+gate for that device, as for the agent. Nothing is offered after the rollout was halted. A new wave reaches the
+bundles at the compiler's next reconcile. An agent installs the package only when
+
+- it runs that release itself (agent first, supervisor second, in the same waves),
+- `dpkg` reports an older `paddock-supervisor` (the Debian form `0.1.0~alpha.4` of a pre-release counts as
+  `0.1.0-alpha.4`),
+- the update policy is automatic or an *Update agent now* request is open (after the agent update it stays open
+  until the supervisor's result arrives while the device reports an older supervisor or an outdated fleetd, at most
+  24 hours; a device that already runs the release can be asked again under the same condition),
+- no agent update is pending, no supervisor upgrade runs, the version did not fail on the device before and is not
+  waiting for its retry.
+
+The agent downloads the package to `/var/lib/paddock/packages/`, writes `/var/lib/paddock/state/supervisor-upgrade.json`
+and starts `paddockd supervisor-upgrade` in the transient unit `paddock-supervisor-upgrade.service` (`systemd-run`,
+outside the supervisor's cgroup, so the restart by the package's postinst does not stop it). The helper copies
+`/usr/sbin/paddock-supervisor` and its unit file to `/var/lib/paddock/packages/supervisor-backup/`, runs `dpkg -i`
+(killed after 15 minutes) and waits up to 10 minutes for a check-in of the agent after the installation; the new
+supervisor must then keep running with the same process for a minute. It writes
+`/var/lib/paddock/state/supervisor-upgrade-result.json`, which the agent reports as `agent.supervisor_updated`:
+
+| Outcome | Audit code | Meaning |
+|---|---|---|
+| `updated` | `device.supervisor_updated` | The new supervisor runs and its agent checked in. |
+| `install_failed` | `device.supervisor_update_failed` | The backup or `dpkg -i` failed, or the helper did not finish within 30 minutes; the backup is restored only if the supervisor is not running afterwards. |
+| `rolled_back` | `device.supervisor_update_failed` | No check-in within 10 minutes, or the new supervisor kept restarting: the backup was copied back and the supervisor restarted. |
+| `rolled_back_unreachable` | `device.supervisor_update_failed` | The new supervisor ran stable, but the agent's check-ins did not reach the server within 10 minutes (`/run/paddock/last-checkin-failed`): the backup was copied back. The device retries the version 24 hours later at the earliest, at most 3 times (`supervisor_retry` in `/var/lib/paddock/state/state.json`). |
+
+`install_failed` and `rolled_back` count once per device toward the failure threshold of the release's rollout,
+exactly like a failed agent update (`agent_update_report` outcome `supervisor_failed`): enough failures halt the
+rollout, and a halted rollout offers neither the agent nor the supervisor. `rolled_back_unreachable` never counts: a
+server outage is no defect of the release. After a rollback `dpkg -l paddock-supervisor` may name the
+new version while the previous binary runs (`/usr/sbin/paddock-supervisor version`) until the next successful
+upgrade. A failed version is not installed again on that device (`failed_supervisor_version` in
+`/var/lib/paddock/state/state.json`); a newer release is. Troubleshooting:
+
+```sh
+journalctl -u paddock-supervisor-upgrade -u paddock-supervisor --since today
+cat /var/lib/paddock/state/supervisor-upgrade-result.json   # until the event is delivered
+```
+
 ## GitHub release workflow
 
 `.github/workflows/release.yml` runs on tags `v*.*.*`. Before the first tag, set the repository variable

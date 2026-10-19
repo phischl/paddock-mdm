@@ -163,6 +163,27 @@ func managedCases(collection, kind string, valid func() map[string]any, invalid 
 	}
 }
 
+func uninstallPath(id string) string { return "/api/v1/devices/" + id + "/uninstall" }
+
+func uninstallCaseBody(hostname string) map[string]any {
+	return map[string]any{"mode": "leave", "confirm_hostname": hostname, "reason": "gate A3"}
+}
+
+// uninstallCaseDevice enrolls an active device for one uninstall case and returns its ID and hostname.
+func uninstallCaseDevice(t *testing.T, w *auditWorld) (string, string) {
+	t.Helper()
+	d := activeDevice(t, w.alice, "", "ao-un-"+uniqueSuffix())
+	return d.DeviceID, getDevice(t, w.alice, d.DeviceID).Hostname
+}
+
+// steppedUpAlice signs alice in on a session of its own and steps it up: a step-up changes the session it runs in.
+func steppedUpAlice(t *testing.T) *env.Portal {
+	t.Helper()
+	alice := login(t, env.Alice)
+	stepUp(t, alice, env.Alice, true)
+	return alice
+}
+
 // deviceAuditCases are the A3 cases of the M2a operations (plan M2a §8: the existing gates include them).
 var deviceAuditCases = func() map[string][]auditCase {
 	rotate := func(id string) string { return "/api/v1/devices/" + id + "/local-admin/rotate" }
@@ -287,6 +308,113 @@ var deviceAuditCases = func() map[string][]auditCase {
 				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+uuid.NewString()+"/groups", map[string]any{"device_group_ids": []string{}})
 				expectStatus(t, res, http.StatusNotFound, "not_found")
 				expectOneEvent(t, w.alice, res.RequestID, "device.groups_changed", "failure")
+			}},
+		},
+		"POST /api/v1/devices/{id}/update-agent": {
+			// The success case needs a running rollout; gate A6 (TestUpdateNow) records it exactly once.
+			{"refused state", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPost, "/api/v1/devices/"+pendingDevice(t, w)+"/update-agent", nil)
+				expectStatus(t, res, http.StatusConflict, "invalid_state")
+				expectOneEvent(t, w.alice, res.RequestID, "device.agent_update_requested", "failure")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.bob, http.MethodPost, "/api/v1/devices/"+activeID(t, w)+"/update-agent", nil)
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.agent_update_requested", "denied")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPost, "/api/v1/devices/"+uuid.NewString()+"/update-agent", nil)
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.agent_update_requested", "failure")
+			}},
+		},
+		"PUT /api/v1/devices/{id}/owners": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/owners", map[string]any{"user_ids": []string{}})
+				expectStatus(t, res, http.StatusOK, "")
+				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "success")
+			}},
+			{"validation failure", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/owners",
+					map[string]any{"user_ids": []string{uuid.NewString()}})
+				expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "failure")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.bob, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/owners", map[string]any{"user_ids": []string{}})
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "denied")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+uuid.NewString()+"/owners", map[string]any{"user_ids": []string{}})
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "failure")
+			}},
+		},
+		// Each case removes its own device; the cases that need a step-up sign in on their own, as for reveal.
+		"POST /api/v1/devices/{id}/uninstall": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, steppedUpAlice(t), http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname))
+				expectStatus(t, res, http.StatusOK, "")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "success")
+			}},
+			{"no step-up", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, login(t, env.Alice), http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname))
+				expectStatus(t, res, http.StatusForbidden, "step_up_required")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "denied")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, w.bob, http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname))
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "denied")
+			}},
+			{"validation failure", func(t *testing.T, w *auditWorld) {
+				id, _ := uninstallCaseDevice(t, w)
+				res := call(t, steppedUpAlice(t), http.MethodPost, uninstallPath(id), uninstallCaseBody("not-the-hostname"))
+				expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_request")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "failure")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, steppedUpAlice(t), http.MethodPost, uninstallPath(uuid.NewString()), uninstallCaseBody("x"))
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "failure")
+			}},
+			{"conflict", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				alice := steppedUpAlice(t)
+				expectStatus(t, call(t, alice, http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname)), http.StatusOK, "")
+				res := call(t, alice, http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname))
+				expectStatus(t, res, http.StatusConflict, "invalid_state")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "failure")
+			}},
+		},
+		"POST /api/v1/devices/{id}/uninstall/cancel": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				expectStatus(t, call(t, steppedUpAlice(t), http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname)), http.StatusOK, "")
+				res := call(t, w.alice, http.MethodPost, uninstallPath(id)+"/cancel", nil)
+				expectStatus(t, res, http.StatusOK, "")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_cancelled", "success")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				id, _ := uninstallCaseDevice(t, w)
+				res := call(t, w.bob, http.MethodPost, uninstallPath(id)+"/cancel", nil)
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_cancelled", "denied")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPost, uninstallPath(uuid.NewString())+"/cancel", nil)
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_cancelled", "failure")
+			}},
+			{"conflict", func(t *testing.T, w *auditWorld) {
+				id, _ := uninstallCaseDevice(t, w)
+				res := call(t, w.alice, http.MethodPost, uninstallPath(id)+"/cancel", nil)
+				expectStatus(t, res, http.StatusConflict, "invalid_state")
+				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_cancelled", "failure")
 			}},
 		},
 	}

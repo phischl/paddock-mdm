@@ -71,7 +71,7 @@ func (q *Queries) DeleteDeviceGroup(ctx context.Context, id uuid.UUID) (int64, e
 }
 
 const getDeviceGroup = `-- name: GetDeviceGroup :one
-SELECT id, organization_id, name, description, created_at, updated_at FROM device_group WHERE id = $1
+SELECT id, organization_id, name, description, created_at, updated_at, staleness_warning_h, staleness_critical_h, agent_update_policy, disk_unlock_mode FROM device_group WHERE id = $1
 `
 
 func (q *Queries) GetDeviceGroup(ctx context.Context, id uuid.UUID) (DeviceGroup, error) {
@@ -84,6 +84,10 @@ func (q *Queries) GetDeviceGroup(ctx context.Context, id uuid.UUID) (DeviceGroup
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StalenessWarningH,
+		&i.StalenessCriticalH,
+		&i.AgentUpdatePolicy,
+		&i.DiskUnlockMode,
 	)
 	return i, err
 }
@@ -91,7 +95,7 @@ func (q *Queries) GetDeviceGroup(ctx context.Context, id uuid.UUID) (DeviceGroup
 const insertDeviceGroup = `-- name: InsertDeviceGroup :one
 INSERT INTO device_group (id, organization_id, name, description)
 VALUES ($1, $2, $3, $4)
-RETURNING id, organization_id, name, description, created_at, updated_at
+RETURNING id, organization_id, name, description, created_at, updated_at, staleness_warning_h, staleness_critical_h, agent_update_policy, disk_unlock_mode
 `
 
 type InsertDeviceGroupParams struct {
@@ -116,12 +120,16 @@ func (q *Queries) InsertDeviceGroup(ctx context.Context, arg InsertDeviceGroupPa
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StalenessWarningH,
+		&i.StalenessCriticalH,
+		&i.AgentUpdatePolicy,
+		&i.DiskUnlockMode,
 	)
 	return i, err
 }
 
 const listAllDeviceGroups = `-- name: ListAllDeviceGroups :many
-SELECT id, organization_id, name, description, created_at, updated_at FROM device_group ORDER BY name, id
+SELECT id, organization_id, name, description, created_at, updated_at, staleness_warning_h, staleness_critical_h, agent_update_policy, disk_unlock_mode FROM device_group ORDER BY name, id
 `
 
 // Declarative configuration (plan M6c decision 16): every device group of the organization.
@@ -141,6 +149,10 @@ func (q *Queries) ListAllDeviceGroups(ctx context.Context) ([]DeviceGroup, error
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StalenessWarningH,
+			&i.StalenessCriticalH,
+			&i.AgentUpdatePolicy,
+			&i.DiskUnlockMode,
 		); err != nil {
 			return nil, err
 		}
@@ -154,7 +166,7 @@ func (q *Queries) ListAllDeviceGroups(ctx context.Context) ([]DeviceGroup, error
 
 const listDeviceGroups = `-- name: ListDeviceGroups :many
 
-SELECT id, organization_id, name, description, created_at, updated_at FROM device_group
+SELECT id, organization_id, name, description, created_at, updated_at, staleness_warning_h, staleness_critical_h, agent_update_policy, disk_unlock_mode FROM device_group
 WHERE ($1::text IS NULL
        OR name ILIKE $1::text ESCAPE '\'
        OR description ILIKE $1::text ESCAPE '\')
@@ -199,6 +211,10 @@ func (q *Queries) ListDeviceGroups(ctx context.Context, arg ListDeviceGroupsPara
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StalenessWarningH,
+			&i.StalenessCriticalH,
+			&i.AgentUpdatePolicy,
+			&i.DiskUnlockMode,
 		); err != nil {
 			return nil, err
 		}
@@ -223,10 +239,51 @@ func (q *Queries) LockDeviceGroup(ctx context.Context, id uuid.UUID) (uuid.UUID,
 	return id_2, err
 }
 
+const setDeviceGroupPolicies = `-- name: SetDeviceGroupPolicies :one
+UPDATE device_group SET staleness_warning_h = $1::int,
+  staleness_critical_h = $2::int, agent_update_policy = $3::text,
+  disk_unlock_mode = $4::text, updated_at = now()
+WHERE id = $5
+RETURNING id, organization_id, name, description, created_at, updated_at, staleness_warning_h, staleness_critical_h, agent_update_policy, disk_unlock_mode
+`
+
+type SetDeviceGroupPoliciesParams struct {
+	StalenessWarningH  *int32
+	StalenessCriticalH *int32
+	AgentUpdatePolicy  *string
+	DiskUnlockMode     *string
+	ID                 uuid.UUID
+}
+
+// The policy overrides of a device group (plan M8d decision 11); NULL inherits the organization's setting.
+func (q *Queries) SetDeviceGroupPolicies(ctx context.Context, arg SetDeviceGroupPoliciesParams) (DeviceGroup, error) {
+	row := q.db.QueryRow(ctx, setDeviceGroupPolicies,
+		arg.StalenessWarningH,
+		arg.StalenessCriticalH,
+		arg.AgentUpdatePolicy,
+		arg.DiskUnlockMode,
+		arg.ID,
+	)
+	var i DeviceGroup
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.StalenessWarningH,
+		&i.StalenessCriticalH,
+		&i.AgentUpdatePolicy,
+		&i.DiskUnlockMode,
+	)
+	return i, err
+}
+
 const updateDeviceGroup = `-- name: UpdateDeviceGroup :one
 UPDATE device_group SET name = $1, description = $2, updated_at = now()
 WHERE id = $3
-RETURNING id, organization_id, name, description, created_at, updated_at
+RETURNING id, organization_id, name, description, created_at, updated_at, staleness_warning_h, staleness_critical_h, agent_update_policy, disk_unlock_mode
 `
 
 type UpdateDeviceGroupParams struct {
@@ -245,6 +302,10 @@ func (q *Queries) UpdateDeviceGroup(ctx context.Context, arg UpdateDeviceGroupPa
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StalenessWarningH,
+		&i.StalenessCriticalH,
+		&i.AgentUpdatePolicy,
+		&i.DiskUnlockMode,
 	)
 	return i, err
 }

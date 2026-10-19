@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 
@@ -59,6 +60,9 @@ func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref por
 		if err := q.UpsertInventoryRef(ctx, pgstore.UpsertInventoryRefParams{
 			DeviceID: device, OrganizationID: org, ExternalID: string(ref), LastSeenAt: inv.LastSeenAt,
 			OsVersion: inv.OSVersion, FleetdVersion: inv.AgentVersion,
+			HardwareVendor: inv.Hardware.Vendor, HardwareModel: inv.Hardware.Model, HardwareSerial: inv.Hardware.Serial,
+			CpuBrand: inv.Hardware.CPUBrand, CpuCores: int32(min(inv.Hardware.CPUCores, math.MaxInt32)), //nolint:gosec // bounded
+			MemoryBytes: inv.Hardware.MemoryBytes, DiskTotalBytes: inv.Hardware.DiskTotalBytes,
 		}); err != nil {
 			return err
 		}

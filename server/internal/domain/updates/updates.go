@@ -31,6 +31,42 @@ const (
 	MaxReasonLength       = 500
 )
 
+// Agent update policies of an organization or a device group (ADR 0037 decision 1).
+const (
+	UpdatePolicyAutomatic = bundle.UpdatePolicyAutomatic
+	UpdatePolicyManual    = bundle.UpdatePolicyManual
+)
+
+// BundleUpdatePolicy is the update_policy of a device's bundle (plan M8d decision 22) from the organization's policy
+// and the overrides of the device's groups (nil entries skipped): a group with manual wins; a group with automatic
+// lifts a manual organization; otherwise the organization's policy. Automatic is rendered as "" (absent), the
+// agent's default, unless it overrides a manual organization.
+func BundleUpdatePolicy(org string, groups []*string) string {
+	var automatic bool
+	for _, g := range groups {
+		switch {
+		case g == nil:
+		case *g == UpdatePolicyManual:
+			return UpdatePolicyManual
+		case *g == UpdatePolicyAutomatic:
+			automatic = true
+		}
+	}
+	switch {
+	case org != UpdatePolicyManual:
+		return ""
+	case automatic:
+		return UpdatePolicyAutomatic
+	default:
+		return UpdatePolicyManual
+	}
+}
+
+// ValidUpdatePolicy reports whether policy is a known agent update policy.
+func ValidUpdatePolicy(policy string) bool {
+	return policy == UpdatePolicyAutomatic || policy == UpdatePolicyManual
+}
+
 // Settings are an organization's update settings.
 type Settings struct {
 	SecurityDailyAt       string
@@ -39,6 +75,8 @@ type Settings struct {
 	MaxRandomDelayMin     int
 	StalenessWarningH     int
 	StalenessCriticalH    int
+	// AgentUpdatePolicy is automatic or manual (ADR 0037 decision 1).
+	AgentUpdatePolicy string
 }
 
 // Defaults returns the settings of an organization without a row.
@@ -46,7 +84,7 @@ func Defaults() Settings {
 	return Settings{
 		SecurityDailyAt: DefaultSecurityDailyAt, RegularSchedule: DefaultRegularSchedule, RegularUpdatesEnabled: true,
 		MaxRandomDelayMin: DefaultMaxRandomDelayMin, StalenessWarningH: DefaultStalenessWarningH,
-		StalenessCriticalH: DefaultStalenessCriticalH,
+		StalenessCriticalH: DefaultStalenessCriticalH, AgentUpdatePolicy: UpdatePolicyAutomatic,
 	}
 }
 
@@ -69,11 +107,11 @@ func (s Settings) Validate() error {
 	if s.MaxRandomDelayMin < 0 || s.MaxRandomDelayMin > bundle.MaxRandomDelayMin {
 		return fmt.Errorf("%w: max_random_delay_min must be between 0 and %d", ErrSettings, bundle.MaxRandomDelayMin)
 	}
-	if s.StalenessWarningH < MinStalenessWarningH || s.StalenessWarningH > MaxStalenessWarningH {
-		return fmt.Errorf("%w: staleness_warning_h must be between %d and %d", ErrSettings, MinStalenessWarningH, MaxStalenessWarningH)
+	if err := ValidateThresholds("staleness_", s.StalenessWarningH, s.StalenessCriticalH); err != nil {
+		return fmt.Errorf("%w: %w", ErrSettings, err)
 	}
-	if s.StalenessCriticalH <= s.StalenessWarningH || s.StalenessCriticalH > MaxStalenessCriticalH {
-		return fmt.Errorf("%w: staleness_critical_h must be above staleness_warning_h and at most %d", ErrSettings, MaxStalenessCriticalH)
+	if !ValidUpdatePolicy(s.AgentUpdatePolicy) {
+		return fmt.Errorf("%w: agent_update_policy must be automatic or manual", ErrSettings)
 	}
 	return nil
 }

@@ -25,6 +25,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Check-in | Check-in | |
 | Command palette | Befehlspalette | |
 | Configuration (navigation group) | Konfiguration | |
+| Contact thresholds | Kontaktschwellen | Warning and critical threshold of a device group. |
 | Danger zone | Gefahrenbereich | Lock, Destroy and Retire on the device page. |
 | Dead man's switch | Totmannschalter | Its period is the *Frist*. |
 | Denied path | Gesperrter Pfad | Managed files on it are refused and not shipped. |
@@ -46,6 +47,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Keyboard shortcut | Tastenkürzel | |
 | Local administrator | Lokaler Administrator | |
 | Login component | Anmeldekomponente | Himmelblau on the device: the device-code and Hello PIN sign-in. |
+| Login history | Anmeldeverlauf | |
 | Managed file / unit | Verwaltete Datei / Unit | |
 | Navigation | Navigation | Navigation drawer; *einblenden* / *ausblenden* to show or hide it. |
 | Never contacted | Nie verbunden | |
@@ -57,6 +59,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Organization administrator | Organisationsadministrator | |
 | Overview (navigation group) | Übersicht | |
 | Overview (page) | Übersicht | The start page of administrators and operators. |
+| Owner (device) | Besitzer | No login or sudo rights through ownership. |
 | Permission profile | Berechtigungsprofil | Classes: Keine, Eingeschränkt, Voll. |
 | Platform (navigation group) | Plattform | |
 | Platform administrator | Plattformadministrator | |
@@ -66,6 +69,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Recovery key | Wiederherstellungsschlüssel | |
 | Reject | Ablehnen | |
 | Restore (backup) | Wiederherstellung | restore drill: *Wiederherstellungsprobe* |
+| Remove Paddock (uninstall) | Paddock entfernen | Modes: *so lassen* (leave), *zurücksetzen* (reset). |
 | Retire | Außer Betrieb nehmen | |
 | Reveal (password, key) | Anzeigen | Every reveal is audited. |
 | Revocation (Lock, Destroy, self-lock) | Widerruf | Page *Widerrufe*. |
@@ -85,12 +89,15 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Silent device (staleness) | Gerät ohne Kontakt | |
 | Start (page) | Start | |
 | Step-up | Identitätsbestätigung | |
+| Supervisor | Supervisor | unchanged |
 | Suspend / resume logins | Anmeldungen aussetzen / wieder zulassen | |
 | Synced (user), upstream directory | Synchronisiert, Quellverzeichnis | |
 | Tamper (event) | Manipulation | |
 | Theme | Erscheinungsbild (System / Hell / Dunkel) | |
+| Unlock mode (disk) | Entsperrmodus | *TPM + Boot-PIN*, *Nur TPM* |
 | Unseal, automatic unseal (OpenBao) | Entsiegeln, automatisches Entsiegeln | The unseal share is the *Entsiegelungsanteil* (*Anteil*); the custodian the *Schlüsselverwahrer*. |
 | Unsealer | Unsealer | kept in English: the name of the service on the control-plane host (ADR 0035) |
+| Update policy (agent) | Update-Richtlinie | automatic / manual |
 | User lock | Sperre; Benutzer sperren / entsperren | *Benutzersperre* where it must be told apart from a device lock. |
 | User menu | Benutzermenü | |
 | Volume (LUKS) | Volume | kept in English, as in cryptsetup |

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  attentionFilter, attentionKinds, parsePackages, validateHold, validateSettings, validPackage, validSchedule,
+  attentionFilter, attentionKinds, parsePackages, validateHold, validateSettings, validateStaleness, validPackage, validSchedule,
 } from '../lib/updates'
 import en from '../locales/en.json'
 
@@ -26,6 +26,18 @@ describe('updates', () => {
     expect(validateSettings({ ...settings, staleness_warning_h: 0 }).staleness_warning_h).toBeTruthy()
     expect(validateSettings({ ...settings, staleness_critical_h: 24 }).staleness_critical_h).toBeTruthy()
     expect(validateSettings({ ...settings, staleness_critical_h: 2161 }).staleness_critical_h).toBeTruthy()
+  })
+
+  it('validates a pair of contact thresholds like updates.ValidateThresholds', () => {
+    expect(validateStaleness(1, 2)).toEqual({})
+    expect(validateStaleness(720, 2160)).toEqual({})
+    expect(validateStaleness(0, 10)).toEqual({ warning_h: 'updates.settings.warningInvalid' })
+    expect(validateStaleness(721, 2160)).toEqual({ warning_h: 'updates.settings.warningInvalid' })
+    expect(validateStaleness(200, 100)).toEqual({ critical_h: 'updates.settings.criticalInvalid' })
+    expect(validateStaleness(200, 200)).toEqual({ critical_h: 'updates.settings.criticalInvalid' })
+    expect(validateStaleness(24, 2161)).toEqual({ critical_h: 'updates.settings.criticalInvalid' })
+    expect(validateStaleness(1.5, 10)).toEqual({ warning_h: 'updates.settings.warningInvalid' })
+    expect(validateStaleness('', '')).toEqual({ warning_h: 'updates.settings.warningInvalid', critical_h: 'updates.settings.criticalInvalid' })
   })
 
   it('validates holds and package names', () => {

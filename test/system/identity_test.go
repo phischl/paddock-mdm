@@ -57,6 +57,7 @@ func TestIdentityGates(t *testing.T) {
 			t.FailNow()
 		}
 		t.Run("L6 PIN past the access-token lifetime", func(t *testing.T) { w.Bind(t); gateL6(t, w) })
+		t.Run("LH1 login history", func(t *testing.T) { w.Bind(t); gateLH1(t, w) })
 		t.Run("P3 effective profile", func(t *testing.T) { w.Bind(t); gateP3(t, w) })
 		t.Run("L2 identity gate", func(t *testing.T) { w.Bind(t); gateL2(t, w) })
 		t.Run("L3 login suspension", func(t *testing.T) { w.Bind(t); gateL3(t, w) })

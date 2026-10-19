@@ -5,7 +5,9 @@ import (
 	"log/slog"
 
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -50,10 +52,43 @@ func (a *Agent) sweepStaging() {
 	}
 }
 
+// updatePolicy is the agent update policy of the applied bundle ("" = automatic).
+func (a *Agent) updatePolicy() string {
+	if a.current == nil {
+		return ""
+	}
+	return a.current.Agent.UpdatePolicy
+}
+
+// updatesAllowed reports whether package upgrades (fleetd, the supervisor) may run now: the policy is automatic, or
+// the last check-in carried a requested update (plan M8d decision 23).
+func (a *Agent) updatesAllowed() bool {
+	return a.updatePolicy() != bundle.UpdatePolicyManual || a.updateRequested
+}
+
 // handleUpdate stages an offered release and asks the supervisor to install it. The agent never replaces itself.
+// Under the manual update policy only a requested offer is staged (plan M8d decision 23). A fresh update-now
+// request — requested_at after the last handled one — overrides the policy and a failed version once (decision 28).
 func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 	a.sweepStaging()
-	if offer == nil || offer.Version == buildinfo.Version || offer.Version == a.st.FailedUpdateVersion || update.Pending(a.d.Layout) {
+	a.updateRequested = offer != nil && offer.Requested
+	fresh := a.updateRequested && offer.RequestedAt != nil &&
+		(a.st.UpdateRequestHandledAt == nil || offer.RequestedAt.After(*a.st.UpdateRequestHandledAt))
+	if offer == nil || offer.Version == buildinfo.Version || (offer.Version == a.st.FailedUpdateVersion && !fresh) ||
+		update.Pending(a.d.Layout) {
+		return
+	}
+	// A running supervisor upgrade restarts the supervisor; an agent update staged meanwhile would meet the old or the
+	// new supervisor at random (review finding 12). A marker that cannot be read counts as running.
+	if marker, err := supervisorpkg.ReadMarker(a.d.Layout); marker != nil || err != nil {
+		slog.InfoContext(ctx, "agent update waits for the running supervisor upgrade", "version", offer.Version)
+		return
+	}
+	if a.updatePolicy() == bundle.UpdatePolicyManual && !fresh {
+		if a.policySkipped != offer.Version {
+			a.policySkipped = offer.Version
+			slog.InfoContext(ctx, "agent update offer ignored by the organization's policy", "version", offer.Version)
+		}
 		return
 	}
 	pid, err := a.d.Supervisor()
@@ -65,7 +100,12 @@ func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 		slog.WarnContext(ctx, "staging the agent update failed; retrying at the next check-in", "version", offer.Version, "error", err)
 		return
 	}
-	slog.InfoContext(ctx, "agent update staged; asking the supervisor to install it", "version", offer.Version)
+	slog.InfoContext(ctx, "agent update staged; asking the supervisor to install it", "version", offer.Version, "requested", fresh)
+	if fresh {
+		at := offer.RequestedAt.UTC()
+		a.st.UpdateRequestHandledAt = &at
+		a.saveState()
+	}
 	if err := a.d.Signal(pid); err != nil {
 		slog.ErrorContext(ctx, "notifying the supervisor failed", "error", err)
 	}

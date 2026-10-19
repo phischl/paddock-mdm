@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -20,6 +22,10 @@ type isolationWorld struct {
 	globexGroups []string
 	// Globex device control plane resources (seedGlobexDevices).
 	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
+	// globexSim is the simulated agent of globexDevice.
+	globexSim *devicesim.Device
+	// globexLogin is the user name of the session start globexSim reported (seedGlobexLogin).
+	globexLogin string
 	// globexEnrollment is the enrollment configuration of globexToken.
 	globexEnrollment protocol.EnrollmentConfig
 	// Globex identity resources (seedGlobexIdentity).
@@ -111,6 +117,41 @@ func seedGlobexIdentity(t *testing.T, w *isolationWorld) {
 	w.globexIDs = append(w.globexIDs, w.globexUser, w.globexUserGroup, w.globexProfile, w.globexAssignment)
 }
 
+// seedGlobexOwnersAndLogins makes, as carol, globexUser the owner of globexDevice and switches login history on
+// (restored when the gate ends), so the user's devices have globex data to find; the session start itself is seeded
+// right before the logins list is checked (seedGlobexLogin).
+func seedGlobexOwnersAndLogins(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	res := call(t, w.carol, http.MethodPut, "/api/v1/devices/"+w.globexDevice+"/owners", map[string]any{"user_ids": []string{w.globexUser}})
+	expectStatus(t, res, http.StatusOK, "")
+	original := currentLoginSettings(t, w.carol)
+	w.top.Cleanup(func() { _ = call(w.top, w.carol, http.MethodPut, "/api/v1/settings/login", original) })
+	expectStatus(t, putLoginHistory(t, w.carol, true, 365), http.StatusOK, "")
+}
+
+// seedGlobexLogin records one session start of globexDevice and waits until carol sees it. It runs right before the
+// logins list is checked: the development stack counts the retention days in seconds, so a row seeded with the
+// other fixtures could be purged before the gate reaches the route.
+func seedGlobexLogin(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	w.globexLogin = "globex-iso-" + uniqueSuffix() + "@globex.test"
+	sendSessionLogins(t, w.globexSim, 1, w.globexLogin, time.Now().UTC().Truncate(time.Millisecond))
+	query := "/api/v1/devices/" + w.globexDevice + "/logins?" + url.Values{"username": {strings.ToLower(w.globexLogin)}}.Encode()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+		var page struct {
+			Total int `json:"total"`
+		}
+		res := call(t, w.carol, http.MethodGet, query, nil)
+		expectStatus(t, res, http.StatusOK, "")
+		if err := res.JSON(&page); err == nil && page.Total > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the seeded globex login is not listed for carol within 30 s: %s", res.Body)
+		}
+	}
+}
+
 // seedGlobexDevices creates, as carol, a device group with an enrolled device (through the device API), an
 // enrollment token, a managed file and a managed unit of that group — all named "globex-iso…" so the list searches
 // find them.
@@ -123,7 +164,7 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	if s.Status != "active" {
 		t.Fatalf("globex device enrollment %+v", s)
 	}
-	w.globexDevice = dev.DeviceID
+	w.globexDevice, w.globexSim = dev.DeviceID, dev
 	// One check-in without any update run makes it a device with overdue security updates (security_updates filter).
 	if _, _, err := dev.Checkin(testContext(t, time.Minute)); err != nil {
 		t.Fatal(err)
@@ -288,9 +329,16 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/devices/{id}/approve":            itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/approve" }, nil),
 	"POST /api/v1/devices/{id}/reject":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/reject" }, nil),
 	"POST /api/v1/devices/{id}/release-quarantine": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/release-quarantine" }, nil),
-	"POST /api/v1/devices/{id}/retire":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/retire" }, nil),
+	"POST /api/v1/devices/{id}/update-agent":       itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/update-agent" }, nil),
+	"POST /api/v1/devices/{id}/uninstall": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/uninstall" },
+		map[string]any{"mode": "leave", "confirm_hostname": "x", "reason": "isolation"}),
+	"POST /api/v1/devices/{id}/uninstall/cancel": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/uninstall/cancel" }, nil),
+	"POST /api/v1/devices/{id}/retire":           itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/retire" }, nil),
 	"PUT /api/v1/devices/{id}/groups": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/groups" },
 		map[string]any{"device_group_ids": []string{}}),
+	"GET /api/v1/devices/{id}/logins": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/logins" }, nil),
+	"PUT /api/v1/devices/{id}/owners": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/owners" },
+		map[string]any{"user_ids": []string{}}),
 	"GET /api/v1/devices/{id}/effective-config": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/effective-config" }, nil),
 	"GET /api/v1/device-groups/{id}/devices":    itemFixture(func(w *isolationWorld) string { return "/api/v1/device-groups/" + w.globexDeviceGroup + "/devices" }, nil),
 
@@ -334,6 +382,7 @@ var isolationFixtures = map[string]isolationFixture{
 	"DELETE /api/v1/users/{id}":                itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser }, nil),
 	"POST /api/v1/users/{id}/lock":             itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/lock" }, nil),
 	"POST /api/v1/users/{id}/unlock":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/unlock" }, nil),
+	"GET /api/v1/users/{id}/devices":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/devices" }, nil),
 	"GET /api/v1/users/{id}/effective-profile": itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/effective-profile" }, nil),
 
 	"GET /api/v1/user-groups": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
@@ -506,6 +555,8 @@ var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/devices/{id}/software":         func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/vulnerabilities":  func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/vulnerabilities/{cve}/devices": func(w *isolationWorld) string { return w.globexCVE },
+	"/api/v1/users/{id}/devices":            func(w *isolationWorld) string { return w.globexUser },
+	"/api/v1/devices/{id}/logins":           func(w *isolationWorld) string { return w.globexDevice },
 }
 
 func fixtureKey(method, path string) string { return strings.ToUpper(method) + " " + path }
@@ -570,6 +621,9 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"globex-iso"}},
 		{"action": {"destroy"}, "status": {"requested"}, "page_size": {"100"}},
 	},
+	// globexUser owns globexDevice (seedGlobexOwnersAndLogins), which reported one session start (seedGlobexLogin).
+	"/api/v1/users/{id}/devices":  {{"q": {"globex-iso"}}, {"sort": {"-last_contact_at"}}},
+	"/api/v1/devices/{id}/logins": {{"q": {"globex-iso"}}, {"sort": {"username"}}},
 }
 
 // currentLoginSettings returns acme's login settings as an update body (unchanged values).
@@ -585,6 +639,26 @@ func currentLoginSettings(t *testing.T, p *env.Portal) map[string]any {
 	return s
 }
 
+func sendSessionLogins(t *testing.T, d *devicesim.Device, seq int64, user string, at ...time.Time) {
+	t.Helper()
+	var events []protocol.Event
+	for i, a := range at {
+		data, _ := json.Marshal(protocol.SessionLogin{Username: user, At: a})
+		events = append(events, protocol.Event{EventSeq: seq + int64(i), Type: protocol.EventSessionLogin, OccurredAt: a, Data: data})
+	}
+	res, err := d.SendEvents(testContext(t, time.Minute), events)
+	if err != nil || res.Status != http.StatusAccepted && res.Status != http.StatusOK {
+		t.Fatalf("send events: %v %d", err, res.Status)
+	}
+}
+
+func putLoginHistory(t *testing.T, p *env.Portal, enabled bool, days int) env.Response {
+	t.Helper()
+	s := currentLoginSettings(t, p)
+	s["login_history_enabled"], s["login_history_days"] = enabled, days
+	return call(t, p, http.MethodPut, "/api/v1/settings/login", s)
+}
+
 // currentUpdateSettings returns acme's update settings as an update body (unchanged values).
 func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 	t.Helper()
@@ -598,9 +672,18 @@ func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 	return s
 }
 
+// listSeeds seed globex data of a collection GET right before the gate checks it: data the development stack's
+// retention purges within minutes.
+var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
+	"/api/v1/devices/{id}/logins": seedGlobexLogin,
+}
+
 // listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c
 // decision 31: the audit log's target_id); the gate runs them like listIsolationQueries.
 var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
+	"/api/v1/devices/{id}/logins": {
+		func(w *isolationWorld) url.Values { return url.Values{"username": {strings.ToLower(w.globexLogin)}} },
+	},
 	"/api/v1/attention/devices": {
 		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexDevice}} },
 	},

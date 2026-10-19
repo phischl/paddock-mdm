@@ -1,4 +1,15 @@
 {
+  "updateSettings": {
+    "agentUpdates": {
+      "title": "Agent updates",
+      "automatic": "Automatic: devices install every agent release the platform rolls out, in their wave",
+      "manual": "Manual: devices install an agent release only when an administrator requests it per device",
+      "hint": "The policy also covers the supervisor and fleetd packages. Device groups can override it. Devices on an old agent appear on the attention page."
+    },
+    "staleness": {
+      "groupsHint": "Device groups can override these thresholds, for example for laptops."
+    }
+  },
   "app": {
     "name": "Paddock",
     "skipToContent": "Skip to content",
@@ -123,6 +134,23 @@
     "typeToConfirm": "Type {text} to confirm"
   },
   "deviceGroups": {
+    "agentUpdates": {
+      "label": "Agent updates"
+    },
+    "inherit": "Organization setting",
+    "staleness": {
+      "title": "Contact thresholds",
+      "override": "Override the organization's thresholds for this group",
+      "warning": "Warning after (hours)",
+      "critical": "Critical after (hours)",
+      "laptopPreset": "Laptop preset (5 days / 35 days)",
+      "hint": "A device in several groups takes the most lenient value of its groups. Without an override the organization's thresholds apply.",
+      "effective": "Effective: warning after {warning} h, critical after {critical} h ({source})",
+      "sources": {
+        "organization": "organization",
+        "device_group": "device group"
+      }
+    },
     "title": "Device groups",
     "count": "{count, plural, =0 {No device groups} one {# device group} other {# device groups}}",
     "create": "Create device group",
@@ -137,6 +165,9 @@
     "empty": {
       "title": "No device groups yet",
       "description": "Groups scope configuration, package holds and login rules to a set of devices."
+    },
+    "unlockMode": {
+      "label": "Disk unlock mode"
     }
   },
   "validation": {
@@ -186,9 +217,13 @@
     "lockout_confirmation_required": "This change would remove your own address from the allow list.",
     "disable_confirmation_required": "This change would switch the allow list off.",
     "session_store_unavailable": "The portal cannot reach its session store. Try again in a moment.",
-    "disclaimer_outdated": "The disclaimer has changed. Read the new text and confirm it again."
+    "disclaimer_outdated": "The disclaimer has changed. Read the new text and confirm it again.",
+    "tpm_in_use_by_disk": "The disk of this device unlocks with the TPM; it cannot be cleared."
   },
   "audit": {
+    "retention": {
+      "purged": "{deleted, plural, one {# expired entry} other {# expired entries}} of {store} were deleted"
+    },
     "title": "Audit log",
     "from": "From",
     "to": "To",
@@ -240,6 +275,8 @@
       "use_denied": "A request with the API token {name} was refused: {reason, select, revoked {the token is revoked} expired {the token expired} creator_inactive {its creator is disabled or lost the required role} other {{reason}}}"
     },
     "device": {
+      "agent_update_requested": "{actor} asked {hostname} to install agent {version} now",
+      "owners_changed": "{actor} changed the owners of {hostname}",
       "enrolled": "The device {hostname} enrolled",
       "approved": "{actor} approved the device {hostname}",
       "rejected": "{actor} rejected the device {hostname}",
@@ -255,6 +292,8 @@
       "agent_rolled_back": "The device {target} rolled agent {version} back to {from_version}",
       "agent_rollback_failed": "The device {target} could not roll agent {version} back to {from_version}; it keeps running {version} and retries",
       "agent_events_dropped": "The device {target} dropped {count, number} events while the server was unreachable",
+      "supervisor_updated": "The device {target} installed supervisor {version} (from {from_version})",
+      "supervisor_update_failed": "The device {target} could not install supervisor {version} and keeps {from_version} ({outcome})",
       "login_assignment_changed": "{actor} changed who may log in on {hostname}",
       "logins_suspended": "{actor} suspended logins on {hostname}",
       "logins_resumed": "{actor} resumed logins on {hostname}",
@@ -285,7 +324,10 @@
       "stale_warning": "The device {target} has not contacted Paddock for {threshold_h, number} hours (warning)",
       "stale_critical": "The device {target} has not contacted Paddock for {threshold_h, number} hours and is presumed lost",
       "stale_cleared": "The device {target} contacted Paddock again",
-      "header_object_rejected": "The escrowed LUKS header of {hostname} was rejected: its size differs from the announced size"
+      "header_object_rejected": "The escrowed LUKS header of {hostname} was rejected: its size differs from the announced size",
+      "uninstall_requested": "{actor} asked to remove Paddock from {hostname} ({mode})",
+      "uninstall_cancelled": "{actor} cancelled the removal of Paddock from {hostname}",
+      "uninstalled": "The device {target} removed Paddock ({mode}, {outcome})"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
@@ -443,6 +485,7 @@
     "artifacts": "Artifacts",
     "packages": "Debian packages",
     "noPackages": "No Debian packages; devices cannot be installed with the Paddock autoinstall from this release.",
+    "supervisorFollows": "Devices install the supervisor package of this release after its agent, in the same waves, when their organization's update policy allows it.",
     "package": "Package",
     "createdBy": "Created",
     "createdFacts": "{at} by {by}",
@@ -480,6 +523,11 @@
     "empty": {
       "title": "No agent releases yet",
       "description": "Upload a signed release to start a staged rollout."
+    },
+    "targets": {
+      "title": "Rollout targets",
+      "himmelblauHint": "Set with PADDOCK_HIMMELBLAU_VERSION of the compiler; devices install it with their next apply.",
+      "none": "No agent release has completed a rollout yet."
     }
   },
   "loginDenied": {
@@ -500,6 +548,40 @@
     "back": "Go to the start page"
   },
   "devices": {
+    "updateAgent": {
+      "label": "Update agent now",
+      "title": "Update the agent now",
+      "confirm": "Offer {version} to {hostname} at its next check-in, outside the rollout wave and regardless of the update policy? The supervisor installs it with self-test, probation and automatic rollback as usual.",
+      "requested": "Update to {version} requested {at}; the device picks it up at its next check-in.",
+      "noRelease": "No agent release is being offered right now.",
+      "upToDate": "The device already runs the offered release.",
+      "offered": "the current agent release"
+    },
+    "logins": {
+      "user": "User",
+      "at": "Signed in",
+      "off": "The login history is off for this organization.",
+      "offLink": "Switch it on under Login & privileges.",
+      "empty": "No logins recorded yet."
+    },
+    "hardware": {
+      "manufacturer": "Manufacturer",
+      "model": "Model",
+      "serial": "Serial number",
+      "cpu": "Processor",
+      "cpuCores": "{cores, plural, one {# core} other {# cores}}",
+      "memory": "Memory",
+      "disk": "Disk size",
+      "pending": "Not reported by the inventory yet"
+    },
+    "owners": {
+      "title": "Owners",
+      "column": "Owners",
+      "hint": "Who is responsible for this device. Owners have no login or sudo rights through this setting.",
+      "saved": "Owners saved.",
+      "none": "No owner assigned."
+    },
+    "ownerFilter": "Owner",
     "title": "Devices",
     "back": "Back to devices",
     "hostname": "Hostname",
@@ -649,7 +731,8 @@
         "tpm_missing": "No TPM: passphrase only",
         "tpm_pin_missing": "Boot PIN skipped",
         "escrow_pending": "Being set up",
-        "compliant": "Compliant"
+        "compliant": "Compliant",
+        "unlock_mode_mismatch": "The disk is enrolled for the other unlock mode than its policy says. An operator changes it at the device with the recovery key (see the runbook)."
       },
       "notReported": "Not reported yet",
       "keyslots": "Keyslots",
@@ -693,6 +776,20 @@
         "copy": "Copy",
         "copied": "Copied",
         "close": "Hide"
+      },
+      "unlockMode": "Unlock mode",
+      "unlockModes": {
+        "tpm_pin": "TPM + boot PIN",
+        "tpm_only": "TPM only"
+      },
+      "unlockModeMismatch": "Unlock mode differs from the policy",
+      "unlockModeRunbook": "Runbook: changing the unlock mode",
+      "notEncrypted": {
+        "reinstall": "This device is not encrypted. Encrypt it by reinstalling it with the Paddock autoinstall after a backup; Paddock does not encrypt a running device in place.",
+        "conversionPlanned": "Its disk layout (separate /boot) qualifies for the in-place encryption planned for a later release."
+      },
+      "unmanaged": {
+        "reinstall": "This device was encrypted outside Paddock: no recovery key or header is escrowed, and a Lock cannot be restored. Reinstall it with the Paddock autoinstall to manage its encryption."
       }
     },
     "revocation": {
@@ -715,6 +812,10 @@
         "destroy": "The destroy was requested. It waits for the approval of a second administrator on the Revocations page."
       },
       "presumedSelfLocked": "The device has not reached Paddock since before {at} and has presumably locked itself (dead man's switch).",
+      "uninstallCancelled": {
+        "before_delivery": "The pending removal of Paddock was cancelled: Lock and Destroy take precedence.",
+        "after_delivery": "The pending removal of Paddock was cancelled, but the device had already received it. It may already have removed the revocation module, and then the lock or destroy cannot run on it."
+      },
       "timeline": "Revocations of this device",
       "steps": "Progress",
       "timelineSteps": {
@@ -762,6 +863,11 @@
         "title": "Retire",
         "explanation": "Retiring revokes the device's identity permanently and it stops receiving configuration. This cannot be undone.",
         "label": "Retire…"
+      },
+      "uninstall": {
+        "title": "Remove Paddock",
+        "explanation": "Removes the Paddock agent from the device with a signed command and retires the device. You choose whether the device is left as it is or reset. User data is never deleted.",
+        "label": "Remove Paddock…"
       }
     },
     "contactFilter": "Contact",
@@ -777,6 +883,7 @@
       "unknown": "unknown"
     },
     "tabs": {
+      "logins": "Logins",
       "overview": "Overview",
       "access": "Login & sudo",
       "configuration": "Configuration",
@@ -817,7 +924,73 @@
     "securityFilter": "Security updates",
     "securityUpdates": {
       "overdue": "Overdue (no successful run in 48 h)"
-    }
+    },
+    "uninstall": {
+      "title": "Remove Paddock from {hostname}",
+      "leave": {
+        "label": "Leave the device as it is",
+        "explanation": "Removes the agent, supervisor, fleetd and Paddock's own files. Keeps every local account including the managed local administrator (its password stays revealable), the sudo rights of break-glass accounts, Himmelblau and directory logins, managed files and the disk encryption with its PIN and recovery key."
+      },
+      "reset": {
+        "label": "Reset the system",
+        "explanation": "Everything of \"leave\", and additionally: Himmelblau and its configuration are removed (directory users can no longer sign in; their home directories stay), managed files that are unchanged are removed, and the managed local administrator is removed unless it is the last local administrator. The disk encryption is never changed."
+      },
+      "clearTpm": {
+        "label": "Also clear the TPM (only possible while the disk does not unlock with it)",
+        "disabledTpmDisk": "Not available: the disk of this device unlocks with the TPM. Clearing it would leave only the recovery key."
+      },
+      "keepLocalAdmin": {
+        "label": "Keep the managed local administrator account"
+      },
+      "confirmLabel": "Remove Paddock",
+      "typed": "Type the hostname to confirm. The device is retired once it reports the removal.",
+      "pending": "Removal requested ({mode}) — {status}. The device removes Paddock at its next check-in and is then retired.",
+      "modes": {
+        "leave": "leave as is",
+        "reset": "reset"
+      },
+      "cancel": {
+        "label": "Cancel request",
+        "title": "Cancel the removal",
+        "confirm": "Cancel the removal of Paddock from {hostname}? Only possible while the device has not received the command."
+      },
+      "done": "Paddock was removed on {at} ({mode}); local administrator: {localAdmin}; TPM: {tpm}.",
+      "localAdmin": {
+        "removed": "removed",
+        "kept": "kept",
+        "kept_last_admin": "kept (last local administrator)"
+      },
+      "tpm": {
+        "cleared": "cleared",
+        "requested_at_next_boot": "clear requested at the next boot",
+        "skipped_in_use": "not cleared (the disk unlocks with it)",
+        "not_requested": "not requested",
+        "failed": "clearing failed"
+      }
+    },
+    "components": {
+      "title": "Components",
+      "column": "Components",
+      "installed": "Installed",
+      "expected": "Expected",
+      "names": {
+        "paddockd": "Agent (paddockd)",
+        "paddock_supervisor": "Supervisor",
+        "paddock_revoke": "Revocation module (paddock-revoke)",
+        "himmelblau": "Himmelblau",
+        "fleetd": "fleetd (osquery)"
+      },
+      "status": {
+        "ok": "Up to date",
+        "outdated": "Outdated",
+        "missing": "Not installed",
+        "unknown": "Not reported"
+      },
+      "outdatedCount": "{count, plural, one {# outdated} other {# outdated}}",
+      "hint": "Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update.",
+      "targetHint": "Target = last completed release. A running rollout does not move it; a component newer than its target counts as up to date."
+    },
+    "componentFilter": "Component outdated"
   },
   "tokens": {
     "title": "Enrollment tokens",
@@ -1092,6 +1265,9 @@
     }
   },
   "users": {
+    "ownedDevices": {
+      "title": "Devices owned"
+    },
     "title": "Users",
     "noDomain": "No organization domain",
     "noDomainDetail": "The username {username} does not end with one of the organization's domains ({domains}). The user cannot sign in on devices: the login component accepts name@domain only. Rename the user in the identity source, or let a platform administrator add the domain to the organization.",
@@ -1261,6 +1437,15 @@
     }
   },
   "loginSettings": {
+    "loginHistory": {
+      "title": "Login history",
+      "enabled": "Record which directory users sign in on each device, and when",
+      "days": "Keep the history for (days)",
+      "notice": "The login history is personal data of your employees: every session start is stored with user name, device and time for the period above and deleted afterwards. Switch it on only with the agreement of your works council or the equivalent body and inform the users. It is off by default; user locks do not depend on it.",
+      "disableConfirm": "Switch the login history off? Every recorded login of this organization is deleted at once.",
+      "disableConfirmLabel": "Switch off and delete",
+      "daysInvalid": "Enter a whole number of days from {min} to {max}."
+    },
     "title": "Login & privileges",
     "updatedAt": "Last changed {at}",
     "login": "Device login",
@@ -1290,7 +1475,14 @@
     "diskEncryption": "Disk encryption",
     "bootPinLength": "Minimum boot PIN length",
     "bootPinLengthHint": "The boot PIN unlocks the disk at every start. Devices installed with the Paddock autoinstall ask for it at their first boot; autoinstalls generated from now on use this length.",
-    "saved": "Login settings saved."
+    "saved": "Login settings saved.",
+    "unlockMode": {
+      "label": "Disk unlock mode for new installations",
+      "tpm_pin": "TPM + boot PIN: the disk asks for a PIN at every start",
+      "tpm_only": "TPM only: the disk unlocks automatically while Secure Boot is unchanged",
+      "hint": "Applies to devices installed with the Paddock autoinstall from now on. Device groups can override it. Installed devices keep their mode until an operator changes it at the device.",
+      "tpmOnlyNotice": "TPM only protects the data against a removed disk, not against someone who has the device: it unlocks at boot and the login screen is the remaining barrier. Use it for shared devices and kiosks, not for laptops with personal data."
+    }
   },
   "commands": {
     "title": "Commands",
@@ -1301,7 +1493,8 @@
     "types": {
       "rotate_admin_password": "Rotate the local administrator password",
       "delete_self_lock": "Delete the dead man's switch token",
-      "install_now": "Install packages now"
+      "install_now": "Install packages now",
+      "uninstall": "Remove Paddock"
     },
     "statuses": {
       "pending": "Pending",
@@ -1525,7 +1718,8 @@
       "revocation_pending": "Lock or Destroy waiting",
       "revocation_expired": "Lock or Destroy expired",
       "agent_rollback_pending": "Agent rollback pending",
-      "agent_not_running": "Agent not running"
+      "agent_not_running": "Agent not running",
+      "uninstall_pending": "Removal of Paddock pending"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1539,7 +1733,8 @@
       "revocation_pending": "Open device",
       "revocation_expired": "Open device",
       "agent_rollback_pending": "Open device",
-      "agent_not_running": "Open device"
+      "agent_not_running": "Open device",
+      "uninstall_pending": "Open device"
     },
     "more": "+{count}",
     "empty": {

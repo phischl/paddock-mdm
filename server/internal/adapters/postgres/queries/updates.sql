@@ -5,14 +5,14 @@ SELECT * FROM organization_update_settings;
 
 -- name: UpsertUpdateSettings :one
 INSERT INTO organization_update_settings (organization_id, security_daily_at, regular_schedule, regular_updates_enabled,
-  max_random_delay_min, staleness_warning_h, staleness_critical_h, updated_at, updated_by)
+  max_random_delay_min, staleness_warning_h, staleness_critical_h, agent_update_policy, updated_at, updated_by)
 VALUES (@organization_id, @security_daily_at, @regular_schedule, @regular_updates_enabled, @max_random_delay_min,
-  @staleness_warning_h, @staleness_critical_h, now(), sqlc.narg(updated_by))
+  @staleness_warning_h, @staleness_critical_h, @agent_update_policy, now(), sqlc.narg(updated_by))
 ON CONFLICT (organization_id) DO UPDATE
 SET security_daily_at = excluded.security_daily_at, regular_schedule = excluded.regular_schedule,
     regular_updates_enabled = excluded.regular_updates_enabled, max_random_delay_min = excluded.max_random_delay_min,
     staleness_warning_h = excluded.staleness_warning_h, staleness_critical_h = excluded.staleness_critical_h,
-    updated_at = excluded.updated_at, updated_by = excluded.updated_by
+    agent_update_policy = excluded.agent_update_policy, updated_at = excluded.updated_at, updated_by = excluded.updated_by
 RETURNING *;
 
 -- name: InsertPackageHold :one

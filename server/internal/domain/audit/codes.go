@@ -13,14 +13,20 @@ const (
 	CodeDeviceGroupDeleted     Code = "device_group.deleted"
 	CodeActionFinalizedUnknown Code = "action.finalized_unknown"
 
-	CodeEnrollmentTokenCreated     Code = "enrollment_token.created"
-	CodeEnrollmentTokenRevoked     Code = "enrollment_token.revoked"
-	CodeDeviceEnrolled             Code = "device.enrolled"
-	CodeDeviceApproved             Code = "device.approved"
-	CodeDeviceRejected             Code = "device.rejected"
-	CodeDeviceQuarantineReleased   Code = "device.quarantine_released"
-	CodeDeviceRetired              Code = "device.retired"
-	CodeDeviceGroupsChanged        Code = "device.groups_changed"
+	CodeEnrollmentTokenCreated   Code = "enrollment_token.created"
+	CodeEnrollmentTokenRevoked   Code = "enrollment_token.revoked"
+	CodeDeviceEnrolled           Code = "device.enrolled"
+	CodeDeviceApproved           Code = "device.approved"
+	CodeDeviceRejected           Code = "device.rejected"
+	CodeDeviceQuarantineReleased Code = "device.quarantine_released"
+	CodeDeviceRetired            Code = "device.retired"
+	CodeDeviceGroupsChanged      Code = "device.groups_changed"
+	CodeDeviceOwnersChanged      Code = "device.owners_changed"
+	// Uninstall (plan M8d decisions 37, 38 and 41).
+	CodeDeviceUninstallRequested   Code = "device.uninstall_requested"
+	CodeDeviceUninstallCancelled   Code = "device.uninstall_cancelled"
+	CodeDeviceUninstalled          Code = "device.uninstalled"
+	CodeDeviceAgentUpdateRequested Code = "device.agent_update_requested"
 	CodeDeviceCloneSuspected       Code = "device.clone_suspected"
 	CodeDeviceBundleApplied        Code = "device.bundle_applied"
 	CodeDeviceBundleRejected       Code = "device.bundle_rejected"
@@ -30,12 +36,15 @@ const (
 	CodeDeviceAgentRolledBack      Code = "device.agent_rolled_back"
 	CodeDeviceAgentRollbackFailed  Code = "device.agent_rollback_failed"
 	CodeDeviceAgentEventsDropped   Code = "device.agent_events_dropped"
-	CodeManagedFileCreated         Code = "managed_file.created"
-	CodeManagedFileUpdated         Code = "managed_file.updated"
-	CodeManagedFileDeleted         Code = "managed_file.deleted"
-	CodeManagedUnitCreated         Code = "managed_unit.created"
-	CodeManagedUnitUpdated         Code = "managed_unit.updated"
-	CodeManagedUnitDeleted         Code = "managed_unit.deleted"
+	// Supervisor package updates (plan M8d decision 33).
+	CodeDeviceSupervisorUpdated      Code = "device.supervisor_updated"
+	CodeDeviceSupervisorUpdateFailed Code = "device.supervisor_update_failed"
+	CodeManagedFileCreated           Code = "managed_file.created"
+	CodeManagedFileUpdated           Code = "managed_file.updated"
+	CodeManagedFileDeleted           Code = "managed_file.deleted"
+	CodeManagedUnitCreated           Code = "managed_unit.created"
+	CodeManagedUnitUpdated           Code = "managed_unit.updated"
+	CodeManagedUnitDeleted           Code = "managed_unit.deleted"
 
 	CodeAgentReleaseCreated          Code = "agent_release.created"
 	CodeAgentReleaseArtifactUploaded Code = "agent_release.artifact_uploaded"
@@ -60,6 +69,7 @@ const (
 	CodeUserGroupMemberAdded        Code = "user_group.member_added"
 	CodeUserGroupMemberRemoved      Code = "user_group.member_removed"
 	CodeSettingsLoginChanged        Code = "settings.login_changed"
+	CodeRetentionPurged             Code = "retention.purged"
 	CodeDeviceLoginAssignmentChange Code = "device.login_assignment_changed"
 	CodeDeviceLoginsSuspended       Code = "device.logins_suspended"
 	CodeDeviceLoginsResumed         Code = "device.logins_resumed"
@@ -183,6 +193,7 @@ var deviceEventParams = []string{
 	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
 	"generation", "service", "at", "field", "before", "after", "unit",
 	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
+	"command_id", "mode", "local_admin", "tpm", "steps",
 }
 
 var registry = map[Code]Definition{
@@ -202,14 +213,15 @@ var registry = map[Code]Definition{
 	CodeDeviceGroupCreated: {
 		Code: CodeDeviceGroupCreated, Emitted: true,
 		Description: "A device group was created.",
-		Params:      []string{"name"},
+		Params:      []string{"name", "staleness_warning_h", "staleness_critical_h", "agent_update_policy", "disk_unlock_mode"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeDeviceGroupUpdated: {
 		Code: CodeDeviceGroupUpdated, Emitted: true,
 		Description: "A device group was renamed or its description changed.",
-		Params:      []string{"name", "old_name", "description_changed"},
-		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
+		Params: []string{"name", "old_name", "description_changed", "staleness_warning_h", "staleness_critical_h",
+			"agent_update_policy", "disk_unlock_mode"},
+		Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeDeviceGroupDeleted: {
 		Code: CodeDeviceGroupDeleted, Emitted: true,
@@ -257,13 +269,45 @@ var registry = map[Code]Definition{
 	CodeDeviceRetired: {
 		Code: CodeDeviceRetired, Emitted: true,
 		Description: "An administrator retired a device; its identity keys are revoked.",
-		Params:      []string{"hostname", "from_state"},
+		Params:      []string{"hostname", "from_state", "reason"},
 		Outcomes:    adminOutcomes,
+		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system).",
+	},
+	CodeDeviceUninstallRequested: {
+		Code: CodeDeviceUninstallRequested, Emitted: true,
+		Description: "An organization administrator asked, with a step-up, to remove Paddock from a device; mode leave keeps everything else working, mode reset also removes Himmelblau, the managed files and the managed local administrator.",
+		Params:      []string{"hostname", "mode", "clear_tpm", "keep_local_admin", "reason", "command_id", "report_overdue"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceUninstallCancelled: {
+		Code: CodeDeviceUninstallCancelled, Emitted: true,
+		Description: "An organization administrator cancelled an uninstall before the device received it, or withdrew one whose removal report is overdue (report_overdue). A Lock or Destroy request that cancels an uninstall records no event of this code: it is recorded on revocation.requested (uninstall_cancelled).",
+		Params:      []string{"hostname", "mode", "command_id", "report_overdue"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceUninstalled: {
+		Code: CodeDeviceUninstalled, Emitted: true,
+		Description: "The device reported that it removed Paddock and the outcome of every step (actor: the device); only the report of the open request whose command succeeded retires the device, by the next event.",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "The param outcome is completed or partial (a step failed); steps maps every step to done, skipped or failed:<message>. helper_failed: the agent could not start the removal, nothing was removed, the request ends and the device is not retired.",
 	},
 	CodeDeviceGroupsChanged: {
 		Code: CodeDeviceGroupsChanged, Emitted: true,
 		Description: "The device group memberships of a device were replaced.",
 		Params:      []string{"hostname", "added", "removed"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceAgentUpdateRequested: {
+		Code: CodeDeviceAgentUpdateRequested, Emitted: true,
+		Description: "An administrator asked a device to install the offered agent release at its next check-in, outside its rollout wave and regardless of the organization's update policy.",
+		Params:      []string{"hostname", "version", "from_version"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceOwnersChanged: {
+		Code: CodeDeviceOwnersChanged, Emitted: true,
+		Description: "An administrator changed the owners of a device.",
+		Params:      []string{"hostname", "added", "removed", "owners"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceCloneSuspected: {
@@ -315,6 +359,20 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Reported as agent.update_failed with outcome rollback_failed (ADR 0024); device.agent_rolled_back follows once the rollback succeeds.",
+	},
+	CodeDeviceSupervisorUpdated: {
+		Code: CodeDeviceSupervisorUpdated, Emitted: true,
+		Description: "The device installed the supervisor package of the current release and checked in with it (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "outcome is updated.",
+	},
+	CodeDeviceSupervisorUpdateFailed: {
+		Code: CodeDeviceSupervisorUpdateFailed, Emitted: true,
+		Description: "Installing the supervisor package failed, or the supervisor was restored from its backup because the agent did not check in within 10 minutes (actor: the device). It counts toward the failure threshold of the release's rollout like a failed agent update, except the outcome rolled_back_unreachable (the agent's check-ins did not reach the server).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Reported as agent.supervisor_updated (ADR 0024); outcome is install_failed, rolled_back, or rolled_back_unreachable (the server was unreachable; the device retries the version after 24 hours, at most 3 times).",
 	},
 	CodeDeviceAgentEventsDropped: {
 		Code: CodeDeviceAgentEventsDropped, Emitted: true,
@@ -553,8 +611,15 @@ var registry = map[Code]Definition{
 	CodeSettingsLoginChanged: {
 		Code: CodeSettingsLoginChanged, Emitted: true,
 		Description: "The organization's login settings were changed (Hello PIN, session action of a lock, break-glass accounts, sudoers.d allow list, sudo lecture text).",
-		Params:      []string{"changed"},
+		Params:      []string{"changed", "login_history_enabled", "login_history_days", "login_history_deleted"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeRetentionPurged: {
+		Code: CodeRetentionPurged, Emitted: true,
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization) or audit_exports (one event per expired export, in its organization).",
+		Params:      []string{"store", "deleted", "cutoff", "partition", "export_id"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
 	},
 	CodeDeviceLoginAssignmentChange: {
 		Code: CodeDeviceLoginAssignmentChange, Emitted: true,
@@ -701,9 +766,9 @@ var registry = map[Code]Definition{
 	CodeRevocationRequested: {
 		Code: CodeRevocationRequested, Emitted: true,
 		Description: "An organization administrator requested a Lock or Destroy of a device after a step-up, typing its hostname; a Lock is approved with the request, a Destroy waits for a second administrator.",
-		Params:      []string{"action", "hostname", "request_id"},
+		Params:      []string{"action", "hostname", "request_id", "uninstall_cancelled", "uninstall_command_id"},
 		Outcomes:    adminOutcomes,
-		Note:        "action is lock or destroy. denied with revocation_disabled while PADDOCK_REVOCATION_ENABLED is off, revocation_frozen while the administrator is frozen after a limit was exceeded.",
+		Note:        "action is lock or destroy. uninstall_cancelled (before_delivery, or after_delivery when the device had received the uninstall command) and uninstall_command_id when the request cancelled an uninstall of the device in the same transaction; no separate device.uninstall_cancelled is recorded. denied with revocation_disabled while PADDOCK_REVOCATION_ENABLED is off, revocation_frozen while the administrator is frozen after a limit was exceeded.",
 	},
 	CodeRevocationApproved: {
 		Code: CodeRevocationApproved, Emitted: true,
@@ -796,7 +861,7 @@ var registry = map[Code]Definition{
 		Code: CodeSettingsUpdatesChanged, Emitted: true,
 		Description: "An organization administrator changed the update settings: the time of the daily security updates, the schedule of regular updates, the random delay and the staleness thresholds.",
 		Params: []string{"security_daily_at", "regular_schedule", "regular_updates_enabled", "max_random_delay_min",
-			"staleness_warning_h", "staleness_critical_h"},
+			"staleness_warning_h", "staleness_critical_h", "agent_update_policy"},
 		Outcomes: adminOutcomes,
 		Note:     "failure with invalid_schedule for a schedule outside the accepted subset.",
 	},
@@ -835,14 +900,14 @@ var registry = map[Code]Definition{
 	CodeDeviceStaleWarning: {
 		Code: CodeDeviceStaleWarning, Emitted: true,
 		Description: "A device has not contacted Paddock for longer than the organization's staleness warning threshold (actor: system).",
-		Params:      []string{"last_contact_at", "threshold_h"},
+		Params:      []string{"last_contact_at", "threshold_h", "source"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per crossing; the device's next contact ends it with device.stale_cleared.",
 	},
 	CodeDeviceStaleCritical: {
 		Code: CodeDeviceStaleCritical, Emitted: true,
 		Description: "A device has not contacted Paddock for longer than the organization's critical staleness threshold: it is presumed lost and listed on the attention page (actor: system).",
-		Params:      []string{"last_contact_at", "threshold_h"},
+		Params:      []string{"last_contact_at", "threshold_h", "source"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per crossing; the device's next contact ends it with device.stale_cleared.",
 	},
@@ -938,7 +1003,7 @@ var registry = map[Code]Definition{
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,
 		Description: "An administrator or operator generated a Paddock autoinstall for one device from an enrollment configuration; the disk passphrase and the token in it are never recorded.",
-		Params:      []string{"release", "agent_version"},
+		Params:      []string{"release", "agent_version", "unlock_mode"},
 		Outcomes:    adminOutcomes,
 		Note:        "release is the Ubuntu release (24.04 or 26.04); agent_version is the release whose packages the device installs.",
 	},

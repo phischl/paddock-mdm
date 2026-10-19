@@ -17,6 +17,7 @@ import (
 // List definitions of the M3a collection endpoints; TestListSpecsMatchContract keeps them equal to x-paddock-list.
 var (
 	userList              = listing.Spec{Sort: []string{"username", "display_name", "created_at"}, DefaultSort: "username"}
+	ownedDeviceList       = listing.Spec{Sort: []string{"hostname", "last_contact_at"}, DefaultSort: "hostname"}
 	userGroupList         = listing.Spec{Sort: []string{"name", "slug", "created_at"}, DefaultSort: "name"}
 	upstreamGroupList     = listing.Spec{Sort: []string{"name"}, DefaultSort: "name"}
 	permissionProfileList = listing.Spec{Sort: []string{"name", "class", "created_at", "updated_at"}, DefaultSort: "name"}
@@ -94,6 +95,20 @@ func (h *handlers) CreateUser(ctx context.Context, req adminapi.CreateUserReques
 		Body:    adminapi.UserCreated{User: toUser(created.User, created.Domains), RecoveryLink: created.RecoveryLink},
 		Headers: adminapi.CreateUser201ResponseHeaders{Location: &loc},
 	}, nil
+}
+
+func (h *handlers) ListUserDevices(ctx context.Context, req adminapi.ListUserDevicesRequestObject) (adminapi.ListUserDevicesResponseObject, error) {
+	params, err := listing.Parse(ownedDeviceList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.users.ListOwnedDevices(ctx, req.Id, app.DeviceQuery{Page: params.ListPage()})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ListUserDevices200JSONResponse(listing.NewPage(toDeviceRows(res.Items), params, res.Count)), nil
 }
 
 func (h *handlers) GetUser(ctx context.Context, req adminapi.GetUserRequestObject) (adminapi.GetUserResponseObject, error) {
@@ -283,6 +298,8 @@ func (h *handlers) UpdateLoginSettings(ctx context.Context, req adminapi.UpdateL
 		BreakGlassAccounts: b.BreakGlassAccounts, SudoersDAllowlist: b.SudoersDAllowlist, SudoLectureText: b.SudoLectureText,
 		LocalAdminUsername: b.LocalAdminUsername, LocalAdminRotationDays: b.LocalAdminRotationDays,
 		RotateAfterRevealHours: b.RotateAfterRevealHours, NoticeText: b.NoticeText, BootPinMinLength: b.BootPinMinLength,
+		LoginHistoryEnabled: b.LoginHistoryEnabled, LoginHistoryDays: b.LoginHistoryDays,
+		DiskUnlockMode: (*string)(b.DiskUnlockMode),
 	})
 	if err != nil {
 		return nil, err
@@ -297,7 +314,8 @@ func toLoginSettings(s pgstore.OrganizationLoginSetting) adminapi.LoginSettings 
 		SudoersDAllowlist: s.SudoersDAllowlist, SudoLectureText: s.SudoLectureText, UpdatedAt: s.UpdatedAt.UTC(),
 		LocalAdminUsername: s.LocalAdminUsername, LocalAdminRotationDays: int(s.LocalAdminRotationDays),
 		RotateAfterRevealHours: intPtr(s.RotateAfterRevealHours), NoticeText: s.NoticeText,
-		BootPinMinLength: int(s.BootPinMinLength),
+		BootPinMinLength: int(s.BootPinMinLength), LoginHistoryEnabled: s.LoginHistoryEnabled,
+		LoginHistoryDays: int(s.LoginHistoryDays), DiskUnlockMode: adminapi.DiskUnlockMode(s.DiskUnlockMode),
 	}
 }
 

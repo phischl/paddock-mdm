@@ -23,6 +23,7 @@ const tabs = computed<Tab[]>(() => [
   { name: 'device-software', label: 'inventory.tabs.software', testid: 'tab-software' },
   { name: 'device-vulnerabilities', label: 'inventory.tabs.vulnerabilities', testid: 'tab-vulnerabilities' },
   { name: 'device-access', label: 'devices.tabs.access', testid: 'tab-access' },
+  { name: 'device-logins', label: 'devices.tabs.logins', testid: 'tab-logins' },
   { name: 'device-configuration', label: 'devices.tabs.configuration', testid: 'tab-configuration' },
   { name: 'device-commands', label: 'devices.tabs.commands', testid: 'tab-commands' },
   ...(session.canReadAudit ? [{ name: 'device-audit', label: 'devices.tabs.audit', testid: 'tab-audit' }] : []),

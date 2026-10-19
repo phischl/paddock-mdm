@@ -19,11 +19,13 @@ import (
 // 11). Polling `loginctl` instead of a D-Bus subscription keeps the agent free of a D-Bus library (plan freedom).
 const SessionPoll = 10 * time.Second
 
-// trackSessions reports a directory user's login once per user per 24 h (session.login, username and time only).
-// Without a login resource there are no directory users to report.
+// trackSessions reports a directory user's login once per user per 24 h (session.login, username and time only), or
+// every session start while the organization records its login history (plan M8d decision 17). Without a login
+// resource there are no directory users to report.
 func (a *Agent) trackSessions(ctx context.Context) {
-	domain := a.loginDomain()
-	if a.d.Sys == nil || a.st.Status != state.StatusActive || domain == "" {
+	spec, ok := a.loginSpec()
+	domain := spec.Himmelblau.Domain
+	if a.d.Sys == nil || a.st.Status != state.StatusActive || !ok || domain == "" {
 		return
 	}
 	list, err := sessions.List(ctx, a.d.Sys.Loginctl)
@@ -41,14 +43,23 @@ func (a *Agent) trackSessions(ctx context.Context) {
 	}
 	now := a.d.Now().UTC()
 	before := len(a.st.SessionsReported)
-	logins := sessions.NewLogins(list, sessions.LocalUIDs(passwd), a.st.SessionsReported, now)
+	var logins []sessions.Session
+	if spec.ReportEverySession {
+		logins = sessions.NewSessionLogins(list, sessions.LocalUIDs(passwd), a.st.SessionsReported, now)
+	} else {
+		logins = sessions.NewLogins(list, sessions.LocalUIDs(passwd), a.st.SessionsReported, now)
+	}
 	for _, s := range logins {
 		upn, err := a.upn(ctx, s, domain)
 		if err != nil {
 			slog.WarnContext(ctx, "session.login not reported: no UPN for the session's user", "error", err)
 			continue
 		}
-		a.event(protocol.EventSessionLogin, protocol.SessionLogin{Username: upn, At: now}) // persists the state
+		at := now
+		if spec.ReportEverySession && !s.Started.IsZero() && !s.Started.After(now) {
+			at = s.Started
+		}
+		a.event(protocol.EventSessionLogin, protocol.SessionLogin{Username: upn, At: at}) // persists the state
 	}
 	if len(logins) == 0 && len(a.st.SessionsReported) != before {
 		a.saveState() // pruned
@@ -75,16 +86,16 @@ func (a *Agent) upn(ctx context.Context, s sessions.Session, domain string) (str
 	return candidate, nil
 }
 
-// loginDomain is the Himmelblau domain of the applied bundle ("" without a login resource).
-func (a *Agent) loginDomain() string {
+// loginSpec is the login resource of the applied bundle; false without one.
+func (a *Agent) loginSpec() (bundle.LoginSpec, bool) {
 	if a.current == nil {
-		return ""
+		return bundle.LoginSpec{}, false
 	}
 	for _, r := range a.current.Resources {
 		var spec bundle.LoginSpec
 		if r.Type == bundle.TypeLogin && json.Unmarshal(r.Spec, &spec) == nil {
-			return spec.Himmelblau.Domain
+			return spec, true
 		}
 	}
-	return ""
+	return bundle.LoginSpec{}, false
 }

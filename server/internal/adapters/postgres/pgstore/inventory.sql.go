@@ -211,6 +211,36 @@ func (q *Queries) DeviceExists(ctx context.Context, id uuid.UUID) (bool, error) 
 	return exists, err
 }
 
+const getDeviceHardware = `-- name: GetDeviceHardware :one
+SELECT hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes
+FROM device_inventory_ref WHERE device_id = $1
+`
+
+type GetDeviceHardwareRow struct {
+	HardwareVendor string
+	HardwareModel  string
+	HardwareSerial string
+	CpuBrand       string
+	CpuCores       int32
+	MemoryBytes    int64
+	DiskTotalBytes int64
+}
+
+func (q *Queries) GetDeviceHardware(ctx context.Context, deviceID uuid.UUID) (GetDeviceHardwareRow, error) {
+	row := q.db.QueryRow(ctx, getDeviceHardware, deviceID)
+	var i GetDeviceHardwareRow
+	err := row.Scan(
+		&i.HardwareVendor,
+		&i.HardwareModel,
+		&i.HardwareSerial,
+		&i.CpuBrand,
+		&i.CpuCores,
+		&i.MemoryBytes,
+		&i.DiskTotalBytes,
+	)
+	return i, err
+}
+
 const insertInstalledSoftware = `-- name: InsertInstalledSoftware :exec
 INSERT INTO installed_software (device_id, organization_id, name, version, source)
 SELECT $1, $2, unnest($3::text[]), unnest($4::text[]), unnest($5::text[])
@@ -672,11 +702,16 @@ func (q *Queries) MarkAgentNotRunningReported(ctx context.Context, arg MarkAgent
 }
 
 const upsertInventoryRef = `-- name: UpsertInventoryRef :exec
-INSERT INTO device_inventory_ref (device_id, organization_id, external_id, last_seen_at, os_version, fleetd_version, synced_at)
-VALUES ($1, $2, $3, $4, $5, $6, now())
+INSERT INTO device_inventory_ref (device_id, organization_id, external_id, last_seen_at, os_version, fleetd_version, synced_at,
+                                  hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes)
+VALUES ($1, $2, $3, $4, $5, $6, now(),
+        $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (device_id) DO UPDATE
   SET external_id = EXCLUDED.external_id, last_seen_at = EXCLUDED.last_seen_at, os_version = EXCLUDED.os_version,
-      fleetd_version = EXCLUDED.fleetd_version, synced_at = now()
+      fleetd_version = EXCLUDED.fleetd_version, synced_at = now(),
+      hardware_vendor = EXCLUDED.hardware_vendor, hardware_model = EXCLUDED.hardware_model,
+      hardware_serial = EXCLUDED.hardware_serial, cpu_brand = EXCLUDED.cpu_brand, cpu_cores = EXCLUDED.cpu_cores,
+      memory_bytes = EXCLUDED.memory_bytes, disk_total_bytes = EXCLUDED.disk_total_bytes
 `
 
 type UpsertInventoryRefParams struct {
@@ -686,6 +721,13 @@ type UpsertInventoryRefParams struct {
 	LastSeenAt     *time.Time
 	OsVersion      string
 	FleetdVersion  string
+	HardwareVendor string
+	HardwareModel  string
+	HardwareSerial string
+	CpuBrand       string
+	CpuCores       int32
+	MemoryBytes    int64
+	DiskTotalBytes int64
 }
 
 func (q *Queries) UpsertInventoryRef(ctx context.Context, arg UpsertInventoryRefParams) error {
@@ -696,6 +738,13 @@ func (q *Queries) UpsertInventoryRef(ctx context.Context, arg UpsertInventoryRef
 		arg.LastSeenAt,
 		arg.OsVersion,
 		arg.FleetdVersion,
+		arg.HardwareVendor,
+		arg.HardwareModel,
+		arg.HardwareSerial,
+		arg.CpuBrand,
+		arg.CpuCores,
+		arg.MemoryBytes,
+		arg.DiskTotalBytes,
 	)
 	return err
 }

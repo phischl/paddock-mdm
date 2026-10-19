@@ -415,7 +415,8 @@ func (a ProfileAssignment) fields() []field {
 func (s UpdateSettings) fields() []field {
 	return []field{{"security_daily_at", s.SecurityDailyAt}, {"regular_schedule", s.RegularSchedule},
 		{"regular_updates_enabled", s.RegularUpdatesEnabled}, {"max_random_delay_min", s.MaxRandomDelayMin},
-		{"staleness_warning_h", s.StalenessWarningH}, {"staleness_critical_h", s.StalenessCriticalH}}
+		{"staleness_warning_h", s.StalenessWarningH}, {"staleness_critical_h", s.StalenessCriticalH},
+		{"agent_update_policy", s.AgentUpdatePolicy}}
 }
 
 func (s ManagedFileSettings) fields() []field {
@@ -428,5 +429,5 @@ func (s LoginSettings) fields() []field {
 		{"sudoers_d_allowlist", list(s.SudoersDAllowlist)}, {"sudo_lecture_text", s.SudoLectureText},
 		{"local_admin_username", s.LocalAdminUsername}, {"local_admin_rotation_days", s.LocalAdminRotationDays},
 		{"rotate_after_reveal_hours", optional(s.RotateAfterRevealHours)}, {"notice_text", s.NoticeText},
-		{"boot_pin_min_length", s.BootPinMinLength}}
+		{"boot_pin_min_length", s.BootPinMinLength}, {"disk_unlock_mode", s.DiskUnlockMode}}
 }

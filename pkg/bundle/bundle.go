@@ -67,7 +67,21 @@ type Bundle struct {
 	// Updates configures security updates, regular updates and package holds (schema v2 only, plan M5b decision 4).
 	// It is a section, not a resource, so agents that do not know it ignore it instead of rejecting the bundle.
 	Updates *UpdatesSpec `json:"updates,omitempty"`
+	// Disk is the disk encryption policy of the device (schema v2 only, plan M8d decision 46). Agents that do not know
+	// it ignore it.
+	Disk *DiskSpec `json:"disk,omitempty"`
 }
+
+// DiskSpec is the disk encryption policy of a device: the unlock mode its keyslots must match.
+type DiskSpec struct {
+	UnlockMode string `json:"unlock_mode"`
+}
+
+// Disk unlock modes of DiskSpec (ADR 0038 decision 1).
+const (
+	UnlockModeTPMPIN  = "tpm_pin"
+	UnlockModeTPMOnly = "tpm_only"
+)
 
 // Inventory is fleetd's installation and enrollment. The enroll secret only lets a host enroll into Fleet; Paddock
 // ignores hosts it cannot map to a device (architecture §15).
@@ -128,7 +142,26 @@ type SigningKey struct {
 // AgentCfg configures the agent itself.
 type AgentCfg struct {
 	CheckinIntervalS int `json:"checkin_interval_s"`
+	// UpdatePolicy is the agent update policy of the device (ADR 0037 decision 1): "" (absent) and automatic follow the
+	// rollout waves, manual installs an offered release only when an administrator requested it for the device.
+	UpdatePolicy string `json:"update_policy,omitempty"`
+	// SupervisorPackages are the paddock-supervisor packages of the current release by arch (plan M8d decision 30):
+	// the agent installs the one of its arch after its own update to that release, as the policy allows.
+	SupervisorPackages map[string]PackageRef `json:"supervisor_packages,omitempty"`
 }
+
+// PackageRef is a Debian package on the public package store (https://bundles.<domain>/<url_path>).
+type PackageRef struct {
+	Version string `json:"version"`
+	URLPath string `json:"url_path"`
+	SHA256  string `json:"sha256"`
+}
+
+// Agent update policies of AgentCfg.UpdatePolicy.
+const (
+	UpdatePolicyAutomatic = "automatic"
+	UpdatePolicyManual    = "manual"
+)
 
 // Resource is one managed resource.
 type Resource struct {
@@ -173,6 +206,9 @@ type LoginSpec struct {
 	LocalAdmin *LocalAdminSpec `json:"local_admin,omitempty"`
 	// Notice is the login notice (plan M4a decision 19): plain text, "" for none.
 	Notice string `json:"notice,omitempty"`
+	// ReportEverySession makes the agent report every session start instead of once per user and 24 hours, while
+	// the organization records its login history (plan M8d decision 17); agents of earlier releases ignore it.
+	ReportEverySession bool `json:"report_every_session,omitempty"`
 }
 
 // LocalAdminSpec is the managed local administrator of the login resource.

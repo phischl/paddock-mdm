@@ -22,7 +22,7 @@ CROSS JOIN LATERAL (SELECT paddock_device_contact(d.state, s.last_contact_at, s.
 -- name: OverviewEncryption :one
 SELECT count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' = 'compliant')::int AS encrypted,
        count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' = 'not_encrypted')::int AS not_encrypted,
-       count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' IN ('unmanaged', 'tpm_missing', 'tpm_pin_missing', 'escrow_pending'))::int AS partial,
+       count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' IN ('unmanaged', 'tpm_missing', 'tpm_pin_missing', 'unlock_mode_mismatch', 'escrow_pending'))::int AS partial,
        count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' IS NULL)::int AS not_reported
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.state = 'active';

@@ -1,5 +1,5 @@
 import type {
-  AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceContact, DeviceState,
+  AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceComponent, DeviceContact, DeviceState,
   DiskState, OrganizationStatus, RevocationStatus,
 } from '../api/client'
 
@@ -55,6 +55,8 @@ export function encryptionStatus(state: DiskState | '' | null | undefined): Stat
       return { status: 'warn', label: 'devices.disk.states.tpm_missing' }
     case 'tpm_pin_missing':
       return { status: 'warn', label: 'devices.disk.states.tpm_pin_missing' }
+    case 'unlock_mode_mismatch':
+      return { status: 'warn', label: 'devices.disk.unlockModeMismatch' }
     case 'not_encrypted':
       return { status: 'critical', label: 'devices.disk.states.not_encrypted' }
     case '':
@@ -91,6 +93,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'agent_outdated':
     case 'agent_rollback_pending':
     case 'agent_not_running':
+    case 'uninstall_pending':
     case 'login_apply_failed':
     case 'sudo_apply_failed':
       return { status: 'warn', label }
@@ -213,6 +216,20 @@ export function actorStatus(type: AuditActorType | string): StatusView {
     case 'api_token':
       return { status: 'info', label }
     default:
+      return { status: 'neutral', label }
+  }
+}
+
+/** The status of a component of a device (plan M8d decision 56). */
+export function componentStatus(s: DeviceComponent['status']): StatusView {
+  const label = 'devices.components.status.' + s
+  switch (s) {
+    case 'ok':
+      return { status: 'ok', label }
+    case 'outdated':
+      return { status: 'warn', label }
+    case 'missing':
+    case 'unknown':
       return { status: 'neutral', label }
   }
 }

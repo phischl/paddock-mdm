@@ -123,7 +123,7 @@ func TestDeviceGroupDeleteDetachesInactiveTokens(t *testing.T) {
 	groups := app.NewDeviceGroups(runner, pool)
 	tokens := app.NewEnrollmentTokens(runner, pool, keys, keys, &fakeTokenCache{}, "https://device.test")
 
-	group, err := groups.Create(admin(), "laptops", nil)
+	group, err := groups.Create(admin(), "laptops", nil, app.DeviceGroupPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,16 +2,19 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import DataList from '../components/DataList.vue'
 import EffectiveProfileView from '../components/EffectiveProfileView.vue'
 import StatusChip from '../components/StatusChip.vue'
-import type { UserDetail, UserEffectiveProfile, UserGroup } from '../api/client'
+import TimeCell from '../components/TimeCell.vue'
+import type { Device, UserDetail, UserEffectiveProfile, UserGroup } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { allDevices } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import { userLockStatus } from '../lib/status'
 import { allUserGroups } from '../lib/userGroups'
-import { deleteUser, getEffectiveProfile, getUser, setLocked, updateUser } from '../lib/users'
+import type { ListColumn } from '../lib/listQuery'
+import { deleteUser, getEffectiveProfile, getUser, listOwnedDevices, setLocked, updateUser } from '../lib/users'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
 
@@ -34,6 +37,11 @@ const editOpen = ref(false)
 const editName = ref('')
 const editEmail = ref('')
 const editProblem = ref('')
+const fetchOwned = computed(() => listOwnedDevices(id.value))
+const ownedColumns: ListColumn[] = [
+  { key: 'hostname', title: 'devices.hostname', sortable: true },
+  { key: 'last_contact_at', title: 'devices.lastContact', sortable: true },
+]
 
 async function load(): Promise<void> {
   const u = await getUser(id.value)
@@ -259,6 +267,33 @@ async function saveEdit(): Promise<void> {
           </tr>
         </tbody>
       </v-table>
+
+      <h2>{{ t('users.ownedDevices.title') }}</h2>
+      <DataList
+        :columns="ownedColumns"
+        :fetch="fetchOwned"
+        searchable
+        default-sort="hostname"
+        item-value="id"
+        data-testid="user-owned-devices"
+      >
+        <template #[`item.hostname`]="{ item }: { item: Device }">
+          <RouterLink :to="{ name: 'device', params: { id: item.id } }">
+            {{ item.hostname }}
+          </RouterLink>
+        </template>
+        <template #[`item.last_contact_at`]="{ item }: { item: Device }">
+          <TimeCell
+            v-if="item.last_contact_at"
+            :iso="item.last_contact_at"
+            mode="relative"
+          />
+          <span
+            v-else
+            class="pd-muted"
+          >{{ t('devices.never') }}</span>
+        </template>
+      </DataList>
 
       <h2>{{ t('profiles.effectiveTitle') }}</h2>
       <v-autocomplete

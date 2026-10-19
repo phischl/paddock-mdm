@@ -35,11 +35,16 @@ func (h *handlers) requestRevocation(ctx context.Context, action string, id admi
 	if body.Reason != nil {
 		in.Reason = *body.Reason
 	}
-	r, err := h.revocations.Request(ctx, in)
+	r, cancelled, err := h.revocations.Request(ctx, in)
 	if err != nil {
 		return adminapi.RevocationRequest{}, err
 	}
-	return h.revocationRequest(ctx, r)
+	out, err := h.revocationRequest(ctx, r)
+	if err == nil && cancelled != "" {
+		c := adminapi.RevocationRequestUninstallCancelled(cancelled)
+		out.UninstallCancelled = &c
+	}
+	return out, err
 }
 
 func (h *handlers) ApproveRevocationRequest(ctx context.Context, req adminapi.ApproveRevocationRequestRequestObject) (adminapi.ApproveRevocationRequestResponseObject, error) {

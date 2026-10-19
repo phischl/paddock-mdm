@@ -1,0 +1,29 @@
+name: upstream-watch
+
+# Compares the pins Dependabot cannot see (deploy/compose/versions.env, the compiler's Himmelblau default, fleetd,
+# the Fleet NVD release) with upstream and keeps one issue per outdated pin (plan M8d decisions 57–62). Issues, not
+# pull requests: every bump has a gate a person runs before merging.
+on:
+  schedule:
+    - cron: "17 5 * * 1" # weekly, Monday 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: "**/go.sum"
+      - name: Reconcile upstream issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: go run ./tools/upstreamwatch issues --repo "$REPO"

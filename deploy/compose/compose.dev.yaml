@@ -143,6 +143,8 @@ services:
       PADDOCK_INVENTORY_SYNC_INTERVAL: ${PADDOCK_INVENTORY_SYNC_INTERVAL:-60s}
       # Staleness thresholds count minutes, for gate U4 (plan M5b decision 9).
       PADDOCK_STALENESS_UNIT: ${PADDOCK_STALENESS_UNIT:-minute}
+      # Retention periods count seconds, for the login history purge gate (plan M8d decision 19, M10 decision 14).
+      PADDOCK_RETENTION_UNIT: ${PADDOCK_RETENTION_UNIT:-seconds}
       # Ubuntu's vulnerability data from the fixture server that gate O1 starts on the network cp, every 30 s, instead
       # of the real bulk file once a day (plan M5c); without the gate running, the downloads fail and the data stays.
       PADDOCK_OSV_UBUNTU_URL: ${PADDOCK_OSV_UBUNTU_URL:-http://osv-fixture:8080/Ubuntu/all.zip}

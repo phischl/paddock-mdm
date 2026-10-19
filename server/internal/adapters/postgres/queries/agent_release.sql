@@ -128,3 +128,10 @@ SELECT version::text, name::text, sha256::text, object_key::text FROM paddock_in
 -- The fleetd package devices install (plan M5a decision 3); no row if no published release has one.
 -- name: FleetdPackage :many
 SELECT package_version::text, sha256::text, object_key::text FROM paddock_fleetd_package(@arch::text);
+
+-- The paddock-supervisor packages of the current rollout while it runs or completed, one per arch, with its waves
+-- (plan M8d decision 30, ADR 0037 amendment 2026-10-18).
+-- name: SupervisorPackages :many
+SELECT version::text, arch::text, package_version::text, sha256::text, object_key::text, status::text,
+       waves::int[], current_wave_index::int
+FROM paddock_supervisor_packages();

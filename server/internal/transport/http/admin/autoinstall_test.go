@@ -81,7 +81,7 @@ func TestGenerateAutoinstall(t *testing.T) {
 	}
 	e.expectEvent(res, "autoinstall.generated:success:")
 	for _, want := range []string{"#cloud-config", `hostname: "laptop-1"`, "https://bundles.test/packages/" + v + "/paddock-agent_" + v + "_amd64.deb",
-		"https://bundles.test/packages/" + v + "/paddock-supervisor_" + v + "_amd64.deb", `{\"boot_pin_min_length\":8}`} {
+		"https://bundles.test/packages/" + v + "/paddock-supervisor_" + v + "_amd64.deb", `{\"boot_pin_min_length\":8,\"unlock_mode\":\"tpm_pin\"}`} {
 		if !strings.Contains(string(res.body), want) {
 			t.Errorf("user-data lacks %s", want)
 		}

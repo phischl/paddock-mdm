@@ -82,6 +82,7 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 			BreakGlassAccounts: breakGlass,
 			LocalAdmin:         &bundle.LocalAdminSpec{Username: s.LocalAdminUsername, RotationDays: int(s.LocalAdminRotationDays)},
 			Notice:             s.NoticeText,
+			ReportEverySession: s.LoginHistoryEnabled,
 		})
 		if err != nil {
 			return nil, nil, nil, err

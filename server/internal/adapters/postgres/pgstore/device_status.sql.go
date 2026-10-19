@@ -93,9 +93,9 @@ func (q *Queries) SetDeviceLoginState(ctx context.Context, arg SetDeviceLoginSta
 
 const upsertDeviceStatus = `-- name: UpsertDeviceStatus :exec
 INSERT INTO device_status (device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health,
-                           schema_versions)
+                           schema_versions, arch, components_outdated)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
-        $8)
+        $8, $9, $10::text[])
 ON CONFLICT (device_id) DO UPDATE
 SET last_contact_at = EXCLUDED.last_contact_at, applied_bundle_version = EXCLUDED.applied_bundle_version,
     agent_version = EXCLUDED.agent_version, last_seq = greatest(device_status.last_seq, EXCLUDED.last_seq),
@@ -103,7 +103,7 @@ SET last_contact_at = EXCLUDED.last_contact_at, applied_bundle_version = EXCLUDE
       WHEN NOT (EXCLUDED.health ? 'revoke_capabilities') AND device_status.health ? 'revoke_capabilities'
       THEN EXCLUDED.health || jsonb_build_object('revoke_capabilities', device_status.health -> 'revoke_capabilities')
       ELSE EXCLUDED.health END,
-    schema_versions = EXCLUDED.schema_versions
+    schema_versions = EXCLUDED.schema_versions, arch = EXCLUDED.arch, components_outdated = EXCLUDED.components_outdated
 WHERE device_status.last_contact_at IS NULL OR device_status.last_contact_at <= EXCLUDED.last_contact_at
 `
 
@@ -116,6 +116,8 @@ type UpsertDeviceStatusParams struct {
 	LastSeq              int64
 	Health               json.RawMessage
 	SchemaVersions       []int32
+	Arch                 string
+	ComponentsOutdated   []string
 }
 
 // Worker heartbeat materialization (plan M2a decision 12); an older heartbeat never overwrites a newer one.
@@ -131,6 +133,8 @@ func (q *Queries) UpsertDeviceStatus(ctx context.Context, arg UpsertDeviceStatus
 		arg.LastSeq,
 		arg.Health,
 		arg.SchemaVersions,
+		arg.Arch,
+		arg.ComponentsOutdated,
 	)
 	return err
 }

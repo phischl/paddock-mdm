@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -18,6 +19,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/managedconfig"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
@@ -39,15 +41,22 @@ var (
 	SpecDeviceReleaseQuarantine = ActionSpec{Code: audit.CodeDeviceQuarantineReleased, AllowedRoles: RolesWrite}
 	SpecDeviceRetire            = ActionSpec{Code: audit.CodeDeviceRetired, AllowedRoles: RolesAdmin}
 	SpecDeviceSetGroups         = ActionSpec{Code: audit.CodeDeviceGroupsChanged, AllowedRoles: RolesWrite}
+	SpecDeviceSetOwners         = ActionSpec{Code: audit.CodeDeviceOwnersChanged, AllowedRoles: RolesWrite}
 )
+
+// MaxDeviceOwners is the most owners a device can have (plan M8d decision 2).
+const MaxDeviceOwners = 20
 
 // DeviceQuery selects a page of devices.
 type DeviceQuery struct {
 	Page       ListPage
 	States     []string
 	GroupID    *uuid.UUID
-	DiskStates []string // disk encryption states of the last check-in (plan M4b decision 14)
-	Contacts   []string // contact states (plan M7c §12 open point 1)
+	DiskStates []string   // disk encryption states of the last check-in (plan M4b decision 14)
+	Contacts   []string   // contact states (plan M7c §12 open point 1)
+	OwnerID    *uuid.UUID // devices owned by this user (plan M8d decision 3)
+	// ComponentOutdated selects devices with (true) or without (false) an outdated component (plan M8d decision 55).
+	ComponentOutdated *bool
 	// SecurityOverdue selects devices without a successful security run within SecurityOverdueWindow.
 	SecurityOverdue bool
 }
@@ -88,7 +97,7 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 	}
 	n, err := q.CountDevices(ctx, pgstore.CountDevicesParams{
 		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
-		SecurityOverdueWindow: overdue, CountLimit: countLimit,
+		SecurityOverdueWindow: overdue, OwnerID: nullID(query.OwnerID), ComponentOutdated: query.ComponentOutdated, CountLimit: countLimit,
 	})
 	if err != nil {
 		return fmt.Errorf("count devices: %w", err)
@@ -96,7 +105,8 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 	out.Count = int(n)
 	out.Items, err = q.ListDevices(ctx, pgstore.ListDevicesParams{
 		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
-		SecurityOverdueWindow: overdue, Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
+		SecurityOverdueWindow: overdue, OwnerID: nullID(query.OwnerID), ComponentOutdated: query.ComponentOutdated, Sort: query.Page.Sort, SkipRows: query.Page.Offset,
+		MaxRows: query.Page.Limit,
 	})
 	if err != nil {
 		return fmt.Errorf("list devices: %w", err)
@@ -114,6 +124,17 @@ type DeviceDetail struct {
 	Groups       []pgstore.ListDeviceGroupsOfDeviceRow
 	IdentityKeys []pgstore.DeviceIdentityKey
 	Login        LoginAssignment
+	// Owners are the users responsible for the device, sorted by username (plan M8d decision 2).
+	Owners []pgstore.AppUser
+	// Hardware are the asset facts of the inventory (plan M8d decision 8); nil while no inventory row exists.
+	Hardware *pgstore.GetDeviceHardwareRow
+	// Uninstall is the device's uninstall with its command (plan M8d decision 42); nil without one.
+	Uninstall *pgstore.GetDeviceUninstallRow
+	// UninstallReportOverdue: the pending uninstall's removal report is overdue, so it can be cancelled or requested
+	// again (UninstallReportTimeout).
+	UninstallReportOverdue bool
+	// ComponentTargets are the platform's component targets (plan M8d decision 55).
+	ComponentTargets map[string]string
 }
 
 // LoginManagement reports whether the device's agent supports bundle schema v2 (login and sudo, plan M3a decision
@@ -165,8 +186,42 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 	if out.IdentityKeys, err = q.ListDeviceIdentityKeys(ctx, id); err != nil {
 		return out, err
 	}
+	if out.Owners, err = listDeviceOwners(ctx, q, id); err != nil {
+		return out, err
+	}
+	hw, err := q.GetDeviceHardware(ctx, id)
+	switch {
+	case err == nil:
+		out.Hardware = &hw
+	case !db.IsNoRows(err):
+		return out, err
+	}
+	if out.ComponentTargets, err = ComponentTargets(ctx, q); err != nil {
+		return out, err
+	}
+	if out.Device.UninstallRequestedAt != nil {
+		u, err := q.GetDeviceUninstall(ctx, id)
+		if err != nil {
+			return out, err
+		}
+		out.Uninstall = &u
+		out.UninstallReportOverdue = u.UninstalledAt == nil &&
+			UninstallReportOverdue(u.CommandStatus, u.CommandFinishedAt, u.CommandDeliveredAt, time.Now())
+	}
 	out.Login, err = loadLoginAssignment(ctx, q, id)
 	return out, err
+}
+
+func listDeviceOwners(ctx context.Context, q *pgstore.Queries, id uuid.UUID) ([]pgstore.AppUser, error) {
+	rows, err := q.ListDeviceOwners(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]pgstore.AppUser, len(rows))
+	for i, r := range rows {
+		out[i] = r.AppUser
+	}
+	return out, nil
 }
 
 // Approve activates a pending device (audited: device.approved).
@@ -271,6 +326,75 @@ func (d *Devices) SetGroups(ctx context.Context, id uuid.UUID, groupIDs []uuid.U
 			return err
 		}
 		rec.StateChanged(statechange.ScopeDevice, id)
+		out, err = loadDeviceDetail(ctx, q, id)
+		return err
+	})
+	return out, err
+}
+
+// SetOwners replaces the owners of a device (audited: device.owners_changed). Owners carry no login or sudo rights and
+// are not part of the bundle, so nothing is recompiled (ADR 0037 decision 5).
+func (d *Devices) SetOwners(ctx context.Context, id uuid.UUID, userIDs []uuid.UUID) (DeviceDetail, error) {
+	var out DeviceDetail
+	spec := SpecDeviceSetOwners
+	spec.Target = &audit.Target{Type: "device", ID: id.String()}
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		dev, err := q.LockDevice(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		rec.SetTarget(audit.Target{Type: "device", ID: id.String(), Display: dev.Hostname})
+		rec.SetParam("hostname", dev.Hostname)
+		want := slices.Compact(slices.SortedFunc(slices.Values(userIDs), compareIDs))
+		if len(want) > MaxDeviceOwners {
+			return problem.InvalidRequest.WithDetail(fmt.Sprintf("a device has at most %d owners", MaxDeviceOwners))
+		}
+		names := map[uuid.UUID]string{}
+		for _, u := range want {
+			usr, err := q.GetAppUser(ctx, u)
+			if db.IsNoRows(err) {
+				return problem.InvalidRequest.WithDetail("unknown user " + u.String())
+			} else if err != nil {
+				return err
+			}
+			names[u] = usr.Username
+		}
+		have, err := listDeviceOwners(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		var by uuid.NullUUID
+		if p, ok := principal.From(ctx); ok && p.ID != uuid.Nil {
+			by = uuid.NullUUID{UUID: p.ID, Valid: true}
+		}
+		added, removed, owners := []string{}, []string{}, []string{}
+		for _, u := range want {
+			owners = append(owners, names[u])
+			if slices.ContainsFunc(have, func(o pgstore.AppUser) bool { return o.ID == u }) {
+				continue
+			}
+			added = append(added, names[u])
+			if err := q.InsertDeviceOwner(ctx, pgstore.InsertDeviceOwnerParams{
+				OrganizationID: dev.OrganizationID, DeviceID: id, UserID: u, AssignedBy: by,
+			}); err != nil {
+				return err
+			}
+		}
+		for _, o := range have {
+			if slices.Contains(want, o.ID) {
+				continue
+			}
+			removed = append(removed, o.Username)
+			if err := q.DeleteDeviceOwner(ctx, pgstore.DeleteDeviceOwnerParams{DeviceID: id, UserID: o.ID}); err != nil {
+				return err
+			}
+		}
+		slices.Sort(added)
+		slices.Sort(removed)
+		slices.Sort(owners)
+		rec.SetParam("added", added)
+		rec.SetParam("removed", removed)
+		rec.SetParam("owners", owners)
 		out, err = loadDeviceDetail(ctx, q, id)
 		return err
 	})

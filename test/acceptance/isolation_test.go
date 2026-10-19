@@ -34,6 +34,7 @@ func TestOrganizationIsolation(t *testing.T) {
 	globexGroup(t, w)
 	seedGlobexDevices(t, w)
 	seedGlobexIdentity(t, w)
+	seedGlobexOwnersAndLogins(t, w)
 	seedGlobexUpstream(t, w)
 	seedGlobexChangeSet(t, w)
 	ctx := testContext(t, time.Minute)
@@ -142,6 +143,9 @@ func TestOrganizationIsolation(t *testing.T) {
 			queries, ok := listIsolationQueries[path]
 			if !ok {
 				t.Fatalf("collection GET %s has no entry in listIsolationQueries", path)
+			}
+			if seed := listSeeds[path]; seed != nil {
+				seed(t, w)
 			}
 			for _, dynamic := range listIsolationDynamicQueries[path] {
 				queries = append(queries, dynamic(w))

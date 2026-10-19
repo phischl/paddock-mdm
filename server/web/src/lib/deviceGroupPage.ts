@@ -1,12 +1,18 @@
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { DeviceGroup } from '../api/client'
+import type { AgentUpdatePolicy, DeviceGroup, DeviceGroupStaleness, DiskUnlockMode } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { createDeviceGroup, deleteDeviceGroup, updateDeviceGroup } from './deviceGroups'
 
 export interface DeviceGroupInput {
   name: string
   description: string
+  /** The group's contact thresholds; null inherits the organization's (plan M8d decision 11). */
+  staleness: DeviceGroupStaleness | null
+  /** The group's agent update policy; null inherits the organization's (plan M8d decision 24). */
+  agent_update_policy: AgentUpdatePolicy | null
+  /** The group's disk unlock mode for new installations; null inherits the organization's (plan M8d decision 49). */
+  disk_unlock_mode: DiskUnlockMode | null
 }
 
 /** Dialog state and handlers of the device group page; reload refreshes the list after a change. */
@@ -25,7 +31,7 @@ export function useDeviceGroupPage(reload: () => void) {
   }
 
   async function onCreate(form: DeviceGroupInput): Promise<void> {
-    createProblem.value = (await createDeviceGroup(form.name, form.description)) ?? ''
+    createProblem.value = (await createDeviceGroup(form)) ?? ''
     if (createProblem.value) return
     createOpen.value = false
     reload()
@@ -42,7 +48,7 @@ export function useDeviceGroupPage(reload: () => void) {
 
   async function onEdit(form: DeviceGroupInput): Promise<void> {
     if (!editTarget.value) return
-    editProblem.value = (await updateDeviceGroup(editTarget.value.id, form.name, form.description)) ?? ''
+    editProblem.value = (await updateDeviceGroup(editTarget.value.id, form)) ?? ''
     if (editProblem.value) return
     editTarget.value = null
     reload()

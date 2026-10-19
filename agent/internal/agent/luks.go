@@ -12,7 +12,11 @@ func (a *Agent) tickLUKS(ctx context.Context, full bool) {
 	if a.luks == nil || a.st.DeviceID == "" {
 		return
 	}
-	disk := a.luks.Tick(ctx, a.bundleKeys(), full)
+	mode := ""
+	if a.current != nil && a.current.Disk != nil {
+		mode = a.current.Disk.UnlockMode
+	}
+	disk := a.luks.Tick(ctx, a.bundleKeys(), full, mode)
 	if disk != nil {
 		a.d.Health.Update(func(r *health.Report) { r.Disk = disk })
 	}

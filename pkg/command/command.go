@@ -28,7 +28,28 @@ const (
 	TypeDeleteSelfLock = "delete_self_lock"
 	// TypeInstallNow installs or upgrades the named packages at once (plan M5b decision 3).
 	TypeInstallNow = "install_now"
+	// TypeUninstall removes Paddock from the device (plan M8d decision 35).
+	TypeUninstall = "uninstall"
 )
+
+// Uninstall modes (ADR 0037 decision 4).
+const (
+	UninstallLeave = "leave" // remove Paddock, keep everything else working
+	UninstallReset = "reset" // remove Paddock, Himmelblau, managed files and the managed local administrator
+)
+
+// UninstallParams are the params of uninstall.
+type UninstallParams struct {
+	Mode           string `json:"mode"`
+	ClearTPM       bool   `json:"clear_tpm,omitempty"`        // reset only
+	KeepLocalAdmin bool   `json:"keep_local_admin,omitempty"` // reset only
+}
+
+// UninstallAccepted is the command result the agent posts before it starts the removal.
+type UninstallAccepted struct {
+	Accepted bool   `json:"accepted"`
+	Reason   string `json:"reason,omitempty"` // when not accepted: invalid_params, revocation_pending, helper_failed
+}
 
 // MaxInstallPackages bounds the packages of one install_now command.
 const MaxInstallPackages = 20
@@ -51,6 +72,7 @@ var lifetimes = map[string]time.Duration{
 	TypeRotateAdminPassword: 7 * 24 * time.Hour,
 	TypeDeleteSelfLock:      30 * 24 * time.Hour,
 	TypeInstallNow:          24 * time.Hour,
+	TypeUninstall:           7 * 24 * time.Hour,
 }
 
 // Lifetime returns the default lifetime of a registered type; ok is false for any other type.

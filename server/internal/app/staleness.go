@@ -70,15 +70,29 @@ func (s *Staleness) Evaluate(ctx context.Context, now time.Time) error {
 		if c.LastContactAt == nil {
 			continue
 		}
-		want := updates.StaleLevel(*c.LastContactAt, now, settings.StalenessWarningH, settings.StalenessCriticalH, s.unit)
+		th := stalenessThresholds(c.GroupWarningH, c.GroupCriticalH, settings)
+		want := updates.StaleLevel(*c.LastContactAt, now, th.warningH, th.criticalH, s.unit)
 		if want == current {
 			continue
 		}
-		if err := s.transition(ctx, c.ID, *c.LastContactAt, current, want, settings, now); err != nil {
+		if err := s.transition(ctx, c.ID, *c.LastContactAt, current, want, settings, th, now); err != nil {
 			errs = append(errs, s.deviceFailed(ctx, c.ID, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// thresholds are the staleness thresholds a device is evaluated with and where they come from.
+type thresholds struct {
+	warningH, criticalH int
+	source              string
+}
+
+// stalenessThresholds resolves a device's thresholds from the overrides of its groups (0 = none) and the
+// organization's settings (plan M8d decision 12).
+func stalenessThresholds(groupWarningH, groupCriticalH int32, settings UpdateSettings) thresholds {
+	w, c, src := updates.Thresholds(int(groupWarningH), int(groupCriticalH), settings.StalenessWarningH, settings.StalenessCriticalH)
+	return thresholds{warningH: w, criticalH: c, source: src}
 }
 
 // deviceFailed logs a device whose evaluation failed; the round goes on with the other devices.
@@ -87,19 +101,22 @@ func (s *Staleness) deviceFailed(ctx context.Context, id uuid.UUID, err error) e
 	return fmt.Errorf("device %s: %w", id, err)
 }
 
-// transition moves a device from level from to level to, audited once: the claim re-reads the open alert and the
-// last contact in the event's transaction and records nothing when another round got there first or the device
-// checked in meanwhile.
-func (s *Staleness) transition(ctx context.Context, id uuid.UUID, last time.Time, from, to string, settings UpdateSettings, now time.Time) error {
+// transition moves a device from level from to level to, audited once: the claim re-reads the open alert, the last
+// contact and the device's group thresholds in the event's transaction and records nothing when another round got
+// there first, the device checked in meanwhile or its groups changed the level.
+func (s *Staleness) transition(ctx context.Context, id uuid.UUID, last time.Time, from, to string, settings UpdateSettings,
+	th thresholds, now time.Time) error {
 	spec := ActionSpec{
 		Code: staleCodes[to], Target: &audit.Target{Type: "device", ID: id.String()},
 		Params: map[string]any{"last_contact_at": audit.Timestamp(last).Format(time.RFC3339Nano)},
 	}
 	switch to {
 	case updates.StaleWarning:
-		spec.Params["threshold_h"] = settings.StalenessWarningH
+		spec.Params["threshold_h"] = th.warningH
+		spec.Params["source"] = th.source
 	case updates.StaleCritical:
-		spec.Params["threshold_h"] = settings.StalenessCriticalH
+		spec.Params["threshold_h"] = th.criticalH
+		spec.Params["source"] = th.source
 	default:
 		spec.Params["previous"] = from
 	}
@@ -115,7 +132,12 @@ func (s *Staleness) transition(ctx context.Context, id uuid.UUID, last time.Time
 		if err != nil {
 			return false, err
 		}
-		if last == nil || updates.StaleLevel(*last, now, settings.StalenessWarningH, settings.StalenessCriticalH, s.unit) != to {
+		groups, err := q.GetDeviceGroupStaleness(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		if cur := stalenessThresholds(groups.GroupWarningH, groups.GroupCriticalH, settings); cur != th || last == nil ||
+			updates.StaleLevel(*last, now, cur.warningH, cur.criticalH, s.unit) != to {
 			return false, nil
 		}
 		if to == updates.StaleNone {

@@ -29,6 +29,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -257,6 +258,10 @@ type discardCommands struct{}
 
 func (discardCommands) DeleteCommand(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 
+func (discardCommands) ClaimResult(_ context.Context, device, _ uuid.UUID, status string) (uuid.UUID, string, error) {
+	return device, status, nil
+}
+
 type env struct {
 	t        *testing.T
 	keysDown bool // the fake bundle key source fails
@@ -355,16 +360,19 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Organizations:  app.NewOrganizations(runner, platformPool, idp),
 		Accounts:       app.NewAccounts(runner, orgPool, platformPool, e.sessions),
 		Releases:       app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
+		AgentUpdates:   app.NewAgentUpdates(runner, orgPool, noOffer{}),
+		Uninstalls:     app.NewUninstalls(runner, orgPool, discardCommands{}),
 		Users:          app.NewUsers(runner, orgPool, idp),
 		UserGroups:     app.NewUserGroups(runner, orgPool, idp),
 		Logins:         app.NewLogins(runner, orgPool, idp),
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
+		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
 		Commands:       app.NewDeviceCommands(orgPool),
 		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:    app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
 		Disk:           app.NewDisk(runner, orgPool, escrowAccess, e.disk),
-		Revocations:    app.NewRevocations(runner, orgPool, e.stepUps, true),
+		Revocations:    app.NewRevocations(runner, orgPool, e.stepUps, discardCommands{}, true),
 		DMS:            app.NewDMS(runner, orgPool, discardCommands{}, true, false),
 		Inventory:      app.NewInventory(orgPool),
 		AuditLog:       app.NewAuditLog(reader, orgPool),
@@ -929,4 +937,11 @@ func TestStaticPortalAndHeaders(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("login with //evil: %d", rec.Code)
 	}
+}
+
+// noOffer is an offer source without a rollout.
+type noOffer struct{}
+
+func (noOffer) Offer(context.Context) (agentrelease.Offer, bool, error) {
+	return agentrelease.Offer{}, false, nil
 }

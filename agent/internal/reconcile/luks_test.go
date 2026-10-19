@@ -44,6 +44,9 @@ type volume struct {
 	failEnroll  bool
 	changes     []string               // keyslot changes made through the tools
 	extra       map[string]*dataVolume // the other volumes of /etc/crypttab by device
+	// boot is the mount point findmnt reports for /boot ("" fails the call); calls collects every tool call.
+	boot  string
+	calls []string
 }
 
 // LUKS UUIDs of the fixture's volumes.
@@ -114,6 +117,7 @@ func (d *dataVolume) dump() string {
 
 func (v *volume) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
+	v.calls = append(v.calls, line)
 	if file, ok := strings.CutPrefix(line, "cryptsetup luksUUID -- "); ok && strings.HasSuffix(file, ".img") {
 		// A header backup: the UUID of the volume whose header it holds (a data volume's dump names its UUID).
 		data, err := os.ReadFile(file) //nolint:gosec // a backup file of the test layout
@@ -133,6 +137,11 @@ func (v *volume) Command(_ context.Context, _ []string, name string, args ...str
 		}
 	}
 	switch {
+	case name == "findmnt" && slices.Contains(args, "/boot"):
+		if v.boot == "" {
+			return "", "", 1, nil
+		}
+		return v.boot + "\n", "", 0, nil
 	case name == "findmnt":
 		return "/dev/mapper/vg-root\n", "", 0, nil
 	case name == "lsblk" && v.plain:
@@ -203,6 +212,8 @@ func (v *volume) metadata() string {
 		switch kind {
 		case "tpm2+pin":
 			tokens[slot] = map[string]any{"type": "systemd-tpm2", "keyslots": []string{slot}, "tpm2-pin": true, "tpm2-pcrs": []int{7}}
+		case "tpm2":
+			tokens[slot] = map[string]any{"type": "systemd-tpm2", "keyslots": []string{slot}, "tpm2-pin": false, "tpm2-pcrs": []int{7}}
 		case "recovery":
 			tokens[slot] = map[string]any{"type": "systemd-recovery", "keyslots": []string{slot}}
 		}
@@ -269,6 +280,7 @@ type luksFixture struct {
 	now    time.Time
 	keys   *bundle.Keys
 	tpm    bool
+	mode   string // the unlock mode of the applied bundle ("" = absent)
 }
 
 func newLUKSFixture(t *testing.T, slots ...string) *luksFixture {
@@ -307,7 +319,7 @@ func (f *luksFixture) write(path, content string) {
 // pass runs a full pass and returns the disk state.
 func (f *luksFixture) pass() string {
 	f.t.Helper()
-	h := f.m.Tick(context.Background(), f.keys, true)
+	h := f.m.Tick(context.Background(), f.keys, true, f.mode)
 	if h == nil {
 		f.t.Fatal("no disk health")
 	}
@@ -318,7 +330,7 @@ func (f *luksFixture) pass() string {
 func (f *luksFixture) poll() string {
 	f.t.Helper()
 	f.now = f.now.Add(reconcile.LUKSPollInterval)
-	return f.m.Tick(context.Background(), f.keys, false).State
+	return f.m.Tick(context.Background(), f.keys, false, f.mode).State
 }
 
 func (f *luksFixture) passphrase() bool {
@@ -362,7 +374,7 @@ func TestLUKSToCompliant(t *testing.T) {
 	if !slices.Equal(f.vol.changes, []string{"add recovery", "wipe password"}) {
 		t.Fatalf("keyslot changes %v", f.vol.changes)
 	}
-	h := f.m.Tick(context.Background(), f.keys, true)
+	h := f.m.Tick(context.Background(), f.keys, true, f.mode)
 	if h.LUKSVersion != 2 || h.Keyslots != 2 || !slices.Equal(h.Tokens, []string{"recovery", "tpm2+pin"}) {
 		t.Fatalf("health %+v", h)
 	}
@@ -443,7 +455,7 @@ func TestLUKSEscrowsEveryVolume(t *testing.T) {
 	if string(f.openHeader(data[0])) != f.vol.extra["/dev/vdb1"].dump() {
 		t.Fatal("the escrowed header is not the data volume's")
 	}
-	h := f.m.Tick(context.Background(), f.keys, true)
+	h := f.m.Tick(context.Background(), f.keys, true, f.mode)
 	got := map[string]protocol.DiskVolume{}
 	for _, v := range h.Volumes {
 		got[v.UUID] = v
@@ -505,7 +517,7 @@ func TestLUKSVolumeWithoutUUID(t *testing.T) {
 	if s := f.settle(); s != protocol.DiskEscrowPending {
 		t.Fatalf("state %s", s)
 	}
-	h := f.m.Tick(context.Background(), f.keys, true)
+	h := f.m.Tick(context.Background(), f.keys, true, f.mode)
 	if len(h.Volumes) != 2 || !reflect.DeepEqual(h.Volumes[1], protocol.DiskVolume{Device: "/dev/vdb1"}) || len(f.volumeHeaders("")) != 0 {
 		t.Fatalf("volumes %+v", h.Volumes)
 	}
@@ -730,7 +742,7 @@ func TestLUKSRootCloneNotEscrowed(t *testing.T) {
 		t.Fatalf("state %s", s)
 	}
 	f.vol.extra["/dev/vdb"].slots = 3
-	h := f.m.Tick(context.Background(), f.keys, true)
+	h := f.m.Tick(context.Background(), f.keys, true, f.mode)
 	if len(h.Volumes) != 2 || !reflect.DeepEqual(h.Volumes[1], protocol.DiskVolume{UUID: rootUUID, Device: "/dev/vdb", SharedUUID: true}) ||
 		len(f.events) != 0 || len(f.st.Volumes) != 0 {
 		t.Fatalf("volumes %+v, events %v, state %+v", h.Volumes, f.events, f.st.Volumes)
@@ -756,7 +768,7 @@ func TestLUKSRefusedVolume(t *testing.T) {
 	if s := f.settle(); s != protocol.DiskEscrowPending || len(f.volumeHeaders(dataUUID)) != 1 {
 		t.Fatalf("state %s, data headers %d", s, len(f.volumeHeaders(dataUUID)))
 	}
-	if h := f.m.Tick(context.Background(), f.keys, true); !h.Volumes[1].Refused {
+	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); !h.Volumes[1].Refused {
 		t.Fatalf("volumes %+v", h.Volumes)
 	}
 	f.now = f.now.Add(reconcile.RefusedRetry - time.Minute)
@@ -790,7 +802,7 @@ func TestLUKSHungVolumeKeepsTicking(t *testing.T) {
 	}
 	for range 5 {
 		start := time.Now()
-		h := f.m.Tick(context.Background(), f.keys, true)
+		h := f.m.Tick(context.Background(), f.keys, true, f.mode)
 		if time.Since(start) > time.Second || h == nil || len(h.Volumes) != 1 || h.State == protocol.DiskCompliant {
 			t.Fatalf("tick took %s, health %+v", time.Since(start), h)
 		}
@@ -799,7 +811,7 @@ func TestLUKSHungVolumeKeepsTicking(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	for range 5 {
-		f.m.Tick(context.Background(), f.keys, true)
+		f.m.Tick(context.Background(), f.keys, true, f.mode)
 	}
 	if n := data.isLuks.Load(); n != 1 {
 		t.Fatalf("%d inventories of the hung volume started, want 1", n)
@@ -807,7 +819,7 @@ func TestLUKSHungVolumeKeepsTicking(t *testing.T) {
 	close(hang)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if h := f.m.Tick(context.Background(), f.keys, true); len(h.Volumes) == 2 && h.Volumes[1].UUID == dataUUID {
+		if h := f.m.Tick(context.Background(), f.keys, true, f.mode); len(h.Volumes) == 2 && h.Volumes[1].UUID == dataUUID {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -835,7 +847,7 @@ func TestLUKSRenumberedVolume(t *testing.T) {
 			swap = false
 		}
 	}
-	h := f.m.Tick(context.Background(), f.keys, true)
+	h := f.m.Tick(context.Background(), f.keys, true, f.mode)
 	if n := len(f.volumeHeaders(dataUUID)) + len(f.volumeHeaders(oldUUID)); n != 0 || h.State == protocol.DiskCompliant {
 		t.Fatalf("escrowed %d headers from a renumbered device, state %s", n, h.State)
 	}
@@ -863,7 +875,7 @@ func TestLUKSNoEscrowWhileScanning(t *testing.T) {
 	f.addVolume("/dev/vdb1", data)
 	f.m.Background = nil
 	for range 10 {
-		f.m.Tick(context.Background(), f.keys, true)
+		f.m.Tick(context.Background(), f.keys, true, f.mode)
 		f.poll()
 	}
 	if n := data.backups.Load(); n != 0 || len(f.volumeHeaders(dataUUID)) != 0 {
@@ -875,10 +887,97 @@ func TestLUKSNoEscrowWhileScanning(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("the completed inventory was never used for the escrow")
 		}
-		f.m.Tick(context.Background(), f.keys, true)
+		f.m.Tick(context.Background(), f.keys, true, f.mode)
 		time.Sleep(10 * time.Millisecond)
 	}
 	if n := data.backups.Load(); n != 1 {
 		t.Fatalf("%d header backups, want 1", n)
 	}
 }
+
+// noTPMChanges fails when the reconciler enrolled or wiped a TPM keyslot (plan M8d decision 48).
+func (f *luksFixture) noTPMChanges() {
+	f.t.Helper()
+	for _, c := range f.vol.calls {
+		if strings.Contains(c, "--tpm2-device") || strings.Contains(c, "--wipe-slot=tpm2") {
+			f.t.Fatalf("the reconciler changed a TPM keyslot: %s", c)
+		}
+	}
+}
+
+// TestLUKSTPMOnlyToCompliant (plan M8d decision 48): under tpm_only the recovery key and the tpm2 keyslot are
+// compliant, the install passphrase goes once the tpm2 keyslot exists, and health reports the mode.
+func TestLUKSTPMOnlyToCompliant(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2")
+	f.mode = bundle.UnlockModeTPMOnly
+	for range 8 {
+		if f.pass() == protocol.DiskCompliant {
+			break
+		}
+		f.poll()
+	}
+	h := f.m.Tick(context.Background(), f.keys, true, f.mode)
+	if h.State != protocol.DiskCompliant || !slices.Equal(h.Tokens, []string{"recovery", "tpm2"}) || h.UnlockMode != "tpm_only" ||
+		f.passphrase() || len(f.events) != 0 {
+		t.Fatalf("health %+v, passphrase %v, events %v", h, f.passphrase(), f.events)
+	}
+	f.noTPMChanges()
+}
+
+// TestLUKSUnlockModeMismatch: a keyslot of the other mode without one of the policy's is reported as
+// unlock_mode_mismatch in both directions, the install passphrase stays, and no TPM keyslot is touched; an absent
+// mode is tpm_pin.
+func TestLUKSUnlockModeMismatch(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, slot string
+	}{
+		{"tpm2+pin under tpm_only", bundle.UnlockModeTPMOnly, "tpm2+pin"},
+		{"tpm2 under tpm_pin", bundle.UnlockModeTPMPIN, "tpm2"},
+		{"tpm2 without a mode", "", "tpm2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLUKSFixture(t, "password", tc.slot)
+			f.mode = tc.mode
+			var s string
+			for range 6 {
+				s = f.pass()
+				f.poll()
+			}
+			want := tc.mode
+			if want == "" {
+				want = bundle.UnlockModeTPMPIN
+			}
+			if h := f.m.Tick(context.Background(), f.keys, true, f.mode); s != protocol.DiskUnlockModeMismatch ||
+				h.State != protocol.DiskUnlockModeMismatch || h.UnlockMode != want || !f.passphrase() {
+				t.Fatalf("state %s, health %+v, passphrase %v", s, h, f.passphrase())
+			}
+			f.noTPMChanges()
+		})
+	}
+	// A device on both kinds (converted by hand, the old keyslot not yet wiped) is no mismatch.
+	f := newLUKSFixture(t, "password", "tpm2+pin", "tpm2")
+	f.mode = bundle.UnlockModeTPMOnly
+	if s := f.pass(); s == protocol.DiskUnlockModeMismatch {
+		t.Fatal("both keyslots reported as a mismatch")
+	}
+}
+
+// TestLUKSBootLayout (plan M8d decision 48): an unencrypted root reports whether /boot is a file system of its own;
+// other states never carry it.
+func TestLUKSBootLayout(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.vol.plain = true
+	for boot, want := range map[string]*bool{"/boot": ptrTo(true), "/": ptrTo(false), "": nil} {
+		f.vol.boot = boot
+		h := f.m.Tick(context.Background(), f.keys, true, f.mode)
+		if h.State != protocol.DiskNotEncrypted || !reflect.DeepEqual(h.BootSeparate, want) {
+			t.Fatalf("/boot on %q: %+v", boot, h)
+		}
+	}
+	f.vol.plain, f.vol.boot = false, "/boot"
+	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.BootSeparate != nil {
+		t.Fatalf("an encrypted device reports the boot layout: %+v", h)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }

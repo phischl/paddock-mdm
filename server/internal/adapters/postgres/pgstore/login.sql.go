@@ -188,7 +188,7 @@ func (q *Queries) ListDeviceUsersSeenSince(ctx context.Context, since time.Time)
 }
 
 const setDeviceLoginsSuspended = `-- name: SetDeviceLoginsSuspended :one
-UPDATE device SET logins_suspended = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended
+UPDATE device SET logins_suspended = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason
 `
 
 type SetDeviceLoginsSuspendedParams struct {
@@ -212,6 +212,13 @@ func (q *Queries) SetDeviceLoginsSuspended(ctx context.Context, arg SetDeviceLog
 		&i.EnrolledAt,
 		&i.StateChangedAt,
 		&i.LoginsSuspended,
+		&i.AgentUpdateRequestedVersion,
+		&i.AgentUpdateRequestedAt,
+		&i.UninstallRequestedAt,
+		&i.UninstallMode,
+		&i.UninstallCommandID,
+		&i.UninstalledAt,
+		&i.RetiredReason,
 	)
 	return i, err
 }

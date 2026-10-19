@@ -3,6 +3,7 @@ import { computed, inject, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { VulnerabilityFinding } from '../api/client'
 import DangerZone from '../components/DangerZone.vue'
+import DeviceOwners from '../components/DeviceOwners.vue'
 import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
 import SeverityChip from '../components/SeverityChip.vue'
@@ -11,8 +12,9 @@ import TimeCell from '../components/TimeCell.vue'
 import UpdatesCard from '../components/UpdatesCard.vue'
 import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { healthRows } from '../lib/deviceHealth'
-import { formatDateTime } from '../lib/format'
+import { formatDateTime, formatGB, formatGiB } from '../lib/format'
 import { listDeviceVulnerabilities } from '../lib/inventory'
+import { componentStatus } from '../lib/status'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
 
@@ -31,6 +33,21 @@ const findingCount = ref(0)
 const copied = ref(false)
 
 const d = computed(() => device.value!)
+/** The hardware rows of the identity panel (plan M8d decision 9): '–' while the inventory reports nothing. */
+const hardwareRows = computed(() => {
+  const hw = d.value.hardware
+  const cpu = hw?.cpu_brand
+    ? hw.cpu_brand + (hw.cpu_cores ? ' (' + t('devices.hardware.cpuCores', { cores: hw.cpu_cores }) + ')' : '')
+    : null
+  return [
+    { key: 'manufacturer', value: hw?.vendor || null, mono: false },
+    { key: 'model', value: hw?.model || null, mono: false },
+    { key: 'serial', value: hw?.serial || null, mono: true },
+    { key: 'cpu', value: cpu, mono: false },
+    { key: 'memory', value: hw ? formatGiB(hw.memory_bytes, locale.value) : null, mono: false },
+    { key: 'disk', value: hw ? formatGB(hw.disk_total_bytes, locale.value) : null, mono: false },
+  ]
+})
 const health = computed(() =>
   healthRows({ device: d.value, diskState: diskState.value, updates: updates.value, conditions: conditions.value }),
 )
@@ -132,6 +149,26 @@ async function copyId(): Promise<void> {
               {{ d.hardware_uuid ?? '–' }}
             </dd>
           </div>
+          <div
+            v-for="row in hardwareRows"
+            :key="row.key"
+            :data-testid="'hardware-' + row.key"
+          >
+            <dt>{{ t('devices.hardware.' + row.key) }}</dt>
+            <dd
+              v-if="row.value"
+              :class="row.mono ? 'mono' : ''"
+            >
+              {{ row.value }}
+            </dd>
+            <dd
+              v-else
+              class="pd-muted"
+              :title="t('devices.hardware.pending')"
+            >
+              –
+            </dd>
+          </div>
           <div>
             <dt>{{ t('devices.osRelease') }}</dt>
             <dd>{{ d.os_release.PRETTY_NAME ?? (Object.entries(d.os_release).map(([k, v]) => k + '=' + v).join(', ') || '–') }}</dd>
@@ -198,6 +235,77 @@ async function copyId(): Promise<void> {
           </div>
         </dl>
       </section>
+
+      <section
+        class="pd-panel"
+        aria-labelledby="device-components-title"
+        data-testid="device-components"
+      >
+        <header class="pd-panel-header">
+          <h2
+            id="device-components-title"
+            class="pd-type-section"
+          >
+            {{ t('devices.components.title') }}
+          </h2>
+        </header>
+        <div class="pd-panel-body">
+          <ul class="pd-components">
+            <li
+              v-for="c in d.components"
+              :key="c.name"
+              :data-testid="'component-' + c.name"
+            >
+              <div class="pd-component-head">
+                <span
+                  class="pd-component-name"
+                  data-testid="component-name"
+                >{{ t('devices.components.names.' + c.name) }}</span>
+                <StatusChip
+                  :status="componentStatus(c.status).status"
+                  :label="t(componentStatus(c.status).label)"
+                />
+              </div>
+              <dl class="pd-component-versions">
+                <div>
+                  <dt>{{ t('devices.components.installed') }}</dt>
+                  <dd
+                    :class="c.installed ? 'mono' : 'pd-muted'"
+                    data-testid="component-installed"
+                  >
+                    {{ c.installed || '–' }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ t('devices.components.expected') }}</dt>
+                  <dd
+                    :class="c.expected ? 'mono' : 'pd-muted'"
+                    data-testid="component-expected"
+                  >
+                    {{ c.expected ?? '–' }}
+                  </dd>
+                </div>
+              </dl>
+            </li>
+          </ul>
+          <p class="pd-type-caption pd-muted">
+            {{ t('devices.components.hint') }}
+          </p>
+          <p
+            class="pd-type-caption pd-muted"
+            data-testid="components-target-hint"
+          >
+            {{ t('devices.components.targetHint') }}
+          </p>
+        </div>
+      </section>
+
+      <DeviceOwners
+        :device-id="d.id"
+        :owners="d.owners"
+        :can-write="session.canWrite"
+        @saved="page.load()"
+      />
 
       <section
         class="pd-panel"
@@ -308,7 +416,11 @@ async function copyId(): Promise<void> {
       :revocable="d.state === 'active' || d.state === 'quarantined'"
       :presumed-self-locked-at="d.presumed_self_locked_at"
       :retirable="page.actions.value.includes('retire')"
+      :uninstallable="d.state === 'active'"
+      :uninstall="d.uninstall ?? null"
+      :disk-tpm="page.diskTpm.value"
       @retire="page.run('retire')"
+      @changed="page.changed()"
     />
   </div>
 </template>

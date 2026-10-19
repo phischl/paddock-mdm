@@ -19,6 +19,7 @@ export const router = createRouter({
         { path: 'software', name: 'device-software', component: () => import('./views/DeviceSoftware.vue') },
         { path: 'vulnerabilities', name: 'device-vulnerabilities', component: () => import('./views/DeviceVulnerabilities.vue') },
         { path: 'access', name: 'device-access', component: () => import('./views/DeviceAccess.vue') },
+        { path: 'logins', name: 'device-logins', component: () => import('./views/DeviceLogins.vue') },
         { path: 'configuration', name: 'device-configuration', component: () => import('./views/DeviceConfiguration.vue') },
         { path: 'commands', name: 'device-commands', component: () => import('./views/DeviceCommands.vue') },
         { path: 'audit', name: 'device-audit', component: () => import('./views/DeviceAudit.vue') },

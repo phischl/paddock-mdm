@@ -38,6 +38,14 @@ UPDATE device_group SET name = @name, description = @description, updated_at = n
 WHERE id = @id
 RETURNING *;
 
+-- name: SetDeviceGroupPolicies :one
+-- The policy overrides of a device group (plan M8d decision 11); NULL inherits the organization's setting.
+UPDATE device_group SET staleness_warning_h = sqlc.narg(staleness_warning_h)::int,
+  staleness_critical_h = sqlc.narg(staleness_critical_h)::int, agent_update_policy = sqlc.narg(agent_update_policy)::text,
+  disk_unlock_mode = sqlc.narg(disk_unlock_mode)::text, updated_at = now()
+WHERE id = @id
+RETURNING *;
+
 -- name: DeleteDeviceGroup :execrows
 DELETE FROM device_group WHERE id = @id;
 

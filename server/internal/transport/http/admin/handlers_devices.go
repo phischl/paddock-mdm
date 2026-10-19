@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,6 +11,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
@@ -21,6 +23,7 @@ var (
 	deviceList          = listing.Spec{Sort: []string{"hostname", "last_contact_at", "enrolled_at", "state"}, DefaultSort: "hostname"}
 	managedFileList     = listing.Spec{Sort: []string{"path", "created_at", "updated_at"}, DefaultSort: "path"}
 	managedUnitList     = listing.Spec{Sort: []string{"unit", "created_at", "updated_at"}, DefaultSort: "unit"}
+	deviceLoginList     = listing.Spec{Sort: []string{"at", "username"}, DefaultSort: "-at"}
 )
 
 func (h *handlers) ListEnrollmentTokens(ctx context.Context, req adminapi.ListEnrollmentTokensRequestObject) (adminapi.ListEnrollmentTokensResponseObject, error) {
@@ -118,7 +121,8 @@ func (h *handlers) ListDevices(ctx context.Context, req adminapi.ListDevicesRequ
 		return nil, err
 	}
 	res, err := h.devices.List(ctx, app.DeviceQuery{Page: params.ListPage(), States: states, GroupID: req.Params.DeviceGroupId,
-		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0})
+		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0, OwnerID: req.Params.OwnerId,
+		ComponentOutdated: req.Params.ComponentOutdated})
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +157,16 @@ func toDeviceRows(rows []pgstore.ListDevicesRow) []adminapi.Device {
 			items[i].DiskState = &s
 		}
 		items[i].Contact = adminapi.DeviceContact(r.Contact)
+		items[i].ComponentsOutdated = r.ComponentsOutdated
+		// Built by ListDevices with jsonb_build_object; an unreadable value leaves the column empty.
+		_ = json.Unmarshal(r.Owners, &items[i].Owners)
+		if r.HardwareVendor != nil {
+			items[i].Hardware = &adminapi.DeviceHardware{
+				Vendor: *r.HardwareVendor, Model: deref(r.HardwareModel, ""), Serial: deref(r.HardwareSerial, ""),
+				CpuBrand: deref(r.CpuBrand, ""), CpuCores: int(deref(r.CpuCores, 0)), MemoryBytes: deref(r.MemoryBytes, 0),
+				DiskTotalBytes: deref(r.DiskTotalBytes, 0),
+			}
+		}
 	}
 	return items
 }
@@ -162,23 +176,54 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 		Id: d.ID, Hostname: d.Hostname, State: adminapi.DeviceState(d.State), HardwareUuid: d.HardwareUuid,
 		MachineId: d.MachineID, OsRelease: map[string]string{}, EnrollmentTokenId: idPtr(d.EnrollmentTokenID),
 		EnrolledAt: d.EnrolledAt.UTC(), StateChangedAt: d.StateChangedAt.UTC(), BundleVersion: d.BundleSeq,
+		Owners: []adminapi.UserRef{}, Components: []adminapi.DeviceComponent{}, ComponentsOutdated: []string{},
+		AgentUpdateRequestedVersion: d.AgentUpdateRequestedVersion,
+		AgentUpdateRequestedAt:      utcPtr(d.AgentUpdateRequestedAt), RetiredReason: d.RetiredReason,
 	}
 	_ = json.Unmarshal(d.OsRelease, &out.OsRelease) // written by the worker from a map[string]string
 	if status != nil {
 		out.LastContactAt, out.AppliedBundleVersion, out.AgentVersion = utcPtr(status.LastContactAt), status.AppliedBundleVersion, status.AgentVersion
+		if status.ComponentsOutdated != nil {
+			out.ComponentsOutdated = status.ComponentsOutdated
+		}
+	}
+	return out
+}
+
+// toDeviceComponents is the component list of a device from its last health report and the targets (plan M8d
+// decision 55).
+func toDeviceComponents(status *pgstore.DeviceStatus, targets map[string]string) []adminapi.DeviceComponent {
+	var installed map[string]string
+	if status != nil {
+		installed = app.HealthComponents(status.Health)
+	}
+	out := make([]adminapi.DeviceComponent, 0, len(components.Names))
+	for _, name := range components.Names {
+		c := adminapi.DeviceComponent{Name: adminapi.DeviceComponentName(name), Installed: installed[name],
+			Status: adminapi.DeviceComponentStatus(components.Status(name, installed, targets))}
+		if v, ok := targets[name]; ok {
+			c.Expected = &v
+		}
+		out = append(out, c)
 	}
 	return out
 }
 
 func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 	base := toDevice(d.Device, d.Status)
+	base.Owners = toUserRefs(d.Owners)
+	base.Hardware = toDeviceHardware(d.Hardware)
 	out := adminapi.DeviceDetail{
 		Id: base.Id, Hostname: base.Hostname, State: base.State, Contact: adminapi.DeviceContact(d.Contact),
 		HardwareUuid: base.HardwareUuid, MachineId: base.MachineId,
 		OsRelease: base.OsRelease, EnrollmentTokenId: base.EnrollmentTokenId, EnrolledAt: base.EnrolledAt,
 		StateChangedAt: base.StateChangedAt, BundleVersion: base.BundleVersion, LastContactAt: base.LastContactAt,
-		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion,
-		Groups: make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
+		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
+		Hardware: base.Hardware, AgentUpdateRequestedVersion: base.AgentUpdateRequestedVersion,
+		AgentUpdateRequestedAt: base.AgentUpdateRequestedAt, RetiredReason: base.RetiredReason,
+		Uninstall: toDeviceUninstall(d.Uninstall, d.UninstallReportOverdue), Components: toDeviceComponents(d.Status, d.ComponentTargets),
+		ComponentsOutdated: base.ComponentsOutdated,
+		Groups:             make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
 		LoginAssignment: adminapi.DeviceLoginAssignment{
 			Users: make([]adminapi.UserRef, len(d.Login.Users)), Groups: make([]adminapi.UserGroupRef, len(d.Login.Groups)),
@@ -282,7 +327,55 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	}
 	out := toDevice(d.Device, d.Status)
 	out.Contact = adminapi.DeviceContact(d.Contact)
+	out.Owners = toUserRefs(d.Owners)
+	out.Hardware = toDeviceHardware(d.Hardware)
+	out.Uninstall = toDeviceUninstall(d.Uninstall, d.UninstallReportOverdue)
+	out.Components = toDeviceComponents(d.Status, d.ComponentTargets)
 	return out, nil
+}
+
+func (h *handlers) UpdateDeviceAgent(ctx context.Context, req adminapi.UpdateDeviceAgentRequestObject) (adminapi.UpdateDeviceAgentResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, h.agentUpdates.RequestNow)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UpdateDeviceAgent200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) UninstallDevice(ctx context.Context, req adminapi.UninstallDeviceRequestObject) (adminapi.UninstallDeviceResponseObject, error) {
+	in := app.UninstallInput{Mode: string(req.Body.Mode), ConfirmHostname: req.Body.ConfirmHostname, Reason: req.Body.Reason,
+		ClearTPM: deref(req.Body.ClearTpm, false), KeepLocalAdmin: deref(req.Body.KeepLocalAdmin, false)}
+	d, err := h.transition(ctx, req.Id, func(ctx context.Context, id uuid.UUID) (pgstore.Device, error) {
+		return h.uninstalls.Request(ctx, id, in)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UninstallDevice200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) CancelDeviceUninstall(ctx context.Context, req adminapi.CancelDeviceUninstallRequestObject) (adminapi.CancelDeviceUninstallResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, h.uninstalls.Cancel)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.CancelDeviceUninstall200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+// toDeviceUninstall is the uninstall of a device; nil without one.
+func toDeviceUninstall(u *pgstore.GetDeviceUninstallRow, overdue bool) *adminapi.DeviceUninstall {
+	if u == nil {
+		return nil
+	}
+	out := &adminapi.DeviceUninstall{Mode: adminapi.DeviceUninstallMode(u.Mode), RequestedAt: u.RequestedAt.UTC(),
+		CommandId: u.CommandID, CommandStatus: u.CommandStatus, UninstalledAt: utcPtr(u.UninstalledAt), ReportOverdue: overdue}
+	if u.LocalAdmin != "" {
+		out.LocalAdmin = &u.LocalAdmin
+	}
+	if u.Tpm != "" {
+		out.Tpm = &u.Tpm
+	}
+	return out
 }
 
 func (h *handlers) SetDeviceGroups(ctx context.Context, req adminapi.SetDeviceGroupsRequestObject) (adminapi.SetDeviceGroupsResponseObject, error) {
@@ -291,6 +384,55 @@ func (h *handlers) SetDeviceGroups(ctx context.Context, req adminapi.SetDeviceGr
 		return nil, err
 	}
 	return adminapi.SetDeviceGroups200JSONResponse(toDeviceDetail(d)), nil
+}
+
+func (h *handlers) ListDeviceLogins(ctx context.Context, req adminapi.ListDeviceLoginsRequestObject) (adminapi.ListDeviceLoginsResponseObject, error) {
+	params, err := listing.Parse(deviceLoginList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var username *string
+	if u := req.Params.Username; u != nil {
+		lower := strings.ToLower(strings.TrimSpace(*u))
+		username = &lower
+	}
+	res, err := h.loginHistory.List(ctx, req.Id, app.LoginEventQuery{Page: params.ListPage(), Username: username})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.DeviceLoginEvent, len(res.Items))
+	for i, e := range res.Items {
+		items[i] = adminapi.DeviceLoginEvent{Id: e.ID, Username: e.Username, At: e.At.UTC()}
+	}
+	return adminapi.ListDeviceLogins200JSONResponse(listing.NewPage(items, params, res.Count)), nil
+}
+
+func (h *handlers) SetDeviceOwners(ctx context.Context, req adminapi.SetDeviceOwnersRequestObject) (adminapi.SetDeviceOwnersResponseObject, error) {
+	d, err := h.devices.SetOwners(ctx, req.Id, req.Body.UserIds)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetDeviceOwners200JSONResponse(toDeviceDetail(d)), nil
+}
+
+func toDeviceHardware(h *pgstore.GetDeviceHardwareRow) *adminapi.DeviceHardware {
+	if h == nil {
+		return nil
+	}
+	return &adminapi.DeviceHardware{
+		Vendor: h.HardwareVendor, Model: h.HardwareModel, Serial: h.HardwareSerial, CpuBrand: h.CpuBrand, CpuCores: int(h.CpuCores),
+		MemoryBytes: h.MemoryBytes, DiskTotalBytes: h.DiskTotalBytes,
+	}
+}
+
+func toUserRefs(users []pgstore.AppUser) []adminapi.UserRef {
+	out := make([]adminapi.UserRef, len(users))
+	for i, u := range users {
+		out[i] = toUserRef(u)
+	}
+	return out
 }
 
 func (h *handlers) GetDeviceEffectiveConfig(ctx context.Context, req adminapi.GetDeviceEffectiveConfigRequestObject) (adminapi.GetDeviceEffectiveConfigResponseObject, error) {

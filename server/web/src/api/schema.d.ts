@@ -566,6 +566,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/update-agent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Asks an active device to install the agent release the platform offers at its
+         *     next check-in, outside its rollout wave and regardless of the update policy (plan M8d decision 26); the
+         *     supervisor installs it with self-test, probation and rollback as usual. The request ends with the device's
+         *     report for that version or after 24 hours. 409 invalid_state: the device is not active, no release is being
+         *     offered (no rollout or a halted one), the device already runs the release, or the release has no artifact for
+         *     the device's architecture.
+         */
+        post: operations["updateDeviceAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/uninstall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Issues the signed command
+         *     uninstall (lifetime 7 days, plan M8d decision 37): the device removes Paddock at its next check-in and is
+         *     retired by its report. Mode leave keeps everything else working; mode reset also removes Himmelblau, the
+         *     unchanged managed files and the managed local administrator (unless it is the last local administrator or
+         *     keep_local_admin is set) and, with clear_tpm, clears the TPM. User data and the disk encryption are never
+         *     changed. confirm_hostname must equal the device's hostname. 422 invalid_request: unknown mode, a reason outside
+         *     2–500 characters, a wrong confirm_hostname, or clear_tpm or keep_local_admin with mode leave. 409 invalid_state:
+         *     the device is not active, an uninstall is already requested, or a Lock or Destroy is pending; 409
+         *     tpm_in_use_by_disk: clear_tpm while the last health report lists a TPM keyslot on any volume.
+         */
+        post: operations["uninstallDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/uninstall/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Cancels an uninstall while its command is pending, failed or expired (plan M8d decision 38):
+         *     the command becomes cancelled and the request is cleared. 409 invalid_state: no uninstall is requested, the
+         *     device already received the command, or the uninstall completed.
+         */
+        post: operations["cancelDeviceUninstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/groups": {
         parameters: {
             query?: never;
@@ -582,6 +660,52 @@ export interface paths {
          *     satisfy it).
          */
         put: operations["setDeviceGroups"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/logins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The login history of the device (plan M8d decision 18): every
+         *     session start of a directory user while the organization's login history is on, for login_history_days. Empty
+         *     while the history is off.
+         */
+        get: operations["listDeviceLogins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/owners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Replaces the owners of the device: the users responsible for it (at most 20;
+         *     duplicates are collapsed). Owners have no login or sudo rights through this setting and are not part of the
+         *     bundle. An unknown or foreign user: 400 invalid_request.
+         */
+        put: operations["setDeviceOwners"];
         post?: never;
         delete?: never;
         options?: never;
@@ -739,6 +863,25 @@ export interface paths {
         head?: never;
         /** @description Roles: org_admin, org_operator. Synced users: 409 attribute_owned_upstream. */
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/users/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The devices the user owns (plan M8d decision 4). */
+        get: operations["listUserDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/users/{id}/lock": {
@@ -1298,7 +1441,9 @@ export interface paths {
          *     root volume stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
          *     the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
          *     administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
-         *     open Lock, 409 invalid_state unless the device is active or quarantined.
+         *     open Lock, 409 invalid_state unless the device is active or quarantined. A Lock takes precedence over an
+         *     uninstall: an uninstall of the device without a removal report is cancelled in the same transaction (recorded
+         *     as uninstall_cancelled on revocation.requested) and uninstall_cancelled says so.
          */
         post: operations["lockDevice"];
         delete?: never;
@@ -1324,7 +1469,8 @@ export interface paths {
          *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
          *     Requests a Destroy: a Lock whose escrowed header and recovery key are deleted before the token is issued, so
          *     the device's data is unrecoverable. It waits for a second administrator (another account and another identity)
-         *     to approve it (two-person rule).
+         *     to approve it (two-person rule). Like a Lock, it cancels an uninstall of the device without a removal report
+         *     (uninstall_cancelled).
          */
         post: operations["destroyDevice"];
         delete?: never;
@@ -1933,6 +2079,27 @@ export interface paths {
         patch: operations["updateIpAllowlistEntry"];
         trace?: never;
     };
+    "/api/platform/v1/component-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The versions devices are expected to run (plan M8d decision 55): paddockd, the
+         *     supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau
+         *     from the compiler. At most five rows, no list contract.
+         */
+        get: operations["listComponentTargets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases": {
         parameters: {
             query?: never;
@@ -2295,14 +2462,45 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description The group's contact thresholds; null when the organization's apply (plan M8d decision 11). */
+            staleness: components["schemas"]["DeviceGroupStaleness"] | null;
+            /** @description The group's agent update policy; null inherits the organization's (ADR 0037 decision 1). */
+            agent_update_policy: components["schemas"]["AgentUpdatePolicy"] | null;
+            /** @description The group's disk unlock mode for new installations; null inherits the organization's (ADR 0038). */
+            disk_unlock_mode: components["schemas"]["DiskUnlockMode"] | null;
         };
+        /** @description Contact thresholds in hours: warning after warning_h (1–720), critical (presumed lost) after critical_h (above warning_h, at most 2160). A device in several groups takes the most lenient values. */
+        DeviceGroupStaleness: {
+            warning_h: number;
+            critical_h: number;
+        };
+        /**
+         * @description automatic follows the platform's rollout waves; manual installs only on an administrator's request per device.
+         * @enum {string}
+         */
+        AgentUpdatePolicy: "automatic" | "manual";
+        /**
+         * @description TPM2 + boot PIN, or TPM2 alone while Secure Boot is unchanged (ADR 0038).
+         * @enum {string}
+         */
+        DiskUnlockMode: "tpm_pin" | "tpm_only";
         DeviceGroupCreate: {
             name: string;
             description?: string;
+            /** @description The contact thresholds of the members in hours (plan M8d decision 11); null or absent inherits the organization's. */
+            staleness?: components["schemas"]["DeviceGroupStaleness"] | null;
+            agent_update_policy?: components["schemas"]["AgentUpdatePolicy"] | null;
+            disk_unlock_mode?: components["schemas"]["DiskUnlockMode"] | null;
         };
         DeviceGroupUpdate: {
             name?: string;
             description?: string;
+            /** @description The contact thresholds of the members in hours (plan M8d decision 11); null clears the override (the organization's thresholds apply), absent keeps it. */
+            staleness?: components["schemas"]["DeviceGroupStaleness"] | null;
+            /** @description null inherits the organization's agent update policy, absent keeps the value. */
+            agent_update_policy?: components["schemas"]["AgentUpdatePolicy"] | null;
+            /** @description null inherits the organization's disk unlock mode, absent keeps the value. */
+            disk_unlock_mode?: components["schemas"]["DiskUnlockMode"] | null;
         };
         DeviceGroupPage: {
             items: components["schemas"]["DeviceGroup"][];
@@ -2841,6 +3039,95 @@ export interface components {
             applied_bundle_version: number | null;
             agent_version: string | null;
             disk_state?: components["schemas"]["DiskState"];
+            /** @description The users responsible for the device, sorted by username (plan M8d decision 2). No login or sudo rights. */
+            owners: components["schemas"]["UserRef"][];
+            /** @description The release an administrator asked the device to install now (plan M8d decision 26); null without an open request. */
+            agent_update_requested_version?: string | null;
+            /** Format: date-time */
+            agent_update_requested_at?: string | null;
+            /** @description The hardware facts of the inventory (plan M8d decision 8); null while the inventory has no row for the device. */
+            hardware: components["schemas"]["DeviceHardware"] | null;
+            /** @description The uninstall of the device (plan M8d decision 42): set from the request until it is cancelled, also after the device reported the removal; null without one. Filled on the device detail and the responses of device actions; null in lists. */
+            uninstall?: components["schemas"]["DeviceUninstall"] | null;
+            /** @description Why the device was retired, when not by an administrator; uninstalled after its removal report. */
+            retired_reason?: string | null;
+            /** @description The components of the device with the installed and expected version (plan M8d decision 55), in the order paddockd, paddock_supervisor, paddock_revoke, himmelblau, fleetd. Filled on the device detail and the responses of device actions; empty in lists. */
+            components: components["schemas"]["DeviceComponent"][];
+            /** @description The components older than their target at the last heartbeat (the list column and filter). */
+            components_outdated: string[];
+        };
+        DeviceComponent: {
+            /** @enum {string} */
+            name: "paddockd" | "paddock_supervisor" | "paddock_revoke" | "himmelblau" | "fleetd";
+            /** @description The installed version; empty when not installed or not reported. */
+            installed: string;
+            /** @description The target version; null without a target. */
+            expected: string | null;
+            /**
+             * @description unknown when the agent reported no components (agents before this release).
+             * @enum {string}
+             */
+            status: "ok" | "outdated" | "missing" | "unknown";
+        };
+        ComponentTarget: {
+            /** @enum {string} */
+            component: "paddockd" | "paddock_supervisor" | "paddock_revoke" | "himmelblau" | "fleetd";
+            version: string;
+            /** @description agent_release (the current release) or PADDOCK_HIMMELBLAU_VERSION (the compiler's setting). */
+            source: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        DeviceUninstall: {
+            /** @enum {string} */
+            mode: "leave" | "reset";
+            /** Format: date-time */
+            requested_at: string;
+            /** Format: uuid */
+            command_id: string;
+            /** @description The device received the command more than 24 hours ago and no removal report arrived; the request can be cancelled or made again. */
+            report_overdue: boolean;
+            /** @description The status of the command uninstall: pending, delivered, succeeded, failed or expired. */
+            command_status: string;
+            /**
+             * Format: date-time
+             * @description When the device reported the removal.
+             */
+            uninstalled_at: string | null;
+            /** @description From the removal report: removed, kept or kept_last_admin. */
+            local_admin: string | null;
+            /** @description From the removal report: cleared, requested_at_next_boot, skipped_in_use, not_requested or failed. */
+            tpm: string | null;
+        };
+        DeviceUninstallRequest: {
+            /** @enum {string} */
+            mode: "leave" | "reset";
+            /** @description Must equal the device's hostname. */
+            confirm_hostname: string;
+            reason: string;
+            /**
+             * @description Mode reset only.
+             * @default false
+             */
+            clear_tpm: boolean;
+            /**
+             * @description Mode reset only.
+             * @default false
+             */
+            keep_local_admin: boolean;
+        };
+        /** @description Asset facts the inventory reports (ADR 0037 decision 7); empty strings and zeros where it reports none. Free disk space, uptime and network addresses stay in Fleet. */
+        DeviceHardware: {
+            vendor: string;
+            model: string;
+            serial: string;
+            cpu_brand: string;
+            /** @description Physical cores. */
+            cpu_cores: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            /** Format: int64 */
+            disk_total_bytes: number;
         };
         DeviceGroupRef: {
             /** Format: uuid */
@@ -2924,12 +3211,13 @@ export interface components {
         };
         /**
          * @description Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
-         *     with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
-         *     a header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, escrowed with the
-         *     current header of every LUKS volume, PDK-009).
+         *     with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), unlock_mode_mismatch (enrolled
+         *     for the other unlock mode than the device's policy, plan M8d decision 48), escrow_pending (recovery key, a
+         *     header or keyslot set not yet as required), compliant (the TPM keyslot of the unlock mode and the recovery key
+         *     only, escrowed with the current header of every LUKS volume, PDK-009).
          * @enum {string}
          */
-        DiskState: "not_encrypted" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "escrow_pending" | "compliant";
+        DiskState: "not_encrypted" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "unlock_mode_mismatch" | "escrow_pending" | "compliant";
         DiskEscrow: {
             generation: number;
             /** @enum {string} */
@@ -2974,6 +3262,10 @@ export interface components {
             /** @description Kind of every keyslot, sorted (tpm2+pin, tpm2, recovery, password, or another token type). */
             tokens: string[];
             keyslots: number;
+            /** @description The unlock mode the agent applied (plan M8d decision 48); absent from agents before it. */
+            unlock_mode?: components["schemas"]["DiskUnlockMode"];
+            /** @description In state not_encrypted only, whether /boot is a file system of its own (ADR 0038). */
+            boot_separate?: boolean;
             /**
              * Format: date-time
              * @description Check-in the state is from.
@@ -3021,7 +3313,7 @@ export interface components {
         /** @enum {string} */
         DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
         /** @enum {string} */
-        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now";
+        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now" | "uninstall";
         DeviceCommand: {
             /** Format: uuid */
             id: string;
@@ -3080,6 +3372,8 @@ export interface components {
             max_random_delay_min: number;
             staleness_warning_h: number;
             staleness_critical_h: number;
+            /** @description Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it. */
+            agent_update_policy?: components["schemas"]["AgentUpdatePolicy"];
         };
         UpdateSettings: {
             security_daily_at: string;
@@ -3088,6 +3382,7 @@ export interface components {
             max_random_delay_min: number;
             staleness_warning_h: number;
             staleness_critical_h: number;
+            agent_update_policy: components["schemas"]["AgentUpdatePolicy"];
             /** Format: date-time */
             updated_at?: string;
         };
@@ -3168,7 +3463,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending";
         Attention: {
             /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
             id: string;
@@ -3181,7 +3476,7 @@ export interface components {
              * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; otherwise empty. */
             detail: string;
         };
         AttentionPage: {
@@ -3420,6 +3715,11 @@ export interface components {
             finished_at?: string;
             /** @description Why the revocation-issuer rejected or failed it, e.g. limit_admin_hour. */
             rejection?: string;
+            /**
+             * @description Only in the response of a Lock or Destroy request that cancelled an uninstall of the device. after_delivery: the device had already received the uninstall command and may already have removed the revocation module (paddock-revoke).
+             * @enum {string}
+             */
+            uninstall_cancelled?: "before_delivery" | "after_delivery";
             /** @description The device's confirmation: erased (true only if every LUKS volume has no keyslot left and unresolved is empty), slots_before and slots_after (sums over the reported volumes), volumes (one {device, slots_before, slots_after, erased} per reported volume, failed ones included, the root volume last) and unresolved (the crypttab entries the device could not erase with certainty; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
             result?: {
                 [key: string]: unknown;
@@ -3572,6 +3872,27 @@ export interface components {
             total_capped: boolean;
             /** @description Applied sort. */
             sort: string;
+        };
+        DeviceLoginEvent: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            /**
+             * Format: date-time
+             * @description Start of the session as the device reported it.
+             */
+            at: string;
+        };
+        DeviceLoginEventPage: {
+            items: components["schemas"]["DeviceLoginEvent"][];
+            page: number;
+            page_size: number;
+            total: number;
+            total_capped: boolean;
+            sort: string;
+        };
+        DeviceOwnersUpdate: {
+            user_ids: string[];
         };
         DeviceGroupsUpdate: {
             device_group_ids: string[];
@@ -3874,6 +4195,18 @@ export interface components {
              *     devices keep the value they were installed with.
              */
             boot_pin_min_length: number;
+            /**
+             * @description Record every session start of directory users per device (ADR 0037 decision 6); absent keeps the value.
+             *     Switching it off deletes every recorded login of the organization (param login_history_deleted).
+             */
+            login_history_enabled?: boolean;
+            /** @description How long a recorded login is kept; absent keeps the value. */
+            login_history_days?: number;
+            /**
+             * @description Disk unlock mode of devices installed with the Paddock autoinstall from now on (ADR 0038 decision 1);
+             *     device groups override it. Absent keeps the value. Installed devices keep their mode.
+             */
+            disk_unlock_mode?: components["schemas"]["DiskUnlockMode"];
         };
         LoginSettings: {
             hello_enabled: boolean;
@@ -3887,6 +4220,11 @@ export interface components {
             rotate_after_reveal_hours: number | null;
             notice_text: string;
             boot_pin_min_length: number;
+            /** @description Every session start of directory users is stored per device (ADR 0037 decision 6); off by default. */
+            login_history_enabled: boolean;
+            /** @description How long the login history is kept (7–365 days). */
+            login_history_days: number;
+            disk_unlock_mode: components["schemas"]["DiskUnlockMode"];
             /** Format: date-time */
             updated_at: string;
         };
@@ -4137,6 +4475,10 @@ export interface components {
         SeverityFilter: components["schemas"]["Severity"][];
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        DeviceLoginSort: "at" | "-at" | "username" | "-username";
+        /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
+        OwnedDeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -4996,6 +5338,10 @@ export interface operations {
                 contact?: components["schemas"]["DeviceContact"][];
                 /** @description overdue = devices that have contacted Paddock but report no successful security update run within the last 48 hours (the overview's "Security updates overdue", plan M7c amendment 2026-10-10). */
                 security_updates?: "overdue";
+                /** @description Only devices this user owns (plan M8d decision 3). */
+                owner_id?: string;
+                /** @description true lists the devices with a component older than its target at their last heartbeat, false the others (plan M8d decision 55). */
+                component_outdated?: boolean;
             };
             header?: never;
             path?: never;
@@ -5183,6 +5529,74 @@ export interface operations {
             409: components["responses"]["Problem"];
         };
     };
+    updateDeviceAgent: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    uninstallDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceUninstallRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    cancelDeviceUninstall: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
     setDeviceGroups: {
         parameters: {
             query?: never;
@@ -5201,6 +5615,74 @@ export interface operations {
         };
         responses: {
             /** @description The device with its new memberships. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceLogins: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["DeviceLoginSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only this user (exact, lower case). */
+                username?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of logins. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceLoginEventPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    setDeviceOwners: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceOwnersUpdate"];
+            };
+        };
+        responses: {
+            /** @description The device with its new owners. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5697,6 +6179,40 @@ export interface operations {
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
+        };
+    };
+    listUserDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
+                sort?: components["parameters"]["OwnedDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the devices the user owns. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
         };
     };
     lockUser: {
@@ -7993,6 +8509,30 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    listComponentTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The component targets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        targets: components["schemas"]["ComponentTarget"][];
+                    };
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     listAgentReleases: {

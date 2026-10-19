@@ -1,14 +1,21 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
-import type { AgentRelease } from '../api/client'
-import { agentReleaseFilters, listAgentReleases } from '../lib/agentReleases'
+import type { AgentRelease, ComponentTarget } from '../api/client'
+import { agentReleaseFilters, getComponentTargets, listAgentReleases, releaseTargetsExist } from '../lib/agentReleases'
 import type { ListColumn } from '../lib/listQuery'
 import { releaseStatus, rolloutStatus } from '../lib/status'
 
 const { t } = useI18n()
+const targets = ref<ComponentTarget[]>([])
+
+onMounted(async () => {
+  const res = await getComponentTargets()
+  targets.value = typeof res === 'string' ? [] : res
+})
 
 const columns: ListColumn[] = [
   { key: 'version', title: 'agentReleases.version', sortable: true },
@@ -23,6 +30,51 @@ const columns: ListColumn[] = [
   <section class="page">
     <h1>{{ t('agentReleases.title') }}</h1>
     <p>{{ t('agentReleases.uploadHint') }}</p>
+    <section
+      class="pd-panel"
+      aria-labelledby="rollout-targets-title"
+      data-testid="rollout-targets"
+    >
+      <header class="pd-panel-header">
+        <h2
+          id="rollout-targets-title"
+          class="pd-type-section"
+        >
+          {{ t('agentReleases.targets.title') }}
+        </h2>
+      </header>
+      <div class="pd-panel-body">
+        <dl class="pd-facts">
+          <div
+            v-for="target in targets"
+            :key="target.component"
+            :data-testid="'target-' + target.component"
+          >
+            <dt>{{ t('devices.components.names.' + target.component) }}</dt>
+            <dd>
+              <span class="mono">{{ target.version }}</span>
+              <span class="pd-muted"> ({{ target.source }})</span>
+            </dd>
+          </div>
+        </dl>
+        <p
+          v-if="!releaseTargetsExist(targets)"
+          class="pd-muted"
+          data-testid="rollout-targets-none"
+        >
+          {{ t('agentReleases.targets.none') }}
+        </p>
+        <p class="pd-type-caption pd-muted">
+          {{ t('agentReleases.targets.himmelblauHint') }}
+        </p>
+        <p
+          class="pd-type-caption pd-muted"
+          data-testid="rollout-targets-hint"
+        >
+          {{ t('devices.components.targetHint') }}
+        </p>
+      </div>
+    </section>
     <DataList
       :columns="columns"
       :fetch="listAgentReleases"

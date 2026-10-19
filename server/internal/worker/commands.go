@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/commandsign"
@@ -170,6 +171,24 @@ func (c *Commands) roundOrg(ctx context.Context, org uuid.UUID) error {
 			return err
 		}
 		slog.InfoContext(ctx, "command expired", "organization_id", org, "device_id", e.DeviceID, "command_id", e.ID)
+	}
+	// A cancelled uninstall leaves Valkey before the device can fetch it; the scan reaches back one lifetime of the
+	// command, so a worker that was down meanwhile still removes it (plan M8d decision 38).
+	lifetime, _ := command.Lifetime(command.TypeUninstall)
+	cancelled, err := c.commands.Cancelled(ctx, now.Add(-lifetime))
+	if err != nil {
+		return err
+	}
+	for _, e := range cancelled {
+		if err := c.cache.DeleteCommand(ctx, e.DeviceID, e.ID); err != nil {
+			return err
+		}
+	}
+	// Update-now requests end after 24 hours (plan M8d decision 29); the cache sync removes their au: keys.
+	if n, err := c.commands.ExpireAgentUpdateRequests(ctx, now); err != nil {
+		return err
+	} else if n > 0 {
+		slog.InfoContext(ctx, "update-now requests expired", "organization_id", org, "count", n)
 	}
 	revocations, err := c.revocations.Expire(ctx, now)
 	if err != nil {

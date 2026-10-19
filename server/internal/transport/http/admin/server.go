@@ -35,6 +35,9 @@ type Deps struct {
 	UserGroups    *app.UserGroups
 	Logins        *app.Logins
 	LoginSettings *app.LoginSettings
+	LoginHistory  *app.LoginHistory
+	AgentUpdates  *app.AgentUpdates
+	Uninstalls    *app.Uninstalls
 	Privileges    *app.Privileges
 	Commands      *app.DeviceCommands
 	LocalAdmin    *app.LocalAdmin
@@ -96,6 +99,10 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/openbao/auto-unseal/disable":                    {app.ScopePlatform, app.SpecAutoUnsealDisable},
 	"POST /api/v1/enrollment-tokens":                                       {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
 	"PUT /api/v1/devices/{id}/groups":                                      {app.ScopeOrg, app.SpecDeviceSetGroups},
+	"PUT /api/v1/devices/{id}/owners":                                      {app.ScopeOrg, app.SpecDeviceSetOwners},
+	"POST /api/v1/devices/{id}/update-agent":                               {app.ScopeOrg, app.SpecAgentUpdateRequest},
+	"POST /api/v1/devices/{id}/uninstall":                                  {app.ScopeOrg, app.SpecUninstallRequest},
+	"POST /api/v1/devices/{id}/uninstall/cancel":                           {app.ScopeOrg, app.SpecUninstallCancel},
 	"POST /api/v1/devices/{id}/approve":                                    {app.ScopeOrg, app.SpecDeviceApprove},
 	"POST /api/v1/devices/{id}/reject":                                     {app.ScopeOrg, app.SpecDeviceReject},
 	"POST /api/v1/devices/{id}/release-quarantine":                         {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},
@@ -183,7 +190,7 @@ func NewHandler(d Deps) http.Handler {
 	h := &handlers{
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
-		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
+		logins: d.Logins, loginSettings: d.LoginSettings, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,

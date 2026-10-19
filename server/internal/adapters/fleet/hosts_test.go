@@ -51,6 +51,11 @@ func TestHostInventory(t *testing.T) {
 	if !slices.Equal(inv.Policies, []ports.PolicyResult{{Key: "disk_encrypted", Passing: true}, {Key: "paddock_agent_running"}}) {
 		t.Fatalf("policies %+v", inv.Policies)
 	}
+	want := ports.HostHardware{Vendor: "LENOVO", Model: "21HD003LGE", Serial: "PF4XK2QZ",
+		CPUBrand: "13th Gen Intel(R) Core(TM) i7-1365U", CPUCores: 10, MemoryBytes: 33328349184, DiskTotalBytes: 510440000000}
+	if inv.Hardware != want {
+		t.Fatalf("hardware %+v, want %+v", inv.Hardware, want)
+	}
 	if _, err := client(srv.URL).HostInventory(context.Background(), "../config"); err == nil {
 		t.Fatal("invalid host reference accepted")
 	}

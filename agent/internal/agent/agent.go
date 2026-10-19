@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net/http"
 	"runtime"
 	"strconv"
 	"sync"
@@ -45,6 +46,8 @@ type Deps struct {
 	Client  *client.Client
 	Health  *health.State
 	Applier *apply.Applier
+	// Inventory is the fleetd reconciler of Applier; New lets the update policy gate its upgrades (plan M8d decision 23).
+	Inventory *reconcile.Inventory
 	// Commands executes the commands of check-ins; nil means the handlers of this build (commands.Handlers).
 	Commands *commands.Executor
 	// Events receives the device events of the reconcilers; New connects it to the spool.
@@ -75,8 +78,17 @@ type Deps struct {
 	// Supervisor returns the PID of paddock-supervisor and Signal sends it SIGUSR1 (tests replace both).
 	Supervisor func() (int, error)
 	Signal     func(pid int) error
-	Now        func() time.Time
-	Rand       func() float64 // uniform in [0, 1)
+	// RunUnit runs systemd-run to start a transient unit (the supervisor upgrade, plan M8d decision 31); nil runs it.
+	RunUnit func(ctx context.Context, name string, args ...string) error
+	// Executable is the running binary the uninstall copies to /run (tests); "" asks the OS.
+	Executable string
+	// SupervisorVersion runs `paddock-supervisor version`; nil runs the installed supervisor ("" when it is not
+	// installed).
+	SupervisorVersion func(ctx context.Context) (string, error)
+	// Download fetches a package from the package store with at most limit bytes; nil uses Client.Download.
+	Download func(ctx context.Context, url string, limit int64) ([]byte, error)
+	Now      func() time.Time
+	Rand     func() float64 // uniform in [0, 1)
 }
 
 // Agent is the run loop. All state is owned by the goroutine that calls Run.
@@ -94,6 +106,13 @@ type Agent struct {
 	// installJobs feeds the install worker, installDone returns its results to the loop (plan M5b decision 7).
 	installJobs chan installJob
 	installDone chan installDone
+	// updateRequested is whether the last check-in's offer was requested by an administrator (plan M8d decision 23):
+	// under the manual policy it allows the fleetd and supervisor upgrades of that check-in.
+	updateRequested bool
+	// policySkipped is the last offered version the manual policy declined, so that it is logged once per version.
+	policySkipped string
+	// supervisorSkipped is the last supervisor package version and reason not installed, logged once.
+	supervisorSkipped string
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -122,7 +141,7 @@ func Load(l paths.Layout) (Deps, error) {
 	events := &reconcile.Events{}
 	inventory := &reconcile.Inventory{Sys: sys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
 	d := Deps{
-		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys,
+		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys, Inventory: inventory,
 		Applier: apply.New(sys, managed, events).WithInventory(inventory),
 	}
 	if l.Root == "" || l.Root == "/" {
@@ -151,6 +170,9 @@ func New(d Deps) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{d: d, st: st, installJobs: make(chan installJob, installQueue), installDone: make(chan installDone, installQueue)}
+	if d.Inventory != nil {
+		d.Inventory.UpdatesAllowed = a.updatesAllowed
+	}
 	a.localAdmin = &localadmin.Manager{Sys: d.Accounts, Escrow: escrowClient{a}, State: &a.st.LocalAdmin, Save: a.persist,
 		Emit: a.event, Result: a.commandResult, Now: d.Now}
 	if d.LUKS != nil {
@@ -162,6 +184,7 @@ func New(d Deps) (*Agent, error) {
 			command.TypeRotateAdminPassword: a.rotateCommand,
 			command.TypeDeleteSelfLock:      a.deleteSelfLock,
 			command.TypeInstallNow:          a.installNowCommand,
+			command.TypeUninstall:           a.uninstallCommand,
 		}), d.Now)
 	}
 	if a.d.Spool == nil {
@@ -193,6 +216,15 @@ func New(d Deps) (*Agent, error) {
 	}
 	if a.d.Signal == nil {
 		a.d.Signal = update.Notify
+	}
+	if a.d.RunUnit == nil {
+		a.d.RunUnit = runUnit
+	}
+	if a.d.SupervisorVersion == nil {
+		a.d.SupervisorVersion = func(ctx context.Context) (string, error) { return supervisorVersion(ctx, a.d.Layout) }
+	}
+	if a.d.Download == nil && a.d.Client != nil {
+		a.d.Download = a.d.Client.Download
 	}
 	a.refreshHealth()
 	a.loadCurrent()
@@ -329,6 +361,10 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 		}
 		d := afterFailure(a.failures, a.d.Rand(), retryAfter)
 		slog.WarnContext(ctx, "check-in failed", "error", err, "failures", a.failures, "retry_in", d.Round(time.Second))
+		if !errors.As(err, &apiErr) || apiErr.Status == http.StatusBadGateway || apiErr.Status == http.StatusServiceUnavailable ||
+			apiErr.Status == http.StatusGatewayTimeout {
+			a.markCheckinFailed()
+		}
 		a.setError(fmt.Sprintf("check-in: %v", err))
 		return d
 	}
@@ -340,13 +376,17 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 		a.setError("")
 	}
 	a.reportUpdate()
+	a.reportSupervisorUpgrade()
 	a.handleBundle(ctx, resp.Bundle)
 	a.ticketAccepted = a.acceptTicket(resp.TimeTicket) || a.ticketAccepted
 	a.handleCommands(ctx, resp.Commands)
 	a.handleUpdate(ctx, resp.AgentUpdate)
+	a.handleSupervisorPackage(ctx)
 	a.flush(ctx)
 	a.postResults(ctx)
+	a.launchUninstall(ctx)
 	a.clearUpdateResult()
+	a.clearSupervisorResult()
 	return afterSuccess(resp.NextCheckinS, a.d.Rand())
 }
 
@@ -356,6 +396,7 @@ func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	a.refreshSudoFlavor(ctx)
 	a.refreshRebootRequired()
 	a.refreshRevokeCapabilities(ctx)
+	a.refreshComponents(ctx)
 	health, err := json.Marshal(a.d.Health.Report())
 	if err != nil {
 		health = nil
@@ -390,6 +431,15 @@ func (a *Agent) checkedIn(resp protocol.CheckinResponse) error {
 	}
 	a.refreshHealth()
 	return fsutil.WriteFile(a.d.Layout.LastCheckin(), []byte(now.Format(time.RFC3339Nano)+"\n"), 0o644, 0o755)
+}
+
+// markCheckinFailed records a check-in that did not reach the server, for the supervisor upgrade helper (design
+// contract 8). A failure to write it is logged only: the helper then counts a rollback as permanent, never the reverse.
+func (a *Agent) markCheckinFailed() {
+	at := a.d.Now().UTC().Format(time.RFC3339Nano) + "\n"
+	if err := fsutil.WriteFile(a.d.Layout.LastCheckinFailed(), []byte(at), 0o644, 0o755); err != nil {
+		slog.Warn("recording the failed check-in failed", "error", err)
+	}
 }
 
 func (a *Agent) setError(msg string) {

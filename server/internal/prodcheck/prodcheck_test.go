@@ -148,7 +148,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 
 func TestDevelopmentVariableFailsNamingIt(t *testing.T) {
 	for _, name := range []string{"PADDOCK_STEPUP_WINDOW", "PADDOCK_STEPUP_MAX_AUTH_AGE", "PADDOCK_STALENESS_UNIT",
-		"PADDOCK_TEST_EXTERNAL_DELAY", "PADDOCK_REAPER_THRESHOLD", "PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL"} {
+		"PADDOCK_TEST_EXTERNAL_DELAY", "PADDOCK_REAPER_THRESHOLD", "PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL",
+		"PADDOCK_RETENTION_UNIT"} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
 			f.setEnv("paddock-api", name, "30s")

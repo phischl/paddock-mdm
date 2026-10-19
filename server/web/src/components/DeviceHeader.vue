@@ -4,6 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { useConfirm } from '../composables/useConfirm'
 import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { lockedByRevocation } from '../lib/deviceHealth'
+import { agentUpdateProblemKey, requestAgentUpdate } from '../lib/devices'
+import { formatDateTime } from '../lib/format'
 import { rotateLocalAdmin } from '../lib/localAdmin'
 import { useProblemText } from '../lib/problems'
 import { deviceStatus, encryptionStatus } from '../lib/status'
@@ -22,7 +24,7 @@ const page = inject(deviceDetailKey)
 if (!page) throw new Error('DeviceHeader outside the device frame')
 const { device, actions, diskState, revocations } = page
 
-const { t } = useI18n()
+const { t, te, locale } = useI18n()
 const confirm = useConfirm()
 const problemText = useProblemText()
 const session = useSessionStore()
@@ -37,6 +39,18 @@ const locked = computed(() => session.canDelete && lockedByRevocation(revocation
 const active = computed(() => d.value.state === 'active')
 const lifecycle = computed(() => actions.value.filter((a) => a !== 'retire'))
 
+/** The result line of a device that removed Paddock and retired itself (plan M8d decision 42). */
+const uninstalled = computed(() => {
+  const u = d.value.uninstall
+  if (d.value.state !== 'retired' || !u?.uninstalled_at) return ''
+  const result = (group: string, value: string | null | undefined) =>
+    value && te('devices.uninstall.' + group + '.' + value) ? t('devices.uninstall.' + group + '.' + value) : (value ?? '–')
+  return t('devices.uninstall.done', {
+    at: formatDateTime(u.uninstalled_at, locale.value), mode: t('devices.uninstall.modes.' + u.mode),
+    localAdmin: result('localAdmin', u.local_admin), tpm: result('tpm', u.tpm),
+  })
+})
+
 async function install(packages: string[]): Promise<{ problem: string; detail?: string } | null> {
   const res = await installNow(d.value.id, packages)
   return 'problem' in res ? res : null
@@ -45,6 +59,27 @@ async function install(packages: string[]): Promise<{ problem: string; detail?: 
 async function installed(): Promise<void> {
   problem.value = ''
   notice.value = t('updates.installNow.requested')
+  await page!.changed()
+}
+
+/** Update agent now (plan M8d decision 29): a non-destructive confirmation, then the request. */
+async function updateAgent(): Promise<void> {
+  problem.value = ''
+  notice.value = ''
+  const confirmed = await confirm({
+    title: t('devices.updateAgent.title'),
+    message: t('devices.updateAgent.confirm', {
+      version: d.value.agent_update_requested_version ?? t('devices.updateAgent.offered'), hostname: d.value.hostname,
+    }),
+    confirmLabel: t('devices.updateAgent.label'),
+  })
+  if (!confirmed) return
+  const res = await requestAgentUpdate(d.value.id)
+  if (res) {
+    const key = agentUpdateProblemKey(res)
+    if (key) notice.value = t(key)
+    else problem.value = res.problem
+  }
   await page!.changed()
 }
 
@@ -131,6 +166,13 @@ async function rotate(): Promise<void> {
         </v-btn>
         <v-btn
           v-if="session.canWrite && active"
+          data-testid="update-agent"
+          @click="updateAgent"
+        >
+          {{ t('devices.updateAgent.label') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canWrite && active"
           data-testid="local-admin-rotate"
           @click="rotate"
         >
@@ -158,6 +200,22 @@ async function rotate(): Promise<void> {
           :title="t('devices.noReportYet')"
         >{{ t('time.never') }}</span>
       </span>
+    </p>
+    <p
+      v-if="d.agent_update_requested_version && d.agent_update_requested_at"
+      class="pd-type-caption"
+      data-testid="update-agent-requested"
+    >
+      {{ t('devices.updateAgent.requested', {
+        version: d.agent_update_requested_version, at: formatDateTime(d.agent_update_requested_at, locale),
+      }) }}
+    </p>
+    <p
+      v-if="uninstalled"
+      class="pd-type-caption"
+      data-testid="uninstall-done"
+    >
+      {{ uninstalled }}
     </p>
     <p
       v-if="notice"
