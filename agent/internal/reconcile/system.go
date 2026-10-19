@@ -123,6 +123,14 @@ func (o OS) Timedatectl(ctx context.Context, args ...string) (string, int, error
 	return command(ctx, "timedatectl", args...)
 }
 
+// Hostnamectl implements System.
+func (o OS) Hostnamectl(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "hostnamectl", args...)
+}
+
 // PackageInstalled implements System.
 func (o OS) PackageInstalled(name string) bool {
 	if o.testRoot() {

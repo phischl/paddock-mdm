@@ -195,6 +195,7 @@
     "invalid_request": "Die Anfrage war ungültig.",
     "internal": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
     "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
+    "conflict": "Das steht im Konflikt mit einem vorhandenen Eintrag.",
     "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
     "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
@@ -283,6 +284,7 @@
       "quarantine_released": "{actor} hat das Gerät {hostname} aus der Quarantäne entlassen",
       "retired": "{actor} hat das Gerät {hostname} außer Betrieb genommen",
       "groups_changed": "{actor} hat die Gerätegruppen von {hostname} geändert",
+      "name_changed": "Gerätename geändert",
       "clone_suspected": "Das Gerät {hostname} wurde unter Quarantäne gestellt, weil seine Identität geklont zu sein scheint",
       "bundle_applied": "Das Gerät {target} hat Bundle {bundle_version, number} angewendet",
       "bundle_rejected": "Das Gerät {target} hat ein Bundle abgelehnt",
@@ -608,6 +610,31 @@
     "keyFacts": "{id}… ({protection}, {status})",
     "groups": "Gerätegruppen",
     "groupsSaved": "Gerätegruppen gespeichert.",
+    "name": {
+      "title": "Gerätename",
+      "label": "Name",
+      "hint": "Ein kleingeschriebenes Label aus 1–63 Buchstaben, Ziffern oder Bindestrichen. Das Gerät übernimmt es beim nächsten Check-in als Hostnamen.",
+      "save": "Speichern",
+      "clear": "Namen entfernen",
+      "saved": "Gerätename gespeichert.",
+      "conflict": "Ein anderes Gerät dieser Organisation trägt diesen Namen bereits.",
+      "invalid": {
+        "fqdn": "Nur den Hostnamen ohne Domain eingeben: keine Punkte.",
+        "uppercase": "Nur Kleinbuchstaben verwenden.",
+        "characters": "Nur Kleinbuchstaben, Ziffern und Bindestriche verwenden.",
+        "hyphen": "Der Name darf nicht mit einem Bindestrich beginnen oder enden.",
+        "tooLong": "Der Name darf höchstens 63 Zeichen lang sein.",
+        "localhost": "„localhost“ ist als Gerätename nicht zulässig.",
+        "server": "Kein gültiger Gerätename. Erlaubt ist ein kleingeschriebenes Label aus 1–63 Buchstaben, Ziffern oder Bindestrichen, das nicht mit einem Bindestrich beginnt oder endet und nicht „localhost“ lautet."
+      },
+      "state": {
+        "unmanaged": "Nicht verwaltet: das Gerät behält seinen eigenen Hostnamen.",
+        "pending": "Ausstehend: das Gerät meldet noch {hostname}.",
+        "applied": "Übernommen: das Gerät meldet diesen Namen."
+      },
+      "pendingChip": "Name ausstehend",
+      "pendingTooltip": "Verwalteter Name: {name}"
+    },
     "effectiveConfig": "Wirksame Konfiguration",
     "conflict": "{resource} wird {count, plural, one {von einer weiteren Gerätegruppe} other {von # weiteren Gerätegruppen}} definiert; es gilt die Definition mit der kleinsten ID.",
     "actions": {

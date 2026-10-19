@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PaddockAutoUnsealWithdrawn` (shares left on the host after disabling) and `PaddockAutoUnsealerDown` (the unsealer
   does not report). Lab hosts that unseal with a cron job move to it as `docs/operations/lab-install.md` section 11
   describes. `./paddock secrets` now also creates the unsealer's database secrets.
+- A device can be named from the portal; the device applies the name as its hostname at its next check-in and keeps
+  it; the device page shows whether the name is pending or applied, and an invalid name is rejected with the rule it
+  breaks (uppercase, invalid characters, a leading or trailing hyphen, too long, `localhost`, a domain).
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.
@@ -136,6 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgrade order for the device lifecycle release (M8d): update the server first, then the agents. Every protocol and
   bundle change is additive; older agents ignore the new bundle fields, and the new event types
   (`agent.supervisor_updated`, `agent.uninstalled`) are only sent after a bundle section or command of this release.
+- The hostname shown for a device follows what the device reports at every check-in instead of the name it had at
+  enrollment.
 - A portal sign-in reuses an existing Authentik session that was authenticated with a second factor instead of asking
   for the password again; a session without a second factor is still refused.
 - Devices install Himmelblau 4.0.6 by default (`PADDOCK_HIMMELBLAU_VERSION`, previously 4.0.4): a device code

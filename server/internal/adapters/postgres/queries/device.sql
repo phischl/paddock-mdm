@@ -30,6 +30,7 @@ LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_a
 LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
 WHERE (sqlc.narg(q_pattern)::text IS NULL
        OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR device.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
        OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
        OR inv.hardware_serial ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
        OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
@@ -69,6 +70,7 @@ SELECT count(*) FROM (
   LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
   WHERE (sqlc.narg(q_pattern)::text IS NULL
          OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR device.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
          OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
          OR inv.hardware_serial ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
          OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
@@ -105,6 +107,15 @@ SELECT id, hostname FROM device WHERE id = ANY(@ids::uuid[]);
 UPDATE device SET state = @state, state_changed_at = now()
 WHERE id = @id AND state = @from_state
 RETURNING *;
+
+-- name: SetDeviceName :one
+-- The managed name of a device (plan M8h decision 4); NULL clears it.
+UPDATE device SET name = sqlc.narg(name) WHERE id = @id RETURNING *;
+
+-- name: UpdateReportedHostname :execrows
+-- The hostname the device reports at check-in (plan M8h decision 9); unchanged values skip the row so the
+-- device_cache_notify trigger does not fire.
+UPDATE device SET hostname = @hostname WHERE id = @id AND hostname IS DISTINCT FROM @hostname;
 
 -- name: InsertDeviceIdentityKey :exec
 INSERT INTO device_identity_key (key_id, organization_id, device_id, public_key, key_protection, status)

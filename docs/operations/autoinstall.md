@@ -17,6 +17,9 @@ a boot PIN, with a high-entropy recovery key and the LUKS header escrowed in Pad
           "locale": "en_US.UTF-8", "keyboard_layout": "us", "timezone": "Europe/Berlin"}' > user-data
    ```
 
+   The `hostname` is the installed system's first hostname, which the device reports at enrollment; it is not the
+   managed device name (`device-name.md`), which an administrator sets on the device page afterwards.
+
    The answer is `text/yaml`. Every call creates a new random disk passphrase; nothing is stored on the server.
    The audit log records `autoinstall.generated` with the release and the agent version, never the passphrase or
    the token. Errors: 404 `not_found` (the configuration is not one of your organization), 422 `token_revoked`,

@@ -45,6 +45,9 @@ type Report struct {
 	// Components are the installed versions of paddockd, the supervisor, paddock-revoke, Himmelblau and fleetd (plan
 	// M8d decision 52), "" for a component that is not installed; nil until the first check-in.
 	Components map[string]string `json:"components,omitempty"`
+	// Hostname is the kernel hostname at the check-in (os.Hostname(), plan M8h decision 8); the server keeps it as the
+	// device's reported hostname.
+	Hostname string `json:"hostname,omitempty"`
 }
 
 // State is the current health, shared between the run loop (writer) and the socket server (reader).

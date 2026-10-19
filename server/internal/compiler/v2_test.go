@@ -658,3 +658,37 @@ func TestComponentTargetGrants(t *testing.T) {
 		t.Fatalf("paddock_component_targets() config %v, %v", config, err)
 	}
 }
+
+// TestHostnameSection (ADR 0041 decision 3): a v2 bundle carries the device's managed name, a device without one
+// gets no section, a v1 bundle never does, and a changed name publishes a new version.
+func TestHostnameSection(t *testing.T) {
+	w := newWorld(t)
+	named, unnamed, v1 := w.v2Device("{1,2}"), w.v2Device("{1,2}"), w.v2Device("{1}")
+	w.exec("UPDATE device SET name = 'lap-0421' WHERE id = $1", named)
+	w.exec("UPDATE device SET name = 'lap-v1' WHERE id = $1", v1)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if h := w.fetch(named).Hostname; h == nil || h.Name != "lap-0421" {
+		t.Fatalf("named device: hostname %+v", h)
+	}
+	if h := w.fetch(unnamed).Hostname; h != nil {
+		t.Fatalf("unnamed device: hostname %+v", h)
+	}
+	if b := w.fetch(v1); b.Hostname != nil {
+		t.Fatalf("v1 bundle with hostname %+v", b.Hostname)
+	}
+	before := w.version(named)
+	w.mustCompile(statechange.ScopeDevice, named)
+	if w.version(named) != before {
+		t.Fatal("an unchanged name published a new version")
+	}
+	w.exec("UPDATE device SET name = 'lap-0422' WHERE id = $1", named)
+	w.mustCompile(statechange.ScopeDevice, named)
+	if w.version(named) != before+1 || w.fetch(named).Hostname.Name != "lap-0422" {
+		t.Fatalf("renamed: version %d after %d, hostname %+v", w.version(named), before, w.fetch(named).Hostname)
+	}
+	w.exec("UPDATE device SET name = NULL WHERE id = $1", named)
+	w.mustCompile(statechange.ScopeDevice, named)
+	if b := w.fetch(named); w.version(named) != before+2 || b.Hostname != nil {
+		t.Fatalf("cleared: version %d, hostname %+v", w.version(named), b.Hostname)
+	}
+}

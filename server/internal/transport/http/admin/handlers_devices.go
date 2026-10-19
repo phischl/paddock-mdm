@@ -174,6 +174,7 @@ func toDeviceRows(rows []pgstore.ListDevicesRow) []adminapi.Device {
 func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 	out := adminapi.Device{
 		Id: d.ID, Hostname: d.Hostname, State: adminapi.DeviceState(d.State), HardwareUuid: d.HardwareUuid,
+		Name: d.Name, NameState: adminapi.DeviceNameState(app.NameState(d.Name, d.Hostname)),
 		MachineId: d.MachineID, OsRelease: map[string]string{}, EnrollmentTokenId: idPtr(d.EnrollmentTokenID),
 		EnrolledAt: d.EnrolledAt.UTC(), StateChangedAt: d.StateChangedAt.UTC(), BundleVersion: d.BundleSeq,
 		Owners: []adminapi.UserRef{}, Components: []adminapi.DeviceComponent{}, ComponentsOutdated: []string{},
@@ -215,6 +216,7 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 	base.Hardware = toDeviceHardware(d.Hardware)
 	out := adminapi.DeviceDetail{
 		Id: base.Id, Hostname: base.Hostname, State: base.State, Contact: adminapi.DeviceContact(d.Contact),
+		Name: base.Name, NameState: adminapi.DeviceDetailNameState(base.NameState),
 		HardwareUuid: base.HardwareUuid, MachineId: base.MachineId,
 		OsRelease: base.OsRelease, EnrollmentTokenId: base.EnrollmentTokenId, EnrolledAt: base.EnrolledAt,
 		StateChangedAt: base.StateChangedAt, BundleVersion: base.BundleVersion, LastContactAt: base.LastContactAt,
@@ -433,6 +435,14 @@ func toUserRefs(users []pgstore.AppUser) []adminapi.UserRef {
 		out[i] = toUserRef(u)
 	}
 	return out
+}
+
+func (h *handlers) SetDeviceName(ctx context.Context, req adminapi.SetDeviceNameRequestObject) (adminapi.SetDeviceNameResponseObject, error) {
+	d, err := h.devices.SetName(ctx, req.Id, req.Body.Name)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetDeviceName200JSONResponse(toDeviceDetail(d)), nil
 }
 
 func (h *handlers) GetDeviceEffectiveConfig(ctx context.Context, req adminapi.GetDeviceEffectiveConfigRequestObject) (adminapi.GetDeviceEffectiveConfigResponseObject, error) {

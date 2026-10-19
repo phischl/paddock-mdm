@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { VulnerabilityFinding } from '../api/client'
+import type { DeviceDetail, VulnerabilityFinding } from '../api/client'
 import DangerZone from '../components/DangerZone.vue'
 import DeviceOwners from '../components/DeviceOwners.vue'
+import DeviceNameCard from '../components/DeviceNameCard.vue'
 import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
 import SeverityChip from '../components/SeverityChip.vue'
@@ -57,6 +58,10 @@ onMounted(async () => {
   findings.value = res?.items.slice(0, 3) ?? []
   findingCount.value = res?.total ?? 0
 })
+
+function nameSaved(next: DeviceDetail): void {
+  device.value = next
+}
 
 async function copyId(): Promise<void> {
   await navigator.clipboard.writeText(d.value.id)
@@ -235,6 +240,11 @@ async function copyId(): Promise<void> {
           </div>
         </dl>
       </section>
+
+      <DeviceNameCard
+        :device="d"
+        @saved="nameSaved"
+      />
 
       <section
         class="pd-panel"

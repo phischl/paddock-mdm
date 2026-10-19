@@ -63,6 +63,11 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 		}); err != nil {
 			return err
 		}
+		if hostname, ok := ReportedHostname(health); ok {
+			if _, err := q.UpdateReportedHostname(ctx, pgstore.UpdateReportedHostnameParams{ID: hb.DeviceID, Hostname: hostname}); err != nil {
+				return err
+			}
+		}
 		if root, ok := RootVolume(diskHealth(health)); ok {
 			_, err := q.SetRootHeaderVolume(ctx, pgstore.SetRootHeaderVolumeParams{Volume: root, DeviceID: hb.DeviceID})
 			return err
@@ -102,6 +107,18 @@ func ComponentTargets(ctx context.Context, q *pgstore.Queries) (map[string]strin
 		out[r.Component] = r.Version
 	}
 	return out, nil
+}
+
+// ReportedHostname reads health.hostname (plan M8h decision 9); false when it is absent, empty or not a valid
+// reported hostname, so a malformed value never fails the check-in and leaves device.hostname alone.
+func ReportedHostname(health json.RawMessage) (string, bool) {
+	var h struct {
+		Hostname string `json:"hostname"`
+	}
+	if json.Unmarshal(health, &h) != nil || h.Hostname == "" || device.ValidateReported(h.Hostname) != nil {
+		return "", false
+	}
+	return h.Hostname, true
 }
 
 // RootVolume is the LUKS UUID of the root volume a device reports in health.disk (PDK-009).

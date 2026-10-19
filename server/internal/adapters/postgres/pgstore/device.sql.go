@@ -40,6 +40,7 @@ SELECT count(*) FROM (
   LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
   WHERE ($1::text IS NULL
          OR hostname ILIKE $1::text ESCAPE '\'
+         OR device.name ILIKE $1::text ESCAPE '\'
          OR hardware_uuid ILIKE $1::text ESCAPE '\'
          OR inv.hardware_serial ILIKE $1::text ESCAPE '\'
          OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
@@ -134,7 +135,7 @@ func (q *Queries) ExpireAgentUpdateRequests(ctx context.Context, before time.Tim
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason FROM device WHERE id = $1
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name FROM device WHERE id = $1
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -160,6 +161,7 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 		&i.UninstallCommandID,
 		&i.UninstalledAt,
 		&i.RetiredReason,
+		&i.Name,
 	)
 	return i, err
 }
@@ -233,7 +235,7 @@ const insertDevice = `-- name: InsertDevice :one
 INSERT INTO device (id, organization_id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
         $8)
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name
 `
 
 type InsertDeviceParams struct {
@@ -279,6 +281,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 		&i.UninstallCommandID,
 		&i.UninstalledAt,
 		&i.RetiredReason,
+		&i.Name,
 	)
 	return i, err
 }
@@ -517,7 +520,7 @@ func (q *Queries) ListDeviceIdentityKeys(ctx context.Context, deviceID uuid.UUID
 
 const listDevices = `-- name: ListDevices :many
 
-SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device.agent_update_requested_version, device.agent_update_requested_at, device.uninstall_requested_at, device.uninstall_mode, device.uninstall_command_id, device.uninstalled_at, device.retired_reason, device_status.last_contact_at, device_status.applied_bundle_version,
+SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device.agent_update_requested_version, device.agent_update_requested_at, device.uninstall_requested_at, device.uninstall_mode, device.uninstall_command_id, device.uninstalled_at, device.retired_reason, device.name, device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
        paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact,
        -- The owners as UserRef objects for the list column (plan M8d decision 3).
@@ -534,6 +537,7 @@ LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_a
 LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
 WHERE ($1::text IS NULL
        OR hostname ILIKE $1::text ESCAPE '\'
+       OR device.name ILIKE $1::text ESCAPE '\'
        OR hardware_uuid ILIKE $1::text ESCAPE '\'
        OR inv.hardware_serial ILIKE $1::text ESCAPE '\'
        OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
@@ -641,6 +645,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.Device.UninstallCommandID,
 			&i.Device.UninstalledAt,
 			&i.Device.RetiredReason,
+			&i.Device.Name,
 			&i.LastContactAt,
 			&i.AppliedBundleVersion,
 			&i.AgentVersion,
@@ -667,7 +672,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 }
 
 const lockDevice = `-- name: LockDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason FROM device WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name FROM device WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -693,6 +698,7 @@ func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) 
 		&i.UninstallCommandID,
 		&i.UninstalledAt,
 		&i.RetiredReason,
+		&i.Name,
 	)
 	return i, err
 }
@@ -722,10 +728,48 @@ func (q *Queries) SetAgentUpdateRequest(ctx context.Context, arg SetAgentUpdateR
 	return err
 }
 
+const setDeviceName = `-- name: SetDeviceName :one
+UPDATE device SET name = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name
+`
+
+type SetDeviceNameParams struct {
+	Name *string
+	ID   uuid.UUID
+}
+
+// The managed name of a device (plan M8h decision 4); NULL clears it.
+func (q *Queries) SetDeviceName(ctx context.Context, arg SetDeviceNameParams) (Device, error) {
+	row := q.db.QueryRow(ctx, setDeviceName, arg.Name, arg.ID)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Hostname,
+		&i.State,
+		&i.BundleSeq,
+		&i.HardwareUuid,
+		&i.MachineID,
+		&i.OsRelease,
+		&i.EnrollmentTokenID,
+		&i.EnrolledAt,
+		&i.StateChangedAt,
+		&i.LoginsSuspended,
+		&i.AgentUpdateRequestedVersion,
+		&i.AgentUpdateRequestedAt,
+		&i.UninstallRequestedAt,
+		&i.UninstallMode,
+		&i.UninstallCommandID,
+		&i.UninstalledAt,
+		&i.RetiredReason,
+		&i.Name,
+	)
+	return i, err
+}
+
 const setDeviceState = `-- name: SetDeviceState :one
 UPDATE device SET state = $1, state_changed_at = now()
 WHERE id = $2 AND state = $3
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name
 `
 
 type SetDeviceStateParams struct {
@@ -757,6 +801,26 @@ func (q *Queries) SetDeviceState(ctx context.Context, arg SetDeviceStateParams) 
 		&i.UninstallCommandID,
 		&i.UninstalledAt,
 		&i.RetiredReason,
+		&i.Name,
 	)
 	return i, err
+}
+
+const updateReportedHostname = `-- name: UpdateReportedHostname :execrows
+UPDATE device SET hostname = $1 WHERE id = $2 AND hostname IS DISTINCT FROM $1
+`
+
+type UpdateReportedHostnameParams struct {
+	Hostname string
+	ID       uuid.UUID
+}
+
+// The hostname the device reports at check-in (plan M8h decision 9); unchanged values skip the row so the
+// device_cache_notify trigger does not fire.
+func (q *Queries) UpdateReportedHostname(ctx context.Context, arg UpdateReportedHostnameParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateReportedHostname, arg.Hostname, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

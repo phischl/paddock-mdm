@@ -374,6 +374,34 @@ describe('app bar: organization name and step-up freshness (plan M8x decisions 3
     expect(tooltip?.getAttribute('aria-label')).toBe('Acme')
   })
 
+  it('keeps the organization name tooltip open after a tap, which also fires hover, until Escape or a click elsewhere (PDK-336)', async () => {
+    const { w } = await mountApp()
+    const name = w.get('[data-testid="org-name"]').element as HTMLElement
+    const tooltip = document.getElementById(name.getAttribute('aria-describedby')!)!
+    const settle = async () => {
+      await flushPromises()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    const open = () => tooltip.classList.contains('v-overlay--active')
+    for (const type of ['touchstart', 'touchend', 'mouseenter', 'mousedown']) name.dispatchEvent(new Event(type))
+    name.click()
+    await settle()
+    expect(open()).toBe(true)
+    name.click()
+    await settle()
+    expect(open()).toBe(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await settle()
+    expect(open()).toBe(false)
+    name.click()
+    await settle()
+    expect(open()).toBe(true)
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    document.body.click()
+    await settle()
+    expect(open()).toBe(false)
+  })
+
   it('shows no confirmation without a current step-up', async () => {
     const { w } = await mountApp()
     expect(w.find('[data-testid="stepup-chip"]').exists()).toBe(false)

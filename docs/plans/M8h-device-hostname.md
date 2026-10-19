@@ -566,3 +566,25 @@ Open points (default chosen):
 4. **Uppercase input: refuse or lowercase silently?** **Default: refuse** (400), the portal hint names the rule.
 5. **Should the reconciler also restart `systemd-resolved`?** **Default: no** — resolved reads the hostname live
    from hostnamed; only Avahi is startup-bound.
+
+## Amendment 2026-10-18 — review 1 of M8h (architect decisions)
+
+- **Pretty hostname (ADR 0041 amendment 2026-10-18).** `hostnamectl hostname <name>` clears the pretty hostname
+  for a valid host name instead of setting it; §2 "Upstream facts" and decisions 12 and 13 are refined: `fakesys`
+  models the clearing, `Plan` treats a pretty hostname of `""` or the name as in sync, and S-HN1 (§9) accepts both
+  and checks that two consecutive drift passes after the correction change nothing and report no
+  `config.drift_corrected`.
+- **Avahi after a partial failure.** Decision 13 is refined: `Apply` restarts a running `avahi-daemon.service` right
+  after a successful `hostnamectl`, before the `/etc/hosts` write, and reports both errors (`errors.Join`). A failed
+  restart stays pending in `reconcile.HostnameState`, which the applier keeps for the agent's lifetime; while it is
+  pending and the names are in sync, `Plan` lists `systemctl restart avahi-daemon.service`, so the next pass (drift
+  or bundle) retries it. An agent restart forgets a pending restart; Avahi then follows at the next rename or reboot.
+- **`/etc/hosts` keeps the domain and aliases.** Decision 13 is refined: on the first `127.0.1.1` line, a host name
+  equal to the device's old static or transient name becomes the new name, `<old>.<domain>` becomes
+  `<new>.<domain>` (Debian's `<fqdn> <short>` layout), and every other alias stays; when only `<old>.<domain>`
+  matched, the new short name follows it. When no host name matches (an unknown layout), the first host name
+  becomes the new name. Separators, a comment and the line ending stay; a `127.0.1.1` line without a host name gets
+  `\t<name>` after the address. The line is in sync when any of its host names is the name.
+- **Symlinked `/etc/hosts`.** When `/etc/hosts` is not a regular file (a symlink), `Plan` leaves it out of the plan
+  instead of planning a write that fails at every drift pass; the agent logs it once while it stays so (state in
+  `reconcile.HostnameState`), and RR-70 covers the stale `127.0.1.1` line this leaves.

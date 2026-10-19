@@ -95,7 +95,8 @@ func (q *Queries) ListActiveGroupMemberIDs(ctx context.Context, deviceGroupID uu
 const listCompileTargets = `-- name: ListCompileTargets :many
 SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions,
        coalesce(s.agent_version, '')::text AS agent_version,
-       coalesce(d.agent_update_requested_version, '')::text AS agent_update_requested_version, d.agent_update_requested_at
+       coalesce(d.agent_update_requested_version, '')::text AS agent_update_requested_version, d.agent_update_requested_at,
+       d.name
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = ANY($1::uuid[]) ORDER BY d.id
 `
@@ -109,6 +110,7 @@ type ListCompileTargetsRow struct {
 	AgentVersion                string
 	AgentUpdateRequestedVersion string
 	AgentUpdateRequestedAt      *time.Time
+	Name                        *string
 }
 
 func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]ListCompileTargetsRow, error) {
@@ -129,6 +131,7 @@ func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]Li
 			&i.AgentVersion,
 			&i.AgentUpdateRequestedVersion,
 			&i.AgentUpdateRequestedAt,
+			&i.Name,
 		); err != nil {
 			return nil, err
 		}

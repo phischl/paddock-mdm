@@ -360,9 +360,11 @@ components:
           type: object
           additionalProperties: true
           description: |
-            The agent's health report. Since plan M8d: components maps paddockd, paddock_supervisor, paddock_revoke,
-            himmelblau and fleetd to their installed versions ("" when not installed), and disk carries unlock_mode
-            and, in state not_encrypted, boot_separate.
+            The agent's health report (agent/internal/health.Report). Since plan M8d: components maps paddockd,
+            paddock_supervisor, paddock_revoke, himmelblau and fleetd to their installed versions ("" when not
+            installed), and disk carries unlock_mode and, in state not_encrypted, boot_separate. Since plan M8h:
+            hostname is the kernel hostname at the check-in (os.Hostname(), plan M8h decision 8); the server keeps it
+            as the device's reported hostname. Agents before M8h do not send it.
           properties:
             components:
               type: object

@@ -42,6 +42,8 @@ const (
 	TypeSudo        = "sudo"  // schema v2
 	// TypeUpdates is the type and ID of the resource the agent makes of the updates section (plan M5b decision 4).
 	TypeUpdates = "updates"
+	// TypeHostname is the type and ID of the resource the agent makes of the hostname section (plan M8h decision 10).
+	TypeHostname = "hostname"
 )
 
 // Bundle is the desired state of one device.
@@ -70,6 +72,29 @@ type Bundle struct {
 	// Disk is the disk encryption policy of the device (schema v2 only, plan M8d decision 46). Agents that do not know
 	// it ignore it.
 	Disk *DiskSpec `json:"disk,omitempty"`
+	// Hostname is the device's managed name (schema v2 only, ADR 0041). Agents that do not know the section ignore
+	// it; a device without a managed name has no section.
+	Hostname *HostnameSpec `json:"hostname,omitempty"`
+}
+
+// HostnameSpec is the hostname section: the device's managed name (ADR 0041).
+type HostnameSpec struct {
+	Name string `json:"name"`
+}
+
+// MaxHostname is the length limit of a device name (one DNS label; Linux limits the hostname to 64 bytes).
+const MaxHostname = 63
+
+var hostnameLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// ValidHostname reports whether name is a lowercase RFC 1123 label of 1 to 63 characters that is not "localhost".
+func ValidHostname(name string) bool {
+	return len(name) <= MaxHostname && hostnameLabel.MatchString(name) && name != "localhost"
+}
+
+// HostnameResource turns the hostname section into the resource the agent plans and applies.
+func HostnameResource(s HostnameSpec) (Resource, error) {
+	return resource(TypeHostname, TypeHostname, s)
 }
 
 // DiskSpec is the disk encryption policy of a device: the unlock mode its keyslots must match.

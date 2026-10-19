@@ -24,8 +24,8 @@ Fleet's features that could collect such data are switched off and kept off by `
 
 | What | When | Stored |
 | --- | --- | --- |
-| Enrollment: hostname, hardware UUID (`/sys/class/dmi/id/product_uuid`), machine ID, `/etc/os-release`, agent version, public identity key | once | device record |
-| Check-in: applied bundle version, agent version, bundle schema versions, architecture, health (agent status and last error, sudo implementation, disk encryption state with the kinds of the LUKS keyslots and, per encrypted volume, its device path, LUKS UUID and keyslot count, the capabilities of `paddock-revoke`), whether a reboot is required | every check-in (5 minutes) | device status |
+| Enrollment: hostname (refreshed at every check-in from the health report, plan M8h), hardware UUID (`/sys/class/dmi/id/product_uuid`), machine ID, `/etc/os-release`, agent version, public identity key | once | device record |
+| Check-in: applied bundle version, agent version, bundle schema versions, architecture, health (agent status and last error, sudo implementation, disk encryption state with the kinds of the LUKS keyslots and, per encrypted volume, its device path, LUKS UUID and keyslot count, the capabilities of `paddock-revoke`, the current hostname), whether a reboot is required | every check-in (5 minutes) | device status |
 | Events of the agent's own work: bundle applied or rejected (resource IDs and error messages), configuration drift corrected, agent updated or rolled back, login and sudo configuration applied or failed, locks and suspensions applied | when they happen | audit log |
 | Update runs (`updates.run`): kind (security or regular), start and end, result, number of upgraded packages, held-back package names, reboot required | after each run | audit log, device update status |
 | Revocation results: per volume the device path and the keyslot counts before and after, unresolved crypttab entries, refusals with their reason | after a Lock, Destroy or refused token | audit log, revocation request |

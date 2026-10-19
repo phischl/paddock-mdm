@@ -350,11 +350,11 @@ paths:
     get:
       operationId: listDeviceGroupDevices
       tags: [device-groups]
-      description: "Roles: org_admin, org_operator, org_auditor. The members of a device group."
+      description: "Roles: org_admin, org_operator, org_auditor. The members of a device group. q matches the reported hostname, the managed name and the hardware UUID."
       x-paddock-list:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
-        search: [hostname, hardware_uuid]
+        search: [hostname, name, hardware_uuid]
         filters: [state]
       parameters:
         - $ref: "#/components/parameters/Page"
@@ -709,11 +709,11 @@ paths:
     get:
       operationId: listDevices
       tags: [devices]
-      description: "Roles: org_admin, org_operator, org_auditor."
+      description: "Roles: org_admin, org_operator, org_auditor. q matches the reported hostname, the managed name and the hardware UUID."
       x-paddock-list:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
-        search: [hostname, hardware_uuid, owners.username, owners.display_name, hardware.serial]
+        search: [hostname, name, hardware_uuid, owners.username, owners.display_name, hardware.serial]
         filters: [state, device_group_id, disk_state, contact, security_updates, owner_id, component_outdated]
       parameters:
         - $ref: "#/components/parameters/Page"
@@ -1060,6 +1060,37 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/name:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: setDeviceName
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator. Sets or clears the managed name of a device. The device applies it as its
+        hostname (static, transient and pretty) at its next check-in; a name changed on the device is corrected at the
+        next drift check. The name is one lowercase DNS label (1–63 characters, letters, digits, hyphens; not
+        "localhost") and unique among the organization's devices that are not retired (409 conflict otherwise); a
+        retired device cannot be named (409 invalid_state).
+      x-paddock-audit: device.name_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceNameUpdate" }
+      responses:
+        "200":
+          description: The device with its new managed name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/effective-config:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -4800,12 +4831,22 @@ components:
       enum: [pending, active, rejected, quarantined, retired]
     Device:
       type: object
-      required: [id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at,
-                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version, contact, owners,
-                 hardware, components, components_outdated]
+      required: [id, hostname, name, name_state, state, hardware_uuid, machine_id, os_release, enrollment_token_id,
+                 enrolled_at, state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version,
+                 contact, owners, hardware, components, components_outdated]
       properties:
         id: { type: string, format: uuid }
-        hostname: { type: string }
+        hostname:
+          type: string
+          description: The hostname the device reported at its last check-in (at enrollment until then).
+        name:
+          type: string
+          nullable: true
+          description: The managed name the device applies as its hostname (ADR 0041); null when not managed.
+        name_state:
+          type: string
+          enum: [unmanaged, pending, applied]
+          description: unmanaged when name is null, applied when the reported hostname equals name, pending otherwise.
         state: { $ref: "#/components/schemas/DeviceState" }
         contact: { $ref: "#/components/schemas/DeviceContact" }
         hardware_uuid: { type: string, nullable: true }
@@ -5784,6 +5825,17 @@ components:
           type: array
           maxItems: 20
           items: { type: string, format: uuid }
+    DeviceNameUpdate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          nullable: true
+          pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+          maxLength: 63
+          description: The managed name; null clears it (the device keeps its current hostname).
     DeviceGroupsUpdate:
       type: object
       required: [device_group_ids]

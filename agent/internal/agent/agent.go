@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"sync"
@@ -397,6 +398,7 @@ func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	a.refreshRebootRequired()
 	a.refreshRevokeCapabilities(ctx)
 	a.refreshComponents(ctx)
+	a.refreshHostname(ctx)
 	health, err := json.Marshal(a.d.Health.Report())
 	if err != nil {
 		health = nil
@@ -405,6 +407,17 @@ func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 		AppliedBundleVersion: a.st.AppliedBundleVersion, AgentVersion: buildinfo.Version,
 		SchemaVersions: apply.SchemaVersions, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH, Health: health,
 	}
+}
+
+// refreshHostname reports the kernel (transient) hostname in the health report (plan M8h decision 8): the server
+// keeps it as the device's reported hostname. A failed read keeps the last value.
+func (a *Agent) refreshHostname(ctx context.Context) {
+	name, err := os.Hostname()
+	if err != nil {
+		slog.DebugContext(ctx, "hostname unknown", "error", err)
+		return
+	}
+	a.d.Health.Update(func(r *health.Report) { r.Hostname = name })
 }
 
 // refreshSudoFlavor detects the active sudo implementation for the health report; a failed detection keeps the last

@@ -1,0 +1,150 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { h } from 'vue'
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { VApp } from 'vuetify/components'
+import { createPinia, setActivePinia } from 'pinia'
+import type { Device } from '../api/client'
+import { createPortalI18n } from '../i18n'
+import { vuetify } from '../plugins/vuetify'
+import { useSessionStore } from '../stores/session'
+import Devices from '../views/Devices.vue'
+
+const now = '2026-10-10T12:00:00Z'
+const base = {
+  state: 'active', contact: 'ok', hardware_uuid: null, machine_id: null, os_release: {}, enrollment_token_id: null,
+  enrolled_at: now, state_changed_at: now, bundle_version: 1, last_contact_at: now, applied_bundle_version: 1, agent_version: '1.0.0',
+  owners: [], hardware: null, components: [], components_outdated: [],
+}
+const items = [
+  { ...base, id: 'd1', hostname: 'ubuntu', name: 'lap-0421', name_state: 'pending' },
+  { ...base, id: 'd2', hostname: 'lap-0422', name: 'lap-0422', name_state: 'applied' },
+  { ...base, id: 'd3', hostname: 'desk-07', name: null, name_state: 'unmanaged' },
+] as Device[]
+
+vi.mock('../lib/devices', async (original) => ({
+  ...(await original<typeof import('../lib/devices')>()),
+  allGroups: () => Promise.resolve([]),
+  listDevices: () => Promise.resolve({ items, page: 1, page_size: 25, total: 3, total_capped: false, sort: 'hostname' }),
+}))
+
+vi.mock('../lib/users', async (original) => ({
+  ...(await original<typeof import('../lib/users')>()),
+  allUsers: () => Promise.resolve([]),
+}))
+
+let wrapper: VueWrapper | null = null
+afterEach(() => {
+  wrapper?.unmount()
+  wrapper = null
+})
+
+async function mountList(): Promise<HTMLElement[]> {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', theme: 'system', organization: null } as never
+  const empty = { render: () => null }
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/devices', name: 'devices', component: Devices },
+      { path: '/devices/:id', name: 'device', component: empty },
+      { path: '/enrollment-tokens', name: 'enrollment-tokens', component: empty },
+    ],
+  })
+  await router.push('/devices')
+  await router.isReady()
+  const App = () => h(VApp, null, { default: () => h(RouterView) })
+  wrapper = mount(App, { global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body })
+  await flushPromises()
+  return [...document.querySelectorAll<HTMLElement>('[data-testid="device-name-pending"]')]
+}
+
+const tooltip = () => document.querySelector<HTMLElement>('[role="tooltip"]')!
+async function settle(): Promise<void> {
+  await flushPromises()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+}
+const tooltipOpen = () => tooltip().classList.contains('v-overlay--active')
+
+describe('device list name-pending tooltip (browser check of PDK-332)', () => {
+  it('names the role=tooltip element, which Vuetify keeps in the page while closed (axe aria-tooltip-name)', async () => {
+    await mountList()
+    expect(tooltipOpen()).toBe(false)
+    expect(tooltip().getAttribute('aria-label')).toBe('Managed name: lap-0421')
+  })
+
+  it('stays open after a tap or click, which also fires hover and focus, until a click elsewhere or Escape', async () => {
+    const [chip] = await mountList()
+    for (const type of ['touchstart', 'touchend', 'mouseenter', 'mousedown']) chip.dispatchEvent(new Event(type))
+    chip.focus()
+    chip.click()
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    chip.dispatchEvent(new MouseEvent('mouseleave'))
+    chip.click()
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await settle()
+    expect(tooltipOpen()).toBe(false)
+    chip.click()
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    chip.blur()
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    document.body.click()
+    await settle()
+    expect(tooltipOpen()).toBe(false)
+  })
+
+  it('opens on keyboard focus and on hover, and a hover without focus closes on leaving', async () => {
+    const [chip] = await mountList()
+    chip.focus()
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    chip.blur()
+    await settle()
+    expect(tooltipOpen()).toBe(false)
+    chip.dispatchEvent(new MouseEvent('mouseenter'))
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    chip.dispatchEvent(new MouseEvent('mouseleave'))
+    await settle()
+    expect(tooltipOpen()).toBe(false)
+  })
+})
+
+describe('device list', () => {
+  it('marks a device whose managed name is pending, with the name for screen readers and as an accessible tooltip (plan M8h decision 18)', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', theme: 'system', organization: null } as never
+    const empty = { render: () => null }
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/devices', name: 'devices', component: Devices },
+        { path: '/devices/:id', name: 'device', component: empty },
+        { path: '/enrollment-tokens', name: 'enrollment-tokens', component: empty },
+      ],
+    })
+    await router.push('/devices')
+    await router.isReady()
+    const App = () => h(VApp, null, { default: () => h(RouterView) })
+    wrapper = mount(App, { global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body })
+    await flushPromises()
+    const chips = [...document.querySelectorAll<HTMLElement>('[data-testid="device-name-pending"]')]
+    expect(chips).toHaveLength(1)
+    expect(chips[0].closest('tr')?.textContent).toContain('ubuntu')
+    // Screen readers read the managed name with the chip; keyboard and touch users reach the tooltip (review 1 finding 5).
+    expect(chips[0].textContent?.replace(/\s+/g, ' ').trim()).toBe('Name pending Managed name: lap-0421')
+    expect(chips[0].querySelector('.visually-hidden')?.textContent).toBe('Managed name: lap-0421')
+    expect(chips[0].getAttribute('tabindex')).toBe('0')
+    chips[0].dispatchEvent(new FocusEvent('focus'))
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const tooltip = [...document.querySelectorAll<HTMLElement>('.v-tooltip .v-overlay__content')]
+    expect(tooltip.map((el) => el.textContent?.trim())).toContain('Managed name: lap-0421')
+  })
+})

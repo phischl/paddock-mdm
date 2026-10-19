@@ -195,6 +195,7 @@
     "invalid_request": "The request was not valid.",
     "internal": "Something went wrong. Please try again.",
     "invalid_state": "This action is not possible in the current state.",
+    "conflict": "This conflicts with an existing item.",
     "already_exists": "This is already managed for the same devices.",
     "in_use": "This item is still in use. Remove what uses it first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",
@@ -283,6 +284,7 @@
       "quarantine_released": "{actor} released the device {hostname} from quarantine",
       "retired": "{actor} retired the device {hostname}",
       "groups_changed": "{actor} changed the device groups of {hostname}",
+      "name_changed": "Device name changed",
       "clone_suspected": "The device {hostname} was quarantined because its identity seems to be cloned",
       "bundle_applied": "The device {target} applied bundle {bundle_version, number}",
       "bundle_rejected": "The device {target} rejected a bundle",
@@ -608,6 +610,31 @@
     "keyFacts": "{id}… ({protection}, {status})",
     "groups": "Device groups",
     "groupsSaved": "Device groups saved.",
+    "name": {
+      "title": "Device name",
+      "label": "Name",
+      "hint": "One lowercase label of 1–63 letters, digits or hyphens. The device uses it as its hostname at its next check-in.",
+      "save": "Save",
+      "clear": "Clear name",
+      "saved": "Device name saved.",
+      "conflict": "Another device of this organization already has this name.",
+      "invalid": {
+        "fqdn": "Enter only the host name, without a domain: no dots.",
+        "uppercase": "Use lowercase letters only.",
+        "characters": "Use only lowercase letters, digits and hyphens.",
+        "hyphen": "The name must not start or end with a hyphen.",
+        "tooLong": "The name can have at most 63 characters.",
+        "localhost": "“localhost” cannot be used as a device name.",
+        "server": "Not a valid device name. Use one lowercase label of 1–63 letters, digits or hyphens that does not start or end with a hyphen and is not “localhost”."
+      },
+      "state": {
+        "unmanaged": "Not managed: the device keeps its own hostname.",
+        "pending": "Pending: the device still reports {hostname}.",
+        "applied": "Applied: the device reports this name."
+      },
+      "pendingChip": "Name pending",
+      "pendingTooltip": "Managed name: {name}"
+    },
     "effectiveConfig": "Effective configuration",
     "conflict": "{resource} is defined by {count, plural, one {one more device group} other {# more device groups}}; the definition with the smallest ID applies.",
     "actions": {

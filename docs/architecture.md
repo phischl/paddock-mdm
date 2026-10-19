@@ -708,6 +708,11 @@ reports `bundle.rejected` with a reason code:
 4. `schema_version` supported by this agent.
 5. `sha256` of the downloaded object equals the value from the check-in response.
 
+> **Amendment 2026-10-18 (M8h):** schema v2 gains the optional top-level section `hostname: {name}`, the
+> device's managed name (`device.name`, a lowercase RFC 1123 label of 1–63 characters, not `localhost`,
+> `bundle.ValidHostname`). The compiler renders it only while a name is set; a bundle without it leaves the hostname
+> alone. Agents that do not know the section ignore it. ADR [0041](adr/0041-device-hostname.md).
+
 ### 7.3 Edge caching with preserved authorization
 
 Bundles are served only through presigned GET URLs (TTL 120 s) whose key contains organization,
@@ -1261,6 +1266,16 @@ them; any change it made is reverted and reported as `config.playbook_touched_pr
 > Reason: an agent rejects bundles with resource types it does not know, so a new resource type would
 > stop bundles on devices that have not received the agent update yet during a staged rollout.
 > New capabilities are added as optional top-level sections (as `inventory`, `revocation`, `dms`).
+
+> **Amendment 2026-10-18 (M8h):** the agent maps the `hostname` section to the internal resource `hostname`,
+> applied **first** (`hostname → time → file → systemd_unit → updates → login → sudo`). The reconciler runs
+> `hostnamectl hostname <name>` (static and transient name; systemd clears the pretty name for a valid host name, ADR
+> 0041 amendment 2026-10-18), keeps the first `127.0.1.1` line of `/etc/hosts`
+> at the name (unless the bundle manages `/etc/hosts` as a file) and restarts `avahi-daemon.service` when it is active,
+> because Avahi reads the host name only at startup. It never reboots and never touches NetworkManager, resolved, DNS
+> or `/etc/hostname` directly. A local rename is drift (`config.drift_corrected` with `resource_ids: ["hostname"]`),
+> not a tamper event. `ProtectHostname=` is never set on the Paddock units: the agent would report a stale name from
+> its own UTS namespace. ADR [0041](adr/0041-device-hostname.md).
 
 ### 11.4 Commands
 
@@ -1834,6 +1849,12 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > `organization_update_settings.agent_update_policy`; `device.agent_update_requested_*`, `uninstall_*`,
 > `uninstalled_at`, `retired_reason`; `device_status.arch`, `components_outdated`.
 
+> **Amendment 2026-10-18 (M8h):** `device.name` (nullable) is the managed name the device applies as its
+> hostname, unique per organization among devices that are not retired (`device_org_name_key`). `device.hostname` is
+> the name the device **reports**: set at enrollment and refreshed from `health.hostname` at every check-in (a
+> conditional update, so an unchanged name does not touch the row). The portal derives `name_state`
+> (`unmanaged | pending | applied`) from both. ADR [0041](adr/0041-device-hostname.md).
+
 ### 16.2 Conventions
 
 - Primary keys UUIDv7 (time-ordered) generated in Go; timestamps `timestamptz` in UTC.
@@ -1870,6 +1891,12 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > `GET /api/v1/devices/{id}/logins`, `GET /api/v1/users/{id}/devices`, `POST /api/v1/devices/{id}/update-agent`,
 > `POST /api/v1/devices/{id}/uninstall` (step-up) and `…/uninstall/cancel`, `GET /api/platform/v1/component-targets`;
 > the device list gains the filters `owner_id` and `component_outdated`. Plan: `docs/plans/M8d-device-lifecycle.md`.
+
+> **Amendment 2026-10-18 (M8h):** `PUT /api/v1/devices/{id}/name` (`{name: string | null}`, org_admin and
+> org_operator, no step-up) sets or clears the managed name, audited as `device.name_changed`; 409 `conflict` for a
+> name another non-retired device of the organization holds, 409 `invalid_state` for a retired device. `Device`
+> carries `name` and `name_state`; `q` of the device lists also matches `name`. ADR
+> [0041](adr/0041-device-hostname.md).
 
 ### 17.2 Device API
 

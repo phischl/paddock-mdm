@@ -232,6 +232,11 @@ func validateFile(f pgstore.ManagedFile, roots []string) (policy.Tier, error) {
 	if err := policy.ValidatePath(f.Path); err != nil {
 		return policy.TierDenied, problem.PathNotAllowed.WithDetail(err.Error())
 	}
+	// hostnamed owns these files and the device name sets them (ADR 0041 decision 6); refusing them here instead of
+	// in pkg/policy keeps the release's upgrade order "server first" (ADR 0013 amendment 2026-10-16).
+	if f.Path == "/etc/hostname" || f.Path == "/etc/machine-info" {
+		return policy.TierDenied, problem.InvalidRequest.WithDetail("path is owned by the device name policy")
+	}
 	for _, err := range []error{
 		policy.ValidateMode(f.Mode), policy.ValidateOwner(f.Owner), policy.ValidateOwner(f.Grp),
 		managedconfig.ValidateContent(f.Content),

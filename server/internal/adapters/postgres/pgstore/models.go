@@ -204,6 +204,7 @@ type Device struct {
 	UninstallCommandID          uuid.NullUUID
 	UninstalledAt               *time.Time
 	RetiredReason               *string
+	Name                        *string
 }
 
 type DeviceAlert struct {

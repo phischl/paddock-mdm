@@ -35,7 +35,7 @@ func (q *Queries) CancelDeviceCommand(ctx context.Context, arg CancelDeviceComma
 const clearDeviceUninstall = `-- name: ClearDeviceUninstall :one
 UPDATE device SET uninstall_requested_at = NULL, uninstall_mode = NULL, uninstall_command_id = NULL, uninstalled_at = NULL
 WHERE id = $1
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name
 `
 
 func (q *Queries) ClearDeviceUninstall(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -61,6 +61,7 @@ func (q *Queries) ClearDeviceUninstall(ctx context.Context, id uuid.UUID) (Devic
 		&i.UninstallCommandID,
 		&i.UninstalledAt,
 		&i.RetiredReason,
+		&i.Name,
 	)
 	return i, err
 }
@@ -222,7 +223,7 @@ const setDeviceUninstall = `-- name: SetDeviceUninstall :one
 UPDATE device SET uninstall_requested_at = $1, uninstall_mode = $2, uninstall_command_id = $3,
   uninstalled_at = NULL
 WHERE id = $4
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name
 `
 
 type SetDeviceUninstallParams struct {
@@ -261,6 +262,7 @@ func (q *Queries) SetDeviceUninstall(ctx context.Context, arg SetDeviceUninstall
 		&i.UninstallCommandID,
 		&i.UninstalledAt,
 		&i.RetiredReason,
+		&i.Name,
 	)
 	return i, err
 }

@@ -351,6 +351,29 @@ var deviceAuditCases = func() map[string][]auditCase {
 				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "failure")
 			}},
 		},
+		"PUT /api/v1/devices/{id}/name": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/name", map[string]any{"name": "a3-" + uniqueSuffix()})
+				expectStatus(t, res, http.StatusOK, "")
+				expectOneEvent(t, w.alice, res.RequestID, "device.name_changed", "success")
+			}},
+			// "localhost" matches the schema pattern, so the use case refuses it inside the action runner.
+			{"validation failure", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/name", map[string]any{"name": "localhost"})
+				expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+				expectOneEvent(t, w.alice, res.RequestID, "device.name_changed", "failure")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.bob, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/name", map[string]any{"name": nil})
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.name_changed", "denied")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+uuid.NewString()+"/name", map[string]any{"name": nil})
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.name_changed", "failure")
+			}},
+		},
 		// Each case removes its own device; the cases that need a step-up sign in on their own, as for reveal.
 		"POST /api/v1/devices/{id}/uninstall": {
 			{"success", func(t *testing.T, w *auditWorld) {
