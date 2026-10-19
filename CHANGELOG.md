@@ -181,7 +181,8 @@ authenticator. Restart Authentik once after the upgrade (`docs/operations/upgrad
   sign in again without password and authenticator.
 - The dead man's switch setting says that a blocked connection triggers the lock like an outage.
 - Updated bundled components: Caddy 2.11.7 (was 2.11.6; fixes a crash when proxying over HTTP/2 and streams cut off
-  after a minute), Authentik 2026.8.4 (was 2026.8.3).
+  after a minute), Authentik 2026.8.4 (was 2026.8.3), RustFS 1.0.3 (was
+  1.0.1).
 
 ### Fixed
 
