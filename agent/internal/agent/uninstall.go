@@ -106,15 +106,16 @@ func (a *Agent) launchUninstall(ctx context.Context) {
 	}
 	err := a.d.RunUnit(ctx, "systemd-run", "--unit="+UninstallUnit, "--collect", "--no-block", "--property=KillMode=process",
 		a.d.Layout.UninstallBinary(), "uninstall", "--plan", a.d.Layout.UninstallPlan())
-	// A crash between systemd-run and saving LaunchedAt reruns the launch while the removal still runs; systemd-run
-	// then fails because the unit is loaded, and reporting helper_failed would end the request under the running
-	// removal (review 2 finding E). The transient unit is Type=simple, so a running helper is active.
-	// The agent is being stopped (a supervisor restart cancels ctx and with it systemd-run): nothing was started, and
-	// the next start launches the removal instead of ending the request with helper_failed.
+	// The agent is being stopped (a supervisor restart cancels ctx and with it systemd-run): the start may not have
+	// happened, and the next start launches the removal or adopts the running one instead of ending the request with
+	// helper_failed.
 	if err != nil && ctx.Err() != nil {
 		slog.WarnContext(ctx, "starting the removal of Paddock interrupted; retrying at the next start", "command_id", p.CommandID, "error", err)
 		return
 	}
+	// A crash between systemd-run and saving LaunchedAt reruns the launch while the removal still runs; systemd-run
+	// then fails because the unit is loaded, and reporting helper_failed would end the request under the running
+	// removal (review 2 finding E). The transient unit is Type=simple, so a running helper is active.
 	if err != nil && a.d.RunUnit(ctx, "systemctl", "is-active", "--quiet", UninstallUnit+".service") == nil {
 		slog.WarnContext(ctx, "the removal of Paddock is already running; adopting it", "command_id", p.CommandID, "error", err)
 		err = nil
