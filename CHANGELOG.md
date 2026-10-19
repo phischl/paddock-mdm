@@ -180,6 +180,8 @@ authenticator. Restart Authentik once after the upgrade (`docs/operations/upgrad
 - *End all sessions* now also signs every portal user out of the identity provider, so a stolen browser session cannot
   sign in again without password and authenticator.
 - The dead man's switch setting says that a blocked connection triggers the lock like an outage.
+- Updated bundled components: Caddy 2.11.7 (was 2.11.6; fixes a crash when proxying over HTTP/2 and streams cut off
+  after a minute).
 
 ### Fixed
 
