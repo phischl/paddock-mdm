@@ -1087,8 +1087,9 @@ blocker. What changes:
 34. **The generator is reported.** `protocol.DiskConversion` (decision 3) gains
     `Initramfs string json:"initramfs,omitempty"` — `dracut` when `/usr/bin/dracut` exists, else `initramfs-tools`
     (a `Stat`, so `Preflight` still runs only `findmnt`, `lsblk`, `blkid`, `lvm` and reads files).
-    `DiskConversionHealth` (§6.1) gains `initramfs: string`. The dialogue (decision 24) shows `devices.disk.convert.check.initramfsSwitch`
-    when it is `initramfs-tools`; the runbook names the switch under "what the user sees".
+    `DiskConversionHealth` (§6.1) gains `initramfs: string`. The dialogue (decision 24) shows
+    `devices.disk.convert.check.initramfsSwitch` when it is `initramfs-tools`; the runbook names the switch under
+    "what the user sees".
 35. **RR-58 is reworded** (PDK-248): "24.04 switches to dracut irreversibly" becomes "A device on initramfs-tools
     switches to dracut irreversibly. initramfs-tools and `brltty` are removed; kernel updates use dracut; no
     Plymouth splash; the dracut initrd is built with `hostonly` and verified with `lsinitrd` before the restart, but
