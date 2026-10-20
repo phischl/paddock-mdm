@@ -155,14 +155,16 @@ Decided by the architect on 2026-10-20 while refreshing plan M8e against `main` 
 decisions above stand, three are made precise:
 
 1. **Decision 5, the generator (correction 1 made precise).** The early-boot step stays a dracut module; a device
-   that does not have dracut installed switches to it at preparation whatever its release — Ubuntu 24.04, and a
-   26.04 upgraded in place that kept initramfs-tools. Before the switch the agent simulates the installation
-   (`apt-get -s install dracut`) and refuses the conversion (`failed`, stage `prepare`, reason
-   `dracut_removes:<packages>`) when anything but `initramfs-tools`, `initramfs-tools-core`, `initramfs-tools-bin`
-   and `brltty` would be removed; extending that list is an architect decision. The agent reports the installed
-   generator in `health.disk.conversion.initramfs` so that the portal's dialogue can say what the switch means.
-   Architecture open question O4 ("no in-place switch on existing 24.04 devices") is superseded by this bounded
-   switch.
+   that does not have dracut installed (`dpkg-query`, the one source of truth for the detection and the switch)
+   switches to it at preparation whatever its release — Ubuntu 24.04, and a 26.04 upgraded in place that kept
+   initramfs-tools. The agent simulates the installation (`apt-get -s install dracut`) in its preflight and again
+   before the switch, reports the simulated removal set in `health.disk.conversion.initramfs_removes` so that the
+   portal's dialogue names what leaves (initramfs-tools, and `brltty` — the console braille support), refuses the
+   conversion (`failed`, stage `prepare`, reason `dracut_removes:<packages>`) when anything but `initramfs-tools`,
+   `initramfs-tools-core`, `initramfs-tools-bin` and `brltty` would be removed, and fails the preparation when
+   what really left differs from the simulation (`dracut_removed_differs:<packages>`); extending the list is an
+   architect decision. Architecture open question O4 ("no in-place switch on existing 24.04 devices") is
+   superseded by this bounded switch.
 2. **Decisions 5 and 6, where executables live (lesson of ADR 0037 amendment 2026-10-19).** Nothing of the
    conversion executes from `/run`, `/tmp`, `/var/tmp`, `/dev/shm` or `/var/lib/paddock`: the init script runs
    from inside the initramfs, the dracut module from `/usr/lib/dracut/modules.d/`, the background helper from the
@@ -170,15 +172,23 @@ decisions above stand, three are made precise:
    `/run/paddock/encrypt-boot.env` and the files below `/var/lib/paddock/encrypt/` are data. Before the agent
    starts the helper's transient unit it checks the slot directory with `statfs` (`ST_NOEXEC`) as the uninstall
    does, and reports `helper_not_running` instead of launching when the check fails.
-3. **Decision 7, the lifecycle (ADR 0037 mirrored).** An uninstall is refused while a conversion is `requested` or
-   `prepared` (cancel first; the disk is unchanged) and permitted while `encrypting`, with a warning in the
-   dialogue and the removal helper stopping the background unit; the device refuses an uninstall command while it
-   prepares. No supervisor upgrade starts while the device prepares, and the preparation waits while a supervisor
-   upgrade runs (bounded by the 30 minutes after which the agent counts the upgrade as failed). Lock, Destroy and
-   Retire are never blocked by a conversion: they withdraw an undelivered `encrypt_disk` command and record it on
-   their own audit event; a prepared or running conversion is left alone, the device refuses a Lock or Destroy
+3. **Decision 7, the lifecycle (ADR 0037 mirrored).** A conversion is *active* while its row is `requested`,
+   `prepared` or `encrypting` or while the device's last health reports `disk.state = encrypting` (a server-side
+   `failed` after a resume failure never hides a reencryption the device still carries). Removing Paddock is
+   refused while a conversion is active — on the server (409) and on the device (`conversion_pending` while the
+   agent holds a conversion or the root volume carries a `reencrypt` keyslot): the removal would purge the plan and
+   the conversion key that a device whose initrd was not regenerated yet needs to open its root volume. No
+   supervisor upgrade starts while the device prepares, and the preparation waits while a supervisor upgrade runs
+   (bounded by the 30 minutes after which the agent counts the upgrade as failed). Lock, Destroy and Retire are
+   never blocked by a conversion: they withdraw an undelivered `encrypt_disk` command and record it on their own
+   audit event; a prepared or running conversion is left alone on the server, the device refuses a Lock or Destroy
    while unencrypted, and the dialogues warn that a Lock during `encrypting` erases a header that is not escrowed.
+   Before the agent hands a revocation to `paddock-revoke` it stops the background encryption unit and does not
+   restart it for 24 hours; the revocation path's code is unchanged (two-person rule), and the expected result of
+   a Lock on a reencrypting header — every keyslot erased, the `reencrypt` keyslot counted like any other — is
+   verified once by hand before the milestone closes; a deviation stops the milestone and is an architect decision.
 
-Consequences: + the switch to dracut is bounded and visible; the conversion cannot be broken by a `noexec` mount
-or by the device's other lifecycle actions; the two-person rule's path stays untouched. − A device uninstalled
-during `encrypting` keeps an unfinished reencryption (RR-59); a Lock during `encrypting` is unrestorable (RR-57).
+Consequences: + the switch to dracut is bounded and visible; the conversion cannot be broken by a `noexec` mount,
+by a removal of Paddock or by the device's other lifecycle actions; the two-person rule's path stays untouched.
+− Paddock cannot be removed from a device until its conversion completed or was cancelled; a Lock during
+`encrypting` is unrestorable (RR-57).
