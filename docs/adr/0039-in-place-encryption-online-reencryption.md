@@ -173,18 +173,23 @@ decisions above stand, three are made precise:
    starts the helper's transient unit it checks the slot directory with `statfs` (`ST_NOEXEC`) as the uninstall
    does, and reports `helper_not_running` instead of launching when the check fails.
 3. **Decision 7, the lifecycle (ADR 0037 mirrored).** A conversion is *active* while its row is `requested`,
-   `prepared` or `encrypting` or while the device's last health reports `disk.state = encrypting` (a server-side
-   `failed` after a resume failure never hides a reencryption the device still carries). Removing Paddock is
-   refused while a conversion is active — on the server (409) and on the device (`conversion_pending` while the
-   agent holds a conversion or the root volume carries a `reencrypt` keyslot): the removal would purge the plan and
-   the conversion key that a device whose initrd was not regenerated yet needs to open its root volume. No
+   `prepared` or `encrypting`, while the device's last health reports `disk.state = encrypting` (a server-side
+   `failed` after a resume failure never hides a reencryption the device still carries), or while the row is
+   `completed` and the device is not yet `compliant` (the reencryption may finish before the user chose the boot
+   PIN; the initrd with the Paddock module and the conversion key is then the only unlock path). Until the agent
+   has regenerated the initrd without the module it keeps the conversion key's keyslot and runs the regeneration
+   also after `completed`. Removing Paddock is refused while a conversion is active — on the server (409) and on
+   the device (`conversion_pending` while the agent holds a conversion whose initrd was not regenerated yet, except
+   one that failed on a still unencrypted disk, or while the root volume carries a `reencrypt` keyslot): the
+   removal would purge the plan and the conversion key such a device needs to open its root volume. No
    supervisor upgrade starts while the device prepares, and the preparation waits while a supervisor upgrade runs
    (bounded by the 30 minutes after which the agent counts the upgrade as failed). Lock, Destroy and Retire are
    never blocked by a conversion: they withdraw an undelivered `encrypt_disk` command and record it on their own
    audit event; a prepared or running conversion is left alone on the server, the device refuses a Lock or Destroy
    while unencrypted, and the dialogues warn that a Lock during `encrypting` erases a header that is not escrowed.
-   Before the agent hands a revocation to `paddock-revoke` it stops the background encryption unit and does not
-   restart it for 24 hours; the revocation path's code is unchanged (two-person rule), and the expected result of
+   Before the agent hands a revocation to `paddock-revoke` it records the hand-over, stops the background
+   encryption unit (bounded; the hand-over proceeds when the bound runs out — the Lock always wins) and does not
+   restart the unit for 24 hours; the revocation path's code is unchanged (two-person rule), and the expected result of
    a Lock on a reencrypting header — every keyslot erased, the `reencrypt` keyslot counted like any other — is
    verified once by hand before the milestone closes; a deviation stops the milestone and is an architect decision.
 

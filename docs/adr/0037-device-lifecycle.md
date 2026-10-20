@@ -345,11 +345,13 @@ amendment).
 ## Amendment 2026-10-20 — uninstall and the in-place encryption (ADR 0039)
 
 Decided by the architect on 2026-10-20 (plan M8e §14.5). Decision 4's preconditions gain "no active in-place
-encryption": a conversion row in phase `requested`, `prepared` or `encrypting`, or a last health report with
-`disk.state = encrypting` (409 `invalid_state`; cancel a requested or prepared encryption first, wait for a running
-one). The device refuses the uninstall command the same way (`conversion_pending`) while it holds a conversion or
-its root volume carries a `reencrypt` keyslot: the removal would purge what such a device needs to open its disk at
-the next boot. Lock, Destroy and Retire are never blocked by a conversion; like the uninstall withdrawal of the
+encryption": a conversion row in phase `requested`, `prepared` or `encrypting`, a last health report with
+`disk.state = encrypting`, or a `completed` conversion whose device is not yet `compliant` (409 `invalid_state`;
+cancel a requested or prepared encryption first, wait for a running one, let the user choose the boot PIN for a
+completed one). The device refuses the uninstall command the same way (`conversion_pending`) while it holds a
+conversion whose initrd was not regenerated yet — except one that failed on a still unencrypted disk — or while its
+root volume carries a `reencrypt` keyslot: the removal would purge what such a device needs to open its disk at the
+next boot. Lock, Destroy and Retire are never blocked by a conversion; like the uninstall withdrawal of the
 amendment of 2026-10-18
 (IV), a revocation request or a retirement withdraws an undelivered `encrypt_disk` command and records it on its
 own audit event (`conversion_cancelled`, `conversion_id`, `conversion_phase`). The uninstall-during-supervisor-upgrade

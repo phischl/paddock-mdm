@@ -122,7 +122,8 @@ Paddock never starts the conversion on its own initiative.
 
    ```go
    // Preflight reports whether the device's disk can be encrypted in place (ADR 0039 decision 2). It reads the layout
-   // with findmnt, lsblk and lvm only and changes nothing.
+   // with findmnt, lsblk, blkid and lvm, asks dpkg-query for dracut and, without dracut, apt-get -s for what the
+   // switch would remove (plan §14.4 decision 34), and changes nothing.
    func Preflight(ctx context.Context, sys System, root string) Layout
    // Layout is the result of a preflight; Reasons is empty when Eligible.
    type Layout struct {
@@ -187,9 +188,13 @@ Paddock never starts the conversion on its own initiative.
      `Tokens` = `md.Kinds()` (the `reencrypt` keyslot excluded), `Conversion` from `encrypt.Progress` (decision 14)
      and returns before `watch`, `step` and `volumes`: no keyslot is recorded, changed, escrowed or reported as
      tampering while the reencryption is unfinished;
-   - after completion the existing flow continues unchanged (`watch` records the keyslots it sees first, the
-     install passphrase is the conversion key, `step` enrolls the recovery key, escrows the header, removes the
-     conversion key's keyslot once the keyslot of the unlock mode exists).
+   - after completion the existing flow continues (`watch` records the keyslots it sees first, the install
+     passphrase is the conversion key, `step` enrolls the recovery key, escrows the header) with one hold (§14.5
+     decision 36, review finding B1′): while `state.Conversion` exists and `!state.Conversion.InitrdRegenerated`,
+     `step` does not remove the conversion key's keyslot or the install passphrase and the state reported is at
+     most `escrow_pending`, never `compliant` — the initrd still carries the Paddock module and the key as the
+     only unlock path until decision 20 has replaced it. Once `InitrdRegenerated` is true the removal of the
+     conversion key's keyslot follows the M4b rule (the keyslot of the unlock mode exists).
 4. `luks.Metadata` learns the keyslot type: `kind()` returns `KindReencrypt = "reencrypt"` for a keyslot whose JSON
    `type` is `reencrypt`; `Kinds()` and `Slots()` exclude that kind; `func (m Metadata) Reencrypting() bool` reports
    whether one exists. `Inspect` (other volumes) is unchanged.
@@ -335,7 +340,11 @@ Paddock never starts the conversion on its own initiative.
 13. `encrypt.Prepare(ctx, deps)` runs the steps below in order; every step is idempotent (a restarted agent with
     `Phase: "preparing"` queues the job again at start-up and the steps skip what exists); a failing step sets
     `state.Conversion.Phase = "failed"`, `FailureStage = "prepare"`, `FailureReason` (the closed reasons below or
-    the first line of the tool's stderr, cut at 200 runes) and emits `disk.conversion_failed`:
+    the first line of the tool's stderr, cut at 200 runes) and emits `disk.conversion_failed`; a failure at step 7
+    or later (the module files exist) first runs the cleanup of `encrypt.Abort` (decision 14: the module
+    directory, `91-paddock-encrypt.conf`, `/var/lib/paddock/encrypt/`, the conversion key, the disk-setup files,
+    `dracut -f --regenerate-all`) so that a failed preparation — an `initrd_incomplete` in particular — can never
+    convert the disk at the next boot (review finding N2):
     1. Preflight again (decision 2) → reason `not_eligible:<reasons>`.
     2. Choose the LUKS UUID (random v4) and the mapping name: `dm_crypt-0`, or `dm_crypt-<n>` with the smallest
        `n` whose `/dev/mapper/<name>` does not exist; write `/var/lib/paddock/encrypt/plan.json` (0600, §6.3) with
@@ -457,7 +466,8 @@ Paddock never starts the conversion on its own initiative.
     `buildinfo.Dev` is set (the `paddock_dev` tag). A release build never installs the marker; `make agent-release`
     and `make release-packages` refuse the tag as they do today.
 20. Initrd regeneration after the keyslot of the unlock mode exists (checked at every full pass while
-    `state.Conversion.Phase == "encrypting"` and `!state.Conversion.InitrdRegenerated`): when `luks.Dump` shows a
+    `state.Conversion.Phase` is `encrypting` **or `completed`** and `!state.Conversion.InitrdRegenerated` — the
+    reencryption may finish before the user chose the PIN, review finding B1′): when `luks.Dump` shows a
     `tpm2+pin` or `tpm2` keyslot, the agent appends `<mapping> UUID=<luks uuid> none luks,tpm2-device=auto` to
     `/etc/crypttab` (unless a line with that UUID exists), removes `91-paddock-encrypt.conf` and
     `/usr/lib/dracut/modules.d/99paddock-encrypt/`, runs `dracut -f --regenerate-all` (15 min bound) and verifies
@@ -491,8 +501,9 @@ Paddock never starts the conversion on its own initiative.
     `reencrypt` keyslot, the install passphrase and the disk-setup marker (already removed by the PIN dialogue) and
     runs the M4b flow to `compliant`; `failed` → emit `disk.conversion_failed{stage: resume, reason}`, count
     `ResumeFailures`; up to 3 relaunches per boot, then wait for the next boot (the device keeps working on
-    dm-crypt; the header stays recoverable). `state.Conversion` is cleared once the device reports `compliant`
-    or `escrow_pending` for the first time after `completed`.
+    dm-crypt; the header stays recoverable). `state.Conversion` is cleared once `InitrdRegenerated` is true
+    **and** the device reports `compliant` or `escrow_pending` for the first time after `completed` (decision 3's
+    hold: the conversion keyslot stays until the initrd no longer needs it).
 23. `health.Report` gains nothing beyond `Disk.Conversion`. The health state `encrypting` is reported with the
     `Tokens` of the real keyslots (`password` for the conversion key, `tpm2+pin` once enrolled), `LUKSVersion` 2,
     and `Volumes` with the root volume only (`Escrowed: false`).
@@ -592,7 +603,7 @@ Paddock never starts the conversion on its own initiative.
   measurement (RR-44 stands).
 - Removing Paddock from a device while a conversion is active: refused (§14.5 decision 36), not supported.
 - Any change to `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, `pkg/revocation/`, the device API path
-  version, `docs/adr/0001…0037`, M8d's migrations once merged.
+  version, `docs/adr/0001…0041` (amendments are the architect's), `server/migrations/paddock/00001…00065`.
 - Decryption (reverting a conversion): never.
 
 ## 5. Affected files
@@ -761,7 +772,8 @@ Message keys `audit.<code>` in `en.json` and `de.json`.
 | `devices.disk.convert.check.tpmOnly` | The device unlocks with its TPM without a PIN (unlock mode: TPM only). | Das Gerät entsperrt sich mit seinem TPM ohne PIN (Entsperrmodus: Nur TPM). |
 | `devices.disk.convert.check.duration` | The background encryption takes about {duration} on this disk; the device stays usable meanwhile. | Die Verschlüsselung im Hintergrund dauert auf dieser Festplatte etwa {duration}; das Gerät bleibt währenddessen nutzbar. |
 | `devices.disk.convert.check.durationUnknown` | The background encryption takes minutes to hours depending on the disk size; the device stays usable meanwhile. | Die Verschlüsselung im Hintergrund dauert je nach Festplattengröße Minuten bis Stunden; das Gerät bleibt währenddessen nutzbar. |
-| `devices.disk.convert.check.initramfsSwitch` | The device switches its early-boot system from initramfs-tools to dracut. This removes the packages {packages} — initramfs-tools itself and brltty, the console braille support for blind users — and replaces the graphical boot splash by a text console. | Das Gerät wechselt sein Frühstartsystem von initramfs-tools zu dracut. Dabei werden die Pakete {packages} entfernt — initramfs-tools selbst und brltty, die Braille-Unterstützung auf der Konsole für blinde Benutzer — und der grafische Startbildschirm wird durch eine Textkonsole ersetzt. |
+| `devices.disk.convert.check.initramfsSwitch` | The device switches its early-boot system from initramfs-tools to dracut. The device reports that this removes the packages {packages} — initramfs-tools itself and, where listed, brltty, the console braille support for blind users — and replaces the graphical boot splash by a text console. | Das Gerät wechselt sein Frühstartsystem von initramfs-tools zu dracut. Das Gerät meldet, dass dabei die Pakete {packages} entfernt werden — initramfs-tools selbst und, sofern aufgeführt, brltty, die Braille-Unterstützung auf der Konsole für blinde Benutzer — und der grafische Startbildschirm wird durch eine Textkonsole ersetzt. |
+| `devices.disk.convert.check.initramfsSwitchUnknown` | The device switches its early-boot system from initramfs-tools to dracut; it could not report which packages leave with initramfs-tools (brltty, the console braille support for blind users, usually does). The device checks this again before it prepares itself. The graphical boot splash is replaced by a text console. | Das Gerät wechselt sein Frühstartsystem von initramfs-tools zu dracut; es konnte nicht melden, welche Pakete mit initramfs-tools entfernt werden (üblicherweise brltty, die Braille-Unterstützung auf der Konsole für blinde Benutzer). Das Gerät prüft dies erneut, bevor es sich vorbereitet. Der grafische Startbildschirm wird durch eine Textkonsole ersetzt. |
 | `devices.disk.convert.confirmLabel` | Encrypt at the next restart | Beim nächsten Neustart verschlüsseln |
 | `devices.disk.convert.typed` | Type the hostname to confirm. | Geben Sie den Hostnamen zur Bestätigung ein. |
 | `devices.disk.convert.requested` | Encryption requested. | Verschlüsselung angefordert. |
@@ -1096,8 +1108,10 @@ blocker. What changes:
     `initramfs-tools-bin`, `brltty`; otherwise step 6 fails with `FailureStage: prepare`, reason
     `dracut_removes:<packages outside the list, sorted, joined by +, cut at 200 runes>` and installs nothing
     (stop condition S11). After `apt-get install -y dracut` succeeded, step 6 compares what really left: the
-    packages that `dpkg-query -W -f='${Package}\n'` listed as installed before the installation and does not list
-    afterwards MUST equal the simulated set; any difference fails the step with reason
+    packages whose `${db:Status-Status}` was `installed` before the installation
+    (`dpkg-query -W -f='${Package} ${db:Status-Status}\n'`) and is not `installed` afterwards MUST equal the
+    simulated set — a package left in state `rc` (configuration files remain) counts as removed, a package that
+    was not `installed` before never counts (review finding N1); any difference fails the step with reason
     `dracut_removed_differs:<symmetric difference, sorted, joined by +, cut at 200 runes>` (the device stays
     unencrypted with dracut installed; a retry simulates afresh). Reason: `dracut` conflicts with initramfs-tools,
     and architecture O4 recorded that the switch also removes `brltty` on Desktop installs; a metapackage or
@@ -1108,10 +1122,15 @@ blocker. What changes:
     simulated removal set of decision 33, reported only while `Initramfs` is `initramfs-tools` (empty when the
     simulation failed; the reasons of decision 2 are not affected). `Preflight` therefore runs `dpkg-query` and,
     on a device without dracut, `apt-get -s`, besides `findmnt`, `lsblk`, `blkid`, `lvm`; the result is cached with
-    the preflight (at most every 10 minutes). `DiskConversionHealth` (§6.1) gains `initramfs: string` and
-    `initramfs_removes: [string]`. The dialogue (decision 24) shows `devices.disk.convert.check.initramfsSwitch`
-    with the set (`{packages}`, joined with `, `) when `initramfs` is `initramfs-tools`; the runbook names the
-    switch and the set under "what the user sees".
+    the preflight (at most every 10 minutes). Cost, accepted: on every `not_encrypted` device one `dpkg-query`
+    per preflight (milliseconds), and on a device still on initramfs-tools one `apt-get -s` per preflight (about
+    a second of CPU and the apt cache read, no lock, no network, at most every 10 minutes and only while the
+    device is unencrypted); the §3.2 doc comment of `Preflight` names both. `DiskConversionHealth` (§6.1) gains
+    `initramfs: string` and `initramfs_removes: [string]`. The dialogue (decision 24) shows
+    `devices.disk.convert.check.initramfsSwitch` worded from the reported set (`{packages}`, joined with `, `)
+    when `initramfs` is `initramfs-tools` and the set is not empty, and
+    `devices.disk.convert.check.initramfsSwitchUnknown` when the set is empty (the simulation failed or reported
+    nothing); the runbook names the switch and the set under "what the user sees".
 35. **RR-58 is reworded** (PDK-248): "24.04 switches to dracut irreversibly" becomes "A device on initramfs-tools
     switches to dracut irreversibly. initramfs-tools and `brltty` are removed; kernel updates use dracut; no
     Plymouth splash; the dracut initrd is built with `hostonly` and verified with `lsinitrd` before the restart, but
@@ -1128,29 +1147,40 @@ blocker. What changes:
     initrd was not regenerated yet has no way to open its root volume at the next boot).
     - **Active conversion** (one definition for every rule and alert of §14.5, review finding M1): a conversion is
       active when the device's latest conversion row is in phase `requested`, `prepared` or `encrypting`, **or**
-      the device's last health reports `disk.state = encrypting` — whatever the row says. The second half covers a
-      row the server set `failed` with stage `resume` (decision 9) while the device still carries the `reencrypt`
-      keyslot and resumes at its next boot (decision 22). `DeviceDiskConversion` (decision 10, §6.1) gains
-      `active: boolean`, derived on read (ADR 0028) from the row and `device_status.health → disk → state`; the
-      portal keys the alerts below on it. Decision 9 is unchanged: a stage-`resume` failure stays a terminal row
-      so that the attention list names it; `active` is what says the device is still encrypting.
+      the device's last health reports `disk.state = encrypting` — whatever the row says —, **or** the latest row
+      is `completed` and the last health reports a `disk.state` other than `compliant` (review finding B1′: the
+      reencryption may finish before the TPM keyslot exists, and the initrd with the Paddock module and the key
+      is then the only unlock path until decision 20 has run). The health half covers a row the server set
+      `failed` with stage `resume` (decision 9) while the device still carries the `reencrypt` keyslot and resumes
+      at its next boot (decision 22). `DeviceDiskConversion` (decision 10, §6.1) gains `active: boolean`, derived
+      on read (ADR 0028) from the row and `device_status.health → disk → state`; the portal keys the alerts below
+      on it. Decision 9 is unchanged: a stage-`resume` failure stays a terminal row so that the attention list
+      names it; `active` is what says the device is still encrypting.
     - Server, `Uninstalls.Request` (`app/uninstall.go`): an active conversion → 409 `invalid_state`, detail
       `an in-place encryption is open; cancel it first` when the row is `requested` or `prepared`, detail
-      `the in-place encryption is unfinished; wait for its completion` when the row is `encrypting` or the health
-      reports `encrypting` (checked under the device's row lock, after the open-uninstall check). The encrypt
-      request keeps refusing an open uninstall (decision 7).
+      `the in-place encryption is unfinished; wait for its completion` in every other active case (checked under
+      the device's row lock, after the open-uninstall check). The encrypt request keeps refusing an open
+      uninstall (decision 7).
     - Agent, `uninstallCommand` (`agent/internal/agent/uninstall.go`): refuses with
-      `{accepted: false, reason: conversion_pending}` while `state.Conversion != nil` (any phase but `completed`
-      and `cancelled`) or `luks.Dump` of the root volume shows `md.Reencrypting()` (`UninstallAccepted.Reason`
-      gains that value; the server stores and shows it as it does `revocation_pending`). The uninstall helper
+      `{accepted: false, reason: conversion_pending}` when `(state.Conversion != nil &&
+      !state.Conversion.InitrdRegenerated && phase ∉ {cancelled, failed-while-unencrypted}) ||
+      md.Reencrypting()` of the root volume's `luks.Dump` — where *failed-while-unencrypted* is a `failed` phase
+      whose `FailureStage` is `preflight`, `prepare` or `init` with the partition not LUKS (decision 18), so that
+      a failed conversion on an unencrypted device never blocks a removal (review finding N2), while a `completed`
+      conversion blocks it until the initrd no longer carries the module and the key. `UninstallAccepted.Reason`
+      gains the value; the server stores and shows it as it does `revocation_pending`. The uninstall helper
       (`agent/internal/uninstall/`) is not changed.
     - Portal, `UninstallDialog.vue`: while `device.disk_conversion.active` is true the dialogue shows the alert
       `devices.danger.uninstall.conversionOpen` (§14.8) and keeps its confirm button disabled; the `DangerZone.vue`
       row is shown as today.
     - Retire, Lock and Destroy stay available (decisions 38, 39). The runbook section "Removing Paddock during a
-      conversion" (decision 26) says: refused until the device is `compliant`; cancel a `requested` or `prepared`
-      conversion first; an `encrypting` device finishes on mains power, or the manual completion of the runbook
-      applies when the agent is gone for another reason.
+      conversion" (decision 26) states the rule exactly as above: refused while the conversion is active — a
+      `requested`, `prepared` or `encrypting` conversion, a device whose health still reports `encrypting`, and a
+      `completed` conversion until the device reports `compliant` (the initrd must no longer carry the Paddock
+      module and the conversion key); cancel a `requested` or `prepared` conversion first; an `encrypting` device
+      finishes on mains power; a `completed` one needs the boot PIN chosen (the dialogue of the next boot) so that
+      the agent can regenerate the initrd; the manual completion of the runbook applies when the agent is gone for
+      another reason.
 37. **Supervisor upgrade and conversion** (the rule of plan M8d §15.4 decision 39, mirrored).
     - No supervisor upgrade starts while the preparation runs: `busy` in `agent/internal/agent/supervisor.go`
       is also true while `state.Conversion != nil && state.Conversion.Phase == "preparing"` (step 6 holds the dpkg
@@ -1183,14 +1213,15 @@ blocker. What changes:
     an unencrypted root (`revocation_refused`, reason `not_encrypted`); during `encrypting` the root is LUKS2 with
     the `reencrypt` keyslot and no escrowed header.
     - **The agent stops the background helper before the hand-over** (review finding M2). In the agent's
-      revocation hand-over (`agent/internal/agent/revocation.go`, before `Deps.Revoke` is called and before the
-      envelope's hash is recorded in `state.HandedRevocations`) the agent runs `systemctl stop
-      paddock-encrypt-resume.service` and waits until `systemctl is-active` is not `active` (bounded 60 s; SIGTERM
-      is safe for `cryptsetup reencrypt`, ADR 0039 sources; a missing unit is no error). The launch condition of
-      decision 21 gains: no entry of `state.HandedRevocations` younger than `revocationWindow` (24 h, the constant
-      of `uninstall.go`) exists — the helper is not relaunched after a hand-over; `paused_reason` is
-      `helper_not_running`. A refused revocation (`not_encrypted`, `malformed`, …) keeps the entry and therefore
-      the pause for 24 h; that is accepted (RR-57).
+      revocation hand-over (`agent/internal/agent/revocation.go`), in this order: (1) the envelope's hash is
+      recorded in `state.HandedRevocations` and the state saved — from then on no pass relaunches the helper;
+      (2) the agent runs `systemctl stop paddock-encrypt-resume.service` and waits until `systemctl is-active` is
+      not `active`, bounded 60 s (SIGTERM is safe for `cryptsetup reencrypt`, ADR 0039 sources; a missing unit is
+      no error); (3) `Deps.Revoke` is called — also when the bound ran out, logged at warning level with the unit's
+      state: the Lock always wins over the helper. The launch condition of decision 21 gains: no entry of
+      `state.HandedRevocations` younger than `revocationWindow` (24 h, the constant of `uninstall.go`) exists;
+      `paused_reason` is `helper_not_running`. A refused revocation (`not_encrypted`, `malformed`, …) keeps the
+      entry and therefore the pause for 24 h; that is accepted (RR-57).
     - **Expected result of a Lock during `encrypting`** (binding for the hand test of PDK-247): `paddock-revoke`
       counts keyslots as `len(luks.Metadata.Keyslots)` of `cryptsetup luksDump --dump-json-metadata` — the raw
       map, so the `reencrypt` keyslot counts as one — and erases with `cryptsetup luksErase --batch-mode`; it
@@ -1271,7 +1302,24 @@ blocker. What changes:
     completion`; `GET /devices/{id}` shows `disk_conversion.active: true`. Acceptance A1 gains: a devicesim whose
     row is `failed` (stage `resume`) but whose check-in reports `disk{state: encrypting}` → `active: true`,
     uninstall → 409; the same devicesim reporting `compliant` → `active: false`, uninstall → 200; while
-    `requested` → 409 with the detail `an in-place encryption is open; cancel it first`.
+    `requested` → 409 with the detail `an in-place encryption is open; cancel it first`; a `completed` row with
+    health `tpm_pin_missing` → `active: true`, uninstall → 409; with health `compliant` → `active: false`.
+51. **Gate coverage of the deferred PIN** (decisions 3, 20, 36; review finding B1′). S-IE1 (`tpm_pin`) is
+    changed at its boot 2: the test does not answer the PIN dialogue but chooses *skip* (the M4b dialogue's skip
+    under `tpm_pin`, `Device.AnswerDiskSetup` gains a skip variant), so the device boots without a TPM keyslot and
+    the reencryption runs to `completed` while the health reports `tpm_pin_missing`. Boot 3 after the background
+    power cut is then a plain reboot (no PIN prompt; the module opens the disk with the key). After
+    `device.disk_conversion_completed`: `GET /devices/{id}` shows `disk_conversion{phase: completed, active:
+    true}`, the uninstall request → 409, `lsinitrd` still lists `paddock-encrypt-init.service` and
+    `etc/paddock/encrypt-key`, `cryptsetup luksDump` still lists the conversion key's keyslot, the health is
+    `tpm_pin_missing` (never `compliant`). Then the test runs `sudo touch /var/lib/paddock/disk-setup-pending`
+    and `sudo systemctl reboot`: the dialogue returns (`ConditionPathExists`), `AnswerDiskSetup` with the PIN; SSH
+    back; within 15 minutes the device is `compliant` with `[recovery, tpm2+pin]`, `lsinitrd` shows `etc/crypttab`
+    with the UUID and no `paddock-encrypt`, `active: false`, uninstall request → 200 (the test cancels that
+    uninstall at once through `POST …/uninstall/cancel` so that the gate's remaining assertions run on an
+    installed device); then `RebootWithPIN` opens the root volume, and the revealed generation 1 no longer opens
+    the disk, generation 2 does — the remaining assertions of S-IE1 (§9) unchanged. S-IE2 (`tpm_only`) keeps its
+    sequence: there is no PIN to defer.
 
 ### 14.7 Residual risks (§12) amended
 
@@ -1292,13 +1340,15 @@ blocker. What changes:
 | `devices.danger.revoke.conversionWarning.encrypting` | The in-place encryption is unfinished: the header is not stored in Paddock, so this action cannot be undone with a stored header, and data the encryption has not reached stays readable. The background encryption is stopped before the device acts. | Die nachträgliche Verschlüsselung ist unvollständig: Der Header ist nicht in Paddock hinterlegt, diese Aktion lässt sich also nicht mit einem hinterlegten Header rückgängig machen, und Daten, die die Verschlüsselung noch nicht erreicht hat, bleiben lesbar. Die Verschlüsselung im Hintergrund wird angehalten, bevor das Gerät handelt. |
 
 `devices.disk.convert.check.ubuntu2404` is replaced by `devices.disk.convert.check.initramfsSwitch` (§6.6, with
-the ICU parameter `{packages}` from `disk.conversion.initramfs_removes`, decision 34).
+the ICU parameter `{packages}` from `disk.conversion.initramfs_removes`) and its fallback
+`devices.disk.convert.check.initramfsSwitchUnknown` for an empty set (decision 34).
 
 ### 14.9 Tickets
 
 PDK-241 … PDK-248 were updated on 2026-10-20 (scope and references). Which ticket owns which decision of §14:
 PDK-241 — 36 (server refusal, `active`), 38, 39 (server withdrawal and event params), `initramfs` and
-`initramfs_removes` in the admin contract, the A1 cases of decision 50; PDK-242 — 34; PDK-243 — 29, 32, 33, 36
-(agent refusal), 37; PDK-244 — 29, 31; PDK-245 — 30, 39 (the stop before the hand-over and the launch
-condition); PDK-246 — 34 (the dialogue line), 36 and 39 (the alerts), §14.8; PDK-247 — 41–50, S11–S14, the Lock
-hand test of decision 39; PDK-248 — 35, §14.7, the O4 note of §14.2.
+`initramfs_removes` in the admin contract, the A1 cases of decision 50; PDK-242 — 34; PDK-243 — 13 (the cleanup
+after step 7), 29, 32, 33, 36 (agent refusal), 37; PDK-244 — 29, 31; PDK-245 — 3 and 22 (the hold until
+`InitrdRegenerated`), 20 (also while `completed`), 30, 39 (the stop before the hand-over and the launch
+condition); PDK-246 — 34 (the dialogue lines), 36 and 39 (the alerts), §14.8; PDK-247 — 41–51, S11–S14, the
+Lock hand test of decision 39; PDK-248 — 35, §14.7, the O4 note of §14.2.
