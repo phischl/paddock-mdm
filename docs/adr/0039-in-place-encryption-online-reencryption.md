@@ -148,3 +148,66 @@ Corrections to the ticket's direction:
   24.04 devices switch irreversibly from initramfs-tools to dracut and lose the Plymouth splash (RR-58); a laptop
   that is only ever on battery never completes (RR-59); unsupported layouts stay unencrypted (RR-61).
 Follow-ups: plan M8e, tickets PDK-241 … PDK-248; architecture §12.4 amendment; ADR 0038 decision 4 superseded.
+
+## Amendment 2026-10-20 — initramfs generator, executable paths, interplay with the device lifecycle
+
+Decided by the architect on 2026-10-20 while refreshing plan M8e against `main` at `727fb7c5` (plan M8e §14); the
+decisions above stand, three are made precise:
+
+1. **Decision 5, the generator (correction 1 made precise).** The early-boot step stays a dracut module; a device
+   that does not have dracut installed (`dpkg-query`, the one source of truth for the detection and the switch)
+   switches to it at preparation whatever its release — Ubuntu 24.04, and a 26.04 upgraded in place that kept
+   initramfs-tools. The agent simulates the installation (`apt-get -s install dracut`) in its preflight and again
+   before the switch, reports the simulated removal set in `health.disk.conversion.initramfs_removes` so that the
+   portal's dialogue names what leaves (initramfs-tools, and `brltty` — the console braille support), refuses the
+   conversion (`failed`, stage `prepare`, reason `dracut_removes:<packages>`) when anything but `initramfs-tools`,
+   `initramfs-tools-core`, `initramfs-tools-bin` and `brltty` would be removed, and fails the preparation when
+   what really left differs from the simulation (`dracut_removed_differs:<packages>`); extending the list is an
+   architect decision. Architecture open question O4 ("no in-place switch on existing 24.04 devices") is
+   superseded by this bounded switch.
+2. **Decisions 5 and 6, where executables live (lesson of ADR 0037 amendment 2026-10-19).** Nothing of the
+   conversion executes from `/run`, `/tmp`, `/var/tmp`, `/dev/shm` or `/var/lib/paddock`: the init script runs
+   from inside the initramfs, the dracut module from `/usr/lib/dracut/modules.d/`, the background helper from the
+   agent's slot `/opt/paddock/agent/current/paddockd`, the notification through the system's `busctl`;
+   `/run/paddock/encrypt-boot.env` and the files below `/var/lib/paddock/encrypt/` are data. Before the agent
+   starts the helper's transient unit it checks the slot directory with `statfs` (`ST_NOEXEC`) as the uninstall
+   does, and reports `helper_not_running` instead of launching when the check fails.
+3. **Decision 7, the lifecycle (ADR 0037 mirrored).** A conversion is *active* while its row is `requested`,
+   `prepared` or `encrypting`, while the device's last health reports `disk.state = encrypting` (a server-side
+   `failed` after a resume failure never hides a reencryption the device still carries), or while the row is
+   `completed` and the device is not yet `compliant` (the reencryption may finish before the user chose the boot
+   PIN; the initrd with the Paddock module and the conversion key is then the only unlock path). Until the agent
+   has regenerated the initrd without the module it keeps the conversion key's keyslot and runs the regeneration
+   also after `completed`. Three boot-path invariants bind every rule (plan M8e §14.10, with the state × event
+   table a reviewer walks): I1 — while the root partition is LUKS and the initrd was not regenerated, nothing
+   removes the module, its configuration, the plan, the key or the conversion keyslot, and every initrd build
+   keeps the module; the module leaves only together with a crypttab line that unlocks through the TPM, verified
+   on every installed initrd. I2 — the disk decides the phase, for a device that holds a conversion and only then: a
+   LUKS root with the
+   conversion keyslot or an unfinished reencryption is adopted as `encrypting`, whatever a state file, a queued
+   preparation or a boot result says, and a module a cleanup had removed is reinstalled before anything else.
+   I3 — a cleanup after an abandoned conversion removes the module first, regenerates, and counts as done only
+   when the initrd of no installed kernel carries the module; the key and the plan are deleted only after that
+   check, so that a device which converts through a stale initrd meanwhile is adopted, not lost; until then the
+   cleanup is retried, the device is not eligible again and not removable. A user who skips the boot PIN on a converted
+   device is asked again at every start (never blocked); until the PIN exists the key lies on the unencrypted
+   `/boot`, which the device reports (`key_on_boot`), the portal shows and RR-57 records. Removing Paddock is
+   refused while a conversion is active — on the server (409) and on
+   the device (`conversion_pending` while the agent holds a conversion whose initrd was not regenerated yet, except
+   one that failed on a still unencrypted disk, or while the root volume carries a `reencrypt` keyslot): the
+   removal would purge the plan and the conversion key such a device needs to open its root volume. No
+   supervisor upgrade starts while the device prepares, and the preparation waits while a supervisor upgrade runs
+   (bounded by the 30 minutes after which the agent counts the upgrade as failed). Lock, Destroy and Retire are
+   never blocked by a conversion: they withdraw an undelivered `encrypt_disk` command and record it on their own
+   audit event; a prepared or running conversion is left alone on the server, the device refuses a Lock or Destroy
+   while unencrypted, and the dialogues warn that a Lock during `encrypting` erases a header that is not escrowed.
+   Before the agent hands a revocation to `paddock-revoke` it records the hand-over, stops the background
+   encryption unit (bounded; the hand-over proceeds when the bound runs out — the Lock always wins) and does not
+   restart the unit for 24 hours; the revocation path's code is unchanged (two-person rule), and the expected result of
+   a Lock on a reencrypting header — every keyslot erased, the `reencrypt` keyslot counted like any other — is
+   verified once by hand before the milestone closes; a deviation stops the milestone and is an architect decision.
+
+Consequences: + the switch to dracut is bounded and visible; the conversion cannot be broken by a `noexec` mount,
+by a removal of Paddock or by the device's other lifecycle actions; the two-person rule's path stays untouched.
+− Paddock cannot be removed from a device until its conversion completed or was cancelled; a Lock during
+`encrypting` is unrestorable (RR-57).
