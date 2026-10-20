@@ -1,6 +1,6 @@
 # Implementierungsplan: M8e — In-place encryption of an installed device (LUKS2 online reencryption after one restart)
 
-Status: Ready for implementation after M8d · 2026-10-17 · Author: architect
+Status: Ready for implementation · 2026-10-17, refreshed against `main` on 2026-10-20 (§14) · Author: architect
 Basis: ADR 0039 (in-place encryption by LUKS2 online reencryption; supersedes ADR 0038 decision 4); ADR 0038
 (unlock modes, `health.disk.boot_separate`); ADR 0037 (signed command with cancel before delivery, transient units
 outside the supervisor's cgroup); ADR 0013 (additive protocol changes); ADR 0018 (lists and dialogs); ADR 0024 (no
@@ -10,9 +10,11 @@ pattern, §3.9 unlock mode, §3.10); lab finding L31; ticket PDK-240.
 
 Binding language: **MUST** / **MUST NOT** / **SHOULD** / **MAY**.
 
-This plan is written against the M8d branch (`origin/M8d-device-lifecycle`, PR #79) and assumes PDK-231, PDK-232
-and PDK-233 (unlock mode, `boot_separate`, the deferred message) are merged before PDK-242 starts. §11 names what
-to do when they are not.
+This plan was written against the M8d branch (`origin/M8d-device-lifecycle`, PR #79). M8d is merged (PR #87, with
+PDK-231, PDK-232 and PDK-233: unlock mode, `boot_separate`, the deferred message), as are M8x, M8u, M8f, M8h, the
+M8d regression fixes (PR #109) and release v0.1.0-alpha.4. The amendment of 2026-10-20 (§14) verified §2 and §5
+against `main` at `727fb7c5`, corrected the facts in place (the corrections are listed in §14.2) and amended the
+decisions where `main` or the lessons of PR #109 require it. Where §14 and an earlier section disagree, §14 wins.
 
 ## 1. Goal
 
@@ -25,7 +27,7 @@ cut, with the progress visible on the device page. The result is a device that i
 installed with the Paddock autoinstall: `compliant`, TPM2 + PIN or TPM2 plus a recovery key, header escrowed.
 Paddock never starts the conversion on its own initiative.
 
-## 2. Context (verified in the code on 2026-10-17, M8d branch at `968b03b`; upstream sources in ADR 0039)
+## 2. Context (verified 2026-10-17 at M8d `968b03b`; re-verified 2026-10-20 at `main` `727fb7c5`, §14.2)
 
 - **Disk reconciler.** `agent/internal/reconcile/luks.go`: `LUKS.Tick(ctx, keys, full)` → `pass()` →
   `luks.Root` (`findmnt` + `lsblk --inverse`; `ErrNotEncrypted` → state `not_encrypted`), `luks.Dump`
@@ -56,24 +58,48 @@ Paddock never starts the conversion on its own initiative.
   `agent/internal/agent/agent.go:New`, `commands.Handler` returns `succeeded | failed | Deferred`; M8d decision 35–39
   (`uninstall`: `UninstallAccepted{accepted, reason}`, the plan file and the transient unit launched after
   `postResults`), decision 38 (cancel before delivery: command `cancelled`, `ListCancelledDeviceCommands`,
-  `cache.DeleteCommand`). The in-process background worker pattern: `agent/internal/agent/osupdates.go`
-  (`installJobs`, `runInstalls`).
+  `cache.DeleteCommand`; since M8d §15.4 the cancel claims the result as `cancelled` in its transaction —
+  `UninstallCache.ClaimResult`, 409 when the device reported first —, runs `WithdrawDeviceCommand` and deletes the
+  cache entry after the commit: `withdrawUninstallCommand` in `app/uninstall.go`). The in-process background worker
+  pattern: `agent/internal/agent/osupdates.go` (`installJobs`, `runInstalls`). The uninstall helper runs from a
+  binary copy in `/root/paddock-uninstall/` (`paths.Layout.UninstallBinary()`, `UninstallPlan()`), never below
+  `/run`: initramfs-tools mounts `/run` `noexec` (ADR 0037 amendment 2026-10-19, PR #109); before `systemd-run` the
+  agent checks the directory with `Deps.NoExec` (`statfs`, `ST_NOEXEC`; `noexec()` in
+  `agent/internal/agent/uninstall.go`). The removal waits while `/var/lib/paddock/state/supervisor-upgrade.json`
+  exists (`supervisorUpgradeRuns`, bounded by `supervisorpkg.StaleAfter` = 30 min), and no supervisor upgrade starts
+  while `state.PendingUninstall` is set (`busy` in `agent/internal/agent/supervisor.go`). The agent's `uninstall`
+  handler refuses with `UninstallAccepted{accepted: false, reason}` (`invalid_params`, `revocation_pending`,
+  `helper_failed`). Lock and Destroy are never blocked by an uninstall: `Revocations.Request` withdraws an
+  undelivered uninstall command and records it as the params `uninstall_cancelled`, `uninstall_command_id` of its one
+  `revocation.requested` event (`cancelUninstall` in `app/revocations.go`). Device states on `main`: `pending`,
+  `active`, `rejected`, `quarantined`, `retired` (`server/internal/domain/device`).
 - **Health.** `health.Report.Disk *protocol.DiskHealth`; `protocol.DiskStates` (closed, ordered); the server keeps
   the whole health JSON in `device_status.health` and derives `disk_state` on read (`queries/device.sql`);
   `app.diskHealth` rejects an unknown state; the attention view `attention_condition` (last recreated by migration
-  00042) lists `disk_not_compliant` for state ≠ `compliant`.
+  `00064_attention_config_behind.sql`; six columns `kind, device_id, hostname, since, detail, id`, the last a
+  per-row key such as `'uninstall_pending:' || d.id::text`) lists `disk_not_compliant` for state ≠ `compliant`.
 - **Events.** `pkg/protocol.EventTypes` (closed); `app/devicereports.go::eventCodes`, `eventEntry`;
-  `audit.deviceEventParams` allow list (`codes.go:175`).
+  `audit.deviceEventParams` allow list (`codes.go:191`; it already contains `stage`, `reason`, `volume`,
+  `command_id`, `mode`).
 - **Bundle.** M8d decision 46: `bundle.DiskSpec{UnlockMode}` (schema v2) from `EffectiveUnlockMode`.
 - **Portal.** `components/DiskEncryptionCard.vue` (state, volumes, reveal/download after step-up; PDK-233 adds the
-  `notEncrypted.*` alerts), `lib/disk.ts`, `lib/status.ts::encryptionStatus`, `lib/deviceDetailPage.ts`
-  (`startStepUp`/`resumeStepUp` pattern), `components/ConfirmDialog.vue` (`requireTypedText`), M8d's
-  `UninstallDialog.vue` pattern.
-- **Gates.** `test/system/autoinstall.go::buildAIVM` (throwaway VM from an ISO, EFI + Secure Boot + TPM 2.0, name
-  and SSH port are constants `aiVMName`, `aiSSHPort`), `test/vms/virtualbox/autoinstall/autoinstall.yaml.tmpl` (the
-  test VMs' user-data: `storage.layout.name: lvm` with a LUKS password, SSH access), `VM.PowerOff`, `Shot`,
-  `RebootWithPIN`, `AnswerDiskSetup`, `Keyslots`, `Opens`, `Device.WaitDisk`, `WaitEvent`, `Health`.
-- **Migrations.** Last on `main`: 00048; M8d adds eight (`<next>` numbering). M8e continues after them.
+  `notEncrypted.*` alerts), `lib/disk.ts`, `lib/status.ts::encryptionStatus`, `lib/stepUp.ts`
+  (`startStepUp`/`resumeStepUp`, used by `lib/deviceDetailPage.ts`), `components/ConfirmDialog.vue`
+  (`requireTypedText`), M8d's `UninstallDialog.vue` pattern; `components/DangerZone.vue` holds the Lock, Destroy and
+  uninstall rows (`devices.danger.lock.*`, `devices.danger.destroy.*`, `devices.danger.uninstall.*`).
+- **Gates.** `test/system/autoinstall.go::buildAIVM(t, root, iso, userData)` (throwaway VM from an ISO, EFI +
+  Secure Boot + TPM 2.0, a 40 960 MB dynamic VDI in the VirtualBox machine folder; name and SSH port are the
+  constants `aiVMName`, `aiSSHPort`), the ISOs are the Ubuntu **Desktop** images (`PADDOCK_SYSTEM_ISO_2604`,
+  default `~/Downloads/ubuntu-26.04.1-desktop-amd64.iso`), `test/vms/virtualbox/autoinstall/autoinstall.yaml.tmpl`
+  (the test VMs' user-data: `storage.layout.name: lvm` with a LUKS password, SSH access), `VM.PowerOff`, `Shot`,
+  `RebootWithPIN`, `Keyslots`, `Opens`, `Device.AnswerDiskSetup`, `Device.PrepareDisk`, `Device.WaitDisk`,
+  `WaitEvent`, `Health`. `make system-test VM=<vm|all> [T=<regex>]` sets `PADDOCK_SYSTEM_VMS` from `VM`;
+  `forEachVM` runs a gate as parallel subtests on every VM of the run with a shared `vmGroup`
+  (`test/system/parallel.go`: `Together`, `Share`, `AfterAll`); every gate retracts the release it published
+  (`retractRelease`, `test/system/retract.go`). Gate S-DU1 (`TestDiskUnlockModeTPMOnly`) runs on the throwaway VM
+  `paddock-ai-2604` only and had not been run on a VM when this amendment was written.
+- **Migrations.** Last on `main`: `00065_device_name.sql` (M8d `00053`–`00063`, M8f `00064`, M8h `00065`). M8e's
+  migration is `00066_disk_conversion.sql`.
 
 ## 3. Binding decisions
 
@@ -197,7 +223,7 @@ Paddock never starts the conversion on its own initiative.
    }
    ```
 
-6. Migration `disk_conversion` (next free number after M8d's):
+6. Migration `server/migrations/paddock/00066_disk_conversion.sql` (the next free number after M8h's `00065`):
 
    ```sql
    CREATE TABLE device_disk_conversion (
@@ -217,11 +243,13 @@ Paddock never starts the conversion on its own initiative.
    -- INSERT, UPDATE; paddock_worker SELECT, UPDATE (the event claim).
    ```
 
-   The attention view is recreated with
+   The attention view is recreated (`CREATE OR REPLACE VIEW attention_condition WITH (security_invoker = true)`,
+   every other branch, the columns and the grants exactly as in `00064_attention_config_behind.sql`) with
 
    ```sql
    UNION ALL
-   SELECT 'disk_conversion_failed', d.id, d.hostname, c.phase_at, coalesce(c.failure_stage, '') || ':' || coalesce(c.failure_reason, '')
+   SELECT 'disk_conversion_failed', d.id, d.hostname, c.phase_at,
+     coalesce(c.failure_stage, '') || ':' || coalesce(c.failure_reason, ''), 'disk_conversion_failed:' || c.id::text
    FROM device_disk_conversion c JOIN device d ON d.id = c.device_id
    WHERE d.state = 'active' AND c.phase = 'failed'
      AND c.id = (SELECT id FROM device_disk_conversion WHERE device_id = d.id ORDER BY requested_at DESC LIMIT 1)
@@ -476,8 +504,9 @@ Paddock never starts the conversion on its own initiative.
     as a required checkbox — the confirm button stays disabled until it is checked —, the information lines
     `devices.disk.convert.check.restart`, `.check.power`, `.check.pin` (or `.check.tpmOnly` when the device's
     unlock mode is `tpm_only`), `.check.duration` with the estimate `ceil(disk_total_bytes / 150 MB/s)` from the
-    hardware facts (M8d) rounded to 10 minutes, or `.check.durationUnknown`; `.check.ubuntu2404` when
-    `disk.conversion.release` is `24.04`), the reason field (2–500), the typed hostname (`requireTypedText`),
+    hardware facts (M8d) rounded to 10 minutes, or `.check.durationUnknown`; `.check.initramfsSwitch` when
+    `disk.conversion.initramfs` is `initramfs-tools`, §14.4), the reason field (2–500), the typed hostname
+    (`requireTypedText`),
     destructive styling, confirm label `devices.disk.convert.confirmLabel`.
 25. Progress panel (same card) while `disk_conversion` is open: the phase line `devices.disk.convert.phases.<phase>`
     with `requested` (command status), `prepared` (waiting for the restart), `encrypting` (a `v-progress-linear`
@@ -564,20 +593,20 @@ Paddock never starts the conversion on its own initiative.
 | Path | Action | Purpose |
 | --- | --- | --- |
 | `docs/adr/0039-in-place-encryption-online-reencryption.md`, `docs/adr/0038-…` (amendment) | new / amended (done) | decisions |
-| `server/migrations/paddock/<next>_disk_conversion.sql` | new | §3.3 decision 6 |
+| `server/migrations/paddock/00066_disk_conversion.sql` | new | §3.3 decision 6 |
 | `server/internal/adapters/postgres/queries/disk_conversion.sql` (new), `device.sql`, `command.sql`, `attention.sql`; `pgstore` (gen) | new / change | queries |
 | `server/internal/domain/audit/codes.go`, `docs/compliance/audit-codes.md` (gen), `server/web/src/lib/auditCodes.gen.ts` (gen) | change | §6.5 |
 | `pkg/command/command.go`, `pkg/bundle/bundle.go`, `pkg/protocol/types.go`, `api/openapi/device.yaml` | change | §6.2, §6.3, decision 5, 11 |
-| `server/internal/app/diskconversion.go` (new), `app/devices.go`, `app/disk.go`, `app/devicereports.go`, `app/commands.go`, `app/attention.go`; `server/internal/compiler/disk.go` | new / change | use cases, events, bundle |
+| `server/internal/app/diskconversion.go` (new), `app/devices.go`, `app/disk.go`, `app/devicereports.go`, `app/commands.go`, `app/attention.go`, `app/uninstall.go`, `app/revocations.go`; `server/internal/compiler/disk.go` | new / change | use cases, events, bundle, the interactions of §14.5 |
 | `server/internal/transport/http/admin/handlers_devices.go`, `handlers.go` (`privileged`), `spec_test.go`; `api/openapi/admin.yaml`; generated Go/TS | change | §6.1 |
-| `agent/internal/encrypt/` (new: `preflight.go`, `prepare.go`, `resume.go`, `plan.go`, `os.go`, `dracut/module-setup.sh`, `dracut/paddock-encrypt-init.sh`, `dracut/paddock-encrypt-init.service`, `embed.go`), `agent/internal/luks/luks.go`, `agent/internal/reconcile/luks.go`, `agent/internal/agent/{agent,encrypt}.go` (new `encrypt.go`), `agent/internal/state/state.go`, `agent/internal/health/health.go` (no change expected), `agent/cmd/paddockd/main.go`, `agent/internal/buildinfo/` | new / change | §3.2, §3.4–§3.6 |
-| `server/web/src/components/{DiskEncryptionCard,EncryptDiskDialog}.vue` (new dialog), `lib/{disk,status,devices,deviceHealth}.ts`, `views/{Devices,Attention}.vue`, `locales/{en,de}.json` | change / new | §3.7 |
+| `agent/internal/encrypt/` (new: `preflight.go`, `prepare.go`, `resume.go`, `plan.go`, `os.go`, `dracut/module-setup.sh`, `dracut/paddock-encrypt-init.sh`, `dracut/paddock-encrypt-init.service`, `embed.go`), `agent/internal/luks/luks.go`, `agent/internal/reconcile/luks.go`, `agent/internal/agent/{agent,encrypt,uninstall,supervisor}.go` (new `encrypt.go`), `agent/internal/uninstall/steps.go`, `agent/internal/sessions/sessions.go`, `agent/internal/state/state.go`, `agent/internal/health/health.go` (no change expected), `agent/cmd/paddockd/main.go`, `agent/internal/buildinfo/` | new / change | §3.2, §3.4–§3.6, §14.3–§14.5 |
+| `server/web/src/components/{DiskEncryptionCard,EncryptDiskDialog,UninstallDialog,DangerZone}.vue` (new dialog), `lib/{disk,status,devices,deviceHealth}.ts`, `views/{Devices,Attention}.vue`, `locales/{en,de}.json` | change / new | §3.7, §14.5 |
 | `test/acceptance/diskconversion_test.go` (new), `test/acceptance/devicesim`; `test/system/{autoinstall,encrypt_test,disk}.go`, `test/vms/virtualbox/autoinstall/{unencrypted-lvm,unencrypted-plain}.yaml.tmpl` (new) | new / change | §9 |
 | `docs/operations/in-place-encryption.md` (new), `docs/operations/{disk-recovery,autoinstall}.md`, `docs/architecture.md`, `docs/compliance/{residual-risks,glossary-de}.md`, `CHANGELOG.md` | new / change | §3.8 |
 
 MUST NOT be touched: `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, `pkg/revocation/`,
-`packaging/nfpm/paddock-revoke.yaml`, `server/migrations/paddock/00001…00048` and M8d's migrations once merged,
-`docs/adr/0001…0037`, `deploy/compose/compose.prod.yaml`, `deploy/compose/compose.lab.yaml`, the device API path
+`packaging/nfpm/paddock-revoke.yaml`, `server/migrations/paddock/00001…00065`, `docs/adr/0001…0041` (amendments
+are the architect's), `deploy/compose/compose.prod.yaml`, `deploy/compose/compose.lab.yaml`, the device API path
 version, `test/vms/virtualbox/*.sh` (the VM scripts are used, never changed), any file of plans M9–M11 and their
 tickets, `server/internal/autoinstall/` (the autoinstall is not changed by M8e).
 
@@ -723,7 +752,7 @@ Message keys `audit.<code>` in `en.json` and `de.json`.
 | `devices.disk.convert.check.tpmOnly` | The device unlocks with its TPM without a PIN (unlock mode: TPM only). | Das Gerät entsperrt sich mit seinem TPM ohne PIN (Entsperrmodus: Nur TPM). |
 | `devices.disk.convert.check.duration` | The background encryption takes about {duration} on this disk; the device stays usable meanwhile. | Die Verschlüsselung im Hintergrund dauert auf dieser Festplatte etwa {duration}; das Gerät bleibt währenddessen nutzbar. |
 | `devices.disk.convert.check.durationUnknown` | The background encryption takes minutes to hours depending on the disk size; the device stays usable meanwhile. | Die Verschlüsselung im Hintergrund dauert je nach Festplattengröße Minuten bis Stunden; das Gerät bleibt währenddessen nutzbar. |
-| `devices.disk.convert.check.ubuntu2404` | On Ubuntu 24.04 the device switches its early-boot system from initramfs-tools to dracut; the graphical boot splash is replaced by a text console. | Auf Ubuntu 24.04 wechselt das Gerät sein Frühstartsystem von initramfs-tools zu dracut; der grafische Startbildschirm wird durch eine Textkonsole ersetzt. |
+| `devices.disk.convert.check.initramfsSwitch` | The device switches its early-boot system from initramfs-tools to dracut; the graphical boot splash is replaced by a text console. | Das Gerät wechselt sein Frühstartsystem von initramfs-tools zu dracut; der grafische Startbildschirm wird durch eine Textkonsole ersetzt. |
 | `devices.disk.convert.confirmLabel` | Encrypt at the next restart | Beim nächsten Neustart verschlüsseln |
 | `devices.disk.convert.typed` | Type the hostname to confirm. | Geben Sie den Hostnamen zur Bestätigung ein. |
 | `devices.disk.convert.requested` | Encryption requested. | Verschlüsselung angefordert. |
@@ -816,14 +845,17 @@ recovery key on a converted device is the conversion key; the reveal dialog is u
    battery, result handling, phase transitions).
 6. **PDK-246 — Portal.** §3.7, §6.6 (with the cancel-after-delivery states of decision 8). Verify: `make web`; component tests over visible text; `make e2e`.
 7. **PDK-247 — System gates and runbook.** §9 S-IE1 … S-IE3, the throwaway VM templates, `docs/operations/
-   in-place-encryption.md`. Verify: `PADDOCK_SYSTEM_VMS=paddock-ie-2404,paddock-ie-2604 make system-test
-   T='TestInPlaceEncryption'`.
+   in-place-encryption.md`. Verify (one gate per run, in this order, §14.6): `make system-test VM=paddock-ai-2604
+   T='^TestDiskUnlockModeTPMOnly$$'` (S-DU1 first), `make system-test VM=paddock-ie-2604
+   T='^TestInPlaceEncryptionLVM$$'`, `make system-test VM=paddock-ie-2404 T='^TestInPlaceEncryptionPlain$$'`,
+   `make system-test VM=all T='^TestDiskGates$$'` (S-IE3).
 8. **PDK-248 — Documents, residual risks, CHANGELOG, regression.** §3.8, §12, the full regression (`make lint
-   test`, `make acceptance`, `make e2e`, `make system-test VM=all`, the two throwaway gates, `make bundle-test`),
-   `make scan-secrets`.
+   test`, `make acceptance`, `make e2e`, `make system-test VM=all`, the two throwaway gates one after the other as
+   in step 7, `make bundle-test`), `make scan-secrets`.
 
 PDK-241 and PDK-242 MAY run in parallel. PDK-243 depends on PDK-242 and on PDK-241's protocol types; PDK-244 on
-PDK-243; PDK-245 on PDK-244; PDK-246 on PDK-241; PDK-247 on PDK-245 and PDK-246; PDK-248 is last.
+PDK-243; PDK-245 on PDK-244; PDK-246 on PDK-241; PDK-247 on PDK-245 and PDK-246; PDK-248 is last. PDK-353 (the
+worktree `.env` preflight of `make system-test`) SHOULD be done before PDK-247 (§14.6).
 
 ## 9. Tests and gates
 
@@ -841,9 +873,10 @@ org_auditor; "event" = exactly one audit event found with `expectOneEvent`):
 | A2 `TestDiskConversionBundle` | `boot_pin_min_length` 10 on the organization → the v2 bundle's `disk.boot_pin_min_length` is 10; the default → 8. | A |
 | A3 `TestListContractM8e` | `GET /devices?disk_state=encrypting` lists a devicesim reporting that state; the list contract tests pass unchanged. | — |
 
-System (`test/system`; the two throwaway VMs run only with `PADDOCK_SYSTEM_VMS=paddock-ie-2404,paddock-ie-2604`,
-as gate D-AI does; ISOs from `PADDOCK_SYSTEM_ISO_2404` / `PADDOCK_SYSTEM_ISO_2604`; `buildAIVM` is generalised to
-take the VM name, the SSH port (2229, 2230) and the ISO; the VMs are built from
+System (`test/system`; the two throwaway VMs run only with `make system-test VM=paddock-ie-2604 T=…` and
+`VM=paddock-ie-2404 T=…`, one gate per run, as gate D-AI does; ISOs from `PADDOCK_SYSTEM_ISO_2404` /
+`PADDOCK_SYSTEM_ISO_2604` (Ubuntu Desktop images, §14.6); `buildAIVM` is generalised to take the VM name, the SSH
+port (2229, 2230), the disk size (16 384 MB for both throwaway VMs, §14.6) and the ISO; the VMs are built from
 `test/vms/virtualbox/autoinstall/unencrypted-lvm.yaml.tmpl` (26.04: `storage.layout.name: lvm`, no password,
 `sizing-policy: all`) and `unencrypted-plain.yaml.tmpl` (24.04: curtin `storage.config` with GPT, a 1 GiB ESP, a
 2 GiB ext4 `/boot` and ext4 `/` on the rest), then `Install` as on the base VMs):
@@ -880,8 +913,7 @@ Regression: `make acceptance`, `make e2e`, `make system-test VM=all` (every exis
 
 ## 11. Stop conditions
 
-- S1: M8d (PDK-231 … PDK-233) is not merged when PDK-242 starts: implement against the M8d branch and report; do
-  not re-implement `boot_separate` or the unlock mode.
+- S1: void since 2026-10-20 — M8d (PDK-231 … PDK-233) is merged in PR #87.
 - S2: `systemd-cryptenroll` on either release refuses to add a keyslot while the `reencrypt` keyslot exists
   (message mentioning reencryption): report the output; the fallback design (the PIN dialogue after `completed`,
   marker set by the agent at completion instead of at preparation) is an architect decision, not an implementer's.
@@ -963,3 +995,247 @@ the recovery key is stored first, the user restarts once and chooses the boot PI
 the background." The upgrade note says: server first, then the agents (every change is additive; older agents
 ignore `disk.boot_pin_min_length` and never receive `encrypt_disk` because older agents fail it with
 `unsupported_type`, which the portal shows as a failed command).
+
+## 14. Amendment 2026-10-20 — refresh against `main` at `727fb7c5` (architect)
+
+Written before implementation started; nothing of this plan is implemented. §2 and §5 were re-verified against
+`main` at `727fb7c5` (PR #116) and corrected in place (§14.2). The decisions below amend §3, §8, §9, §11 and §12;
+where they disagree with an earlier section, this amendment wins. ADR 0039 (amendment 2026-10-20) records the
+architecture of §14.3–§14.5; ADR 0037 (amendment 2026-10-20) records the uninstall precondition of §14.5.
+
+### 14.1 Basis
+
+- M8d is merged (PR #87) with its amendments of 2026-10-18 and 2026-10-19 (plan M8d §15, ADR 0037 amendments):
+  unlock mode, `boot_separate`, the deferred message of PDK-233, the uninstall with the helper in
+  `/root/paddock-uninstall/`, the supervisor-upgrade deferral, Lock and Destroy never blocked by an uninstall.
+  Stop condition S1 is void.
+- Also merged since the plan was written: M8x (PR #82), M8u (PR #85), M8f (PR #86), M8h (PR #89), the M8d
+  VM-regression fixes (PR #109), release v0.1.0-alpha.4 (PR #110), the dependency update (PR #116).
+- Numbering: migrations end at `00065_device_name.sql`; M8e's is `00066_disk_conversion.sql`. Residual risks end at
+  RR-70 (M8h); `docs/compliance/residual-risks.md` reserves **RR-56 to RR-61 for M8e** (its note below the devices
+  table) — the reservation stands, M8e needs no further number. ADRs end at 0041; M8e adds none, it amends 0039
+  and 0037.
+
+### 14.2 Corrections applied in place (what changed on `main` since `968b03b`)
+
+| Plan text (2026-10-17) | `main` (2026-10-20) | Applied in |
+| --- | --- | --- |
+| last migration `00048`, M8e after M8d's eight `<next>` | last `00065`; M8e = `00066_disk_conversion.sql` | §2, §3.3 decision 6, §5 |
+| attention view last recreated by `00042`, five columns in the `UNION` branch | last by `00064`; six columns (`… , id` = `'disk_conversion_failed:' \|\| c.id::text`) | §2, §3.3 decision 6 |
+| `audit.deviceEventParams` at `codes.go:175` | `codes.go:191`; `volume`, `stage`, `reason`, `command_id`, `mode` already listed | §2 |
+| `startStepUp`/`resumeStepUp` in `lib/deviceDetailPage.ts` | defined in `lib/stepUp.ts`, used by `deviceDetailPage.ts` | §2 |
+| `AnswerDiskSetup` listed with the `VM` methods | `(*Device).AnswerDiskSetup`, `(*Device).PrepareDisk` (`test/system/disk.go`) | §2 |
+| M8d decision 38 cancel = command `cancelled` + `cache.DeleteCommand` | plus `ClaimResult(cancelled)` in the transaction (409 when the device reported first), `WithdrawDeviceCommand`, `DeleteCommand` after the commit (`withdrawUninstallCommand`) | §2; decision 8 as amended in §14.5 |
+| uninstall helper below `/run/paddock/uninstall/` (M8d decision 39) | `/root/paddock-uninstall/` with the `statfs` `noexec` check (`Deps.NoExec`); `/run` is `noexec` under initramfs-tools | §2, §14.3 |
+| — | the uninstall defers while `supervisor-upgrade.json` exists; no supervisor upgrade starts while an uninstall is pending | §2, §14.5 |
+| — | `Revocations.Request` withdraws an undelivered uninstall (`uninstall_cancelled` params on `revocation.requested`) | §2, §14.5 |
+| `buildAIVM` takes name and port from constants; ISOs unspecified | `buildAIVM(t, root, iso, userData)`, 40 960 MB VDI; the ISOs are Ubuntu **Desktop** images (`ubuntu-26.04.1-desktop-amd64.iso`) | §2, §9, §14.6 |
+| `PADDOCK_SYSTEM_VMS=… make system-test T=…` | `make system-test VM=<vm> T=<regex>` (`VM` is required and sets `PADDOCK_SYSTEM_VMS`) | §8, §9 |
+| `.check.ubuntu2404` keyed on `release = 24.04` | `.check.initramfsSwitch` keyed on `disk.conversion.initramfs = initramfs-tools` (§14.4) | §3.7 decision 24, §6.6 |
+| MUST NOT touch `00001…00048` and M8d's migrations, `docs/adr/0001…0037` | `00001…00065`, `docs/adr/0001…0041` | §5 |
+| — | `docs/operations/autoinstall.md` "Encrypting an installed device" carries PDK-233's wording; `docs/operations/disk-recovery.md` row `unmanaged` says "(no in-place conversion)"; `docs/architecture.md` open question O4 says "no in-place switch on existing 24.04 devices" | PDK-248 rewrites all three (decision 26; O4 gets the note "superseded by ADR 0039, bounded by plan M8e §14.4") |
+
+### 14.3 Executables and `noexec` mounts (lesson of PR #109) — decisions 13, 15, 16, 21, 28 amended
+
+Finding: M8e executes nothing from `/run`. `/run/paddock/encrypt-boot.env` (decision 16) is a data file the init
+script writes and the agent reads; the dracut initrd with the `systemd` module mounts `/run` without `noexec`, and
+the file survives the switch to the real root as data. Every executable of M8e and where it runs from:
+
+| What | Path | File system |
+| --- | --- | --- |
+| init script (decision 16) | `/usr/libexec/paddock/encrypt-init.sh` inside the initramfs, `ExecStart` of `paddock-encrypt-init.service` | the initramfs root (rootfs); never `noexec` |
+| `module-setup.sh` (decision 15) | `/usr/lib/dracut/modules.d/99paddock-encrypt/module-setup.sh`, sourced by `dracut` | root file system |
+| background helper (decision 21) | `/opt/paddock/agent/current/paddockd encrypt-resume` in `paddock-encrypt-resume.service` | the agent's slot on the root file system |
+| notification (decision 28) | `systemd-run … busctl` from `PATH` (`/usr/bin`) | root file system |
+| operator commands (decisions 14, 26) | `/usr/bin/paddockd encrypt-abort` (the package's symlink to the slot) | root file system |
+| tools | `dracut`, `lsinitrd`, `apt-get`, `cryptsetup`, `lvm`, `e2fsck`, `resize2fs`, `systemd-run`, `systemctl` from `PATH` | root file system |
+
+29. **No executable below a mount that may be `noexec`.** M8e MUST NOT place a binary copy, a script or a
+    helper below `/run`, `/tmp`, `/var/tmp`, `/dev/shm` or `/var/lib/paddock` and MUST NOT run anything from
+    there; those paths carry data files only (`plan.json`, `plan.env`, `progress.json`, `result.json`,
+    `test-hooks`, `encrypt-boot.env`). Reason: initramfs-tools mounts `/run` `noexec` and hardened hosts mount the
+    others `noexec`; `systemd` then fails the unit with an opaque "Permission denied" (gate S-UN1, PR #109).
+30. **`statfs` preflight before every transient unit that runs `paddockd`.** Before `systemd-run` of decision 21
+    the agent resolves `/opt/paddock/agent/current` (`filepath.EvalSymlinks`) and calls `Deps.NoExec(dir)` on the
+    slot directory (the function of `agent/internal/agent/uninstall.go`, reused unchanged). `noexec` or an error →
+    no launch; the reason is logged at error level once per boot, `health.disk.conversion.paused_reason` is
+    `helper_not_running`, and the launch is retried at the next full pass. The helper runs from the slot, not from a
+    copy: the slot is never purged while the agent runs, and the uninstall helper stops the unit first (§14.5).
+    The notification of decision 28 needs no check (`busctl` is the system's). The init script needs none (it is
+    inside the initramfs).
+31. **Unit files unchanged.** `paddock-encrypt-init.service` keeps `ExecStart=/usr/libexec/paddock/encrypt-init.sh`
+    (§6.4); the transient units keep the properties of decisions 21 and 28.
+
+### 14.4 Initramfs generator: initramfs-tools and dracut — decisions 2, 3, 13 amended (ADR 0039 amendment)
+
+The plan does not assume dracut everywhere: ADR 0039 correction 1 switches a device to dracut at preparation, as the
+autoinstall and `Device.PrepareDisk` do on Ubuntu 24.04, and the module is only built after that switch. Not a
+blocker. What changes:
+
+32. **The switch is keyed on the installed generator, not on the release.** "dracut installed" means
+    `dpkg-query -W -f='${db:Status-Status}' dracut` prints `installed`. When it does not — on 24.04, and on a
+    26.04 that was upgraded in place from 24.04 and kept initramfs-tools — decision 13 step 6 installs dracut; the
+    `24.04` condition of step 6 is removed. `lsinitrd` and `dracut` come with the package.
+33. **The removal set is closed.** Before `apt-get install -y dracut`, step 6 runs
+    `apt-get -s -o Debug::NoLocking=true install dracut` (simulation, bounded 2 minutes) and reads the packages of
+    its `Remv ` lines. Every one of them MUST be in the allow list `initramfs-tools`, `initramfs-tools-core`,
+    `initramfs-tools-bin`, `brltty`; otherwise the step fails with `FailureStage: prepare`, reason
+    `dracut_removes:<packages outside the list, sorted, joined by +, cut at 200 runes>` and installs nothing (stop
+    condition S11). Reason: `dracut` conflicts with initramfs-tools, and architecture O4 recorded that the switch
+    also removes `brltty` on Desktop installs; a metapackage or anything else leaving with it is an architect
+    decision, never an implementer's.
+34. **The generator is reported.** `protocol.DiskConversion` (decision 3) gains
+    `Initramfs string json:"initramfs,omitempty"` — `dracut` when `/usr/bin/dracut` exists, else `initramfs-tools`
+    (a `Stat`, so `Preflight` still runs only `findmnt`, `lsblk`, `blkid`, `lvm` and reads files).
+    `DiskConversionHealth` (§6.1) gains `initramfs: string`. The dialogue (decision 24) shows `devices.disk.convert.check.initramfsSwitch`
+    when it is `initramfs-tools`; the runbook names the switch under "what the user sees".
+35. **RR-58 is reworded** (PDK-248): "24.04 switches to dracut irreversibly" becomes "A device on initramfs-tools
+    switches to dracut irreversibly. initramfs-tools and `brltty` are removed; kernel updates use dracut; no
+    Plymouth splash; the dracut initrd is built with `hostonly` and verified with `lsinitrd` before the restart, but
+    a hardware driver dracut leaves out would stop the boot before anything is encrypted. Mitigation: the dialogue
+    says so; the allow list of decision 33 refuses any other removal; the same stack as autoinstalled 24.04
+    devices; gate S-IE2 proves the switch on a Desktop install; the runbook's recovery (boot the previous kernel
+    entry; every installed kernel's initrd carries the module). Record: the support statement for converted
+    devices and the allow list."
+
+### 14.5 Interactions with M8d — decisions 7, 8, 12, 13, 21, 22, 24 amended (ADR 0037 and 0039 amendments)
+
+36. **Uninstall and conversion.**
+    - Server, `Uninstalls.Request` (`app/uninstall.go`): an open conversion in phase `requested` or `prepared` →
+      409 `invalid_state`, detail `an in-place encryption is open; cancel it first` (checked under the device's
+      row lock, after the open-uninstall check). Phase `encrypting` does not refuse: the device works on dm-crypt
+      and the organization may decide to leave Paddock; the uninstall dialogue (`UninstallDialog.vue`) then shows
+      the alert `devices.danger.uninstall.encryptingWarning` (§14.8) when `device.disk_conversion.phase` is
+      `encrypting`. The encrypt request keeps refusing an open uninstall (decision 7).
+    - Agent, `uninstallCommand` (`agent/internal/agent/uninstall.go`): refuses with
+      `{accepted: false, reason: conversion_pending}` while `state.Conversion.Phase` is `preparing` or `prepared`
+      (`UninstallAccepted.Reason` gains that value; the server stores and shows it as it does `revocation_pending`).
+    - Agent, uninstall helper (`agent/internal/uninstall/steps.go`): `paddockUnits` gains
+      `paddock-encrypt-resume.service` (stopped, not disabled: a transient unit; a missing unit is no failure, as
+      for the timer and the disk setup today). SIGTERM is safe for `cryptsetup reencrypt` (ADR 0039 sources). The
+      conversion row stays `encrypting` on a retired device (the attention view lists `active` devices only). The
+      runbook section "Removing Paddock during a conversion" (decision 26) says: the reencryption is unfinished,
+      nobody resumes it; finish it with `cryptsetup reencrypt --resume-only <partition>` and the revealed key
+      before the device leaves the organization's hands.
+37. **Supervisor upgrade and conversion** (the rule of plan M8d §15.4 decision 39, mirrored).
+    - No supervisor upgrade starts while the preparation runs: `busy` in `agent/internal/agent/supervisor.go`
+      is also true while `state.Conversion != nil && state.Conversion.Phase == "preparing"` (step 6 holds the dpkg
+      lock, and a supervisor restart would interrupt the worker).
+    - The conversion worker does not start a step of decision 13 while `supervisor-upgrade.json` exists: before
+      every step it reads `supervisorpkg.ReadMarker`; while a marker exists it waits (poll every 30 s), bounded by
+      `supervisorpkg.StaleAfter` (30 min) from the marker's `started_at` (or the file's mtime when unreadable, as
+      `supervisorUpgradeRuns` does), then continues. Logged once per job at info level; no event.
+    - An agent A/B update during a conversion needs no rule: `state.Conversion` is shared, a restarted agent
+      re-queues a `preparing` job (decision 13), the helper's unit outlives the agent (own cgroup) and keeps its
+      binary, and the next launch resolves `current` anew (decision 30).
+38. **Lifecycle states.** `encrypt` needs `active` (decision 7, unchanged). A later state change does not stop the
+    device: it converts fail-safe as prepared, and the server records its conversion events in every state in which
+    the gateway accepts reports; the attention entry `disk_conversion_failed` is for `active` devices only
+    (decision 6). `Devices.Retire` (`app/devices.go`) withdraws an undelivered `encrypt_disk` command exactly as
+    decision 8's `command_cancelled` does, sets the row `cancelled` and records `conversion_cancelled:
+    before_delivery` and `conversion_id` as params of its one `device.retired` event; a delivered command or a
+    `prepared` conversion is left alone (params `conversion_id`, `conversion_phase`). Retire is never refused for a
+    conversion (a presumed-lost device must stay retirable). The registry entries of `device.retired` and
+    `revocation.requested` (`codes.go`) gain the params `conversion_cancelled`, `conversion_id`, `conversion_phase`
+    (closed values: `before_delivery`; `requested | prepared | encrypting`).
+39. **Lock and Destroy precedence** (plan M8d §15.4 decision 37, mirrored). Lock and Destroy are never blocked by
+    a conversion. `Revocations.Request` (`app/revocations.go`), in its transaction and under the device's row lock:
+    an undelivered `encrypt_disk` command is withdrawn as in decision 8 (`ClaimResult(cancelled)`,
+    `WithdrawDeviceCommand`, `DeleteCommand` after the commit; the row `cancelled`), recorded as the params
+    `conversion_cancelled: before_delivery` and `conversion_id` of the one `revocation.requested` event; a delivered
+    command, a `prepared` or an `encrypting` conversion is left alone and recorded as `conversion_id`,
+    `conversion_phase`. No second audit event. The device side is unchanged: `paddock-revoke` refuses a Lock or
+    Destroy of an unencrypted root (`revocation_refused`, reason `not_encrypted`); during `encrypting` the root is
+    LUKS2 with the `reencrypt` keyslot and no escrowed header. The Lock and Destroy dialogues (`DangerZone.vue`)
+    show, when `device.disk_conversion` is open, the alert `devices.danger.revoke.conversionWarning.<phase>`
+    (§14.8): `requested` and `prepared` → the device is not encrypted yet and refuses the action; `encrypting` →
+    the header is not escrowed, the Lock cannot be restored, and data the encryption has not reached stays
+    readable. `paddock-revoke`'s behaviour on a header with the `online-reencrypt` requirement is verified once by
+    hand on a throwaway VM in PDK-247 (transcript in the result document, like the emergency-shell recovery);
+    RR-57 records it (§14.7). The revocation path's code is not changed.
+40. **Revocation handed over during the preparation.** Decision 12's refusal (`revocation_pending`, 24 hours)
+    stays an acceptance check only; the worker does not abort a running preparation for a revocation, because the
+    device refuses Lock and Destroy while unencrypted and the conversion cannot harm the organization's position.
+
+### 14.6 Tests and gates (§9) amended
+
+41. **Commands and the `$$` pitfall.** The gates run one per `make` invocation: `make system-test
+    VM=paddock-ie-2604 T='^TestInPlaceEncryptionLVM$$'` and `make system-test VM=paddock-ie-2404
+    T='^TestInPlaceEncryptionPlain$$'` (`$$` is make's escape for `$`; a bare `$` is swallowed and the pattern
+    matches nothing). A run whose log lacks `--- PASS: TestInPlaceEncryption…` is not green, whatever its exit
+    code (PDK-339: a filter that matches no test ends green). S-IE3 runs inside `make system-test VM=all
+    T='^TestDiskGates$$'`. `PADDOCK_SYSTEM_VMS` MUST NOT name a throwaway VM together with a base VM: `forEachVM`
+    would try to run every base gate on the throwaway name.
+42. **Throwaway VM size and disk headroom.** `buildAIVM` is generalised to `buildAIVM(t, root, spec aiSpec,
+    userData)` with `type aiSpec struct { Name, SSHPort string; DiskMB int }`; D-AI and S-DU1 keep
+    `paddock-ai-2604`, `2228`, `40960`; `paddock-ie-2604` is `2229` and `paddock-ie-2404` is `2230`, both with
+    `DiskMB = 16384`. Reason: the
+    reencryption writes every sector of the root partition, so a dynamic VDI grows to the full disk size — two
+    40 GB VMs would need 80 GB, and the laptop had 36 GB free on 2026-10-20 with the VirtualBox machine folder on
+    the same file system. With 16 GB the background phase on a VM also finishes in minutes instead of a quarter
+    of an hour. Before `buildAIVM` creates the disk, the gate reads `statfs` of the VirtualBox machine folder
+    (`VBoxManage list systemproperties`, line `Default machine folder`) and fails (`t.Fatalf`, not `Skip`) when
+    less than 24 GiB are free, naming the figure. The two gates are separate top-level tests without
+    `t.Parallel`, so they run one after the other; each deletes its VM in its cleanup (as D-AI does). Operator
+    note for the runs: `df -h /` and `docker builder prune` first (the development host is usually near full).
+43. **ISOs.** `PADDOCK_SYSTEM_ISO_2604` (default `~/Downloads/ubuntu-26.04.1-desktop-amd64.iso`, as D-AI) and
+    `PADDOCK_SYSTEM_ISO_2404` (default `~/Downloads/ubuntu-24.04.5.1-desktop-amd64.iso`); a missing file fails the
+    gate with the path. Both throwaway VMs are Ubuntu Desktop installs — the only images the harness uses — which
+    is what makes GDM `AutomaticLogin` and the dracut removal set of decision 33 relevant.
+44. **Progress assertions read the device, not the API.** `done_bytes increasing between two check-ins` becomes
+    "between two reads of the device's health over SSH (`Device.Health()`) 10 s apart"; the API shows the value of
+    the last check-in and is asserted once at the end (`GET /devices/{id}` has `done_bytes`, `eta_s`). The
+    10 %–90 % window for the power cut is found the same way (poll every 5 s).
+45. **Notification assertion.** GNOME hides a banner after seconds whatever `expire_timeout` says, so a screenshot
+    is evidence, not the assertion. S-IE1 asserts within 2 minutes of `prepared` that the journal shows one
+    `paddock-notify-<session>-<ts>.service: Deactivated successfully` per graphical session
+    (`journalctl -o cat _COMM=systemd | grep paddock-notify-`) and that `systemctl list-units 'paddock-notify-*'`
+    shows none; it takes a screenshot every 2 s for 90 s from `prepared` on, keeps them in
+    `bin/system-evidence/`, and logs whether "Disk encryption is ready" was seen. The desktop itself is
+    PDK-243's manual verification 2 on the lab device.
+46. **S-DU1 first.** `TestDiskUnlockModeTPMOnly` (M8d) has not been run on a VM yet and S-IE2 relies on
+    `tpm_only`. PDK-247 MUST run `make system-test VM=paddock-ai-2604 T='^TestDiskUnlockModeTPMOnly$$'` before
+    S-IE2 and record the result; a failure there is an M8d finding (ticket stub, stop condition S13), not fixed
+    inside M8e.
+47. **Organization-wide settings.** S-IE2 sets the organization's unlock mode to `tpm_only` (restored in its
+    cleanup); it therefore MUST run alone, never concurrently with `VM=all` gates. S-IE3 shares nothing and needs
+    no `Together`.
+48. **Harness rules of PR #109 apply.** The throwaway gates publish their release with `Install` and MUST retract
+    it in their cleanup (`retractRelease`); they run from a worktree only with `deploy/compose/.env` and
+    `deploy/compose/.secrets` present (PDK-353 adds the preflight; until then check by hand before the run).
+49. **Stop conditions added.** S11: `apt-get -s install dracut` on a throwaway or lab device would remove a package
+    outside the allow list of decision 33 — report the simulation output; the architect extends the list. S12:
+    the 16 GB throwaway VM leaves the root file system with less than 1 GiB free after the Desktop install, so that
+    the preflight reports `low_free_space` — report `findmnt -bno AVAIL /`; the size is an architect decision.
+    S13: S-DU1 fails on `paddock-ai-2604` — report, open a ticket stub against M8d, do not change `disksetup` or the
+    reconciler inside M8e.
+
+### 14.7 Residual risks (§12) amended
+
+- RR-57 gains the sentence: "A Lock or Destroy during `encrypting` erases a header that is not escrowed; the
+  encrypted part is lost for good, the rest stays readable until the reencryption would have reached it. The
+  dialogue says so; the device-side behaviour on a header with the `online-reencrypt` requirement was verified once
+  on a VM (PDK-247)."
+- RR-58 as reworded in decision 35.
+- RR-59 gains the sentence: "Removing Paddock during `encrypting` is permitted and leaves the reencryption
+  unfinished; the runbook's manual completion applies. Record: devices removed while `encrypting`."
+- RR-56, RR-60, RR-61 unchanged.
+
+### 14.8 Texts added to §6.6 (binding; `en.json` / `de.json`)
+
+| Key | English | German |
+| --- | --- | --- |
+| `devices.danger.uninstall.encryptingWarning` | The in-place encryption of this device is unfinished. After the removal nobody resumes it; finish it by hand as the runbook describes before the device leaves your hands. | Die nachträgliche Verschlüsselung dieses Geräts ist unvollständig. Nach der Entfernung setzt sie niemand fort; schließen Sie sie von Hand ab, wie das Runbook beschreibt, bevor das Gerät aus Ihren Händen geht. |
+| `devices.danger.revoke.conversionWarning.requested` | This device is not encrypted yet; it refuses a Lock or Destroy until the encryption has started. | Dieses Gerät ist noch nicht verschlüsselt; es lehnt Sperren und Zerstören ab, bis die Verschlüsselung begonnen hat. |
+| `devices.danger.revoke.conversionWarning.prepared` | This device is not encrypted yet; it refuses a Lock or Destroy until the encryption has started. | Dieses Gerät ist noch nicht verschlüsselt; es lehnt Sperren und Zerstören ab, bis die Verschlüsselung begonnen hat. |
+| `devices.danger.revoke.conversionWarning.encrypting` | The in-place encryption is unfinished: the header is not stored in Paddock, so this action cannot be undone with a stored header, and data the encryption has not reached stays readable. | Die nachträgliche Verschlüsselung ist unvollständig: Der Header ist nicht in Paddock hinterlegt, diese Aktion lässt sich also nicht mit einem hinterlegten Header rückgängig machen, und Daten, die die Verschlüsselung noch nicht erreicht hat, bleiben lesbar. |
+
+`devices.disk.convert.check.ubuntu2404` is replaced by `devices.disk.convert.check.initramfsSwitch` (§6.6).
+
+### 14.9 Tickets
+
+PDK-241 … PDK-248 were updated on 2026-10-20 (scope and references). In short: PDK-241 adds decisions 36 (server),
+38, 39 and `initramfs` in the contracts; PDK-242 adds decision 34; PDK-243 adds decisions 30 (the preflight is
+PDK-245's, the worker rule is here), 32, 33, 36 (agent handler), 37; PDK-245 adds decision 30 and the helper's
+`paddockUnits` entry of decision 36; PDK-246 adds the texts of §14.8 and the two dialogue alerts; PDK-247 adds
+decisions 41–48 and the S11–S13 reports; PDK-248 adds §14.7 and the O4 note of §14.2.

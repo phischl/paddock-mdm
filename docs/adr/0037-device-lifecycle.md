@@ -341,3 +341,14 @@ The helper deletes both once it wrote `result.json`; the summary stays. Before `
 instead of the opaque systemd error. A reboot during the removal still ends the helper (its transient unit is not
 started again); the copy and the plan then remain in the directory until removed by hand (plan M8d §15.4, decision 39
 amendment).
+
+## Amendment 2026-10-20 — uninstall and the in-place encryption (ADR 0039)
+
+Decided by the architect on 2026-10-20 (plan M8e §14.5). Decision 4's preconditions gain "no in-place encryption in
+phase `requested` or `prepared`" (409 `invalid_state`; cancel the encryption first — the disk is unchanged until the
+device restarts). An uninstall during `encrypting` is permitted with a warning; the removal helper stops the
+background encryption unit first, and the device refuses an uninstall command while it is still preparing. Lock,
+Destroy and Retire are never blocked by a conversion; like the uninstall withdrawal of the amendment of 2026-10-18
+(IV), a revocation request or a retirement withdraws an undelivered `encrypt_disk` command and records it on its
+own audit event (`conversion_cancelled`, `conversion_id`, `conversion_phase`). The uninstall-during-supervisor-upgrade
+rule of 2026-10-19 is mirrored for the preparation of a conversion. Details and texts: plan M8e §14.5 and §14.8.

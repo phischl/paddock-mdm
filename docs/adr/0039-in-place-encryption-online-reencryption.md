@@ -148,3 +148,37 @@ Corrections to the ticket's direction:
   24.04 devices switch irreversibly from initramfs-tools to dracut and lose the Plymouth splash (RR-58); a laptop
   that is only ever on battery never completes (RR-59); unsupported layouts stay unencrypted (RR-61).
 Follow-ups: plan M8e, tickets PDK-241 … PDK-248; architecture §12.4 amendment; ADR 0038 decision 4 superseded.
+
+## Amendment 2026-10-20 — initramfs generator, executable paths, interplay with the device lifecycle
+
+Decided by the architect on 2026-10-20 while refreshing plan M8e against `main` at `727fb7c5` (plan M8e §14); the
+decisions above stand, three are made precise:
+
+1. **Decision 5, the generator (correction 1 made precise).** The early-boot step stays a dracut module; a device
+   that does not have dracut installed switches to it at preparation whatever its release — Ubuntu 24.04, and a
+   26.04 upgraded in place that kept initramfs-tools. Before the switch the agent simulates the installation
+   (`apt-get -s install dracut`) and refuses the conversion (`failed`, stage `prepare`, reason
+   `dracut_removes:<packages>`) when anything but `initramfs-tools`, `initramfs-tools-core`, `initramfs-tools-bin`
+   and `brltty` would be removed; extending that list is an architect decision. The agent reports the installed
+   generator in `health.disk.conversion.initramfs` so that the portal's dialogue can say what the switch means.
+   Architecture open question O4 ("no in-place switch on existing 24.04 devices") is superseded by this bounded
+   switch.
+2. **Decisions 5 and 6, where executables live (lesson of ADR 0037 amendment 2026-10-19).** Nothing of the
+   conversion executes from `/run`, `/tmp`, `/var/tmp`, `/dev/shm` or `/var/lib/paddock`: the init script runs
+   from inside the initramfs, the dracut module from `/usr/lib/dracut/modules.d/`, the background helper from the
+   agent's slot `/opt/paddock/agent/current/paddockd`, the notification through the system's `busctl`;
+   `/run/paddock/encrypt-boot.env` and the files below `/var/lib/paddock/encrypt/` are data. Before the agent
+   starts the helper's transient unit it checks the slot directory with `statfs` (`ST_NOEXEC`) as the uninstall
+   does, and reports `helper_not_running` instead of launching when the check fails.
+3. **Decision 7, the lifecycle (ADR 0037 mirrored).** An uninstall is refused while a conversion is `requested` or
+   `prepared` (cancel first; the disk is unchanged) and permitted while `encrypting`, with a warning in the
+   dialogue and the removal helper stopping the background unit; the device refuses an uninstall command while it
+   prepares. No supervisor upgrade starts while the device prepares, and the preparation waits while a supervisor
+   upgrade runs (bounded by the 30 minutes after which the agent counts the upgrade as failed). Lock, Destroy and
+   Retire are never blocked by a conversion: they withdraw an undelivered `encrypt_disk` command and record it on
+   their own audit event; a prepared or running conversion is left alone, the device refuses a Lock or Destroy
+   while unencrypted, and the dialogues warn that a Lock during `encrypting` erases a header that is not escrowed.
+
+Consequences: + the switch to dracut is bounded and visible; the conversion cannot be broken by a `noexec` mount
+or by the device's other lifecycle actions; the two-person rule's path stays untouched. − A device uninstalled
+during `encrypting` keeps an unfinished reencryption (RR-59); a Lock during `encrypting` is unrestorable (RR-57).
