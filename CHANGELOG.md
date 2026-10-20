@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Go toolchain 1.27.3 (was 1.27.2; build image `golang:1.27.3-trixie`, CI, every module): a security release with
   fixes to `crypto/x509`, which every Paddock binary uses for its TLS and device certificates.
 
+### Changed
+
+- Updated bundled components: AWS CLI 2.38.2 (was 2.38.1).
+
 ## [0.1.0-alpha.4] - 2026-10-19
 
 Fixes from the first lab installation on real hardware (M8x) and their follow-ups (M8f), the device lifecycle (M8d),
