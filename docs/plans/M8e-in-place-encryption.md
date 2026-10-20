@@ -1440,16 +1440,15 @@ the ICU parameter `{packages}` from `disk.conversion.initramfs_removes`) and its
 
 ### 14.9 Tickets
 
-PDK-241 … PDK-248 were updated on 2026-10-20 (scope and references). Which ticket owns which decision of §14:
-PDK-241 — 36 (server refusal, `active`), 38, 39 (server withdrawal and event params), `initramfs` and
-`initramfs_removes`, `key_on_boot` and `init_result` in the contracts, the A1 cases of decision 50; PDK-242 — 34,
-the reason `cleanup_pending` (§14.10); PDK-243 — 13 (the cleanup after step 7 under I3), 29, 32, 33, 36 (agent
-refusal), 37; PDK-244 — 29, 31; PDK-245 — 3 and 22 (the hold until `InitrdRegenerated`), 18 (I2), 20 (also
-while `completed`, the order of I1, `plan.env` last), 30, 39 (the stop before the hand-over and the launch
-condition), 52 (the re-arm, `key_on_boot`), the I2 adoption of decision 18 and §14.10; PDK-246 — 34 (the dialogue
-lines), 36 and 39 (the alerts), 52 (the
-`keyOnBoot` alert), §14.8; PDK-247 — 41–53 (S-IE4 of decision 53), S11–S14, the Lock hand test of decision
-39; PDK-248 — 35, §14.7, the O4 note of §14.2. Every ticket of the agent and the gates cites §14.10 (invariants and the
+PDK-241 … PDK-248 were updated on 2026-10-20 (scope and references). Which ticket owns which decision of §14: PDK-241
+— 36 (server refusal, `active`), 38, 39 (server withdrawal and event params), `initramfs` and `initramfs_removes`,
+`key_on_boot` and `init_result` in the contracts, the A1 cases of decision 50; PDK-242 — 34, the reason
+`cleanup_pending` (§14.10); PDK-243 — 13 (the cleanup after step 7 under I3), 29, 32, 33, 36 (agent refusal), 37;
+PDK-244 — 29, 31; PDK-245 — 3 and 22 (the hold until `InitrdRegenerated`), 18 (I2), 20 (also while `completed`, the
+order of I1, `plan.env` last), 30, 39 (the stop before the hand-over and the launch condition), 52 (the re-arm,
+`key_on_boot`), the I2 adoption of decision 18 and §14.10; PDK-246 — 34 (the dialogue lines), 36 and 39 (the alerts),
+52 (the `keyOnBoot` alert), §14.8; PDK-247 — 41–53 (S-IE4 of decision 53), S11–S14, the Lock hand test of decision 39;
+PDK-248 — 35, §14.7, the O4 note of §14.2. Every ticket of the agent and the gates cites §14.10 (invariants and the
 state × event table).
 
 ### 14.10 Boot-path invariants and the state × event table (binding; review round 3 of PR #117)
