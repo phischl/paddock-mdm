@@ -665,7 +665,8 @@ DeviceDiskConversion: {id: uuid, phase: enum[requested,prepared,encrypting,compl
                        eta_s: integer nullable, paused_reason: string nullable, progress_at: date-time nullable,
                        failure_stage: string nullable, failure_reason: string nullable, finished_at: date-time nullable,
                        abort_command_id: uuid nullable, abort_command_status: string nullable, abort_refused_reason: string nullable,
-                       active: boolean (§14.5 decision 36: phase in requested|prepared|encrypting, or the last health disk.state = encrypting)}
+                       active: boolean}  # §14.5 decision 36: phase in requested|prepared|encrypting, or the last
+                                         # health disk.state = encrypting, or completed with health ≠ compliant
 DeviceEncryptRequest: {confirm_hostname (required), reason (required, 2–500), backup_confirmed (boolean, required)}
 DeviceEncryptCancelRequest: {confirm_hostname (required)}
 DiskEncryption:       + conversion (DeviceDiskConversion, nullable)
