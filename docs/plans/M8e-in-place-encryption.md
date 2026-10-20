@@ -403,7 +403,8 @@ Paddock never starts the conversion on its own initiative.
     other phase (exit 2, message on stderr). `encrypt.Abort` runs under invariant I3 of §14.10 in this order
     (review round 4, X1): (1) remove only the module directory and `91-paddock-encrypt.conf`; (2) `dracut -f
     --regenerate-all`; (3) `lsinitrd` of the initrd of every installed kernel (`/boot/initrd.img-<v>` for every
-    `/lib/modules/<v>`) must show no `paddock-encrypt`; (4) only after (3) passed: delete the conversion key,
+    `<v>` that has `/boot/vmlinuz-<v>` or `/lib/modules/<v>` — every GRUB entry) must show no `paddock-encrypt`;
+    (4) only after (3) passed: delete the conversion key,
     `plan.json`, `plan.env`, `test-hooks` and the two disk-setup files, clear `CleanupPending`. While (2) or (3)
     fails, `state.Conversion.CleanupPending` stays true and the agent re-runs (1)–(3) at every full pass — the
     key and the plan stay on disk, because an initrd that still carries the module converts the disk at the next
@@ -506,7 +507,8 @@ Paddock never starts the conversion on its own initiative.
     UUID=<luks uuid> none luks,tpm2-device=auto` to `/etc/crypttab` (unless a line with that UUID exists); (2)
     removes `91-paddock-encrypt.conf` and `/usr/lib/dracut/modules.d/99paddock-encrypt/`; (3) runs `dracut -f
     --regenerate-all` (15 min bound); (4) verifies with `lsinitrd` that the initrd of **every installed kernel**
-    (`/boot/initrd.img-<v>` for every `/lib/modules/<v>`) contains `etc/crypttab` with the UUID and no
+    (`/boot/initrd.img-<v>` for every `<v>` that has `/boot/vmlinuz-<v>` or `/lib/modules/<v>`, so that every GRUB
+    entry is checked) contains `etc/crypttab` with the UUID and no
     `paddock-encrypt` (I3); (5) only then removes `plan.env`, `plan.json`
     and `test-hooks` from `/var/lib/paddock/encrypt/` and sets `InitrdRegenerated = true`. A failure at (3) or
     (4) is logged and retried at the next full pass — from (2) on, by re-running (2) to (4) — while the device
@@ -1389,15 +1391,18 @@ blocker. What changes:
 
 53. **Gate S-IE4 `TestInPlaceEncryptionCleanupAdopt`** (review round 4, X1 (4); the `cancelled` and
     `failed:prepare` rows of §14.10). Its own run on a fresh `paddock-ie-2404` (plain layout, `tpm_only`, after
-    S-IE2; `make system-test VM=paddock-ie-2404 T='^TestInPlaceEncryptionCleanupAdopt$$'`): after `Install`
+    S-IE2; `make system-test VM=paddock-ie-2404 T='^TestInPlaceEncryptionCleanupAdopt$$'`; like S-IE2 it sets
+    the organization's unlock mode to `tpm_only`, restores it in its cleanup and runs alone, decision 47): after `Install`
     and the request → `prepared`; the test makes dracut fail without a product hook — `sudo dpkg-divert --add
     --rename --divert /usr/bin/dracut.real /usr/bin/dracut` and a stub `/usr/bin/dracut` (`#!/bin/sh`, `exit 1`,
     0755); `sudo paddockd encrypt-abort` → exit 0, `device.disk_conversion_aborted{by: operator}`, row
     `cancelled`, within one full pass health `disk.conversion{eligible: false, reasons: [cleanup_pending]}`, the
     module directory gone, `/var/lib/paddock/encrypt/plan.env` and `/var/lib/paddock/install-passphrase` still
     present (I3 order), `lsinitrd` of the running kernel still lists `paddock-encrypt-init.service`;
-    `POST /devices/{id}/uninstall` → the device answers `{accepted: false, reason: conversion_pending}` (the
-    server accepted the request: the row is `cancelled`; the test cancels the uninstall afterwards); `sudo
+    `POST /devices/{id}/uninstall` → 200 (the server accepted the request: the row is `cancelled`); the device
+    answers `{accepted: false, reason: conversion_pending}`, the command is `failed` with that reason in the
+    device's commands list, and the server has ended the request (`EndFailedUninstall`,
+    `queries/uninstall.sql`): `GET /devices/{id}` shows no open uninstall — nothing to cancel; `sudo
     systemctl reboot` → the console shows `paddock-encrypt: init done` (the stale initrd converts); SSH back on
     dm-crypt; `device.disk_conversion_started{init_result: ok}`, `GET /devices/{id}` shows the same conversion
     id with `phase: encrypting`, health `encrypting`; within one full pass the module directory and the conf
@@ -1479,7 +1484,8 @@ Three invariants bind every decision of this plan; a decision that contradicts t
 - **I3 — a cleanup is done when no initrd carries the module.** A cleanup (decision 14's `encrypt.Abort`,
   decision 13's failure after step 7, decision 18's unencrypted failure) removes first only the module directory
   and the conf, regenerates, and counts as done only when `lsinitrd` of the initrd of every installed kernel
-  (`/boot/initrd.img-<v>` for every `/lib/modules/<v>`) shows no `paddock-encrypt`; only after that check it
+  (`/boot/initrd.img-<v>` for every `<v>` that has `/boot/vmlinuz-<v>` or `/lib/modules/<v>` — every GRUB entry,
+  the one definition for decisions 14, 18 and 20) shows no `paddock-encrypt`; only after that check it
   deletes the key, `plan.json`, `plan.env` and the disk-setup files. Until then `state.Conversion.CleanupPending`
   is true, the cleanup is retried at every full pass, the phase stays non-final (the state is not cleared, the
   preflight reports the reason `cleanup_pending` and `eligible: false`, the uninstall is refused with
@@ -1496,7 +1502,7 @@ outcome and the invariant that holds). *LUKS* = the root partition carries the L
 | `preparing` (steps 1–9 running) | I2 runs first: a reboot during or after step 8 built an initrd with the module, the device converted at that boot, the partition is LUKS → adopted as `encrypting`, the queued job is dropped, `disk.conversion_started` moves the row from `requested` to `encrypting`; not LUKS (reboot before step 8, or the module did not run) → the worker re-queues the job, steps skip what exists (decision 13), boots as before | before step 7 nothing of M8e in the initrd; from step 7 the module is included (I1 is not yet in force, not LUKS) | n/a (no dialogue: the marker is written at step 5, the unit runs at the next boot) | server 409 (row `requested`); device `conversion_pending` (decision 36) | server withdraws an undelivered command; a delivered one: the device refuses the Lock (`not_encrypted`); the worker continues (decision 40) | a failure ≥ step 7 sets `failed:prepare` and starts the cleanup under I3 |
 | `prepared` | the module runs: shrink, init → LUKS, boots on dm-crypt; at the next agent start I2 → `encrypting` | the module is included (`plan.env` exists); still bootable unencrypted | n/a until the conversion boot | server 409 (`cancel it first`); device `conversion_pending` | as `preparing`; the conversion stays `prepared` (device refuses, `not_encrypted`) | n/a |
 | `encrypting` | the module (or, after decision 20, crypttab + TPM) opens the volume; the helper resumes (decision 21); I2 keeps `encrypting` | before decision 20: the module is included (I1); after: crypttab + TPM (decision 20 step 1 precedes the removal) | set: TPM keyslot → decision 20 regenerates, `key_on_boot` false; skipped: `tpm_pin_missing`, module stays, `key_on_boot` true | server 409 (`wait for its completion`); device `conversion_pending` (I1) | server leaves the conversion; agent records the hand-over, stops the helper, hands over; `paddock-revoke` erases every keyslot (decision 39; S14 if not) | n/a (no cleanup in this phase) |
-| `completed`, `!InitrdRegenerated` | as `encrypting` (the module opens the volume); decision 52 re-arms the PIN dialogue every boot | the module is included (I1: `plan.env` still exists) | set: decision 20 → `InitrdRegenerated`, then M4b removes the conversion keyslot, `compliant`; skipped: dialogue again next boot (decision 52), `key_on_boot` true, at most `escrow_pending` | server 409 (`active`: `completed` and not `compliant`); device `conversion_pending` (I1) | as `encrypting`; header not escrowed, unrestorable (RR-57) | decision 20's failure is retried every full pass; the module stays until (4) verifies (I3 applied to the regeneration) |
+| `completed`, `!InitrdRegenerated` | as `encrypting` (the module opens the volume); decision 52 re-arms the PIN dialogue every boot | the module is included (I1: `plan.env` still exists) | set: decision 20 → `InitrdRegenerated`, then M4b removes the conversion keyslot, `compliant`; skipped: dialogue again next boot (decision 52), `key_on_boot` true, at most `escrow_pending` | server 409 (`active`: `completed` and not `compliant`); device `conversion_pending` (I1) | as `encrypting`; header not escrowed, unrestorable (RR-57) | decision 20's steps (2)–(4) are retried every full pass; during the retry the unlock path is the crypttab line of step (1) plus the TPM keyslot, and the initrds not yet rebuilt still carry the module (I1; I3 applied to the regeneration) |
 | `completed`, `InitrdRegenerated` (state cleared on `compliant`/`escrow_pending`) | crypttab + TPM opens the volume; `RebootWithPIN` | crypttab + TPM | n/a (set) | server 200 once `compliant`; device accepts (`Conversion == nil`) | as any compliant device (header escrowed after completion) | n/a |
 | `failed:preflight` (not LUKS, nothing written) | boots as before | nothing of M8e | n/a | server 200 (row `failed`, health `not_encrypted`); device accepts | normal (device refuses, `not_encrypted`) | n/a |
 | `failed:prepare` before step 7 (not LUKS) | boots as before | nothing of M8e in the initrd | n/a | as `failed:preflight` | normal | n/a |
