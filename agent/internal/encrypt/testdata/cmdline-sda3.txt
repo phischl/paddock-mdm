@@ -1,0 +1,14 @@
+@ plain
+$ findmnt -no SOURCE /
+/dev/sda3
+$ lsblk --inverse --json --paths --bytes --output NAME,TYPE,FSTYPE,PKNAME,PARTUUID,SIZE -- /dev/sda3
+{"blockdevices":[{"name":"/dev/sda3","type":"part","fstype":"ext4","pkname":"/dev/sda","partuuid":"6a7b8c9d-0e1f-4203-9415-263748596a7b","size":"40793800704",
+  "children":[{"name":"/dev/sda","type":"disk","fstype":null,"pkname":null,"partuuid":null,"size":"42949672960"}]}]}
+$ blkid -p -o value -s PTTYPE /dev/sda
+gpt
+$ findmnt -no SOURCE /boot
+/dev/sda2
+$ lsblk --noheadings --nodeps --paths --output TYPE -- /dev/sda2
+part
+> /proc/cmdline
+BOOT_IMAGE=/vmlinuz-7.0.0-14-generic root=/dev/sda3 ro quiet splash

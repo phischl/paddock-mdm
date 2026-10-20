@@ -22,6 +22,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/client"
 	"github.com/phischl/paddock-mdm/agent/internal/commands"
 	"github.com/phischl/paddock-mdm/agent/internal/config"
+	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
 	"github.com/phischl/paddock-mdm/agent/internal/enroll"
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/health"
@@ -59,6 +60,8 @@ type Deps struct {
 	Accounts localadmin.System
 	// LUKS runs the LUKS tools of the root volume (plan M4b decision 8); nil disables the luks reconciler.
 	LUKS luks.Tools
+	// Encrypt is the device the in-place encryption preflight reads (plan M8e); nil reports no eligibility.
+	Encrypt encrypt.System
 	// FollowLogins sends the PAM session openings of the device until ctx ends (journal); nil: none.
 	FollowLogins func(ctx context.Context, out chan<- localadmin.Login)
 	Spool        *spool.Spool    // nil: the agent's own spool below Layout
@@ -150,6 +153,7 @@ func Load(l paths.Layout) (Deps, error) {
 	if l.Root == "" || l.Root == "/" {
 		d.FollowLogins = localadmin.FollowJournal
 		d.LUKS = luks.OS{}
+		d.Encrypt = encrypt.OS{}
 		d.Notify = func(ctx context.Context, msg string) { notifySessions(ctx, sys.Loginctl, runTool, msg) }
 	}
 	return d, nil
@@ -180,7 +184,7 @@ func New(d Deps) (*Agent, error) {
 		Emit: a.event, Result: a.commandResult, Now: d.Now}
 	if d.LUKS != nil {
 		a.luks = &reconcile.LUKS{Tools: d.LUKS, Layout: d.Layout, Escrow: escrowClient{a}, State: &a.st.LUKS, Save: a.persist,
-			Emit: a.event, Now: d.Now, TPM2Present: func() bool { return luks.TPM2Present(d.Layout.Root) }}
+			Emit: a.event, Now: d.Now, TPM2Present: func() bool { return luks.TPM2Present(d.Layout.Root) }, Encrypt: d.Encrypt}
 	}
 	if a.d.Commands == nil {
 		a.d.Commands = commands.New(commands.Handlers(map[string]commands.Handler{

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
@@ -89,6 +90,11 @@ type LUKS struct {
 	TPM2Present func() bool
 	// Background runs the inventory of the volumes of /etc/crypttab; nil runs it in a goroutine (tests run it inline).
 	Background func(func())
+	// Encrypt is the device the in-place encryption preflight reads (plan M8e decision 3); nil reports no conversion.
+	Encrypt encrypt.System
+	// CleanupPending reports whether the cleanup of an abandoned conversion is unfinished (invariant I3 of plan M8e
+	// §14.10); nil is false.
+	CleanupPending func() bool
 
 	// mu guards scanning, scan and fresh, which the background inventory writes. fresh is set by a completed scan
 	// and cleared by the pass that uses it for escrows.
@@ -103,7 +109,16 @@ type LUKS struct {
 	rootUUID string // the LUKS UUID of the root volume in the current pass ("" when cryptsetup reported none)
 	// volumeSet identifies the volumes of /etc/crypttab of the last pass (their UUIDs, sorted).
 	volumeSet string
+	// preflight is the cached preflight of an unencrypted device, taken at preflightAt with the keys of the bundle
+	// applied then.
+	preflight     *encrypt.Layout
+	preflightAt   time.Time
+	preflightKeys *bundle.Keys
 }
+
+// PreflightInterval is how often an unencrypted device repeats the in-place encryption preflight (plan M8e decision
+// 3); a newly applied bundle repeats it at once.
+const PreflightInterval = 10 * time.Minute
 
 // volumeScan is a completed inventory of the volumes of /etc/crypttab: the selection and, per header, its keyslots.
 type volumeScan struct {
@@ -203,7 +218,8 @@ func (m *LUKS) Tick(ctx context.Context, keys *bundle.Keys, full bool, mode stri
 func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 	vol, err := luks.Root(ctx, m.Tools)
 	if errors.Is(err, luks.ErrNotEncrypted) {
-		m.health = &protocol.DiskHealth{State: protocol.DiskNotEncrypted, UnlockMode: m.mode, BootSeparate: m.bootSeparate(ctx)}
+		m.health = &protocol.DiskHealth{State: protocol.DiskNotEncrypted, UnlockMode: m.mode, BootSeparate: m.bootSeparate(ctx),
+			Conversion: m.conversion(ctx, keys)}
 		return
 	}
 	if err != nil {
@@ -220,6 +236,12 @@ func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 		return
 	}
 	kinds := md.Kinds()
+	if md.Reencrypting() {
+		// An unfinished online reencryption (plan M8e decision 3): no keyslot is recorded, changed, escrowed or reported
+		// as tampering until it completes.
+		m.health = m.report(protocol.DiskEncrypting, kinds)
+		return
+	}
 	passphrase := exists(m.Layout.InstallPassphrase())
 	if !passphrase && m.State.RecoveryAttempted == 0 && !md.Has(luks.KindRecovery) {
 		m.health = m.report(protocol.DiskUnmanaged, kinds)
@@ -658,6 +680,31 @@ func (m *LUKS) bootSeparate(ctx context.Context) *bool {
 	}
 	separate := strings.TrimSpace(out) == "/boot"
 	return &separate
+}
+
+// conversion is the eligibility of an unencrypted device for the in-place encryption (plan M8e decisions 3 and 34).
+// The preflight runs at most every PreflightInterval and again at the first pass with a newly applied bundle (a new
+// bundle brings new keys); an unfinished cleanup is reported at once, without the cache.
+func (m *LUKS) conversion(ctx context.Context, keys *bundle.Keys) *protocol.DiskConversion {
+	if m.Encrypt == nil {
+		return nil
+	}
+	var l encrypt.Layout
+	if m.CleanupPending != nil && m.CleanupPending() {
+		l = encrypt.Preflight(ctx, m.Encrypt, m.Layout.Root, true)
+	} else {
+		if now := m.Now(); m.preflight == nil || keys != m.preflightKeys || !now.Before(m.preflightAt.Add(PreflightInterval)) {
+			p := encrypt.Preflight(ctx, m.Encrypt, m.Layout.Root, false)
+			m.preflight, m.preflightAt, m.preflightKeys = &p, now, keys
+		}
+		l = *m.preflight
+	}
+	c := &protocol.DiskConversion{Eligible: l.Eligible, Reasons: l.Reasons, Release: l.Release, Layout: l.Kind,
+		Initramfs: l.Initramfs}
+	if l.Initramfs == encrypt.InitramfsTools {
+		c.InitramfsRemoves = l.InitramfsRemoves
+	}
+	return c
 }
 
 func (m *LUKS) save() {

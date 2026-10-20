@@ -1,0 +1,5 @@
+@ lvm
+$ lvm pvs --segments --noheadings --units b -o pv_name,pvseg_start,pvseg_size,lv_name
+  /dev/sda3           0  4863 ubuntu-lv
+  /dev/sda3        4863  3838
+  /dev/sda3        8701  1024 swap_1

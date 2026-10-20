@@ -1,0 +1,48 @@
+$ findmnt -no SOURCE /
+/dev/sda2
+$ lsblk --inverse --json --paths --bytes --output NAME,TYPE,FSTYPE,PKNAME,PARTUUID,SIZE -- /dev/sda2
+{
+   "blockdevices": [
+      {
+         "name": "/dev/sda2",
+         "type": "part",
+         "fstype": "ext4",
+         "pkname": "/dev/sda",
+         "partuuid": "5e4d3c2b-1a09-4f8e-9d7c-6b5a49382716",
+         "size": 41871736832,
+         "children": [
+            {
+               "name": "/dev/sda",
+               "type": "disk",
+               "fstype": null,
+               "pkname": null,
+               "partuuid": null,
+               "size": 42949672960
+            }
+         ]
+      }
+   ]
+}
+$ blkid -p -o value -s PTTYPE /dev/sda
+gpt
+$ findmnt -no FSTYPE /
+ext4
+$ findmnt -no UUID /
+c0ffee00-1234-4abc-8def-001122334455
+$ findmnt -bno SIZE,AVAIL /
+41063628800 30109130752
+$ findmnt --noheadings --output TARGET --target /boot
+/
+$ findmnt --fstab -no SOURCE /
+UUID=c0ffee00-1234-4abc-8def-001122334455
+$ dpkg-query -W -f=${db:Status-Status} dracut
+installed
+> /etc/os-release
+NAME="Ubuntu"
+VERSION_ID="26.04"
+ID=ubuntu
+> /proc/cmdline
+BOOT_IMAGE=/boot/vmlinuz-7.0.0-14-generic root=UUID=c0ffee00-1234-4abc-8def-001122334455 ro quiet splash
+> /sys/firmware/efi/
+> /sys/class/tpm/tpm0/tpm_version_major
+2

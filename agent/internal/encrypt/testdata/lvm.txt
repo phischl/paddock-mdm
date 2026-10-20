@@ -1,0 +1,94 @@
+$ findmnt -no SOURCE /
+/dev/mapper/ubuntu--vg-ubuntu--lv
+$ lsblk --inverse --json --paths --bytes --output NAME,TYPE,FSTYPE,PKNAME,PARTUUID,SIZE -- /dev/mapper/ubuntu--vg-ubuntu--lv
+{
+   "blockdevices": [
+      {
+         "name": "/dev/mapper/ubuntu--vg-ubuntu--lv",
+         "type": "lvm",
+         "fstype": "ext4",
+         "pkname": "/dev/sda3",
+         "partuuid": null,
+         "size": 20396900352,
+         "children": [
+            {
+               "name": "/dev/sda3",
+               "type": "part",
+               "fstype": "LVM2_member",
+               "pkname": "/dev/sda",
+               "partuuid": "8c2f8d4e-5b7a-4f1c-9e0d-2a6b3c4d5e6f",
+               "size": 40793800704,
+               "children": [
+                  {
+                     "name": "/dev/sda",
+                     "type": "disk",
+                     "fstype": null,
+                     "pkname": null,
+                     "partuuid": null,
+                     "size": 42949672960
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}
+$ lvm lvs --noheadings -o vg_name,lv_name,vg_uuid,lv_uuid -- /dev/mapper/ubuntu--vg-ubuntu--lv
+  ubuntu-vg ubuntu-lv Xb3k9f-0aQe-Lm2T-7yRv-Pq4W-n8Zs-Jc1dHg 4fRt2x-9KpL-0mWq-Zx7c-Vb3n-Hy6u-Tg5eQa
+$ lvm pvs --noheadings -o pv_name,vg_name
+  /dev/sda3  ubuntu-vg
+$ blkid -p -o value -s PTTYPE /dev/sda
+gpt
+$ lvm pvs --segments --noheadings --units b -o pv_name,pvseg_start,pvseg_size,lv_name
+  /dev/sda3           0  4863 ubuntu-lv
+  /dev/sda3        4863  4862
+$ findmnt -no FSTYPE /
+ext4
+$ findmnt -no UUID /
+3d5a2c71-8e4b-4f09-a1c6-7b2e9d0f4a85
+$ findmnt -bno SIZE,AVAIL /
+20012101632 14873907200
+$ findmnt --noheadings --output TARGET --target /boot
+/boot
+$ findmnt -no SOURCE /boot
+/dev/sda2
+$ lsblk --noheadings --nodeps --paths --output TYPE -- /dev/sda2
+part
+$ findmnt --fstab -no SOURCE /
+/dev/disk/by-id/dm-uuid-LVM-Xb3k9f0aQeLm2T7yRvPq4Wn8ZsJc1dHg4fRt2x9KpL0mWqZx7cVb3nHy6uTg5eQa
+$ dpkg-query -W -f=${db:Status-Status} dracut
+? 1
+$ apt-get -s -o Debug::NoLocking=true install dracut
+NOTE: This is only a simulation!
+      apt-get needs root privileges for real execution.
+      Keep also in mind that locking is deactivated,
+      so don't depend on the relevance to the real current situation!
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  dracut-core
+The following packages will be REMOVED:
+  brltty initramfs-tools
+The following NEW packages will be installed:
+  dracut dracut-core
+0 upgraded, 2 newly installed, 2 to remove and 0 not upgraded.
+Remv brltty [6.6-4ubuntu5]
+Remv initramfs-tools [0.142ubuntu25.1]
+Inst dracut-core (060+5-1ubuntu3.2 Ubuntu:24.04/noble-updates [amd64])
+Inst dracut (060+5-1ubuntu3.2 Ubuntu:24.04/noble-updates [all])
+Conf dracut-core (060+5-1ubuntu3.2 Ubuntu:24.04/noble-updates [amd64])
+Conf dracut (060+5-1ubuntu3.2 Ubuntu:24.04/noble-updates [all])
+> /etc/os-release
+PRETTY_NAME="Ubuntu 24.04.3 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+VERSION="24.04.3 LTS (Noble Numbat)"
+VERSION_CODENAME=noble
+ID=ubuntu
+ID_LIKE=debian
+> /proc/cmdline
+BOOT_IMAGE=/vmlinuz-6.8.0-85-generic root=/dev/mapper/ubuntu--vg-ubuntu--lv ro quiet splash vt.handoff=7
+> /sys/firmware/efi/
+> /sys/class/tpm/tpm0/tpm_version_major
+2

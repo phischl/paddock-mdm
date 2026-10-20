@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- An unencrypted device now checks, without changing anything, whether its disk can be encrypted in place and
+  reports the result with its health: eligible or not and why, the release, the disk layout, the initramfs generator
+  and, on devices still on initramfs-tools, which packages the switch to dracut would remove. The check runs at most
+  every 10 minutes and only while the device is unencrypted. While an encryption of the root volume is unfinished
+  the device reports the disk state `encrypting` and leaves its keyslots alone.
+
 ### Security
 
 - Go toolchain 1.27.3 (was 1.27.2; build image `golang:1.27.3-trixie`, CI, every module): a security release with

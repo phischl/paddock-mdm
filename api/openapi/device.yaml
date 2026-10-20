@@ -364,7 +364,11 @@ components:
             paddock_supervisor, paddock_revoke, himmelblau and fleetd to their installed versions ("" when not
             installed), and disk carries unlock_mode and, in state not_encrypted, boot_separate. Since plan M8h:
             hostname is the kernel hostname at the check-in (os.Hostname(), plan M8h decision 8); the server keeps it
-            as the device's reported hostname. Agents before M8h do not send it.
+            as the device's reported hostname. Agents before M8h do not send it. Since plan M8e: disk.state may be
+            encrypting (an online reencryption of the root volume is unfinished), and disk.conversion carries, in state
+            not_encrypted, the in-place encryption preflight: eligible, reasons (closed set, sorted), release, layout
+            (lvm or plain), initramfs (dracut or initramfs-tools) and, under initramfs-tools, initramfs_removes (the
+            packages installing dracut would remove); from the preparation on also phase, progress and key_on_boot.
           properties:
             components:
               type: object

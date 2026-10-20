@@ -273,6 +273,7 @@ const SudoGroupMemberKeptLastAdmin = "last_admin"
 // Disk states of DiskHealth (plan M4b decision 8), from the least to the most complete.
 const (
 	DiskNotEncrypted  = "not_encrypted"   // the root file system is not on LUKS
+	DiskEncrypting    = "encrypting"      // an online reencryption of the root volume is unfinished (ADR 0039)
 	DiskUnmanaged     = "unmanaged"       // encrypted, but not installed with the Paddock autoinstall
 	DiskTPMMissing    = "tpm_missing"     // no TPM 2.0: the disk keeps its passphrase
 	DiskTPMPINMissing = "tpm_pin_missing" // the boot PIN was skipped: the disk keeps its passphrase
@@ -283,7 +284,7 @@ const (
 )
 
 // DiskStates are the states in DiskHealth.
-var DiskStates = []string{DiskNotEncrypted, DiskUnmanaged, DiskTPMMissing, DiskTPMPINMissing, DiskUnlockModeMismatch,
+var DiskStates = []string{DiskNotEncrypted, DiskEncrypting, DiskUnmanaged, DiskTPMMissing, DiskTPMPINMissing, DiskUnlockModeMismatch,
 	DiskEscrowPending, DiskCompliant}
 
 // DiskHealth is the disk encryption of the device in the check-in health (health.disk, plan M4b decision 8).
@@ -302,6 +303,35 @@ type DiskHealth struct {
 	// BootSeparate tells, in state not_encrypted only, whether /boot is a file system of its own (the layout an
 	// in-place encryption could convert, ADR 0038).
 	BootSeparate *bool `json:"boot_separate,omitempty"`
+	// Conversion is the in-place encryption of the root volume (plan M8e decision 3); nil from older agents and on
+	// devices that neither are unencrypted nor convert.
+	Conversion *DiskConversion `json:"conversion,omitempty"`
+}
+
+// DiskConversion is the in-place encryption of the root volume in health.disk (ADR 0039): the eligibility of an
+// unencrypted device and, from the preparation on, the phase and the progress.
+type DiskConversion struct {
+	Eligible bool     `json:"eligible"`
+	Reasons  []string `json:"reasons,omitempty"` // the closed preflight reasons (plan M8e decision 2), sorted
+	Release  string   `json:"release,omitempty"` // VERSION_ID of /etc/os-release (24.04 or 26.04)
+	Layout   string   `json:"layout,omitempty"`  // lvm | plain
+	// Initramfs is the installed initramfs generator: dracut when dpkg-query reports it installed, else
+	// initramfs-tools (plan M8e decision 34).
+	Initramfs string `json:"initramfs,omitempty"`
+	// InitramfsRemoves is, under initramfs-tools only, what installing dracut would remove (the simulated apt
+	// removal set, sorted; empty when the simulation failed).
+	InitramfsRemoves []string `json:"initramfs_removes,omitempty"`
+	// KeyOnBoot is true from the preparation until the initrd was regenerated: the conversion key lies in the
+	// initrd on the unencrypted /boot (plan M8e decision 52).
+	KeyOnBoot     bool       `json:"key_on_boot,omitempty"`
+	Phase         string     `json:"phase,omitempty"`      // prepared | encrypting | completed | failed
+	DataBytes     int64      `json:"data_bytes,omitempty"` // bytes to encrypt (the partition minus the header)
+	DoneBytes     int64      `json:"done_bytes,omitempty"`
+	ETASeconds    int64      `json:"eta_s,omitempty"`
+	PausedReason  string     `json:"paused_reason,omitempty"` // on_battery | helper_not_running
+	FailureStage  string     `json:"failure_stage,omitempty"` // preflight | prepare | init | resume
+	FailureReason string     `json:"failure_reason,omitempty"`
+	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
 }
 
 // DiskVolume is one LUKS volume in health.disk. Escrowed is true when the server stored a header of its current

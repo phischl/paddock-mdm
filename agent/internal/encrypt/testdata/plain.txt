@@ -1,0 +1,54 @@
+$ findmnt -no SOURCE /
+/dev/nvme0n1p3
+$ lsblk --inverse --json --paths --bytes --output NAME,TYPE,FSTYPE,PKNAME,PARTUUID,SIZE -- /dev/nvme0n1p3
+{
+   "blockdevices": [
+      {
+         "name": "/dev/nvme0n1p3",
+         "type": "part",
+         "fstype": "ext4",
+         "pkname": "/dev/nvme0n1",
+         "partuuid": "1f0e2d3c-4b5a-4968-8776-655443322110",
+         "size": 509031055360,
+         "children": [
+            {
+               "name": "/dev/nvme0n1",
+               "type": "disk",
+               "fstype": null,
+               "pkname": null,
+               "partuuid": null,
+               "size": 512110190592
+            }
+         ]
+      }
+   ]
+}
+$ blkid -p -o value -s PTTYPE /dev/nvme0n1
+gpt
+$ findmnt -no FSTYPE /
+ext4
+$ findmnt -no UUID /
+a7c41e09-2b6d-4f3a-9e85-0c1d2e3f4a5b
+$ findmnt -bno SIZE,AVAIL /
+500068036608 431205810176
+$ findmnt --noheadings --output TARGET --target /boot
+/boot
+$ findmnt -no SOURCE /boot
+/dev/nvme0n1p2
+$ lsblk --noheadings --nodeps --paths --output TYPE -- /dev/nvme0n1p2
+part
+$ findmnt --fstab -no SOURCE /
+UUID=a7c41e09-2b6d-4f3a-9e85-0c1d2e3f4a5b
+$ dpkg-query -W -f=${db:Status-Status} dracut
+installed
+> /etc/os-release
+PRETTY_NAME="Ubuntu 26.04 LTS"
+NAME="Ubuntu"
+VERSION_ID="26.04"
+ID=ubuntu
+ID_LIKE=debian
+> /proc/cmdline
+BOOT_IMAGE=/vmlinuz-7.0.0-14-generic root=UUID=a7c41e09-2b6d-4f3a-9e85-0c1d2e3f4a5b ro quiet splash
+> /sys/firmware/efi/
+> /sys/class/tpm/tpm0/tpm_version_major
+2
