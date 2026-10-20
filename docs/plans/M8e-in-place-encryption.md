@@ -1392,7 +1392,8 @@ blocker. What changes:
 53. **Gate S-IE4 `TestInPlaceEncryptionCleanupAdopt`** (review round 4, X1 (4); the `cancelled` and
     `failed:prepare` rows of §14.10). Its own run on a fresh `paddock-ie-2404` (plain layout, `tpm_only`, after
     S-IE2; `make system-test VM=paddock-ie-2404 T='^TestInPlaceEncryptionCleanupAdopt$$'`; like S-IE2 it sets
-    the organization's unlock mode to `tpm_only`, restores it in its cleanup and runs alone, decision 47): after `Install`
+    the organization's unlock mode to `tpm_only`, restores it in its cleanup and runs alone, decision 47): after
+    `Install`
     and the request → `prepared`; the test makes dracut fail without a product hook — `sudo dpkg-divert --add
     --rename --divert /usr/bin/dracut.real /usr/bin/dracut` and a stub `/usr/bin/dracut` (`#!/bin/sh`, `exit 1`,
     0755); `sudo paddockd encrypt-abort` → exit 0, `device.disk_conversion_aborted{by: operator}`, row
