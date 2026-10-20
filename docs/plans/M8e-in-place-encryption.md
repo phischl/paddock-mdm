@@ -303,7 +303,7 @@ Paddock never starts the conversion on its own initiative.
    ```go
    EventDiskConversionPrepared  = "disk.conversion_prepared"  // data: {conversion_id, layout, volume, data_bytes}
    EventDiskConversionStarted   = "disk.conversion_started"   // data: {conversion_id, volume, init_s, init_result}
-   //                                                           init_result: ok | <stage>:<reason> | unknown (decision 18)
+   //                                                           init_result: ok | <stage>:<reason> | unknown (dec. 18)
    EventDiskConversionCompleted = "disk.conversion_completed" // data: {conversion_id, volume, data_bytes, duration_s}
    EventDiskConversionFailed    = "disk.conversion_failed"    // data: {conversion_id, stage, reason, volume}
    EventDiskConversionAborted   = "disk.conversion_aborted"   // data: {conversion_id, by}  by: admin | operator
