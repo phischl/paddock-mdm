@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Updated bundled components: AWS CLI 2.38.2 (was 2.38.1).
+- Updated bundled components: Fleet and fleetctl v4.93.1 (was v4.93.0; bug fixes), AWS CLI 2.38.2 (was 2.38.1).
 
 ## [0.1.0-alpha.4] - 2026-10-19
 
