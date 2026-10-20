@@ -316,7 +316,8 @@ Paddock never starts the conversion on its own initiative.
    `UpdateDiskConversionPhase`): `prepared` sets `layout`, `luks_uuid`, `data_bytes`; `started` sets
    `encrypting` from `requested`, `prepared`, `failed` or `cancelled` (the device adopted a conversion whose
    initrd converted the disk, plan §14.10 I2; refused and audited only when another row of the device is open,
-   `device_disk_conversion_open_idx`), clearing `failure_stage`, `failure_reason` and `finished_at`; `completed` sets `completed` and `finished_at`; `failed` sets `failed`, `failure_stage`,
+   `device_disk_conversion_open_idx`), clearing `failure_stage`, `failure_reason` and `finished_at`; `completed` sets
+   `completed` and `finished_at`; `failed` sets `failed`, `failure_stage`,
    `failure_reason`, `finished_at`; `aborted` sets `cancelled` and `finished_at`. The result of an
    `encrypt_disk_abort` command with `{aborted: false, reason}` stores `abort_refused_reason = reason` and
    leaves the phase (the command-result path of `app/commands.go`, keyed on `abort_command_id`). An event for a row of another device
@@ -679,7 +680,8 @@ DeviceDiskConversion: {id: uuid, phase: enum[requested,prepared,encrypting,compl
                        luks_uuid: uuid nullable, data_bytes: integer int64 nullable, done_bytes: integer int64 nullable,
                        eta_s: integer nullable, paused_reason: string nullable, progress_at: date-time nullable,
                        failure_stage: string nullable, failure_reason: string nullable, finished_at: date-time nullable,
-                       abort_command_id: uuid nullable, abort_command_status: string nullable, abort_refused_reason: string nullable,
+                       abort_command_id: uuid nullable, abort_command_status: string nullable, abort_refused_reason:
+                       string nullable,
                        active: boolean}  # §14.5 decision 36: phase in requested|prepared|encrypting, or the last
                                          # health disk.state = encrypting, or completed with health ≠ compliant
 DeviceEncryptRequest: {confirm_hostname (required), reason (required, 2–500), backup_confirmed (boolean, required)}
@@ -687,7 +689,8 @@ DeviceEncryptCancelRequest: {confirm_hostname (required)}
 DiskEncryption:       + conversion (DeviceDiskConversion, nullable)
 DiskState / DiskHealth: + conversion (DiskConversionHealth); state enum + encrypting
 DiskConversionHealth: {eligible: boolean, reasons: [string], release: string, layout: string, phase: string, data_bytes, done_bytes: integer int64,
-                       eta_s: integer, paused_reason: string, failure_stage: string, failure_reason: string, updated_at: date-time,
+                       eta_s: integer, paused_reason: string, failure_stage: string, failure_reason: string, updated_at:
+                       date-time,
                        initramfs: string (dracut | initramfs-tools), initramfs_removes: [string],  # §14.4 decision 34
                        key_on_boot: boolean}  # §14.6 decision 52
 AttentionKind:        + disk_conversion_failed
@@ -1371,7 +1374,8 @@ blocker. What changes:
     the disk, generation 2 does — the remaining assertions of S-IE1 (§9) unchanged. S-IE2 (`tpm_only`) keeps its
     sequence: there is no PIN to defer.
 52. **A skipped PIN on a converted device: the dialogue returns at every boot** (review finding M-2). While
-    `state.Conversion.Phase` is `encrypting` or `completed` and `!InitrdRegenerated` (no TPM keyslot yet) the agent, at every
+    `state.Conversion.Phase` is `encrypting` or `completed` and `!InitrdRegenerated` (no TPM keyslot yet) the agent, at
+    every
     start and at every full pass, re-creates `/var/lib/paddock/disk-setup-pending` when it is missing, so that
     `paddock-disk-setup.service` asks for the PIN at the next boot; the user can still skip (fail safe, the boot
     is never blocked). `protocol.DiskConversion` (decision 3) gains `KeyOnBoot bool json:"key_on_boot,omitempty"`,
@@ -1442,9 +1446,11 @@ PDK-241 — 36 (server refusal, `active`), 38, 39 (server withdrawal and event p
 the reason `cleanup_pending` (§14.10); PDK-243 — 13 (the cleanup after step 7 under I3), 29, 32, 33, 36 (agent
 refusal), 37; PDK-244 — 29, 31; PDK-245 — 3 and 22 (the hold until `InitrdRegenerated`), 18 (I2), 20 (also
 while `completed`, the order of I1, `plan.env` last), 30, 39 (the stop before the hand-over and the launch
-condition), 52 (the re-arm, `key_on_boot`), the I2 adoption of decision 18 and §14.10; PDK-246 — 34 (the dialogue lines), 36 and 39 (the alerts), 52 (the
+condition), 52 (the re-arm, `key_on_boot`), the I2 adoption of decision 18 and §14.10; PDK-246 — 34 (the dialogue
+lines), 36 and 39 (the alerts), 52 (the
 `keyOnBoot` alert), §14.8; PDK-247 — 41–53 (S-IE4 of decision 53), S11–S14, the Lock hand test of decision
-39; PDK-248 — 35, §14.7, the O4 note of §14.2. Every ticket of the agent and the gates cites §14.10 (invariants and the state × event table).
+39; PDK-248 — 35, §14.7, the O4 note of §14.2. Every ticket of the agent and the gates cites §14.10 (invariants and the
+state × event table).
 
 ### 14.10 Boot-path invariants and the state × event table (binding; review round 3 of PR #117)
 

@@ -182,7 +182,8 @@ decisions above stand, three are made precise:
    table a reviewer walks): I1 — while the root partition is LUKS and the initrd was not regenerated, nothing
    removes the module, its configuration, the plan, the key or the conversion keyslot, and every initrd build
    keeps the module; the module leaves only together with a crypttab line that unlocks through the TPM, verified
-   on every installed initrd. I2 — the disk decides the phase, for a device that holds a conversion and only then: a LUKS root with the
+   on every installed initrd. I2 — the disk decides the phase, for a device that holds a conversion and only then: a
+   LUKS root with the
    conversion keyslot or an unfinished reencryption is adopted as `encrypting`, whatever a state file, a queued
    preparation or a boot result says, and a module a cleanup had removed is reinstalled before anything else.
    I3 — a cleanup after an abandoned conversion removes the module first, regenerates, and counts as done only
