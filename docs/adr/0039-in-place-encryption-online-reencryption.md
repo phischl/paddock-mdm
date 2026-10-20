@@ -182,10 +182,13 @@ decisions above stand, three are made precise:
    table a reviewer walks): I1 — while the root partition is LUKS and the initrd was not regenerated, nothing
    removes the module, its configuration, the plan, the key or the conversion keyslot, and every initrd build
    keeps the module; the module leaves only together with a crypttab line that unlocks through the TPM, verified
-   on every installed initrd. I2 — the disk decides the phase: a LUKS root with the conversion keyslot or an
-   unfinished reencryption is `encrypting`, whatever a state file or boot result says. I3 — a cleanup after an
-   abandoned conversion counts as done only when no installed initrd carries the module; until then it is
-   retried, the device is not eligible again and not removable. A user who skips the boot PIN on a converted
+   on every installed initrd. I2 — the disk decides the phase, for a device that holds a conversion and only then: a LUKS root with the
+   conversion keyslot or an unfinished reencryption is adopted as `encrypting`, whatever a state file, a queued
+   preparation or a boot result says, and a module a cleanup had removed is reinstalled before anything else.
+   I3 — a cleanup after an abandoned conversion removes the module first, regenerates, and counts as done only
+   when the initrd of no installed kernel carries the module; the key and the plan are deleted only after that
+   check, so that a device which converts through a stale initrd meanwhile is adopted, not lost; until then the
+   cleanup is retried, the device is not eligible again and not removable. A user who skips the boot PIN on a converted
    device is asked again at every start (never blocked); until the PIN exists the key lies on the unencrypted
    `/boot`, which the device reports (`key_on_boot`), the portal shows and RR-57 records. Removing Paddock is
    refused while a conversion is active — on the server (409) and on
