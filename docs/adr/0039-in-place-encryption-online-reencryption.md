@@ -178,7 +178,17 @@ decisions above stand, three are made precise:
    `completed` and the device is not yet `compliant` (the reencryption may finish before the user chose the boot
    PIN; the initrd with the Paddock module and the conversion key is then the only unlock path). Until the agent
    has regenerated the initrd without the module it keeps the conversion key's keyslot and runs the regeneration
-   also after `completed`. Removing Paddock is refused while a conversion is active — on the server (409) and on
+   also after `completed`. Three boot-path invariants bind every rule (plan M8e §14.10, with the state × event
+   table a reviewer walks): I1 — while the root partition is LUKS and the initrd was not regenerated, nothing
+   removes the module, its configuration, the plan, the key or the conversion keyslot, and every initrd build
+   keeps the module; the module leaves only together with a crypttab line that unlocks through the TPM, verified
+   on every installed initrd. I2 — the disk decides the phase: a LUKS root with the conversion keyslot or an
+   unfinished reencryption is `encrypting`, whatever a state file or boot result says. I3 — a cleanup after an
+   abandoned conversion counts as done only when no installed initrd carries the module; until then it is
+   retried, the device is not eligible again and not removable. A user who skips the boot PIN on a converted
+   device is asked again at every start (never blocked); until the PIN exists the key lies on the unencrypted
+   `/boot`, which the device reports (`key_on_boot`), the portal shows and RR-57 records. Removing Paddock is
+   refused while a conversion is active — on the server (409) and on
    the device (`conversion_pending` while the agent holds a conversion whose initrd was not regenerated yet, except
    one that failed on a still unencrypted disk, or while the root volume carries a `reencrypt` keyslot): the
    removal would purge the plan and the conversion key such a device needs to open its root volume. No

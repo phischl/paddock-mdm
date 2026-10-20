@@ -157,7 +157,9 @@ Paddock never starts the conversion on its own initiative.
    `root_reference_unsupported` (`findmnt --fstab -no SOURCE /` is neither `UUID=<fs uuid>` nor
    `/dev/mapper/<vg>-<lv>` nor `/dev/<vg>/<lv>`, or `root=` on `/proc/cmdline` is neither `UUID=<fs uuid>` nor one
    of those paths), `already_encrypted` (the `luks` reconciler's state is not `not_encrypted`), `dm_crypt_missing`
-   (`/sys/module/dm_crypt` absent and `modprobe dm_crypt` fails; checked at preparation only, decision 7).
+   (`/sys/module/dm_crypt` absent and `modprobe dm_crypt` fails; checked at preparation only, decision 7),
+   `cleanup_pending` (`state.Conversion.CleanupPending` is true: an initrd still carries the module of an
+   abandoned conversion, invariant I3 of §14.10; reported alone, the other checks are skipped).
 3. `protocol.DiskHealth` gains `Conversion *DiskConversion json:"conversion,omitempty"`:
 
    ```go
@@ -189,8 +191,9 @@ Paddock never starts the conversion on its own initiative.
      and returns before `watch`, `step` and `volumes`: no keyslot is recorded, changed, escrowed or reported as
      tampering while the reencryption is unfinished;
    - after completion the existing flow continues (`watch` records the keyslots it sees first, the install
-     passphrase is the conversion key, `step` enrolls the recovery key, escrows the header) with one hold (§14.5
-     decision 36, review finding B1′): while `state.Conversion` exists and `!state.Conversion.InitrdRegenerated`,
+     passphrase is the conversion key, `step` enrolls the recovery key, escrows the header) with one hold
+     (invariant I1 of §14.10; §14.5 decision 36, review finding B1′): while `state.Conversion` exists and
+     `!state.Conversion.InitrdRegenerated`,
      `step` does not remove the conversion key's keyslot or the install passphrase and the state reported is at
      most `escrow_pending`, never `compliant` — the initrd still carries the Paddock module and the key as the
      only unlock path until decision 20 has replaced it. Once `InitrdRegenerated` is true the removal of the
@@ -299,7 +302,8 @@ Paddock never starts the conversion on its own initiative.
 
    ```go
    EventDiskConversionPrepared  = "disk.conversion_prepared"  // data: {conversion_id, layout, volume, data_bytes}
-   EventDiskConversionStarted   = "disk.conversion_started"   // data: {conversion_id, volume, init_s}
+   EventDiskConversionStarted   = "disk.conversion_started"   // data: {conversion_id, volume, init_s, init_result}
+   //                                                           init_result: ok | <stage>:<reason> | unknown (decision 18)
    EventDiskConversionCompleted = "disk.conversion_completed" // data: {conversion_id, volume, data_bytes, duration_s}
    EventDiskConversionFailed    = "disk.conversion_failed"    // data: {conversion_id, stage, reason, volume}
    EventDiskConversionAborted   = "disk.conversion_aborted"   // data: {conversion_id, by}  by: admin | operator
@@ -307,7 +311,8 @@ Paddock never starts the conversion on its own initiative.
 
    (the closed set gains five.) `eventCodes` maps them to `device.disk_conversion_prepared | _started |
    _completed | _failed | _aborted`; `audit.deviceEventParams` gains `conversion_id`, `layout`, `data_bytes`,
-   `duration_s`, `init_s`, `by`. The claim of `eventEntry` updates the row named by `conversion_id` (query
+   `duration_s`, `init_s`, `init_result`, `by`. The claim of `eventEntry` updates the row named by `conversion_id`
+   (query
    `UpdateDiskConversionPhase`): `prepared` sets `layout`, `luks_uuid`, `data_bytes`; `started` sets
    `encrypting`; `completed` sets `completed` and `finished_at`; `failed` sets `failed`, `failure_stage`,
    `failure_reason`, `finished_at`; `aborted` sets `cancelled` and `finished_at`. The result of an
@@ -344,7 +349,8 @@ Paddock never starts the conversion on its own initiative.
     or later (the module files exist) first runs the cleanup of `encrypt.Abort` (decision 14: the module
     directory, `91-paddock-encrypt.conf`, `/var/lib/paddock/encrypt/`, the conversion key, the disk-setup files,
     `dracut -f --regenerate-all`) so that a failed preparation — an `initrd_incomplete` in particular — can never
-    convert the disk at the next boot (review finding N2):
+    convert the disk at the next boot (review finding N2) — under invariant I3 of §14.10: `CleanupPending` until
+    `lsinitrd` of every installed initrd shows no `paddock-encrypt`, retried at every full pass:
     1. Preflight again (decision 2) → reason `not_eligible:<reasons>`.
     2. Choose the LUKS UUID (random v4) and the mapping name: `dm_crypt-0`, or `dm_crypt-<n>` with the smallest
        `n` whose `/dev/mapper/<name>` does not exist; write `/var/lib/paddock/encrypt/plan.json` (0600, §6.3) with
@@ -391,7 +397,11 @@ Paddock never starts the conversion on its own initiative.
     `state.Conversion.Phase = "cancelled"` and emits `disk.conversion_aborted{conversion_id, by: operator}`
     through the running agent's spool (the subcommand writes the event with the next `event_seq` into the spool
     file under the agent's lock, as `paddockd uninstall` does in M8d decision 40 step 10). It refuses in any
-    other phase (exit 2, message on stderr).
+    other phase (exit 2, message on stderr). `encrypt.Abort` runs under invariant I3 of §14.10: it ends with
+    `lsinitrd` over every `/boot/initrd.img-*`; while one still lists `paddock-encrypt` it sets
+    `state.Conversion.CleanupPending` and the agent retries the file removal and the regeneration at every full
+    pass; the state is cleared only once no initrd carries the module. It never runs while the partition is LUKS
+    (I1; decision 27 refuses with `not_abortable`).
 
 ### 3.5 The init step (dracut module; PDK-244)
 
@@ -449,14 +459,22 @@ Paddock never starts the conversion on its own initiative.
 ### 3.6 After the conversion boot and the background phase (agent; PDK-245)
 
 18. At every start the agent reads `/run/paddock/encrypt-boot.env` when `state.Conversion` is `prepared` or
-    `encrypting` and the file exists (and removes it afterwards):
-    - `ok`: when the phase was `prepared`, set `encrypting`, `StartedAt = now`, emit `disk.conversion_started
-      {conversion_id, volume, init_s}`; then decision 20 (initrd regeneration) and decision 21 (resume).
-    - `failed` or `skipped`: set `failed`, stage `init`, the reason; emit `disk.conversion_failed`; remove the
-      module conf and directory, the plan files and (only when the partition is not LUKS) the conversion key and
-      the disk-setup files; `dracut -f --regenerate-all`. When the partition *is* LUKS (a failure after the init),
-      the phase is `encrypting` nonetheless once the agent finds `md.Reencrypting()` true — the device booted on
-      dm-crypt, and decision 21 continues.
+    `encrypting` and the file exists (and removes it afterwards). The disk decides, not the file (invariant I2,
+    §14.10): before anything else the agent runs `cryptsetup isLuks <partition>`.
+    - The partition is LUKS (the file says `ok`, or it says `failed`/`skipped` after the header was written, or
+      the file is missing because the device booted through the module once more): when the phase was `prepared`,
+      set `encrypting`, `StartedAt = now`, emit `disk.conversion_started{conversion_id, volume, init_s,
+      init_result}` with `init_result` = `ok` or `<stage>:<reason>` from the file (`unknown` without a file); no
+      cleanup of any kind (I1); then decision 20 (initrd regeneration) and decision 21 (resume). The device booted
+      on dm-crypt through the module; the init failure is a log line and the event param, never a `failed` phase.
+    - The partition is not LUKS and the file says `failed` or `skipped`: set `failed`, stage `init`, the reason;
+      emit `disk.conversion_failed`; run the cleanup of decision 14 (`encrypt.Abort`'s file part: the module conf
+      and directory, the plan files, the conversion key, the disk-setup files, `dracut -f --regenerate-all`)
+      under invariant I3: `state.Conversion.CleanupPending = true` until `lsinitrd` of every `/boot/initrd.img-*`
+      shows no `paddock-encrypt`; the cleanup is retried at every full pass until then and the state is not
+      cleared before.
+    - The partition is not LUKS and the file is missing: a `prepared` conversion stays `prepared` (the user has
+      not restarted yet, or the device booted from an initrd without the module).
     Without the file (the device booted from an initrd without the module, or the user has not restarted yet), a
     `prepared` conversion stays `prepared`; an `encrypting` one continues with decision 21.
 19. Dev-only test hooks: the embedded script honours `paddock.encrypt.testdelay=<stage>:<seconds>` on the kernel
@@ -468,13 +486,17 @@ Paddock never starts the conversion on its own initiative.
 20. Initrd regeneration after the keyslot of the unlock mode exists (checked at every full pass while
     `state.Conversion.Phase` is `encrypting` **or `completed`** and `!state.Conversion.InitrdRegenerated` — the
     reencryption may finish before the user chose the PIN, review finding B1′): when `luks.Dump` shows a
-    `tpm2+pin` or `tpm2` keyslot, the agent appends `<mapping> UUID=<luks uuid> none luks,tpm2-device=auto` to
-    `/etc/crypttab` (unless a line with that UUID exists), removes `91-paddock-encrypt.conf` and
-    `/usr/lib/dracut/modules.d/99paddock-encrypt/`, runs `dracut -f --regenerate-all` (15 min bound) and verifies
-    with `lsinitrd` that the running kernel's initrd contains `etc/crypttab` with the UUID and no
-    `paddock-encrypt`; then `InitrdRegenerated = true`. A failure is logged and retried at the next full pass; the
-    device keeps booting with the module (the keyfile opens the disk) until it succeeds. The conversion key stays
-    on disk until the `luks` reconciler removes it after completion (decision 3).
+    `tpm2+pin` or `tpm2` keyslot, the agent, in this order (invariant I1, §14.10: the module leaves the initrd
+    only together with a crypttab line that opens the volume with the TPM keyslot): (1) appends `<mapping>
+    UUID=<luks uuid> none luks,tpm2-device=auto` to `/etc/crypttab` (unless a line with that UUID exists); (2)
+    removes `91-paddock-encrypt.conf` and `/usr/lib/dracut/modules.d/99paddock-encrypt/`; (3) runs `dracut -f
+    --regenerate-all` (15 min bound); (4) verifies with `lsinitrd` that **every** `/boot/initrd.img-*` contains
+    `etc/crypttab` with the UUID and no `paddock-encrypt` (I3); (5) only then removes `plan.env`, `plan.json`
+    and `test-hooks` from `/var/lib/paddock/encrypt/` and sets `InitrdRegenerated = true`. A failure at (3) or
+    (4) is logged and retried at the next full pass — from (2) on, by re-running (2) to (4) — while the device
+    keeps booting with the module (the keyfile opens the disk; a kernel update in between builds an initrd that
+    unlocks through the crypttab line of (1)). The conversion key stays on disk until the `luks` reconciler
+    removes it after `InitrdRegenerated` (decision 3). Dev builds remove `test-hooks` here too.
 21. Background phase: `paddockd encrypt-resume` (new `agent/internal/encrypt/resume.go`, root only, runs inside
     the transient unit `paddock-encrypt-resume.service` started by the agent with `systemd-run --unit
     paddock-encrypt-resume --collect --no-block --property=KillMode=mixed --property=Nice=10
@@ -497,9 +519,11 @@ Paddock never starts the conversion on its own initiative.
     `DataBytes`, `ETASeconds`, `PausedReason`, `UpdatedAt`; `paused_reason: helper_not_running` when the unit is
     not active and no result exists); reads `result.json`: `completed` → `state.Conversion.Phase = "completed"`,
     `CompletedAt`, emit `disk.conversion_completed{conversion_id, volume, data_bytes, duration_s}`, remove
-    `/var/lib/paddock/encrypt/` except nothing else — the `luks` reconciler now sees a LUKS2 root without the
-    `reencrypt` keyslot, the install passphrase and the disk-setup marker (already removed by the PIN dialogue) and
-    runs the M4b flow to `compliant`; `failed` → emit `disk.conversion_failed{stage: resume, reason}`, count
+    **only** `progress.json` and `result.json` (`plan.env`, `plan.json`, the module and the conf stay until
+    decision 20 has verified the regenerated initrds — invariant I1, §14.10; review finding B-1) — the `luks`
+    reconciler now sees a LUKS2 root without the `reencrypt` keyslot, the install passphrase and the disk-setup
+    marker (removed by the PIN dialogue, or re-armed by decision 52 while the PIN is skipped) and runs the M4b flow
+    under the hold of decision 3; `failed` → emit `disk.conversion_failed{stage: resume, reason}`, count
     `ResumeFailures`; up to 3 relaunches per boot, then wait for the next boot (the device keeps working on
     dm-crypt; the header stays recoverable). `state.Conversion` is cleared once `InitrdRegenerated` is true
     **and** the device reports `compliant` or `escrow_pending` for the first time after `completed` (decision 3's
@@ -648,7 +672,8 @@ DiskEncryption:       + conversion (DeviceDiskConversion, nullable)
 DiskState / DiskHealth: + conversion (DiskConversionHealth); state enum + encrypting
 DiskConversionHealth: {eligible: boolean, reasons: [string], release: string, layout: string, phase: string, data_bytes, done_bytes: integer int64,
                        eta_s: integer, paused_reason: string, failure_stage: string, failure_reason: string, updated_at: date-time,
-                       initramfs: string (dracut | initramfs-tools), initramfs_removes: [string]}  # §14.4 decision 34
+                       initramfs: string (dracut | initramfs-tools), initramfs_removes: [string],  # §14.4 decision 34
+                       key_on_boot: boolean}  # §14.6 decision 52
 AttentionKind:        + disk_conversion_failed
 
 # operations
@@ -693,6 +718,7 @@ type DiskConversion struct {
     FailureStage, FailureReason string
     AbortRequested       bool                 `json:"abort_requested,omitempty"` // decision 27, while preparing
     Notified             map[string]time.Time `json:"notified,omitempty"`        // decision 28, by session ID
+    CleanupPending       bool                 `json:"cleanup_pending,omitempty"` // §14.10 I3: cleanup unfinished
 }
 ```
 
@@ -749,7 +775,7 @@ block the boot). The key file is referenced by path only; the script never echoe
 | `device.encrypt_requested` | An organization administrator asked, with a step-up and a backup acknowledgement, to encrypt the disk of an unencrypted device in place; the device prepares itself and converts at its next restart. | `hostname`, `reason`, `backup_confirmed`, `command_id`, `conversion_id` |
 | `device.encrypt_cancelled` | An organization administrator cancelled an in-place encryption with a step-up: the undelivered command was withdrawn, or the device was sent a signed abort that it executes only before its restart. | `hostname`, `command_id`, `conversion_id`, `mode` (command_cancelled, abort_sent) |
 | `device.disk_conversion_prepared` | The device escrowed the conversion key and built the initrd for its in-place encryption; it waits for a restart (actor: the device). | `conversion_id`, `layout`, `volume`, `data_bytes` |
-| `device.disk_conversion_started` | The device initialised LUKS2 on its root partition at the restart and encrypts the remaining data in the background (actor: the device). | `conversion_id`, `volume`, `init_s` |
+| `device.disk_conversion_started` | The device initialised LUKS2 on its root partition at the restart and encrypts the remaining data in the background (actor: the device). | `conversion_id`, `volume`, `init_s`, `init_result` |
 | `device.disk_conversion_completed` | The device finished encrypting its root partition; the recovery key, the TPM unlock and the header escrow follow as for a newly installed device (actor: the device). | `conversion_id`, `volume`, `data_bytes`, `duration_s` |
 | `device.disk_conversion_failed` | The in-place encryption of a device failed or was skipped at the named stage; stages preflight, prepare and init leave the device unencrypted, stage resume leaves it bootable with the encryption unfinished (actor: the device). | `conversion_id`, `stage`, `reason`, `volume` |
 | `device.disk_conversion_aborted` | The device abandoned a prepared in-place encryption before its restart on an administrator's cancel from the portal or an operator's command at the device; the disk is unchanged and the device unencrypted (actor: the device). | `conversion_id`, `by` |
@@ -803,6 +829,7 @@ Message keys `audit.<code>` in `en.json` and `de.json`.
 | `devices.disk.convert.reasons.root_reference_unsupported` | fstab or the kernel command line refer to root by a device path | fstab oder die Kernel-Kommandozeile verweisen über einen Gerätepfad auf root |
 | `devices.disk.convert.reasons.already_encrypted` | the root volume is already encrypted | das Root-Volume ist bereits verschlüsselt |
 | `devices.disk.convert.reasons.dm_crypt_missing` | the kernel has no dm-crypt | der Kernel hat kein dm-crypt |
+| `devices.disk.convert.reasons.cleanup_pending` | the device is still removing an abandoned encryption from its boot files; try again after its next check-in | das Gerät entfernt noch eine abgebrochene Verschlüsselung aus seinen Startdateien; nach dem nächsten Check-in erneut versuchen |
 | `devices.disk.convert.cancel.label` | Cancel encryption | Verschlüsselung abbrechen |
 | `devices.disk.convert.cancel.title` | Cancel the encryption of {hostname} | Verschlüsselung von {hostname} abbrechen |
 | `devices.disk.convert.cancel.confirm` | Possible until the device restarts. If the device has already prepared itself, it receives a signed cancellation at its next check-in and discards the preparation; the stored recovery key stays in Paddock. Type the hostname to confirm. | Möglich, bis das Gerät neu startet. Hat sich das Gerät bereits vorbereitet, erhält es beim nächsten Check-in einen signierten Abbruch und verwirft die Vorbereitung; der hinterlegte Wiederherstellungsschlüssel bleibt in Paddock. Geben Sie den Hostnamen zur Bestätigung ein. |
@@ -1164,10 +1191,12 @@ blocker. What changes:
     - Agent, `uninstallCommand` (`agent/internal/agent/uninstall.go`): refuses with
       `{accepted: false, reason: conversion_pending}` when `(state.Conversion != nil &&
       !state.Conversion.InitrdRegenerated && phase ∉ {cancelled, failed-while-unencrypted}) ||
-      md.Reencrypting()` of the root volume's `luks.Dump` — where *failed-while-unencrypted* is a `failed` phase
-      whose `FailureStage` is `preflight`, `prepare` or `init` with the partition not LUKS (decision 18), so that
-      a failed conversion on an unencrypted device never blocks a removal (review finding N2), while a `completed`
-      conversion blocks it until the initrd no longer carries the module and the key. `UninstallAccepted.Reason`
+      state.Conversion.CleanupPending || md.Reencrypting()` of the root volume's `luks.Dump` — where
+      *failed-while-unencrypted* is a `failed` phase whose `FailureStage` is `preflight`, `prepare` or `init`
+      with the partition not LUKS (decision 18) and whose cleanup is done (I3: no initrd carries the module), so
+      that a failed conversion on an unencrypted device never blocks a removal once nothing can convert it at the
+      next boot (review finding N2), while a `completed` conversion blocks it until the initrd no longer carries
+      the module and the key (invariant I1, §14.10). `UninstallAccepted.Reason`
       gains the value; the server stores and shows it as it does `revocation_pending`. The uninstall helper
       (`agent/internal/uninstall/`) is not changed.
     - Portal, `UninstallDialog.vue`: while `device.disk_conversion.active` is true the dialogue shows the alert
@@ -1312,22 +1341,43 @@ blocker. What changes:
     `device.disk_conversion_completed`: `GET /devices/{id}` shows `disk_conversion{phase: completed, active:
     true}`, the uninstall request → 409, `lsinitrd` still lists `paddock-encrypt-init.service` and
     `etc/paddock/encrypt-key`, `cryptsetup luksDump` still lists the conversion key's keyslot, the health is
-    `tpm_pin_missing` (never `compliant`). Then the test runs `sudo touch /var/lib/paddock/disk-setup-pending`
-    and `sudo systemctl reboot`: the dialogue returns (`ConditionPathExists`), `AnswerDiskSetup` with the PIN; SSH
-    back; within 15 minutes the device is `compliant` with `[recovery, tpm2+pin]`, `lsinitrd` shows `etc/crypttab`
-    with the UUID and no `paddock-encrypt`, `active: false`, uninstall request → 200 (the test cancels that
+    `tpm_pin_missing` (never `compliant`), `health.disk.conversion.key_on_boot` is true, and
+    `/var/lib/paddock/disk-setup-pending` exists again (decision 52's re-arm). While the PIN is still skipped the
+    test runs `sudo dracut -f --regenerate-all` and `sudo systemctl reboot`: the dialogue returns and is skipped
+    once more; SSH back on dm-crypt (invariant I1: every initrd build keeps the module while the partition is LUKS
+    and `InitrdRegenerated` is false; `lsinitrd` lists the module and the key again). Then `sudo systemctl
+    reboot` once more: the dialogue returns by the re-arm alone (no manual marker), `AnswerDiskSetup` with the
+    PIN; SSH back; within 15 minutes the device is `compliant` with `[recovery, tpm2+pin]`, `lsinitrd` of every
+    installed initrd shows `etc/crypttab` with the UUID and no `paddock-encrypt`, `/var/lib/paddock/encrypt/`
+    holds no `plan.env`, `key_on_boot` is false, `active: false`, uninstall request → 200 (the test cancels that
     uninstall at once through `POST …/uninstall/cancel` so that the gate's remaining assertions run on an
     installed device); then `RebootWithPIN` opens the root volume, and the revealed generation 1 no longer opens
     the disk, generation 2 does — the remaining assertions of S-IE1 (§9) unchanged. S-IE2 (`tpm_only`) keeps its
     sequence: there is no PIN to defer.
+52. **A skipped PIN on a converted device: the dialogue returns at every boot** (review finding M-2). While
+    `state.Conversion.Phase == "completed"` and `!InitrdRegenerated` (no TPM keyslot yet) the agent, at every
+    start and at every full pass, re-creates `/var/lib/paddock/disk-setup-pending` when it is missing, so that
+    `paddock-disk-setup.service` asks for the PIN at the next boot; the user can still skip (fail safe, the boot
+    is never blocked). `protocol.DiskConversion` (decision 3) gains `KeyOnBoot bool json:"key_on_boot,omitempty"`,
+    true from `prepared` until `InitrdRegenerated` (the conversion key lies in the initrd on the unencrypted
+    `/boot`); `DiskConversionHealth` (§6.1) gains `key_on_boot: boolean`. The portal shows, while `key_on_boot` is
+    true and the phase is `encrypting` or `completed`, the alert `devices.disk.convert.keyOnBoot` (§14.8) on the
+    disk card: the disk is not protected at rest until the user chooses the boot PIN; the device asks at every
+    start. RR-57 records the exposure (§14.7). Under `tpm_only` the keyslot is enrolled without a dialogue at the
+    conversion boot, so the re-arm covers only a failed enrollment, which the dialogue of decision 1 of ADR 0038
+    already retries at the next boot.
 
 ### 14.7 Residual risks (§12) amended
 
-- RR-57 gains the sentence: "A Lock or Destroy during `encrypting` erases a header that is not escrowed; the
+- RR-57 gains the sentences: "A Lock or Destroy during `encrypting` erases a header that is not escrowed; the
   encrypted part is lost for good, the rest stays readable until the reencryption would have reached it. The
   dialogue says so; the agent stops the background encryption before it hands the revocation over and does not
   restart it for 24 hours, also after a refused revocation; the device-side result on a header with the
-  `online-reencrypt` requirement was verified once on a VM (PDK-247)."
+  `online-reencrypt` requirement was verified once on a VM (PDK-247)." and "A user who skips the boot PIN on a
+  converted device leaves the conversion key in the initrd on the unencrypted `/boot` for as long as the PIN is
+  skipped — the disk is then encrypted but not protected at rest; the device asks for the PIN at every start
+  (plan M8e decision 52), the device page and the health say so (`key_on_boot`), and the attention list keeps
+  the device under `disk_not_compliant`. Record: devices whose `key_on_boot` stays true for longer than a day."
 - RR-58 as reworded in decision 35.
 - RR-56, RR-59, RR-60, RR-61 unchanged (removing Paddock is refused while a conversion is active, decision 36).
 
@@ -1339,6 +1389,8 @@ blocker. What changes:
 | `devices.danger.revoke.conversionWarning.unencrypted` | This device is not encrypted yet; it refuses a Lock or Destroy until the encryption has started. | Dieses Gerät ist noch nicht verschlüsselt; es lehnt Sperren und Zerstören ab, bis die Verschlüsselung begonnen hat. |
 | `devices.danger.revoke.conversionWarning.encrypting` | The in-place encryption is unfinished: the header is not stored in Paddock, so this action cannot be undone with a stored header, and data the encryption has not reached stays readable. The background encryption is stopped before the device acts. | Die nachträgliche Verschlüsselung ist unvollständig: Der Header ist nicht in Paddock hinterlegt, diese Aktion lässt sich also nicht mit einem hinterlegten Header rückgängig machen, und Daten, die die Verschlüsselung noch nicht erreicht hat, bleiben lesbar. Die Verschlüsselung im Hintergrund wird angehalten, bevor das Gerät handelt. |
 
+| `devices.disk.convert.keyOnBoot` | The disk is encrypted but not protected at rest yet: until the user chooses the boot PIN, the key that unlocks it lies on the unencrypted boot partition. The device asks for the PIN at every start. | Die Festplatte ist verschlüsselt, aber noch nicht im Ruhezustand geschützt: Bis der Benutzer die Boot-PIN wählt, liegt der Schlüssel, der sie entsperrt, auf der unverschlüsselten Boot-Partition. Das Gerät fragt bei jedem Start nach der PIN. |
+
 `devices.disk.convert.check.ubuntu2404` is replaced by `devices.disk.convert.check.initramfsSwitch` (§6.6, with
 the ICU parameter `{packages}` from `disk.conversion.initramfs_removes`) and its fallback
 `devices.disk.convert.check.initramfsSwitchUnknown` for an empty set (decision 34).
@@ -1347,8 +1399,55 @@ the ICU parameter `{packages}` from `disk.conversion.initramfs_removes`) and its
 
 PDK-241 … PDK-248 were updated on 2026-10-20 (scope and references). Which ticket owns which decision of §14:
 PDK-241 — 36 (server refusal, `active`), 38, 39 (server withdrawal and event params), `initramfs` and
-`initramfs_removes` in the admin contract, the A1 cases of decision 50; PDK-242 — 34; PDK-243 — 13 (the cleanup
-after step 7), 29, 32, 33, 36 (agent refusal), 37; PDK-244 — 29, 31; PDK-245 — 3 and 22 (the hold until
-`InitrdRegenerated`), 20 (also while `completed`), 30, 39 (the stop before the hand-over and the launch
-condition); PDK-246 — 34 (the dialogue lines), 36 and 39 (the alerts), §14.8; PDK-247 — 41–51, S11–S14, the
-Lock hand test of decision 39; PDK-248 — 35, §14.7, the O4 note of §14.2.
+`initramfs_removes`, `key_on_boot` and `init_result` in the contracts, the A1 cases of decision 50; PDK-242 — 34,
+the reason `cleanup_pending` (§14.10); PDK-243 — 13 (the cleanup after step 7 under I3), 29, 32, 33, 36 (agent
+refusal), 37; PDK-244 — 29, 31; PDK-245 — 3 and 22 (the hold until `InitrdRegenerated`), 18 (I2), 20 (also
+while `completed`, the order of I1, `plan.env` last), 30, 39 (the stop before the hand-over and the launch
+condition), 52 (the re-arm, `key_on_boot`); PDK-246 — 34 (the dialogue lines), 36 and 39 (the alerts), 52 (the
+`keyOnBoot` alert), §14.8; PDK-247 — 41–51, S11–S14, the Lock hand test of decision 39; PDK-248 — 35, §14.7,
+the O4 note of §14.2. Every ticket of the agent and the gates cites §14.10 (invariants and the state × event table).
+
+### 14.10 Boot-path invariants and the state × event table (binding; review round 3 of PR #117)
+
+Three invariants bind every decision of this plan; a decision that contradicts them is wrong, not the invariant.
+
+- **I1 — the unlock path is never removed before its replacement works.** While the root partition is LUKS and
+  `state.Conversion.InitrdRegenerated` is false, no step, cleanup, uninstall, abort or keyslot change MAY remove
+  the module directory, `91-paddock-encrypt.conf`, `plan.env`, the conversion key or the conversion key's
+  keyslot, and every initrd build (a kernel update's, `dracut -f --regenerate-all` by anyone) keeps the module
+  (the module's `check()` sees `plan.env`). The only sequence that removes them is decision 20, which first
+  writes the crypttab line that opens the volume with the TPM keyslot, then verifies every installed initrd, and
+  removes `plan.env` last. Consequences: decision 3's hold, decision 22's "only `progress.json` and
+  `result.json`", decision 36's refusal, decision 27's `not_abortable` after the restart.
+- **I2 — the disk decides the phase.** At every start and every full pass the agent derives the phase from the
+  disk before it trusts the state file or the boot result: when `/run/paddock/encrypt-boot.env` says `ok`, or
+  `md.Reencrypting()` holds, or the partition is LUKS and `luks.Dump` shows the conversion key's keyslot
+  (`KeySlot(install passphrase)` succeeds), and the phase is not `encrypting` or `completed`, the agent sets
+  `encrypting` (emitting `disk.conversion_started` once) — whatever the phase says (`prepared`, `failed`, or a
+  state file restored from a backup). Consequences: decision 18 (no cleanup when the partition is LUKS),
+  decision 36's `md.Reencrypting()` term.
+- **I3 — a cleanup is done when no initrd carries the module.** A cleanup (decision 14's `encrypt.Abort`,
+  decision 13's failure after step 7, decision 18's unencrypted failure) counts as done only when `lsinitrd` of
+  every `/boot/initrd.img-*` shows no `paddock-encrypt`; until then `state.Conversion.CleanupPending` is true,
+  the cleanup is retried at every full pass, the phase stays non-final (the state is not cleared, the preflight
+  reports the reason `cleanup_pending` and `eligible: false`, the uninstall is refused with
+  `conversion_pending`), and `disk.conversion_aborted`/`_failed` is emitted once at the first attempt.
+  `state.DiskConversion` (§6.3) gains `CleanupPending bool json:"cleanup_pending,omitempty"`.
+
+State × event table (rows: the agent's phase and, for `failed`, the stage; columns: what happens; each cell the
+outcome and the invariant that holds). *LUKS* = the root partition carries the LUKS2 header.
+
+| Phase | Reboot | Kernel update / initrd rebuild | PIN set / skipped | Uninstall request | Lock / Destroy | Cleanup failure |
+| --- | --- | --- | --- | --- | --- | --- |
+| `preparing` (steps 1–9 running) | the worker re-queues the job at start, steps skip what exists (decision 13); not LUKS, boots as before | before step 7 nothing of M8e in the initrd; from step 7 the module is included (I1 is not yet in force, not LUKS) | n/a (no dialogue: the marker is written at step 5, the unit runs at the next boot) | server 409 (row `requested`); device `conversion_pending` (decision 36) | server withdraws an undelivered command; a delivered one: the device refuses the Lock (`not_encrypted`); the worker continues (decision 40) | a failure ≥ step 7 sets `failed:prepare` and starts the cleanup under I3 |
+| `prepared` | the module runs: shrink, init → LUKS, boots on dm-crypt; at the next agent start I2 → `encrypting` | the module is included (`plan.env` exists); still bootable unencrypted | n/a until the conversion boot | server 409 (`cancel it first`); device `conversion_pending` | as `preparing`; the conversion stays `prepared` (device refuses, `not_encrypted`) | n/a |
+| `encrypting` | the module (or, after decision 20, crypttab + TPM) opens the volume; the helper resumes (decision 21); I2 keeps `encrypting` | before decision 20: the module is included (I1); after: crypttab + TPM (decision 20 step 1 precedes the removal) | set: TPM keyslot → decision 20 regenerates, `key_on_boot` false; skipped: `tpm_pin_missing`, module stays, `key_on_boot` true | server 409 (`wait for its completion`); device `conversion_pending` (I1) | server leaves the conversion; agent records the hand-over, stops the helper, hands over; `paddock-revoke` erases every keyslot (decision 39; S14 if not) | n/a (no cleanup in this phase) |
+| `completed`, `!InitrdRegenerated` | as `encrypting` (the module opens the volume); decision 52 re-arms the PIN dialogue every boot | the module is included (I1: `plan.env` still exists) | set: decision 20 → `InitrdRegenerated`, then M4b removes the conversion keyslot, `compliant`; skipped: dialogue again next boot (decision 52), `key_on_boot` true, at most `escrow_pending` | server 409 (`active`: `completed` and not `compliant`); device `conversion_pending` (I1) | as `encrypting`; header not escrowed, unrestorable (RR-57) | decision 20's failure is retried every full pass; the module stays until (4) verifies (I3 applied to the regeneration) |
+| `completed`, `InitrdRegenerated` (state cleared on `compliant`/`escrow_pending`) | crypttab + TPM opens the volume; `RebootWithPIN` | crypttab + TPM | n/a (set) | server 200 once `compliant`; device accepts (`Conversion == nil`) | as any compliant device (header escrowed after completion) | n/a |
+| `failed:preflight` (not LUKS, nothing written) | boots as before | nothing of M8e | n/a | server 200 (row `failed`, health `not_encrypted`); device accepts | normal (device refuses, `not_encrypted`) | n/a |
+| `failed:prepare` before step 7 (not LUKS) | boots as before | nothing of M8e in the initrd | n/a | as `failed:preflight` | normal | n/a |
+| `failed:prepare` at or after step 7 (not LUKS) | boots as before while `CleanupPending`: the module's unit would run if an initrd still carries it, so the cleanup regenerates first (I3) | an initrd build during `CleanupPending` without `plan.env` drops the module | n/a | server 200 (row `failed`); device `conversion_pending` while `CleanupPending`, accepts once done (I3) | normal | retried every full pass; `cleanup_pending` in the preflight; the phase stays non-final (I3) |
+| `failed:init`, partition not LUKS (`on_battery`, `fsck_*`, `vg_busy`, `luks_init_*` before the header) | boots as before; the cleanup under I3 | as the row above | n/a | as the row above | normal | as the row above |
+| `failed:init` reported but partition LUKS (`root_missing`, a failure after the header) | never a `failed` phase: I2 → `encrypting` at the next agent start, `init_result` names the stage | the module is included (I1) | as `encrypting` | as `encrypting` | as `encrypting` | n/a (no cleanup: I1, decision 18) |
+| `failed:resume` (row `failed` on the server, device still LUKS with the `reencrypt` keyslot) | the module or crypttab opens the volume; I2 → the agent's phase is `encrypting` and the helper relaunches up to 3× per boot (decision 22) | as `encrypting` | as `encrypting` | server 409 (`active` through health `encrypting`); device `conversion_pending` (`md.Reencrypting()`) | as `encrypting` | n/a |
+| `cancelled` (abort before the restart, decision 14/27) | boots as before once the cleanup is done; during `CleanupPending` the regeneration runs first (I3) | drops the module once `plan.env` is gone | n/a | device `conversion_pending` while `CleanupPending`, accepts once done; server 200 (row `cancelled`) | normal | retried every full pass (I3); `cleanup_pending` in the preflight; the row stays `cancelled` on the server |
