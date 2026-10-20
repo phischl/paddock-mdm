@@ -7,17 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-10-19
+
+Fixes from the first lab installation on real hardware (M8x) and their follow-ups (M8f), the device lifecycle (M8d),
+the device name set from the platform (M8h) and the optional automatic unseal of OpenBao (M8u). **Upgrade order:
+update the agents on the devices first, then the server** (`docs/operations/upgrade.md`): the Hello PIN fix and the
+last-administrator fix live in the agent, and every device lifecycle change is additive in both directions; devices
+update `paddock-supervisor` once the server runs this release. After the upgrade every Authentik sign-in asks for a
+second factor, and every administrator signs in to the portal and confirms their identity with a WebAuthn
+authenticator. Restart Authentik once after the upgrade (`docs/operations/upgrade.md`). Schema: migrations
+00049–00065 (control-plane database); the audit database is unchanged.
+
 ### Security
 
 - Every portal sign-in is now refused without a second factor; the default brand's authentication flow and
   Authentik's default authentication flow ask for a second factor as well. After the upgrade every Authentik sign-in
   (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks for a second factor and
-  enrols one when missing.
+  enrols one when missing (GHSA-34qw-8jfm-g64v, medium).
 - A step-up (identity confirmation) is refused when Authentik answered it without authenticating again, that is with
   a token whose authentication predates the step-up; the user is asked to confirm again instead of the earlier sign-in
   counting as a step-up. The portal's failure message suggests waiting 20 seconds after a recent confirmation.
 - A step-up (identity confirmation) now proves a WebAuthn authenticator to Paddock itself: the identity provider names
-  the authenticator classes it validated and the portal refuses any other factor.
+  the authenticator classes it validated and the portal refuses any other factor (GHSA-wj3v-v8f4-pp78, medium).
 
 ### Added
 
@@ -41,7 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   describes. `./paddock secrets` now also creates the unsealer's database secrets.
 - A device can be named from the portal; the device applies the name as its hostname at its next check-in and keeps
   it; the device page shows whether the name is pending or applied, and an invalid name is rejected with the rule it
-  breaks (uppercase, invalid characters, a leading or trailing hyphen, too long, `localhost`, a domain).
+  breaks (uppercase, invalid characters, a leading or trailing hyphen, too long, `localhost`, a domain). Runbook
+  `docs/operations/device-name.md`: what changes on the device, the effects on DHCP and DNS, and `/etc/hosts` as a
+  managed file.
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.
@@ -88,24 +101,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check-in, outside its rollout wave and regardless of the update policy, with the usual self-test, probation and
   rollback. The request ends with the device's report or after 24 hours.
 - Devices update `paddock-supervisor` themselves, in the waves of the release's rollout: once a device's wave is
-  reached, an agent of that release installs the package through a transient unit, waits up to 10 minutes for its
-  next check-in and restores the previous supervisor otherwise (audited as `device.supervisor_updated` or
+  reached, an agent of that release installs the package through a transient unit, waits up to 10 minutes for its next
+  check-in and restores the previous supervisor otherwise (audited as `device.supervisor_updated` or
   `device.supervisor_update_failed`). Supervisor upgrades that failed on the device count toward the rollout's failure
-  threshold (a rollback only because the server was unreachable does not), and a
-  halted rollout offers no supervisor package. The update policy applies, and *Update agent now* also brings the
-  supervisor package to a device outside the current wave and stays open until the supervisor followed; a failed version is not installed again, except after a rollback only because the server
-  was unreachable, which is retried after 24 hours, up to 3 times.
+  threshold (a rollback only because the server was unreachable does not), and a halted rollout offers no supervisor
+  package. The update policy applies, and *Update agent now* also brings the supervisor package to a device outside the
+  current wave and stays open until the supervisor followed; a failed version is not installed again, except after a
+  rollback only because the server was unreachable, which is retried after 24 hours, up to 3 times.
 - Devices can be removed from Paddock from the portal (*Danger zone* → *Remove Paddock*, organization administrators
-  with a step-up and the typed hostname, `POST /api/v1/devices/{id}/uninstall`) in two modes, leave as is or reset,
-  and the request can be cancelled until the device received it, or requested again or cancelled once the device's
-  removal report is 24 hours overdue (`report_overdue`, which also withdraws a command the device received but did
-  not answer yet); a cancelled removal never starts on the device. The device is
-  retired after it reported the removal of the open request (`device.uninstalled`, `device.retired` with reason
-  `uninstalled`); a removal report without such a request is audited and retires nothing. Pending removals appear on
-  the attention page. Lock and Destroy take precedence: requesting one cancels a pending removal (recorded on
-  `revocation.requested` as `uninstall_cancelled` with the removal's `uninstall_command_id`), and the device page
-  warns when the device had already
-  received the removal and may have removed `paddock-revoke`.
+  with a step-up and the typed hostname, `POST /api/v1/devices/{id}/uninstall`) in two modes, leave as is or reset, and
+  the request can be cancelled until the device received it, or requested again or cancelled once the device's removal
+  report is 24 hours overdue (`report_overdue`, which also withdraws a command the device received but did not answer
+  yet); a cancelled removal never starts on the device. The device is retired after it reported the removal of the open
+  request (`device.uninstalled`, `device.retired` with reason `uninstalled`); a removal report without such a request is
+  audited and retires nothing. Pending removals appear on the attention page. Lock and Destroy take precedence:
+  requesting one cancels a pending removal (recorded on `revocation.requested` as `uninstall_cancelled` with the
+  removal's `uninstall_command_id`), and the device page warns when the device had already received the removal and may
+  have removed `paddock-revoke`.
 - Agents of this release carry out the removal in the transient unit `paddock-uninstall` once the server accepted
   the request, after a running supervisor upgrade but waiting for it 30 minutes at most: they stop and purge
   Paddock's services and packages, keep every user file and the disk encryption, keep the managed local administrator
@@ -137,9 +149,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Upgrade order for the device lifecycle release (M8d): update the server first, then the agents. Every protocol and
-  bundle change is additive; older agents ignore the new bundle fields, and the new event types
-  (`agent.supervisor_updated`, `agent.uninstalled`) are only sent after a bundle section or command of this release.
+- The device lifecycle changes (M8d) work in either upgrade order: every protocol and bundle change is additive; older
+  agents ignore the new bundle fields, and the new event types (`agent.supervisor_updated`, `agent.uninstalled`) are
+  only sent after a bundle section or command of this release. The release as a whole updates the agents first (see
+  above).
 - The hostname shown for a device follows what the device reports at every check-in instead of the name it had at
   enrollment.
 - A portal sign-in reuses an existing Authentik session that was authenticated with a second factor instead of asking
@@ -160,14 +173,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it running again.
 - A repeated identity confirmation (step-up) is possible 20 seconds after the previous one instead of a minute; the
   step-up asks the identity provider to authenticate again after 20 seconds.
-- The portal sign-in enrols a WebAuthn authenticator when the administrator has none: after the TOTP code (or one of
-  the account's recovery codes, which the identity provider counts as the TOTP factor) for an administrator with TOTP
-  only, after the password for a new administrator without any authenticator. Keep administrators' recovery codes in
-  custody. TOTP stays
-  usable for the identity provider's own interfaces and the device login.
+- The portal sign-in enrols a WebAuthn authenticator when the administrator has none: after the TOTP code (or one of the
+  account's recovery codes, which the identity provider counts as the TOTP factor) for an administrator with TOTP only,
+  after the password for a new administrator without any authenticator. Keep administrators' recovery codes in custody.
+  TOTP stays usable for the identity provider's own interfaces and the device login.
 - *End all sessions* now also signs every portal user out of the identity provider, so a stolen browser session cannot
   sign in again without password and authenticator.
 - The dead man's switch setting says that a blocked connection triggers the lock like an outage.
+- Updated bundled components: Caddy 2.11.7 (was 2.11.6; fixes a crash when proxying over HTTP/2 and streams cut off
+  after a minute), Authentik 2026.8.4 (was 2026.8.3), RustFS 1.0.3 (was 1.0.1), Fleet and fleetctl v4.93.0 (was
+  v4.92.3; Fleet migrates its own database at its first start: take a Fleet dump before the upgrade and restore it
+  when rolling back, `docs/operations/restore.md`), AWS CLI 2.38.1 (was 2.37.9).
 
 ### Fixed
 
@@ -181,9 +197,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "permission denied". `./paddock check` now names such a file (item `secret files readable by the Paddock services`)
   with the `chmod 644` to run, and `./paddock agent-release` refuses a release directory the `paddock-api` service
   cannot read and names `chmod -R a+rX`.
-- A refused portal sign-in names the reason: no Paddock role group, roles in several organizations, several roles
-  in one organization, platform and organization roles on one account, or an inactive organization. The audit event `admin.login` carries it as
-  `denial_reason`.
+- A refused portal sign-in names the reason: no Paddock role group, roles in several organizations, several roles in one
+  organization, platform and organization roles on one account, or an inactive organization. The audit event
+  `admin.login` carries it as `denial_reason`.
 - While OpenBao was sealed at the start of `paddock-api`, the portal sign-in answered with an internal error. It now
   shows *The server's key store is sealed*; `paddock-server healthcheck` and the timeout line of `./paddock up` name
   the reason (`session keys not loaded: OpenBao is sealed or unreachable`).
@@ -1033,7 +1049,8 @@ acceptance.
   in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
-[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.3...HEAD
+[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.4...HEAD
+[0.1.0-alpha.4]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/phischl/paddock-mdm/tree/1ab53f4499a354981a06240627ea97a15d9bdc54

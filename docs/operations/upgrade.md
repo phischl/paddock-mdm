@@ -12,7 +12,7 @@ agent (`docs/operations/agent-releases.md`). See residual risk RR-36 for devices
 release also needs a WebAuthn authenticator for every administrator (the portal enrols one at the first sign-in),
 signs every administrator out once and asks for one security review afterwards: follow the four steps in `docs/operations/install.md`, section 12.
 
-**Release with *End all sessions* for the identity provider (ADR 0034 amendment 2026-10-18).** Authentik grants
+**Release 0.1.0-alpha.4: *End all sessions* for the identity provider (ADR 0034 amendment 2026-10-18).** Authentik grants
 Paddock's service account the two permissions on authenticated sessions when it applies `paddock-portal.yaml` at its
 start: restart Authentik once after the upgrade (`./paddock compose restart authentik-server authentik-worker`), or
 *End all sessions* records a failure with `upstream_unavailable` after it ended the portal sessions.
@@ -44,8 +44,17 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
 
    Compare `.env.example` of A and B: new settings of B have defaults; set them in `.env` if your installation needs
    other values. Keep `PADDOCK_PROJECT` unchanged, so that B uses the same containers, networks and volumes.
-3. Control plane only: take a backup — full backups of both PostgreSQL databases and an OpenBao snapshot
-   (`docs/operations/restore.md`, "How the backups run") — and check that all three are in the backup bucket.
+3. Control plane only: take a backup — full backups of both PostgreSQL databases, an OpenBao snapshot and a dump of
+   Fleet's MySQL (`docs/operations/restore.md`, "How the backups run") — and check that all four are in the backup
+   bucket. Fleet migrates its database when B brings a new Fleet version, so a rollback needs that dump:
+
+   ```sh
+   ./paddock compose run --rm --no-deps pgbackrest backup --start-fast
+   ./paddock compose run --rm --no-deps pgbackrest-authentik backup --start-fast
+   ./paddock compose run --rm --no-deps paddock-worker backup openbao
+   ./paddock compose run --rm --no-deps fleet-backup once   # fleet-backup-upload uploads it within a minute
+   ```
+
 4. Start B:
 
    ```sh
@@ -80,6 +89,9 @@ notes of B:
   (`docs/operations/restore.md`), then `./paddock up` in A's directory. **Every change written after that backup is
   lost** (devices that checked in, audit events in the control-plane database, configuration edits); the audit
   domain's WORM evidence stays.
+- **B changes the Fleet version** (`FLEET_IMAGE` in `versions.env`): in both cases A's Fleet cannot run on the
+  database B's Fleet migrated. Before `./paddock up` in A's directory, restore the Fleet dump of step 3 into an empty
+  `fleet-mysql` (`docs/operations/restore.md`, step 6).
 
 Never edit the shipped files of a bundle to change behaviour: `./paddock verify` reports it, and the next upgrade
 replaces them. Settings belong in `.env`.
