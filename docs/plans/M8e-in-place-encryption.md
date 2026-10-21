@@ -1540,3 +1540,28 @@ newest row by `requested_at` is not always the conversion the disk carries. Inva
   open) to `completed`.
 - The admin API's `DeviceCommand` gains `params` (what gate A1 asserts); command params never carry secrets — a
   command that needs one references it and never embeds it (`pkg/command.Command`, `admin.yaml`).
+
+### Amendment 2026-10-21 — encrypt-abort handshake (decision 14; decided by the orchestrator as architect)
+
+Found while implementing PDK-243: decision 14 has `paddockd encrypt-abort` act on the device itself, but the agent is
+the only writer of `state.json` and the event spool and no agent lock exists. Decision 14 is corrected as follows:
+
+- `paddockd encrypt-abort` never writes `state.json` or the spool; the agent stays the only writer.
+- The subcommand writes a root-only request `/var/lib/paddock/encrypt-abort.request` (0600, atomically through a
+  temporary file and a rename) carrying a nonce, the `conversion_id` and `by=operator`. On its session tick the agent
+  claims the request by renaming it, runs the `encrypt_disk_abort` path (decision 14, the I3 order with
+  `CleanupPending`), answers in `/var/lib/paddock/encrypt-abort.response` with the same nonce, and removes the request.
+  The agent ignores and removes a request older than 30 minutes.
+- Exit codes: 0 aborted; 2 refused (for example the disk is LUKS already, I1); 1 when no agent claimed the request
+  within 60 s. The subcommand then withdraws the request and nothing on the disk has changed. If the agent claimed
+  the request but the subcommand stopped waiting (interrupt or timeout), it also exits 1 and says the outcome is
+  unknown. It never claims "nothing changed" once a claim is possible.
+- The runbook section "Aborting without a running agent" follows in PDK-247.
+- `state.Conversion` carries `module_written`. The agent saves it before step 7 writes the first module file, so a
+  cleanup in this or any later run knows that an initrd may carry the module and the key.
+- Once step 7 has started, the X1 cleanup deletes the conversion key and the plan only after every installed kernel's
+  initrd has been verified clean (`lsinitrd`, falling back to `lsinitramfs`) or no initrd exists. Otherwise
+  `CleanupPending` stays set and the cleanup is retried at every full pass.
+- Operator remedy for a `cleanup_pending` that does not clear because a foreign or old dracut-built initrd still
+  carries the module: rebuild that initrd with the initramfs tool in use (or remove that kernel); the agent's next
+  retry then completes the cleanup. The full runbook text follows in PDK-247.

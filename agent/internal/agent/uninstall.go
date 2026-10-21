@@ -28,9 +28,10 @@ const UninstallUnit = "paddock-uninstall"
 const revocationWindow = 24 * time.Hour
 
 // uninstallCommand accepts an uninstall command (plan M8d decision 39): it validates the params, refuses while a
-// revocation was handed over within 24 hours, writes the plan and a copy of the running binary below
-// /root/paddock-uninstall and marks the removal pending; the run loop starts it once the result was accepted.
-func (a *Agent) uninstallCommand(_ context.Context, c *command.Command) (string, map[string]any) {
+// revocation was handed over within 24 hours or while an in-place encryption is pending (plan M8e decision 36),
+// writes the plan and a copy of the running binary below /root/paddock-uninstall and marks the removal pending; the
+// run loop starts it once the result was accepted.
+func (a *Agent) uninstallCommand(ctx context.Context, c *command.Command) (string, map[string]any) {
 	var p command.UninstallParams
 	dec := json.NewDecoder(bytes.NewReader(c.Params))
 	dec.DisallowUnknownFields()
@@ -43,6 +44,9 @@ func (a *Agent) uninstallCommand(_ context.Context, c *command.Command) (string,
 		if now.Sub(at) < revocationWindow {
 			return protocol.CommandFailed, map[string]any{"accepted": false, "reason": "revocation_pending"}
 		}
+	}
+	if a.conversionPending(ctx) {
+		return protocol.CommandFailed, map[string]any{"accepted": false, "reason": "conversion_pending"}
 	}
 	plan := uninstall.Plan{CommandID: c.CommandID, Mode: p.Mode, ClearTPM: p.ClearTPM, KeepLocalAdmin: p.KeepLocalAdmin,
 		DeviceID: a.st.DeviceID, EventSeqBase: a.st.EventSeq, RequestedAt: c.IssuedAt}

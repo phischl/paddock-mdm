@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and, on devices still on initramfs-tools, which packages the switch to dracut would remove. The check runs at most
   every 10 minutes and only while the device is unencrypted. While an encryption of the root volume is unfinished
   the device reports the disk state `encrypting` and leaves its keyslots alone.
+- An unencrypted, eligible device now accepts the request to encrypt its disk in place and prepares itself
+  without touching its data: it stores a new key in Paddock as the disk's first recovery key and waits until the
+  server has it, switches to dracut where initramfs-tools is still in use (only when the switch would remove nothing
+  but initramfs-tools and brltty, and checked afterwards), and builds the start-up image that encrypts the disk at the
+  next restart. Signed-in users are asked to restart with a desktop notification, repeated every 4 hours. Until the
+  restart an administrator can cancel from the portal, or an operator with `sudo paddockd encrypt-abort` at the
+  device; the device then removes the prepared files and rebuilds its start-up images, and keeps retrying until no
+  start-up image carries the encryption step any more. Removing Paddock is refused with `conversion_pending` while an
+  encryption is prepared, running or not yet finished, and no supervisor upgrade starts while the device prepares.
 
 ### Security
 

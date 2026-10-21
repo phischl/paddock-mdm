@@ -22,6 +22,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/client"
 	"github.com/phischl/paddock-mdm/agent/internal/config"
 	"github.com/phischl/paddock-mdm/agent/internal/disksetup"
+	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
 	"github.com/phischl/paddock-mdm/agent/internal/enroll"
 	"github.com/phischl/paddock-mdm/agent/internal/identity"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
@@ -52,6 +53,8 @@ commands:
   uninstall --plan FILE
                  remove Paddock from this device as the accepted uninstall command says and report it
                  (started by the agent in the transient unit paddock-uninstall)
+  encrypt-abort  abandon a prepared in-place encryption before the restart (root only): the running agent removes
+                 the module and the conversion key and rebuilds the initrd; exit 0 aborted, 2 refused, 1 error
   version        print the version
 `
 
@@ -90,6 +93,8 @@ func run(args []string, stdout io.Writer) int {
 		return runSupervisorUpgrade(ctx, layout, rest)
 	case "uninstall":
 		return runUninstall(ctx, layout, rest)
+	case "encrypt-abort":
+		return runEncryptAbort(ctx, layout, rest)
 	case "self-test":
 		r := selftest.Run(ctx, layout)
 		enc := json.NewEncoder(stdout)
@@ -282,6 +287,43 @@ func runUninstall(ctx context.Context, layout paths.Layout, args []string) int {
 		}
 	}
 	h.Execute(ctx, plan)
+	return 0
+}
+
+// runEncryptAbort hands an abort of the prepared in-place encryption to the running agent and waits for its answer
+// (plan M8e decision 14 as corrected on 2026-10-21: the agent is the only writer of its state and its spool). Exit 0:
+// aborted; 2: refused (no prepared conversion, or the disk converted already); 1: no running agent or an error — then
+// nothing on the device was changed, unless the message says that the outcome is unknown (the agent took the request).
+func runEncryptAbort(ctx context.Context, layout paths.Layout, args []string) int {
+	if len(args) != 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return 1
+	}
+	if layout.Root == "/" && os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "paddockd encrypt-abort must run as root")
+		return 1
+	}
+	id := ""
+	if st, err := state.Load(layout.State()); err == nil && st.Conversion != nil {
+		id = st.Conversion.ID
+	}
+	resp, err := encrypt.RequestAbort(ctx, layout, id, time.Now, sleep)
+	switch {
+	case errors.Is(err, encrypt.ErrNoAgent):
+		fmt.Fprintln(os.Stderr, "no running Paddock agent answered; nothing was changed. See the runbook "+
+			"docs/operations/in-place-encryption.md, section \"Aborting without a running agent\".")
+		return 1
+	case errors.Is(err, encrypt.ErrOutcomeUnknown):
+		fmt.Fprintln(os.Stderr, "encrypt-abort:", err, "- the agent may still abort; check its log (journalctl -u paddock-supervisor)")
+		return 1
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "encrypt-abort failed:", err, "- nothing was changed")
+		return 1
+	case !resp.Aborted:
+		fmt.Fprintln(os.Stderr, "encrypt-abort refused:", resp.Reason)
+		return 2
+	}
+	fmt.Fprintln(os.Stderr, "in-place encryption aborted; the disk stays unencrypted")
 	return 0
 }
 

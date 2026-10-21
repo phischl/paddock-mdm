@@ -120,3 +120,25 @@ func (l Layout) RebootRequired() string { return l.Join("/var/run/reboot-require
 func (l Layout) UnattendedLog() string {
 	return l.Join("/var/log/unattended-upgrades/unattended-upgrades.log")
 }
+
+// EncryptDir holds the data files of an in-place encryption (plan M8e §6.3; 0700): plan.json, plan.env and, in dev
+// builds, test-hooks. Nothing below it is ever executed (plan M8e decision 29).
+func (l Layout) EncryptDir() string { return l.Join("/var/lib/paddock/encrypt") }
+
+// EncryptPlan is the conversion plan the agent writes at preparation (plan M8e decision 13 step 2).
+func (l Layout) EncryptPlan() string { return l.Join("/var/lib/paddock/encrypt/plan.json") }
+
+// EncryptPlanEnv is the shell form of the plan the dracut module puts into the initrd (plan M8e decision 13 step 7).
+func (l Layout) EncryptPlanEnv() string { return l.Join("/var/lib/paddock/encrypt/plan.env") }
+
+// EncryptTestHooks marks a dev build's initrd for the test delays of the init script (plan M8e decision 19).
+func (l Layout) EncryptTestHooks() string { return l.Join("/var/lib/paddock/encrypt/test-hooks") }
+
+// EncryptAbortRequest is the request `paddockd encrypt-abort` hands to the running agent (plan M8e decision 14 as
+// corrected on 2026-10-21: the agent stays the only writer of its state and its spool).
+func (l Layout) EncryptAbortRequest() string { return l.Join("/var/lib/paddock/encrypt-abort.request") }
+
+// EncryptAbortResponse is the running agent's answer to EncryptAbortRequest.
+func (l Layout) EncryptAbortResponse() string {
+	return l.Join("/var/lib/paddock/encrypt-abort.response")
+}

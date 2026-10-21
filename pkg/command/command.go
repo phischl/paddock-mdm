@@ -77,7 +77,7 @@ type UninstallParams struct {
 // UninstallAccepted is the command result the agent posts before it starts the removal.
 type UninstallAccepted struct {
 	Accepted bool   `json:"accepted"`
-	Reason   string `json:"reason,omitempty"` // when not accepted: invalid_params, revocation_pending, helper_failed
+	Reason   string `json:"reason,omitempty"` // when not accepted: invalid_params, revocation_pending, helper_failed, conversion_pending
 }
 
 // MaxInstallPackages bounds the packages of one install_now command.
