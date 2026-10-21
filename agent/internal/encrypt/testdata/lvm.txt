@@ -1,3 +1,13 @@
+$ lvm config --typeconfig full devices/use_devicesfile
+use_devicesfile=0
+$ lvm config --typeconfig diff devices
+devices {
+	issue_discards=1
+}
+$ lsblk --noheadings --list --paths --output NAME,FSTYPE
+/dev/sda
+/dev/sda1 vfat
+/dev/sda2 ext4
 $ findmnt -no SOURCE /
 /dev/mapper/ubuntu--vg-ubuntu--lv
 $ lsblk --inverse --json --paths --bytes --output NAME,TYPE,FSTYPE,PKNAME,PARTUUID,SIZE -- /dev/mapper/ubuntu--vg-ubuntu--lv

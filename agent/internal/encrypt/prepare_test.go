@@ -596,3 +596,21 @@ func TestPrepareTransientToolError(t *testing.T) {
 		t.Fatalf("after the passing error: outcome %v %+v", got, f.conversion())
 	}
 }
+
+// TestPrepareTestHooks: only a dev build marks the initrd for the test delays of the init script (plan M8e decision 19).
+func TestPrepareTestHooks(t *testing.T) {
+	for _, dev := range []bool{false, true} {
+		f := newFixture(t)
+		p := f.preparer()
+		p.TestHooks = dev
+		if got := p.Prepare(context.Background()); got != encrypt.Prepared {
+			t.Fatalf("dev %v: outcome %v, conversion %+v", dev, got, f.conversion())
+		}
+		if f.dev.Exists("/var/lib/paddock/encrypt/test-hooks") != dev {
+			t.Fatalf("dev %v: test-hooks written %v", dev, !dev)
+		}
+		if dev && (f.read("/var/lib/paddock/encrypt/test-hooks") != "" || f.mode("/var/lib/paddock/encrypt/test-hooks") != 0o600) {
+			t.Fatal("test-hooks is not an empty root-only file")
+		}
+	}
+}

@@ -22,10 +22,15 @@ const (
 	ReasonBootOnRootDevice         = "boot_on_root_device"
 	ReasonCleanupPending           = "cleanup_pending"
 	ReasonDMCryptMissing           = "dm_crypt_missing" // checked at the preparation only (decision 7)
+	ReasonHibernationConfigured    = "hibernation_configured"
 	ReasonLowFreeSpace             = "low_free_space"
+	ReasonLVMDevicesFile           = "lvm_devicesfile"
+	ReasonLVMFilter                = "lvm_filter"
+	ReasonLVMUnknown               = "lvm_unknown"
 	ReasonNoSeparateBoot           = "no_separate_boot"
 	ReasonNoTPM2                   = "no_tpm2"
 	ReasonNoUEFI                   = "no_uefi"
+	ReasonOtherLUKSPresent         = "other_luks_present"
 	ReasonPVTailInUse              = "pv_tail_in_use"
 	ReasonReleaseUnsupported       = "release_unsupported"
 	ReasonRootLayoutUnsupported    = "root_layout_unsupported"
@@ -88,6 +93,11 @@ func Preflight(ctx context.Context, sys System, root string, cleanupPending bool
 		p.fail(ReasonNoTPM2)
 	}
 	part := p.rootLayout()
+	p.otherLUKS()
+	p.hibernation()
+	if p.l.Kind == KindLVM {
+		p.lvmConfig()
+	}
 	p.rootFS()
 	p.boot(part)
 	p.reference()
@@ -107,6 +117,8 @@ type preflight struct {
 	// source is the root file system's device (findmnt SOURCE without a btrfs subvolume); vg, lv, vgUUID and lvUUID
 	// name the root LV when the root is one, whatever the layout.
 	source, vg, lv, vgUUID, lvUUID string
+	// rootChain is the device chain below / (rootLayout).
+	rootChain []blockDevice
 }
 
 func (p *preflight) fail(reason string) { p.reasons = append(p.reasons, reason) }
@@ -162,6 +174,7 @@ func (p *preflight) rootLayout() string {
 	src, _ := p.run("findmnt", "-no", "SOURCE", "/")
 	p.source, _, _ = strings.Cut(src, "[")
 	chain, ok := p.chain()
+	p.rootChain = chain
 	if chain != nil && encrypted(chain) {
 		p.fail(ReasonAlreadyEncrypted)
 	}
@@ -285,6 +298,92 @@ func (p *preflight) pvTailFree(pv string) bool {
 		}
 	}
 	return lv != "" && lv == p.lv
+}
+
+// otherLUKS fails when a LUKS volume outside the root chain exists (reason other_luks_present): the init step's
+// initrd disables dracut's LUKS handling with rd.luks=0 (plan M8e decision 15 as amended 2026-10-21), so such a
+// volume would no longer be opened at boot. A failing lsblk fails closed.
+func (p *preflight) otherLUKS() {
+	out, ok := p.run("lsblk", "--noheadings", "--list", "--paths", "--output", "NAME,FSTYPE")
+	if !ok {
+		p.fail(ReasonOtherLUKSPresent)
+		return
+	}
+	for line := range strings.Lines(out) {
+		f := strings.Fields(line)
+		if len(f) != 2 || f[1] != "crypto_LUKS" {
+			continue
+		}
+		if !slices.ContainsFunc(p.rootChain, func(d blockDevice) bool { return d.Name == f[0] }) {
+			p.fail(ReasonOtherLUKSPresent)
+			return
+		}
+	}
+}
+
+// hibernationEFIVar is the EFI variable systemd sets when it hibernates to a swap device it then resumes from.
+const hibernationEFIVar = "/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67"
+
+// hibernation fails when a resume from hibernation is configured (reason hibernation_configured): the init step would
+// shrink and encrypt a file system the hibernated kernel still has mounted (plan M8e amendment 2026-10-21). Configured
+// means resume= on the kernel command line, in dracut's /etc/cmdline.d or in a kernel_cmdline of dracut's
+// configuration, a resume device in /sys/power/resume, or systemd's HibernateLocation EFI variable.
+func (p *preflight) hibernation() {
+	files := []string{filepath.Join(p.root, "/proc/cmdline")}
+	for _, pattern := range []string{"/etc/cmdline.d/*.conf", "/etc/dracut.conf.d/*.conf", "/usr/lib/dracut/dracut.conf.d/*.conf"} {
+		confs, _ := filepath.Glob(filepath.Join(p.root, pattern))
+		files = append(files, confs...)
+	}
+	for _, f := range files {
+		raw, err := p.sys.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, arg := range strings.Fields(strings.NewReplacer(`"`, " ", "'", " ").Replace(string(raw))) {
+			if strings.HasPrefix(arg, "resume=") || strings.HasPrefix(arg, "kernel_cmdline=resume=") {
+				p.fail(ReasonHibernationConfigured)
+				return
+			}
+		}
+	}
+	if raw, err := p.sys.ReadFile(filepath.Join(p.root, "/sys/power/resume")); err == nil {
+		if dev := strings.TrimSpace(string(raw)); dev != "" && dev != "0:0" {
+			p.fail(ReasonHibernationConfigured)
+			return
+		}
+	}
+	if ok, err := p.sys.Stat(filepath.Join(p.root, hibernationEFIVar)); err != nil || ok {
+		p.fail(ReasonHibernationConfigured)
+	}
+}
+
+// lvmConfig fails when LVM would not see the PV once it moves onto the mapping (plan M8e amendment 2026-10-21): an
+// active devices file lists the partition, not the mapping (reason lvm_devicesfile), and a filter set by the
+// administrator may reject dm devices (reason lvm_filter). An lvm config that fails or prints something unexpected
+// fails closed with lvm_unknown.
+func (p *preflight) lvmConfig() {
+	out, ok := p.run("lvm", "config", "--typeconfig", "full", "devices/use_devicesfile")
+	switch {
+	case !ok || (out != "use_devicesfile=0" && out != "use_devicesfile=1"):
+		p.fail(ReasonLVMUnknown)
+	case out == "use_devicesfile=1":
+		if exists, err := p.sys.Stat(filepath.Join(p.root, "/etc/lvm/devices/system.devices")); err != nil || exists {
+			p.fail(ReasonLVMDevicesFile)
+		}
+	}
+	// Asking for the two nodes directly exits 5 when they are unset (the default), hence the whole section; it is
+	// empty when nothing differs from the defaults.
+	out, ok = p.run("lvm", "config", "--typeconfig", "diff", "devices")
+	if first, _, _ := strings.Cut(out, "\n"); !ok || (out != "" && strings.TrimSpace(first) != "devices {") {
+		p.fail(ReasonLVMUnknown)
+		return
+	}
+	for line := range strings.Lines(out) {
+		if l := strings.TrimSpace(line); strings.HasPrefix(l, "filter=") || strings.HasPrefix(l, "global_filter=") {
+			p.fail(ReasonLVMFilter)
+			return
+		}
+	}
 }
 
 // rootFS checks the root file system's type and free space (reasons root_not_ext4, low_free_space).

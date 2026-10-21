@@ -777,7 +777,7 @@ RemainAfterExit=yes
 ExecStart=/usr/libexec/paddock/encrypt-init.sh
 StandardOutput=journal+console
 StandardError=journal+console
-TimeoutStartSec=2h
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=initrd.target
@@ -1565,3 +1565,97 @@ the only writer of `state.json` and the event spool and no agent lock exists. De
 - Operator remedy for a `cleanup_pending` that does not clear because a foreign or old dracut-built initrd still
   carries the module: rebuild that initrd with the initramfs tool in use (or remove that kernel); the agent's next
   retry then completes the cleanup. The full runbook text follows in PDK-247.
+
+### Amendment 2026-10-21 — dracut catch-all and rd.luks=0 (decided by the orchestrator as architect)
+
+Found while implementing PDK-244. The binding text of decisions 2, 15 and 16 is corrected as follows:
+
+- **dracut's catch-all LUKS rule.** Decision 15 makes the module depend on `crypt`. On a host without a crypttab and
+  without `rd.luks.uuid`, the `crypt` module's `parse-crypt.sh` installs a udev rule that, for every `crypto_LUKS`
+  device, runs `crypt-run-generator` in the settled initqueue. The initqueue runs after the init unit, which is
+  `Before=dracut-initqueue.service`. The generator adds `luks-<uuid> <dev> none` to the initrd's crypttab and starts
+  `cryptsetup.target`. `systemd-cryptsetup` then asks for a passphrase on the console before it finds the partition
+  held by `<mapping>`, both at the conversion boot (the udev watch change event after the header write) and at every
+  later open boot, so the boot waits at a prompt nobody can answer.
+- **Decision 15, addition.** `install()` also writes `rd.luks=0` to `$initdir/etc/cmdline.d/91paddock-encrypt.conf`.
+  dracut's `parse-crypt.sh` reads it with `getarg` and removes its `70-luks.rules`, which takes away the prompt. It
+  does not affect `systemd-cryptsetup-generator`, which reads only `/proc/cmdline`. It is safe under I1 and decision
+  20: step (2) removes the module before (3) rebuilds, so no initrd keeps the module once the crypttab line with the
+  TPM keyslot takes over. An initrd that carries both (a kernel update between (1) and (2)) runs
+  `systemd-cryptsetup@<mapping>` and the script side by side. That race is benign: whichever opens first wins, the
+  script counts an existing mapping as opened, and `systemd-cryptsetup` succeeds on an active volume.
+- **Decision 15, `check()` and the key.** `check()` tests only `plan.env`, as written. `installkernel()` fails (dracut
+  `dfatal`) when `/var/lib/paddock/install-passphrase` is missing. dracut ignores the status of `install()` but stops
+  on `installkernel()` and keeps the previous initrd, so no initrd is built with the plan but without the key. This is
+  safer than having `check()` drop the module: a module that is silently dropped while the partition is LUKS leaves
+  an initrd with no unlock path (I1). `install()` also installs `blkid` and `readlink`, and `plymouth` when the host
+  has it (`inst_multiple -o`).
+- **§6.4, the unit.** `TimeoutStartSec=infinity` replaces `2h` (corrected in place above). A timeout that kills
+  `resize2fs` or the header write is worse than a slow boot.
+- **Decision 2, new reasons `hibernation_configured`, `lvm_devicesfile`, `lvm_filter`, `lvm_unknown`.**
+  - `hibernation_configured`: `resume=` on `/proc/cmdline`, in `/etc/cmdline.d/*.conf` or in a `kernel_cmdline` of
+    `/etc/dracut.conf.d/*.conf` or `/usr/lib/dracut/dracut.conf.d/*.conf`, `/sys/power/resume` other
+    than `0:0`, or the `HibernateLocation-8cf2644b-…` EFI variable. Nothing orders the module against
+    `systemd-hibernate-resume`, so a resumed kernel would write over the shrunk file system and the header. The init
+    script also skips with `PADDOCK_BOOT_STATUS=skipped`, reason `resume_set`, when dracut's `getarg resume=` finds
+    one. This check comes after the `isLuks`/open stage and before the mains check.
+  - For the `lvm` layout only: `lvm_devicesfile` when `lvm config --typeconfig full devices/use_devicesfile` prints
+    `use_devicesfile=1` and `/etc/lvm/devices/system.devices` exists; `lvm_filter` when `lvm config --typeconfig diff
+    devices` prints a `filter=` or `global_filter=` line (the command for the two nodes alone exits 5 when they are
+    unset, the default: review 2 of PDK-244). In both cases LVM would not see the PV once it moves onto
+    the mapping. `lvm_unknown` when either `lvm config` call fails or prints something unexpected (not
+    `use_devicesfile=0|1`; output that does not start with `devices {`). Empty output of the second call means
+    nothing differs from the defaults. The `lvm config` commands and the `dracut.conf.d` resume scan were confirmed by the
+    orchestrator as architect, 2026-10-21. Supporting the devices file (`lvmdevices --adddev`/`--deldev`)
+    is a later feature; PDK-247 checks the 26.04 default on the throwaway VM.
+  - The portal texts for these reasons are relayed to PDK-246.
+- **Decision 16, `e2fsck -f -p`** replaces `-f -y`. Exit 0 or 1 continues; any other exit is reported as `fsck_<exit>`.
+  The script never repairs more than a preen does.
+- **Decision 16, splash.** When `plymouth --ping` succeeds, the script runs `plymouth display-message --text="Encrypting
+  the disk - do not switch off"` before the shrink and again before the LUKS init.
+- **Decision 2, new reason `other_luks_present`.** Because `rd.luks=0` also leaves every other LUKS volume closed,
+  the preflight lists `lsblk --noheadings --list --paths --output NAME,FSTYPE` and fails with `other_luks_present`
+  when a `crypto_LUKS` device lies outside the root chain. A failing `lsblk` fails closed with the same reason.
+  Portal text (binding, §6.6): `devices.disk.convert.reasons.other_luks_present`: en "another encrypted volume is
+  present on the device", de "auf dem Gerät ist ein weiteres verschlüsseltes Volume vorhanden".
+- **Decision 16, stage order.** The stages run in this order: (1) device wait; (3) `cryptsetup isLuks` and the open
+  path; (2) mains; then (4)–(6). A header on the disk decides before anything else (I2): a LUKS device that boots on
+  battery must still be opened. `on_battery` is written before any tool that changes the disk; only `udevadm settle`
+  and `cryptsetup isLuks` run earlier. A mapping that already exists counts as opened. After the mains check and
+  before the shrink, the script checks that the partition named by the PARTUUID is the plan's: `blkid -p -s UUID -o
+  value` must print `$PADDOCK_FS_UUID` (plain), or `lvm pvs --noheadings -o vg_name` must print `$PADDOCK_VG` (lvm),
+  and `blkid -o device -t PARTUUID=…` must name exactly one device.
+  Otherwise it reports `device_mismatch` and changes nothing, so a cloned disk is never touched.
+- **Decision 16, stage 6.** The script first waits up to 30 s for `/dev/mapper/$PADDOCK_MAPPING`, which it otherwise
+  reports as `mapping_missing`, and then up to 30 s for the root device. The plain root's
+  `/dev/disk/by-uuid/$PADDOCK_FS_UUID` link already exists before the conversion, pointing at the raw partition, so
+  for `plain` it must also resolve to a `dm-*` device.
+- **Decision 16, stage 4.** After an `e2fsck` failure the script runs `lvm vgchange -ay "$PADDOCK_VG"`, not `-an`.
+  `-an` would take the root LV away from the unencrypted boot.
+- **Decision 16, stage 5.** After a failing init the script runs `cryptsetup isLuks` again. If the header exists,
+  it opens the mapping and continues with stage 6 as an online reencryption. Otherwise it reports `luks_init_<exit>`.
+- **Closed reasons added** (stage `init` unless noted): `resize2fs_<exit>`, `lvreduce_<exit>`, `pvresize_<exit>`,
+  `vg_activate_<exit>` (stage `init` or `open`), `size_unknown` (`blockdev`, `lvm pvs` or `dumpe2fs` gave no
+  number), `plan_invalid` (the plan is missing or lacks a value), `device_mismatch`, `mapping_missing`,
+  `resume_set` (status `skipped`), `isluks_<exit>` (`cryptsetup isLuks` neither said
+  yes nor no), and `script_<exit>` (the script's main part ended without a result). The open stage's reason
+  (`<stderr line>`) is reduced to `[A-Za-z0-9_.:-]` (other characters become `_`) and cut at 200 characters.
+- **Residual, accepted.** The binding unit is not ordered against `systemd-fsck-root.service`. `e2fsck` and
+  `resize2fs` open the device exclusively, so a concurrent fsck ends this conversion fail-safe with `fsck_8`,
+  `resize2fs_<exit>` or `vg_busy`. `systemd-fsck` ignores its own exit 8.
+- **RR-56 reworded (PDK-248 carries it into `residual-risks.md`).** "The shrink is not crash-safe. `e2fsck -f`,
+  `resize2fs` and `lvreduce` run at the conversion boot before the system starts. They take minutes, and longer the
+  larger and slower the disk (a full check and an inode move on a spinning disk can take well over ten minutes). A
+  power cut or a forced power-off in that window can damage the root file system. Mitigation: mains power required
+  when a battery exists; the splash says "Encrypting the disk - do not switch off" and the console shows each step;
+  the unit has no timeout; `e2fsck -f -p` before; the backup acknowledgement in the dialogue; idempotent stages.
+  Record: the backup policy for devices that are converted."
+- **RR-59, addition.** A laptop whose only charger is USB-C (power supply type `USB`, no ACPI `Mains` supply) is always
+  seen as on battery, so its init step always skips with `on_battery`. This fails safe, but such a device can never
+  be converted.
+- **Verification items for PDK-247 (VM gates).** (a) On a device in the decision-20 window, an initrd that carries
+  both the crypttab line and the module boots: `systemd-cryptsetup@<mapping>` and the script race, and one opens
+  the volume. (b) `systemctl show -p After systemd-fsck-root.service` in the initrd shows whether the fsck can run
+  concurrently with the module at all. (c) Whether 26.04 has the LVM devices file enabled by default. (d) A
+  `resume=` set only through `kernel_cmdline` in `/etc/dracut.conf.d` is refused by the preflight
+  (`hibernation_configured`); if one slips through, the init step skips with `resume_set`.

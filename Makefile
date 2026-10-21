@@ -53,13 +53,21 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
 .PHONY: lint-supervisor-budget
 lint-supervisor-budget:
 	bash test/supervisor-budget.sh
+
+# The dracut module of the in-place encryption (plan M8e PDK-244): the init script runs in the initrd under whatever
+# /bin/sh dracut installs, so it is checked as POSIX sh; module-setup.sh is sourced by dracut's bash. shellcheck comes
+# with the CI runner image; a missing shellcheck fails the target instead of skipping it (plan M8e stop condition S4).
+.PHONY: lint-shell
+lint-shell:
+	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
+	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,

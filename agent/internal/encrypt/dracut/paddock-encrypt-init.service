@@ -1,0 +1,18 @@
+[Unit]
+Description=Paddock in-place disk encryption (init step)
+DefaultDependencies=no
+ConditionPathExists=/etc/paddock/encrypt-plan.env
+After=systemd-udev-trigger.service systemd-udevd.service
+Before=initrd-root-device.target sysroot.mount cryptsetup.target dracut-initqueue.service
+Wants=systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/paddock/encrypt-init.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=initrd.target

@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Encryption in progress`, and the attention list names failed encryptions. The admin API answers a cancel of an
   encryption the device already started with the problem code `conversion_not_cancellable` (409; was
   `invalid_state`).
+- At the restart after the preparation, a prepared device now encrypts its disk in place before the system starts:
+  the start-up image checks and shrinks the root file system to make room, writes the encryption header with the
+  stored key and continues the start on the encrypted disk; later restarts open the disk the same way until its own
+  unlock method takes over. On battery power, or when any step before the header fails, the device starts unencrypted
+  as before and reports why, so that a new request can follow. A device that has another encrypted volume besides the
+  root disk is not eligible (`other_luks_present`), nor is one set up to resume from hibernation
+  (`hibernation_configured`) or, with LVM, one whose LVM configuration filters devices or uses a devices file
+  (`lvm_filter`, `lvm_devicesfile`) or whose LVM configuration cannot be read (`lvm_unknown`).
 
 ### Security
 

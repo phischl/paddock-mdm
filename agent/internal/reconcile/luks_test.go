@@ -1033,6 +1033,8 @@ func (e *encryptSystem) Command(_ context.Context, name string, args ...string) 
   "children":[{"name":"/dev/sda","type":"disk","size":42949672960}]}]}`, "", 0, nil
 	case "blkid -p -o value -s PTTYPE /dev/sda":
 		return "gpt\n", "", 0, nil
+	case "lsblk --noheadings --list --paths --output NAME,FSTYPE":
+		return "/dev/sda\n/dev/sda2 ext4\n/dev/sda3 ext4\n", "", 0, nil
 	case "findmnt -no FSTYPE /":
 		return "ext4\n", "", 0, nil
 	case "findmnt -no UUID /":
