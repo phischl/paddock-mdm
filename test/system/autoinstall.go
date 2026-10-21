@@ -184,12 +184,15 @@ func (v *VM) StartWithPassphrase(t *testing.T, passphrase string) {
 	Until(t, v.Name+" answers SSH", 10*time.Minute, 5*time.Second, nil, v.sshUp)
 }
 
-// aiDevicesPath lists the active devices with the throwaway VM's hostname.
-const aiDevicesPath = "/api/v1/devices?q=" + aiVMName + "&state=active&page_size=100"
+// aiDevicesPath lists the devices in state with the throwaway VM's hostname. One state per query keeps the page
+// small: the retired devices of earlier runs never push the current one off it.
+func aiDevicesPath(state string) string {
+	return "/api/v1/devices?q=" + aiVMName + "&state=" + state + "&page_size=100"
+}
 
-// tokenDevices are the IDs of the active devices of a GET /api/v1/devices page that enrolled with the enrollment
+// tokenDevices are the IDs of the devices of a GET /api/v1/devices page in state that enrolled with the enrollment
 // token tokenID.
-func tokenDevices(page []byte, tokenID string) ([]string, error) {
+func tokenDevices(page []byte, tokenID, state string) ([]string, error) {
 	var p struct {
 		Items []struct {
 			ID                string  `json:"id"`
@@ -202,11 +205,17 @@ func tokenDevices(page []byte, tokenID string) ([]string, error) {
 	}
 	var ids []string
 	for _, item := range p.Items {
-		if item.State == "active" && item.EnrollmentTokenID != nil && *item.EnrollmentTokenID == tokenID {
+		if item.State == state && item.EnrollmentTokenID != nil && *item.EnrollmentTokenID == tokenID {
 			ids = append(ids, item.ID)
 		}
 	}
 	return ids, nil
+}
+
+// endVerbs take a device of the run out of use through the product: a pending device can only be rejected, an
+// active or a quarantined one is retired; rejected and retired devices are out of use already.
+func endVerbs() []struct{ state, verb string } {
+	return []struct{ state, verb string }{{"pending", "reject"}, {"active", "retire"}, {"quarantined", "retire"}}
 }
 
 // WaitAIDevice waits until the throwaway VM enrolled itself with the enrollment token tokenID and returns its device
@@ -216,7 +225,7 @@ func (s *Stack) WaitAIDevice(t *testing.T, tokenID string) string {
 	t.Helper()
 	var id string
 	Until(t, aiVMName+" enrolls itself", 10*time.Minute, 10*time.Second, nil, func() bool {
-		ids, err := tokenDevices(s.Call(t, http.MethodGet, aiDevicesPath, nil, http.StatusOK).Body, tokenID)
+		ids, err := tokenDevices(s.Call(t, http.MethodGet, aiDevicesPath("active"), nil, http.StatusOK).Body, tokenID, "active")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -228,27 +237,29 @@ func (s *Stack) WaitAIDevice(t *testing.T, tokenID string) string {
 	return id
 }
 
-// RetireAIDevicesOnCleanup retires, when the test ends and also after a failure, every active device that enrolled
-// with the enrollment token tokenID, so that a later run never finds it.
+// RetireAIDevicesOnCleanup takes every device that enrolled with the enrollment token tokenID out of use when the
+// test ends, also after a failure (endVerbs), so that a later run never finds it.
 func (s *Stack) RetireAIDevicesOnCleanup(t *testing.T, tokenID string) {
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		res, err := s.session().Do(ctx, http.MethodGet, aiDevicesPath, nil)
-		if err == nil && res.Status == http.StatusUnauthorized {
-			s.Login(t)
-			res, err = s.session().Do(ctx, http.MethodGet, aiDevicesPath, nil)
-		}
-		if err != nil || res.Status != http.StatusOK {
-			t.Errorf("cleanup: list the devices of %s: HTTP %d %v %s", aiVMName, res.Status, err, res.Body)
-			return
-		}
-		ids, err := tokenDevices(res.Body, tokenID)
-		if err != nil {
-			t.Errorf("cleanup: %v", err)
-		}
-		for _, id := range ids {
-			s.cleanupCall(t, http.MethodPost, "/api/v1/devices/"+id+"/retire", http.StatusOK)
+		for _, e := range endVerbs() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			res, err := s.session().Do(ctx, http.MethodGet, aiDevicesPath(e.state), nil)
+			if err == nil && res.Status == http.StatusUnauthorized {
+				s.Login(t)
+				res, err = s.session().Do(ctx, http.MethodGet, aiDevicesPath(e.state), nil)
+			}
+			cancel()
+			if err != nil || res.Status != http.StatusOK {
+				t.Errorf("cleanup: list the %s devices of %s: HTTP %d %v %s", e.state, aiVMName, res.Status, err, res.Body)
+				continue
+			}
+			ids, err := tokenDevices(res.Body, tokenID, e.state)
+			if err != nil {
+				t.Errorf("cleanup: %v", err)
+			}
+			for _, id := range ids {
+				s.cleanupCall(t, http.MethodPost, "/api/v1/devices/"+id+"/"+e.verb, http.StatusOK)
+			}
 		}
 	})
 }
