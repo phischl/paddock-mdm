@@ -3,8 +3,11 @@ package system
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"slices"
 	"sort"
 	"strconv"
@@ -183,14 +186,95 @@ func (v *VM) Keyslots(t *testing.T) []string {
 	return kinds
 }
 
-// Opens reports whether secret unlocks the guest's LUKS volume (cryptsetup --test-passphrase; the secret travels on
-// stdin).
+// Opens reports whether secret opens a keyslot of the guest's LUKS volume (opensScript; the secret travels on stdin).
+// A token never answers for it, and any other failure than a rejected secret fails the test.
 func (v *VM) Opens(t *testing.T, secret string) bool {
 	t.Helper()
+	device := v.LUKSDevice()
+	slots, tokens, err := luksPassphraseSlots([]byte(v.Must("sudo cryptsetup luksDump --dump-json-metadata " + device)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	_, err := v.SSH(ctx, []byte(secret), "sudo cryptsetup open --test-passphrase --key-file=- "+v.LUKSDevice())
-	return err == nil
+	out, err := v.SSH(ctx, []byte(secret), "sudo sh -c '"+opensScript(device, "/run", slots, tokens)+"'")
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return true
+	case errors.As(err, &exit) && exit.ExitCode() == opensRejected:
+		return false
+	default:
+		t.Fatalf("%s: test the secret against keyslots %v: %v: %s", v.Name, slots, err, out)
+		return false
+	}
+}
+
+// opensRejected is the exit status of opensScript when no keyslot accepts the secret.
+const opensRejected = 10
+
+// luksPassphraseSlots are the keyslots of LUKS2 JSON metadata (cryptsetup luksDump --dump-json-metadata) that a
+// passphrase opens and the volume's token IDs, both ascending. A reencryption keyslot holds no passphrase.
+func luksPassphraseSlots(metadata []byte) (slots, tokens []int, err error) {
+	var md struct {
+		Keyslots map[string]struct {
+			Type string `json:"type"`
+		} `json:"keyslots"`
+		Tokens map[string]json.RawMessage `json:"tokens"`
+	}
+	if err := json.Unmarshal(metadata, &md); err != nil {
+		return nil, nil, fmt.Errorf("LUKS2 metadata: %w", err)
+	}
+	for id, slot := range md.Keyslots {
+		n, err := strconv.Atoi(id)
+		if err != nil {
+			return nil, nil, fmt.Errorf("keyslot %q: %w", id, err)
+		}
+		if slot.Type == "luks2" {
+			slots = append(slots, n)
+		}
+	}
+	for id := range md.Tokens {
+		n, err := strconv.Atoi(id)
+		if err != nil {
+			return nil, nil, fmt.Errorf("token %q: %w", id, err)
+		}
+		tokens = append(tokens, n)
+	}
+	slices.Sort(slots)
+	slices.Sort(tokens)
+	return slots, tokens, nil
+}
+
+// opensScript is the root shell script behind Opens: it reads the secret from stdin into a directory under dir, tests
+// it against each of slots on a copy of device's header with every token removed, and exits 0 when a slot accepts it,
+// opensRejected when none does and with cryptsetup's status on any other error. cryptsetup tries a volume's tokens
+// before the key file, even with --key-slot, and a tpm2 token without a PIN answers for any secret (PDK-369); the
+// copy keeps only what a passphrase opens. It contains no single quote, so callers can wrap it in sh -c '…'.
+func opensScript(device, dir string, slots, tokens []int) string {
+	join := func(ns []int) string {
+		s := make([]string, len(ns))
+		for i, n := range ns {
+			s[i] = strconv.Itoa(n)
+		}
+		return strings.Join(s, " ")
+	}
+	return `set -eu
+umask 077
+d=$(mktemp -d -p "` + dir + `")
+trap "rm -rf \"$d\"" EXIT
+cat > "$d/secret"
+cryptsetup luksHeaderBackup -q "` + device + `" --header-backup-file "$d/header"
+# luksHeaderBackup writes the copy read-only; removing its tokens needs write access without root.
+chmod 0600 "$d/header"
+for id in ` + join(tokens) + `; do cryptsetup token remove --token-id "$id" "$d/header"; done
+for slot in ` + join(slots) + `; do
+	rc=0
+	cryptsetup open --test-passphrase --key-slot "$slot" --key-file "$d/secret" "$d/header" || rc=$?
+	if [ "$rc" -eq 0 ]; then exit 0; fi
+	if [ "$rc" -ne 2 ]; then exit "$rc"; fi
+done
+exit ` + strconv.Itoa(opensRejected) + "\n"
 }
 
 // diskEscrow is a generation of GET /api/v1/devices/{id}/disk.
