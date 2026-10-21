@@ -355,14 +355,17 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 # The exactly-once gate checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check); they run in
 # parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8).
 # SHARD=i/n runs shard i of n: test/acceptance/cmd/acceptanceshard puts every listed test into exactly one shard,
-# balanced by test/acceptance/shard-weights.txt.
+# balanced by test/acceptance/shard-weights.txt; before the run it checks (-verify n) that the n shard regexes select
+# every test of `go test -list` exactly once, so a new test can never be left out.
 acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
 	@set -eo pipefail; run='$(T)'; \
 	if [ -n '$(SHARD)' ]; then \
 		[ -z "$$run" ] || { echo "acceptance: T and SHARD are mutually exclusive" >&2; exit 1; }; \
-		run="$$(go test -list '.*' ./test/acceptance/... | \
-			go run ./test/acceptance/cmd/acceptanceshard -shard '$(SHARD)' -weights test/acceptance/shard-weights.txt)"; \
+		list="$$(go test -list '.*' ./test/acceptance/...)"; \
+		shard='$(SHARD)'; weights=test/acceptance/shard-weights.txt; \
+		printf '%s\n' "$$list" | go run ./test/acceptance/cmd/acceptanceshard -verify "$${shard#*/}" -weights $$weights; \
+		run="$$(printf '%s\n' "$$list" | go run ./test/acceptance/cmd/acceptanceshard -shard "$$shard" -weights $$weights)"; \
 		echo "acceptance shard $(SHARD): -run '$$run'"; \
 	fi; \
 	set --; [ -z "$$run" ] || set -- -run "$$run"; \

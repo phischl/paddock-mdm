@@ -3,6 +3,8 @@
 // regex of shard i. Every listed test lands in exactly one shard: the assignment is a deterministic greedy balance
 // over the measured durations of the weights file, so tests that are missing from it still run, with a default
 // weight. Tests that share a group in the weights file (gates that run together with t.Parallel) stay in one shard.
+// With -verify n it checks instead that the n shard regexes select every listed test exactly once (CI runs this
+// before each shard).
 package main
 
 import (
@@ -30,12 +32,18 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	shardFlag := fs.String("shard", "", "shard to print, as i/n (1-based)")
 	weightsPath := fs.String("weights", "", "file with lines '<seconds> <test> [group]'")
 	defaultWeight := fs.Int("default", 60, "weight in seconds of tests missing from the weights file")
+	verifyTotal := fs.Int("verify", 0, "instead of printing a shard, check that n shards select every listed test exactly once")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	index, total, err := parseShard(*shardFlag)
-	if err != nil {
-		return err
+	var index, total int
+	if *verifyTotal == 0 {
+		var err error
+		if index, total, err = parseShard(*shardFlag); err != nil {
+			return err
+		}
+	} else if *verifyTotal < 1 || *shardFlag != "" {
+		return errors.New("-verify wants n >= 1 and no -shard")
 	}
 	names, err := parseList(stdin)
 	if err != nil {
@@ -52,6 +60,13 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("weights %s: %w", *weightsPath, err)
 		}
+	}
+	if *verifyTotal > 0 {
+		if err := verify(names, assign(names, w, *defaultWeight, *verifyTotal)); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "%d tests, %d shards: every test selected by exactly one shard\n", len(names), *verifyTotal)
+		return err
 	}
 	shards := assign(names, w, *defaultWeight, total)
 	shard := shards[index-1]
@@ -191,6 +206,37 @@ func assign(names []string, w weights, defaultWeight, total int) [][]string {
 		slices.Sort(s)
 	}
 	return shards
+}
+
+// verify checks the -run regexes that the shards produce against the full test list: every listed test is selected
+// by exactly one shard and no shard is empty. It checks the regexes rather than the slices so that a quoting or
+// anchoring mistake in runRegex cannot hide a test.
+func verify(names []string, shards [][]string) error {
+	count := make(map[string]int, len(names))
+	for i, shard := range shards {
+		if len(shard) == 0 {
+			return fmt.Errorf("shard %d/%d has no tests; use fewer shards", i+1, len(shards))
+		}
+		re, err := regexp.Compile(runRegex(shard))
+		if err != nil {
+			return fmt.Errorf("shard %d/%d: %w", i+1, len(shards), err)
+		}
+		for _, n := range names {
+			if re.MatchString(n) {
+				count[n]++
+			}
+		}
+	}
+	var problems []string
+	for _, n := range names {
+		if count[n] != 1 {
+			problems = append(problems, fmt.Sprintf("%s selected by %d shards", n, count[n]))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("shards are not exhaustive and disjoint: %s", strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 func runRegex(names []string) string {

@@ -70,6 +70,67 @@ func TestEveryTestRunsInExactlyOneShard(t *testing.T) {
 	}
 }
 
+func TestUnknownTestRunsInExactlyOneShard(t *testing.T) {
+	w, err := parseWeights(strings.NewReader(weightsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"TestA", "TestB", "TestBrandNew", "TestD", "TestE"}
+	for total := 1; total <= 4; total++ {
+		shards := assign(names, w, 60, total)
+		var union []string
+		for _, s := range shards {
+			union = append(union, s...)
+		}
+		slices.Sort(union)
+		if !slices.Equal(union, names) {
+			t.Errorf("%d shards: union %v, want %v without duplicates", total, union, names)
+		}
+		if err := verify(names, shards); err != nil {
+			t.Errorf("%d shards: verify: %v", total, err)
+		}
+	}
+}
+
+func TestVerifyMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "weights.txt")
+	if err := os.WriteFile(path, []byte(weightsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"-verify", "3", "-weights", path}, strings.NewReader(goTestList+"TestBrandNew\n"), &out); err != nil {
+		t.Fatalf("verify 3: %v", err)
+	}
+	if !strings.Contains(out.String(), "7 tests, 3 shards") {
+		t.Errorf("verify output %q", out.String())
+	}
+	for _, args := range [][]string{{"-verify", "7"}, {"-verify", "1", "-shard", "1/1"}, {"-verify", "-1"}} {
+		if err := run(args, strings.NewReader(goTestList), &out); err == nil {
+			t.Errorf("run %v succeeded, want error", args)
+		}
+	}
+}
+
+func TestVerifyRejectsBrokenShards(t *testing.T) {
+	names := []string{"TestA", "TestAB", "TestB"}
+	cases := map[string][][]string{
+		"missing test":  {{"TestA"}, {"TestB"}},
+		"duplicate":     {{"TestA", "TestB"}, {"TestB", "TestAB"}},
+		"empty shard":   {{"TestA", "TestAB", "TestB"}, {}},
+		"unknown entry": {{"TestA", "TestAB"}, {"TestC"}},
+	}
+	for name, shards := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := verify(names, shards); err == nil {
+				t.Errorf("verify(%v) succeeded, want error", shards)
+			}
+		})
+	}
+	if err := verify(names, [][]string{{"TestA"}, {"TestAB", "TestB"}}); err != nil {
+		t.Errorf("verify of a correct split: %v", err)
+	}
+}
+
 func TestAssignBalancesAndKeepsGroupsTogether(t *testing.T) {
 	w, err := parseWeights(strings.NewReader(weightsFile))
 	if err != nil {
