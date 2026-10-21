@@ -147,12 +147,6 @@ jobs:
       - name: compose logs
         if: failure()
         run: make logs
-      - name: e2e diagnostics (temporary)
-        if: always()
-        run: |
-          . deploy/compose/scripts/lib.sh
-          docker logs paddock-paddock-api-1 2>&1 | jq -Rc 'fromjson? | select((.path // "") | startswith("/api/platform/v1/organizations")) | select(.method != "GET") | {t: .time, m: .method, p: (.path | split("?")[0]), s: .status, ms: .duration_ms}' | redact_tokens || true
-          docker logs paddock-authentik-server-1 2>&1 | jq -Rc 'fromjson? | select((.path // "") | startswith("/api/v3/")) | select(.method != "GET") | {t: .timestamp, m: .method, p: (.path | split("?")[0]), s: .status, ms: .runtime}' | redact_tokens | tail -150 || true
 
   # The required status check "acceptance" of the default branch ruleset: green only if every shard and the e2e job
   # are; a skipped job (failed prerequisites) fails it too.
