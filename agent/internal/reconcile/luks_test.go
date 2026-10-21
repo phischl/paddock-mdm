@@ -992,7 +992,9 @@ func TestLUKSReencrypting(t *testing.T) {
 	f.st.Keyslots = []string{"password", "tpm2+pin"}
 	for range 2 {
 		h := f.m.Tick(context.Background(), f.keys, true, f.mode)
-		if h.State != protocol.DiskEncrypting || !slices.Equal(h.Tokens, []string{"password"}) || h.Keyslots != 1 {
+		if h.State != protocol.DiskEncrypting || !slices.Equal(h.Tokens, []string{"password"}) || h.Keyslots != 1 ||
+			!reflect.DeepEqual(h.Volumes, []protocol.DiskVolume{{UUID: rootUUID, Device: "/dev/sda3", Root: true, LUKSVersion: 2,
+				Tokens: []string{"password"}, Keyslots: 1}}) {
 			t.Fatalf("reencrypting: %+v", h)
 		}
 	}
@@ -1025,6 +1027,9 @@ type encryptSystem struct {
 func (e *encryptSystem) Command(_ context.Context, name string, args ...string) (string, string, int, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
 	e.calls = append(e.calls, line)
+	if strings.HasPrefix(line, "lsinitrd ") && strings.HasSuffix(line, "/boot/initrd.img-6.8.0-85-generic") {
+		return "Image: initrd\n", "", 0, nil
+	}
 	switch line {
 	case "findmnt -no SOURCE /":
 		return "/dev/sda3\n", "", 0, nil
@@ -1060,7 +1065,12 @@ func (e *encryptSystem) Command(_ context.Context, name string, args ...string) 
 	return "", "unexpected", 1, nil
 }
 
-func (e *encryptSystem) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) } //nolint:gosec // test layout
+func (e *encryptSystem) ReadFile(path string) ([]byte, error) {
+	if strings.HasSuffix(path, "/proc/sys/kernel/osrelease") {
+		return []byte("6.8.0-85-generic\n"), nil
+	}
+	return os.ReadFile(path) //nolint:gosec // test layout
+}
 
 func (e *encryptSystem) Stat(path string) (bool, error) {
 	_, err := os.Stat(path)
@@ -1132,6 +1142,17 @@ func TestLUKSConversionEligibility(t *testing.T) {
 	if c := tick(); !c.Eligible || len(sys.calls) != n {
 		t.Fatalf("after the cleanup: %+v", c)
 	}
+	// Plan M8e decision 52: a prepared conversion's key lies in the initrd on the unencrypted /boot.
+	f.m.ConversionHealth = func() *protocol.DiskConversion {
+		return &protocol.DiskConversion{Phase: "prepared", KeyOnBoot: true, CleanupError: "dracut: exit 1",
+			PausedReason: "packages_busy", PausedSince: &f.now, InitrdIssue: "boot_space_low", BootSpaceNeeded: 2, BootSpaceFree: 1, InitrdIssueKernel: "6.8.0-91-generic"}
+	}
+	if c := tick(); !c.KeyOnBoot || !c.Eligible || c.Phase != "prepared" || c.CleanupError != "dracut: exit 1" ||
+		c.PausedReason != "packages_busy" || c.PausedSince == nil || c.InitrdIssue != "boot_space_low" || c.BootSpaceNeeded != 2 ||
+		c.BootSpaceFree != 1 || c.InitrdIssueKernel != "6.8.0-91-generic" {
+		t.Fatalf("prepared: %+v", c)
+	}
+	f.m.ConversionHealth = nil
 
 	f.vol.plain = false
 	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.Conversion != nil {
@@ -1140,5 +1161,53 @@ func TestLUKSConversionEligibility(t *testing.T) {
 	f.m.Encrypt, f.vol.plain = nil, true
 	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.Conversion != nil {
 		t.Fatalf("no preflight device, but a conversion: %+v", h)
+	}
+}
+
+// TestLUKSConversionHold: plan M8e decision 3 and invariant I1 — after an in-place encryption whose initrd still
+// carries the module and the conversion key, the M4b flow enrolls and escrows the recovery key and the header but
+// keeps the conversion key's keyslot and the install passphrase, and the disk is at most escrow_pending; once the
+// initrd was regenerated the flow removes them and reaches compliant. The conversion's health block is attached.
+func TestLUKSConversionHold(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	hold := true
+	f.m.ConversionHold = func() bool { return hold }
+	f.m.ConversionHealth = func() *protocol.DiskConversion {
+		return &protocol.DiskConversion{Phase: "completed", KeyOnBoot: hold}
+	}
+	for range 5 {
+		f.pass()
+		f.poll()
+	}
+	if s := f.pass(); s != protocol.DiskEscrowPending || !f.passphrase() || slices.Contains(f.vol.changes, "wipe password") ||
+		len(f.server.of(escrow.KindLUKSRecoveryKey)) != 1 || len(f.server.of(escrow.KindLUKSHeader)) != 1 {
+		t.Fatalf("held: %s, passphrase %v, changes %v, escrows %+v", s, f.passphrase(), f.vol.changes, f.server.requests)
+	}
+	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.Conversion == nil || !h.Conversion.KeyOnBoot ||
+		h.Conversion.Phase != "completed" {
+		t.Fatalf("health %+v", h)
+	}
+	hold = false
+	f.toCompliant()
+	if !slices.Contains(f.vol.changes, "wipe password") || f.passphrase() {
+		t.Fatalf("after the hold: changes %v", f.vol.changes)
+	}
+	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.Conversion == nil || h.Conversion.KeyOnBoot {
+		t.Fatalf("health %+v", h)
+	}
+	// Whatever the keyslots look like, a held disk is never reported compliant.
+	hold = true
+	if s := f.pass(); s != protocol.DiskEscrowPending {
+		t.Fatalf("held after compliant: %s", s)
+	}
+
+	// While the reencryption runs the health block comes with state encrypting.
+	f = newLUKSFixture(t, "password", "reencrypt")
+	f.m.ConversionHealth = func() *protocol.DiskConversion {
+		return &protocol.DiskConversion{Phase: "encrypting", DoneBytes: 8192, KeyOnBoot: true}
+	}
+	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.State != protocol.DiskEncrypting || h.Conversion == nil ||
+		h.Conversion.DoneBytes != 8192 {
+		t.Fatalf("encrypting: %+v", h)
 	}
 }

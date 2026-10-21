@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
@@ -95,6 +96,12 @@ type LUKS struct {
 	// CleanupPending reports whether the cleanup of an abandoned conversion is unfinished (invariant I3 of plan M8e
 	// §14.10); nil is false.
 	CleanupPending func() bool
+	// ConversionHold reports whether an in-place encryption still needs the conversion key's keyslot and the install
+	// passphrase: its initrd was not regenerated yet (plan M8e decision 3, invariant I1); nil is false.
+	ConversionHold func() bool
+	// ConversionHealth returns the conversion's part of health.disk while the device holds one (plan M8e decisions 22
+	// and 52); nil, or a nil result, reports none.
+	ConversionHealth func() *protocol.DiskConversion
 
 	// mu guards scanning, scan and fresh, which the background inventory writes. fresh is set by a completed scan
 	// and cleared by the pass that uses it for escrows.
@@ -216,6 +223,13 @@ func (m *LUKS) Tick(ctx context.Context, keys *bundle.Keys, full bool, mode stri
 
 // pass inventories the volume, reports changed keyslots and takes at most one step.
 func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
+	before := m.health
+	defer func() {
+		// Only a report built by this pass: an earlier one may be published already.
+		if h := m.health; h != before && h != nil && h.State != protocol.DiskNotEncrypted && m.ConversionHealth != nil {
+			h.Conversion = m.ConversionHealth()
+		}
+	}()
 	vol, err := luks.Root(ctx, m.Tools)
 	if errors.Is(err, luks.ErrNotEncrypted) {
 		m.health = &protocol.DiskHealth{State: protocol.DiskNotEncrypted, UnlockMode: m.mode, BootSeparate: m.bootSeparate(ctx),
@@ -238,8 +252,14 @@ func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 	kinds := md.Kinds()
 	if md.Reencrypting() {
 		// An unfinished online reencryption (plan M8e decision 3): no keyslot is recorded, changed, escrowed or reported
-		// as tampering until it completes.
+		// as tampering until it completes. The root volume alone is listed, not escrowed (decision 23).
+		uuid, err := luks.UUID(ctx, m.Tools, vol.Device)
+		if err != nil {
+			slog.WarnContext(ctx, "the LUKS UUID of the root volume is unknown", "device", vol.Device, "error", err)
+		}
 		m.health = m.report(protocol.DiskEncrypting, kinds)
+		m.health.Volumes = []protocol.DiskVolume{{UUID: uuid, Device: vol.Device, Root: true, LUKSVersion: 2, Tokens: kinds,
+			Keyslots: len(kinds)}}
 		return
 	}
 	passphrase := exists(m.Layout.InstallPassphrase())
@@ -418,7 +438,7 @@ func (m *LUKS) step(ctx context.Context, device string, md luks.Metadata, passph
 		return nil // a recovery keyslot this agent did not create: nothing to escrow
 	case digest(md) != m.State.HeaderDigest:
 		return m.escrowHeader(ctx, device, m.rootUUID, true, digest(md), keys)
-	case passphrase && md.Has(tpmKind(m.mode)):
+	case passphrase && md.Has(tpmKind(m.mode)) && !m.held():
 		return m.removePassphrase(ctx, device, keyFile, md)
 	}
 	return nil
@@ -661,11 +681,16 @@ func (m *LUKS) state(md luks.Metadata, passphrase bool) string {
 	case !md.Has(own):
 		return protocol.DiskTPMPINMissing
 	case passphrase || m.pending != nil || m.State.RecoveryStored == 0 || digest(md) != m.State.HeaderDigest ||
-		!slices.Equal(md.Kinds(), compliantKeyslotsFor(m.mode)):
+		!slices.Equal(md.Kinds(), compliantKeyslotsFor(m.mode)) || m.held():
 		return protocol.DiskEscrowPending
 	}
 	return protocol.DiskCompliant
 }
+
+// held reports the hold of plan M8e decision 3: while a conversion's initrd still carries the module and the
+// conversion key as the only unlock path, its keyslot and the install passphrase stay and the disk is at most
+// escrow_pending.
+func (m *LUKS) held() bool { return m.ConversionHold != nil && m.ConversionHold() }
 
 func (m *LUKS) report(s string, kinds []string) *protocol.DiskHealth {
 	return &protocol.DiskHealth{State: s, LUKSVersion: 2, Tokens: kinds, Keyslots: len(kinds), UnlockMode: m.mode}
@@ -704,6 +729,14 @@ func (m *LUKS) conversion(ctx context.Context, keys *bundle.Keys) *protocol.Disk
 	if l.Initramfs == encrypt.InitramfsTools {
 		c.InitramfsRemoves = l.InitramfsRemoves
 	}
+	if m.ConversionHealth != nil {
+		if h := m.ConversionHealth(); h != nil {
+			c.Phase, c.KeyOnBoot, c.CleanupError, c.PausedReason, c.PausedSince = h.Phase, h.KeyOnBoot, h.CleanupError,
+				h.PausedReason, h.PausedSince
+			c.InitrdIssue, c.BootSpaceNeeded, c.BootSpaceFree, c.InitrdIssueKernel = h.InitrdIssue, h.BootSpaceNeeded, h.BootSpaceFree,
+				h.InitrdIssueKernel
+		}
+	}
 	return c
 }
 
@@ -737,13 +770,17 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// shred overwrites a file with zeros, flushes it and removes it.
+// shred overwrites a file with zeros, flushes it and removes it. It opens the file without following a symlink and
+// writes only to a regular file, so that a link planted at the path cannot direct the zeros elsewhere.
 func shred(path string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // the install passphrase of the layout
+	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // the install passphrase of the layout
 	if err != nil {
 		return err
 	}
 	info, err := f.Stat()
+	if err == nil && !info.Mode().IsRegular() {
+		err = fmt.Errorf("%s is no regular file; it is not overwritten", path)
+	}
 	if err == nil {
 		_, err = f.Write(make([]byte, info.Size()))
 	}

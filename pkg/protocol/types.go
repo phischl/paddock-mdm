@@ -331,12 +331,26 @@ type DiskConversion struct {
 	InitramfsRemoves []string `json:"initramfs_removes,omitempty"`
 	// KeyOnBoot is true from the preparation until the initrd was regenerated: the conversion key lies in the
 	// initrd on the unencrypted /boot (plan M8e decision 52).
-	KeyOnBoot     bool       `json:"key_on_boot,omitempty"`
-	Phase         string     `json:"phase,omitempty"`      // prepared | encrypting | completed | failed
-	DataBytes     int64      `json:"data_bytes,omitempty"` // bytes to encrypt (the partition minus the header)
-	DoneBytes     int64      `json:"done_bytes,omitempty"`
-	ETASeconds    int64      `json:"eta_s,omitempty"`
-	PausedReason  string     `json:"paused_reason,omitempty"` // on_battery | helper_not_running
+	KeyOnBoot bool `json:"key_on_boot,omitempty"`
+	// CleanupError is why the last attempt of an unfinished cleanup (reason cleanup_pending) did not finish, its first
+	// line (plan M8e amendment 2026-10-21, item 17).
+	CleanupError string `json:"cleanup_error,omitempty"`
+	Phase        string `json:"phase,omitempty"`      // prepared | encrypting | completed | failed
+	DataBytes    int64  `json:"data_bytes,omitempty"` // bytes to encrypt (the partition minus the header)
+	DoneBytes    int64  `json:"done_bytes,omitempty"`
+	ETASeconds   int64  `json:"eta_s,omitempty"`
+	PausedReason string `json:"paused_reason,omitempty"` // on_battery | helper_not_running | packages_busy
+	// InitrdIssue is why the initrd work of a conversion cannot go on: boot_space_low (BootSpaceNeeded bytes needed,
+	// BootSpaceFree free in /boot), no_bootable_kernel, kernel_not_buildable, orphan_initrd_removed,
+	// key_material_hardlinked or key_material_shared_bootable (plan M8e amendment 2026-10-21, item 19).
+	InitrdIssue     string `json:"initrd_issue,omitempty"`
+	BootSpaceNeeded int64  `json:"boot_space_needed,omitempty"`
+	BootSpaceFree   int64  `json:"boot_space_free,omitempty"`
+	// InitrdIssueKernel names the kernel of initrd_issue kernel_not_buildable or key_material_shared_bootable (plan M8e
+	// amendment 2026-10-21, item 19).
+	InitrdIssueKernel string `json:"initrd_issue_kernel,omitempty"`
+	// PausedSince is when a preparation began to wait with packages_busy (plan M8e amendment 2026-10-21, item 18).
+	PausedSince   *time.Time `json:"paused_since,omitempty"`
 	FailureStage  string     `json:"failure_stage,omitempty"` // preflight | prepare | init | resume
 	FailureReason string     `json:"failure_reason,omitempty"`
 	UpdatedAt     *time.Time `json:"updated_at,omitempty"`

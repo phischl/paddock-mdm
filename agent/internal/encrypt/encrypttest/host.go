@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
 )
 
 // Host answers tool runs from Handle first, then from the fixture's recorded commands; an unknown command fails the
@@ -26,11 +28,19 @@ type Host struct {
 	Handle func(line string) (stdout string, exit int, ok bool)
 	// NotFound reports the tools that are not installed; nil: all are.
 	NotFound func(name string) bool
+	// PackagesBusy makes LockPackages fail as while apt or dpkg runs.
+	PackagesBusy bool
+	// Free is what FreeBytes reports for /boot; 0 is 1 GiB. FreeFunc, when set, answers instead.
+	Free     int64
+	FreeFunc func(dir string) int64
+	// Stderr answers the stderr of a command line Handle answered with a non-zero exit; nil: none.
+	Stderr func(line string) string
 
 	mu       sync.Mutex
 	commands map[string]recorded
 	calls    []string
 	long     []string
+	locked   bool
 }
 
 type recorded struct {
@@ -150,7 +160,11 @@ func (h *Host) run(ctx context.Context, long bool, name string, args []string) (
 	}
 	if handle != nil {
 		if out, exit, ok := handle(line); ok {
-			return out, "", exit, nil
+			stderr := ""
+			if exit != 0 && h.Stderr != nil {
+				stderr = h.Stderr(line)
+			}
+			return out, stderr, exit, nil
 		}
 	}
 	if !known {
@@ -158,6 +172,41 @@ func (h *Host) run(ctx context.Context, long bool, name string, args []string) (
 		return "", "", -1, errors.New("unrecorded command")
 	}
 	return r.stdout, "", r.exit, nil
+}
+
+// LockPackages implements encrypt.Host: busy with PackagesBusy, else held until unlock.
+func (h *Host) LockPackages() (func(), error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.PackagesBusy || h.locked {
+		return nil, encrypt.ErrPackagesBusy
+	}
+	h.locked = true
+	return func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.locked = false
+	}, nil
+}
+
+// FreeBytes implements encrypt.Host.
+func (h *Host) FreeBytes(dir string) (int64, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.FreeFunc != nil {
+		return h.FreeFunc(dir), nil
+	}
+	if h.Free == 0 {
+		return 1 << 30, nil
+	}
+	return h.Free, nil
+}
+
+// PackagesLocked reports whether the code under test holds the dpkg locks now.
+func (h *Host) PackagesLocked() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.locked
 }
 
 // ReadFile implements encrypt.System.

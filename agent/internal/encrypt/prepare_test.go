@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -95,7 +96,7 @@ func TestPrepareLVM(t *testing.T) {
 			t.Errorf("%s mode %v", initrd, info)
 		}
 	}
-	if f.dev.Count(aptInstall) != 1 || f.longCalls("dracut -f --regenerate-all") != 1 ||
+	if f.dev.Count(aptInstall) != 1 || f.longCalls("dracut -f --no-uefi /boot/.initrd.img-") != 2 || f.longCalls("dracut -f --regenerate-all") != 0 ||
 		f.dev.Count("apt-get -s -o Debug::NoLocking=true install dracut") != 2 {
 		t.Fatalf("calls %v", f.dev.Calls())
 	}
@@ -294,7 +295,9 @@ func TestPrepareInitrdIncomplete(t *testing.T) {
 	if c.Phase != state.ConversionFailed || c.FailureReason != "initrd_incomplete" || c.CleanupPending {
 		t.Fatalf("conversion %+v", c)
 	}
-	if !f.moduleGone() || f.longCalls("dracut -f --regenerate-all") != 2 || f.dev.initrdCarriesModule(runningKernel) ||
+	// Step 8 stops at the first kernel's incomplete initrd, then the cleanup rebuilds both (amendment items 18, 19(h)).
+	if !f.moduleGone() || f.longCalls("dracut -f --regenerate-all") != 0 || f.longCalls("dracut -f --no-uefi /boot/.initrd.img-") != 3 ||
+		f.dev.initrdCarriesModule(runningKernel) ||
 		f.dev.initrdCarriesModule(olderKernel) {
 		t.Fatalf("module left: %v", f.dev.Long())
 	}
@@ -409,17 +412,17 @@ func TestPreparePlanRecordedAfterStop(t *testing.T) {
 // without a plan nothing is LUKS, with one its partition is checked, and an unreadable plan is unknown.
 func TestIsLUKSWithoutPartition(t *testing.T) {
 	f := newFixture(t)
-	if luks, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, ""); luks || !ok {
+	if luks, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, encrypt.Disk{}); luks || !ok {
 		t.Fatalf("no plan: %v %v", luks, ok)
 	}
 	f.dev.Write("/var/lib/paddock/encrypt/plan.json", `{"conversion_id":"`+conversionID+`","partition":"`+partition+`"}`)
 	f.dev.set(func(d *device) { d.luks = true })
-	if luks, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, ""); !luks || !ok {
+	if luks, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, encrypt.Disk{}); !luks || !ok {
 		t.Fatalf("plan with a LUKS partition: %v %v", luks, ok)
 	}
 	for name, content := range map[string]string{"unreadable": "{", "no partition": `{"conversion_id":"` + conversionID + `"}`} {
 		f.dev.Write("/var/lib/paddock/encrypt/plan.json", content)
-		if _, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, ""); ok {
+		if _, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, encrypt.Disk{}); ok {
 			t.Fatalf("%s plan: answered", name)
 		}
 	}
@@ -517,15 +520,17 @@ func TestPrepareRerunFailureKeepsCleanup(t *testing.T) {
 }
 
 // TestPrepareFailureOnLUKSPartition: Review 3, major-2 — a failing rerun never cleans up a partition that is LUKS
-// (invariants I1 and I2): a LUKS partition stops the preparation for the adoption without recording a failure; a
-// header that cannot be checked records the failure with CleanupPending and keeps the key, the plan and the module.
+// (invariants I1 and I2): a partition that became LUKS while the failing step ran stops the preparation for the
+// adoption without recording a failure; a header that became uncheckable records the failure with CleanupPending and
+// keeps the key, the plan and the module.
 func TestPrepareFailureOnLUKSPartition(t *testing.T) {
 	for name, set := range map[string]func(d *device){
-		"LUKS":    func(d *device) { d.luks, d.incomplete = true, true },
-		"unknown": func(d *device) { d.luksExit, d.incomplete = 4, true },
+		"LUKS":    func(d *device) { d.incomplete, d.afterDracut = true, func(d *device) { d.luks = true } },
+		"unknown": func(d *device) { d.incomplete, d.afterDracut = true, func(d *device) { d.luksExit = 4 } },
 	} {
 		f := stoppedBeforePrepared(t)
 		f.dev.set(set)
+		_ = f.store.Update(func(c *state.DiskConversion, _ *state.LUKS) { c.CleanupError = "an earlier reason" })
 		got := f.preparer().Prepare(context.Background())
 		c := f.conversion()
 		for _, p := range append([]string{encrypt.ModuleDir, encrypt.ModuleConf}, leftovers...) {
@@ -539,7 +544,7 @@ func TestPrepareFailureOnLUKSPartition(t *testing.T) {
 			}
 			continue
 		}
-		if got != encrypt.Failed || c.Phase != state.ConversionFailed || !c.CleanupPending {
+		if got != encrypt.Failed || c.Phase != state.ConversionFailed || !c.CleanupPending || c.CleanupError != "" {
 			t.Fatalf("%s: outcome %v, %+v", name, got, c)
 		}
 	}
@@ -612,5 +617,93 @@ func TestPrepareTestHooks(t *testing.T) {
 		if dev && (f.read("/var/lib/paddock/encrypt/test-hooks") != "" || f.mode("/var/lib/paddock/encrypt/test-hooks") != 0o600) {
 			t.Fatal("test-hooks is not an empty root-only file")
 		}
+	}
+}
+
+// TestPrepareStopsOnConvertedPartition: PDK-367 — no step runs while the planned partition is LUKS or its header cannot
+// be checked (invariants I1 and I2): the rerun stops before it rewrites the disk setup, rebuilds the initrds or records
+// prepared, and the worker's adoption takes over.
+func TestPrepareStopsOnConvertedPartition(t *testing.T) {
+	for name, set := range map[string]func(d *device){
+		"LUKS":    func(d *device) { d.luks = true },
+		"unknown": func(d *device) { d.luksExit = 4 },
+	} {
+		f := stoppedBeforePrepared(t)
+		if err := os.Remove(f.dev.Path("/var/lib/paddock/disk-setup-pending")); err != nil {
+			t.Fatal(err)
+		}
+		rebuilds := f.longCalls("dracut -f --regenerate-all")
+		f.dev.set(set)
+		if got := f.preparer().Prepare(context.Background()); got != encrypt.Stopped {
+			t.Fatalf("%s: outcome %v", name, got)
+		}
+		c := f.conversion()
+		if c.Phase != state.ConversionPreparing || len(f.store.events) != 0 || f.longCalls("dracut -f --regenerate-all") != rebuilds ||
+			f.dev.Exists("/var/lib/paddock/disk-setup-pending") {
+			t.Fatalf("%s: a step ran: %+v, events %v", name, c, f.store.types())
+		}
+	}
+}
+
+// TestPrepareAbortDuringUnsavedFailure: PDK-367 — an abort requested while a step failed whose failure could not be
+// saved runs (decision 27) instead of being answered not_abortable by the worker.
+func TestPrepareAbortDuringUnsavedFailure(t *testing.T) {
+	f := newFixture(t)
+	failed := false
+	f.dev.set(func(d *device) {
+		d.incomplete = true
+		d.afterDracut = func(*device) {
+			f.store.mu.Lock()
+			defer f.store.mu.Unlock()
+			if f.store.saveErr != nil {
+				return // the cleanup's rebuild
+			}
+			f.store.c.AbortRequested = true
+			f.store.saveErr = func(*state.DiskConversion) error {
+				if failed {
+					return nil
+				}
+				failed = true
+				return errors.New("disk full")
+			}
+		}
+	})
+	if got := f.preparer().Prepare(context.Background()); got != encrypt.Aborted {
+		t.Fatalf("outcome %v, %+v", got, f.conversion())
+	}
+	if c := f.conversion(); !failed || c.Phase != state.ConversionCancelled || c.AbortRequested {
+		t.Fatalf("conversion %+v", c)
+	}
+	if types := f.store.types(); len(types) != 1 || types[0] != protocol.EventDiskConversionAborted {
+		t.Fatalf("events %v", types)
+	}
+}
+
+// TestPrepareAbortDuringTransientError: PDK-366 — an abort requested while a step ended on a transient tool error
+// (dpkg cannot answer at step 6) runs instead of the retry.
+func TestPrepareAbortDuringTransientError(t *testing.T) {
+	f := newFixture(t)
+	p := f.preparer()
+	n := 0
+	p.Hold = func(context.Context) error {
+		if n++; n == 6 {
+			f.dev.set(func(d *device) { d.dpkgExit = 2 })
+			f.store.beforeUpdate = func(c *state.DiskConversion) {
+				if c.TransientErrors == 0 && c.Phase == state.ConversionPreparing {
+					c.AbortRequested = true
+				}
+			}
+		}
+		return nil
+	}
+	if got := p.Prepare(context.Background()); got != encrypt.Aborted {
+		t.Fatalf("outcome %v, %+v", got, f.conversion())
+	}
+	c := f.conversion()
+	if c.Phase != state.ConversionCancelled || c.AbortRequested || c.TransientErrors != 1 {
+		t.Fatalf("conversion %+v", c)
+	}
+	if types := f.store.types(); len(types) != 1 || types[0] != protocol.EventDiskConversionAborted {
+		t.Fatalf("events %v", types)
 	}
 }

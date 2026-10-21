@@ -130,6 +130,22 @@ type Agent struct {
 	conversionJobs  chan struct{}
 	conversionCalls chan func()
 	conversionBusy  bool
+	// helperRunning is whether the background reencryption's unit was running at the last full pass (plan M8e decision
+	// 22); helperNoExecLogged and helperLimitLogged log a launch that cannot happen once per start.
+	helperRunning bool
+	// initrdFailures and initrdRetryAt are the backoff of the converted disk's initrd work and of a cleanup;
+	// finishCancel cancels a regeneration the worker runs, at a revocation hand-over (PDK-374).
+	initrdFailures int
+	initrdRetryAt  time.Time
+	finishCancel   context.CancelFunc
+	// bootConverted is a boot result ok seen since the start: this boot opened the converted disk through the module,
+	// so no "not LUKS" answer leads to a cleanup until the next start (amendment 2026-10-21, item 13).
+	bootConverted bool
+	// helperLaunched is a helper this start launched or saw running whose end the agent has not recorded yet: an end
+	// without a result counts as a failed run.
+	helperLaunched     bool
+	helperNoExecLogged bool
+	helperLimitLogged  bool
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -196,9 +212,7 @@ func New(d Deps) (*Agent, error) {
 	a.localAdmin = &localadmin.Manager{Sys: d.Accounts, Escrow: escrowClient{a}, State: &a.st.LocalAdmin, Save: a.persist,
 		Emit: a.event, Result: a.commandResult, Now: d.Now}
 	if d.LUKS != nil {
-		a.luks = &reconcile.LUKS{Tools: d.LUKS, Layout: d.Layout, Escrow: escrowClient{a}, State: &a.st.LUKS, Save: a.persist,
-			Emit: a.event, Now: d.Now, TPM2Present: func() bool { return luks.TPM2Present(d.Layout.Root) }, Encrypt: d.Encrypt,
-			CleanupPending: func() bool { return a.st.Conversion != nil && a.st.Conversion.CleanupPending }}
+		a.luks = a.luksReconciler()
 	}
 	if a.d.Commands == nil {
 		a.d.Commands = commands.New(commands.Handlers(map[string]commands.Handler{

@@ -93,11 +93,29 @@ func (a *Agent) handRevocations(ctx context.Context, envelopes []json.RawMessage
 		}
 		// Recorded first: a token is never handed twice, even if paddock-revoke reboots the device.
 		a.st.HandedRevocations[h] = now
+		revoked := false
+		if c := a.st.Conversion; c != nil {
+			// The wait for dpkg's locks is reported anew by the next pass that waits (amendment item 19).
+			c.PackagesBusySince = nil
+		}
+		if c := a.st.Conversion; c != nil && c.StartedAt != nil && c.RevokedAt == nil {
+			at := now.UTC()
+			c.RevokedAt, revoked = &at, true
+		}
 		if err := state.Save(a.d.Layout.State(), a.st); err != nil {
 			slog.ErrorContext(ctx, "saving the agent state failed; revocation not handed", "error", err)
 			delete(a.st.HandedRevocations, h)
+			if revoked {
+				a.st.Conversion.RevokedAt = nil
+			}
 			continue
 		}
+		// The recorded hand-over keeps every later pass from relaunching the background reencryption (plan M8e §14.5
+		// decision 39); the running one is stopped before paddock-revoke erases the keyslots.
+		if a.finishCancel != nil {
+			a.finishCancel()
+		}
+		a.stopResumeHelper(ctx)
 		refused, err := a.d.Revoke(ctx, env)
 		switch {
 		case err != nil:

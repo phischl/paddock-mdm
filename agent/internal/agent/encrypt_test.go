@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,7 @@ const (
 	testConversionID = "5b0e7c1a-2f4d-4e8b-9a6c-3d1f0e2b4a7c"
 	testPartition    = "/dev/disk/by-partuuid/8c2f8d4e-5b7a-4f1c-9e0d-2a6b3c4d5e6f"
 	testKernel       = "6.8.0-85-generic"
+	testLUKSUUID     = "0e373e21-dd76-4f34-bdf4-c815419e5a55"
 )
 
 // initrdListing is what lsinitrd shows for an initrd built with the module.
@@ -39,17 +41,94 @@ const initrdListing = "paddock-encrypt\netc/paddock/encrypt-plan.env\netc/paddoc
 	"usr/lib/systemd/system/paddock-encrypt-init.service\nusr/sbin/cryptsetup\nusr/sbin/e2fsck\nusr/sbin/resize2fs\nusr/sbin/lvm\n"
 
 // convDevice is the fake device of the agent's conversion tests: the eligible lvm device of the encrypt tests with
-// dracut installed; isLuks answers luks, and lsinitrd lists the module while ModuleConf exists.
+// dracut installed. isLuks answers luks; dracut builds every installed kernel's initrd with the module while
+// ModuleConf and plan.env exist (the module's check()) and with /etc/crypttab, unless dracutExit fails it; lsinitrd
+// lists what the last build put in. With luks, luksDump shows slots; the unit of the background helper is unit.
 type convDevice struct {
 	*encrypttest.Host
-	mu   sync.Mutex
-	luks bool
+	mu         sync.Mutex
+	luks       bool
+	slots      []string
+	unit       string
+	dracutExit int
+	// stopStuck keeps the helper's unit active after systemctl stop.
+	stopStuck bool
+	// onLine runs at every command line before the device answers it (without mu).
+	onLine func(line string)
+	// headerReadable makes luksDump answer although isLuks says no (one tool's wrong answer).
+	headerReadable bool
+	// partDevices is what blkid names for the partition's PARTUUID ("" = one device, /dev/sda3).
+	partDevices string
 }
 
 func (d *convDevice) setLUKS(v bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.luks = v
+}
+
+func (d *convDevice) set(fn func(d *convDevice)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	fn(d)
+}
+
+// build is dracut -f --regenerate-all on the fake: the initrd of every kernel with /boot/vmlinuz-<v>.
+func (d *convDevice) build() {
+	module := d.Exists(encrypt.ModuleConf) && d.Exists("/var/lib/paddock/encrypt/plan.env")
+	images, _ := filepath.Glob(d.Path("/boot/vmlinuz-*"))
+	for _, img := range images {
+		d.buildInitrd(filepath.Join(filepath.Dir(img), "initrd.img-"+strings.TrimPrefix(filepath.Base(img), "vmlinuz-")), module)
+	}
+}
+
+// buildInitrd writes one initrd as lsinitrd shows it (the header with the dracut modules, then ls -l lines), then
+// after crypttabMark the crypttab it carries.
+func (d *convDevice) buildInitrd(path string, module bool) {
+	modules := "systemd\ncrypt\n"
+	files := []string{"usr/sbin/cryptsetup", "usr/lib/systemd/systemd-cryptsetup", "usr/lib/x86_64-linux-gnu/libtss2-esys.so.0"}
+	if module {
+		modules += "paddock-encrypt\n"
+		for line := range strings.Lines(initrdListing) {
+			if f := strings.TrimSpace(line); f != "paddock-encrypt" {
+				files = append(files, f)
+			}
+		}
+	}
+	crypttab, err := os.ReadFile(d.Path("/etc/crypttab"))
+	if err == nil {
+		files = append(files, "etc/crypttab")
+	}
+	var b strings.Builder
+	b.WriteString("Image: initrd\n====\nVersion: dracut-060\n\ndracut modules:\n" + modules + "====\n")
+	for _, f := range files {
+		b.WriteString("-rwxr-xr-x   1 root     root          123 Oct 21 10:00 " + f + "\n")
+	}
+	_ = os.WriteFile(path, []byte(b.String()+crypttabMark+string(crypttab)), 0o600)
+}
+
+// crypttabMark separates a fake initrd's listing from the crypttab it carries.
+const crypttabMark = "--- etc/crypttab ---\n"
+
+// metadata is the LUKS2 metadata of the slots, by kind.
+func (d *convDevice) metadata() string {
+	keyslots, tokens := map[string]any{}, map[string]any{}
+	for i, kind := range d.slots {
+		slot := strconv.Itoa(i)
+		keyslots[slot] = map[string]any{"type": "luks2"}
+		switch kind {
+		case "tpm2+pin":
+			tokens[slot] = map[string]any{"type": "systemd-tpm2", "keyslots": []string{slot}, "tpm2-pin": true}
+		case "tpm2":
+			tokens[slot] = map[string]any{"type": "systemd-tpm2", "keyslots": []string{slot}}
+		case "recovery":
+			tokens[slot] = map[string]any{"type": "systemd-recovery", "keyslots": []string{slot}}
+		case "reencrypt":
+			keyslots[slot] = map[string]any{"type": "reencrypt"}
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"keyslots": keyslots, "tokens": tokens})
+	return string(b)
 }
 
 var testEscrowKey = sync.OnceValue(func() *rsa.PrivateKey {
@@ -65,13 +144,21 @@ func convAgent(t *testing.T) (*Agent, *testgw.Gateway, *convDevice) {
 	t.Helper()
 	g := testgw.New(t)
 	a := newAgent(t, g)
-	d := &convDevice{Host: encrypttest.LoadInto(t, "../encrypt/testdata/lvm.txt", a.d.Layout.Root)}
+	d := &convDevice{Host: encrypttest.LoadInto(t, "../encrypt/testdata/lvm.txt", a.d.Layout.Root), unit: "inactive",
+		slots: []string{"password", "reencrypt"}}
 	d.Write("/proc/sys/kernel/osrelease", testKernel+"\n")
 	d.Write("/boot/vmlinuz-"+testKernel, "")
+	d.Write("/lib/modules/"+testKernel+"/modules.dep", "")
 	d.Write("/boot/initrd.img-"+testKernel, "")
 	d.MkdirAll("/sys/module/dm_crypt")
 	d.Write(testPartition, "")
 	d.Handle = func(line string) (string, int, bool) {
+		d.mu.Lock()
+		hook := d.onLine
+		d.mu.Unlock()
+		if hook != nil {
+			hook(line)
+		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		switch line {
@@ -89,12 +176,69 @@ func convAgent(t *testing.T) (*Agent, *testgw.Gateway, *convDevice) {
 		case "lvm vgs --noheadings --units b --nosuffix -o vg_extent_size ubuntu-vg":
 			return "4194304\n", 0, true
 		case "dracut -f --regenerate-all":
-			return "", 0, true
-		case "lsinitrd /boot/initrd.img-" + testKernel:
-			if d.Exists(encrypt.ModuleConf) {
-				return initrdListing, 0, true
+			if d.dracutExit != 0 {
+				return "", d.dracutExit, true
 			}
-			return "usr/sbin/cryptsetup\n", 0, true
+			d.build()
+			return "", 0, true
+		case "blkid -o device -t PARTUUID=8c2f8d4e-5b7a-4f1c-9e0d-2a6b3c4d5e6f":
+			if d.partDevices == "" {
+				return "/dev/sda3\n", 0, true
+			}
+			return d.partDevices, 0, true
+		case "cryptsetup luksDump --dump-json-metadata -- " + testPartition:
+			if !d.luks && !d.headerReadable {
+				return "", 1, true
+			}
+			return d.metadata(), 0, true
+		case "systemctl is-active " + encrypt.ResumeUnit:
+			if d.unit == "active" {
+				return "active\n", 0, true
+			}
+			return d.unit + "\n", 3, true
+		case "systemctl stop --no-block " + encrypt.ResumeUnit:
+			if !d.stopStuck {
+				d.unit = "inactive"
+			}
+			return "", 0, true
+		}
+		if rest, ok := strings.CutPrefix(line, "dracut -f --no-uefi /boot/.initrd.img-"); ok {
+			if d.dracutExit != 0 {
+				return "", d.dracutExit, true
+			}
+			d.buildInitrd(d.Path("/boot/.initrd.img-"+strings.Fields(rest)[0]),
+				d.Exists(encrypt.ModuleConf) && d.Exists("/var/lib/paddock/encrypt/plan.env"))
+			return "", 0, true
+		}
+		if rest, ok := strings.CutPrefix(line, "dracut -f --no-uefi --omit paddock-encrypt "); ok {
+			if d.dracutExit != 0 {
+				return "", d.dracutExit, true
+			}
+			tmp := d.Path(strings.Fields(rest)[0])
+			d.buildInitrd(tmp, false)
+			// What real lsinitrd prints for a build with --omit: dracut's command line names the module.
+			raw, _ := os.ReadFile(tmp)
+			_ = os.WriteFile(tmp, []byte(strings.Replace(string(raw), "Version: dracut-060\n",
+				"Version: dracut-060\nArguments: -f --omit 'paddock-encrypt'\n", 1)), 0o600)
+			return "", 0, true
+		}
+		if initrd, ok := strings.CutPrefix(line, "lsinitrd -m "); ok {
+			raw, _ := os.ReadFile(d.Path(initrd))
+			head, _, _ := strings.Cut(string(raw), "====\n-")
+			return head, 0, true
+		}
+		if initrd, ok := strings.CutPrefix(line, "lsinitrd -f etc/crypttab "); ok {
+			raw, _ := os.ReadFile(d.Path(initrd))
+			_, crypttab, _ := strings.Cut(string(raw), crypttabMark)
+			return crypttab, 0, true
+		}
+		if initrd, ok := strings.CutPrefix(line, "lsinitrd "); ok {
+			raw, err := os.ReadFile(d.Path(initrd))
+			if err != nil {
+				return "", 1, true
+			}
+			listing, _, _ := strings.Cut(string(raw), crypttabMark)
+			return listing, 0, true
 		}
 		return "", 0, false
 	}
@@ -312,7 +456,8 @@ func TestStartConversionAdopts(t *testing.T) {
 		LUKSUUID: "0e373e21-dd76-4f34-bdf4-c815419e5a55", AbortCommandID: "c-abort", AbortRequested: true}
 	d.setLUKS(true)
 	a.startConversion(context.Background())
-	if c := a.st.Conversion; c.Phase != state.ConversionEncrypting || c.StartedAt == nil || len(a.conversionJobs) != 0 || c.AbortRequested {
+	// The job queued is the converted disk's initrd work (decisions 18, 20 and 52), not the preparation.
+	if c := a.st.Conversion; c.Phase != state.ConversionEncrypting || c.StartedAt == nil || len(a.conversionJobs) != 1 || c.AbortRequested {
 		t.Fatalf("conversion %+v, queued %d", c, len(a.conversionJobs))
 	}
 	events := spooled(t, a)
@@ -353,14 +498,18 @@ func TestTickConversionRetriesCleanup(t *testing.T) {
 			_ = os.Remove(d.Path(testPartition))
 		}
 		a.st.Conversion = &state.DiskConversion{ID: testConversionID, Phase: state.ConversionCancelled, Partition: testPartition,
-			CleanupPending: true}
+			Mapping: "dm_crypt-0", LUKSUUID: testLUKSUUID, CleanupPending: true}
 		a.tickConversion(context.Background())
 		if !tc.luks && !tc.missing && (d.Count("dracut -f --regenerate-all") != 0 || len(a.conversionJobs) != 1 || !a.conversionBusy) {
 			t.Fatalf("%s: the cleanup ran on the loop or was not queued", name)
 		}
 		if tc.luks {
-			if len(a.conversionJobs) != 0 || a.st.Conversion.Phase != state.ConversionEncrypting {
+			if a.st.Conversion.Phase != state.ConversionEncrypting || a.st.Conversion.CleanupPending {
 				t.Fatalf("%s: queued a cleanup instead of adopting", name)
+			}
+			runWorker(t, a)
+			if !d.Exists("/var/lib/paddock/install-passphrase") {
+				t.Fatalf("%s: the adopted conversion's key was removed", name)
 			}
 			continue
 		}
@@ -375,7 +524,8 @@ func TestTickConversionRetriesCleanup(t *testing.T) {
 }
 
 // TestWorkerAnswersRefusedAbort: an encrypt_disk_abort the worker cannot run (the partition cannot be checked, I1) is
-// answered not_abortable at once, and the preparation goes on instead of staying preparing without a worker.
+// answered not_abortable at once, and the preparation is queued again instead of staying preparing without a worker;
+// its steps wait until the header can be checked (PDK-367).
 func TestWorkerAnswersRefusedAbort(t *testing.T) {
 	a, _, d := convAgent(t)
 	params := `{"conversion_id":"` + testConversionID + `"}`
@@ -391,7 +541,8 @@ func TestWorkerAnswersRefusedAbort(t *testing.T) {
 		string(a.st.CommandResults[0].Result) != `{"aborted":false,"reason":"not_abortable"}` {
 		t.Fatalf("abort answer %+v", a.st.CommandResults)
 	}
-	if c.AbortRequested || c.AbortCommandID != "" || c.Phase != state.ConversionPrepared || a.conversionBusy {
+	if c.AbortRequested || c.AbortCommandID != "" || c.Phase != state.ConversionPreparing || a.conversionBusy ||
+		d.Count("dracut -f --regenerate-all") != 0 {
 		t.Fatalf("conversion %+v, busy %v", c, a.conversionBusy)
 	}
 }
@@ -464,7 +615,8 @@ func failAtInitrd(d *convDevice, then func()) {
 	handle := d.Handle
 	done := false
 	d.Handle = func(line string) (string, int, bool) {
-		if line == "lsinitrd /boot/initrd.img-"+testKernel && !done {
+		// Step 8's listing, not the preflight's (which runs before the module exists).
+		if line == "lsinitrd /boot/.initrd.img-"+testKernel+".paddock" && !done && d.Exists(encrypt.ModuleConf) {
 			done = true
 			then()
 			return "usr/sbin/cryptsetup\n", 0, true
@@ -550,7 +702,7 @@ func TestUninstallConversionPending(t *testing.T) {
 			t.Fatal(err)
 		}
 		if tc.conv != nil {
-			tc.conv.ID, tc.conv.Partition = testConversionID, testPartition
+			tc.conv.ID, tc.conv.Partition, tc.conv.Mapping, tc.conv.LUKSUUID = testConversionID, testPartition, "dm_crypt-0", testLUKSUUID
 		}
 		a.st.Conversion = tc.conv
 		d.setLUKS(tc.luks)
@@ -588,18 +740,22 @@ func (r reencryptingRoot) Command(_ context.Context, _ []string, name string, ar
 	return "", "", 1, nil
 }
 
-// TestSupervisorUpgradeHeldWhilePreparing: plan M8e decision 37 — no supervisor upgrade starts while preparing.
+// TestSupervisorUpgradeHeldWhilePreparing: plan M8e decision 37 as amended on 2026-10-21 (item 18) — no supervisor
+// upgrade starts while the worker runs a preparation step; a preparation waiting between its passes (packages_busy,
+// possibly for a long time) does not hold the agent's update channel.
 func TestSupervisorUpgradeHeldWhilePreparing(t *testing.T) {
 	a, _, launched := supervisorAgent(t, "")
-	a.st.Conversion = &state.DiskConversion{ID: testConversionID, Phase: state.ConversionPreparing}
+	since := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	a.st.Conversion = &state.DiskConversion{ID: testConversionID, Phase: state.ConversionPreparing, PackagesBusySince: &since}
+	a.conversionBusy = true
 	a.Cycle(context.Background())
 	if len(*launched) != 0 {
-		t.Fatalf("installed while preparing: %v", *launched)
+		t.Fatalf("installed while a preparation step ran: %v", *launched)
 	}
-	a.st.Conversion.Phase = state.ConversionPrepared
+	a.conversionBusy = false
 	a.Cycle(context.Background())
 	if len(*launched) != 1 {
-		t.Fatalf("held back while prepared: %v", *launched)
+		t.Fatalf("held back while the preparation waits for the dpkg lock: %v", *launched)
 	}
 }
 

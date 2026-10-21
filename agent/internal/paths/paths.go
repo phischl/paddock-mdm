@@ -134,6 +134,18 @@ func (l Layout) EncryptPlanEnv() string { return l.Join("/var/lib/paddock/encryp
 // EncryptTestHooks marks a dev build's initrd for the test delays of the init script (plan M8e decision 19).
 func (l Layout) EncryptTestHooks() string { return l.Join("/var/lib/paddock/encrypt/test-hooks") }
 
+// EncryptProgress is the progress of the background reencryption, written by `paddockd encrypt-resume` (plan M8e
+// decision 21).
+func (l Layout) EncryptProgress() string { return l.Join("/var/lib/paddock/encrypt/progress.json") }
+
+// EncryptResult is the outcome of the background reencryption, written by `paddockd encrypt-resume` when it ends
+// (plan M8e decision 21).
+func (l Layout) EncryptResult() string { return l.Join("/var/lib/paddock/encrypt/result.json") }
+
+// EncryptBootResult is the result of the init step at the conversion boot (plan M8e decision 16): data the init
+// script leaves on /run, never executed.
+func (l Layout) EncryptBootResult() string { return l.Join("/run/paddock/encrypt-boot.env") }
+
 // EncryptAbortRequest is the request `paddockd encrypt-abort` hands to the running agent (plan M8e decision 14 as
 // corrected on 2026-10-21: the agent stays the only writer of its state and its spool).
 func (l Layout) EncryptAbortRequest() string { return l.Join("/var/lib/paddock/encrypt-abort.request") }

@@ -72,10 +72,16 @@ func (u *Upgrader) install(ctx context.Context, deb string) string {
 	}
 	out, exit, err := u.Sys.Dpkg(ctx, "-i", deb)
 	if err != nil || exit != 0 {
-		slog.ErrorContext(ctx, "installing the supervisor package failed", "exit", exit, "error", err, "output", lastLines(out))
 		if pid, active := u.supervisor(ctx); !active || pid == "" {
 			u.restore(ctx)
 		}
+		if err == nil && strings.Contains(out, "locked by another process") {
+			// Another package run (apt, or the in-place encryption's initrd work, plan M8e amendment 2026-10-21 item 16)
+			// holds dpkg's lock: nothing was installed, the agent tries again later.
+			slog.WarnContext(ctx, "dpkg is locked by another package run; the supervisor upgrade waits", "output", lastLines(out))
+			return OutcomeDeferred
+		}
+		slog.ErrorContext(ctx, "installing the supervisor package failed", "exit", exit, "error", err, "output", lastLines(out))
 		return protocol.SupervisorOutcomeInstallFailed
 	}
 	updated, unreachable := u.wait(ctx, u.Now())
