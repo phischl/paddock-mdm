@@ -102,6 +102,9 @@ type Preparer struct {
 	State Store
 	// Module is the embedded dracut module (agent/internal/encrypt/dracut); its files are written as they are.
 	Module fs.FS
+	// TestHooks writes the marker that lets the init script honour the test delays (plan M8e decision 19); only a
+	// dev build (buildinfo.Dev) sets it.
+	TestHooks bool
 	// Hold returns once no supervisor upgrade runs (plan M8e decision 37); nil holds nothing.
 	Hold  func(ctx context.Context) error
 	Now   func() time.Time
@@ -578,9 +581,9 @@ func symmetricDifference(a, b []string) []string {
 	return slices.Compact(diff)
 }
 
-// module is step 7: the embedded module files (directory and scripts 0755, others 0644), its dracut configuration
-// and plan.env. ModuleWritten is recorded first: from the first file on, any dracut run (a kernel update) may build
-// an initrd with the module, which the cleanup must then verify (invariant I3).
+// module is step 7: the embedded module files (directory and scripts 0755, others 0644), its dracut configuration,
+// plan.env and, in dev builds, test-hooks. ModuleWritten is recorded first: from the first file on, any dracut run (a
+// kernel update) may build an initrd with the module, which the cleanup must then verify (invariant I3).
 func (p *Preparer) module(_ context.Context, c state.DiskConversion) error {
 	plan, err := ReadPlan(p.Layout)
 	if err != nil || plan == nil {
@@ -601,7 +604,13 @@ func (p *Preparer) module(_ context.Context, c state.DiskConversion) error {
 	if err := fsutil.WriteFile(p.Layout.Join(ModuleConf), []byte("add_dracutmodules+=\" "+moduleName+" \"\n"), 0o644, 0o755); err != nil {
 		return err
 	}
-	return fsutil.WriteFile(p.Layout.EncryptPlanEnv(), env, 0o600, 0o700)
+	if err := fsutil.WriteFile(p.Layout.EncryptPlanEnv(), env, 0o600, 0o700); err != nil {
+		return err
+	}
+	if p.TestHooks {
+		return fsutil.WriteFile(p.Layout.EncryptTestHooks(), nil, 0o600, 0o700)
+	}
+	return nil
 }
 
 // WriteModule writes the files of the embedded module to ModuleDir, replacing what is there.

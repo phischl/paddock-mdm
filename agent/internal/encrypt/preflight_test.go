@@ -122,6 +122,9 @@ func (f *fakeSystem) set(line, stdout string, exit int) {
 	f.commands[line] = &recorded{stdout: stdout, exit: exit}
 }
 
+// lsblkList is the listing the preflight looks for other LUKS volumes in.
+const lsblkList = "lsblk --noheadings --list --paths --output NAME,FSTYPE"
+
 // tools are the commands a preflight may run (plan M8e decision 34).
 var tools = []string{"findmnt", "lsblk", "blkid", "lvm", "dpkg-query", "apt-get"}
 
@@ -150,6 +153,25 @@ func TestPreflightLVM(t *testing.T) {
 	f.checkCalls(false)
 	if !slices.Contains(f.calls, "apt-get -s -o Debug::NoLocking=true install dracut") {
 		t.Fatalf("no removal simulation without dracut: %v", f.calls)
+	}
+}
+
+// TestPreflightLVMDefaults: use_devicesfile=1 without a devices file, a resume device 0:0 and dracut's cmdline.d
+// without resume= are no reasons.
+func TestPreflightLVMDefaults(t *testing.T) {
+	// Upstream's defaults: nothing in the devices section differs.
+	f := loadFixture(t, "lvm")
+	f.set("lvm config --typeconfig diff devices", "", 0)
+	if got := f.preflight(); !got.Eligible {
+		t.Fatalf("upstream defaults: reasons %v", got.Reasons)
+	}
+	// Ubuntu's stock lvm.conf (testdata/lvm.txt) with use_devicesfile=1 but no devices file.
+	f = loadFixture(t, "lvm")
+	f.set("lvm config --typeconfig full devices/use_devicesfile", "use_devicesfile=1\n", 0)
+	f.write("/sys/power/resume", "0:0\n")
+	f.write("/etc/cmdline.d/90lvm.conf", "rd.lvm.lv=ubuntu-vg/ubuntu-lv\n")
+	if got := f.preflight(); !got.Eligible {
+		t.Fatalf("reasons %v", got.Reasons)
 	}
 }
 
@@ -198,6 +220,55 @@ func TestPreflightNotEligible(t *testing.T) {
 		{fixture: "plain", reasons: []string{"root_layout_unsupported"}, change: func(f *fakeSystem) {
 			f.set("blkid -p -o value -s PTTYPE /dev/nvme0n1", "dos\n", 0)
 		}},
+		// The init step's initrd sets rd.luks=0, which would leave any other LUKS volume closed (amendment 2026-10-21).
+		{fixture: "lvm", reasons: []string{"other_luks_present"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.set(lsblkList, "/dev/sda\n/dev/sda3 LVM2_member\n/dev/sdb\n/dev/sdb1 crypto_LUKS\n", 0)
+		}},
+		{fixture: "plain", reasons: []string{"other_luks_present"}, kind: encrypt.KindPlain, change: func(f *fakeSystem) {
+			f.set(lsblkList, "", 1)
+		}},
+		// A resume from hibernation would run the shrink under a kernel that still has root mounted (amendment
+		// 2026-10-21).
+		{fixture: "plain", reasons: []string{"hibernation_configured"}, kind: encrypt.KindPlain, change: func(f *fakeSystem) {
+			f.write("/proc/cmdline", "BOOT_IMAGE=/vmlinuz root=UUID=a7c41e09-2b6d-4f3a-9e85-0c1d2e3f4a5b ro resume=UUID=0b1c quiet\n")
+		}},
+		{fixture: "plain", reasons: []string{"hibernation_configured"}, kind: encrypt.KindPlain, change: func(f *fakeSystem) {
+			f.write("/etc/cmdline.d/90resume.conf", " resume=/dev/nvme0n1p4 \n")
+		}},
+		{fixture: "lvm", reasons: []string{"hibernation_configured"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.write("/sys/power/resume", "259:4\n")
+		}},
+		{fixture: "lvm", reasons: []string{"hibernation_configured"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.write("/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67", "x")
+		}},
+		// LVM would not see the PV on the mapping (amendment 2026-10-21).
+		{fixture: "lvm", reasons: []string{"lvm_devicesfile"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.set("lvm config --typeconfig full devices/use_devicesfile", "use_devicesfile=1\n", 0)
+			f.write("/etc/lvm/devices/system.devices", "VERSION=1.1.1\n")
+		}},
+		// An lvm config that fails or prints something unexpected fails closed (review 2 of PDK-244).
+		{fixture: "lvm", reasons: []string{"lvm_unknown"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.set("lvm config --typeconfig full devices/use_devicesfile", "", 5)
+			f.set("lvm config --typeconfig diff devices", "", 5)
+		}},
+		{fixture: "lvm", reasons: []string{"lvm_unknown"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.set("lvm config --typeconfig diff devices", "", 5)
+		}},
+		{fixture: "lvm", reasons: []string{"lvm_unknown"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.set("lvm config --typeconfig diff devices", "Configuration node devices not found\n", 0)
+		}},
+		{fixture: "lvm", reasons: []string{"lvm_unknown"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.set("lvm config --typeconfig full devices/use_devicesfile", "\n", 0)
+		}},
+		{fixture: "lvm", reasons: []string{"lvm_filter"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.set("lvm config --typeconfig diff devices", "devices {\n\tissue_discards=1\n\tglobal_filter=[\"a|^/dev/sd.*|\",\"r|.*|\"]\n}\n", 0)
+		}},
+		{fixture: "lvm", reasons: []string{"lvm_filter"}, kind: encrypt.KindLVM, change: func(f *fakeSystem) {
+			f.set("lvm config --typeconfig diff devices", "devices {\n\tfilter=[\"r|/dev/mapper/.*|\"]\n}\n", 0)
+		}},
+		{fixture: "plain", reasons: []string{"hibernation_configured"}, kind: encrypt.KindPlain, change: func(f *fakeSystem) {
+			f.write("/etc/dracut.conf.d/50-resume.conf", "kernel_cmdline=\"resume=UUID=0b1c\"\n")
+		}},
 		{fixture: "lvm", reasons: []string{"low_free_space", "no_tpm2", "no_uefi", "pv_tail_in_use", "release_unsupported"},
 			kind: encrypt.KindLVM, change: func(f *fakeSystem) {
 				f.set("findmnt -bno SIZE,AVAIL /", "20012101632 0\n", 0)
@@ -228,6 +299,7 @@ func TestPreflightAlreadyEncrypted(t *testing.T) {
 		`{"blockdevices":[{"name":"/dev/mapper/ubuntu--vg-ubuntu--lv","type":"lvm","fstype":"ext4","children":[
   {"name":"/dev/mapper/dm_crypt-0","type":"crypt","fstype":"LVM2_member","children":[
     {"name":"/dev/sda3","type":"part","fstype":"crypto_LUKS","partuuid":"8c2f8d4e-5b7a-4f1c-9e0d-2a6b3c4d5e6f","children":[{"name":"/dev/sda","type":"disk"}]}]}]}]}`, 0)
+	f.set(lsblkList, "/dev/sda\n/dev/sda3 crypto_LUKS\n/dev/mapper/dm_crypt-0 LVM2_member\n", 0)
 	got := f.preflight()
 	if !slices.Equal(got.Reasons, []string{"already_encrypted", "root_layout_unsupported"}) || got.Kind != "" || got.VG != "" {
 		t.Fatalf("encrypted root: %+v", got)
@@ -313,6 +385,9 @@ func (f *fakeSystem) remove(path string) {
 
 func (f *fakeSystem) write(path, content string) {
 	f.t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(f.root, path)), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(f.root, path), []byte(content), 0o644); err != nil {
 		f.t.Fatal(err)
 	}

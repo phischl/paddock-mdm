@@ -1,3 +1,7 @@
+$ lsblk --noheadings --list --paths --output NAME,FSTYPE
+/dev/sda
+/dev/sda1 vfat
+/dev/sda2 ext4
 $ findmnt -no SOURCE /
 /dev/sda2
 $ lsblk --inverse --json --paths --bytes --output NAME,TYPE,FSTYPE,PKNAME,PARTUUID,SIZE -- /dev/sda2

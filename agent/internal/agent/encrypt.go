@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/agent/internal/commands"
 	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
@@ -375,7 +376,7 @@ func (a *Agent) refuseUnrunAbort() {
 // preparer builds the preparation from the applied bundle; it runs on the loop.
 func (a *Agent) preparer(ctx context.Context) *encrypt.Preparer {
 	p := &encrypt.Preparer{Sys: a.d.Encrypt, Layout: a.d.Layout, Escrow: loopEscrow{a: a, ctx: ctx}, Keys: a.bundleKeys(),
-		State: a.loopStore(ctx), Module: a.d.EncryptModule, Now: a.d.Now,
+		State: a.loopStore(ctx), Module: a.d.EncryptModule, TestHooks: buildinfo.Dev, Now: a.d.Now,
 		Hold:  func(context.Context) error { return a.holdForSupervisor(ctx) },
 		Sleep: func(_ context.Context, d time.Duration) error { return a.d.Sleep(ctx, d) }}
 	if a.current != nil {

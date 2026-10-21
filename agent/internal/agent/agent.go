@@ -165,6 +165,7 @@ func Load(l paths.Layout) (Deps, error) {
 		d.FollowLogins = localadmin.FollowJournal
 		d.LUKS = luks.OS{}
 		d.Encrypt = encrypt.OS{}
+		d.EncryptModule = encrypt.Module()
 		d.Notify = func(ctx context.Context, msg string) { notifySessions(ctx, sys.Loginctl, runTool, msg) }
 	}
 	return d, nil
