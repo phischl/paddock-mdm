@@ -617,6 +617,21 @@ func TestDiskUnlockMode(t *testing.T) {
 	}
 }
 
+// TestDiskBootPINMinLength (plan M8e decision 11): every v2 bundle carries the organization's boot PIN length.
+func TestDiskBootPINMinLength(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1,2}", w.g1)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if d := w.fetch(dev).Disk; d == nil || d.BootPINMinLength != 8 {
+		t.Fatalf("default disk section %+v", d)
+	}
+	w.exec("UPDATE organization_login_settings SET boot_pin_min_length = 10 WHERE organization_id = $1", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if d := w.fetch(dev).Disk; d == nil || d.BootPINMinLength != 10 {
+		t.Fatalf("disk section %+v, want boot_pin_min_length 10", d)
+	}
+}
+
 // TestHimmelblauTarget (plan M8d decision 53): the reconcile round records the compiler's Himmelblau version as the
 // component target.
 func TestHimmelblauTarget(t *testing.T) {

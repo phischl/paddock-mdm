@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Go toolchain 1.27.3 (was 1.27.2; build image `golang:1.27.3-trixie`, CI, every module): a security release with
   fixes to `crypto/x509`, which every Paddock binary uses for its TLS and device certificates.
 
+### Added
+
+- In-place encryption, admin API and server (M8e, ADR 0039): `POST /api/v1/devices/{id}/encrypt` asks an
+  unencrypted device with a supported disk layout to encrypt its root volume in place (organization administrators,
+  with a step-up, the typed hostname and a backup acknowledgement), and `POST /api/v1/devices/{id}/encrypt/cancel`
+  cancels the request until the device restarts. The device and its disk (`GET /api/v1/devices/{id}`, `…/disk`)
+  carry the conversion's phase and progress as `disk_conversion`, `GET /api/v1/devices` filters by the disk state
+  `encrypting`, and the attention list reports `disk_conversion_failed`. Devices receive the organization's boot PIN
+  length in their bundle. An uninstall is refused while a conversion is active; Lock, Destroy and Retire withdraw a
+  request the device has not received. Upgrade: server first, then the agents; agents before M8e fail the command as
+  unsupported. Schema: migration 00066.
+
 ### Changed
 
 - Updated bundled components: Fleet and fleetctl v4.93.1 (was v4.93.0; bug fixes), AWS CLI 2.38.2 (was 2.38.1).

@@ -37,6 +37,16 @@ const (
 	CodeDeviceAgentRolledBack      Code = "device.agent_rolled_back"
 	CodeDeviceAgentRollbackFailed  Code = "device.agent_rollback_failed"
 	CodeDeviceAgentEventsDropped   Code = "device.agent_events_dropped"
+
+	// In-place encryption (plan M8e decisions 7–9).
+	CodeDeviceEncryptRequested        Code = "device.encrypt_requested"
+	CodeDeviceEncryptCancelled        Code = "device.encrypt_cancelled"
+	CodeDeviceDiskConversionPrepared  Code = "device.disk_conversion_prepared"
+	CodeDeviceDiskConversionStarted   Code = "device.disk_conversion_started"
+	CodeDeviceDiskConversionCompleted Code = "device.disk_conversion_completed"
+	CodeDeviceDiskConversionFailed    Code = "device.disk_conversion_failed"
+	CodeDeviceDiskConversionAborted   Code = "device.disk_conversion_aborted"
+
 	// Supervisor package updates (plan M8d decision 33).
 	CodeDeviceSupervisorUpdated      Code = "device.supervisor_updated"
 	CodeDeviceSupervisorUpdateFailed Code = "device.supervisor_update_failed"
@@ -195,6 +205,7 @@ var deviceEventParams = []string{
 	"generation", "service", "at", "field", "before", "after", "unit",
 	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
 	"command_id", "mode", "local_admin", "tpm", "steps",
+	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by",
 }
 
 var registry = map[Code]Definition{
@@ -270,9 +281,9 @@ var registry = map[Code]Definition{
 	CodeDeviceRetired: {
 		Code: CodeDeviceRetired, Emitted: true,
 		Description: "An administrator retired a device; its identity keys are revoked.",
-		Params:      []string{"hostname", "from_state", "reason"},
+		Params:      []string{"hostname", "from_state", "reason", "conversion_cancelled", "conversion_id", "conversion_phase"},
 		Outcomes:    adminOutcomes,
-		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system).",
+		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
 	},
 	CodeDeviceUninstallRequested: {
 		Code: CodeDeviceUninstallRequested, Emitted: true,
@@ -292,6 +303,54 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "The param outcome is completed or partial (a step failed); steps maps every step to done, skipped or failed:<message>. helper_failed: the agent could not start the removal, nothing was removed, the request ends and the device is not retired.",
+	},
+	CodeDeviceEncryptRequested: {
+		Code: CodeDeviceEncryptRequested, Emitted: true,
+		Description: "An organization administrator asked, with a step-up and a backup acknowledgement, to encrypt the disk of an unencrypted device in place; the device prepares itself and converts at its next restart.",
+		Params:      []string{"hostname", "reason", "backup_confirmed", "command_id", "conversion_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceEncryptCancelled: {
+		Code: CodeDeviceEncryptCancelled, Emitted: true,
+		Description: "An organization administrator cancelled an in-place encryption with a step-up: the undelivered command was withdrawn, or the device was sent a signed abort that it executes only before its restart.",
+		Params:      []string{"hostname", "command_id", "conversion_id", "mode"},
+		Outcomes:    adminOutcomes,
+		Note:        "mode is command_cancelled (the encrypt_disk command was withdrawn, the conversion is cancelled) or abort_sent (command_id is then the encrypt_disk_abort command; the conversion keeps its phase until the device answers).",
+	},
+	CodeDeviceDiskConversionPrepared: {
+		Code: CodeDeviceDiskConversionPrepared, Emitted: true,
+		Description: "The device escrowed the conversion key and built the initrd for its in-place encryption; it waits for a restart (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id, layout (lvm or plain), volume (the LUKS UUID the header will have) and data_bytes.",
+	},
+	CodeDeviceDiskConversionStarted: {
+		Code: CodeDeviceDiskConversionStarted, Emitted: true,
+		Description: "The device initialised LUKS2 on its root partition at the restart and encrypts the remaining data in the background (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id, volume, init_s and init_result (ok, <stage>:<reason> or unknown). A conversion that was failed or cancelled is adopted as encrypting; when the device has another open conversion the event is recorded and changes no conversion.",
+	},
+	CodeDeviceDiskConversionCompleted: {
+		Code: CodeDeviceDiskConversionCompleted, Emitted: true,
+		Description: "The device finished encrypting its root partition; the recovery key, the TPM unlock and the header escrow follow as for a newly installed device (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id, volume, data_bytes and duration_s.",
+	},
+	CodeDeviceDiskConversionFailed: {
+		Code: CodeDeviceDiskConversionFailed, Emitted: true,
+		Description: "The in-place encryption of a device failed or was skipped at the named stage; stages preflight, prepare and init leave the device unencrypted, stage resume leaves it bootable with the encryption unfinished (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id, stage, reason and volume.",
+	},
+	CodeDeviceDiskConversionAborted: {
+		Code: CodeDeviceDiskConversionAborted, Emitted: true,
+		Description: "The device abandoned a prepared in-place encryption before its restart on an administrator's cancel from the portal or an operator's command at the device; the disk is unchanged and the device unencrypted (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id and by (admin or operator).",
 	},
 	CodeDeviceGroupsChanged: {
 		Code: CodeDeviceGroupsChanged, Emitted: true,
@@ -773,9 +832,10 @@ var registry = map[Code]Definition{
 	CodeRevocationRequested: {
 		Code: CodeRevocationRequested, Emitted: true,
 		Description: "An organization administrator requested a Lock or Destroy of a device after a step-up, typing its hostname; a Lock is approved with the request, a Destroy waits for a second administrator.",
-		Params:      []string{"action", "hostname", "request_id", "uninstall_cancelled", "uninstall_command_id"},
-		Outcomes:    adminOutcomes,
-		Note:        "action is lock or destroy. uninstall_cancelled (before_delivery, or after_delivery when the device had received the uninstall command) and uninstall_command_id when the request cancelled an uninstall of the device in the same transaction; no separate device.uninstall_cancelled is recorded. denied with revocation_disabled while PADDOCK_REVOCATION_ENABLED is off, revocation_frozen while the administrator is frozen after a limit was exceeded.",
+		Params: []string{"action", "hostname", "request_id", "uninstall_cancelled", "uninstall_command_id",
+			"conversion_cancelled", "conversion_id", "conversion_phase"},
+		Outcomes: adminOutcomes,
+		Note:     "action is lock or destroy. uninstall_cancelled (before_delivery, or after_delivery when the device had received the uninstall command) and uninstall_command_id when the request cancelled an uninstall of the device in the same transaction; no separate device.uninstall_cancelled is recorded. conversion_cancelled (before_delivery) and conversion_id when the request withdrew an undelivered encrypt_disk command; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone. denied with revocation_disabled while PADDOCK_REVOCATION_ENABLED is off, revocation_frozen while the administrator is frozen after a limit was exceeded.",
 	},
 	CodeRevocationApproved: {
 		Code: CodeRevocationApproved, Emitted: true,

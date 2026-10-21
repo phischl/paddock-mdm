@@ -223,7 +223,8 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
 		Hardware: base.Hardware, AgentUpdateRequestedVersion: base.AgentUpdateRequestedVersion,
 		AgentUpdateRequestedAt: base.AgentUpdateRequestedAt, RetiredReason: base.RetiredReason,
-		Uninstall: toDeviceUninstall(d.Uninstall, d.UninstallReportOverdue), Components: toDeviceComponents(d.Status, d.ComponentTargets),
+		Uninstall: toDeviceUninstall(d.Uninstall, d.UninstallReportOverdue), DiskConversion: toDeviceDiskConversion(d.DiskConversion),
+		Components:         toDeviceComponents(d.Status, d.ComponentTargets),
 		ComponentsOutdated: base.ComponentsOutdated,
 		Groups:             make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
@@ -332,6 +333,7 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	out.Owners = toUserRefs(d.Owners)
 	out.Hardware = toDeviceHardware(d.Hardware)
 	out.Uninstall = toDeviceUninstall(d.Uninstall, d.UninstallReportOverdue)
+	out.DiskConversion = toDeviceDiskConversion(d.DiskConversion)
 	out.Components = toDeviceComponents(d.Status, d.ComponentTargets)
 	return out, nil
 }
@@ -376,6 +378,53 @@ func toDeviceUninstall(u *pgstore.GetDeviceUninstallRow, overdue bool) *adminapi
 	}
 	if u.Tpm != "" {
 		out.Tpm = &u.Tpm
+	}
+	return out
+}
+
+func (h *handlers) EncryptDevice(ctx context.Context, req adminapi.EncryptDeviceRequestObject) (adminapi.EncryptDeviceResponseObject, error) {
+	in := app.DiskConversionInput{ConfirmHostname: req.Body.ConfirmHostname, Reason: req.Body.Reason, BackupConfirmed: req.Body.BackupConfirmed}
+	d, err := h.transition(ctx, req.Id, func(ctx context.Context, id uuid.UUID) (pgstore.Device, error) {
+		return h.conversions.Request(ctx, id, in)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.EncryptDevice200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) CancelDeviceEncryption(ctx context.Context, req adminapi.CancelDeviceEncryptionRequestObject) (adminapi.CancelDeviceEncryptionResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, func(ctx context.Context, id uuid.UUID) (pgstore.Device, error) {
+		return h.conversions.Cancel(ctx, id, req.Body.ConfirmHostname)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.CancelDeviceEncryption200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+// toDeviceDiskConversion is the latest in-place encryption of a device; nil without one.
+func toDeviceDiskConversion(c *app.DiskConversion) *adminapi.DeviceDiskConversion {
+	if c == nil {
+		return nil
+	}
+	r := c.DeviceDiskConversion
+	out := &adminapi.DeviceDiskConversion{
+		Id: r.ID, Phase: adminapi.DeviceDiskConversionPhase(r.Phase), RequestedAt: r.RequestedAt.UTC(), Reason: r.Reason,
+		CommandId: r.CommandID, CommandStatus: c.CommandStatus, LuksUuid: idPtr(r.LuksUuid), DataBytes: r.DataBytes,
+		FailureStage: r.FailureStage, FailureReason: r.FailureReason, FinishedAt: utcPtr(r.FinishedAt),
+		AbortCommandId: idPtr(r.AbortCommandID), AbortCommandStatus: c.AbortCommandStatus,
+		AbortRefusedReason: r.AbortRefusedReason, Active: c.Active,
+	}
+	if r.Layout != nil {
+		layout := adminapi.DeviceDiskConversionLayout(*r.Layout)
+		out.Layout = &layout
+	}
+	if p := c.Progress; p != nil {
+		out.DoneBytes, out.EtaS, out.ProgressAt = &p.DoneBytes, &p.ETASeconds, utcPtr(p.UpdatedAt)
+		if p.PausedReason != "" {
+			out.PausedReason = &p.PausedReason
+		}
 	}
 	return out
 }

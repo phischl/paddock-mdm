@@ -494,7 +494,14 @@ components:
                  tamper.protected_file_changed, local_admin.rotated, local_admin.rotation_failed, local_admin.login,
                  tamper.local_admin_changed, tamper.keyslot_changed, revocation.trust_pinned_tofu,
                  revocation.refused, tamper.service_stopped, updates.run, agent.supervisor_updated,
-                 agent.uninstalled]
+                 agent.uninstalled, disk.conversion_prepared, disk.conversion_started, disk.conversion_completed,
+                 disk.conversion_failed, disk.conversion_aborted]
+          description: |
+            Since plan M8e the phases of an in-place encryption, each with data.conversion_id:
+            disk.conversion_prepared {layout (lvm|plain), volume (the LUKS UUID of the header to come), data_bytes},
+            disk.conversion_started {volume, init_s, init_result (ok, <stage>:<reason> or unknown)},
+            disk.conversion_completed {volume, data_bytes, duration_s}, disk.conversion_failed {stage (preflight,
+            prepare, init or resume), reason, volume}, disk.conversion_aborted {by (admin or operator)}.
         occurred_at: { type: string, format: date-time }
         data:
           type: object

@@ -33,7 +33,7 @@ func newNameWorld(t *testing.T) nameWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	return nameWorld{privilegesHarness: h, devices: app.NewDevices(h.runner, pool), operator: h.account(t, principal.RoleOrgOperator, false)}
+	return nameWorld{privilegesHarness: h, devices: app.NewDevices(h.runner, pool, nil), operator: h.account(t, principal.RoleOrgOperator, false)}
 }
 
 func (w nameWorld) device(t *testing.T, org uuid.UUID, hostname, state string) uuid.UUID {

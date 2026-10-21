@@ -259,6 +259,10 @@ type discardCommands struct{}
 
 func (discardCommands) DeleteCommand(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 
+func (discardCommands) ReleaseResult(context.Context, uuid.UUID, uuid.UUID, string) (bool, error) {
+	return true, nil
+}
+
 func (discardCommands) ClaimResult(_ context.Context, device, _ uuid.UUID, status string) (uuid.UUID, string, error) {
 	return device, status, nil
 }
@@ -358,13 +362,14 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Tokens:         app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, nil, "https://device.test"),
 		APITokens:      app.NewAPITokens(runner, orgPool),
 		Declarative:    app.NewDeclarative(runner, orgPool),
-		Devices:        app.NewDevices(runner, orgPool),
+		Devices:        app.NewDevices(runner, orgPool, discardCommands{}),
 		Managed:        app.NewManagedConfig(runner, orgPool),
 		Organizations:  app.NewOrganizations(runner, platformPool, idp),
 		Accounts:       app.NewAccounts(runner, orgPool, platformPool, e.sessions),
 		Releases:       app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
 		AgentUpdates:   app.NewAgentUpdates(runner, orgPool, noOffer{}),
 		Uninstalls:     app.NewUninstalls(runner, orgPool, discardCommands{}),
+		Conversions:    app.NewDiskConversions(runner, orgPool, discardCommands{}),
 		Users:          app.NewUsers(runner, orgPool, idp),
 		UserGroups:     app.NewUserGroups(runner, orgPool, idp),
 		Logins:         app.NewLogins(runner, orgPool, idp),

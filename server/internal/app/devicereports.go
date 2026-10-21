@@ -219,6 +219,12 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventTamperServiceStopped: audit.CodeDeviceTamperServiceStopped,
 
 	protocol.EventUpdatesRun: audit.CodeDeviceUpdatesRun,
+
+	protocol.EventDiskConversionPrepared:  audit.CodeDeviceDiskConversionPrepared,
+	protocol.EventDiskConversionStarted:   audit.CodeDeviceDiskConversionStarted,
+	protocol.EventDiskConversionCompleted: audit.CodeDeviceDiskConversionCompleted,
+	protocol.EventDiskConversionFailed:    audit.CodeDeviceDiskConversionFailed,
+	protocol.EventDiskConversionAborted:   audit.CodeDeviceDiskConversionAborted,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -304,6 +310,9 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 		// The removal report marks the device; the report consumer retires it (plan M8d decision 41).
 		if ev.Type == protocol.EventAgentUninstalled && err == nil {
 			err = markUninstalled(ctx, q, deviceID, ev, spec.Params)
+		}
+		if slices.Contains(conversionEvents, ev.Type) && err == nil {
+			err = applyConversionEvent(ctx, q, deviceID, ev.Type, spec.Params)
 		}
 		if area := loginStateArea(ev.Type, spec.Params); area != "" && err == nil {
 			err = setLoginState(ctx, q, deviceID, org, area, ev, spec.Params)
@@ -501,14 +510,16 @@ func eventParams(ev protocol.Event) map[string]any {
 	if json.Unmarshal(ev.Data, &data) != nil {
 		return params
 	}
-	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq", "sessions_locked", "sessions_terminated", "generation", "upgraded"} {
+	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq", "sessions_locked", "sessions_terminated", "generation", "upgraded",
+		"data_bytes", "duration_s", "init_s"} {
 		if v, ok := data[key].(float64); ok {
 			params[key] = int64(v)
 		}
 	}
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
 		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
-		"kind", "started_at", "finished_at", "result", "error", "volume", "command_id", "mode", "local_admin", "tpm"} {
+		"kind", "started_at", "finished_at", "result", "error", "volume", "command_id", "mode", "local_admin", "tpm",
+		"conversion_id", "layout", "init_result", "by"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}

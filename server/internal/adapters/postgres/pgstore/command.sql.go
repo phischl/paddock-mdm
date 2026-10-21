@@ -296,6 +296,32 @@ func (q *Queries) ListDueDeviceCommands(ctx context.Context, now time.Time) ([]D
 	return items, nil
 }
 
+const lockDeviceCommand = `-- name: LockDeviceCommand :one
+SELECT id, organization_id, device_id, type, params, status, issued_by, issued_at, expires_at, not_before, delivered_at, finished_at, result FROM device_command WHERE id = $1 FOR UPDATE
+`
+
+// A command under its row lock (the lock order of an in-place encryption: device, command, conversion).
+func (q *Queries) LockDeviceCommand(ctx context.Context, id uuid.UUID) (DeviceCommand, error) {
+	row := q.db.QueryRow(ctx, lockDeviceCommand, id)
+	var i DeviceCommand
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.DeviceID,
+		&i.Type,
+		&i.Params,
+		&i.Status,
+		&i.IssuedBy,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.NotBefore,
+		&i.DeliveredAt,
+		&i.FinishedAt,
+		&i.Result,
+	)
+	return i, err
+}
+
 const markDeviceCommandsDelivered = `-- name: MarkDeviceCommandsDelivered :execrows
 UPDATE device_command SET status = 'delivered', delivered_at = $1::timestamptz
 WHERE device_id = $2 AND id = ANY($3::uuid[]) AND status = 'pending'

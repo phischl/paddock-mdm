@@ -97,9 +97,11 @@ func HostnameResource(s HostnameSpec) (Resource, error) {
 	return resource(TypeHostname, TypeHostname, s)
 }
 
-// DiskSpec is the disk encryption policy of a device: the unlock mode its keyslots must match.
+// DiskSpec is the disk encryption policy of a device: the unlock mode its keyslots must match and the boot PIN
+// length an in-place encryption asks for (plan M8e decision 11; agents before M8e ignore it).
 type DiskSpec struct {
-	UnlockMode string `json:"unlock_mode"`
+	UnlockMode       string `json:"unlock_mode"`
+	BootPINMinLength int    `json:"boot_pin_min_length,omitempty"`
 }
 
 // Disk unlock modes of DiskSpec (ADR 0038 decision 1).

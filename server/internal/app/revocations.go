@@ -61,7 +61,8 @@ type RevocationInput struct {
 
 // Request records a Lock (approved at once) or a Destroy (waiting for a second administrator) with the requester's
 // approval (audited: revocation.requested). It cancels an uninstall of the device without a removal report and
-// returns what it cancelled (UninstallCancelled*, "" for none).
+// returns what it cancelled (UninstallCancelled*, "" for none); it withdraws an undelivered encrypt_disk command
+// (withdrawConversion).
 func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.RevocationRequest, string, error) {
 	spec := SpecRevocationRequest
 	spec.Target = &audit.Target{Type: "device", ID: in.DeviceID.String()}
@@ -71,7 +72,8 @@ func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.
 	}
 	var out pgstore.RevocationRequest
 	var cancelled string
-	var withdrawn uuid.UUID
+	var withdrawn, conversion uuid.UUID
+	claims := newResultClaims(r.cache, in.DeviceID)
 	err := r.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if in.Action != revocation.ActionLock && in.Action != revocation.ActionDestroy {
 			return problem.InvalidRequest.WithDetail("action must be lock or destroy")
@@ -122,11 +124,16 @@ func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.
 		if status == revocation.StatusApproved {
 			rec.RevocationApproved(out.ID)
 		}
-		cancelled, withdrawn, err = r.cancelUninstall(ctx, q, rec, dev, now)
+		if cancelled, withdrawn, err = r.cancelUninstall(ctx, q, rec, claims, dev, now); err != nil {
+			return err
+		}
+		conversion, err = withdrawConversion(ctx, q, claims, rec, dev.ID, now)
 		return err
 	})
+	claims.releaseOn(ctx, err)
 	if err == nil {
 		dropWithdrawnCommand(ctx, r.cache, in.DeviceID, withdrawn)
+		dropWithdrawnCommand(ctx, r.cache, in.DeviceID, conversion)
 	}
 	return out, cancelled, err
 }
@@ -146,7 +153,7 @@ const (
 // uninstall_command_id of revocation.requested, the action's one event (ActionRunner records exactly one per attempt).
 // It returns UninstallCancelled* ("" when no uninstall was open) and the command to drop from cmd:<device_id> after
 // the commit.
-func (r *Revocations) cancelUninstall(ctx context.Context, q *pgstore.Queries, rec Recorder, dev pgstore.Device,
+func (r *Revocations) cancelUninstall(ctx context.Context, q *pgstore.Queries, rec Recorder, claims *resultClaims, dev pgstore.Device,
 	now time.Time) (string, uuid.UUID, error) {
 	if dev.UninstallRequestedAt == nil || dev.UninstalledAt != nil || !dev.UninstallCommandID.Valid {
 		return "", uuid.Nil, nil
@@ -160,7 +167,7 @@ func (r *Revocations) cancelUninstall(ctx context.Context, q *pgstore.Queries, r
 	case devicecommand.StatusPending, devicecommand.StatusDelivered:
 		// A command that got its result meanwhile (not withdrawn) counts like a result the device claimed first:
 		// Lock and Destroy are never refused because of an uninstall (review 3 finding F).
-		claimed, withdrawn, err := withdrawUninstallCommand(ctx, q, r.cache, dev.ID, cmd, now)
+		claimed, withdrawn, err := withdrawUninstallCommand(ctx, q, r.cache, claims, dev.ID, cmd, now)
 		if err != nil {
 			return "", uuid.Nil, err
 		}

@@ -113,7 +113,7 @@ func TestDeniedFileIsNotEffective(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	devices := app.NewDevices(h.runner, pool)
+	devices := app.NewDevices(h.runner, pool, nil)
 	device := uuid.Must(uuid.NewV7())
 	if _, err := h.super.Exec(context.Background(), "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'h', 'active')",
 		device, h.org); err != nil {

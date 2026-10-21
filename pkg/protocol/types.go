@@ -185,6 +185,12 @@ const (
 	// Uninstall (plan M8d decision 40): the final report of `paddockd uninstall`, sent once after the command
 	// uninstall; the device is retired by it.
 	EventAgentUninstalled = "agent.uninstalled"
+	// In-place encryption (plan M8e decision 9): the phases of a conversion; each event carries conversion_id.
+	EventDiskConversionPrepared  = "disk.conversion_prepared"  // data: {conversion_id, layout, volume, data_bytes}
+	EventDiskConversionStarted   = "disk.conversion_started"   // data: {conversion_id, volume, init_s, init_result}
+	EventDiskConversionCompleted = "disk.conversion_completed" // data: {conversion_id, volume, data_bytes, duration_s}
+	EventDiskConversionFailed    = "disk.conversion_failed"    // data: {conversion_id, stage, reason, volume}
+	EventDiskConversionAborted   = "disk.conversion_aborted"   // data: {conversion_id, by}
 )
 
 // Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
@@ -264,6 +270,8 @@ var EventTypes = []string{
 	EventUpdatesRun,
 	EventAgentSupervisorUpdated,
 	EventAgentUninstalled,
+	EventDiskConversionPrepared, EventDiskConversionStarted, EventDiskConversionCompleted, EventDiskConversionFailed,
+	EventDiskConversionAborted,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass

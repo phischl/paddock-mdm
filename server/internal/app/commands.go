@@ -199,16 +199,34 @@ func (d *DeviceCommands) MarkDelivered(ctx context.Context, hb ingest.Heartbeat)
 	})
 }
 
-// Finish records the result of a command; only the first result of an open command counts (worker).
+// Finish records the result of a command; only the first result of an open command counts (worker). The result of
+// an in-place encryption command also moves its conversion (recordConversionResult).
 func (d *DeviceCommands) Finish(ctx context.Context, r ingest.CommandResult) error {
 	result := r.Result
 	if len(result) == 0 {
 		result = json.RawMessage(`{}`)
 	}
 	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		_, err := q.FinishDeviceCommand(ctx, pgstore.FinishDeviceCommandParams{
+		cmd, err := q.GetDeviceCommand(ctx, r.CommandID)
+		if db.IsNoRows(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		// An in-place encryption result moves its conversion: the lock order of lockConversion, the device first.
+		conversion := cmd.Type == command.TypeEncryptDisk || cmd.Type == command.TypeEncryptDiskAbort
+		if conversion && cmd.DeviceID == r.DeviceID {
+			if _, err := q.LockDevice(ctx, r.DeviceID); err != nil {
+				return err
+			}
+		}
+		n, err := q.FinishDeviceCommand(ctx, pgstore.FinishDeviceCommandParams{
 			ID: r.CommandID, DeviceID: r.DeviceID, Status: r.Status, Result: result, FinishedAt: r.ReceivedAt,
 		})
-		return err
+		if err != nil || n != 1 || !conversion {
+			return err
+		}
+		return recordConversionResult(ctx, q, r.DeviceID, cmd, result)
 	})
 }

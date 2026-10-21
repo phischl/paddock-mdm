@@ -558,7 +558,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Roles: org_admin. active or quarantined → retired; the identity keys are revoked. */
+        /** @description Roles: org_admin. active or quarantined → retired; the identity keys are revoked. An encrypt_disk command the device has not received is withdrawn and its conversion cancelled (plan M8e §14.5 decision 38); an in-place encryption never refuses the retirement. */
         post: operations["retireDevice"];
         delete?: never;
         options?: never;
@@ -611,7 +611,8 @@ export interface paths {
          *     keep_local_admin is set) and, with clear_tpm, clears the TPM. User data and the disk encryption are never
          *     changed. confirm_hostname must equal the device's hostname. 422 invalid_request: unknown mode, a reason outside
          *     2–500 characters, a wrong confirm_hostname, or clear_tpm or keep_local_admin with mode leave. 409 invalid_state:
-         *     the device is not active, an uninstall is already requested, or a Lock or Destroy is pending; 409
+         *     the device is not active, an uninstall is already requested, an in-place encryption is active
+         *     (disk_conversion.active, plan M8e §14.5 decision 36), or a Lock or Destroy is pending; 409
          *     tpm_in_use_by_disk: clear_tpm while the last health report lists a TPM keyslot on any volume.
          */
         post: operations["uninstallDevice"];
@@ -638,6 +639,62 @@ export interface paths {
          *     device already received the command, or the uninstall completed.
          */
         post: operations["cancelDeviceUninstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/encrypt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Issues the signed command
+         *     encrypt_disk (lifetime 7 days, ADR 0039, plan M8e decision 7): the device escrows a recovery key, prepares
+         *     itself and encrypts its root volume in place after its next restart; disk_conversion follows the phases.
+         *     confirm_hostname must equal the device's hostname and backup_confirmed must be true. 422 invalid_request: a
+         *     reason outside 2–500 characters, a wrong confirm_hostname, or backup_confirmed false. 409 invalid_state: the
+         *     device is not active; its last health does not report disk state not_encrypted with an eligible layout (the
+         *     detail names the reasons); a conversion is already open; an uninstall is pending; or a Lock or Destroy is
+         *     pending.
+         */
+        post: operations["encryptDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/encrypt/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Cancels the open in-place
+         *     encryption before the device restarts (plan M8e decision 8): while the encrypt_disk command has not reached
+         *     the device (pending, failed or expired) it is withdrawn and the conversion is cancelled at once; once the
+         *     device received it, or while the conversion is prepared, the device is sent the signed command
+         *     encrypt_disk_abort and the conversion keeps its phase until the device reports the abort (cancelled) or
+         *     refuses it (abort_refused_reason). confirm_hostname must equal the device's hostname (422 invalid_request).
+         *     409 invalid_state: no conversion is open, a cancellation is already on its way, or the device already started
+         *     the encryption.
+         */
+        post: operations["cancelDeviceEncryption"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1468,7 +1525,9 @@ export interface paths {
          *     administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
          *     open Lock, 409 invalid_state unless the device is active or quarantined. A Lock takes precedence over an
          *     uninstall: an uninstall of the device without a removal report is cancelled in the same transaction (recorded
-         *     as uninstall_cancelled on revocation.requested) and uninstall_cancelled says so.
+         *     as uninstall_cancelled on revocation.requested) and uninstall_cancelled says so. It is never refused for an
+         *     in-place encryption: an encrypt_disk command the device has not received is withdrawn and its conversion
+         *     cancelled (conversion_cancelled on revocation.requested, plan M8e §14.5 decision 39).
          */
         post: operations["lockDevice"];
         delete?: never;
@@ -1495,7 +1554,7 @@ export interface paths {
          *     Requests a Destroy: a Lock whose escrowed header and recovery key are deleted before the token is issued, so
          *     the device's data is unrecoverable. It waits for a second administrator (another account and another identity)
          *     to approve it (two-person rule). Like a Lock, it cancels an uninstall of the device without a removal report
-         *     (uninstall_cancelled).
+         *     (uninstall_cancelled) and withdraws an undelivered encrypt_disk command (conversion_cancelled).
          */
         post: operations["destroyDevice"];
         delete?: never;
@@ -3084,6 +3143,8 @@ export interface components {
             hardware: components["schemas"]["DeviceHardware"] | null;
             /** @description The uninstall of the device (plan M8d decision 42): set from the request until it is cancelled, also after the device reported the removal; null without one. Filled on the device detail and the responses of device actions; null in lists. */
             uninstall?: components["schemas"]["DeviceUninstall"] | null;
+            /** @description The latest in-place encryption of the device (plan M8e decision 10); null without one. Filled on the device detail and the responses of device actions; null in lists. */
+            disk_conversion?: components["schemas"]["DeviceDiskConversion"] | null;
             /** @description Why the device was retired, when not by an administrator; uninstalled after its removal report. */
             retired_reason?: string | null;
             /** @description The components of the device with the installed and expected version (plan M8d decision 55), in the order paddockd, paddock_supervisor, paddock_revoke, himmelblau, fleetd. Filled on the device detail and the responses of device actions; empty in lists. */
@@ -3150,6 +3211,105 @@ export interface components {
              * @default false
              */
             keep_local_admin: boolean;
+        };
+        /** @description An in-place encryption of the device's root volume (ADR 0039, plan M8e decision 10). done_bytes, eta_s, paused_reason and progress_at come from the last check-in while the phase is encrypting and are null otherwise. */
+        DeviceDiskConversion: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description requested: the command is issued; prepared: the recovery key is escrowed and the device waits for a restart; encrypting: the device converted at the restart and encrypts the rest in the background; cancelled: the command was withdrawn before delivery or the device aborted before its restart.
+             * @enum {string}
+             */
+            phase: "requested" | "prepared" | "encrypting" | "completed" | "failed" | "cancelled";
+            /** Format: date-time */
+            requested_at: string;
+            reason: string;
+            /** Format: uuid */
+            command_id: string;
+            /** @description The status of the command encrypt_disk: pending, delivered, succeeded, failed, expired or cancelled. */
+            command_status: string;
+            /** @enum {string|null} */
+            layout: "lvm" | "plain" | null;
+            /**
+             * Format: uuid
+             * @description The LUKS UUID of the root volume's header.
+             */
+            luks_uuid: string | null;
+            /**
+             * Format: int64
+             * @description Bytes to encrypt.
+             */
+            data_bytes: number | null;
+            /** Format: int64 */
+            done_bytes: number | null;
+            /** Format: int64 */
+            eta_s: number | null;
+            /** @description on_battery or helper_not_running. */
+            paused_reason: string | null;
+            /**
+             * Format: date-time
+             * @description When the device measured the progress.
+             */
+            progress_at: string | null;
+            /** @description preflight, prepare, init or resume. */
+            failure_stage: string | null;
+            failure_reason: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+            /**
+             * Format: uuid
+             * @description The command encrypt_disk_abort of a cancel after delivery.
+             */
+            abort_command_id: string | null;
+            abort_command_status: string | null;
+            /** @description The device refused the abort: invalid_params, unknown_conversion or not_abortable. */
+            abort_refused_reason: string | null;
+            /** @description The device's in-place encryption is active (plan M8e §14.5 decision 36, amendment 2026-10-21): this conversion is requested, prepared or encrypting; the last health reports the disk encrypting; the last health reports key_on_boot (the conversion key is still in the initrd), whatever the conversions say; or, fail safe, a conversion completed less than 30 days ago and the last health carries no conversion report and is not compliant. Paddock cannot be removed while it is active. */
+            active: boolean;
+        };
+        DeviceEncryptRequest: {
+            /** @description Must equal the device's hostname. */
+            confirm_hostname: string;
+            reason: string;
+            /** @description The administrator confirms that the device's data is backed up; must be true. */
+            backup_confirmed: boolean;
+        };
+        DeviceEncryptCancelRequest: {
+            /** @description Must equal the device's hostname. */
+            confirm_hostname: string;
+        };
+        /** @description The in-place encryption as the device's last check-in reports it (health.disk.conversion, plan M8e decisions 3, 34 and 52): the eligibility of an unencrypted disk and, from the preparation on, the phase and the progress. */
+        DiskConversionHealth: {
+            eligible: boolean;
+            /** @description Why the disk cannot be encrypted in place, sorted (e.g. no_separate_boot, root_not_ext4, cleanup_pending). */
+            reasons?: string[];
+            /** @description VERSION_ID of /etc/os-release. */
+            release?: string;
+            /** @description lvm or plain. */
+            layout?: string;
+            /** @description prepared, encrypting, completed or failed. */
+            phase?: string;
+            /** Format: int64 */
+            data_bytes?: number;
+            /** Format: int64 */
+            done_bytes?: number;
+            /** Format: int64 */
+            eta_s?: number;
+            /** @description on_battery or helper_not_running. */
+            paused_reason?: string;
+            failure_stage?: string;
+            failure_reason?: string;
+            /** Format: date-time */
+            updated_at?: string;
+            /**
+             * @description The installed initramfs generator.
+             * @enum {string}
+             */
+            initramfs?: "dracut" | "initramfs-tools";
+            /** @description The packages the switch to dracut would remove, sorted; only while initramfs is initramfs-tools. */
+            initramfs_removes?: string[];
+            /** @description The conversion key lies in the initrd on the unencrypted /boot until the user chose the boot PIN. */
+            key_on_boot?: boolean;
         };
         /** @description Asset facts the inventory reports (ADR 0037 decision 7); empty strings and zeros where it reports none. Free disk space, uptime and network addresses stay in Fleet. */
         DeviceHardware: {
@@ -3245,14 +3405,14 @@ export interface components {
             } | null;
         };
         /**
-         * @description Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
-         *     with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), unlock_mode_mismatch (enrolled
+         * @description Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), encrypting (an in-place
+         *     encryption is unfinished, plan M8e), unmanaged (not installed with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), unlock_mode_mismatch (enrolled
          *     for the other unlock mode than the device's policy, plan M8d decision 48), escrow_pending (recovery key, a
          *     header or keyslot set not yet as required), compliant (the TPM keyslot of the unlock mode and the recovery key
          *     only, escrowed with the current header of every LUKS volume, PDK-009).
          * @enum {string}
          */
-        DiskState: "not_encrypted" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "unlock_mode_mismatch" | "escrow_pending" | "compliant";
+        DiskState: "not_encrypted" | "encrypting" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "unlock_mode_mismatch" | "escrow_pending" | "compliant";
         DiskEscrow: {
             generation: number;
             /** @enum {string} */
@@ -3301,6 +3461,10 @@ export interface components {
             unlock_mode?: components["schemas"]["DiskUnlockMode"];
             /** @description In state not_encrypted only, whether /boot is a file system of its own (ADR 0038). */
             boot_separate?: boolean;
+            /** @description The in-place encryption the last check-in reports (plan M8e decision 3); absent from older agents. */
+            conversion?: components["schemas"]["DiskConversionHealth"];
+            /** @description The latest in-place encryption of the device, as on the device (plan M8e decision 10); null without one. */
+            disk_conversion?: components["schemas"]["DeviceDiskConversion"] | null;
             /**
              * Format: date-time
              * @description Check-in the state is from.
@@ -3348,7 +3512,7 @@ export interface components {
         /** @enum {string} */
         DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
         /** @enum {string} */
-        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now" | "uninstall";
+        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now" | "uninstall" | "encrypt_disk" | "encrypt_disk_abort";
         DeviceCommand: {
             /** Format: uuid */
             id: string;
@@ -3498,7 +3662,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed";
         Attention: {
             /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
             id: string;
@@ -3511,7 +3675,7 @@ export interface components {
              * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; otherwise empty. */
             detail: string;
         };
         AttentionPage: {
@@ -5634,6 +5798,58 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    encryptDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceEncryptRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    cancelDeviceEncryption: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceEncryptCancelRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
         };
     };
     setDeviceGroups: {

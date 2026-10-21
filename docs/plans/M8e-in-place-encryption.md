@@ -1512,3 +1512,29 @@ outcome and the invariant that holds). *LUKS* = the root partition carries the L
 | `failed:init` reported but partition LUKS (`root_missing`, a failure after the header) | never a `failed` phase: I2 → `encrypting` at the next agent start, `init_result` names the stage | the module is included (I1) | as `encrypting` | as `encrypting` | as `encrypting` | n/a (no cleanup: I1, decision 18) |
 | `failed:resume` (row `failed` on the server, device still LUKS with the `reencrypt` keyslot) | the module or crypttab opens the volume; I2 → the agent's phase is `encrypting` and the helper relaunches up to 3× per boot (decision 22) | as `encrypting` | as `encrypting` | server 409 (`active` through health `encrypting`); device `conversion_pending` (`md.Reencrypting()`) | as `encrypting` | n/a |
 | `cancelled` (abort before the restart, decision 14/27) | cleanup done: boots as before. `CleanupPending`: a stale initrd converts the disk at that boot; I2 adopts at the next agent start — `encrypting`, `disk.conversion_started` moves the row from `cancelled` to `encrypting` (refused and audited only when the device has another open row), module and conf reinstalled, initrds rebuilt (I1) — gate S-IE4 (decision 53) | during `CleanupPending` a rebuild drops the module from the rebuilt initrd only; `plan.env` stays until (3) passed | n/a | device `conversion_pending` while `CleanupPending`, accepts once (4) ran; server 200 (row `cancelled`) | normal | (1)–(3) retried every full pass; the key and `plan.*` stay until (3) passed; `cleanup_pending` in the preflight; the row stays `cancelled` on the server until an adoption |
+
+### Amendment 2026-10-21 — row ordering of decisions 6 and 36 (decided by the orchestrator as architect)
+
+Found in the review of PDK-241: decision 9 lets the device adopt an older `failed` or `cancelled` row (I2), so the
+newest row by `requested_at` is not always the conversion the disk carries. Invariant I1 is binding over the literal
+"latest row" wording of decisions 6 and 36:
+
+- The server's **latest conversion** of a device (`Device.disk_conversion`, `DiskEncryption.disk_conversion`, the
+  open-conversion checks of decisions 7, 8, 38, 39 and the `disk_conversion_failed` attention entry of decision 6) is
+  the open one first, then the one whose phase changed last: ordering `(phase IN ('requested','prepared','encrypting'))
+  DESC, phase_at DESC, id DESC`, in `GetLatestDiskConversion` (`queries/disk_conversion.sql`) and in the attention view's
+  subquery. Migration `00066_disk_conversion.sql` (not yet merged) carries it directly.
+- **Active** (decision 36, replaced by the architect lead on 2026-10-21; it supersedes "completed + health ≠
+  `compliant`"): `DeviceDiskConversion.active` is true iff (a) the latest row is open (`requested`, `prepared`,
+  `encrypting`), or (b) the last health reports `disk.state = encrypting`, or (c) the last health reports
+  `disk.conversion.key_on_boot = true`, whatever the rows say (widened in the second review round of PDK-241: also a
+  `failed` row or no `completed` row; exactly the `!InitrdRegenerated` window of decision 52, which encodes I1), or (d)
+  fail safe: the device's latest completed row — the latest row or an adopted older one — is
+  less than 30 days old and the health is missing or carries no `conversion` block. Otherwise it is not active: a
+  long-converted device that later reports `escrow_pending` or `tpm_pin_missing` does not block the uninstall.
+  Confirmed by the orchestrator as architect: "latest completed row" is the device's latest completed row, whether
+  or not it is the latest row; and a health with state `compliant` counts as not active, also within the 30 days of
+  (d), because the agent never reports `compliant` before the initrd was regenerated (decision 3), so I1 holds, and
+  gate S-IE1 expects `active: false` at `compliant` (decision 51).
+- Decision 9: `disk.conversion_completed` also moves a `cancelled` row (an adoption refused while another row was
+  open) to `completed`.

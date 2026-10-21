@@ -33,7 +33,7 @@ func newOwnersWorld(t *testing.T) ownersWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	w := ownersWorld{privilegesHarness: h, pool: pool, devices: app.NewDevices(h.runner, pool), users: app.NewUsers(h.runner, pool, nil),
+	w := ownersWorld{privilegesHarness: h, pool: pool, devices: app.NewDevices(h.runner, pool, nil), users: app.NewUsers(h.runner, pool, nil),
 		device: uuid.Must(uuid.NewV7())}
 	if _, err := h.super.Exec(context.Background(), "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, 'active')",
 		w.device, h.org, "owned-"+w.device.String()[24:]); err != nil {

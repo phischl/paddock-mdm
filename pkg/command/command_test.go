@@ -129,6 +129,11 @@ func TestLifetime(t *testing.T) {
 	if d, ok := Lifetime(TypeUninstall); !ok || d != 7*24*time.Hour {
 		t.Fatalf("uninstall: %v %v", d, ok)
 	}
+	for _, typ := range []string{TypeEncryptDisk, TypeEncryptDiskAbort} {
+		if d, ok := Lifetime(typ); !ok || d != 7*24*time.Hour {
+			t.Fatalf("%s: %v %v", typ, d, ok)
+		}
+	}
 	if _, ok := Lifetime("collect_status"); ok {
 		t.Fatal("collect_status is not a type of this release")
 	}

@@ -48,7 +48,7 @@ func newCombinationWorld(t *testing.T) combinationWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	w := combinationWorld{privilegesHarness: h, devices: app.NewDevices(h.runner, pool), user: uuid.Must(uuid.NewV7())}
+	w := combinationWorld{privilegesHarness: h, devices: app.NewDevices(h.runner, pool, nil), user: uuid.Must(uuid.NewV7())}
 	w.admin = h.account(t, principal.RoleOrgAdmin, false)
 	w.steppedUp = h.account(t, principal.RoleOrgAdmin, true)
 	w.operator = h.account(t, principal.RoleOrgOperator, true)

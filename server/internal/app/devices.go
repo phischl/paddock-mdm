@@ -13,6 +13,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/policy"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
@@ -27,11 +28,12 @@ import (
 type Devices struct {
 	runner *ActionRunner
 	org    *db.OrgPool
+	cache  UninstallCache
 }
 
-// NewDevices creates the use cases.
-func NewDevices(runner *ActionRunner, org *db.OrgPool) *Devices {
-	return &Devices{runner: runner, org: org}
+// NewDevices creates the use cases; cache withdraws an undelivered encrypt_disk command a retirement cancels.
+func NewDevices(runner *ActionRunner, org *db.OrgPool, cache UninstallCache) *Devices {
+	return &Devices{runner: runner, org: org, cache: cache}
 }
 
 // Specs of the privileged device actions.
@@ -134,6 +136,8 @@ type DeviceDetail struct {
 	// UninstallReportOverdue: the pending uninstall's removal report is overdue, so it can be cancelled or requested
 	// again (UninstallReportTimeout).
 	UninstallReportOverdue bool
+	// DiskConversion is the device's latest in-place encryption (plan M8e decision 10); nil without one.
+	DiskConversion *DiskConversion
 	// ComponentTargets are the platform's component targets (plan M8d decision 55).
 	ComponentTargets map[string]string
 }
@@ -209,6 +213,13 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 		out.UninstallReportOverdue = u.UninstalledAt == nil &&
 			UninstallReportOverdue(u.CommandStatus, u.CommandFinishedAt, u.CommandDeliveredAt, time.Now())
 	}
+	var health *protocol.DiskHealth
+	if out.Status != nil {
+		health = diskHealth(out.Status.Health)
+	}
+	if out.DiskConversion, err = loadDiskConversion(ctx, q, id, health); err != nil {
+		return out, err
+	}
 	out.Login, err = loadLoginAssignment(ctx, q, id)
 	return out, err
 }
@@ -242,7 +253,25 @@ func (d *Devices) ReleaseQuarantine(ctx context.Context, id uuid.UUID) (pgstore.
 
 // Retire retires a device and revokes its identity keys (audited: device.retired).
 func (d *Devices) Retire(ctx context.Context, id uuid.UUID) (pgstore.Device, error) {
-	return d.transition(ctx, SpecDeviceRetire, device.ActionRetire, id)
+	spec := SpecDeviceRetire
+	spec.Target = &audit.Target{Type: "device", ID: id.String()}
+	var out pgstore.Device
+	var withdrawn uuid.UUID
+	claims := newResultClaims(d.cache, id)
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		var err error
+		if out, err = TransitionDevice(ctx, q, rec, device.ActionRetire, id); err != nil {
+			return err
+		}
+		// A presumed-lost device stays retirable: a conversion never refuses it (plan M8e §14.5 decision 38).
+		withdrawn, err = withdrawConversion(ctx, q, claims, rec, id, time.Now())
+		return err
+	})
+	claims.releaseOn(ctx, err)
+	if err == nil {
+		dropWithdrawnCommand(ctx, d.cache, id, withdrawn)
+	}
+	return out, err
 }
 
 func (d *Devices) transition(ctx context.Context, spec ActionSpec, action device.Action, id uuid.UUID) (pgstore.Device, error) {
