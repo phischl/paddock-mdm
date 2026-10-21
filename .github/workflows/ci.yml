@@ -86,12 +86,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: make web
 
-  acceptance:
+  # The acceptance gates run in shards, each job against its own stack (PDK-359): the whole suite took 101 min on one
+  # runner (2026-10-21) against a budget of 96 min (plan M8f S11). Every gate runs in exactly one shard
+  # (test/acceptance/cmd/acceptanceshard); adding a shard number is enough, the total comes from the matrix.
+  acceptance-shard:
+    name: acceptance (shard ${{ matrix.shard }})
     needs: [lint, test, web, secrets, trivy]
     runs-on: ubuntu-24.04
-    timeout-minutes: 180 # make up 8 min + acceptance 120 min + disruptive 1 min + e2e 10 min + logs
+    timeout-minutes: 135 # make up 8 min + acceptance 120 min + logs
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
-      ACCEPTANCE_TIMEOUT: 120m # the suite took 82 min on a runner (2026-10-18); keep 20 % headroom
+      ACCEPTANCE_TIMEOUT: 120m # ~35 min per shard on a runner (estimate from the 2026-10-21 durations)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,12 +111,7 @@ jobs:
       - run: make dev-secrets
       - run: make up
       - run: make dev-seed
-      - run: make acceptance
-      # End every portal session and restart OpenBao, so they run alone after the main run (plan M8s gate S13, plan M8u
-      # gate U4).
-      - name: Disruptive acceptance gates
-        run: PADDOCK_ACCEPTANCE_DISRUPTIVE=1 make acceptance T='TestSessionsEndAll|TestAutoUnsealRestart'
-      - run: make e2e
+      - run: make acceptance SHARD=${{ matrix.shard }}/${{ strategy.job-total }}
       - name: compose logs
         if: failure()
         run: make logs
@@ -119,6 +122,43 @@ jobs:
         run: |
           docker ps -aq --filter label=com.docker.compose.project=paddock --filter label=com.docker.compose.service=fleet \
             | xargs -r -n1 docker logs 2>&1
+
+  # The disruptive gates and the Playwright suite on a stack of their own, in parallel with the shards.
+  acceptance-e2e:
+    name: acceptance (disruptive, e2e)
+    needs: [lint, test, web, secrets, trivy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40 # make up 8 min + disruptive 2 min + e2e 10 min + logs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: "**/go.sum"
+      - run: make dev-secrets
+      - run: make up
+      - run: make dev-seed
+      # End every portal session and restart OpenBao, so they run alone (plan M8s gate S13, plan M8u gate U4).
+      - name: Disruptive acceptance gates
+        run: PADDOCK_ACCEPTANCE_DISRUPTIVE=1 make acceptance T='TestSessionsEndAll|TestAutoUnsealRestart'
+      - run: make e2e
+      - name: compose logs
+        if: failure()
+        run: make logs
+
+  # The required status check "acceptance" of the default branch ruleset: green only if every shard and the e2e job
+  # are; a skipped job (failed prerequisites) fails it too.
+  acceptance:
+    needs: [acceptance-shard, acceptance-e2e]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - run: test "$SHARDS" = success && test "$E2E" = success
+        env:
+          SHARDS: ${{ needs.acceptance-shard.result }}
+          E2E: ${{ needs.acceptance-e2e.result }}
 
   edge:
     needs: [acceptance]

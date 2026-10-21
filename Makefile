@@ -12,7 +12,8 @@ COMPOSE_DIR   := deploy/compose
 SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
 GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
-UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/...
+UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... \
+	./test/acceptance/cmd/acceptanceshard/...
 WEB_DIR       := server/web
 IMAGE         ?= paddock-server:dev
 UID           := $(shell id -u)
@@ -333,8 +334,10 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 dev-seed: ## Create organizations acme and globex and assign the dev users
 	go run ./test/acceptance/cmd/devseed
 
-# Guard against hangs; the suite takes ~85 min on a development machine and ~82 min on a GitHub runner since M8x
-# (measured 2026-10-18). Keep at least 20 % headroom when gates are added.
+# Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
+# (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards
+# (SHARD=i/n, PDK-359), each against its own stack: with three shards ~27-29 min of measured gate time each, about
+# 35 min per `make acceptance` step on a runner. Keep at least 20 % headroom when gates are added.
 ACCEPTANCE_TIMEOUT ?= 120m
 
 # paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.
@@ -351,10 +354,20 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 .PHONY: acceptance
 # The exactly-once gate checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check); they run in
 # parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8).
-acceptance: ## Run acceptance gates against the running stack (optional T=<regex>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
+# SHARD=i/n runs shard i of n: test/acceptance/cmd/acceptanceshard puts every listed test into exactly one shard,
+# balanced by test/acceptance/shard-weights.txt.
+acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
-	PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
-		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... $(if $(T),-run '$(T)',) -v
+	@set -eo pipefail; run='$(T)'; \
+	if [ -n '$(SHARD)' ]; then \
+		[ -z "$$run" ] || { echo "acceptance: T and SHARD are mutually exclusive" >&2; exit 1; }; \
+		run="$$(go test -list '.*' ./test/acceptance/... | \
+			go run ./test/acceptance/cmd/acceptanceshard -shard '$(SHARD)' -weights test/acceptance/shard-weights.txt)"; \
+		echo "acceptance shard $(SHARD): -run '$$run'"; \
+	fi; \
+	set --; [ -z "$$run" ] || set -- -run "$$run"; \
+	set -x; PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
+		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... "$$@" -v
 
 .PHONY: system-test
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
