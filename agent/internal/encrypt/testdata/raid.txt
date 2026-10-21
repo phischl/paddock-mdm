@@ -1,0 +1,78 @@
+$ findmnt -no SOURCE /
+/dev/md0
+$ lsblk --inverse --json --paths --bytes --output NAME,TYPE,FSTYPE,PKNAME,PARTUUID,SIZE -- /dev/md0
+{
+   "blockdevices": [
+      {
+         "name": "/dev/md0",
+         "type": "raid1",
+         "fstype": "ext4",
+         "pkname": "/dev/sda2",
+         "partuuid": null,
+         "size": 40766537728,
+         "children": [
+            {
+               "name": "/dev/sda2",
+               "type": "part",
+               "fstype": "linux_raid_member",
+               "pkname": "/dev/sda",
+               "partuuid": "0a1b2c3d-4e5f-4061-8728-394a5b6c7d8e",
+               "size": 40800092160,
+               "children": [
+                  {
+                     "name": "/dev/sda",
+                     "type": "disk",
+                     "fstype": null,
+                     "pkname": null,
+                     "partuuid": null,
+                     "size": 42949672960
+                  }
+               ]
+            },
+            {
+               "name": "/dev/sdb2",
+               "type": "part",
+               "fstype": "linux_raid_member",
+               "pkname": "/dev/sdb",
+               "partuuid": "9f8e7d6c-5b4a-4392-8180-7f6e5d4c3b2a",
+               "size": 40800092160,
+               "children": [
+                  {
+                     "name": "/dev/sdb",
+                     "type": "disk",
+                     "fstype": null,
+                     "pkname": null,
+                     "partuuid": null,
+                     "size": 42949672960
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}
+$ findmnt -no FSTYPE /
+ext4
+$ findmnt -no UUID /
+77665544-3322-4110-8ffe-eddccbbaa998
+$ findmnt -bno SIZE,AVAIL /
+40007729152 33501065216
+$ findmnt --noheadings --output TARGET --target /boot
+/boot
+$ findmnt -no SOURCE /boot
+/dev/sda1
+$ lsblk --noheadings --nodeps --paths --output TYPE -- /dev/sda1
+part
+$ findmnt --fstab -no SOURCE /
+UUID=77665544-3322-4110-8ffe-eddccbbaa998
+$ dpkg-query -W -f=${db:Status-Status} dracut
+installed
+> /etc/os-release
+NAME="Ubuntu"
+VERSION_ID="24.04"
+ID=ubuntu
+> /proc/cmdline
+BOOT_IMAGE=/vmlinuz-6.8.0-85-generic root=UUID=77665544-3322-4110-8ffe-eddccbbaa998 ro
+> /sys/firmware/efi/
+> /sys/class/tpm/tpm0/tpm_version_major
+2

@@ -1,0 +1,4 @@
+@ lvm
+$ lvm pvs --noheadings -o pv_name,vg_name
+  /dev/sda3  ubuntu-vg
+  /dev/sdb1  ubuntu-vg

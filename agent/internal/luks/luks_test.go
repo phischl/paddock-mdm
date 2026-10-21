@@ -188,3 +188,38 @@ func TestTPM2Present(t *testing.T) {
 		}
 	}
 }
+
+// TestReencryptKeyslot (plan M8e decision 4): the reencrypt keyslot of an unfinished online reencryption is no kind of
+// the inventory and no slot of any kind, and Reencrypting reports it.
+func TestReencryptKeyslot(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "reencrypt-password.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTools{answers: map[string]answer{"cryptsetup luksDump --dump-json-metadata -- /dev/sda3": {stdout: string(raw)}}}
+	m, err := luks.Dump(context.Background(), f, "/dev/sda3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Kinds(); !slices.Equal(got, []string{luks.KindPassword}) {
+		t.Fatalf("kinds %v", got)
+	}
+	if !m.Reencrypting() || m.Kind(1) != luks.KindReencrypt || m.Has(luks.KindReencrypt) {
+		t.Fatalf("reencrypting %v, kind of keyslot 1 %q", m.Reencrypting(), m.Kind(1))
+	}
+	if s := m.Slots(luks.KindReencrypt); s != nil {
+		t.Fatalf("reencrypt slots %v", s)
+	}
+	if s := m.Slots(luks.KindPassword); !slices.Equal(s, []int{0}) {
+		t.Fatalf("password slots %v", s)
+	}
+
+	done, err := os.ReadFile(filepath.Join("testdata", "tpm2-recovery-password.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.answers["cryptsetup luksDump --dump-json-metadata -- /dev/sda3"] = answer{stdout: string(done)}
+	if m, err = luks.Dump(context.Background(), f, "/dev/sda3"); err != nil || m.Reencrypting() {
+		t.Fatalf("a finished volume reports a reencryption: %v", err)
+	}
+}

@@ -104,6 +104,9 @@ const (
 	KindTPM2     = "tpm2"
 	KindRecovery = "recovery"
 	KindPassword = "password" // a keyslot without a token: a passphrase or a key file
+	// KindReencrypt is the keyslot of an unfinished online reencryption (plan M8e decision 4); it holds no key
+	// and is never part of an inventory.
+	KindReencrypt = "reencrypt"
 )
 
 // Dump reads the metadata of a LUKS2 volume.
@@ -177,14 +180,26 @@ func sha256Hex(b []byte) string {
 
 // Kinds returns the kind of every keyslot, sorted: a keyslot referenced by a systemd-tpm2 token is tpm2+pin (or
 // tpm2 without PIN), by systemd-recovery recovery, by another token its type without "systemd-", and a keyslot
-// without a token password.
+// without a token password. The reencrypt keyslot of an unfinished reencryption is left out.
 func (m Metadata) Kinds() []string {
 	kinds := make([]string, 0, len(m.Keyslots))
 	for slot := range m.Keyslots {
-		kinds = append(kinds, m.kind(slot))
+		if kind := m.kind(slot); kind != KindReencrypt {
+			kinds = append(kinds, kind)
+		}
 	}
 	sort.Strings(kinds)
 	return kinds
+}
+
+// Reencrypting reports whether the volume carries the reencrypt keyslot of an unfinished online reencryption.
+func (m Metadata) Reencrypting() bool {
+	for slot := range m.Keyslots {
+		if m.kind(slot) == KindReencrypt {
+			return true
+		}
+	}
+	return false
 }
 
 // Kind returns the kind of keyslot slot, "" if the slot is not in use.
@@ -196,11 +211,11 @@ func (m Metadata) Kind(slot int) string {
 	return m.kind(key)
 }
 
-// Slots returns the numbers of the keyslots of kind, sorted.
+// Slots returns the numbers of the keyslots of kind, sorted; the reencrypt keyslot is never among them.
 func (m Metadata) Slots(kind string) []int {
 	var slots []int
 	for key := range m.Keyslots {
-		if n, err := strconv.Atoi(key); err == nil && m.kind(key) == kind {
+		if n, err := strconv.Atoi(key); err == nil && kind != KindReencrypt && m.kind(key) == kind {
 			slots = append(slots, n)
 		}
 	}
@@ -209,6 +224,12 @@ func (m Metadata) Slots(kind string) []int {
 }
 
 func (m Metadata) kind(slot string) string {
+	var ks struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(m.Keyslots[slot], &ks) == nil && ks.Type == KindReencrypt {
+		return KindReencrypt
+	}
 	kind := KindPassword
 	for _, tok := range m.Tokens {
 		if !slices.Contains(tok.Keyslots, slot) {

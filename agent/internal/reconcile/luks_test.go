@@ -216,6 +216,8 @@ func (v *volume) metadata() string {
 			tokens[slot] = map[string]any{"type": "systemd-tpm2", "keyslots": []string{slot}, "tpm2-pin": false, "tpm2-pcrs": []int{7}}
 		case "recovery":
 			tokens[slot] = map[string]any{"type": "systemd-recovery", "keyslots": []string{slot}}
+		case "reencrypt":
+			keyslots[slot] = map[string]any{"type": "reencrypt", "mode": "encrypt", "direction": "forward"}
 		}
 	}
 	b, _ := json.Marshal(map[string]any{"keyslots": keyslots, "tokens": tokens, "segments": map[string]any{}})
@@ -981,3 +983,160 @@ func TestLUKSBootLayout(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// TestLUKSReencrypting (plan M8e decisions 3 and 4): while the root volume carries the reencrypt keyslot the state is
+// encrypting, and no keyslot is recorded, changed, escrowed or reported as tampering; once it is gone the M4b flow
+// runs.
+func TestLUKSReencrypting(t *testing.T) {
+	f := newLUKSFixture(t, "password", "reencrypt")
+	f.st.Keyslots = []string{"password", "tpm2+pin"}
+	for range 2 {
+		h := f.m.Tick(context.Background(), f.keys, true, f.mode)
+		if h.State != protocol.DiskEncrypting || !slices.Equal(h.Tokens, []string{"password"}) || h.Keyslots != 1 {
+			t.Fatalf("reencrypting: %+v", h)
+		}
+	}
+	if !slices.Equal(f.st.Keyslots, []string{"password", "tpm2+pin"}) || f.st.InstallSlot != nil || len(f.events) != 0 ||
+		len(f.vol.changes) != 0 || len(f.server.requests) != 0 {
+		t.Fatalf("a reencrypting volume was touched: state %+v, events %v, changes %v, escrows %v", f.st, f.events,
+			f.vol.changes, f.server.requests)
+	}
+	for _, c := range f.vol.calls {
+		if strings.HasPrefix(c, "systemd-cryptenroll") || strings.HasPrefix(c, "cryptsetup open") ||
+			strings.HasPrefix(c, "cryptsetup luksHeaderBackup") {
+			t.Fatalf("reencrypting: %s", c)
+		}
+	}
+
+	f.vol.slots[1] = ""
+	f.st.Keyslots = nil
+	if s := f.pass(); s != protocol.DiskTPMPINMissing || len(f.server.of(escrow.KindLUKSRecoveryKey)) != 1 ||
+		!slices.Equal(f.st.Keyslots, []string{"password", "recovery"}) || len(f.events) != 0 {
+		t.Fatalf("after the reencryption: %s, keyslots %v, escrows %v, events %v", s, f.st.Keyslots, f.server.requests, f.events)
+	}
+}
+
+// encryptSystem is an unencrypted plain layout behind the preflight tools; dracut decides the initramfs answer.
+type encryptSystem struct {
+	dracut bool
+	calls  []string
+}
+
+func (e *encryptSystem) Command(_ context.Context, name string, args ...string) (string, string, int, error) {
+	line := strings.Join(append([]string{name}, args...), " ")
+	e.calls = append(e.calls, line)
+	switch line {
+	case "findmnt -no SOURCE /":
+		return "/dev/sda3\n", "", 0, nil
+	case "lsblk --inverse --json --paths --bytes --output NAME,TYPE,FSTYPE,PKNAME,PARTUUID,SIZE -- /dev/sda3":
+		return `{"blockdevices":[{"name":"/dev/sda3","type":"part","fstype":"ext4","partuuid":"6a7b8c9d-0e1f-4203-9415-263748596a7b","size":40793800704,
+  "children":[{"name":"/dev/sda","type":"disk","size":42949672960}]}]}`, "", 0, nil
+	case "blkid -p -o value -s PTTYPE /dev/sda":
+		return "gpt\n", "", 0, nil
+	case "findmnt -no FSTYPE /":
+		return "ext4\n", "", 0, nil
+	case "findmnt -no UUID /":
+		return "a7c41e09-2b6d-4f3a-9e85-0c1d2e3f4a5b\n", "", 0, nil
+	case "findmnt -bno SIZE,AVAIL /":
+		return "40000000000 30000000000\n", "", 0, nil
+	case "findmnt --noheadings --output TARGET --target /boot":
+		return "/boot\n", "", 0, nil
+	case "findmnt -no SOURCE /boot":
+		return "/dev/sda2\n", "", 0, nil
+	case "lsblk --noheadings --nodeps --paths --output TYPE -- /dev/sda2":
+		return "part\n", "", 0, nil
+	case "findmnt --fstab -no SOURCE /":
+		return "UUID=a7c41e09-2b6d-4f3a-9e85-0c1d2e3f4a5b\n", "", 0, nil
+	case "dpkg-query -W -f=${db:Status-Status} dracut":
+		if e.dracut {
+			return "installed", "", 0, nil
+		}
+		return "", "dpkg-query: no packages found matching dracut\n", 1, nil
+	case "apt-get -s -o Debug::NoLocking=true install dracut":
+		return "Remv initramfs-tools [0.142ubuntu25.1]\nRemv brltty [6.6-4ubuntu5]\nInst dracut (060+5-1ubuntu3.2)\n", "", 0, nil
+	}
+	return "", "unexpected", 1, nil
+}
+
+func (e *encryptSystem) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) } //nolint:gosec // test layout
+
+func (e *encryptSystem) Stat(path string) (bool, error) {
+	_, err := os.Stat(path)
+	return err == nil, nil
+}
+
+func (e *encryptSystem) count(prefix string) int {
+	n := 0
+	for _, c := range e.calls {
+		if strings.HasPrefix(c, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestLUKSConversionEligibility (plan M8e decisions 3 and 34): an unencrypted device reports the preflight in
+// health.disk.conversion, taken at most every PreflightInterval and again with a newly applied bundle; an unfinished
+// cleanup is reported alone at once.
+func TestLUKSConversionEligibility(t *testing.T) {
+	f := newLUKSFixture(t, "password")
+	f.vol.plain, f.vol.boot = true, "/boot"
+	sys := &encryptSystem{}
+	cleanup := false
+	f.m.Encrypt, f.m.CleanupPending = sys, func() bool { return cleanup }
+	f.write(f.layout.Join("/etc/os-release"), "NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\n")
+	f.write(f.layout.Join("/proc/cmdline"), "BOOT_IMAGE=/vmlinuz root=UUID=a7c41e09-2b6d-4f3a-9e85-0c1d2e3f4a5b ro\n")
+	f.write(f.layout.Join("/sys/class/tpm/tpm0/tpm_version_major"), "2\n")
+	if err := os.MkdirAll(f.layout.Join("/sys/firmware/efi"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tick := func() *protocol.DiskConversion {
+		t.Helper()
+		h := f.m.Tick(context.Background(), f.keys, true, f.mode)
+		if h.State != protocol.DiskNotEncrypted {
+			t.Fatalf("state %s", h.State)
+		}
+		return h.Conversion
+	}
+	want := &protocol.DiskConversion{Eligible: true, Release: "24.04", Layout: "plain", Initramfs: "initramfs-tools",
+		InitramfsRemoves: []string{"brltty", "initramfs-tools"}}
+	if c := tick(); !reflect.DeepEqual(c, want) {
+		t.Fatalf("conversion %+v", c)
+	}
+	raw, _ := json.Marshal(want)
+	if string(raw) != `{"eligible":true,"release":"24.04","layout":"plain","initramfs":"initramfs-tools","initramfs_removes":["brltty","initramfs-tools"]}` {
+		t.Fatalf("health.disk.conversion %s", raw)
+	}
+	f.now = f.now.Add(reconcile.PreflightInterval - time.Second)
+	if tick(); sys.count("dpkg-query") != 1 || sys.count("apt-get") != 1 {
+		t.Fatalf("preflight not cached: %v", sys.calls)
+	}
+	f.now = f.now.Add(time.Second)
+	sys.dracut = true
+	if c := tick(); sys.count("dpkg-query") != 2 || c.Initramfs != "dracut" || c.InitramfsRemoves != nil {
+		t.Fatalf("after the interval: %+v, %v", c, sys.calls)
+	}
+	f.keys = &bundle.Keys{EscrowWrap: f.keys.EscrowWrap}
+	if tick(); sys.count("dpkg-query") != 3 {
+		t.Fatalf("a new bundle did not repeat the preflight: %v", sys.calls)
+	}
+
+	cleanup = true
+	n := len(sys.calls)
+	if c := tick(); !reflect.DeepEqual(c, &protocol.DiskConversion{Reasons: []string{"cleanup_pending"}}) || len(sys.calls) != n {
+		t.Fatalf("cleanup pending: %+v, calls %v", c, sys.calls[n:])
+	}
+	cleanup = false
+	if c := tick(); !c.Eligible || len(sys.calls) != n {
+		t.Fatalf("after the cleanup: %+v", c)
+	}
+
+	f.vol.plain = false
+	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.Conversion != nil {
+		t.Fatalf("an encrypted device reports a conversion: %+v", h)
+	}
+	f.m.Encrypt, f.vol.plain = nil, true
+	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.Conversion != nil {
+		t.Fatalf("no preflight device, but a conversion: %+v", h)
+	}
+}
