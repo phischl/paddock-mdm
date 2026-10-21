@@ -14,6 +14,7 @@ export default defineConfig({
     // The development stack uses Caddy's internal CA.
     ignoreHTTPSErrors: true,
     trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 })

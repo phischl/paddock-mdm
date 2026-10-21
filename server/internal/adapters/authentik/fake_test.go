@@ -2,6 +2,7 @@ package authentik_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,7 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -41,6 +44,12 @@ type fakeAuthentik struct {
 	failStatus int
 	// failReactivation makes every PATCH with is_active true answer 503 (a lock interrupted after the deactivation).
 	failReactivation bool
+	// latency delays every answer (an Authentik under load); requests are served concurrently meanwhile.
+	latency atomic.Int64
+	// loseCreateAnswers makes the first POST to every path create its object and then never answer, as when the
+	// response is lost or the client times out after Authentik committed; lostCreates records the paths done.
+	loseCreateAnswers bool
+	lostCreates       map[string]bool
 }
 
 type fakeGroup struct {
@@ -60,6 +69,7 @@ func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
 	f := &fakeAuthentik{
 		t: t, groups: map[string]*fakeGroup{}, users: map[int]*fakeUser{}, nextPK: 1,
 		objects: map[string]map[string]map[string]any{}, tokens: map[string][]int{}, sessions: map[int]int{},
+		lostCreates: map[string]bool{},
 	}
 	// Objects of Authentik's defaults and of the Paddock blueprints.
 	for _, slug := range []string{"paddock-device-authentication", "paddock-device-authorization", "default-provider-invalidation-flow",
@@ -164,8 +174,14 @@ var collections = map[string]struct{ name, fixture string }{
 }
 
 func (f *fakeAuthentik) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	time.Sleep(time.Duration(f.latency.Load()))
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	unlocked := false
+	defer func() {
+		if !unlocked {
+			f.mu.Unlock()
+		}
+	}()
 	if r.Header.Get("Authorization") != "Bearer test-token" {
 		w.WriteHeader(http.StatusForbidden)
 		return
@@ -182,6 +198,13 @@ func (f *fakeAuthentik) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
 	status, out := f.route(r, body)
+	if f.loseCreateAnswers && r.Method == http.MethodPost && status == http.StatusCreated && !f.lostCreates[r.URL.Path] {
+		f.lostCreates[r.URL.Path] = true
+		unlocked = true
+		f.mu.Unlock()
+		<-r.Context().Done()
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if out != nil {
@@ -357,9 +380,34 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 	return http.StatusNotFound, f.fixture("delete_core_groups_id_404.json")
 }
 
+// taken reports whether a POST to collection name violates one of Authentik's unique constraints: the name, the slug of
+// an application, and policy, target and order of a binding.
+func (f *fakeAuthentik) taken(name string, body map[string]any) bool {
+	fields := []string{"name"}
+	switch name {
+	case "applications":
+		fields = []string{"slug"}
+	case "bindings":
+		fields = []string{"policy", "target", "order"}
+	}
+	for _, obj := range f.objects[name] {
+		same := true
+		for _, k := range fields {
+			same = same && fmt.Sprint(obj[k]) == fmt.Sprint(body[k])
+		}
+		if same {
+			return true
+		}
+	}
+	return false
+}
+
 // collection lists (filtered by every query parameter that names a field) or creates objects.
 func (f *fakeAuthentik) collection(method, name, fixture string, q map[string][]string, body map[string]any) (int, any) {
 	if method == http.MethodPost {
+		if f.taken(name, body) {
+			return http.StatusBadRequest, map[string]any{"non_field_errors": []string{"The fields must make a unique set."}}
+		}
 		obj := f.fixture(fixture)
 		for k, v := range body {
 			obj[k] = v

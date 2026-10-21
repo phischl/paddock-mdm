@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -17,16 +19,27 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
+// ProvisioningBudget bounds the identity provider provisioning of one organization create: long enough for an
+// Authentik under load including retries, well short of the server's write timeout of 120 s (PDK-351).
+const ProvisioningBudget = 60 * time.Second
+
 // Organizations are the platform use cases.
 type Organizations struct {
 	runner   *ActionRunner
 	platform *db.PlatformPool
 	idp      ports.IdentityProvider
+	budget   time.Duration
 }
 
 // NewOrganizations creates the use cases.
 func NewOrganizations(runner *ActionRunner, platform *db.PlatformPool, idp ports.IdentityProvider) *Organizations {
-	return &Organizations{runner: runner, platform: platform, idp: idp}
+	return &Organizations{runner: runner, platform: platform, idp: idp, budget: ProvisioningBudget}
+}
+
+// WithProvisioningBudget changes the provisioning budget (tests).
+func (o *Organizations) WithProvisioningBudget(d time.Duration) *Organizations {
+	o.budget = d
+	return o
 }
 
 // Specs of the privileged platform actions on organizations.
@@ -121,7 +134,14 @@ func (o *Organizations) Create(ctx context.Context, slug, name string) (org pgst
 			return nil
 		},
 		func(ctx context.Context) error {
+			// Provisioning outlives a client that gave up (a closed dialog, a proxy timeout): a half-done provisioning
+			// is not abandoned and its outcome is recorded. The budget bounds it instead.
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.budget)
+			defer cancel()
 			_, err := o.idp.EnsureOrganization(ctx, slug)
+			if err != nil && ctx.Err() != nil && !errors.Is(err, problem.UpstreamUnavailable) {
+				return fmt.Errorf("%w: provisioning exceeded %s: %w", problem.UpstreamUnavailable, o.budget, err)
+			}
 			return err
 		},
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder, externalErr error) error {
