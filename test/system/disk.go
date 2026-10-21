@@ -252,9 +252,9 @@ func luksPassphraseSlots(metadata []byte) (slots, tokens []int, err error) {
 	return slots, tokens, nil
 }
 
-// opensScript is the root shell script behind OpensDevice: it reads the secret from stdin into a directory under dir, tests
-// it against each of slots on a copy of device's header with every token removed, and exits 0 when a slot accepts it,
-// opensRejected when none does and with cryptsetup's status on any other error. cryptsetup tries a volume's tokens
+// opensScript is the root shell script behind OpensDevice: it reads the secret from stdin into a directory under dir,
+// tests it against each of slots on a copy of device's header with every token removed, and exits 0 when a slot accepts
+// it, opensRejected when none does and with cryptsetup's status on any other error. cryptsetup tries a volume's tokens
 // before the key file, even with --key-slot, and a tpm2 token without a PIN answers for any secret (PDK-369); the
 // copy keeps only what a passphrase opens. It contains no single quote, so callers can wrap it in sh -c '…'.
 func opensScript(device, dir string, slots, tokens []int) string {
