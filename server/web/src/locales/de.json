@@ -879,7 +879,12 @@
           "root_reference_unsupported": "fstab oder die Kernel-Kommandozeile verweisen über einen Gerätepfad auf root",
           "already_encrypted": "das Root-Volume ist bereits verschlüsselt",
           "dm_crypt_missing": "der Kernel hat kein dm-crypt",
-          "cleanup_pending": "das Gerät entfernt noch eine abgebrochene Verschlüsselung aus seinen Startdateien; nach dem nächsten Check-in erneut versuchen"
+          "cleanup_pending": "das Gerät entfernt noch eine abgebrochene Verschlüsselung aus seinen Startdateien; nach dem nächsten Check-in erneut versuchen",
+          "other_luks_present": "auf dem Gerät gibt es bereits ein anderes verschlüsseltes Volume",
+          "lvm_devicesfile": "LVM verwendet auf diesem Gerät eine Devices-Datei, die die nachträgliche Verschlüsselung noch nicht unterstützt",
+          "hibernation_configured": "auf dem Gerät ist der Ruhezustand (Hibernation) eingerichtet",
+          "lvm_filter": "LVM verwendet auf diesem Gerät einen eigenen Gerätefilter, den die nachträgliche Verschlüsselung noch nicht unterstützt",
+          "lvm_unknown": "die LVM-Konfiguration des Geräts konnte nicht gelesen werden"
         },
         "cancel": {
           "label": "Verschlüsselung abbrechen",

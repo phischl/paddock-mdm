@@ -153,6 +153,22 @@ describe('in-place encryption: eligibility (plan M8e decision 24)', () => {
     expect(el('disk-convert-eligible')).toBeNull()
     expect(button('Encrypt this device…')).toBeUndefined()
   })
+
+  it('names the reasons added by PDK-244 and shows an unknown reason as reported', async () => {
+    disk = {
+      ...base, state: 'not_encrypted', disk_conversion: null,
+      conversion: { eligible: false, reasons: ['hibernation_configured', 'lvm_devicesfile', 'lvm_filter', 'lvm_unknown', 'other_luks_present', 'some_future_reason'] },
+    }
+    await mountCard()
+    expect([...el('disk-convert-reasons')!.querySelectorAll('li')].map((l) => l.textContent?.trim())).toEqual([
+      'hibernation is set up on the device',
+      'LVM uses a devices file on this device, which in-place encryption does not support yet',
+      'LVM uses a custom device filter on this device, which in-place encryption does not support yet',
+      'the LVM configuration of the device could not be read',
+      'another encrypted volume exists on the device',
+      'some_future_reason',
+    ])
+  })
 })
 
 describe('in-place encryption: the dialogue (plan M8e decision 24, §14.4 decision 34)', () => {

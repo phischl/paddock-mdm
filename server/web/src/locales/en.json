@@ -879,7 +879,12 @@
           "root_reference_unsupported": "fstab or the kernel command line refer to root by a device path",
           "already_encrypted": "the root volume is already encrypted",
           "dm_crypt_missing": "the kernel has no dm-crypt",
-          "cleanup_pending": "the device is still removing an abandoned encryption from its boot files; try again after its next check-in"
+          "cleanup_pending": "the device is still removing an abandoned encryption from its boot files; try again after its next check-in",
+          "other_luks_present": "another encrypted volume exists on the device",
+          "lvm_devicesfile": "LVM uses a devices file on this device, which in-place encryption does not support yet",
+          "hibernation_configured": "hibernation is set up on the device",
+          "lvm_filter": "LVM uses a custom device filter on this device, which in-place encryption does not support yet",
+          "lvm_unknown": "the LVM configuration of the device could not be read"
         },
         "cancel": {
           "label": "Cancel encryption",
