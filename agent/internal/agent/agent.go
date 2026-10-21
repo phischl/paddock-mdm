@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -60,8 +61,11 @@ type Deps struct {
 	Accounts localadmin.System
 	// LUKS runs the LUKS tools of the root volume (plan M4b decision 8); nil disables the luks reconciler.
 	LUKS luks.Tools
-	// Encrypt is the device the in-place encryption preflight reads (plan M8e); nil reports no eligibility.
-	Encrypt encrypt.System
+	// Encrypt is the device the in-place encryption reads and changes (plan M8e); nil reports no eligibility and
+	// refuses encrypt_disk.
+	Encrypt encrypt.Host
+	// EncryptModule is the embedded dracut module of the in-place encryption (plan M8e §6.4); nil refuses encrypt_disk.
+	EncryptModule fs.FS
 	// FollowLogins sends the PAM session openings of the device until ctx ends (journal); nil: none.
 	FollowLogins func(ctx context.Context, out chan<- localadmin.Login)
 	Spool        *spool.Spool    // nil: the agent's own spool below Layout
@@ -95,6 +99,8 @@ type Deps struct {
 	Download func(ctx context.Context, url string, limit int64) ([]byte, error)
 	Now      func() time.Time
 	Rand     func() float64 // uniform in [0, 1)
+	// Sleep waits d or until ctx ends; nil waits.
+	Sleep func(ctx context.Context, d time.Duration) error
 }
 
 // Agent is the run loop. All state is owned by the goroutine that calls Run.
@@ -119,6 +125,11 @@ type Agent struct {
 	policySkipped string
 	// supervisorSkipped is the last supervisor package version and reason not installed, logged once.
 	supervisorSkipped string
+	// conversionJobs feeds the conversion worker (plan M8e decision 12); conversionCalls carries its reads and changes
+	// of the state to the loop; conversionBusy is set while a preparation is queued or runs.
+	conversionJobs  chan struct{}
+	conversionCalls chan func()
+	conversionBusy  bool
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -176,7 +187,8 @@ func New(d Deps) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Agent{d: d, st: st, installJobs: make(chan installJob, installQueue), installDone: make(chan installDone, installQueue)}
+	a := &Agent{d: d, st: st, installJobs: make(chan installJob, installQueue), installDone: make(chan installDone, installQueue),
+		conversionJobs: make(chan struct{}, 1), conversionCalls: make(chan func())}
 	if d.Inventory != nil {
 		d.Inventory.UpdatesAllowed = a.updatesAllowed
 	}
@@ -184,7 +196,8 @@ func New(d Deps) (*Agent, error) {
 		Emit: a.event, Result: a.commandResult, Now: d.Now}
 	if d.LUKS != nil {
 		a.luks = &reconcile.LUKS{Tools: d.LUKS, Layout: d.Layout, Escrow: escrowClient{a}, State: &a.st.LUKS, Save: a.persist,
-			Emit: a.event, Now: d.Now, TPM2Present: func() bool { return luks.TPM2Present(d.Layout.Root) }, Encrypt: d.Encrypt}
+			Emit: a.event, Now: d.Now, TPM2Present: func() bool { return luks.TPM2Present(d.Layout.Root) }, Encrypt: d.Encrypt,
+			CleanupPending: func() bool { return a.st.Conversion != nil && a.st.Conversion.CleanupPending }}
 	}
 	if a.d.Commands == nil {
 		a.d.Commands = commands.New(commands.Handlers(map[string]commands.Handler{
@@ -192,6 +205,8 @@ func New(d Deps) (*Agent, error) {
 			command.TypeDeleteSelfLock:      a.deleteSelfLock,
 			command.TypeInstallNow:          a.installNowCommand,
 			command.TypeUninstall:           a.uninstallCommand,
+			command.TypeEncryptDisk:         a.encryptDiskCommand,
+			command.TypeEncryptDiskAbort:    a.encryptDiskAbortCommand,
 		}), d.Now)
 	}
 	if a.d.Spool == nil {
@@ -233,6 +248,9 @@ func New(d Deps) (*Agent, error) {
 	if a.d.SupervisorVersion == nil {
 		a.d.SupervisorVersion = func(ctx context.Context) (string, error) { return supervisorVersion(ctx, a.d.Layout) }
 	}
+	if a.d.Sleep == nil {
+		a.d.Sleep = sleepCtx
+	}
 	if a.d.Download == nil && a.d.Client != nil {
 		a.d.Download = a.d.Client.Download
 	}
@@ -266,6 +284,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		// Not waited for: an installation in progress outlives the run loop (runInstalls).
 		go a.runInstalls(ctx)
 	}
+	// Before the worker starts: the I2 check of plan M8e §14.10 decides before a preparation is re-queued.
+	a.startConversion(ctx)
+	if a.d.Encrypt != nil {
+		// Not waited for, like the install worker: a running apt-get or dracut outlives the run loop.
+		go a.runConversions(ctx)
+	}
 	logins := make(chan localadmin.Login, 16)
 	if a.d.FollowLogins != nil {
 		wg.Add(1)
@@ -296,11 +320,15 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 		case <-drift.C:
 			a.drift(ctx)
 			a.tickLUKS(ctx, true)
+			a.tickConversion(ctx)
 			a.reportUpdateRuns(ctx)
 		case d := <-a.installDone:
 			a.finishInstall(d)
+		case fn := <-a.conversionCalls:
+			fn()
 		case <-sessionPoll.C:
 			a.trackSessions(ctx)
+			a.tickConversionSessions(ctx)
 		case <-dms.C:
 			a.tickDMS(ctx)
 		case <-localAdmin.C:
@@ -323,6 +351,7 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			}
 			a.tickLocalAdmin(ctx)
 			a.tickLUKS(ctx, true)
+			a.tickConversion(ctx)
 		}
 	}
 }

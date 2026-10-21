@@ -1,6 +1,6 @@
 // Package encrypt is the in-place encryption of an installed device's root volume (ADR 0039, plan M8e): the
-// preflight that tells whether the disk layout qualifies and, in later tickets, the preparation and the resume of the
-// online reencryption.
+// preflight that tells whether the disk layout qualifies, the preparation for the conversion at the next restart, its
+// abort and cleanup, the restart notification and, in a later ticket, the resume of the online reencryption.
 package encrypt
 
 import (
@@ -378,11 +378,19 @@ func (p *preflight) initramfs() {
 // simulatedRemovals returns the packages installing dracut would remove: the Remv lines of
 // apt-get -s -o Debug::NoLocking=true install dracut, sorted; nil when the simulation failed (plan M8e decision 33).
 func simulatedRemovals(ctx context.Context, sys System) []string {
-	out, _, exit, err := sys.Command(ctx, "apt-get", "-s", "-o", "Debug::NoLocking=true", "install", "dracut")
-	if err != nil || exit != 0 {
+	pkgs, ok := simulateRemovals(ctx, sys)
+	if !ok {
 		return nil
 	}
-	var pkgs []string
+	return pkgs
+}
+
+// simulateRemovals is simulatedRemovals that tells a failed simulation (ok false) from an empty set.
+func simulateRemovals(ctx context.Context, sys System) (pkgs []string, ok bool) {
+	out, _, exit, err := sys.Command(ctx, "apt-get", "-s", "-o", "Debug::NoLocking=true", "install", "dracut")
+	if err != nil || exit != 0 {
+		return nil, false
+	}
 	for line := range strings.Lines(out) {
 		if rest, ok := strings.CutPrefix(line, "Remv "); ok {
 			if f := strings.Fields(rest); len(f) > 0 {
@@ -391,5 +399,5 @@ func simulatedRemovals(ctx context.Context, sys System) []string {
 		}
 	}
 	slices.Sort(pkgs)
-	return slices.Compact(pkgs)
+	return slices.Compact(pkgs), true
 }

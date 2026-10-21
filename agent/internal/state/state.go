@@ -74,6 +74,63 @@ type State struct {
 	LocalAdmin LocalAdmin `json:"local_admin"`
 	// LUKS is the disk encryption of the root volume (plan M4b decisions 8–12).
 	LUKS LUKS `json:"luks"`
+	// Conversion is the in-place encryption of the root volume (plan M8e §6.3); nil without one.
+	Conversion *DiskConversion `json:"conversion,omitempty"`
+}
+
+// Phases of an in-place encryption on the device (plan M8e §3.1); the server's phase requested is preparing here.
+const (
+	ConversionPreparing  = "preparing"
+	ConversionPrepared   = "prepared"
+	ConversionEncrypting = "encrypting"
+	ConversionCompleted  = "completed"
+	ConversionFailed     = "failed"
+	ConversionCancelled  = "cancelled"
+)
+
+// Failure stages of an in-place encryption (plan M8e decision 3).
+const (
+	StagePreflight = "preflight"
+	StagePrepare   = "prepare"
+	StageInit      = "init"
+	StageResume    = "resume"
+)
+
+// DiskConversion is the in-place encryption in progress on this device (ADR 0039, plan M8e §6.3). Secrets are never
+// stored here.
+type DiskConversion struct {
+	ID          string     `json:"id"`
+	CommandID   string     `json:"command_id"`
+	Phase       string     `json:"phase"`
+	RequestedAt time.Time  `json:"requested_at"`
+	PreparedAt  *time.Time `json:"prepared_at,omitempty"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	Layout      string     `json:"layout,omitempty"`
+	LUKSUUID    string     `json:"luks_uuid,omitempty"`
+	Mapping     string     `json:"mapping,omitempty"`
+	Partition   string     `json:"partition,omitempty"`
+	DataBytes   int64      `json:"data_bytes,omitempty"`
+	// KeyEscrowGeneration is the recovery key generation the server stored the conversion key as (decision 13 step 4).
+	KeyEscrowGeneration int64  `json:"key_escrow_generation,omitempty"`
+	InitrdRegenerated   bool   `json:"initrd_regenerated,omitempty"`
+	ResumeFailures      int    `json:"resume_failures,omitempty"`
+	FailureStage        string `json:"failure_stage,omitempty"`
+	FailureReason       string `json:"failure_reason,omitempty"`
+	// AbortRequested is an encrypt_disk_abort received while preparing (decision 27); AbortCommandID is that command,
+	// whose result the agent posts once the worker aborted.
+	AbortRequested bool   `json:"abort_requested,omitempty"`
+	AbortCommandID string `json:"abort_command_id,omitempty"`
+	// Notified is the last restart notification per graphical session ID (decision 28).
+	Notified map[string]time.Time `json:"notified,omitempty"`
+	// CleanupPending is an unfinished cleanup: an initrd may still carry the module (invariant I3 of plan M8e §14.10).
+	CleanupPending bool `json:"cleanup_pending,omitempty"`
+	// ModuleWritten is set before step 7 writes the module (decision 13): from then on any initrd may carry the module
+	// and the key, so the cleanup must verify every initrd before it deletes them (invariant I3).
+	ModuleWritten bool `json:"module_written,omitempty"`
+	// TransientErrors counts the passes of the preparation that ended on a tool error outside the closed set of
+	// reasons; the preparation fails once encrypt.TransientRetries are used up.
+	TransientErrors int `json:"transient_errors,omitempty"`
 }
 
 // PendingInstall is an install_now command waiting for the install worker.

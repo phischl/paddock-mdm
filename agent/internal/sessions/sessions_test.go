@@ -14,7 +14,7 @@ const (
 		"     7 811622788 dave@acme.test seat0 4100 user   tty2 no   -\n" +
 		"    c1 60578 gdm-greeter seat0 2629   greeter       tty1 no   -\n"
 	shown = "Id=1\nUser=60578\nName=gdm-greeter\nClass=manager-early\n\nId=4\nUser=1000\nName=paddock\nClass=user\n\n" +
-		"Id=7\nUser=811622788\nName=dave@acme.test\nClass=user\nTimestamp=Sat 2026-10-17 10:15:02 UTC\n\nId=c1\nUser=60578\nName=gdm-greeter\nClass=greeter\n"
+		"Id=7\nUser=811622788\nName=dave@acme.test\nClass=user\nType=wayland\nTimestamp=Sat 2026-10-17 10:15:02 UTC\n\nId=c1\nUser=60578\nName=gdm-greeter\nClass=greeter\n"
 	passwd = "root:x:0:0:root:/root:/bin/bash\ngdm:x:975:975:Gnome Display Manager:/var/lib/gdm3:/bin/false\n" +
 		"paddock:x:1000:1000:Paddock Test:/home/paddock:/bin/bash\ndave:x:1001:1001::/home/dave:/bin/bash\n"
 )
@@ -24,7 +24,7 @@ func fakeLoginctl(t *testing.T) Loginctl {
 		switch {
 		case slices.Equal(args, []string{"list-sessions", "--no-legend"}):
 			return listed, 0, nil
-		case slices.Equal(args, []string{"show-session", "1", "4", "7", "c1", "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class", "-p", "Timestamp"}):
+		case slices.Equal(args, []string{"show-session", "1", "4", "7", "c1", "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class", "-p", "Type", "-p", "Timestamp"}):
 			return shown, 0, nil
 		}
 		t.Fatalf("unexpected loginctl %v", args)
@@ -34,7 +34,7 @@ func fakeLoginctl(t *testing.T) Loginctl {
 
 func TestListAndDirectoryUsers(t *testing.T) {
 	list, err := List(context.Background(), fakeLoginctl(t))
-	if err != nil || len(list) != 4 || list[2] != (Session{ID: "7", UID: 811622788, User: "dave@acme.test", Class: "user",
+	if err != nil || len(list) != 4 || list[2] != (Session{ID: "7", UID: 811622788, User: "dave@acme.test", Class: "user", Type: "wayland",
 		Started: time.Date(2026, 10, 17, 10, 15, 2, 0, time.UTC)}) || !list[0].Started.IsZero() {
 		t.Fatalf("List: %+v %v", list, err)
 	}

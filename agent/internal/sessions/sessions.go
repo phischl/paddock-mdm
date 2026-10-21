@@ -23,6 +23,8 @@ type Session struct {
 	UID   int
 	User  string
 	Class string // user, user-early, …, greeter, lock-screen, manager, background
+	// Type is the session type: wayland, x11, tty, mir or unspecified (plan M8e decision 28).
+	Type string
 	// Started is the start of the session as logind reports it (Timestamp); zero when it could not be read.
 	Started time.Time
 }
@@ -50,7 +52,7 @@ func List(ctx context.Context, loginctl Loginctl) ([]Session, error) {
 		return nil, nil
 	}
 	args := append([]string{"show-session"}, ids...)
-	out, exit, err = loginctl(ctx, append(args, "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class", "-p", "Timestamp")...)
+	out, exit, err = loginctl(ctx, append(args, "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class", "-p", "Type", "-p", "Timestamp")...)
 	if err == nil && exit != 0 {
 		err = fmt.Errorf("loginctl show-session: exit %d", exit) // a session ended in between: the next pass retries
 	}
@@ -86,6 +88,8 @@ func parseShow(out string) []Session {
 			cur.UID, _ = strconv.Atoi(v)
 		case "Class":
 			cur.Class = v
+		case "Type":
+			cur.Type = v
 		case "Timestamp":
 			cur.Started = parseTimestamp(v)
 		}

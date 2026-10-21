@@ -30,6 +30,9 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 	result, rerr := supervisorpkg.ReadResult(a.d.Layout)
 	// An accepted uninstall removes the supervisor package; an upgrade started now would race the removal.
 	busy := marker != nil || result != nil || err != nil || rerr != nil || update.Pending(a.d.Layout) || a.st.PendingUninstall != nil
+	// A preparation holds the dpkg lock at step 6 and must not be interrupted by a supervisor restart (plan M8e
+	// decision 37).
+	busy = busy || (a.st.Conversion != nil && a.st.Conversion.Phase == state.ConversionPreparing)
 	installed := a.d.Sys.PackageVersion(supervisorpkg.Package)
 	retry := a.st.SupervisorRetry
 	backoff := retry != nil && retry.Version == ref.Version && a.d.Now().Before(retry.NotBefore)
