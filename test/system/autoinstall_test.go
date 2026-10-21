@@ -15,7 +15,7 @@ import (
 // from the 26.04 ISO; at the first boot the disk passphrase of the user-data and the boot PIN (twice) are typed; the
 // device enrolls itself and becomes compliant; the next boot unlocks with the PIN, the install passphrase no longer
 // unlocks, and the recovery key from the API unlocks at the PIN prompt once the PIN attempts are used up. It runs
-// only with PADDOCK_SYSTEM_VMS=paddock-ai-2604 (about an hour) and deletes the VM at the end.
+// only with PADDOCK_SYSTEM_VMS=paddock-ai-2604 (about an hour), deletes the VM and retires its device at the end.
 func TestAutoinstallGate(t *testing.T) {
 	if !slices.Contains(strings.Split(os.Getenv("PADDOCK_SYSTEM_VMS"), ","), aiVMName) {
 		t.Skip("gate D-AI runs with PADDOCK_SYSTEM_VMS=" + aiVMName)
@@ -42,6 +42,7 @@ func TestAutoinstallGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.RevokeOnCleanup(t, created.Token.ID)
+	s.RetireAIDevicesOnCleanup(t, created.Token.ID)
 	userData := s.Call(t, http.MethodPost, "/api/v1/autoinstall", map[string]any{
 		"enrollment_config": created.EnrollmentConfig, "release": "26.04", "hostname": aiVMName,
 		"locale": "en_US.UTF-8", "keyboard_layout": "us", "timezone": "Europe/Berlin",
@@ -59,22 +60,7 @@ func TestAutoinstallGate(t *testing.T) {
 	if out := vm.Must("sudo passwd -S paddock-install | cut -d' ' -f2"); out != "L" {
 		t.Errorf("the installer account is not locked: %s", out)
 	}
-	Until(t, aiVMName+" enrolls itself", 10*time.Minute, 10*time.Second, nil, func() bool {
-		var page struct {
-			Items []struct {
-				ID    string `json:"id"`
-				State string `json:"state"`
-			} `json:"items"`
-		}
-		_ = json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/devices?q="+aiVMName+"&state=active", nil, http.StatusOK).Body, &page)
-		for _, item := range page.Items {
-			if d.ID == "" || d.ID == item.ID {
-				d.ID = item.ID
-				return true
-			}
-		}
-		return false
-	})
+	d.ID = s.WaitAIDevice(t, created.Token.ID)
 	if out := vm.Must("test -e /etc/paddock/enroll.json && echo present || echo gone"); out != "gone" {
 		t.Error("the enrollment configuration is still on the device")
 	}

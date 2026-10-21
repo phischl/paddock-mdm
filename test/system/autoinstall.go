@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -181,4 +182,73 @@ func (v *VM) StartWithPassphrase(t *testing.T, passphrase string) {
 	v.Shot(t, "passphrase-prompt")
 	v.Type(passphrase)
 	Until(t, v.Name+" answers SSH", 10*time.Minute, 5*time.Second, nil, v.sshUp)
+}
+
+// aiDevicesPath lists the active devices with the throwaway VM's hostname.
+const aiDevicesPath = "/api/v1/devices?q=" + aiVMName + "&state=active&page_size=100"
+
+// tokenDevices are the IDs of the active devices of a GET /api/v1/devices page that enrolled with the enrollment
+// token tokenID.
+func tokenDevices(page []byte, tokenID string) ([]string, error) {
+	var p struct {
+		Items []struct {
+			ID                string  `json:"id"`
+			State             string  `json:"state"`
+			EnrollmentTokenID *string `json:"enrollment_token_id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(page, &p); err != nil {
+		return nil, fmt.Errorf("device page: %w", err)
+	}
+	var ids []string
+	for _, item := range p.Items {
+		if item.State == "active" && item.EnrollmentTokenID != nil && *item.EnrollmentTokenID == tokenID {
+			ids = append(ids, item.ID)
+		}
+	}
+	return ids, nil
+}
+
+// WaitAIDevice waits until the throwaway VM enrolled itself with the enrollment token tokenID and returns its device
+// ID. The token, used once per run, tells the VM apart from an earlier run's device with the same hostname
+// (PDK-377).
+func (s *Stack) WaitAIDevice(t *testing.T, tokenID string) string {
+	t.Helper()
+	var id string
+	Until(t, aiVMName+" enrolls itself", 10*time.Minute, 10*time.Second, nil, func() bool {
+		ids, err := tokenDevices(s.Call(t, http.MethodGet, aiDevicesPath, nil, http.StatusOK).Body, tokenID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ids) > 0 {
+			id = ids[0]
+		}
+		return id != ""
+	})
+	return id
+}
+
+// RetireAIDevicesOnCleanup retires, when the test ends and also after a failure, every active device that enrolled
+// with the enrollment token tokenID, so that a later run never finds it.
+func (s *Stack) RetireAIDevicesOnCleanup(t *testing.T, tokenID string) {
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		res, err := s.session().Do(ctx, http.MethodGet, aiDevicesPath, nil)
+		if err == nil && res.Status == http.StatusUnauthorized {
+			s.Login(t)
+			res, err = s.session().Do(ctx, http.MethodGet, aiDevicesPath, nil)
+		}
+		if err != nil || res.Status != http.StatusOK {
+			t.Errorf("cleanup: list the devices of %s: HTTP %d %v %s", aiVMName, res.Status, err, res.Body)
+			return
+		}
+		ids, err := tokenDevices(res.Body, tokenID)
+		if err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+		for _, id := range ids {
+			s.cleanupCall(t, http.MethodPost, "/api/v1/devices/"+id+"/retire", http.StatusOK)
+		}
+	})
 }

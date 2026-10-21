@@ -70,6 +70,7 @@ func TestDiskUnlockModeTPMOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.RevokeOnCleanup(t, created.Token.ID)
+	s.RetireAIDevicesOnCleanup(t, created.Token.ID)
 	userData := s.Call(t, http.MethodPost, "/api/v1/autoinstall", map[string]any{
 		"enrollment_config": created.EnrollmentConfig, "release": "26.04", "hostname": aiVMName,
 		"locale": "en_US.UTF-8", "keyboard_layout": "us", "timezone": "Europe/Berlin",
@@ -91,18 +92,7 @@ func TestDiskUnlockModeTPMOnly(t *testing.T) {
 	if out := vm.Must("sudo journalctl -b -u paddock-disk-setup.service --no-pager"); !strings.Contains(out, "TPM unlock enrolled") {
 		t.Fatalf("no TPM-only enrollment in the journal:\n%s", out)
 	}
-	Until(t, aiVMName+" enrolls itself", 10*time.Minute, 10*time.Second, nil, func() bool {
-		var page struct {
-			Items []struct {
-				ID string `json:"id"`
-			} `json:"items"`
-		}
-		_ = json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/devices?q="+aiVMName+"&state=active", nil, http.StatusOK).Body, &page)
-		if len(page.Items) > 0 {
-			d.ID = page.Items[0].ID
-		}
-		return d.ID != ""
-	})
+	d.ID = s.WaitAIDevice(t, created.Token.ID)
 	info := d.WaitDisk(t, "compliant", 30*time.Minute, func(i diskInfo) bool { return i.state() == "compliant" })
 	if info.UnlockMode != "tpm_only" || !slices.Equal(vm.Keyslots(t), []string{"recovery", "tpm2"}) {
 		t.Fatalf("compliant disk %+v, keyslots %v", info, vm.Keyslots(t))
