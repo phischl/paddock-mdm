@@ -329,7 +329,14 @@
       "header_object_rejected": "The escrowed LUKS header of {hostname} was rejected: its size differs from the announced size",
       "uninstall_requested": "{actor} asked to remove Paddock from {hostname} ({mode})",
       "uninstall_cancelled": "{actor} cancelled the removal of Paddock from {hostname}",
-      "uninstalled": "The device {target} removed Paddock ({mode}, {outcome})"
+      "uninstalled": "The device {target} removed Paddock ({mode}, {outcome})",
+      "encrypt_requested": "{actor} asked to encrypt the disk of {hostname} in place",
+      "encrypt_cancelled": "{actor} cancelled the in-place encryption of {hostname} ({mode})",
+      "disk_conversion_prepared": "The device {target} prepared the in-place encryption of its disk and waits for a restart",
+      "disk_conversion_started": "The device {target} started encrypting its disk in place ({init_result})",
+      "disk_conversion_completed": "The device {target} finished encrypting its disk in place",
+      "disk_conversion_failed": "The in-place encryption of the device {target} failed ({stage}: {reason})",
+      "disk_conversion_aborted": "The device {target} abandoned the in-place encryption of its disk ({by})"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
@@ -754,6 +761,7 @@
       "state": "Disk encryption",
       "states": {
         "not_encrypted": "Not encrypted",
+        "encrypting": "Encryption in progress",
         "unmanaged": "Encrypted, not managed",
         "tpm_missing": "No TPM: passphrase only",
         "tpm_pin_missing": "Boot PIN skipped",
@@ -1747,7 +1755,8 @@
       "agent_rollback_pending": "Agent rollback pending",
       "agent_not_running": "Agent not running",
       "uninstall_pending": "Removal of Paddock pending",
-      "config_behind": "Configuration behind"
+      "config_behind": "Configuration behind",
+      "disk_conversion_failed": "In-place encryption failed"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1763,7 +1772,8 @@
       "agent_rollback_pending": "Open device",
       "agent_not_running": "Open device",
       "uninstall_pending": "Open device",
-      "config_behind": "Open device"
+      "config_behind": "Open device",
+      "disk_conversion_failed": "Open device"
     },
     "more": "+{count}",
     "empty": {

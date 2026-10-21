@@ -51,6 +51,8 @@ type DiskState struct {
 	ReportedAt        *time.Time
 	Escrows           []pgstore.EscrowSecret
 	LastKeyslotChange *KeyslotChange
+	// Conversion is the device's latest in-place encryption (plan M8e decision 10); nil without one.
+	Conversion *DiskConversion
 }
 
 // Get returns the disk encryption of a device; an unknown or foreign device is not_found.
@@ -70,6 +72,9 @@ func (d *Disk) Get(ctx context.Context, deviceID uuid.UUID) (DiskState, error) {
 			out.Health = diskHealth(status.Health)
 			out.LastKeyslotChange = lastKeyslotChange(status.LoginState)
 		case !db.IsNoRows(err):
+			return err
+		}
+		if out.Conversion, err = loadDiskConversion(ctx, q, deviceID, out.Health); err != nil {
 			return err
 		}
 		out.Escrows, err = q.ListDiskEscrows(ctx, deviceID)

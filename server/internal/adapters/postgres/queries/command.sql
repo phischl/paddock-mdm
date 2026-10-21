@@ -9,6 +9,10 @@ RETURNING *;
 -- name: GetDeviceCommand :one
 SELECT * FROM device_command WHERE id = @id;
 
+-- name: LockDeviceCommand :one
+-- A command under its row lock (the lock order of an in-place encryption: device, command, conversion).
+SELECT * FROM device_command WHERE id = @id FOR UPDATE;
+
 -- List queries (ADR 0018): see device_group.sql.
 
 -- name: ListDeviceCommands :many

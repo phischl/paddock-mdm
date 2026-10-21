@@ -25,7 +25,7 @@ func TestInventoryHardware(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(api.Close)
-	devices := app.NewDevices(nil, api)
+	devices := app.NewDevices(nil, api, nil)
 	reader := principal.With(context.Background(), principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()),
 		Role: principal.RoleOrgAuditor, OrganizationID: org})
 

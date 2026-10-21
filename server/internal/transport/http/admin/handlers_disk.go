@@ -39,7 +39,9 @@ func (h *handlers) GetDeviceDisk(ctx context.Context, req adminapi.GetDeviceDisk
 			out.UnlockMode = &m
 		}
 		out.BootSeparate = d.BootSeparate
+		out.Conversion = toDiskConversionHealth(d.Conversion)
 	}
+	out.DiskConversion = toDeviceDiskConversion(s.Conversion)
 	for _, e := range s.Escrows {
 		if e.Kind == escrow.KindLUKSHeader {
 			out.Headers = append(out.Headers, toDiskEscrow(e))
@@ -55,6 +57,36 @@ func (h *handlers) GetDeviceDisk(ctx context.Context, req adminapi.GetDeviceDisk
 		}{After: nonNil(c.After), At: c.At.UTC(), Before: nonNil(c.Before)}
 	}
 	return out, nil
+}
+
+// toDiskConversionHealth maps health.disk.conversion (plan M8e decision 3); nil when the device reports none.
+func toDiskConversionHealth(c *protocol.DiskConversion) *adminapi.DiskConversionHealth {
+	if c == nil {
+		return nil
+	}
+	optInt := func(n int64) *int64 {
+		if n == 0 {
+			return nil
+		}
+		return &n
+	}
+	out := &adminapi.DiskConversionHealth{Eligible: c.Eligible, UpdatedAt: utcPtr(c.UpdatedAt),
+		Release: optString(c.Release), Layout: optString(c.Layout), Phase: optString(c.Phase),
+		PausedReason: optString(c.PausedReason), FailureStage: optString(c.FailureStage), FailureReason: optString(c.FailureReason),
+		DataBytes: optInt(c.DataBytes), DoneBytes: optInt(c.DoneBytes), EtaS: optInt(c.ETASeconds)}
+	if len(c.Reasons) > 0 {
+		out.Reasons = &c.Reasons
+	}
+	if len(c.InitramfsRemoves) > 0 {
+		out.InitramfsRemoves = &c.InitramfsRemoves
+	}
+	if m := adminapi.DiskConversionHealthInitramfs(c.Initramfs); m.Valid() {
+		out.Initramfs = &m
+	}
+	if c.KeyOnBoot {
+		out.KeyOnBoot = &c.KeyOnBoot
+	}
+	return out
 }
 
 func toDiskEscrow(e pgstore.EscrowSecret) adminapi.DiskEscrow {

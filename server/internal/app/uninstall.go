@@ -30,9 +30,11 @@ type Uninstalls struct {
 }
 
 // UninstallCache withdraws a cancelled uninstall from the gateway (devicecache.Cache): the result claim makes a later
-// result of the device a conflict, and the command leaves cmd:<device_id>.
+// result of the device a conflict, and the command leaves cmd:<device_id>; a claim of a rolled-back withdrawal is
+// released.
 type UninstallCache interface {
 	ClaimResult(ctx context.Context, device, id uuid.UUID, status string) (uuid.UUID, string, error)
+	ReleaseResult(ctx context.Context, device, id uuid.UUID, status string) (bool, error)
 	DeleteCommand(ctx context.Context, device, id uuid.UUID) error
 }
 
@@ -125,6 +127,9 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 				overdue = open
 			}
 		}
+		if err := refuseActiveConversion(ctx, q, deviceID); err != nil {
+			return err
+		}
 		revoking, err := q.DeviceHasOpenRevocation(ctx, deviceID)
 		if err != nil {
 			return err
@@ -153,7 +158,7 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 		}
 		now := u.now()
 		if overdue.ID != uuid.Nil {
-			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, deviceID, overdue, now)
+			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, nil, deviceID, overdue, now)
 			if err != nil {
 				return err
 			}
@@ -239,7 +244,7 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 		switch {
 		case cmd.Status == devicecommand.StatusSucceeded && overdue:
 		case cmd.Status == devicecommand.StatusPending || (cmd.Status == devicecommand.StatusDelivered && overdue):
-			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, deviceID, cmd, now)
+			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, nil, deviceID, cmd, now)
 			if err != nil {
 				return err
 			}
@@ -281,9 +286,10 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 // removal, then cancels the command. When the device's result was claimed first it returns that status and leaves
 // the command as it is. withdrawn is false also when the command already has a result although the claim was won:
 // the gateway publishes a result before it claims it, so the worker may have recorded it meanwhile. The caller
-// decides whether either refuses its action and runs dropWithdrawnCommand after the commit.
-func withdrawUninstallCommand(ctx context.Context, q *pgstore.Queries, cache UninstallCache, deviceID uuid.UUID,
-	cmd pgstore.DeviceCommand, now time.Time) (claimed string, withdrawn bool, err error) {
+// decides whether either refuses its action and runs dropWithdrawnCommand after the commit. A won claim is noted in
+// claims (nil: not tracked) so that the caller can release it when its transaction fails.
+func withdrawUninstallCommand(ctx context.Context, q *pgstore.Queries, cache UninstallCache, claims *resultClaims,
+	deviceID uuid.UUID, cmd pgstore.DeviceCommand, now time.Time) (claimed string, withdrawn bool, err error) {
 	owner, status, err := cache.ClaimResult(ctx, deviceID, cmd.ID, devicecommand.StatusCancelled)
 	if err != nil {
 		return "", false, err
@@ -291,11 +297,44 @@ func withdrawUninstallCommand(ctx context.Context, q *pgstore.Queries, cache Uni
 	if owner != deviceID || status != devicecommand.StatusCancelled {
 		return status, false, nil
 	}
+	claims.won(cmd.ID)
 	n, err := q.WithdrawDeviceCommand(ctx, pgstore.WithdrawDeviceCommandParams{ID: cmd.ID, FinishedAt: now.UTC()})
 	if err != nil {
 		return "", false, err
 	}
 	return "", n == 1, nil
+}
+
+// resultClaims are the result claims (UninstallCache.ClaimResult) an action won inside its transaction. Valkey is
+// outside the transaction: a claim would survive a rollback and turn the device's later result into a conflict, so the
+// action releases them when its transaction fails (PDK-241 review 2).
+type resultClaims struct {
+	cache  UninstallCache
+	device uuid.UUID
+	ids    []uuid.UUID
+}
+
+func newResultClaims(cache UninstallCache, device uuid.UUID) *resultClaims {
+	return &resultClaims{cache: cache, device: device}
+}
+
+func (c *resultClaims) won(id uuid.UUID) {
+	if c != nil {
+		c.ids = append(c.ids, id)
+	}
+}
+
+// releaseOn takes the claims back when err (the transaction's outcome) is not nil.
+func (c *resultClaims) releaseOn(ctx context.Context, err error) {
+	if c == nil || err == nil {
+		return
+	}
+	for _, id := range c.ids {
+		if _, rerr := c.cache.ReleaseResult(ctx, c.device, id, devicecommand.StatusCancelled); rerr != nil {
+			slog.WarnContext(ctx, "releasing the result claim of a rolled-back withdrawal failed", "device_id", c.device,
+				"command_id", id, "error", rerr)
+		}
+	}
 }
 
 // errCommandFinished refuses a cancel of an uninstall command that got its result while it was withdrawn.

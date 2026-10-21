@@ -108,7 +108,7 @@ func TestComponentsOutdated(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(api.Close)
-	devices := app.NewDevices(h.runner, api)
+	devices := app.NewDevices(h.runner, api, nil)
 	reader := h.operatorIn(t, org, principal.RoleOrgAuditor)
 	yes, no := true, false
 	list := func(flag *bool) int {

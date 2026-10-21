@@ -161,3 +161,29 @@ func TestErrorsDoNotCarryKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestReleaseResult (PDK-241 fix round 2): a claim whose transaction rolled back is taken back, a result the device
+// claimed is never removed.
+func TestReleaseResult(t *testing.T) {
+	cache := devicecache.New(valkeytest.Start(t).Client(t))
+	ctx := context.Background()
+	device, id := uuid.New(), uuid.New()
+	if _, _, err := cache.ClaimResult(ctx, device, id, "cancelled"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := cache.ReleaseResult(ctx, device, id, "cancelled"); err != nil || !ok {
+		t.Fatalf("release: %v %v", ok, err)
+	}
+	if _, _, ok, err := cache.Result(ctx, id); err != nil || ok {
+		t.Fatalf("result after the release: %v %v", ok, err)
+	}
+	if owner, status, err := cache.ClaimResult(ctx, device, id, "succeeded"); err != nil || owner != device || status != "succeeded" {
+		t.Fatalf("device claim after the release: %v %s %v", owner, status, err)
+	}
+	if ok, err := cache.ReleaseResult(ctx, device, id, "cancelled"); err != nil || ok {
+		t.Fatalf("released the device's result: %v %v", ok, err)
+	}
+	if _, status, ok, err := cache.Result(ctx, id); err != nil || !ok || status != "succeeded" {
+		t.Fatalf("device result %s %v %v", status, ok, err)
+	}
+}

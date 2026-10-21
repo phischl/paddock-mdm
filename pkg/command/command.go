@@ -30,7 +30,36 @@ const (
 	TypeInstallNow = "install_now"
 	// TypeUninstall removes Paddock from the device (plan M8d decision 35).
 	TypeUninstall = "uninstall"
+	// TypeEncryptDisk encrypts the unencrypted root volume in place after one restart (ADR 0039 decision 1).
+	TypeEncryptDisk = "encrypt_disk"
+	// TypeEncryptDiskAbort cancels a conversion the device has received but not executed at a restart (plan M8e
+	// decision 27).
+	TypeEncryptDiskAbort = "encrypt_disk_abort"
 )
+
+// EncryptDiskParams are the params of encrypt_disk (ADR 0039 decision 1). The device takes the unlock mode and the
+// boot PIN length from its bundle, never from the command.
+type EncryptDiskParams struct {
+	ConversionID string `json:"conversion_id"`
+}
+
+// EncryptDiskAccepted is the command result the agent posts when it starts the preparation, or the refusal.
+type EncryptDiskAccepted struct {
+	Accepted bool     `json:"accepted"`
+	Reason   string   `json:"reason,omitempty"`  // invalid_params, revocation_pending, uninstall_pending, not_eligible
+	Reasons  []string `json:"reasons,omitempty"` // the preflight reasons for not_eligible
+}
+
+// EncryptDiskAbortParams name the conversion to abort.
+type EncryptDiskAbortParams struct {
+	ConversionID string `json:"conversion_id"`
+}
+
+// EncryptDiskAbortResult is the command result of encrypt_disk_abort.
+type EncryptDiskAbortResult struct {
+	Aborted bool   `json:"aborted"`
+	Reason  string `json:"reason,omitempty"` // when not aborted: invalid_params, unknown_conversion, not_abortable
+}
 
 // Uninstall modes (ADR 0037 decision 4).
 const (
@@ -73,6 +102,8 @@ var lifetimes = map[string]time.Duration{
 	TypeDeleteSelfLock:      30 * 24 * time.Hour,
 	TypeInstallNow:          24 * time.Hour,
 	TypeUninstall:           7 * 24 * time.Hour,
+	TypeEncryptDisk:         7 * 24 * time.Hour,
+	TypeEncryptDiskAbort:    7 * 24 * time.Hour,
 }
 
 // Lifetime returns the default lifetime of a registered type; ok is false for any other type.
@@ -87,7 +118,9 @@ const ClockTolerance = 5 * time.Minute
 // MaxEnvelopeSize bounds a command envelope.
 const MaxEnvelopeSize = 16 << 10
 
-// Command is the signed payload.
+// Command is the signed payload. Params never carry a secret: they are signed, not encrypted, stored in plain text
+// and listed in the admin API (DeviceCommand.params); a command that needs a secret references it (for example an
+// escrow generation), never embeds it.
 type Command struct {
 	CommandID      string          `json:"command_id"`
 	DeviceID       string          `json:"device_id"`

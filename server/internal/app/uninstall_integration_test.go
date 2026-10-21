@@ -47,7 +47,7 @@ func newUninstallWorld(t *testing.T) uninstallWorld {
 	}
 	t.Cleanup(worker.Close)
 	cache := &fakeUninstallCache{claims: map[uuid.UUID]string{}}
-	w := uninstallWorld{harness: h, uninstalls: app.NewUninstalls(h.runner, api, cache), devices: app.NewDevices(h.runner, api),
+	w := uninstallWorld{harness: h, uninstalls: app.NewUninstalls(h.runner, api, cache), devices: app.NewDevices(h.runner, api, cache),
 		reports: app.NewDeviceReports(app.NewActionRunner(worker, nil, httpx.RequestID), worker), cache: cache, api: api}
 	w.device, w.hostname = w.newDevice(t, h.org, "active")
 	return w
@@ -55,9 +55,10 @@ func newUninstallWorld(t *testing.T) uninstallWorld {
 
 // fakeUninstallCache is the gateway's result claims (cres:) and the commands it removed from cmd:<device_id>.
 type fakeUninstallCache struct {
-	mu      sync.Mutex
-	claims  map[uuid.UUID]string // command ID → "<device>:<status>"
-	deleted []uuid.UUID
+	mu       sync.Mutex
+	claims   map[uuid.UUID]string // command ID → "<device>:<status>"
+	deleted  []uuid.UUID
+	released []uuid.UUID
 }
 
 func (c *fakeUninstallCache) ClaimResult(_ context.Context, device, id uuid.UUID, status string) (uuid.UUID, string, error) {
@@ -69,6 +70,17 @@ func (c *fakeUninstallCache) ClaimResult(_ context.Context, device, id uuid.UUID
 	}
 	c.claims[id] = device.String() + ":" + status
 	return device, status, nil
+}
+
+func (c *fakeUninstallCache) ReleaseResult(_ context.Context, device, id uuid.UUID, status string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.claims[id] != device.String()+":"+status {
+		return false, nil
+	}
+	delete(c.claims, id)
+	c.released = append(c.released, id)
+	return true, nil
 }
 
 func (c *fakeUninstallCache) DeleteCommand(_ context.Context, _, id uuid.UUID) error {

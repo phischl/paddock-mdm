@@ -92,6 +92,25 @@ func (c *Cache) ClaimResult(ctx context.Context, device, id uuid.UUID, status st
 	return owner, existing, err
 }
 
+// releaseScript deletes cres:<command_id> only while it holds the claim given, so a result the device posted later is
+// never removed.
+var releaseScript = valkey.NewLuaScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+`)
+
+// ReleaseResult takes back a claim of ClaimResult whose transaction rolled back; it reports whether the claim was
+// still there.
+func (c *Cache) ReleaseResult(ctx context.Context, device, id uuid.UUID, status string) (bool, error) {
+	n, err := releaseScript.Exec(ctx, c.c, []string{resultKey(id)}, []string{device.String() + ":" + status}).AsInt64()
+	if err != nil {
+		return false, fmt.Errorf("devicecache: release result: %w", err)
+	}
+	return n == 1, nil
+}
+
 // Result reads cres:<command_id>.
 func (c *Cache) Result(ctx context.Context, id uuid.UUID) (device uuid.UUID, status string, ok bool, err error) {
 	v, err := c.c.Do(ctx, c.c.B().Get().Key(resultKey(id)).Build()).ToString()

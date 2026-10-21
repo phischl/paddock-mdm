@@ -49,6 +49,8 @@ export function encryptionStatus(state: DiskState | '' | null | undefined): Stat
       return { status: 'ok', label: 'status.encrypted' }
     case 'escrow_pending':
       return { status: 'warn', label: 'devices.disk.states.escrow_pending' }
+    case 'encrypting':
+      return { status: 'warn', label: 'devices.disk.states.encrypting' }
     case 'unmanaged':
       return { status: 'warn', label: 'devices.disk.states.unmanaged' }
     case 'tpm_missing':
@@ -95,6 +97,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'agent_not_running':
     case 'uninstall_pending':
     case 'config_behind':
+    case 'disk_conversion_failed':
     case 'login_apply_failed':
     case 'sudo_apply_failed':
       return { status: 'warn', label }

@@ -58,6 +58,10 @@ func toDeviceCommand(c pgstore.DeviceCommand) adminapi.DeviceCommand {
 	if len(c.Result) > 0 && json.Unmarshal(c.Result, &result) == nil && result != nil {
 		out.Result = &result
 	}
+	var params map[string]any
+	if len(c.Params) > 0 && json.Unmarshal(c.Params, &params) == nil && params != nil {
+		out.Params = &params
+	}
 	return out
 }
 

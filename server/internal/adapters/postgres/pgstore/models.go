@@ -232,6 +232,26 @@ type DeviceCommand struct {
 	Result         json.RawMessage
 }
 
+type DeviceDiskConversion struct {
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	DeviceID           uuid.UUID
+	CommandID          uuid.UUID
+	RequestedAt        time.Time
+	RequestedBy        uuid.NullUUID
+	Reason             string
+	Phase              string
+	Layout             *string
+	LuksUuid           uuid.NullUUID
+	DataBytes          *int64
+	FailureStage       *string
+	FailureReason      *string
+	PhaseAt            time.Time
+	FinishedAt         *time.Time
+	AbortCommandID     uuid.NullUUID
+	AbortRefusedReason *string
+}
+
 type DeviceEventSeen struct {
 	DeviceID       uuid.UUID
 	EventSeq       int64

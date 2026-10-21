@@ -329,7 +329,14 @@
       "header_object_rejected": "Der hinterlegte LUKS-Header von {hostname} wurde abgewiesen: seine Größe weicht von der angekündigten ab",
       "uninstall_requested": "{actor} hat angefordert, Paddock von {hostname} zu entfernen ({mode})",
       "uninstall_cancelled": "{actor} hat die Entfernung von Paddock von {hostname} zurückgezogen",
-      "uninstalled": "Das Gerät {target} hat Paddock entfernt ({mode}, {outcome})"
+      "uninstalled": "Das Gerät {target} hat Paddock entfernt ({mode}, {outcome})",
+      "encrypt_requested": "{actor} hat angefordert, die Festplatte von {hostname} nachträglich zu verschlüsseln",
+      "encrypt_cancelled": "{actor} hat die nachträgliche Verschlüsselung von {hostname} abgebrochen ({mode})",
+      "disk_conversion_prepared": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte vorbereitet und wartet auf einen Neustart",
+      "disk_conversion_started": "Das Gerät {target} hat begonnen, seine Festplatte nachträglich zu verschlüsseln ({init_result})",
+      "disk_conversion_completed": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte abgeschlossen",
+      "disk_conversion_failed": "Die nachträgliche Verschlüsselung des Geräts {target} ist fehlgeschlagen ({stage}: {reason})",
+      "disk_conversion_aborted": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte abgebrochen ({by})"
     },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
@@ -754,6 +761,7 @@
       "state": "Festplattenverschlüsselung",
       "states": {
         "not_encrypted": "Nicht verschlüsselt",
+        "encrypting": "Verschlüsselung läuft",
         "unmanaged": "Verschlüsselt, nicht verwaltet",
         "tpm_missing": "Kein TPM: nur Passphrase",
         "tpm_pin_missing": "Boot-PIN übersprungen",
@@ -1747,7 +1755,8 @@
       "agent_rollback_pending": "Agent-Rücksetzung ausstehend",
       "agent_not_running": "Agent läuft nicht",
       "uninstall_pending": "Entfernung von Paddock ausstehend",
-      "config_behind": "Konfiguration im Rückstand"
+      "config_behind": "Konfiguration im Rückstand",
+      "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1763,7 +1772,8 @@
       "agent_rollback_pending": "Gerät öffnen",
       "agent_not_running": "Gerät öffnen",
       "uninstall_pending": "Gerät öffnen",
-      "config_behind": "Gerät öffnen"
+      "config_behind": "Gerät öffnen",
+      "disk_conversion_failed": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {
