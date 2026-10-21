@@ -96,13 +96,13 @@ func gateDESC(t *testing.T, w *diskWorld) string {
 		t.Fatal("the escrowed recovery key does not open the disk")
 	}
 	w.MustIn(header, "sudo sh -c 'umask 077 && cat > /run/paddock-gate-header.img'")
-	w.MustIn([]byte(revealed.RecoveryKey), `sudo sh -c 'set -e
-f=/run/paddock-gate-copy.img
-truncate -s 64M $f
-loop=$(losetup --find --show $f)
-trap "losetup -d $loop; rm -f $f /run/paddock-gate-header.img" EXIT
-cryptsetup luksHeaderRestore -q $loop --header-backup-file /run/paddock-gate-header.img
-cryptsetup open --test-passphrase --key-file=- $loop'`)
+	loop := w.Must("sudo sh -c 'truncate -s 64M /run/paddock-gate-copy.img && losetup --find --show /run/paddock-gate-copy.img'")
+	defer w.Must("sudo sh -c 'losetup -d " + loop + " && rm -f /run/paddock-gate-copy.img /run/paddock-gate-header.img'")
+	w.Must("sudo cryptsetup luksHeaderRestore -q " + loop + " --header-backup-file /run/paddock-gate-header.img")
+	// The restored header carries the device's tokens; only a keyslot may answer for the recovery key (PDK-370).
+	if !w.OpensDevice(t, loop, revealed.RecoveryKey) {
+		t.Fatal("the escrowed recovery key does not open the restored header copy")
+	}
 	for _, code := range []string{"disk.recovery_key_revealed", "disk.header_downloaded"} {
 		Until(t, "one audit event "+code, time.Minute, 2*time.Second, nil, func() bool { return len(w.s.Events(t, code, w.ID)) == 1 })
 	}

@@ -426,14 +426,17 @@ func TestRevocationLockGate(t *testing.T) {
 				t.Fatal(err)
 			}
 			header := admin.call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/disk/header", body, http.StatusOK).Body
-			if _, err := vm.SSH(context.Background(), []byte(revealed.RecoveryKey), "sudo cryptsetup open --test-passphrase --key-file=- "+target.device); err == nil {
+			// Keyslots only, before and after: a token left on the target must not answer for the recovery key (PDK-370).
+			if vm.OpensDevice(t, target.device, revealed.RecoveryKey) {
 				t.Fatal("the erased target opens before the restore")
 			}
 			vm.MustIn(header, "sudo sh -c 'umask 077 && cat > /run/paddock-gate-header.img'")
-			vm.MustIn([]byte(revealed.RecoveryKey), `sudo sh -c 'set -e
+			vm.Must(`sudo sh -c 'set -e
 trap "rm -f /run/paddock-gate-header.img" EXIT
-cryptsetup luksHeaderRestore -q `+target.device+` --header-backup-file /run/paddock-gate-header.img
-cryptsetup open --test-passphrase --key-file=- `+target.device+`'`)
+cryptsetup luksHeaderRestore -q ` + target.device + ` --header-backup-file /run/paddock-gate-header.img'`)
+			if !vm.OpensDevice(t, target.device, revealed.RecoveryKey) {
+				t.Fatal("the escrowed recovery key does not open the restored target")
+			}
 		})
 		vm.Must("sudo wipefs -aq " + target.device)
 	})

@@ -34,7 +34,7 @@ func TestLUKSPassphraseSlots(t *testing.T) {
 	}
 }
 
-// TestOpensScriptIgnoresTokens is the self-test of Opens against a LUKS2 image whose second keyslot has a keyring
+// TestOpensScriptIgnoresTokens is the self-test of OpensDevice against a LUKS2 image whose second keyslot has a keyring
 // token that unlocks without input, like a tpm2 token without a PIN: a plain cryptsetup --test-passphrase accepts any
 // secret there, the script accepts only the passphrases of the keyslots and leaves the image's token in place. It needs
 // cryptsetup and keyctl on the host.
@@ -112,5 +112,14 @@ func TestOpensScriptIgnoresTokens(t *testing.T) {
 	}
 	if out, rc := sh("secret", opensScript(filepath.Join(dir, "missing.img"), work, slots, tokens)); rc == 0 || rc == opensRejected {
 		t.Errorf("a missing device exits %d, want an error: %s", rc, out)
+	}
+	// An erased volume, like the revoke gate's target before the restore, has no keyslot left to test.
+	must("", "cryptsetup luksErase -q "+image)
+	slots, tokens, err = luksPassphraseSlots([]byte(must("", "cryptsetup luksDump --dump-json-metadata "+image)))
+	if err != nil || len(slots) != 0 {
+		t.Fatalf("erased image: slots %v, %v", slots, err)
+	}
+	if out, rc := sh("first-passphrase", opensScript(image, work, slots, tokens)); rc != opensRejected {
+		t.Errorf("erased image: exit %d, want %d: %s", rc, opensRejected, out)
 	}
 }
