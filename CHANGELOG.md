@@ -64,6 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Updated bundled components: Fleet and fleetctl v4.93.1 (was v4.93.0; bug fixes), AWS CLI 2.38.2 (was 2.38.1).
 
+### Fixed
+
+- Creating an organization no longer fails when Authentik answers slowly: its groups and device login objects are
+  set up with independent steps in parallel (about a third of the round trips), a create step whose answer was lost
+  finds the object instead of failing, and the setup continues when the browser gives up. It is bounded at 60 s;
+  beyond that, or when Authentik is down, the request fails with `502 upstream_unavailable` (never a 500) and the
+  organization can be created again. Single Authentik requests slower than 2 s are logged.
+
 ## [0.1.0-alpha.4] - 2026-10-19
 
 Fixes from the first lab installation on real hardware (M8x) and their follow-ups (M8f), the device lifecycle (M8d),

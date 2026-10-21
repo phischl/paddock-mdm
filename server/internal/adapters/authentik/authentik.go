@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
@@ -68,13 +69,18 @@ type group struct {
 }
 
 // EnsureOrganization creates paddock.<slug> with its .admins, .operators, .auditors and .locked children and the
-// device login application if missing, and corrects the device login objects (architecture §9.2).
+// device login application if missing, and corrects the device login objects (architecture §9.2). Independent steps
+// run concurrently, so the request takes about ten Authentik round trips instead of about thirty (PDK-351).
 func (c *Client) EnsureOrganization(ctx context.Context, slug string) (ports.OrgIdentityRefs, error) {
+	start := time.Now()
+	// The root group is ensured alone first: it is needed by the children, and an unreachable Authentik fails here
+	// before the fan-out multiplies the retries.
 	rootPK, err := c.ensureGroup(ctx, organization.RootGroup(slug), "")
 	if err != nil {
 		return ports.OrgIdentityRefs{}, err
 	}
 	refs := ports.OrgIdentityRefs{RootGroupPK: rootPK}
+	steps := []func(context.Context) error{func(ctx context.Context) error { return c.ensureDeviceLogin(ctx, slug) }}
 	for _, g := range []struct {
 		name string
 		pk   *string
@@ -84,16 +90,37 @@ func (c *Client) EnsureOrganization(ctx context.Context, slug string) (ports.Org
 		{organization.RoleGroup(slug, organization.GroupAuditors), &refs.AuditorsGroupPK},
 		{organization.LockedGroup(slug), &refs.LockedGroupPK},
 	} {
-		pk, err := c.ensureGroup(ctx, g.name, rootPK)
-		if err != nil {
-			return ports.OrgIdentityRefs{}, err
-		}
-		*g.pk = pk
+		steps = append(steps, func(ctx context.Context) (err error) {
+			*g.pk, err = c.ensureGroup(ctx, g.name, rootPK)
+			return err
+		})
 	}
-	if err := c.ensureDeviceLogin(ctx, slug); err != nil {
+	if err := parallel(ctx, steps...); err != nil {
 		return ports.OrgIdentityRefs{}, err
 	}
+	slog.InfoContext(ctx, "authentik organization ensured", "slug", slug, "duration", time.Since(start))
 	return refs, nil
+}
+
+// parallel runs steps concurrently and returns the first error; the remaining steps are canceled then.
+func parallel(ctx context.Context, steps ...func(context.Context) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg    sync.WaitGroup
+		once  sync.Once
+		first error
+	)
+	for _, step := range steps {
+		wg.Go(func() {
+			if err := step(ctx); err != nil {
+				once.Do(func() { first = err })
+				cancel()
+			}
+		})
+	}
+	wg.Wait()
+	return first
 }
 
 // EnsureGroup creates name as child of the organization's root group if missing.
@@ -215,12 +242,10 @@ func (c *Client) ensureGroup(ctx context.Context, name, parent string) (string, 
 	}
 	var created group
 	if err := c.do(ctx, http.MethodPost, "/api/v3/core/groups/", body, &created); err != nil {
-		var st *errStatus
-		// A concurrent request may have created it meanwhile (name is unique): look it up again.
-		if errors.As(err, &st) && st.code == http.StatusBadRequest {
-			if pk, ferr := c.findGroup(ctx, name); ferr == nil && pk != "" {
-				return pk, nil
-			}
+		// A concurrent request may have created it meanwhile, or a retried POST whose answer was lost did (name is
+		// unique): look it up again.
+		if pk, ferr := c.findGroup(ctx, name); ferr == nil && pk != "" {
+			return pk, nil
 		}
 		return "", upstream(err)
 	}
@@ -244,6 +269,9 @@ func (c *Client) findGroup(ctx context.Context, name string) (string, error) {
 	return "", nil
 }
 
+// slowRequest is the duration from which a single request is logged, to find the slow call when Authentik is loaded.
+const slowRequest = 2 * time.Second
+
 // do sends one request with retries on network errors and 5xx.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
 	var payload []byte
@@ -264,7 +292,11 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 			}
 			backoff *= 2
 		}
+		began := time.Now()
 		retry, err := c.once(ctx, method, path, payload, out)
+		if took := time.Since(began); took >= slowRequest {
+			slog.WarnContext(ctx, "authentik request slow", "method", method, "path", path, "attempt", attempt+1, "duration", took)
+		}
 		if err == nil {
 			return nil
 		}

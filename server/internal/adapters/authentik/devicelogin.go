@@ -78,47 +78,38 @@ func (n named) pk() string {
 }
 
 // ensureDeviceLogin creates or corrects the organization's groups mapping, OAuth2 provider, application, access
-// policy and its binding (plan M3a decision 5, settings of PoC M1).
+// policy and its binding (plan M3a decision 5, settings of PoC M1). The lookups and the objects without dependencies
+// are handled concurrently.
 func (c *Client) ensureDeviceLogin(ctx context.Context, slug string) error {
 	app := organization.DeviceLoginApp(slug)
-	authFlow, err := c.findOne(ctx, "/api/v3/flows/instances/", url.Values{"slug": {deviceAuthenticationFlow}})
-	if err != nil {
-		return err
-	}
-	if authFlow == "" {
-		return upstream(fmt.Errorf("flow %s missing (blueprint paddock-device.yaml not applied)", deviceAuthenticationFlow))
-	}
-	authzFlow, err := c.findOne(ctx, "/api/v3/flows/instances/", url.Values{"slug": {authorizationFlow}})
-	if err != nil {
-		return err
-	}
-	if authzFlow == "" {
-		return upstream(fmt.Errorf("flow %s missing (blueprint paddock-device.yaml not applied)", authorizationFlow))
-	}
-	invalFlow, err := c.findOne(ctx, "/api/v3/flows/instances/", url.Values{"slug": {invalidationFlow}})
-	if err != nil {
-		return err
-	}
-	signing, err := c.findOne(ctx, "/api/v3/crypto/certificatekeypairs/", url.Values{"name": {signingKeyName}})
-	if err != nil {
-		return err
-	}
-	var mappings []string
-	for _, managed := range standardScopes {
-		pk, err := c.findOne(ctx, "/api/v3/propertymappings/provider/scope/", url.Values{"managed": {managed}})
-		if err != nil {
+	var authFlow, authzFlow, invalFlow, signing, groups, policy string
+	mappings := make([]string, len(standardScopes))
+	steps := []func(context.Context) error{
+		c.lookup(&authFlow, "/api/v3/flows/instances/", url.Values{"slug": {deviceAuthenticationFlow}},
+			"flow "+deviceAuthenticationFlow+" missing (blueprint paddock-device.yaml not applied)"),
+		c.lookup(&authzFlow, "/api/v3/flows/instances/", url.Values{"slug": {authorizationFlow}},
+			"flow "+authorizationFlow+" missing (blueprint paddock-device.yaml not applied)"),
+		c.lookup(&invalFlow, "/api/v3/flows/instances/", url.Values{"slug": {invalidationFlow}}, ""),
+		c.lookup(&signing, "/api/v3/crypto/certificatekeypairs/", url.Values{"name": {signingKeyName}}, ""),
+		func(ctx context.Context) (err error) {
+			groups, err = c.upsert(ctx, "/api/v3/propertymappings/provider/scope/", GroupsMappingName(slug), http.MethodPatch, map[string]any{
+				"name": GroupsMappingName(slug), "scope_name": "profile", "description": "Paddock device groups",
+				"expression": GroupsExpression(slug),
+			})
 			return err
-		}
-		if pk == "" {
-			return upstream(fmt.Errorf("scope mapping %s missing", managed))
-		}
-		mappings = append(mappings, pk)
+		},
+		func(ctx context.Context) (err error) {
+			policy, err = c.upsert(ctx, "/api/v3/policies/expression/", AccessPolicyName(slug), http.MethodPatch, map[string]any{
+				"name": AccessPolicyName(slug), "expression": AccessExpression(slug),
+			})
+			return err
+		},
 	}
-	groups, err := c.upsert(ctx, "/api/v3/propertymappings/provider/scope/", GroupsMappingName(slug), http.MethodPatch, map[string]any{
-		"name": GroupsMappingName(slug), "scope_name": "profile", "description": "Paddock device groups",
-		"expression": GroupsExpression(slug),
-	})
-	if err != nil {
+	for i, managed := range standardScopes {
+		steps = append(steps, c.lookup(&mappings[i], "/api/v3/propertymappings/provider/scope/", url.Values{"managed": {managed}},
+			"scope mapping "+managed+" missing"))
+	}
+	if err := parallel(ctx, steps...); err != nil {
 		return err
 	}
 	provider, err := c.upsert(ctx, "/api/v3/providers/oauth2/", app, http.MethodPut, map[string]any{
@@ -142,13 +133,8 @@ func (c *Client) ensureDeviceLogin(ctx context.Context, slug string) error {
 	if err != nil {
 		return err
 	}
-	policy, err := c.upsert(ctx, "/api/v3/policies/expression/", AccessPolicyName(slug), http.MethodPatch, map[string]any{
-		"name": AccessPolicyName(slug), "expression": AccessExpression(slug),
-	})
-	if err != nil {
-		return err
-	}
-	binding, err := c.findOne(ctx, "/api/v3/policies/bindings/", url.Values{"target": {appPK}, "policy": {policy}})
+	bindingQuery := url.Values{"target": {appPK}, "policy": {policy}}
+	binding, err := c.findOne(ctx, "/api/v3/policies/bindings/", bindingQuery)
 	if err != nil || binding != "" {
 		return err
 	}
@@ -156,9 +142,27 @@ func (c *Client) ensureDeviceLogin(ctx context.Context, slug string) error {
 		"target": appPK, "policy": policy, "order": 0, "enabled": true, "timeout": 30,
 	}, nil)
 	if err != nil {
+		// A retried POST whose answer was lost may have created it (policy, target and order are unique).
+		if binding, ferr := c.findOne(ctx, "/api/v3/policies/bindings/", bindingQuery); ferr == nil && binding != "" {
+			return nil
+		}
 		return upstream(err)
 	}
 	return nil
+}
+
+// lookup returns a step that stores the pk of the first match of a list query in pk; with missing set, no match is an
+// error.
+func (c *Client) lookup(pk *string, collection string, q url.Values, missing string) func(context.Context) error {
+	return func(ctx context.Context) (err error) {
+		if *pk, err = c.findOne(ctx, collection, q); err != nil {
+			return err
+		}
+		if *pk == "" && missing != "" {
+			return upstream(errors.New(missing))
+		}
+		return nil
+	}
 }
 
 // ensureApplication creates or corrects the application app (slug = name) and returns its pk.
@@ -184,6 +188,10 @@ func (c *Client) ensureApplication(ctx context.Context, app, provider string) (s
 	}
 	var created named
 	if err := c.do(ctx, http.MethodPost, "/api/v3/core/applications/", body, &created); err != nil {
+		// A retried POST whose answer was lost may have created it (the slug is unique).
+		if ferr := c.do(ctx, http.MethodGet, "/api/v3/core/applications/"+url.PathEscape(app)+"/", nil, &existing); ferr == nil {
+			return existing.pk(), nil
+		}
 		return "", upstream(err)
 	}
 	return created.pk(), nil
@@ -204,6 +212,10 @@ func (c *Client) upsert(ctx context.Context, collection, name, method string, bo
 	}
 	var created named
 	if err := c.do(ctx, http.MethodPost, collection, body, &created); err != nil {
+		// A concurrent request or a retried POST whose answer was lost may have created it (the name is unique).
+		if pk, ferr := c.findOne(ctx, collection, url.Values{"name": {name}}); ferr == nil && pk != "" {
+			return pk, nil
+		}
 		return "", upstream(err)
 	}
 	return created.pk(), nil

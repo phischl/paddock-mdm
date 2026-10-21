@@ -55,6 +55,8 @@ type fakeIdP struct {
 	failReactivation bool
 	// onLock runs at the start of LockUser, after the use case's first transaction committed.
 	onLock func()
+	// onEnsure runs at the start of EnsureOrganization with its context; its error is returned.
+	onEnsure func(ctx context.Context) error
 }
 
 // fakePKs numbers the users of every fake identity provider of the test binary.
@@ -72,7 +74,12 @@ func (f *fakeIdP) err() error {
 	return nil
 }
 
-func (f *fakeIdP) EnsureOrganization(context.Context, string) (ports.OrgIdentityRefs, error) {
+func (f *fakeIdP) EnsureOrganization(ctx context.Context, _ string) (ports.OrgIdentityRefs, error) {
+	if f.onEnsure != nil {
+		if err := f.onEnsure(ctx); err != nil {
+			return ports.OrgIdentityRefs{}, err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.err(); err != nil {
@@ -269,7 +276,8 @@ func (discardCommands) ClaimResult(_ context.Context, device, _ uuid.UUID, statu
 
 type env struct {
 	t        *testing.T
-	keysDown bool // the fake bundle key source fails
+	keysDown bool               // the fake bundle key source fails
+	orgs     *app.Organizations // the organization use cases, for their test hooks
 	handler  http.Handler
 	keys     *admin.Keyring
 	router   routers.Router
@@ -348,6 +356,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}}
 	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
+	e.orgs = app.NewOrganizations(runner, platformPool, idp)
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
 		if e.keysDown {
 			return nil, problem.UpstreamUnavailable
@@ -364,7 +373,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Declarative:    app.NewDeclarative(runner, orgPool),
 		Devices:        app.NewDevices(runner, orgPool, discardCommands{}),
 		Managed:        app.NewManagedConfig(runner, orgPool),
-		Organizations:  app.NewOrganizations(runner, platformPool, idp),
+		Organizations:  e.orgs,
 		Accounts:       app.NewAccounts(runner, orgPool, platformPool, e.sessions),
 		Releases:       app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
 		AgentUpdates:   app.NewAgentUpdates(runner, orgPool, noOffer{}),
@@ -489,6 +498,7 @@ type call struct {
 	contentType  string            // default application/json
 	headers      map[string]string // additional request headers
 	skipReqCheck bool              // negative tests send requests that violate the contract on purpose
+	ctx          context.Context   // the request context; default background
 }
 
 type result struct {
@@ -522,6 +532,9 @@ func (e *env) do(c call) result {
 		body, _ = json.Marshal(c.body)
 	}
 	req := httptest.NewRequest(c.method, "https://admin.test"+c.path, bytes.NewReader(body))
+	if c.ctx != nil {
+		req = req.WithContext(c.ctx)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -859,6 +872,50 @@ func TestOrganizationProvisioning(t *testing.T) {
 	one := e.do(call{method: "GET", path: "/api/platform/v1/organizations/" + o.Id.String(), cookie: root})
 	if one.status != http.StatusOK {
 		t.Fatalf("get: %d", one.status)
+	}
+}
+
+// A slow identity provider must not lose an organization create: provisioning continues after the client gave up,
+// and a provider slower than the budget fails as upstream_unavailable, never as a 500 (PDK-351).
+func TestOrganizationProvisioningBudget(t *testing.T) {
+	e := newEnv(t)
+	root := e.platformSession()
+	slug := "org-" + uuid.NewString()[:8]
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var provisioningErr error
+	e.idp.onEnsure = func(pctx context.Context) error {
+		cancel()
+		provisioningErr = pctx.Err()
+		return nil
+	}
+	gone := e.do(call{ctx: ctx, method: "POST", path: "/api/platform/v1/organizations", cookie: root, body: map[string]any{"slug": slug, "name": "Initech"}})
+	if provisioningErr != nil {
+		t.Fatalf("provisioning was aborted with the client: %v", provisioningErr)
+	}
+	var o adminapi.Organization
+	gone.decode(t, &o)
+	if gone.status != http.StatusCreated || o.Status != "active" {
+		t.Fatalf("client gone: %d %s", gone.status, gone.body)
+	}
+	e.expectEvent(gone, "organization.created:success:")
+
+	e.orgs.WithProvisioningBudget(50 * time.Millisecond)
+	e.idp.onEnsure = func(pctx context.Context) error {
+		<-pctx.Done()
+		return pctx.Err()
+	}
+	slow := e.do(call{method: "POST", path: "/api/platform/v1/organizations", cookie: root, body: map[string]any{"slug": slug + "s", "name": "Initrode"}})
+	if slow.status != http.StatusBadGateway || slow.problemCode(t) != "upstream_unavailable" {
+		t.Fatalf("over budget: %d %s", slow.status, slow.body)
+	}
+	e.expectEvent(slow, "organization.created:failure:upstream_unavailable")
+
+	e.idp.onEnsure = nil
+	retried := e.do(call{method: "POST", path: "/api/platform/v1/organizations", cookie: root, body: map[string]any{"slug": slug + "s", "name": "Initrode"}})
+	retried.decode(t, &o)
+	if retried.status != http.StatusOK || o.Status != "active" {
+		t.Fatalf("re-provisioning after the budget: %d %s", retried.status, retried.body)
 	}
 }
 

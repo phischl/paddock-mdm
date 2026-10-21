@@ -65,6 +65,52 @@ func TestEnsureOrganizationIsIdempotent(t *testing.T) {
 	}
 }
 
+// Authentik committed a create but its answer was lost (a client timeout under load): the retried POST meets the
+// unique constraint, and the step finds the object instead of failing or duplicating it (PDK-351).
+func TestEnsureOrganizationSurvivesLostCreateAnswers(t *testing.T) {
+	f, srv := newFake(t)
+	f.loseCreateAnswers = true
+	c := client(srv).WithHTTPClient(&http.Client{Timeout: 500 * time.Millisecond})
+	refs, err := c.EnsureOrganization(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.lostCreates) != 6 {
+		t.Fatalf("lost answers on %v, want every created collection", f.lostCreates)
+	}
+	if len(f.groups) != 5 || refs.LockedGroupPK != f.groupByName(organization.LockedGroup("acme")).pk {
+		t.Fatalf("groups %d, refs %+v", len(f.groups), refs)
+	}
+	if len(f.objects["providers"]) != 1 || len(f.objects["applications"]) != 1 || len(f.objects["policies"]) != 1 ||
+		len(f.objects["bindings"]) != 1 || len(f.objects["scopemappings"]) != 5 {
+		t.Fatalf("device login objects: %v", f.objects)
+	}
+}
+
+// Under load every Authentik answer is slow. The independent steps run concurrently, so a create takes about ten
+// round trips instead of one per request (PDK-351).
+func TestEnsureOrganizationOnSlowAuthentik(t *testing.T) {
+	f, srv := newFake(t)
+	const latency = 200 * time.Millisecond
+	f.latency.Store(int64(latency))
+	for _, run := range []string{"create", "correct"} {
+		f.mu.Lock()
+		f.requests = nil
+		f.mu.Unlock()
+		start := time.Now()
+		if _, err := client(srv).EnsureOrganization(context.Background(), "acme"); err != nil {
+			t.Fatal(err)
+		}
+		took := time.Since(start)
+		f.mu.Lock()
+		n := len(f.requests)
+		f.mu.Unlock()
+		if n < 20 || took > 14*latency {
+			t.Fatalf("%s: %d requests took %s at %s each, want at most %s", run, n, took, latency, 14*latency)
+		}
+	}
+}
+
 func TestDeviceLoginSettings(t *testing.T) {
 	f, srv := newFake(t)
 	if _, err := client(srv).EnsureOrganization(context.Background(), "acme"); err != nil {
