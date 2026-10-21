@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -181,4 +182,84 @@ func (v *VM) StartWithPassphrase(t *testing.T, passphrase string) {
 	v.Shot(t, "passphrase-prompt")
 	v.Type(passphrase)
 	Until(t, v.Name+" answers SSH", 10*time.Minute, 5*time.Second, nil, v.sshUp)
+}
+
+// aiDevicesPath lists the devices in state with the throwaway VM's hostname. One state per query keeps the page
+// small: the retired devices of earlier runs never push the current one off it.
+func aiDevicesPath(state string) string {
+	return "/api/v1/devices?q=" + aiVMName + "&state=" + state + "&page_size=100"
+}
+
+// tokenDevices are the IDs of the devices of a GET /api/v1/devices page in state that enrolled with the enrollment
+// token tokenID.
+func tokenDevices(page []byte, tokenID, state string) ([]string, error) {
+	var p struct {
+		Items []struct {
+			ID                string  `json:"id"`
+			State             string  `json:"state"`
+			EnrollmentTokenID *string `json:"enrollment_token_id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(page, &p); err != nil {
+		return nil, fmt.Errorf("device page: %w", err)
+	}
+	var ids []string
+	for _, item := range p.Items {
+		if item.State == state && item.EnrollmentTokenID != nil && *item.EnrollmentTokenID == tokenID {
+			ids = append(ids, item.ID)
+		}
+	}
+	return ids, nil
+}
+
+// endVerbs take a device of the run out of use through the product: a pending device can only be rejected, an
+// active or a quarantined one is retired; rejected and retired devices are out of use already.
+func endVerbs() []struct{ state, verb string } {
+	return []struct{ state, verb string }{{"pending", "reject"}, {"active", "retire"}, {"quarantined", "retire"}}
+}
+
+// WaitAIDevice waits until the throwaway VM enrolled itself with the enrollment token tokenID and returns its device
+// ID. The token, used once per run, tells the VM apart from an earlier run's device with the same hostname
+// (PDK-377).
+func (s *Stack) WaitAIDevice(t *testing.T, tokenID string) string {
+	t.Helper()
+	var id string
+	Until(t, aiVMName+" enrolls itself", 10*time.Minute, 10*time.Second, nil, func() bool {
+		ids, err := tokenDevices(s.Call(t, http.MethodGet, aiDevicesPath("active"), nil, http.StatusOK).Body, tokenID, "active")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ids) > 0 {
+			id = ids[0]
+		}
+		return id != ""
+	})
+	return id
+}
+
+// RetireAIDevicesOnCleanup takes every device that enrolled with the enrollment token tokenID out of use when the
+// test ends, also after a failure (endVerbs), so that a later run never finds it.
+func (s *Stack) RetireAIDevicesOnCleanup(t *testing.T, tokenID string) {
+	t.Cleanup(func() {
+		for _, e := range endVerbs() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			res, err := s.session().Do(ctx, http.MethodGet, aiDevicesPath(e.state), nil)
+			if err == nil && res.Status == http.StatusUnauthorized {
+				s.Login(t)
+				res, err = s.session().Do(ctx, http.MethodGet, aiDevicesPath(e.state), nil)
+			}
+			cancel()
+			if err != nil || res.Status != http.StatusOK {
+				t.Errorf("cleanup: list the %s devices of %s: HTTP %d %v %s", e.state, aiVMName, res.Status, err, res.Body)
+				continue
+			}
+			ids, err := tokenDevices(res.Body, tokenID, e.state)
+			if err != nil {
+				t.Errorf("cleanup: %v", err)
+			}
+			for _, id := range ids {
+				s.cleanupCall(t, http.MethodPost, "/api/v1/devices/"+id+"/"+e.verb, http.StatusOK)
+			}
+		}
+	})
 }
