@@ -260,7 +260,7 @@ func TestDiskConversionCancel(t *testing.T) {
 	w.post(t, w.device, protocol.EventDiskConversionStarted, map[string]any{"conversion_id": conversion.String(), "init_s": 42, "init_result": "ok"})
 	w.expectPhase(t, conversion, "encrypting")
 	_, err = w.conversions.Cancel(w.admin(), w.device, w.hostname)
-	expectUninstallProblem(t, err, "invalid_state", 409, "the device already started the encryption; it cannot be cancelled")
+	expectUninstallProblem(t, err, "conversion_not_cancellable", 409, "the device already started the encryption; it cannot be cancelled")
 	if n := w.count(t, `SELECT count(*) FROM outbox WHERE payload ->> 'code' = 'device.encrypt_cancelled' AND payload ->> 'outcome' = 'success'
 		AND payload -> 'target' ->> 'id' = $1`, w.device.String()); n != 2 {
 		t.Fatalf("%d successful cancels", n)

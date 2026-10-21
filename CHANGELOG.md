@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device; the device then removes the prepared files and rebuilds its start-up images, and keeps retrying until no
   start-up image carries the encryption step any more. Removing Paddock is refused with `conversion_pending` while an
   encryption is prepared, running or not yet finished, and no supervisor upgrade starts while the device prepares.
+- Portal: the disk card of an unencrypted device shows whether it can be encrypted in place, or why not, and lets
+  organization administrators start the encryption after a step-up, a backup acknowledgement, a reason and the
+  typed hostname; the dialogue names the restart, the boot PIN, the expected duration and, on devices still on
+  initramfs-tools, the packages the switch to dracut removes. The card then follows the encryption (requested,
+  prepared, the progress with the remaining time or the pause reason, completed, failed with a runbook link),
+  offers the cancel until the device restarts, and warns while the key still lies on the boot partition. Remove
+  Paddock is refused while an encryption is active, Lock and Destroy warn about it, the device list filters by
+  `Encryption in progress`, and the attention list names failed encryptions. The admin API answers a cancel of an
+  encryption the device already started with the problem code `conversion_not_cancellable` (409; was
+  `invalid_state`).
 
 ### Security
 

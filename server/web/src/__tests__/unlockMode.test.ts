@@ -86,20 +86,12 @@ describe('unencrypted devices (plan M8d decision 50)', () => {
   const base = { tokens: [], keyslots: 0, recovery_keys: [], headers: [], volumes: [], unresolved: [] }
   const texts = () => [...(el('disk-reinstall')?.querySelectorAll('p') ?? [])].map((p) => p.textContent?.trim())
 
-  it('asks for a reinstall and names a separate /boot as a conversion candidate', async () => {
+  it('asks for a reinstall when the agent reports no eligibility (plan M8e decision 24 replaces conversionPlanned)', async () => {
     disk = { ...base, state: 'not_encrypted', boot_separate: true }
     await mountIn(DiskEncryptionCard, { deviceId: 'd1', hostname: 'lt-1' })
     expect(texts()).toEqual([
-      'This device is not encrypted. Encrypt it by reinstalling it with the Paddock autoinstall after a backup; Paddock does not encrypt a running device in place.',
-      'Its disk layout (separate /boot) qualifies for the in-place encryption planned for a later release.',
+      'This device is not encrypted, and its agent reports no disk layout that can be encrypted in place. Encrypt it by reinstalling it with the Paddock autoinstall after a backup.',
     ])
-  })
-
-  it('shows only the reinstall without a separate /boot', async () => {
-    disk = { ...base, state: 'not_encrypted', boot_separate: false }
-    await mountIn(DiskEncryptionCard, { deviceId: 'd1', hostname: 'lt-1' })
-    expect(texts()).toHaveLength(1)
-    expect(el('disk-conversion-planned')).toBeNull()
   })
 
   it('asks for a reinstall of a device encrypted outside Paddock and says nothing for a compliant one', async () => {

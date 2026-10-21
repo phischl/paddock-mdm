@@ -2,8 +2,9 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import type { DeviceUninstall, RevocationRequest } from '../api/client'
+import type { DeviceDiskConversion, DeviceUninstall, DiskState, RevocationRequest } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
+import { conversionWarning } from '../lib/disk'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import { listRevocations, requestRevocation, timeline, volumeResults, type RevokeAction, type VolumeResult } from '../lib/revocations'
@@ -26,6 +27,7 @@ import { revocationStatus } from '../lib/status'
 const props = defineProps<{
   deviceId: string; hostname: string; revocable: boolean; presumedSelfLockedAt: string | null; retirable: boolean
   uninstallable?: boolean; uninstall?: DeviceUninstall | null; diskTpm?: boolean
+  diskConversion?: DeviceDiskConversion | null; diskState?: DiskState | null
 }>()
 const emit = defineEmits<{ retire: []; changed: [] }>()
 
@@ -89,10 +91,12 @@ async function resume(): Promise<void> {
 
 async function revoke(action: RevokeAction): Promise<void> {
   const key = 'devices.revocation.' + action
+  const warning = conversionWarning(props.diskConversion, props.diskState)
   const answer = await confirm({
     title: t(key + '.title'), message: t(key + '.confirm', { hostname: props.hostname }), confirmLabel: t(key + '.label'),
     destructive: true, requireTypedText: props.hostname,
     reason: { label: t('devices.revocation.reason'), hint: t('devices.revocation.reasonHint'), required: true, maxLength: 500 },
+    warning: warning ? t('devices.danger.revoke.conversionWarning.' + warning) : undefined,
   })
   if (!answer) return
   const res = await requestRevocation(props.deviceId, action, props.hostname, answer.reason)
@@ -282,6 +286,7 @@ onMounted(async () => {
       :model-value="uninstallOpen"
       :hostname="hostname"
       :disk-tpm="!!diskTpm"
+      :conversion-active="!!diskConversion?.active"
       @confirm="submitUninstall"
       @cancel="uninstallOpen = false"
     />

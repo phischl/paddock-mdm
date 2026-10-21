@@ -389,6 +389,10 @@ a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary);
 .pd-component-versions dt { color: var(--pd-text-secondary); }
 .pd-component-versions dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
 .pd-uninstall-hint { margin: 0 0 var(--pd-space-2) var(--pd-space-8); color: var(--pd-text-secondary); }
+.pd-encrypt-checks { margin: var(--pd-space-2) 0 var(--pd-space-4) var(--pd-space-5); }
+.pd-encrypt-checks li + li { margin-top: var(--pd-space-1); }
+.pd-conversion { margin-bottom: var(--pd-space-4); }
+.pd-conversion p { margin: 0 0 var(--pd-space-2); }
 .pd-identity-id { display: inline-flex; align-items: center; gap: 2px; }
 /* Vuetify drops the input's minimum width on blur, so the chips reflow onto one line fewer and the button below
    moves away from the click that blurred the field; the focused width is kept. */

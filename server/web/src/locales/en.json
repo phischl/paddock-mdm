@@ -219,7 +219,8 @@
     "disable_confirmation_required": "This change would switch the allow list off.",
     "session_store_unavailable": "The portal cannot reach its session store. Try again in a moment.",
     "disclaimer_outdated": "The disclaimer has changed. Read the new text and confirm it again.",
-    "tpm_in_use_by_disk": "The disk of this device unlocks with the TPM; it cannot be cleared."
+    "tpm_in_use_by_disk": "The disk of this device unlocks with the TPM; it cannot be cleared.",
+    "conversion_not_cancellable": "The device already started the encryption; it cannot be cancelled."
   },
   "audit": {
     "retention": {
@@ -820,11 +821,86 @@
       "unlockModeMismatch": "Unlock mode differs from the policy",
       "unlockModeRunbook": "Runbook: changing the unlock mode",
       "notEncrypted": {
-        "reinstall": "This device is not encrypted. Encrypt it by reinstalling it with the Paddock autoinstall after a backup; Paddock does not encrypt a running device in place.",
-        "conversionPlanned": "Its disk layout (separate /boot) qualifies for the in-place encryption planned for a later release."
+        "reinstall": "This device is not encrypted, and its agent reports no disk layout that can be encrypted in place. Encrypt it by reinstalling it with the Paddock autoinstall after a backup."
       },
       "unmanaged": {
         "reinstall": "This device was encrypted outside Paddock: no recovery key or header is escrowed, and a Lock cannot be restored. Reinstall it with the Paddock autoinstall to manage its encryption."
+      },
+      "convert": {
+        "label": "Encrypt this device…",
+        "eligible": "This device is not encrypted. Its disk layout allows encrypting it in place: the device prepares itself, the recovery key is stored in Paddock first, the user restarts once and chooses the boot PIN, and the rest is encrypted in the background.",
+        "title": "Encrypt {hostname} in place",
+        "explanation": "Paddock encrypts the root partition of this device without reinstalling it. Nothing changes until the device restarts; the recovery key is stored in Paddock before the first byte is encrypted. Data outside the root partition (other partitions, swap partitions) is not encrypted.",
+        "check": {
+          "backup": "I confirm that a current backup of this device exists. The file system is shrunk at the restart; a power cut in those seconds can damage it.",
+          "restart": "The user must restart the device once. Until then nothing is encrypted. The restart takes a few minutes longer than usual.",
+          "power": "A laptop must be on mains power at that restart; the background encryption pauses on battery.",
+          "pin": "At the restart the device asks the user for a boot PIN on a text console (unlock mode: TPM + boot PIN). The PIN never reaches Paddock.",
+          "tpmOnly": "The device unlocks with its TPM without a PIN (unlock mode: TPM only).",
+          "duration": "The background encryption takes about {duration} on this disk; the device stays usable meanwhile.",
+          "durationUnknown": "The background encryption takes minutes to hours depending on the disk size; the device stays usable meanwhile.",
+          "initramfsSwitch": "The device switches its early-boot system from initramfs-tools to dracut. The device reports that this removes the packages {packages} — initramfs-tools itself and, where listed, brltty, the console braille support for blind users — and replaces the graphical boot splash by a text console.",
+          "initramfsSwitchUnknown": "The device switches its early-boot system from initramfs-tools to dracut; it could not report which packages leave with initramfs-tools (brltty, the console braille support for blind users, usually does). The device checks this again before it prepares itself. The graphical boot splash is replaced by a text console."
+        },
+        "confirmLabel": "Encrypt at the next restart",
+        "typed": "Type the hostname to confirm.",
+        "requested": "Encryption requested.",
+        "phases": {
+          "requested": "Encryption requested — {status}. The device prepares itself at its next check-in.",
+          "prepared": "Prepared since {at}: the recovery key is stored. Waiting for the user to restart the device.",
+          "encrypting": "Encrypting in the background: {percent} % of {total}",
+          "completed": "Encryption completed on {at}; the recovery key and the TPM unlock are being set up.",
+          "cancelled": "Encryption cancelled on {at}; the disk is unchanged."
+        },
+        "eta": "about {duration} left",
+        "progressAt": "last report {at}",
+        "paused": {
+          "on_battery": "paused: the device runs on battery",
+          "helper_not_running": "paused: the encryption helper is not running; it starts again at the next check-in or restart"
+        },
+        "failed": "The encryption failed at stage \"{stage}\": {reason}. See the runbook.",
+        "failures": {
+          "preflight": "preflight (the device refused the request; nothing was changed)",
+          "prepare": "preparation (nothing on the disk was changed)",
+          "init": "restart (the device boots unencrypted; see the runbook when it does not boot)",
+          "resume": "background encryption (the device works; the encryption is unfinished and resumes at the next restart)"
+        },
+        "reasonsTitle": "In-place encryption is not possible on this device:",
+        "reasons": {
+          "release_unsupported": "the Ubuntu release is not 24.04 or 26.04",
+          "no_uefi": "the device does not boot with UEFI",
+          "no_tpm2": "the device has no TPM 2.0",
+          "no_separate_boot": "/boot is not on its own partition",
+          "boot_on_root_device": "/boot shares the root partition",
+          "root_not_ext4": "the root file system is not ext4",
+          "root_layout_unsupported": "the root partition layout is not supported (RAID, several volumes, no GPT or an unknown stack)",
+          "pv_tail_in_use": "the end of the LVM physical volume is used by a volume other than root",
+          "low_free_space": "less than 1 GiB is free on the root file system",
+          "root_reference_unsupported": "fstab or the kernel command line refer to root by a device path",
+          "already_encrypted": "the root volume is already encrypted",
+          "dm_crypt_missing": "the kernel has no dm-crypt",
+          "cleanup_pending": "the device is still removing an abandoned encryption from its boot files; try again after its next check-in",
+          "other_luks_present": "another encrypted volume exists on the device",
+          "lvm_devicesfile": "LVM uses a devices file on this device, which in-place encryption does not support yet",
+          "hibernation_configured": "hibernation is set up on the device",
+          "lvm_filter": "LVM uses a custom device filter on this device, which in-place encryption does not support yet",
+          "lvm_unknown": "the LVM configuration of the device could not be read"
+        },
+        "cancel": {
+          "label": "Cancel encryption",
+          "title": "Cancel the encryption of {hostname}",
+          "confirm": "Possible until the device restarts. If the device has already prepared itself, it receives a signed cancellation at its next check-in and discards the preparation; the stored recovery key stays in Paddock. Type the hostname to confirm.",
+          "confirmLabel": "Cancel encryption"
+        },
+        "cancelled": "Encryption cancelled.",
+        "cancelSent": "Cancellation sent {at}; the device confirms it at its next check-in unless it has already restarted.",
+        "cancelRefused": "The device refused the cancellation: {reason}.",
+        "abortReasons": {
+          "not_abortable": "it had already restarted and started the encryption",
+          "unknown_conversion": "it knows no such request"
+        },
+        "keyOnBoot": "The disk is encrypted but not protected at rest yet: until the user chooses the boot PIN, the key that unlocks it lies on the unencrypted boot partition. The device asks for the PIN at every start.",
+        "runbook": "Runbook: in-place encryption"
       }
     },
     "revocation": {
@@ -902,7 +978,14 @@
       "uninstall": {
         "title": "Remove Paddock",
         "explanation": "Removes the Paddock agent from the device with a signed command and retires the device. You choose whether the device is left as it is or reset. User data is never deleted.",
-        "label": "Remove Paddock…"
+        "label": "Remove Paddock…",
+        "conversionOpen": "Paddock cannot be removed while this device is being encrypted in place: the removal would delete what the device needs to unlock its disk at the next start. Cancel a requested or prepared encryption first; a running encryption finishes on mains power."
+      },
+      "revoke": {
+        "conversionWarning": {
+          "unencrypted": "This device is not encrypted yet; it refuses a Lock or Destroy until the encryption has started.",
+          "encrypting": "The in-place encryption is unfinished: the header is not stored in Paddock, so this action cannot be undone with a stored header, and data the encryption has not reached stays readable. The background encryption is stopped before the device acts."
+        }
       }
     },
     "contactFilter": "Contact",

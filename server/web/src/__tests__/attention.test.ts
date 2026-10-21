@@ -65,6 +65,14 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
     expect(rows[0].text()).toContain('never')
   })
 
+  it('labels a failed in-place encryption with its stage and reason (plan M8e decision 25)', async () => {
+    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'disk_conversion_failed', since: '2026-10-21T10:00:00Z', detail: 'init:on_battery' }] }]
+    const w = await mountAttention()
+    const chip = w.find('[data-testid="attention-list"] tbody tr .pd-chip')
+    expect(chip.text()).toBe('In-place encryption failed')
+    expect(chip.attributes('title')).toBe('init:on_battery')
+  })
+
   it('explains the empty list', async () => {
     items = []
     const w = await mountAttention()

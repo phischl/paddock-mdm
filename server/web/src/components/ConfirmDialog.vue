@@ -18,6 +18,7 @@ const props = defineProps<{
   destructive?: boolean
   requireTypedText?: string
   reason?: ConfirmReason
+  warning?: string
 }>()
 
 const emit = defineEmits<{
@@ -94,6 +95,15 @@ function onConfirm(): void {
         <p :id="id + '-message'">
           {{ message }}
         </p>
+        <v-alert
+          v-if="warning"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="confirm-warning"
+        >
+          {{ warning }}
+        </v-alert>
         <v-textarea
           v-if="reason"
           v-model="reasonText"

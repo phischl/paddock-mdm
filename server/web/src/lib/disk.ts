@@ -1,9 +1,11 @@
-import { api, problemCode, type DiskEncryption, type DiskEscrow, type DiskRecoveryKey, type DiskState, type DiskVolume } from '../api/client'
+import {
+  api, problemCode, type DeviceDiskConversion, type DiskEncryption, type DiskEscrow, type DiskRecoveryKey, type DiskState, type DiskVolume,
+} from '../api/client'
 import type { ListFilter } from './listQuery'
 
 /** The disk encryption states (plan M4b decision 8), from the least to the most complete. */
 export const diskStates: DiskState[] = [
-  'not_encrypted', 'unmanaged', 'tpm_missing', 'tpm_pin_missing', 'unlock_mode_mismatch', 'escrow_pending', 'compliant',
+  'not_encrypted', 'encrypting', 'unmanaged', 'tpm_missing', 'tpm_pin_missing', 'unlock_mode_mismatch', 'escrow_pending', 'compliant',
 ]
 
 /** The runbook section on converting a disk to the other unlock mode with the recovery key. */
@@ -87,4 +89,89 @@ export function volumeHeaders(headers: DiskEscrow[], v: DiskVolume): DiskEscrow[
 export function headerDevice(h: DiskEscrow, volumes: DiskVolume[]): string {
   const v = h.volume === undefined ? volumes.find((x) => x.root) : volumes.find((x) => x.uuid === h.volume)
   return v?.device ?? h.volume ?? ''
+}
+
+/** The runbook of the in-place encryption (plan M8e decision 25). */
+export const conversionRunbook = 'https://github.com/phischl/paddock-mdm/blob/main/docs/operations/in-place-encryption.md'
+
+/** The phases in which a conversion is open (plan M8e decision 10). */
+const openPhases = ['requested', 'prepared', 'encrypting']
+
+/** Whether the conversion is requested, prepared or encrypting. */
+export function conversionOpen(c: DeviceDiskConversion | null | undefined): c is DeviceDiskConversion {
+  return !!c && openPhases.includes(c.phase)
+}
+
+/**
+ * Whether a cancellation of the conversion is on its way (plan M8e decision 8): an abort was issued, the device has not
+ * refused it, and the command did not fail, expire or get cancelled (then the server allows a new cancel, as its
+ * abortOnItsWay does).
+ */
+export function abortOpen(c: DeviceDiskConversion): boolean {
+  return !!c.abort_command_id && !c.abort_refused_reason && !['failed', 'expired', 'cancelled'].includes(c.abort_command_status ?? '')
+}
+
+/** Whether the conversion can still be cancelled: requested or prepared, and no abort on its way. */
+export function conversionCancellable(c: DeviceDiskConversion | null | undefined): c is DeviceDiskConversion {
+  return !!c && (c.phase === 'requested' || c.phase === 'prepared') && !abortOpen(c)
+}
+
+/**
+ * The warning of the Lock and Destroy dialogues while an in-place encryption is active (plan M8e §14.5 decision 39):
+ * unencrypted for a requested or prepared conversion of a device that does not report the disk encrypting, encrypting
+ * otherwise; null when no conversion is active.
+ */
+export function conversionWarning(c: DeviceDiskConversion | null | undefined, state: DiskState | null | undefined): 'unencrypted' | 'encrypting' | null {
+  if (!c?.active) return null
+  return (c.phase === 'requested' || c.phase === 'prepared') && state !== 'encrypting' ? 'unencrypted' : 'encrypting'
+}
+
+/** The disk throughput the duration estimate assumes (plan M8e decision 24): 150 MB/s. */
+const conversionBytesPerSecond = 150e6
+
+/** The estimated duration of the background encryption in seconds, rounded up to 10 minutes; null without a disk size. */
+export function conversionEstimate(diskTotalBytes: number | null | undefined): number | null {
+  if (!diskTotalBytes) return null
+  const seconds = Math.ceil(diskTotalBytes / conversionBytesPerSecond)
+  return Math.max(1, Math.ceil(seconds / 600)) * 600
+}
+
+/** Formats a duration in hours and minutes in the locale (e.g. "2 hours 10 minutes"); at least one minute. */
+export function formatDuration(seconds: number, locale: string): string {
+  const total = Math.max(1, Math.round(seconds / 60))
+  const hours = Math.floor(total / 60)
+  const minutes = total % 60
+  const unit = (u: 'hour' | 'minute', n: number) => new Intl.NumberFormat(locale, { style: 'unit', unit: u, unitDisplay: 'long' }).format(n)
+  return [hours > 0 ? unit('hour', hours) : '', minutes > 0 ? unit('minute', minutes) : ''].filter(Boolean).join(' ')
+}
+
+/** The share of the data encrypted in whole percent; 0 without a size. */
+export function conversionPercent(c: Pick<DeviceDiskConversion, 'done_bytes' | 'data_bytes'>): number {
+  if (!c.data_bytes) return 0
+  return Math.min(100, Math.floor(((c.done_bytes ?? 0) / c.data_bytes) * 100))
+}
+
+/** Requests the in-place encryption of a device (step-up, typed hostname, backup acknowledgement); null or the problem code. */
+export async function requestEncrypt(id: string, hostname: string, reason: string): Promise<string | null> {
+  const { error } = await api.POST('/api/v1/devices/{id}/encrypt', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
+    body: { confirm_hostname: hostname, reason, backup_confirmed: true },
+  })
+  return error ? problemCode(error) : null
+}
+
+/** Cancels the in-place encryption of a device (step-up, typed hostname); null or the problem code. */
+export async function cancelEncrypt(id: string, hostname: string): Promise<string | null> {
+  const { error } = await api.POST('/api/v1/devices/{id}/encrypt/cancel', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } }, body: { confirm_hostname: hostname },
+  })
+  return error ? problemCode(error) : null
+}
+
+/** When the abort command of a cancel after delivery was issued (for devices.disk.convert.cancelSent); null if unknown. */
+export async function abortIssuedAt(id: string, commandId: string): Promise<string | null> {
+  const { data } = await api.GET('/api/v1/devices/{id}/commands', {
+    params: { path: { id }, query: { type: ['encrypt_disk_abort'], sort: '-issued_at', page: 1, page_size: 10 } },
+  })
+  return data?.items.find((c) => c.id === commandId)?.issued_at ?? null
 }
