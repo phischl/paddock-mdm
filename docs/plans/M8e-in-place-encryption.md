@@ -1538,3 +1538,5 @@ newest row by `requested_at` is not always the conversion the disk carries. Inva
   gate S-IE1 expects `active: false` at `compliant` (decision 51).
 - Decision 9: `disk.conversion_completed` also moves a `cancelled` row (an adoption refused while another row was
   open) to `completed`.
+- The admin API's `DeviceCommand` gains `params` (what gate A1 asserts); command params never carry secrets — a
+  command that needs one references it and never embeds it (`pkg/command.Command`, `admin.yaml`).

@@ -5365,6 +5365,13 @@ components:
         not_before: { type: string, format: date-time, description: Delivered to the device only from then on. }
         delivered_at: { type: string, format: date-time }
         finished_at: { type: string, format: date-time }
+        params:
+          type: object
+          additionalProperties: true
+          description: >-
+            The params the signed command carries, e.g. the conversion_id of encrypt_disk and encrypt_disk_abort (plan
+            M8e gate A1). Command params never carry secrets: a command that needs one references it (for example an
+            escrow generation) and never embeds it.
         result:
           type: object
           additionalProperties: true

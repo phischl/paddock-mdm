@@ -3533,6 +3533,10 @@ export interface components {
             delivered_at?: string;
             /** Format: date-time */
             finished_at?: string;
+            /** @description The params the signed command carries, e.g. the conversion_id of encrypt_disk and encrypt_disk_abort (plan M8e gate A1). Command params never carry secrets: a command that needs one references it (for example an escrow generation) and never embeds it. */
+            params?: {
+                [key: string]: unknown;
+            };
             /** @description Outcome details reported by the device. */
             result?: {
                 [key: string]: unknown;

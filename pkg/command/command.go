@@ -118,7 +118,9 @@ const ClockTolerance = 5 * time.Minute
 // MaxEnvelopeSize bounds a command envelope.
 const MaxEnvelopeSize = 16 << 10
 
-// Command is the signed payload.
+// Command is the signed payload. Params never carry a secret: they are signed, not encrypted, stored in plain text
+// and listed in the admin API (DeviceCommand.params); a command that needs a secret references it (for example an
+// escrow generation), never embeds it.
 type Command struct {
 	CommandID      string          `json:"command_id"`
 	DeviceID       string          `json:"device_id"`

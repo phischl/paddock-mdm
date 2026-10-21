@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a step-up, the typed hostname and a backup acknowledgement), and `POST /api/v1/devices/{id}/encrypt/cancel`
   cancels the request until the device restarts. The device and its disk (`GET /api/v1/devices/{id}`, `…/disk`)
   carry the conversion's phase and progress as `disk_conversion`, `GET /api/v1/devices` filters by the disk state
-  `encrypting`, and the attention list reports `disk_conversion_failed`. Devices receive the organization's boot PIN
+  `encrypting`, the attention list reports `disk_conversion_failed`, and a device's command list
+  (`GET /api/v1/devices/{id}/commands`) shows each command's `params`. Devices receive the organization's boot PIN
   length in their bundle. An uninstall is refused while a conversion is active; Lock, Destroy and Retire withdraw a
   request the device has not received. Upgrade: server first, then the agents; agents before M8e fail the command as
   unsupported. Schema: migration 00066.

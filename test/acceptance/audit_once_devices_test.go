@@ -169,6 +169,12 @@ func uninstallCaseBody(hostname string) map[string]any {
 	return map[string]any{"mode": "leave", "confirm_hostname": hostname, "reason": "gate A3"}
 }
 
+func encryptPath(id string) string { return "/api/v1/devices/" + id + "/encrypt" }
+
+func encryptCaseBody(hostname string) map[string]any {
+	return map[string]any{"confirm_hostname": hostname, "reason": "gate A3", "backup_confirmed": true}
+}
+
 // uninstallCaseDevice enrolls an active device for one uninstall case and returns its ID and hostname.
 func uninstallCaseDevice(t *testing.T, w *auditWorld) (string, string) {
 	t.Helper()
@@ -438,6 +444,86 @@ var deviceAuditCases = func() map[string][]auditCase {
 				res := call(t, w.alice, http.MethodPost, uninstallPath(id)+"/cancel", nil)
 				expectStatus(t, res, http.StatusConflict, "invalid_state")
 				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_cancelled", "failure")
+			}},
+		},
+		// In-place encryption (plan M8e decisions 7 and 8): the success and the cancel cases need a device whose health
+		// reports an eligible disk (newConversionSim); a device without a disk report is not eligible (conflict).
+		"POST /api/v1/devices/{id}/encrypt": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				s := newConversionSim(t, w.alice, "ao-enc")
+				res := call(t, steppedUpAlice(t), http.MethodPost, s.path("/encrypt"), s.encryptBody())
+				expectStatus(t, res, http.StatusOK, "")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "success")
+			}},
+			{"no step-up", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, login(t, env.Alice), http.MethodPost, encryptPath(id), encryptCaseBody(hostname))
+				expectStatus(t, res, http.StatusForbidden, "step_up_required")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "denied")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, w.bob, http.MethodPost, encryptPath(id), encryptCaseBody(hostname))
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "denied")
+			}},
+			{"validation failure", func(t *testing.T, w *auditWorld) {
+				id, _ := uninstallCaseDevice(t, w)
+				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(id), encryptCaseBody("not-the-hostname"))
+				expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_request")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "failure")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(uuid.NewString()), encryptCaseBody("x"))
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "failure")
+			}},
+			{"conflict", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(id), encryptCaseBody(hostname))
+				expectStatus(t, res, http.StatusConflict, "invalid_state")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "failure")
+			}},
+		},
+		"POST /api/v1/devices/{id}/encrypt/cancel": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				s := newConversionSim(t, w.alice, "ao-encc")
+				alice := steppedUpAlice(t)
+				expectStatus(t, call(t, alice, http.MethodPost, s.path("/encrypt"), s.encryptBody()), http.StatusOK, "")
+				res := call(t, alice, http.MethodPost, s.path("/encrypt/cancel"), s.cancelBody())
+				expectStatus(t, res, http.StatusOK, "")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "success")
+			}},
+			{"no step-up", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, login(t, env.Alice), http.MethodPost, encryptPath(id)+"/cancel", map[string]any{"confirm_hostname": hostname})
+				expectStatus(t, res, http.StatusForbidden, "step_up_required")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "denied")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, w.bob, http.MethodPost, encryptPath(id)+"/cancel", map[string]any{"confirm_hostname": hostname})
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "denied")
+			}},
+			{"validation failure", func(t *testing.T, w *auditWorld) {
+				s := newConversionSim(t, w.alice, "ao-encv")
+				alice := steppedUpAlice(t)
+				expectStatus(t, call(t, alice, http.MethodPost, s.path("/encrypt"), s.encryptBody()), http.StatusOK, "")
+				res := call(t, alice, http.MethodPost, s.path("/encrypt/cancel"), map[string]any{"confirm_hostname": "not-the-hostname"})
+				expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_request")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "failure")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(uuid.NewString())+"/cancel", map[string]any{"confirm_hostname": "x"})
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "failure")
+			}},
+			{"conflict", func(t *testing.T, w *auditWorld) {
+				id, hostname := uninstallCaseDevice(t, w)
+				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(id)+"/cancel", map[string]any{"confirm_hostname": hostname})
+				expectStatus(t, res, http.StatusConflict, "invalid_state")
+				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "failure")
 			}},
 		},
 	}

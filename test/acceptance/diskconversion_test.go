@@ -72,16 +72,23 @@ type diskView struct {
 }
 
 // reportDisk checks d in with health until the device's disk satisfies done: the worker stores a heartbeat at most
-// once a minute per device. Every check-in delivers the device's open commands.
+// once a minute per device. Every check-in delivers the device's open commands. It checks in every 5 s: the gateway
+// allows 30 requests per minute and device key and counts refused requests too, so a 2 s loop that runs for minutes
+// is refused for good once it crossed the limit (the cause of the first CI failure of this gate).
 func reportDisk(t *testing.T, p *env.Portal, d *devicesim.Device, health string, done func(diskView) bool) {
 	t.Helper()
 	d.Health = json.RawMessage(health)
-	eventually(t, "the disk report", 3*time.Minute, func() bool {
+	for deadline := time.Now().Add(3 * time.Minute); ; time.Sleep(5 * time.Second) {
 		_, _, _ = d.Checkin(testContext(t, time.Minute))
 		var disk diskView
 		_ = call(t, p, http.MethodGet, "/api/v1/devices/"+d.DeviceID+"/disk", nil).JSON(&disk)
-		return done(disk)
-	})
+		if done(disk) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the disk report: not within 3m0s; last %+v", disk)
+		}
+	}
 }
 
 // conversionSim is a devicesim with an in-place encryption gate's helpers.
