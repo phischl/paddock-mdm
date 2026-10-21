@@ -3,12 +3,15 @@
 //	devicesim enroll --hostname <name> < enrollment-config.json
 //	devicesim local-admin --hostname <name> < enrollment-config.json
 //	devicesim inventory --hostname <name> --package <name>=<version> ... < enrollment-config.json
+//	devicesim disk --hostname <name> --health <json> < enrollment-config.json
 //
 // enroll prints {"enrollment_id", "device_id", "status"} once the enrollment left "processing". local-admin needs an
 // auto-approving token: it enrolls, escrows a first local administrator password like an agent (encrypted to the
 // escrow key of its bundle, confirmed with local_admin.rotated) and prints {"device_id", "password"}. inventory needs
 // an auto-approving token, too: it enrolls, enrolls an osquery host with the device's hardware UUID in Fleet (plan
-// M5a), reports the packages and prints {"device_id"}.
+// M5a), reports the packages and prints {"device_id"}. disk needs an auto-approving token, too: it enrolls, checks in
+// once with the given health (e.g. an unencrypted disk that can be encrypted in place, plan M8e) and prints
+// {"device_id"}.
 package main
 
 import (
@@ -39,14 +42,16 @@ func main() {
 	}
 }
 
-const usage = "usage: devicesim enroll|local-admin|inventory --hostname <name> [--package <name>=<version> ...] < enrollment-config.json"
+const usage = "usage: devicesim enroll|local-admin|inventory|disk --hostname <name> [--package <name>=<version> ...] " +
+	"[--health <json>] < enrollment-config.json"
 
 func run(args []string) error {
-	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory") {
+	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory" && args[0] != "disk") {
 		return errors.New(usage)
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	hostname := fs.String("hostname", "", "hostname to report")
+	health := fs.String("health", "", "check-in health to report (disk)")
 	var packages [][2]string
 	fs.Func("package", "deb package <name>=<version> to report to Fleet (inventory)", func(v string) error {
 		name, version, ok := strings.Cut(v, "=")
@@ -56,7 +61,7 @@ func run(args []string) error {
 		packages = append(packages, [2]string{name, version})
 		return nil
 	})
-	if err := fs.Parse(args[1:]); err != nil || *hostname == "" {
+	if err := fs.Parse(args[1:]); err != nil || *hostname == "" || (args[0] == "disk" && !json.Valid([]byte(*health))) {
 		return errors.New(usage)
 	}
 	var cfg protocol.EnrollmentConfig
@@ -91,6 +96,17 @@ func run(args []string) error {
 	}
 	if s.Status != protocol.EnrollActive {
 		return fmt.Errorf("enrollment %s, want active (auto-approving token)", s.Status)
+	}
+	if args[0] == "disk" {
+		dev.Health = json.RawMessage(*health)
+		_, res, err := dev.Checkin(ctx)
+		if err != nil {
+			return fmt.Errorf("check in: %w", err)
+		}
+		if res.Status != http.StatusOK {
+			return fmt.Errorf("check in: HTTP %d %s", res.Status, res.Body)
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID})
 	}
 	if args[0] == "inventory" {
 		if err := reportInventory(ctx, client, dev, *hostname, packages); err != nil {

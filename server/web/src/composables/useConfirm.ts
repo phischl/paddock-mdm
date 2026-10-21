@@ -19,6 +19,8 @@ export interface ConfirmOptions {
   /** High-risk actions: the confirm button stays disabled until this text is typed exactly. */
   requireTypedText?: string
   reason?: ConfirmReason
+  /** A warning shown above the fields (e.g. an in-place encryption in progress, plan M8e decision 39). */
+  warning?: string
 }
 
 /** The answer of the dialog: cancelled, or confirmed with the reason typed (empty without a reason field). */

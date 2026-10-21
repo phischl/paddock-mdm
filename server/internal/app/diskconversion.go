@@ -238,7 +238,7 @@ func (c *DiskConversions) Cancel(ctx context.Context, deviceID uuid.UUID, confir
 		now := c.now()
 		switch {
 		case row.Phase == disk.PhaseEncrypting:
-			return problem.InvalidState.WithDetail("the device already started the encryption; it cannot be cancelled")
+			return problem.ConversionNotCancellable.WithDetail("the device already started the encryption; it cannot be cancelled")
 		case row.Phase == disk.PhaseRequested && undelivered(conv.CommandStatus):
 			rec.SetParam("mode", ConversionCancelCommand)
 			rec.SetParam("command_id", row.CommandID.String())

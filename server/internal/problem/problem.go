@@ -71,6 +71,9 @@ var (
 	// a request whose values contradict the device or each other (typed hostname, reset-only options with leave).
 	TPMInUseByDisk            = &Error{Code: "tpm_in_use_by_disk", Status: http.StatusConflict}
 	InvalidRequestUnprocessed = &Error{Code: "invalid_request", Status: http.StatusUnprocessableEntity}
+	// ConversionNotCancellable: a cancel of an in-place encryption the device already started (plan M8e decision 8,
+	// portal text problems.conversion_not_cancellable).
+	ConversionNotCancellable = &Error{Code: "conversion_not_cancellable", Status: http.StatusConflict}
 	// TooManyVolumes is the error code of a header escrow for a 33rd distinct volume of a device (PDK-009, review
 	// round 1); recorded by the worker, never sent over HTTP.
 	TooManyVolumes = &Error{Code: "too_many_volumes", Status: http.StatusConflict}

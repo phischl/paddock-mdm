@@ -219,7 +219,8 @@
     "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten.",
     "session_store_unavailable": "Das Portal erreicht seinen Sitzungsspeicher nicht. Versuchen Sie es gleich noch einmal.",
     "disclaimer_outdated": "Der Hinweistext hat sich geändert. Lesen Sie den neuen Text und bestätigen Sie erneut.",
-    "tpm_in_use_by_disk": "Die Festplatte dieses Geräts wird mit dem TPM entsperrt; er kann nicht gelöscht werden."
+    "tpm_in_use_by_disk": "Die Festplatte dieses Geräts wird mit dem TPM entsperrt; er kann nicht gelöscht werden.",
+    "conversion_not_cancellable": "Das Gerät hat die Verschlüsselung bereits begonnen; sie kann nicht abgebrochen werden."
   },
   "audit": {
     "retention": {
@@ -820,11 +821,81 @@
       "unlockModeMismatch": "Entsperrmodus weicht von der Richtlinie ab",
       "unlockModeRunbook": "Runbook: Entsperrmodus ändern",
       "notEncrypted": {
-        "reinstall": "Dieses Gerät ist nicht verschlüsselt. Verschlüsseln Sie es, indem Sie es nach einer Sicherung mit dem Paddock-Autoinstall neu installieren; Paddock verschlüsselt ein laufendes Gerät nicht nachträglich.",
-        "conversionPlanned": "Sein Festplattenlayout (separates /boot) kommt für die nachträgliche Verschlüsselung in Frage, die für ein späteres Release geplant ist."
+        "reinstall": "Dieses Gerät ist nicht verschlüsselt, und sein Agent meldet kein Festplattenlayout, das sich nachträglich verschlüsseln lässt. Verschlüsseln Sie es, indem Sie es nach einer Sicherung mit dem Paddock-Autoinstall neu installieren."
       },
       "unmanaged": {
         "reinstall": "Dieses Gerät wurde außerhalb von Paddock verschlüsselt: Kein Wiederherstellungsschlüssel und kein Header sind hinterlegt, und eine Sperre lässt sich nicht aufheben. Installieren Sie es mit dem Paddock-Autoinstall neu, um seine Verschlüsselung zu verwalten."
+      },
+      "convert": {
+        "label": "Dieses Gerät verschlüsseln …",
+        "eligible": "Dieses Gerät ist nicht verschlüsselt. Sein Festplattenlayout erlaubt die nachträgliche Verschlüsselung: Das Gerät bereitet sich vor, der Wiederherstellungsschlüssel wird zuerst in Paddock hinterlegt, der Benutzer startet einmal neu und wählt die Boot-PIN, der Rest wird im Hintergrund verschlüsselt.",
+        "title": "{hostname} nachträglich verschlüsseln",
+        "explanation": "Paddock verschlüsselt die Root-Partition dieses Geräts ohne Neuinstallation. Bis zum Neustart ändert sich nichts; der Wiederherstellungsschlüssel wird in Paddock hinterlegt, bevor das erste Byte verschlüsselt wird. Daten außerhalb der Root-Partition (andere Partitionen, Swap-Partitionen) werden nicht verschlüsselt.",
+        "check": {
+          "backup": "Ich bestätige, dass eine aktuelle Sicherung dieses Geräts existiert. Das Dateisystem wird beim Neustart verkleinert; ein Stromausfall in diesen Sekunden kann es beschädigen.",
+          "restart": "Der Benutzer muss das Gerät einmal neu starten. Bis dahin wird nichts verschlüsselt. Der Neustart dauert einige Minuten länger als üblich.",
+          "power": "Ein Laptop muss bei diesem Neustart am Netzteil hängen; die Verschlüsselung im Hintergrund pausiert im Akkubetrieb.",
+          "pin": "Beim Neustart fragt das Gerät den Benutzer auf einer Textkonsole nach einer Boot-PIN (Entsperrmodus: TPM + Boot-PIN). Die PIN gelangt nie zu Paddock.",
+          "tpmOnly": "Das Gerät entsperrt sich mit seinem TPM ohne PIN (Entsperrmodus: Nur TPM).",
+          "duration": "Die Verschlüsselung im Hintergrund dauert auf dieser Festplatte etwa {duration}; das Gerät bleibt währenddessen nutzbar.",
+          "durationUnknown": "Die Verschlüsselung im Hintergrund dauert je nach Festplattengröße Minuten bis Stunden; das Gerät bleibt währenddessen nutzbar.",
+          "initramfsSwitch": "Das Gerät wechselt sein Frühstartsystem von initramfs-tools zu dracut. Das Gerät meldet, dass dabei die Pakete {packages} entfernt werden — initramfs-tools selbst und, sofern aufgeführt, brltty, die Braille-Unterstützung auf der Konsole für blinde Benutzer — und der grafische Startbildschirm wird durch eine Textkonsole ersetzt.",
+          "initramfsSwitchUnknown": "Das Gerät wechselt sein Frühstartsystem von initramfs-tools zu dracut; es konnte nicht melden, welche Pakete mit initramfs-tools entfernt werden (üblicherweise brltty, die Braille-Unterstützung auf der Konsole für blinde Benutzer). Das Gerät prüft dies erneut, bevor es sich vorbereitet. Der grafische Startbildschirm wird durch eine Textkonsole ersetzt."
+        },
+        "confirmLabel": "Beim nächsten Neustart verschlüsseln",
+        "typed": "Geben Sie den Hostnamen zur Bestätigung ein.",
+        "requested": "Verschlüsselung angefordert.",
+        "phases": {
+          "requested": "Verschlüsselung angefordert — {status}. Das Gerät bereitet sich beim nächsten Check-in vor.",
+          "prepared": "Vorbereitet seit {at}: Der Wiederherstellungsschlüssel ist hinterlegt. Warten auf den Neustart durch den Benutzer.",
+          "encrypting": "Verschlüsselung im Hintergrund: {percent} % von {total}",
+          "completed": "Verschlüsselung am {at} abgeschlossen; Wiederherstellungsschlüssel und TPM-Entsperrung werden eingerichtet.",
+          "cancelled": "Verschlüsselung am {at} abgebrochen; die Festplatte ist unverändert."
+        },
+        "eta": "noch etwa {duration}",
+        "progressAt": "letzte Meldung {at}",
+        "paused": {
+          "on_battery": "pausiert: Das Gerät läuft im Akkubetrieb",
+          "helper_not_running": "pausiert: Der Verschlüsselungshelfer läuft nicht; er startet beim nächsten Check-in oder Neustart erneut"
+        },
+        "failed": "Die Verschlüsselung ist in der Phase „{stage}“ fehlgeschlagen: {reason}. Siehe Runbook.",
+        "failures": {
+          "preflight": "Vorprüfung (das Gerät hat die Anforderung abgelehnt; nichts wurde geändert)",
+          "prepare": "Vorbereitung (auf der Festplatte wurde nichts geändert)",
+          "init": "Neustart (das Gerät startet unverschlüsselt; siehe Runbook, falls es nicht startet)",
+          "resume": "Hintergrundverschlüsselung (das Gerät funktioniert; die Verschlüsselung ist unvollständig und wird beim nächsten Neustart fortgesetzt)"
+        },
+        "reasonsTitle": "Eine nachträgliche Verschlüsselung ist auf diesem Gerät nicht möglich:",
+        "reasons": {
+          "release_unsupported": "das Ubuntu-Release ist nicht 24.04 oder 26.04",
+          "no_uefi": "das Gerät startet nicht mit UEFI",
+          "no_tpm2": "das Gerät hat keinen TPM 2.0",
+          "no_separate_boot": "/boot liegt nicht auf einer eigenen Partition",
+          "boot_on_root_device": "/boot teilt sich die Root-Partition",
+          "root_not_ext4": "das Root-Dateisystem ist nicht ext4",
+          "root_layout_unsupported": "das Layout der Root-Partition wird nicht unterstützt (RAID, mehrere Volumes, kein GPT oder ein unbekannter Aufbau)",
+          "pv_tail_in_use": "das Ende des physischen LVM-Volumes wird von einem anderen Volume als root belegt",
+          "low_free_space": "auf dem Root-Dateisystem ist weniger als 1 GiB frei",
+          "root_reference_unsupported": "fstab oder die Kernel-Kommandozeile verweisen über einen Gerätepfad auf root",
+          "already_encrypted": "das Root-Volume ist bereits verschlüsselt",
+          "dm_crypt_missing": "der Kernel hat kein dm-crypt",
+          "cleanup_pending": "das Gerät entfernt noch eine abgebrochene Verschlüsselung aus seinen Startdateien; nach dem nächsten Check-in erneut versuchen"
+        },
+        "cancel": {
+          "label": "Verschlüsselung abbrechen",
+          "title": "Verschlüsselung von {hostname} abbrechen",
+          "confirm": "Möglich, bis das Gerät neu startet. Hat sich das Gerät bereits vorbereitet, erhält es beim nächsten Check-in einen signierten Abbruch und verwirft die Vorbereitung; der hinterlegte Wiederherstellungsschlüssel bleibt in Paddock. Geben Sie den Hostnamen zur Bestätigung ein.",
+          "confirmLabel": "Verschlüsselung abbrechen"
+        },
+        "cancelled": "Verschlüsselung abgebrochen.",
+        "cancelSent": "Abbruch gesendet {at}; das Gerät bestätigt ihn beim nächsten Check-in, sofern es nicht bereits neu gestartet hat.",
+        "cancelRefused": "Das Gerät hat den Abbruch abgelehnt: {reason}.",
+        "abortReasons": {
+          "not_abortable": "es hatte bereits neu gestartet und die Verschlüsselung begonnen",
+          "unknown_conversion": "es kennt keine solche Anforderung"
+        },
+        "keyOnBoot": "Die Festplatte ist verschlüsselt, aber noch nicht im Ruhezustand geschützt: Bis der Benutzer die Boot-PIN wählt, liegt der Schlüssel, der sie entsperrt, auf der unverschlüsselten Boot-Partition. Das Gerät fragt bei jedem Start nach der PIN.",
+        "runbook": "Runbook: Nachträgliche Verschlüsselung"
       }
     },
     "revocation": {
@@ -902,7 +973,14 @@
       "uninstall": {
         "title": "Paddock entfernen",
         "explanation": "Entfernt den Paddock-Agent mit einem signierten Befehl vom Gerät und nimmt das Gerät außer Betrieb. Sie wählen, ob das Gerät so bleibt, wie es ist, oder zurückgesetzt wird. Benutzerdaten werden nie gelöscht.",
-        "label": "Paddock entfernen …"
+        "label": "Paddock entfernen …",
+        "conversionOpen": "Paddock kann nicht entfernt werden, solange dieses Gerät nachträglich verschlüsselt wird: Die Entfernung würde löschen, was das Gerät beim nächsten Start zum Entsperren seiner Festplatte braucht. Brechen Sie eine angeforderte oder vorbereitete Verschlüsselung zuerst ab; eine laufende Verschlüsselung wird am Netzteil abgeschlossen."
+      },
+      "revoke": {
+        "conversionWarning": {
+          "unencrypted": "Dieses Gerät ist noch nicht verschlüsselt; es lehnt Sperren und Zerstören ab, bis die Verschlüsselung begonnen hat.",
+          "encrypting": "Die nachträgliche Verschlüsselung ist unvollständig: Der Header ist nicht in Paddock hinterlegt, diese Aktion lässt sich also nicht mit einem hinterlegten Header rückgängig machen, und Daten, die die Verschlüsselung noch nicht erreicht hat, bleiben lesbar. Die Verschlüsselung im Hintergrund wird angehalten, bevor das Gerät handelt."
+        }
       }
     },
     "contactFilter": "Kontakt",

@@ -102,6 +102,8 @@ async function copyId(): Promise<void> {
       <DiskEncryptionCard
         :device-id="d.id"
         :hostname="d.hostname"
+        :active="d.state === 'active'"
+        :disk-total-bytes="d.hardware?.disk_total_bytes ?? null"
       />
       <UpdatesCard
         :device-id="d.id"
@@ -429,6 +431,8 @@ async function copyId(): Promise<void> {
       :uninstallable="d.state === 'active'"
       :uninstall="d.uninstall ?? null"
       :disk-tpm="page.diskTpm.value"
+      :disk-conversion="d.disk_conversion ?? null"
+      :disk-state="page.diskState.value"
       @retire="page.run('retire')"
       @changed="page.changed()"
     />

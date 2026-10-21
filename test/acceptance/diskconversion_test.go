@@ -361,8 +361,8 @@ func TestDiskConversionAbort(t *testing.T) {
 		t.Fatalf("refused %+v", refused)
 	}
 	admin.stepUp(t)
-	expectDetail(t, call(t, admin.Portal, http.MethodPost, cancel, s.cancelBody()), http.StatusConflict, "invalid_state",
-		"the device already started the encryption; it cannot be cancelled")
+	expectDetail(t, call(t, admin.Portal, http.MethodPost, cancel, s.cancelBody()), http.StatusConflict,
+		"conversion_not_cancellable", "the device already started the encryption; it cannot be cancelled")
 }
 
 // TestDiskConversionAdoption covers the adoption of gate A1 (plan M8e decision 9, §14.10 I2): a stale initrd converted

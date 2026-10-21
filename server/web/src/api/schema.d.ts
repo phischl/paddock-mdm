@@ -691,8 +691,8 @@ export interface paths {
          *     device received it, or while the conversion is prepared, the device is sent the signed command
          *     encrypt_disk_abort and the conversion keeps its phase until the device reports the abort (cancelled) or
          *     refuses it (abort_refused_reason). confirm_hostname must equal the device's hostname (422 invalid_request).
-         *     409 invalid_state: no conversion is open, a cancellation is already on its way, or the device already started
-         *     the encryption.
+         *     409 invalid_state: no conversion is open or a cancellation is already on its way; 409
+         *     conversion_not_cancellable: the device already started the encryption.
          */
         post: operations["cancelDeviceEncryption"];
         delete?: never;

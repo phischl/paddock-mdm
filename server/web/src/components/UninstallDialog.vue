@@ -8,9 +8,9 @@ import { uninstallModes, type UninstallAnswer, type UninstallMode } from '../lib
 /**
  * The confirmation of Remove Paddock (plan M8d decision 42), laid out like ConfirmDialog: the mode with its
  * explanation, the reset options (clearing the TPM is disabled while a disk unlocks with it), the reason and the
- * typed hostname. Focus starts on Cancel; Esc cancels; Enter in the fields never submits.
+ * typed hostname; while an in-place encryption is active the removal is refused (plan M8e §14.5 decision 36). Focus starts on Cancel; Esc cancels; Enter in the fields never submits.
  */
-const props = defineProps<{ modelValue: boolean; hostname: string; diskTpm: boolean }>()
+const props = defineProps<{ modelValue: boolean; hostname: string; diskTpm: boolean; conversionActive?: boolean }>()
 const emit = defineEmits<{ confirm: [answer: UninstallAnswer]; cancel: [] }>()
 
 const { t } = useI18n()
@@ -23,7 +23,7 @@ const typed = ref('')
 const cancelButton = ref<ComponentPublicInstance | null>(null)
 const card = ref<ComponentPublicInstance | null>(null)
 
-const canConfirm = computed(() => typed.value === props.hostname && reason.value.trim().length >= 2)
+const canConfirm = computed(() => !props.conversionActive && typed.value === props.hostname && reason.value.trim().length >= 2)
 
 function focusCancel(): void {
   ;(cancelButton.value?.$el as HTMLElement | undefined)?.focus()
@@ -80,6 +80,15 @@ function onConfirm(): void {
         {{ t('devices.uninstall.title', { hostname }) }}
       </v-card-title>
       <v-card-text>
+        <v-alert
+          v-if="conversionActive"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="uninstall-conversion-open"
+        >
+          {{ t('devices.danger.uninstall.conversionOpen') }}
+        </v-alert>
         <v-radio-group
           v-model="mode"
           :aria-labelledby="id + '-title'"
