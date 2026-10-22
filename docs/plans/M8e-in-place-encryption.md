@@ -2025,3 +2025,82 @@ fallback design named in S2 is adopted:
     - **Ticket.** PDK-397 implements this item (agent, protocol and contracts, portal texts, unit tests); the VM
       evidence is PDK-247's gates S-IE1, S-IE2 part B and S-IE4 as amended above; PDK-248 carries RR-57, the
       runbook and the architecture note; PDK-390 takes the admin schema change if it lands first.
+
+### Amendment 2026-10-22 — a Lock on a header marked for reencryption (stop condition S14; decided by the maintainer)
+
+Stop condition S14 (§14.5 decision 39) was hit in PDK-247's hand test on 2026-10-22: a Lock during `encrypting`
+(Ubuntu 24.04, `plain` layout, 2.5 % progress) ended with the result `{"erased": false, "slots_before": 2,
+"slots_after": 1}`. Before the Lock the header held keyslot 0 of type `luks2` (the conversion key) and keyslot 1 of
+type `reencrypt` (key_size 1, area type `datashift`, no key material, no data; requirement `online-reencrypt-v2`).
+After `cryptsetup luksErase` the key-bearing keyslot was gone — the device no longer unlocks (dracut emergency
+shell, the by-uuid link missing), and no header of this conversion is escrowed — but the `reencrypt` keyslot stayed,
+so `paddock-revoke` (`agent/internal/revoke/revoke.go::eraseVolume`, `keyslots()`) counted `len(m.Keyslots)` of the
+raw dump as 1 and reported the erasure as incomplete. The data was erased as a Lock intends; the report was wrong.
+Decision 39's expected result ("the `reencrypt` keyslot counts as one … `slots_after: 0`") assumed that `luksErase`
+removes the `reencrypt` keyslot; it does not. Side finding: ADR 0039's source table also claimed that
+`crypt_keyslot_add_by_keyslot_context` carries no reencryption check, which the S2 evidence (amendment 2026-10-22,
+item 22) contradicts; ADR 0039 amendment 2026-10-22 (S14) corrects both rows.
+
+The maintainer decided on 2026-10-22 that `paddock-revoke` is changed now, before alpha.5, so that only key-bearing
+keyslots count. This is a change to the revocation path under the two-person rule: the maintainer's decision is
+the approval of the change; the verification on real hardware that the rule requires is part of PDK-399 and needs
+the maintainer's separate approval before it runs (it is destructive on the device it runs on).
+
+23. **Only key-bearing keyslots count** (`agent/internal/revoke/revoke.go`, the change of PDK-399):
+    - **Definition.** A *key-bearing keyslot* is a LUKS2 keyslot whose JSON `type` is `luks2` — the only keyslot
+      type of LUKS2 that holds key material — or, on LUKS1, an enabled keyslot (`Key Slot N: ENABLED`). Every other
+      LUKS2 keyslot type (`reencrypt` today; any type cryptsetup adds later) holds no key material and is a
+      *non-key keyslot*. The counting is the revoke package's own (`keyslots()` reads the `type` of every entry of
+      `Metadata.Keyslots`); it does not use `luks.Metadata.Kinds()`, whose exclusion of `reencrypt` serves the
+      reconciler's inventory and may change with it.
+    - **Result.** `VolumeErasure.SlotsBefore` and `SlotsAfter` count key-bearing keyslots only; `Erased` is true
+      iff `luksErase` exited 0 and `SlotsAfter == 0`; `Erasure.SlotsBefore`, `SlotsAfter` and `Erased` sum and
+      combine the volumes as today (an unknown count stays `-1`, never erased). Additively, `VolumeErasure` gains
+      `OtherSlotsAfter int json:"other_slots_after,omitempty"`: the number of non-key keyslots left on the volume
+      after the erasure (the `reencrypt` keyslot of an unfinished conversion), so that the confirmation shows what
+      stayed; it never affects `Erased`. `luksErase` stays the only erase command — `paddock-revoke` does not kill
+      the `reencrypt` keyslot (it holds no key; `cryptsetup` may refuse a `luksKillSlot` on it under the
+      requirement) — and the sequence of volumes, the time bounds and every refusal reason are unchanged.
+    - **Server.** `server/internal/domain/revocation/confirmation.go::AllErased` is unchanged: it reads `erased`,
+      `volumes[].erased` and `volumes[].slots_after`, which now carry the key-bearing counts; the parser ignores
+      `other_slots_after` until the portal shows it (PDK-399 adds it to `VolumeConfirmation` and to
+      `RevocationRequest.result.volumes[]` in `api/openapi/admin.yaml` as an optional integer, with the
+      description of `result` corrected to "no key-bearing keyslot left"). The audit event
+      `revocation.executed` keeps its params (`erased`, `slots_before`, `slots_after`, `volumes`, …); its
+      description and note in `server/internal/domain/audit/codes.go` say "key-bearing keyslot" instead of
+      "keyslot" (the code is unchanged; the generated `docs/compliance/audit-codes.md` follows). Older agents
+      report the raw count as before; a server does not distinguish them — a Lock on an unconverted device gives
+      the same numbers under both rules.
+    - **Portal.** `DangerZone.vue` shows `slots_before`/`slots_after` as today (now key-bearing); when
+      `other_slots_after` is present and greater than 0 it adds the line `devices.danger.revoke.otherSlotsLeft`
+      (texts below) under the volume.
+    - **Expected result of a Lock during `encrypting`** (replaces decision 39's): `revocation.executed` with
+      `erased: true`, `slots_before` = the key-bearing keyslots the dump listed before (the conversion key's `luks2`
+      slot, plus `tpm2+pin` or `tpm2` once enrolled — after amendment item 22 the enrollment follows the
+      completion, so during `encrypting` it is 1), `slots_after: 0`, `volumes[0].other_slots_after: 1` (the
+      `reencrypt` keyslot); the device does not boot afterwards. S14 is closed by this item; S16: after the change
+      a Lock on a header marked for reencryption still reports `erased: false`, or `luksErase` leaves a `luks2`
+      keyslot behind — stop and report the dump and the output.
+    - **RR-57, extension** (PDK-248 carries it): "A Lock or Destroy during `encrypting` erases the key-bearing
+      keyslot and leaves the key-less `reencrypt` keyslot behind; the confirmation counts key-bearing keyslots only
+      and reports the leftover separately. The volume is unrecoverable — no header of the conversion is escrowed —
+      and the data the reencryption had not reached stays readable. Verified on a throwaway VM and on real hardware
+      (PDK-399)."
+    - **§14.10 table**, rows `encrypting`, `completed !InitrdRegenerated` and `failed:resume`, column "Lock /
+      Destroy": "`paddock-revoke` erases the key-bearing keyslots and reports `erased: true` with
+      `other_slots_after: 1` (the `reencrypt` keyslot stays; item 23)".
+    - **Texts (binding; `en.json` / `de.json`).** `devices.danger.revoke.otherSlotsLeft`: en "{count} key-less
+      keyslot(s) of an unfinished reencryption remain on the volume; they hold no key and do not make the erasure
+      incomplete.", de "{count} schlüssellose Keyslots einer unvollständigen Neuverschlüsselung verbleiben auf dem
+      Volume; sie enthalten keinen Schlüssel und machen die Löschung nicht unvollständig." (ICU plural on
+      `count`).
+    - **Evidence required by the two-person rule (PDK-399).** (a) The PDK-247 hand test repeated on a throwaway VM
+      with the changed `paddock-revoke` (expected result above; transcript in the result document). (b) A test on
+      real hardware: the `paddock_revoke_testtarget` build against a dedicated LUKS2 volume on a USB disk or a
+      spare partition of the test laptop that was put into an unfinished reencryption by hand (`cryptsetup
+      reencrypt --encrypt --init-only --reduce-device-size 32M`, then `--resume-only` interrupted with SIGTERM
+      after a few percent), named in `/etc/paddock/revoke-test-target` — never the system disk; the result shows
+      `erased: true`, `slots_after: 0`, `other_slots_after: 1`, and the volume no longer opens with its key. (b)
+      is destructive on the device it runs on and MUST NOT be carried out before the maintainer has approved it
+      separately for the specific device and disk; `docs/operations/revocation-acceptance.md` gains the case as a
+      row of its protocol.
