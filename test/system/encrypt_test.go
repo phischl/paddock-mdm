@@ -169,6 +169,7 @@ func TestInPlaceEncryptionLVM(t *testing.T) {
 	w.requireNoDiskSetup(t)
 	w.requireLUKSRoot(t, partition, conv.Mapping)
 	w.probeEnrollWhileEncrypting(t, partition)
+	w.requireEnrollmentDeferred(t)
 	w.requireRootReference(t, conv.Mapping)
 	// The key the server escrowed (revealed by an administrator above) belongs to the converted volume.
 	if !w.Opens(t, conversionKey) {
@@ -379,6 +380,8 @@ func TestInPlaceEncryptionPlain(t *testing.T) {
 		w.logBootEvidence(t, "boot 2 (init after the power cut)")
 		// No TPM enrollment while the header is marked for reencryption (stop condition S2, amendment item 22).
 		w.requireNoDiskSetup(t)
+		w.probeEnrollWhileEncrypting(t, partition)
+		w.requireEnrollmentDeferred(t)
 		started := w.WaitEvent(t, "device.disk_conversion_started", 10*time.Minute, func(p map[string]any) bool { return p["conversion_id"] == id })
 		t.Logf("%s: disk.conversion_started %v", w.Name, started)
 		w.waitHealth(t, "encrypting", 5*time.Minute, func(h conversionHealth) bool { return h.Disk.State == "encrypting" })

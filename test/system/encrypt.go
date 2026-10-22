@@ -282,6 +282,8 @@ type conversionHealth struct {
 			ETASeconds       int64    `json:"eta_s"`
 			PausedReason     string   `json:"paused_reason"`
 			InitrdIssue      string   `json:"initrd_issue"`
+			// EnrollmentDeferred is "reencrypt" while no keyslot can be added (plan M8e amendment item 22).
+			EnrollmentDeferred string `json:"enrollment_deferred"`
 		} `json:"conversion"`
 	} `json:"disk"`
 }
@@ -532,6 +534,15 @@ func (w *ieWorld) requireNoDiskSetup(t *testing.T) {
 		t.Fatalf("the disk setup ran while the reencryption is unfinished (ConditionResult=%s):\n%s", out,
 			w.Must("sudo journalctl -b -u paddock-disk-setup.service --no-pager -o cat"))
 	}
+}
+
+// requireEnrollmentDeferred waits until the device reports that the enrollment waits for the end of the reencryption
+// (plan M8e amendment item 22).
+func (w *ieWorld) requireEnrollmentDeferred(t *testing.T) {
+	t.Helper()
+	w.waitHealth(t, "enrollment_deferred reencrypt", 5*time.Minute, func(h conversionHealth) bool {
+		return h.Disk.State == "encrypting" && h.Disk.Conversion != nil && h.Disk.Conversion.EnrollmentDeferred == "reencrypt"
+	})
 }
 
 // requireNoFailedEnrollment asserts that no enrollment was tried and refused in this boot: a device whose disk-setup
