@@ -177,7 +177,7 @@ tested in steps 1–5. Check every item and note the file and line you checked.
 | 1 Install | | | | |
 | 2 Lock | | | | |
 | 2b Lock skips unescrowed volume | | | | |
-| 2c Lock on a header marked for reencryption (maintainer approval: date, device, disk) | | | | |
+| 2c Lock on a header marked for reencryption (maintainer approval: date, device, disk) | pass: `erased: true`, `slots_before: 1`, `slots_after: 0`, `other_slots_after: 1`; afterwards only the `reencrypt` keyslot is listed and the key no longer opens the volume ("no usable keyslot"); system disk untouched. Approved by the maintainer on 2026-10-22 for the test laptop (Dell XPS 13 9300) and a Verbatim Store 'n' Go USB stick (3.8 GB); the stick was wiped afterwards | 2ff96581, `paddock_revoke_testtarget` build, Ubuntu 24.04.5, cryptsetup 2.7.0 | 2026-10-22 | maintainer (approval); run by the implementation agent |
 | 3 Restore | | | | |
 | 4 Destroy | | | | |
 | 5 Dead man's switch | | | | |
