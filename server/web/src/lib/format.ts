@@ -18,6 +18,12 @@ export function formatGB(bytes: number, locale: string): string | null {
   return new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(bytes / 1e9) + ' GB'
 }
 
+/** Formats a byte count in whole MiB (room in /boot, plan M8e amendment 2026-10-21 item 19), rounded by round: up for
+ * what is needed and down for what is free, so the text never shows enough room where the device found too little. */
+export function formatMiB(bytes: number, locale: string, round: (mib: number) => number): string {
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(round(bytes / 2 ** 20)) + ' MiB'
+}
+
 export function formatTime(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { timeStyle: 'short' }).format(new Date(iso))
 }

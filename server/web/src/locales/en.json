@@ -856,7 +856,18 @@
         "progressAt": "last report {at}",
         "paused": {
           "on_battery": "paused: the device runs on battery",
-          "helper_not_running": "paused: the encryption helper is not running; it starts again at the next check-in or restart"
+          "helper_not_running": "paused: the encryption helper is not running; it starts again at the next check-in or restart",
+          "packages_busy": "paused: a software installation or update is running on the device"
+        },
+        "packagesBusy": "Waiting since {at}: a software installation or update is running on the device. The preparation continues on its own once it has finished.",
+        "cleanupPending": "The device has not yet removed the abandoned encryption from its boot files and retries at its next check-in. Last attempt: {reason}.",
+        "initrdIssues": {
+          "boot_space_low": "The boot partition (/boot) has too little free space to rebuild the boot files: {needed} needed, {free} free. Free space there, for example by removing old kernels; the device retries on its own.",
+          "no_bootable_kernel": "The device has no kernel whose boot files it can rebuild. The step waits until a kernel is installed.",
+          "kernel_not_buildable": "The boot files of kernel {kernel} cannot be rebuilt because its module list is missing. The step waits; reinstall or remove that kernel.",
+          "orphan_initrd_removed": "The device removed the boot files of a kernel that can no longer start, because they contained the encryption key.",
+          "key_material_hardlinked": "A file holding the encryption key has further hard links on the device. The cleanup cannot finish; see the runbook.",
+          "key_material_shared_bootable": "The boot files of kernel {kernel} share their data with a file holding the encryption key. They stay until they are rebuilt; see the runbook."
         },
         "failed": "The encryption failed at stage \"{stage}\": {reason}. See the runbook.",
         "failures": {

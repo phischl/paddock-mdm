@@ -9,7 +9,7 @@ import {
   conversionRunbook, diskStateLabel, downloadHeader, formatDuration, getDisk, headerDevice, latestStored, requestEncrypt,
   revealRecoveryKey, saveFile, unlockModeRunbook, volumeHeaders,
 } from '../lib/disk'
-import { formatDateTime, formatGB } from '../lib/format'
+import { formatDateTime, formatGB, formatMiB } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
@@ -132,6 +132,27 @@ const progressText = computed(() => {
     c.progress_at ? t('devices.disk.convert.progressAt', { at: at(c.progress_at) }) : '',
   ]
   return parts.filter(Boolean).join(' · ')
+})
+
+/** The preparation's wait for a package run (plan M8e amendment 2026-10-21, item 18); empty without one. */
+const waitText = computed(() => {
+  const c = conversion.value
+  if (c?.phase !== 'requested' || !c.paused_reason) return ''
+  if (c.paused_reason === 'packages_busy' && c.paused_since) return t('devices.disk.convert.packagesBusy', { at: at(c.paused_since) })
+  return known('devices.disk.convert.paused.' + c.paused_reason, c.paused_reason)
+})
+
+/** Why the device's initrd work cannot go on (plan M8e amendment 2026-10-21, item 19); an unknown code as reported. */
+const initrdIssueText = computed(() => {
+  const c = conversion.value
+  if (!c?.initrd_issue) return ''
+  const key = 'devices.disk.convert.initrdIssues.' + c.initrd_issue
+  if (!te(key)) return c.initrd_issue
+  return t(key, {
+    kernel: c.initrd_issue_kernel ?? '–',
+    needed: formatMiB(c.boot_space_needed ?? 0, locale.value, Math.ceil),
+    free: formatMiB(c.boot_space_free ?? 0, locale.value, Math.floor),
+  })
 })
 
 
@@ -355,6 +376,36 @@ onBeforeUnmount(hide)
               </p>
             </template>
           </template>
+          <p
+            v-if="waitText"
+            class="pd-type-caption"
+            data-testid="disk-convert-wait"
+          >
+            {{ waitText }}
+          </p>
+          <v-alert
+            v-if="initrdIssueText"
+            :type="conversion.initrd_issue === 'orphan_initrd_removed' ? 'info' : 'warning'"
+            variant="tonal"
+            class="conflict"
+            data-testid="disk-convert-initrd-issue"
+          >
+            {{ initrdIssueText }}
+          </v-alert>
+          <v-alert
+            v-if="conversion.cleanup_error"
+            type="warning"
+            variant="tonal"
+            class="conflict"
+            data-testid="disk-convert-cleanup"
+          >
+            {{ t('devices.disk.convert.cleanupPending', { reason: conversion.cleanup_error }) }}
+            <a
+              :href="conversionRunbook"
+              target="_blank"
+              rel="noopener"
+            >{{ t('devices.disk.convert.runbook') }}</a>
+          </v-alert>
           <p
             v-if="cancelSent"
             role="status"

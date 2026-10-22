@@ -1,6 +1,8 @@
 package disk
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +52,58 @@ func TestConversionActive(t *testing.T) {
 	} {
 		if got := ConversionActive(tc.phase, tc.health, tc.completed, now); got != tc.want {
 			t.Errorf("%s: ConversionActive = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestNotes (plan M8e amendment 2026-10-21, items 17 to 19): the wait only while encrypting or preparing, the cleanup's
+// reason only once failed or cancelled, the initrd issue in every phase.
+func TestNotes(t *testing.T) {
+	since := time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC)
+	report := func(phase string) *protocol.DiskConversion {
+		return &protocol.DiskConversion{Phase: phase, PausedReason: "packages_busy", PausedSince: &since,
+			CleanupError: "dracut: no space left on device", InitrdIssue: "boot_space_low", BootSpaceNeeded: 90, BootSpaceFree: 40}
+	}
+	initrd := ConversionNotes{InitrdIssue: "boot_space_low", BootSpaceNeeded: 90, BootSpaceFree: 40}
+	paused := initrd
+	paused.PausedReason, paused.PausedSince = "packages_busy", &since
+	cleanup := initrd
+	cleanup.CleanupError = "dracut: no space left on device"
+	for _, tc := range []struct {
+		name   string
+		phase  string
+		report *protocol.DiskConversion
+		want   ConversionNotes
+	}{
+		{"no report", PhaseRequested, nil, ConversionNotes{}},
+		{"requested, device preparing", PhaseRequested, report("preparing"), paused},
+		{"requested, device already prepared", PhaseRequested, report("prepared"), initrd},
+		{"prepared", PhasePrepared, report("prepared"), initrd},
+		{"encrypting", PhaseEncrypting, report("encrypting"), paused},
+		{"completed", PhaseCompleted, report("completed"), initrd},
+		{"failed, cleanup pending", PhaseFailed, report("failed"), cleanup},
+		{"cancelled, cleanup pending", PhaseCancelled, report(""), cleanup},
+	} {
+		if got := Notes(tc.phase, tc.report); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: Notes = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+	shared := Notes(PhaseCompleted, &protocol.DiskConversion{InitrdIssue: "key_material_shared_bootable", InitrdIssueKernel: "6.8.0-45-generic"})
+	if shared.InitrdIssue != "key_material_shared_bootable" || shared.InitrdIssueKernel != "6.8.0-45-generic" {
+		t.Errorf("Notes = %+v, want the issue with its kernel", shared)
+	}
+}
+
+// TestNotesBoundsDeviceText (plan M8e amendment 2026-10-21, item 17): cleanup_error is device-supplied free text and
+// reaches the admin API only as its first line, without control characters, at most 200 runes.
+func TestNotesBoundsDeviceText(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"dracut failed\nsecond line", "dracut failed"},
+		{"dracut\x00 failed\tnow\r\nmore", "dracut failednow"},
+		{strings.Repeat("ä", 250), strings.Repeat("ä", 200)},
+	} {
+		if got := Notes(PhaseFailed, &protocol.DiskConversion{CleanupError: tc.in}).CleanupError; got != tc.want {
+			t.Errorf("CleanupError(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

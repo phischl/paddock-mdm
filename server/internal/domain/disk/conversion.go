@@ -1,7 +1,9 @@
 package disk
 
 import (
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
@@ -46,4 +48,61 @@ func ConversionActive(phase string, health *protocol.DiskHealth, completedAt *ti
 		return false
 	}
 	return now.Sub(*completedAt) < CompletedFailSafe
+}
+
+// reportedPreparing is the phase health.disk.conversion reports while the device prepares; the server's phase is still
+// requested then.
+const reportedPreparing = "preparing"
+
+// ConversionNotes is what the last check-in reports beside the progress (plan M8e amendment 2026-10-21, items 17 to
+// 19): a wait, why an unfinished cleanup did not finish, and why the initrd work cannot go on. Every field is empty
+// where it does not apply.
+type ConversionNotes struct {
+	PausedReason      string
+	PausedSince       *time.Time
+	CleanupError      string
+	InitrdIssue       string
+	InitrdIssueKernel string
+	BootSpaceNeeded   int64
+	BootSpaceFree     int64
+}
+
+// Notes takes the notes of a conversion in phase from health.disk.conversion c of the last check-in: the wait while
+// the device encrypts or, with the server still at requested, prepares; the cleanup's reason only once the conversion
+// failed or was cancelled, the only phases that leave a cleanup; the initrd issue in every phase, since the
+// preparation, the regeneration and the cleanup all report it. c is nil without a report.
+func Notes(phase string, c *protocol.DiskConversion) ConversionNotes {
+	if c == nil {
+		return ConversionNotes{}
+	}
+	n := ConversionNotes{InitrdIssue: noteText(c.InitrdIssue), InitrdIssueKernel: noteText(c.InitrdIssueKernel),
+		BootSpaceNeeded: c.BootSpaceNeeded, BootSpaceFree: c.BootSpaceFree}
+	if phase == PhaseEncrypting || (phase == PhaseRequested && c.Phase == reportedPreparing) {
+		n.PausedReason, n.PausedSince = noteText(c.PausedReason), c.PausedSince
+	}
+	if phase == PhaseFailed || phase == PhaseCancelled {
+		n.CleanupError = noteText(c.CleanupError)
+	}
+	return n
+}
+
+// maxNoteText is the bound the agent applies to cleanup_error (plan M8e amendment 2026-10-21, item 17).
+const maxNoteText = 200
+
+// noteText bounds a device-reported text like failure_reason: the health is device input and cleanup_error is free
+// text the portal shows, so only its first line, without control characters, at most maxNoteText runes.
+func noteText(s string) string {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if r := []rune(s); len(r) > maxNoteText {
+		s = string(r[:maxNoteText])
+	}
+	return strings.TrimSpace(s)
 }

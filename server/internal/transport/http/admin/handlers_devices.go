@@ -422,9 +422,12 @@ func toDeviceDiskConversion(c *app.DiskConversion) *adminapi.DeviceDiskConversio
 	}
 	if p := c.Progress; p != nil {
 		out.DoneBytes, out.EtaS, out.ProgressAt = &p.DoneBytes, &p.ETASeconds, utcPtr(p.UpdatedAt)
-		if p.PausedReason != "" {
-			out.PausedReason = &p.PausedReason
-		}
+	}
+	n := c.Notes
+	out.PausedReason, out.PausedSince, out.CleanupError = optString(n.PausedReason), utcPtr(n.PausedSince), optString(n.CleanupError)
+	out.InitrdIssue, out.InitrdIssueKernel = optString(n.InitrdIssue), optString(n.InitrdIssueKernel)
+	if n.BootSpaceNeeded > 0 || n.BootSpaceFree > 0 {
+		out.BootSpaceNeeded, out.BootSpaceFree = &n.BootSpaceNeeded, &n.BootSpaceFree
 	}
 	return out
 }

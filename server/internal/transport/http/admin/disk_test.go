@@ -265,3 +265,75 @@ func (e *env) expectNoSecret(r result, secret string) {
 		e.t.Fatalf("secret in %d action rows (%v)", n, err)
 	}
 }
+
+// TestDeviceDiskConversionNotes (plan M8e amendment 2026-10-21, items 17 to 19): GET /devices/{id}/disk returns
+// packages_busy with its start while the device prepares, the cleanup's reason only once the conversion was
+// cancelled and the initrd issue with its sizes, all from the last check-in and gone once a check-in no longer
+// reports them; another organization gets 404.
+func TestDeviceDiskConversionNotes(t *testing.T) {
+	e := newEnv(t)
+	auditor := e.session(e.acme, principal.RoleOrgAuditor)
+	other := e.session(e.globex, principal.RoleOrgAuditor)
+	device := e.insertDevice(e.acme, "lt-convert", "active")
+	path := "/api/v1/devices/" + device.String() + "/disk"
+	command, conversion := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	ctx := context.Background()
+	if _, err := e.super.Exec(ctx, `INSERT INTO device_command (id, organization_id, device_id, type, status, expires_at)
+		VALUES ($1, $2, $3, 'encrypt_disk', 'delivered', now() + interval '1 day')`, command, e.acme, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.super.Exec(ctx, `INSERT INTO device_disk_conversion (id, organization_id, device_id, command_id, reason, phase)
+		VALUES ($1, $2, $3, $4, 'policy', 'requested')`, conversion, e.acme, device, command); err != nil {
+		t.Fatal(err)
+	}
+	health := func(phase string) string {
+		return `{"status":"ok","disk":{"state":"not_encrypted","keyslots":0,"conversion":{"eligible":false,"phase":"` + phase + `",
+			"paused_reason":"packages_busy","paused_since":"2026-10-22T08:00:00Z","cleanup_error":"dracut failed",
+			"initrd_issue":"boot_space_low","boot_space_needed":90,"boot_space_free":40}}}`
+	}
+	if _, err := e.super.Exec(ctx, `INSERT INTO device_status (device_id, organization_id, last_contact_at, health)
+		VALUES ($1, $2, now(), $3)`, device, e.acme, health("preparing")); err != nil {
+		t.Fatal(err)
+	}
+	get := func() adminapi.DeviceDiskConversion {
+		t.Helper()
+		var disk adminapi.DiskEncryption
+		e.do(call{method: "GET", path: path, cookie: auditor}).decode(t, &disk)
+		if disk.DiskConversion == nil {
+			t.Fatal("no conversion")
+		}
+		return *disk.DiskConversion
+	}
+
+	c := get()
+	if c.PausedReason == nil || *c.PausedReason != "packages_busy" || c.PausedSince == nil ||
+		!c.PausedSince.Equal(time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC)) || c.CleanupError != nil ||
+		c.InitrdIssue == nil || *c.InitrdIssue != "boot_space_low" || c.BootSpaceNeeded == nil || *c.BootSpaceNeeded != 90 ||
+		c.BootSpaceFree == nil || *c.BootSpaceFree != 40 || c.InitrdIssueKernel != nil {
+		raw, _ := json.Marshal(c)
+		t.Fatalf("preparing %s", raw)
+	}
+	if res := e.do(call{method: "GET", path: path, cookie: other}); res.status != http.StatusNotFound || res.problemCode(t) != "not_found" {
+		t.Fatalf("another organization: %d %s", res.status, res.body)
+	}
+
+	if _, err := e.super.Exec(ctx, `UPDATE device_disk_conversion SET phase = 'cancelled', finished_at = now() WHERE id = $1`, conversion); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.super.Exec(ctx, `UPDATE device_status SET health = $2 WHERE device_id = $1`, device, health("")); err != nil {
+		t.Fatal(err)
+	}
+	if c := get(); c.PausedReason != nil || c.PausedSince != nil || c.CleanupError == nil || *c.CleanupError != "dracut failed" ||
+		c.InitrdIssue == nil {
+		raw, _ := json.Marshal(c)
+		t.Fatalf("cancelled %s", raw)
+	}
+	if _, err := e.super.Exec(ctx, `UPDATE device_status SET health = $2 WHERE device_id = $1`, device,
+		`{"status":"ok","disk":{"state":"not_encrypted","keyslots":0,"conversion":{"eligible":true}}}`); err != nil {
+		t.Fatal(err)
+	}
+	if c := get(); c.CleanupError != nil || c.InitrdIssue != nil || c.BootSpaceNeeded != nil || c.BootSpaceFree != nil {
+		raw, _ := json.Marshal(c)
+		t.Fatalf("after a check-in without notes %s", raw)
+	}
+}
