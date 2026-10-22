@@ -3212,7 +3212,7 @@ export interface components {
              */
             keep_local_admin: boolean;
         };
-        /** @description An in-place encryption of the device's root volume (ADR 0039, plan M8e decision 10). done_bytes, eta_s, paused_reason and progress_at come from the last check-in while the phase is encrypting and are null otherwise. */
+        /** @description An in-place encryption of the device's root volume (ADR 0039, plan M8e decision 10). done_bytes, eta_s and progress_at come from the last check-in while the phase is encrypting and are null otherwise. paused_reason and paused_since, cleanup_error and the initrd issue come from the last check-in where the phase has them (plan M8e amendment 2026-10-21, items 17 to 19) and are absent otherwise. */
         DeviceDiskConversion: {
             /** Format: uuid */
             id: string;
@@ -3244,13 +3244,34 @@ export interface components {
             done_bytes: number | null;
             /** Format: int64 */
             eta_s: number | null;
-            /** @description on_battery or helper_not_running. */
+            /** @description Why the device waits: on_battery or helper_not_running while encrypting; packages_busy while the phase is requested and the device prepares (a package run holds dpkg's locks). */
             paused_reason: string | null;
+            /**
+             * Format: date-time
+             * @description When the wait began; packages_busy only.
+             */
+            paused_since?: string;
             /**
              * Format: date-time
              * @description When the device measured the progress.
              */
             progress_at: string | null;
+            /** @description Why the device's last attempt to clean up after a failure or a cancel did not finish, while the cleanup is pending (phases failed and cancelled). Diagnostic text, not a code and not localized: the first line of the device's error without control characters, at most 200 characters. */
+            cleanup_error?: string;
+            /** @description Why the device's initrd work for the conversion cannot go on: boot_space_low, no_bootable_kernel, kernel_not_buildable, orphan_initrd_removed, key_material_hardlinked or key_material_shared_bootable. */
+            initrd_issue?: string;
+            /** @description The kernel version of kernel_not_buildable or key_material_shared_bootable. */
+            initrd_issue_kernel?: string;
+            /**
+             * Format: int64
+             * @description Bytes needed in /boot; boot_space_low only.
+             */
+            boot_space_needed?: number;
+            /**
+             * Format: int64
+             * @description Bytes free in /boot; boot_space_low only.
+             */
+            boot_space_free?: number;
             /** @description preflight, prepare, init or resume. */
             failure_stage: string | null;
             failure_reason: string | null;

@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/disk"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
@@ -781,5 +782,56 @@ func TestDiskConversionRefusedResultDuringWithdrawal(t *testing.T) {
 		default:
 			t.Fatalf("round %d (retire %v): command %s, conversion %s:%s, withdrawal %v", i, retire, status, phase, stage, withdrawErr)
 		}
+	}
+}
+
+// TestDiskConversionNotes (plan M8e amendment 2026-10-21, items 17 to 19): the device detail carries packages_busy with
+// its start while the device prepares, the cleanup's reason only once the conversion failed and the initrd issue in
+// every phase, all from the last check-in, and gone once a check-in no longer reports them; another organization's
+// administrator sees nothing.
+func TestDiskConversionNotes(t *testing.T) {
+	w := newConversionWorld(t)
+	conversion, _ := w.request(t)
+	since := time.Now().UTC().Truncate(time.Second)
+	report := func(state, phase string) string {
+		return `{"disk": {"state": "` + state + `", "keyslots": 0, "conversion": {"eligible": false, "phase": "` + phase + `",
+			"paused_reason": "packages_busy", "paused_since": "` + since.Format(time.RFC3339) + `", "cleanup_error": "dracut failed",
+			"initrd_issue": "boot_space_low", "boot_space_needed": 90, "boot_space_free": 40}}}`
+	}
+	notes := func() disk.ConversionNotes {
+		t.Helper()
+		detail, err := w.devices.Get(w.admin(), w.device)
+		if err != nil || detail.DiskConversion == nil || detail.DiskConversion.DeviceDiskConversion.ID != conversion {
+			t.Fatalf("detail %+v, %v", detail.DiskConversion, err)
+		}
+		return detail.DiskConversion.Notes
+	}
+
+	w.health(t, w.device, report("not_encrypted", "preparing"))
+	n := notes()
+	if n.PausedReason != "packages_busy" || n.PausedSince == nil || !n.PausedSince.Equal(since) || n.CleanupError != "" ||
+		n.InitrdIssue != "boot_space_low" || n.BootSpaceNeeded != 90 || n.BootSpaceFree != 40 {
+		t.Fatalf("preparing %+v", n)
+	}
+	if _, err := w.devices.Get(w.as(uuid.Must(uuid.NewV7()), principal.RoleOrgAdmin, true), w.device); !errors.Is(err, problem.NotFound) {
+		t.Fatalf("another organization: %v", err)
+	}
+
+	w.post(t, w.device, protocol.EventDiskConversionPrepared, map[string]any{"conversion_id": conversion.String(), "layout": "lvm",
+		"volume": uuid.NewString(), "data_bytes": 1000})
+	w.health(t, w.device, report("not_encrypted", "prepared"))
+	if n := notes(); n.PausedReason != "" || n.PausedSince != nil || n.CleanupError != "" || n.InitrdIssue != "boot_space_low" {
+		t.Fatalf("prepared %+v", n)
+	}
+
+	w.post(t, w.device, protocol.EventDiskConversionFailed, map[string]any{"conversion_id": conversion.String(), "stage": "prepare", "reason": "x"})
+	w.expectPhase(t, conversion, "failed")
+	w.health(t, w.device, report("not_encrypted", "failed"))
+	if n := notes(); n.PausedReason != "" || n.PausedSince != nil || n.CleanupError != "dracut failed" || n.InitrdIssue != "boot_space_low" {
+		t.Fatalf("failed %+v", n)
+	}
+	w.health(t, w.device, `{"disk": {"state": "not_encrypted", "keyslots": 0, "conversion": {"eligible": false, "phase": "failed"}}}`)
+	if n := notes(); n != (disk.ConversionNotes{}) {
+		t.Fatalf("after a check-in without notes %+v", n)
 	}
 }

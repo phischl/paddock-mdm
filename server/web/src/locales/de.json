@@ -856,7 +856,18 @@
         "progressAt": "letzte Meldung {at}",
         "paused": {
           "on_battery": "pausiert: Das Gerät läuft im Akkubetrieb",
-          "helper_not_running": "pausiert: Der Verschlüsselungshelfer läuft nicht; er startet beim nächsten Check-in oder Neustart erneut"
+          "helper_not_running": "pausiert: Der Verschlüsselungshelfer läuft nicht; er startet beim nächsten Check-in oder Neustart erneut",
+          "packages_busy": "pausiert: Auf dem Gerät läuft eine Softwareinstallation oder -aktualisierung"
+        },
+        "packagesBusy": "Wartet seit {at}: Auf dem Gerät läuft eine Softwareinstallation oder -aktualisierung. Die Vorbereitung geht von selbst weiter, sobald sie beendet ist.",
+        "cleanupPending": "Das Gerät hat die abgebrochene Verschlüsselung noch nicht aus seinen Startdateien entfernt und versucht es beim nächsten Check-in erneut. Letzter Versuch: {reason}.",
+        "initrdIssues": {
+          "boot_space_low": "Auf der Boot-Partition (/boot) ist zu wenig Platz, um die Startdateien neu zu erstellen: {needed} benötigt, {free} frei. Dort Platz schaffen, zum Beispiel durch Entfernen alter Kernel; das Gerät versucht es von selbst erneut.",
+          "no_bootable_kernel": "Das Gerät hat keinen Kernel, dessen Startdateien es neu erstellen kann. Der Schritt wartet, bis ein Kernel installiert ist.",
+          "kernel_not_buildable": "Die Startdateien von Kernel {kernel} lassen sich nicht neu erstellen, weil seine Modulliste fehlt. Der Schritt wartet; diesen Kernel neu installieren oder entfernen.",
+          "orphan_initrd_removed": "Das Gerät hat die Startdateien eines Kernels entfernt, der nicht mehr starten kann, weil sie den Verschlüsselungsschlüssel enthielten.",
+          "key_material_hardlinked": "Eine Datei mit dem Verschlüsselungsschlüssel hat auf dem Gerät weitere Hardlinks. Die Bereinigung kann nicht abschließen; siehe Runbook.",
+          "key_material_shared_bootable": "Die Startdateien von Kernel {kernel} teilen ihre Daten mit einer Datei, die den Verschlüsselungsschlüssel enthält. Sie bleiben, bis sie neu erstellt sind; siehe Runbook."
         },
         "failed": "Die Verschlüsselung ist in der Phase „{stage}“ fehlgeschlagen: {reason}. Siehe Runbook.",
         "failures": {

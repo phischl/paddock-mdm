@@ -64,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and reported as `key_material_hardlinked`; one that a bootable kernel's start-up image points to is kept until that
   kernel's image is rebuilt (`key_material_shared_bootable` with the kernel). Overwriting never takes extra room on
   the boot partition; on btrfs such files are only removed.
+- Admin API and portal: an in-place encryption now shows what the device reports while it waits or is stuck. While
+  the device prepares and a software installation or update holds the package manager, the conversion carries
+  `paused_reason: packages_busy` with `paused_since`; after a failure or a cancel, `cleanup_error` says why the
+  device's last cleanup attempt did not finish; and `initrd_issue` (with `initrd_issue_kernel`, `boot_space_needed`
+  and `boot_space_free` where they apply) says why the device cannot rebuild its boot files, for example too little
+  room in `/boot`. All fields are optional additions to `DeviceDiskConversion`; the portal's disk card explains each
+  of them.
 
 ### Security
 

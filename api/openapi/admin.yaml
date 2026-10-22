@@ -5022,8 +5022,10 @@ components:
     DeviceDiskConversion:
       type: object
       description: >-
-        An in-place encryption of the device's root volume (ADR 0039, plan M8e decision 10). done_bytes, eta_s,
-        paused_reason and progress_at come from the last check-in while the phase is encrypting and are null otherwise.
+        An in-place encryption of the device's root volume (ADR 0039, plan M8e decision 10). done_bytes, eta_s and
+        progress_at come from the last check-in while the phase is encrypting and are null otherwise. paused_reason and
+        paused_since, cleanup_error and the initrd issue come from the last check-in where the phase has them (plan M8e
+        amendment 2026-10-21, items 17 to 19) and are absent otherwise.
       required: [id, phase, requested_at, reason, command_id, command_status, layout, luks_uuid, data_bytes, done_bytes,
                  eta_s, paused_reason, progress_at, failure_stage, failure_reason, finished_at, abort_command_id,
                  abort_command_status, abort_refused_reason, active]
@@ -5045,8 +5047,28 @@ components:
         data_bytes: { type: integer, format: int64, nullable: true, description: Bytes to encrypt. }
         done_bytes: { type: integer, format: int64, nullable: true }
         eta_s: { type: integer, format: int64, nullable: true }
-        paused_reason: { type: string, nullable: true, description: "on_battery or helper_not_running." }
+        paused_reason:
+          type: string
+          nullable: true
+          description: >-
+            Why the device waits: on_battery or helper_not_running while encrypting; packages_busy while the phase is
+            requested and the device prepares (a package run holds dpkg's locks).
+        paused_since: { type: string, format: date-time, description: "When the wait began; packages_busy only." }
         progress_at: { type: string, format: date-time, nullable: true, description: When the device measured the progress. }
+        cleanup_error:
+          type: string
+          description: >-
+            Why the device's last attempt to clean up after a failure or a cancel did not finish, while the cleanup is
+            pending (phases failed and cancelled). Diagnostic text, not a code and not localized: the first line of the
+            device's error without control characters, at most 200 characters.
+        initrd_issue:
+          type: string
+          description: >-
+            Why the device's initrd work for the conversion cannot go on: boot_space_low, no_bootable_kernel,
+            kernel_not_buildable, orphan_initrd_removed, key_material_hardlinked or key_material_shared_bootable.
+        initrd_issue_kernel: { type: string, description: "The kernel version of kernel_not_buildable or key_material_shared_bootable." }
+        boot_space_needed: { type: integer, format: int64, description: "Bytes needed in /boot; boot_space_low only." }
+        boot_space_free: { type: integer, format: int64, description: "Bytes free in /boot; boot_space_low only." }
         failure_stage: { type: string, nullable: true, description: "preflight, prepare, init or resume." }
         failure_reason: { type: string, nullable: true }
         finished_at: { type: string, format: date-time, nullable: true }

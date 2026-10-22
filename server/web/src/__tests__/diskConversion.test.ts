@@ -334,6 +334,53 @@ describe('in-place encryption: progress and cancel (plan M8e decisions 8 and 25)
   })
 })
 
+describe('in-place encryption: waits and stuck boot files (plan M8e amendment 2026-10-21, items 17 to 19)', () => {
+  it('shows the wait for a package run with its start while the device prepares', async () => {
+    disk = { ...base, state: 'not_encrypted', disk_conversion: row('requested', { paused_reason: 'packages_busy', paused_since: at }) }
+    await mountCard()
+    expect(text('disk-convert-wait')).toMatch(/^Waiting since .+: a software installation or update is running on the device\. The preparation continues on its own once it has finished\.$/)
+    expect(el('disk-convert-initrd-issue')).toBeNull()
+    expect(el('disk-convert-cleanup')).toBeNull()
+  })
+
+  it('shows no wait once the device is prepared', async () => {
+    disk = { ...base, state: 'not_encrypted', disk_conversion: row('prepared') }
+    await mountCard()
+    expect(el('disk-convert-wait')).toBeNull()
+  })
+
+  it('shows the room missing in /boot in MiB, the need rounded up and the free room down', async () => {
+    disk = {
+      ...base, state: 'not_encrypted',
+      disk_conversion: row('requested', { initrd_issue: 'boot_space_low', boot_space_needed: 90 * 2 ** 20 - 1, boot_space_free: 89 * 2 ** 20 + 1 }),
+    }
+    await mountCard()
+    expect(text('disk-convert-initrd-issue')).toBe('The boot partition (/boot) has too little free space to rebuild the boot files: 90 MiB needed, 89 MiB free. Free space there, for example by removing old kernels; the device retries on its own.')
+  })
+
+  it('names the kernel of an issue and shows an unknown issue as reported', async () => {
+    disk = { ...base, state: 'tpm_pin_missing', disk_conversion: row('completed', { initrd_issue: 'kernel_not_buildable', initrd_issue_kernel: '6.8.0-45-generic', finished_at: at }) }
+    await mountCard()
+    expect(text('disk-convert-initrd-issue')).toBe('The boot files of kernel 6.8.0-45-generic cannot be rebuilt because its module list is missing. The step waits; reinstall or remove that kernel.')
+    wrapper?.unmount()
+    disk = { ...disk, disk_conversion: row('completed', { initrd_issue: 'newer_issue', finished_at: at }) }
+    await mountCard()
+    expect(text('disk-convert-initrd-issue')).toBe('newer_issue')
+  })
+
+  it('shows why a cleanup after a cancel is still pending, with the runbook', async () => {
+    disk = {
+      ...base, state: 'not_encrypted',
+      disk_conversion: row('cancelled', { finished_at: at, cleanup_error: 'dracut: no space left on device', initrd_issue: 'key_material_hardlinked', active: false }),
+    }
+    await mountCard()
+    const alert = el('disk-convert-cleanup')!
+    expect(alert.textContent).toContain('The device has not yet removed the abandoned encryption from its boot files and retries at its next check-in. Last attempt: dracut: no space left on device.')
+    expect(alert.querySelector('a')?.getAttribute('href')).toContain('docs/operations/in-place-encryption.md')
+    expect(text('disk-convert-initrd-issue')).toBe('A file holding the encryption key has further hard links on the device. The cleanup cannot finish; see the runbook.')
+  })
+})
+
 describe('in-place encryption: the conversion key on /boot (plan M8e §14.6 decision 52)', () => {
   it.each([
     ['encrypting', true, true],

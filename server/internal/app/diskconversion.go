@@ -80,7 +80,9 @@ type DiskConversion struct {
 	pgstore.GetLatestDiskConversionRow
 	// Progress is health.disk.conversion of the last check-in while the conversion is encrypting; nil otherwise.
 	Progress *protocol.DiskConversion
-	Active   bool
+	// Notes are the wait, the cleanup's reason and the initrd issue of the last check-in where the phase has them.
+	Notes  disk.ConversionNotes
+	Active bool
 }
 
 // loadDiskConversion returns the latest conversion of a device with the disk health of its last check-in; nil
@@ -96,6 +98,9 @@ func loadDiskConversion(ctx context.Context, q *pgstore.Queries, deviceID uuid.U
 	out := &DiskConversion{GetLatestDiskConversionRow: row}
 	if health != nil && row.DeviceDiskConversion.Phase == disk.PhaseEncrypting {
 		out.Progress = health.Conversion
+	}
+	if health != nil {
+		out.Notes = disk.Notes(row.DeviceDiskConversion.Phase, health.Conversion)
 	}
 	out.Active = disk.ConversionActive(row.DeviceDiskConversion.Phase, health, row.CompletedAt, time.Now())
 	return out, nil
