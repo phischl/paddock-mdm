@@ -1555,6 +1555,12 @@ func TestEnrollmentAfterCompletion(t *testing.T) {
 	if h := a.conversionHealth(); h.EnrollmentDeferred != "" {
 		t.Fatalf("completed: %+v", h)
 	}
+	// The completing pass took its report before it read the header: an encrypting value is not reported at completed.
+	a.enrollmentDeferred = "reencrypt"
+	if h := a.conversionHealth(); h.EnrollmentDeferred != "" {
+		t.Fatalf("encrypting value at completed: %+v", h)
+	}
+	a.enrollmentDeferred = ""
 	_ = os.Remove(d.Path(marker))
 	a.tickConversion(context.Background())
 	runWorker(t, a)

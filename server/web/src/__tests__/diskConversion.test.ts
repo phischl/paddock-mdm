@@ -409,6 +409,26 @@ describe('in-place encryption: the conversion key on /boot (plan M8e §14.6 deci
 
 describe('in-place encryption: the deferred enrollment (plan M8e amendment 2026-10-22, item 22)', () => {
   it.each([
+    ['completed', 'reencrypt_after_completed', true],
+    ['completed', undefined, false],
+    ['encrypting', 'reencrypt_after_completed', false],
+  ] as const)('phase %s with enrollment_deferred %s warns that the disk refuses the enrollment: %s', async (phase, deferred, shown) => {
+    disk = {
+      ...base, state: 'encrypting',
+      conversion: { eligible: false, key_on_boot: true, ...(deferred ? { enrollment_deferred: deferred } : {}) },
+      disk_conversion: row(phase, { data_bytes: 200e9, done_bytes: 100e9, eta_s: 5400, progress_at: at }),
+    }
+    await mountCard()
+    if (shown) {
+      expect(text('disk-convert-enrollment-refused')).toBe('The encryption has completed, but the disk still refuses the boot ' +
+        'PIN and the TPM unlock: its header is still marked for the background encryption. The key stays on the boot ' +
+        'partition; see the device\'s log and the runbook.')
+    } else {
+      expect(el('disk-convert-enrollment-refused')).toBeNull()
+    }
+  })
+
+  it.each([
     ['reencrypt', true],
     [undefined, false],
   ] as const)('enrollment_deferred %s shows the line in the progress panel: %s', async (deferred, shown) => {

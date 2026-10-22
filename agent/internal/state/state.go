@@ -201,6 +201,10 @@ type LUKS struct {
 	// Volumes are the LUKS volumes of /etc/crypttab other than the root volume, by LUKS UUID (PDK-009). Their header
 	// generations share the counter HeaderAttempted with the root volume.
 	Volumes map[string]*LUKSVolume `json:"volumes,omitempty"`
+	// EnrollmentExpected is set by the agent once an in-place encryption completed without a TPM keyslot and cleared
+	// once the keyslots are recorded with one: until then the first-boot disk setup's TPM keyslot is the expected
+	// enrollment, no tampering (plan M8e amendment 2026-10-22, item 22).
+	EnrollmentExpected bool `json:"enrollment_expected,omitempty"`
 }
 
 // LUKSVolume is the persistent state of a LUKS volume other than the root volume: the keyslot kinds recorded last

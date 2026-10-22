@@ -238,8 +238,9 @@ func TestEnrollmentAfterCompletionNoTamper(t *testing.T) {
 		a.tickConversion(context.Background())
 		runWorker(t, a)
 		a.tickLUKS(context.Background(), true)
-		if a.st.Conversion.Phase != state.ConversionCompleted || !d.Exists("/var/lib/paddock/disk-setup-pending") {
-			t.Fatalf("foreign %v: completed %+v", foreign, a.st.Conversion)
+		if a.st.Conversion.Phase != state.ConversionCompleted || !d.Exists("/var/lib/paddock/disk-setup-pending") ||
+			!a.st.LUKS.EnrollmentExpected {
+			t.Fatalf("foreign %v: completed %+v, expected %v", foreign, a.st.Conversion, a.st.LUKS.EnrollmentExpected)
 		}
 
 		// The next boot: disk-setup enrolls the PIN and removes the marker.
@@ -260,8 +261,28 @@ func TestEnrollmentAfterCompletionNoTamper(t *testing.T) {
 		if n := len(eventsOfType(t, a, protocol.EventTamperKeyslotChanged)); (n == 1) != foreign || n > 1 {
 			t.Fatalf("foreign %v: tamper events %d", foreign, n)
 		}
-		if !foreign && !a.st.Conversion.InitrdRegenerated {
-			t.Fatalf("not regenerated: %+v", a.st.Conversion)
+		if !foreign && !a.st.Conversion.InitrdRegenerated || a.st.LUKS.EnrollmentExpected {
+			t.Fatalf("not regenerated: %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
 		}
+	}
+}
+
+// TestEnrollmentExpectationRevoked (item 22): a revocation hand-over after the completion withdraws the expected
+// enrollment, so that any later keyslot change is reported.
+func TestEnrollmentExpectationRevoked(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	a.startConversion(context.Background())
+	runWorker(t, a)
+	d.set(func(d *convDevice) { d.slots = []string{"password"} })
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if a.st.Conversion.Phase != state.ConversionCompleted || !a.st.LUKS.EnrollmentExpected {
+		t.Fatalf("completed %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
+	}
+	at := a.d.Now()
+	a.st.Conversion.RevokedAt = &at
+	a.tickConversion(context.Background())
+	if a.st.LUKS.EnrollmentExpected {
+		t.Fatal("still expected after the revocation")
 	}
 }

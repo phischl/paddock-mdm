@@ -894,9 +894,15 @@ func (a *Agent) tickConverted(ctx context.Context) {
 // deferredEnrollment is enrollment_deferred (plan M8e amendment 2026-10-22, item 22): while the initrd was not
 // regenerated, the converted volume's header is marked for the reencryption — the mandatory requirement or the
 // reencrypt keyslot — and no TPM keyslot exists, reencrypt while encrypting and reencrypt_after_completed once
-// completed (stop condition S15, logged once per start). An unreadable header reports none.
+// completed (how stop condition S15 shows on the device, logged once per start). An unreadable header reports none.
+// A completed conversion without a TPM keyslot also records that the luks reconciler is to expect the first-boot
+// enrollment (state.LUKS.EnrollmentExpected); a revocation hand-over withdraws it.
 func (a *Agent) deferredEnrollment(ctx context.Context) string {
 	c := a.st.Conversion
+	if a.st.LUKS.EnrollmentExpected && a.conversionRevoked() {
+		a.st.LUKS.EnrollmentExpected = false
+		a.saveState()
+	}
 	if !converted(c) || c.InitrdRegenerated {
 		return ""
 	}
@@ -904,6 +910,11 @@ func (a *Agent) deferredEnrollment(ctx context.Context) string {
 	if err != nil {
 		slog.DebugContext(ctx, "the converted volume's header is unreadable for the enrollment check", "error", err)
 		return ""
+	}
+	if c.Phase == state.ConversionCompleted && !encrypt.HasTPMKeyslot(md) && !a.st.LUKS.EnrollmentExpected &&
+		!a.conversionRevoked() {
+		a.st.LUKS.EnrollmentExpected = true
+		a.saveState()
 	}
 	if !md.ReencryptRequired() && !md.Reencrypting() || encrypt.HasTPMKeyslot(md) {
 		return ""
@@ -1180,7 +1191,7 @@ func (a *Agent) clearConversion(ctx context.Context) {
 		return
 	}
 	slog.InfoContext(ctx, "in-place encryption finished", "conversion_id", c.ID, "disk", disk.State)
-	a.st.Conversion = nil
+	a.st.Conversion, a.st.LUKS.EnrollmentExpected = nil, false
 	a.saveState()
 }
 
@@ -1204,8 +1215,11 @@ func (a *Agent) conversionHealth() *protocol.DiskConversion {
 		at := *c.PackagesBusySince
 		h.PausedReason, h.PausedSince = encrypt.PausedPackagesBusy, &at
 	}
-	if converted(c) {
-		h.EnrollmentDeferred = a.enrollmentDeferred
+	// The value of the last full pass, only in its own phase: the pass that completes reads the header after this
+	// report was taken.
+	if d := a.enrollmentDeferred; c.Phase == state.ConversionEncrypting && d == encrypt.EnrollmentDeferredReencrypt ||
+		c.Phase == state.ConversionCompleted && d == encrypt.EnrollmentDeferredReencryptAfterCompleted {
+		h.EnrollmentDeferred = d
 	}
 	if c.Phase != state.ConversionEncrypting {
 		return h

@@ -382,6 +382,15 @@ onBeforeUnmount(hide)
                 {{ t('devices.disk.convert.enrollmentDeferred') }}
               </p>
             </template>
+            <v-alert
+              v-if="conversion.phase === 'completed' && health?.enrollment_deferred === 'reencrypt_after_completed'"
+              type="warning"
+              variant="tonal"
+              class="conflict"
+              data-testid="disk-convert-enrollment-refused"
+            >
+              {{ t('devices.disk.convert.enrollmentDeferredAfterCompleted') }}
+            </v-alert>
           </template>
           <p
             v-if="waitText"

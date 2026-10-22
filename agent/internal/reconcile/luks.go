@@ -251,8 +251,9 @@ func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 		return
 	}
 	kinds := md.Kinds()
-	if md.Reencrypting() {
-		// An unfinished online reencryption (plan M8e decision 3): no keyslot is recorded, changed, escrowed or reported
+	if md.Reencrypting() || md.ReencryptRequired() {
+		// An unfinished online reencryption (plan M8e decision 3) — its keyslot, or its mandatory requirement, which
+		// refuses every new keyslot (amendment 2026-10-22, item 22): no keyslot is recorded, changed, escrowed or reported
 		// as tampering until it completes. The root volume alone is listed, not escrowed (decision 23).
 		uuid, err := luks.UUID(ctx, m.Tools, vol.Device)
 		if err != nil {
@@ -268,8 +269,10 @@ func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 		m.health = m.report(protocol.DiskUnmanaged, kinds)
 		return
 	}
-	if exists(m.Layout.DiskSetupPending()) {
-		// The first-boot disk setup has not enrolled the PIN yet; its changes are no tampering.
+	if exists(m.Layout.DiskSetupPending()) && !m.held() {
+		// The first-boot disk setup has not enrolled the PIN yet; its changes are no tampering. A conversion arms it only
+		// after the completion and may leave it armed for weeks (plan M8e amendment 2026-10-22, item 22): its passes go
+		// on, and watch expects the enrollment (enrollmentAdded).
 		m.health = m.report(m.state(md, passphrase), kinds)
 		return
 	}
@@ -410,15 +413,19 @@ func (m *LUKS) watch(kinds []string) {
 		slog.Warn("LUKS keyslots changed outside Paddock", "volume", m.rootUUID, "before", m.State.Keyslots, "after", kinds)
 	}
 	m.State.Keyslots = kinds
+	if slices.Contains(kinds, luks.KindTPM2) || slices.Contains(kinds, luks.KindTPM2PIN) {
+		m.State.EnrollmentExpected = false
+	}
 	m.save()
 }
 
 // enrollmentAdded reports whether after is before plus the TPM keyslot the first-boot disk setup enrolls under the
-// unlock mode of /etc/paddock/disk-setup.json, while a conversion holds the disk and before has no TPM keyslot: the
-// setup runs only after the reencryption completed, when no marker hides the change from watch any more (plan M8e
-// amendment 2026-10-22, item 22). Any other change stays tampering.
+// unlock mode of /etc/paddock/disk-setup.json, while the agent expects that enrollment of a completed conversion
+// (State.EnrollmentExpected) and before has no TPM keyslot: the setup runs only after the reencryption completed, when
+// no marker hides the change from watch any more (plan M8e amendment 2026-10-22, item 22). Any other change stays
+// tampering.
 func (m *LUKS) enrollmentAdded(before, after []string) bool {
-	if !m.held() || slices.Contains(before, luks.KindTPM2) || slices.Contains(before, luks.KindTPM2PIN) {
+	if !m.State.EnrollmentExpected || slices.Contains(before, luks.KindTPM2) || slices.Contains(before, luks.KindTPM2PIN) {
 		return false
 	}
 	i := slices.Index(after, tpmKind(m.diskSetupMode()))
