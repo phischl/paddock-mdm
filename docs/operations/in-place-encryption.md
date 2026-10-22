@@ -101,9 +101,9 @@ exit
 ```
 
 To reach that shell on purpose (for example when the init step itself misbehaves), add `rd.systemd.unit=emergency.target`
-to the kernel command line in the GRUB menu (`e`). That shell starts without udev, so run
-`udevadm trigger --action=add && udevadm settle` first, open the partition as above, and continue with
-`systemctl default`. A kernel parameter `systemd.mask=paddock-encrypt-init.service` does **not** stop the init step:
+to the kernel command line in the GRUB menu (`e`). That shell starts without udev, so start it first
+(`systemctl start systemd-udevd.service systemd-udev-trigger.service && udevadm settle`), open the partition as above,
+and continue with `systemctl default`. A kernel parameter `systemd.mask=paddock-encrypt-init.service` does **not** stop the init step:
 the initrd enables the unit itself.
 
 ## Aborting at the device: `paddockd encrypt-abort`
