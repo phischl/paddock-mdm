@@ -36,10 +36,12 @@ var (
 // fakeVolume is a LUKS volume of fakeSys.
 type fakeVolume struct {
 	slots     int
-	reencrypt int  // key-less keyslots of type reencrypt, which luksErase leaves in place
-	keep      int  // luks2 keyslots a successful luksErase leaves behind
-	untyped   bool // one more keyslot whose JSON carries no type
-	luks1     bool // only the text dump of a LUKS1 header, no JSON metadata
+	reencrypt int    // key-less keyslots of type reencrypt, which luksErase leaves in place
+	keep      int    // luks2 keyslots a successful luksErase leaves behind
+	untyped   bool   // one more keyslot whose JSON carries no type
+	extraType string // one more keyslot of this type
+	noSlots   bool   // metadata without a keyslots object
+	luks1     bool   // only the text dump of a LUKS1 header, no JSON metadata
 	eraseFail bool
 	// hang blocks luksErase until it is closed, whatever the context says (a disk stuck in the kernel).
 	hang chan struct{}
@@ -89,7 +91,14 @@ func (s *fakeSys) Command(_ context.Context, _ []string, name string, args ...st
 		if v.untyped {
 			slots["31"] = map[string]any{"key_size": 64}
 		}
-		out, _ := json.Marshal(map[string]any{"keyslots": slots, "tokens": map[string]any{}})
+		if v.extraType != "" {
+			slots["30"] = map[string]any{"type": v.extraType, "key_size": 64}
+		}
+		meta := map[string]any{"keyslots": slots, "tokens": map[string]any{}}
+		if v.noSlots {
+			delete(meta, "keyslots")
+		}
+		out, _ := json.Marshal(meta)
 		return string(out), "", 0, nil
 	case args[0] == "luksDump" && v.luks1:
 		var out strings.Builder
@@ -402,6 +411,29 @@ func TestOnlyReencryptKeyslotEraseFails(t *testing.T) {
 func TestUntypedKeyslot(t *testing.T) {
 	sys := newSys(t)
 	sys.volumes["/dev/vda3"] = &fakeVolume{slots: 1, untyped: true}
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
+	if err != nil || e.Erased || e.SlotsAfter != -1 || e.Volumes[0].SlotsAfter != -1 || e.Volumes[0].Erased {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+}
+
+// TestUnknownKeyslotType: a LUKS2 keyslot of a type other than luks2 and reencrypt might hold a key, so the count is
+// unknown and the volume is never reported as erased, also when luksErase removed every luks2 keyslot.
+func TestUnknownKeyslotType(t *testing.T) {
+	sys := newSys(t)
+	sys.volumes["/dev/vda3"] = &fakeVolume{slots: 1, reencrypt: 1, extraType: "foo"}
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
+	if err != nil || e.Erased || e.SlotsAfter != -1 ||
+		!reflect.DeepEqual(e.Volumes, []VolumeErasure{{Device: "/dev/vda3", SlotsAfter: -1}}) {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+}
+
+// TestMetadataWithoutKeyslots: LUKS2 metadata without a keyslots object gives no count, so the volume is never reported
+// as erased.
+func TestMetadataWithoutKeyslots(t *testing.T) {
+	sys := newSys(t)
+	sys.volumes["/dev/vda3"] = &fakeVolume{noSlots: true}
 	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
 	if err != nil || e.Erased || e.SlotsAfter != -1 || e.Volumes[0].SlotsAfter != -1 || e.Volumes[0].Erased {
 		t.Fatalf("execute: %+v %v", e, err)

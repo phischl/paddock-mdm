@@ -390,25 +390,32 @@ func (r *Revoker) eraseVolume(ctx context.Context, device string) VolumeErasure 
 }
 
 // keyslots counts the key-bearing keyslots of device and, second, its non-key keyslots: from the JSON metadata of
-// LUKS2, where only the type luks2 holds key material, or, as LUKS1 has none, from the text dump of a LUKS1 header
-// ("Version: 1", "Key Slot N: ENABLED"), where every enabled keyslot holds a key. It does not use
-// luks.Metadata.Kinds(), whose exclusion of reencrypt serves the reconciler's inventory (plan M8e, amendment
-// 2026-10-22, item 23).
+// LUKS2, where the type luks2 holds key material and the type reencrypt holds none, or, as LUKS1 has none, from the
+// text dump of a LUKS1 header ("Version: 1", "Key Slot N: ENABLED"), where every enabled keyslot holds a key. Metadata
+// without a keyslots object, or a keyslot of any other or unreadable type, gives no count, so the volume is never
+// reported as erased. It does not use luks.Metadata.Kinds(), whose exclusion of reencrypt serves the reconciler's
+// inventory (plan M8e, amendment 2026-10-22, item 23).
 func (r *Revoker) keyslots(ctx context.Context, device string) (int, int, error) {
 	if m, err := luks.Dump(ctx, r.Sys, device); err == nil {
+		if m.Keyslots == nil {
+			return 0, 0, fmt.Errorf("revoke: no keyslots in the metadata of %s", device)
+		}
 		keys, other := 0, 0
 		for slot, raw := range m.Keyslots {
 			var ks struct {
 				Type string `json:"type"`
 			}
-			// A keyslot whose type cannot be read might hold a key: no count, so the volume is never reported erased.
-			if err := json.Unmarshal(raw, &ks); err != nil || ks.Type == "" {
+			if err := json.Unmarshal(raw, &ks); err != nil {
 				return 0, 0, fmt.Errorf("revoke: keyslot %s of %s has no readable type", slot, device)
 			}
-			if ks.Type == "luks2" {
+			// A type cryptsetup adds later might hold a key: it fails closed instead of counting as non-key.
+			switch ks.Type {
+			case "luks2":
 				keys++
-			} else {
+			case "reencrypt":
 				other++
+			default:
+				return 0, 0, fmt.Errorf("revoke: keyslot %s of %s has the unknown type %q", slot, device, ks.Type)
 			}
 		}
 		return keys, other, nil

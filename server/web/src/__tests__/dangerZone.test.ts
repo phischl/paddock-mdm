@@ -190,6 +190,7 @@ describe('danger zone (plan M7c decision 24)', () => {
       expect(items.map((li) => li.firstChild?.textContent?.trim())).toEqual(['/dev/sdb1: 1 keyslot erased', '/dev/sda3: 1 keyslot erased'])
       expect(items[0].textContent).not.toContain('key-less')
       expect(items[1].textContent).toContain('1 key-less keyslot of an unfinished reencryption remains on the volume; it holds no key and does not make the erasure incomplete.')
+      expect(items[1].textContent).toContain('The keys are erased, but the part of the disk the encryption had not reached stays readable.')
       // Only the volume with a leftover keyslot carries the line, and the erasure is not marked incomplete.
       expect(document.querySelectorAll('[data-testid="revocation-other-slots"]')).toHaveLength(1)
       expect([...document.querySelectorAll('p')].filter((p) => p.textContent?.includes('Incomplete: not every encrypted volume'))).toHaveLength(2)
