@@ -2043,10 +2043,10 @@ item 22) contradicts; ADR 0039 amendment 2026-10-22 (S14) corrects both rows.
 
 The maintainer decided on 2026-10-22 that `paddock-revoke` is changed now, before alpha.5, so that only key-bearing
 keyslots count. This is a change to the revocation path under the two-person rule: the maintainer's decision is
-the approval of the change; the verification on real hardware that the rule requires is part of PDK-399 and needs
+the approval of the change; the verification on real hardware that the rule requires is part of PDK-400 and needs
 the maintainer's separate approval before it runs (it is destructive on the device it runs on).
 
-23. **Only key-bearing keyslots count** (`agent/internal/revoke/revoke.go`, the change of PDK-399):
+23. **Only key-bearing keyslots count** (`agent/internal/revoke/revoke.go`, the change of PDK-400):
     - **Definition.** A *key-bearing keyslot* is a LUKS2 keyslot whose JSON `type` is `luks2` — the only keyslot
       type of LUKS2 that holds key material — or, on LUKS1, an enabled keyslot (`Key Slot N: ENABLED`). Every other
       LUKS2 keyslot type (`reencrypt` today; any type cryptsetup adds later) holds no key material and is a
@@ -2063,7 +2063,7 @@ the maintainer's separate approval before it runs (it is destructive on the devi
       requirement) — and the sequence of volumes, the time bounds and every refusal reason are unchanged.
     - **Server.** `server/internal/domain/revocation/confirmation.go::AllErased` is unchanged: it reads `erased`,
       `volumes[].erased` and `volumes[].slots_after`, which now carry the key-bearing counts; the parser ignores
-      `other_slots_after` until the portal shows it (PDK-399 adds it to `VolumeConfirmation` and to
+      `other_slots_after` until the portal shows it (PDK-400 adds it to `VolumeConfirmation` and to
       `RevocationRequest.result.volumes[]` in `api/openapi/admin.yaml` as an optional integer, with the
       description of `result` corrected to "no key-bearing keyslot left"). The audit event
       `revocation.executed` keeps its params (`erased`, `slots_before`, `slots_after`, `volumes`, …); its
@@ -2085,7 +2085,7 @@ the maintainer's separate approval before it runs (it is destructive on the devi
       keyslot and leaves the key-less `reencrypt` keyslot behind; the confirmation counts key-bearing keyslots only
       and reports the leftover separately. The volume is unrecoverable — no header of the conversion is escrowed —
       and the data the reencryption had not reached stays readable. Verified on a throwaway VM and on real hardware
-      (PDK-399)."
+      (PDK-400)."
     - **§14.10 table**, rows `encrypting`, `completed !InitrdRegenerated` and `failed:resume`, column "Lock /
       Destroy": "`paddock-revoke` erases the key-bearing keyslots and reports `erased: true` with
       `other_slots_after: 1` (the `reencrypt` keyslot stays; item 23)".
@@ -2094,7 +2094,7 @@ the maintainer's separate approval before it runs (it is destructive on the devi
       incomplete.", de "{count} schlüssellose Keyslots einer unvollständigen Neuverschlüsselung verbleiben auf dem
       Volume; sie enthalten keinen Schlüssel und machen die Löschung nicht unvollständig." (ICU plural on
       `count`).
-    - **Evidence required by the two-person rule (PDK-399).** (a) The PDK-247 hand test repeated on a throwaway VM
+    - **Evidence required by the two-person rule (PDK-400).** (a) The PDK-247 hand test repeated on a throwaway VM
       with the changed `paddock-revoke` (expected result above; transcript in the result document). (b) A test on
       real hardware: the `paddock_revoke_testtarget` build against a dedicated LUKS2 volume on a USB disk or a
       spare partition of the test laptop that was put into an unfinished reencryption by hand (`cryptsetup
