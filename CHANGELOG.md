@@ -104,6 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Lock or Destroy during an unfinished in-place encryption is now confirmed as erased: the device counts only the
+  keyslots that hold a key, and reports the key-less keyslot of the unfinished encryption, which the erasure leaves
+  behind, separately. The portal names that leftover keyslot under the volume. Before, the confirmation reported such
+  an erasure as incomplete although the disk no longer unlocked.
 - Creating an organization no longer fails when Authentik answers slowly: its groups and device login objects are
   set up with independent steps in parallel (about a third of the round trips), a create step whose answer was lost
   finds the object instead of failing, and the setup continues when the browser gives up. It is bounded at 60 s;

@@ -109,7 +109,9 @@ as for a damaged header (`docs/operations/disk-recovery.md`):
 
 1. Make sure the reason for the Lock is resolved (the device is back with its owner, or with IT). The request on the
    *Revocations* page shows `confirmed` with the device's result (`slots_before`, `slots_after: 0`, and per volume
-   in `volumes`, each with its LUKS `uuid`; the device page lists every volume, the volumes the Lock skipped because
+   in `volumes`, each with its LUKS `uuid`; the counts are key-bearing keyslots — a Lock during an unfinished in-place
+   encryption leaves the key-less `reencrypt` keyslot on the volume, reported as `other_slots_after` and shown as a
+   line under the volume; it holds no key and does not make the erasure incomplete; the device page lists every volume, the volumes the Lock skipped because
    their header was not escrowed (they stay readable), and the crypttab entries the device could not erase with
    certainty; with such entries the erasure is incomplete and the request `failed`). Restore every erased volume as
    below.

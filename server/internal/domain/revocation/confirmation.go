@@ -18,13 +18,16 @@ type Confirmation struct {
 	SharedUUID []string `json:"shared_uuid"`
 }
 
-// VolumeConfirmation is the erasure of one LUKS volume of the device.
+// VolumeConfirmation is the erasure of one LUKS volume of the device. SlotsBefore and SlotsAfter count key-bearing
+// keyslots; OtherSlotsAfter counts the key-less keyslots left on the volume (the reencrypt keyslot of an unfinished
+// reencryption) and does not make the erasure incomplete (plan M8e, amendment 2026-10-22, item 23).
 type VolumeConfirmation struct {
-	Device      string `json:"device"`
-	UUID        string `json:"uuid"`
-	SlotsBefore int    `json:"slots_before"`
-	SlotsAfter  int    `json:"slots_after"`
-	Erased      bool   `json:"erased"`
+	Device          string `json:"device"`
+	UUID            string `json:"uuid"`
+	SlotsBefore     int    `json:"slots_before"`
+	SlotsAfter      int    `json:"slots_after"`
+	OtherSlotsAfter int    `json:"other_slots_after,omitempty"`
+	Erased          bool   `json:"erased"`
 }
 
 // SkippedVolume is a volume a Lock did not erase.
@@ -43,7 +46,7 @@ func ParseConfirmation(raw []byte) Confirmation {
 }
 
 // AllErased reports whether the device erased every volume: the device says so, no volume it lists contradicts it by
-// a keyslot left or a failed erasure, and no crypttab entry is unresolved (plan M4c.1 decision 2, review round 1).
+// a key-bearing keyslot left or a failed erasure, and no crypttab entry is unresolved (plan M4c.1 decision 2, review round 1).
 func (c Confirmation) AllErased() bool {
 	if !c.Erased || len(c.Unresolved) > 0 {
 		return false

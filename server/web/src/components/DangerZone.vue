@@ -373,6 +373,12 @@ onMounted(async () => {
                 :key="'v' + i + ':' + v.device"
               >
                 {{ volumeText(v) }}
+                <div
+                  v-if="typeof v.other_slots_after === 'number' && v.other_slots_after > 0"
+                  data-testid="revocation-other-slots"
+                >
+                  {{ t('devices.danger.revoke.otherSlotsLeft', { count: v.other_slots_after }) }}
+                </div>
               </li>
               <li
                 v-for="(source, i) in volumeResults(r).unresolved"

@@ -998,7 +998,8 @@
         "conversionWarning": {
           "unencrypted": "Dieses Gerät ist noch nicht verschlüsselt; es lehnt Sperren und Zerstören ab, bis die Verschlüsselung begonnen hat.",
           "encrypting": "Die nachträgliche Verschlüsselung ist unvollständig: Der Header ist nicht in Paddock hinterlegt, diese Aktion lässt sich also nicht mit einem hinterlegten Header rückgängig machen, und Daten, die die Verschlüsselung noch nicht erreicht hat, bleiben lesbar. Die Verschlüsselung im Hintergrund wird angehalten, bevor das Gerät handelt."
-        }
+        },
+        "otherSlotsLeft": "{count, plural, one {# schlüsselloser Keyslot einer unvollständigen Neuverschlüsselung verbleibt auf dem Volume; er enthält keinen Schlüssel und macht die Löschung nicht unvollständig.} other {# schlüssellose Keyslots einer unvollständigen Neuverschlüsselung verbleiben auf dem Volume; sie enthalten keinen Schlüssel und machen die Löschung nicht unvollständig.}}"
       }
     },
     "contactFilter": "Kontakt",

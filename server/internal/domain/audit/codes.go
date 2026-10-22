@@ -885,10 +885,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceRevocationConfirmed: {
 		Code: CodeDeviceRevocationConfirmed, Emitted: true,
-		Description: "A device confirmed a revocation before its forced reboot: every keyslot of every LUKS volume of the device is erased (actor: the device).",
+		Description: "A device confirmed a revocation before its forced reboot: every key-bearing keyslot of every LUKS volume of the device is erased (actor: the device).",
 		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "volumes", "unresolved", "skipped_not_escrowed", "shared_uuid", "status"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "status failed means the device reported that the erasure did not complete. erased is true only if every volume has no keyslot left and no crypttab entry is unresolved; slots_before and slots_after are sums over the reported volumes, volumes counts the reported volumes (failed ones included) and unresolved the crypttab entries the device could not erase with certainty (both 0 for devices before M4c.1); skipped_not_escrowed counts the volumes a Lock left alone because their header escrow was not confirmed (PDK-009), shared_uuid the volumes whose LUKS UUID another volume or the root volume has (a Destroy erases them, a Lock skips them).",
+		Note:        "status failed means the device reported that the erasure did not complete. erased is true only if every volume has no key-bearing keyslot left and no crypttab entry is unresolved; slots_before and slots_after are sums of key-bearing keyslots over the reported volumes (a key-less reencrypt keyslot of an unfinished reencryption is not counted; devices before PDK-400 count every keyslot), volumes counts the reported volumes (failed ones included) and unresolved the crypttab entries the device could not erase with certainty (both 0 for devices before M4c.1); skipped_not_escrowed counts the volumes a Lock left alone because their header escrow was not confirmed (PDK-009), shared_uuid the volumes whose LUKS UUID another volume or the root volume has (a Destroy erases them, a Lock skips them).",
 	},
 	CodeDeviceRevocationRefused: {
 		Code: CodeDeviceRevocationRefused, Emitted: true,

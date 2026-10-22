@@ -105,7 +105,7 @@ type Revoker struct {
 const SecondaryWithin = 2 * time.Minute
 
 // Erasure is the confirmation of a token; it is posted as the command result (plan M4c.1 decision 2). Erased is
-// true only if every erased volume has no keyslot left and no crypttab entry is unresolved; SlotsBefore and
+// true only if every erased volume has no key-bearing keyslot left and no crypttab entry is unresolved; SlotsBefore and
 // SlotsAfter are the sums over the volumes (SlotsAfter -1 when a volume's count is unknown), kept for the
 // confirmations of M4c. SkippedNotEscrowed are the volumes a Lock left alone because the token does not confirm
 // their header escrow (PDK-009); they do not make the erasure incomplete. SharedUUID lists the devices whose LUKS UUID
@@ -121,13 +121,16 @@ type Erasure struct {
 	SharedUUID         []string        `json:"shared_uuid,omitempty"`
 }
 
-// VolumeErasure is the erasure of one LUKS volume.
+// VolumeErasure is the erasure of one LUKS volume. SlotsBefore and SlotsAfter count key-bearing keyslots;
+// OtherSlotsAfter counts the non-key keyslots left after the erasure (the `reencrypt` keyslot of an unfinished
+// reencryption, which luksErase does not remove) and never affects Erased (plan M8e, amendment 2026-10-22, item 23).
 type VolumeErasure struct {
-	Device      string `json:"device"`
-	UUID        string `json:"uuid,omitempty"`
-	SlotsBefore int    `json:"slots_before"`
-	SlotsAfter  int    `json:"slots_after"` // -1: unknown, never reported as erased
-	Erased      bool   `json:"erased"`
+	Device          string `json:"device"`
+	UUID            string `json:"uuid,omitempty"`
+	SlotsBefore     int    `json:"slots_before"`
+	SlotsAfter      int    `json:"slots_after"` // -1: unknown, never reported as erased
+	OtherSlotsAfter int    `json:"other_slots_after,omitempty"`
+	Erased          bool   `json:"erased"`
 }
 
 // SkippedVolume is a volume a Lock did not erase; UUID is "" when cryptsetup reported none.
@@ -369,32 +372,50 @@ func (r *Revoker) eraseWithin(ctx context.Context, devices []string, within time
 	return out
 }
 
-// eraseVolume runs `cryptsetup luksErase` on device and counts the keyslots before and after.
+// eraseVolume runs `cryptsetup luksErase` on device and counts the key-bearing keyslots before and after.
 func (r *Revoker) eraseVolume(ctx context.Context, device string) VolumeErasure {
 	v := VolumeErasure{Device: device}
-	if n, err := r.keyslots(ctx, device); err == nil {
+	if n, _, err := r.keyslots(ctx, device); err == nil {
 		v.SlotsBefore = n
 	}
 	_, _, exit, err := r.Sys.Command(ctx, nil, "cryptsetup", "luksErase", "--batch-mode", "--", device)
-	n, countErr := r.keyslots(ctx, device)
+	n, other, countErr := r.keyslots(ctx, device)
 	if countErr != nil {
 		v.SlotsAfter = -1
 		return v
 	}
-	v.SlotsAfter = n
+	v.SlotsAfter, v.OtherSlotsAfter = n, other
 	v.Erased = err == nil && exit == 0 && v.SlotsAfter == 0
 	return v
 }
 
-// keyslots counts the keyslots of device: from the JSON metadata of LUKS2 or, as LUKS1 has none, from the text dump
-// of a LUKS1 header ("Version: 1", "Key Slot N: ENABLED").
-func (r *Revoker) keyslots(ctx context.Context, device string) (int, error) {
+// keyslots counts the key-bearing keyslots of device and, second, its non-key keyslots: from the JSON metadata of
+// LUKS2, where only the type luks2 holds key material, or, as LUKS1 has none, from the text dump of a LUKS1 header
+// ("Version: 1", "Key Slot N: ENABLED"), where every enabled keyslot holds a key. It does not use
+// luks.Metadata.Kinds(), whose exclusion of reencrypt serves the reconciler's inventory (plan M8e, amendment
+// 2026-10-22, item 23).
+func (r *Revoker) keyslots(ctx context.Context, device string) (int, int, error) {
 	if m, err := luks.Dump(ctx, r.Sys, device); err == nil {
-		return len(m.Keyslots), nil
+		keys, other := 0, 0
+		for slot, raw := range m.Keyslots {
+			var ks struct {
+				Type string `json:"type"`
+			}
+			// A keyslot whose type cannot be read might hold a key: no count, so the volume is never reported erased.
+			if err := json.Unmarshal(raw, &ks); err != nil || ks.Type == "" {
+				return 0, 0, fmt.Errorf("revoke: keyslot %s of %s has no readable type", slot, device)
+			}
+			if ks.Type == "luks2" {
+				keys++
+			} else {
+				other++
+			}
+		}
+		return keys, other, nil
 	}
 	out, _, exit, err := r.Sys.Command(ctx, nil, "cryptsetup", "luksDump", "--", device)
 	if err != nil || exit != 0 {
-		return 0, fmt.Errorf("revoke: no keyslot count for %s", device)
+		return 0, 0, fmt.Errorf("revoke: no keyslot count for %s", device)
 	}
 	luks1, n := false, 0
 	for _, line := range strings.Split(out, "\n") {
@@ -407,9 +428,9 @@ func (r *Revoker) keyslots(ctx context.Context, device string) (int, error) {
 		}
 	}
 	if !luks1 {
-		return 0, fmt.Errorf("revoke: no keyslot count for %s", device)
+		return 0, 0, fmt.Errorf("revoke: no keyslot count for %s", device)
 	}
-	return n, nil
+	return n, 0, nil
 }
 
 // confirm posts the result until the server accepts it or ConfirmTimeout has passed.

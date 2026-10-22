@@ -94,6 +94,8 @@ export interface VolumeResult {
   device: string
   slots_before: number
   slots_after: number
+  /** Key-less keyslots left on the volume, the reencrypt keyslot of an unfinished reencryption (plan M8e item 23). */
+  other_slots_after?: number
   erased: boolean
 }
 
