@@ -44,7 +44,8 @@ func TestPrepareLVM(t *testing.T) {
 		t.Fatalf("escrow requests %+v", f.server.requests)
 	}
 	req := f.server.requests[0]
-	if req.Kind != escrow.KindLUKSRecoveryKey || req.Generation != 3 || req.Volume != c.LUKSUUID || c.LUKSUUID == "" || req.Ciphertext == "" ||
+	// A header field on a secret is refused by POST /v1/escrow (the server's own predicate, PDK-247).
+	if req.Kind != escrow.KindLUKSRecoveryKey || req.Generation != 3 || req.HasHeaderFields() || c.LUKSUUID == "" || req.Ciphertext == "" ||
 		req.KeyVersion != 1 {
 		t.Fatalf("escrow request %+v, conversion %+v", req, c)
 	}
@@ -378,7 +379,8 @@ func TestPrepareStopsWhenAdopted(t *testing.T) {
 
 // TestPreparePlanRecordedAfterStop: Review 2, major-2 — a run that wrote plan.json but could not record it in the state
 // (stopped, or the save failed) leaves no conversion without its partition and LUKS UUID: the rerun records them from
-// plan.json before step 3, and the key is escrowed for that LUKS UUID.
+// plan.json before step 3, and the key escrowed before the preparation is announced for that LUKS UUID (the escrow
+// request itself carries no volume, plan M8e amendment item 20).
 func TestPreparePlanRecordedAfterStop(t *testing.T) {
 	f := newFixture(t)
 	f.store.saveErr = func(*state.DiskConversion) error {
@@ -404,8 +406,17 @@ func TestPreparePlanRecordedAfterStop(t *testing.T) {
 		c.Layout != plan.Layout || c.DataBytes != plan.DataBytes {
 		t.Fatalf("conversion %+v, plan %+v", c, plan)
 	}
-	if r := f.server.requests; len(r) != 1 || r[0].Volume != plan.LUKSUUID {
+	if r := f.server.requests; len(r) != 1 || r[0].HasHeaderFields() {
 		t.Fatalf("escrows %+v", r)
+	}
+	var prepared []any
+	for _, e := range f.store.events {
+		if e.typ == protocol.EventDiskConversionPrepared {
+			prepared = append(prepared, e.data["volume"])
+		}
+	}
+	if len(prepared) != 1 || prepared[0] != plan.LUKSUUID {
+		t.Fatalf("disk.conversion_prepared volumes %v, want %s", prepared, plan.LUKSUUID)
 	}
 }
 

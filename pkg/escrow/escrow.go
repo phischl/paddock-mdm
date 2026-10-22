@@ -93,6 +93,12 @@ type Request struct {
 	Size       int64  `json:"size,omitempty"`        // bytes of the sealed header object
 }
 
+// HasHeaderFields reports whether the request carries a field only a luks_header may carry (Volume, WrappedDEK,
+// Nonce, SHA256, Size): POST /v1/escrow refuses a secret with any of them (PDK-009).
+func (r Request) HasHeaderFields() bool {
+	return r.WrappedDEK != "" || r.Nonce != "" || r.SHA256 != "" || r.Size != 0 || r.Volume != ""
+}
+
 // Accepted is the 202 body of POST /v1/escrow. UploadURL is the presigned PUT of a header (valid 10 minutes).
 type Accepted struct {
 	EscrowID  string `json:"escrow_id"`

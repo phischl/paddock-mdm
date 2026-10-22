@@ -300,6 +300,11 @@ type diskInfo struct {
 		Before []string `json:"before"`
 		After  []string `json:"after"`
 	} `json:"last_keyslot_change"`
+	// Conversion is the in-place encryption as the last check-in reported it (plan M8e).
+	Conversion *struct {
+		Eligible bool     `json:"eligible"`
+		Reasons  []string `json:"reasons"`
+	} `json:"conversion"`
 }
 
 func (i diskInfo) state() string {

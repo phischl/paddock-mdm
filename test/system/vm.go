@@ -29,6 +29,8 @@ type VM struct {
 	t    *testing.T
 	// group coordinates this VM with the other VMs of a parallel test (nil: the test drives its VMs itself).
 	group *vmGroup
+	// serial is the file the first serial port of a throwaway VM writes to (buildAIVM).
+	serial string
 }
 
 func newVM(t *testing.T, root, name string) *VM {

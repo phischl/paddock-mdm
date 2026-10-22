@@ -78,7 +78,7 @@ func validateEscrow(req escrow.Request) (ingest.Escrow, error) {
 		return ingest.Escrow{}, errInvalidRequest.with("generation and key_version must be positive")
 	}
 	m := ingest.Escrow{EscrowID: id, Kind: req.Kind, Generation: req.Generation, KeyVersion: req.KeyVersion}
-	header := req.WrappedDEK != "" || req.Nonce != "" || req.SHA256 != "" || req.Size != 0 || req.Volume != ""
+	header := req.HasHeaderFields()
 	if req.Volume != "" {
 		volume, err := uuid.Parse(req.Volume)
 		if err != nil || volume.String() != req.Volume {

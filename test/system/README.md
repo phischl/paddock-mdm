@@ -42,3 +42,36 @@ the whole organization shares is coordinated through the VMs' `vmGroup` (`parall
   rollout (S-UP3) starts it with the failure threshold 1, and a simulated device reports a failed update to halt it.
 
 A new gate that changes shared state uses one of them; anything else it creates gets the run's suffix.
+
+## Throwaway VMs
+
+Some gates install a VM of their own from an Ubuntu Desktop ISO and delete it when they end; they never run with
+`VM=all` and are opted into through `VM`, one gate per `make` invocation:
+
+| VM | Gates | ISO |
+| --- | --- | --- |
+| `paddock-ai-2604` (SSH 2228, 40 GiB) | D-AI `TestAutoinstallGate`, S-DU1 `TestDiskUnlockModeTPMOnly` | `PADDOCK_SYSTEM_ISO_2604` |
+| `paddock-ie-2604` (SSH 2229, 16 GiB) | S-IE1 `TestInPlaceEncryptionLVM` | `PADDOCK_SYSTEM_ISO_2604` |
+| `paddock-ie-2404` (SSH 2230, 16 GiB) | S-IE2 `TestInPlaceEncryptionPlain`, S-IE4 `TestInPlaceEncryptionCleanupAdopt` | `PADDOCK_SYSTEM_ISO_2404` |
+
+```sh
+make system-test VM=paddock-ai-2604 T='^TestDiskUnlockModeTPMOnly$$'
+make system-test VM=paddock-ie-2604 T='^TestInPlaceEncryptionLVM$$'
+make system-test VM=paddock-ie-2404 T='^TestInPlaceEncryptionPlain$$'
+make system-test VM=paddock-ie-2404 T='^TestInPlaceEncryptionCleanupAdopt$$'
+```
+
+The ISOs default to `~/Downloads/ubuntu-26.04.1-desktop-amd64.iso` and `~/Downloads/ubuntu-24.04.5.1-desktop-amd64.iso`.
+`$$` is make's escape for `$`: a bare `$` at the end of `T` is dropped, the pattern becomes a prefix match and also
+runs every test whose name starts the same; a run whose log lacks `--- PASS:` for its gate is not green, whatever its
+exit code (a filter that matches nothing passes). Never name a throwaway VM together with a base VM in `VM`: the base
+gates would run on the throwaway name. The in-place encryption gates (plan M8e §9) install their VM without disk
+encryption from `test/vms/virtualbox/autoinstall/unencrypted-lvm.yaml.tmpl` (26.04, guided LVM) or
+`unencrypted-plain.yaml.tmpl` (24.04, ext4 on a partition), with GDM logging the test user in, and then install the
+packages like the base gates. S-IE2 and S-IE4 set the organization's unlock mode to `tpm_only` for their run, so no
+other gate may run at the same time. A gate fails before it creates its VM when the VirtualBox machine folder has
+less than 24 GiB free: the reencryption grows the dynamic disk to its full size (`df -h`, `docker builder prune`
+first). The VM's serial console is written to `bin/system-ai/<vm>/serial.log` (the gates read the init step's
+console lines there), and its disk is throttled while the background reencryption runs, so that a power cut lands in
+its middle; the limit is set only while the VM is powered off (a change at runtime did not take effect), so a gate
+lifts it with a clean restart.

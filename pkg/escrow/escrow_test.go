@@ -117,3 +117,24 @@ func TestHeaderObjectKey(t *testing.T) {
 		t.Fatal(k)
 	}
 }
+
+// TestHasHeaderFields: every field only a luks_header carries counts, a secret's fields do not.
+func TestHasHeaderFields(t *testing.T) {
+	secret := Request{EscrowID: "id", Kind: KindLUKSRecoveryKey, Generation: 1, KeyVersion: 1, Ciphertext: "Y3Q="}
+	if secret.HasHeaderFields() {
+		t.Fatal("a secret without header fields reports one")
+	}
+	for name, set := range map[string]func(*Request){
+		"volume":      func(r *Request) { r.Volume = "0f3e7b2a-5c1d-4e8f-9a6b-2d4c8e1f0a3b" },
+		"wrapped_dek": func(r *Request) { r.WrappedDEK = "ZGVr" },
+		"nonce":       func(r *Request) { r.Nonce = "bm9uY2U=" },
+		"sha256":      func(r *Request) { r.SHA256 = "00" },
+		"size":        func(r *Request) { r.Size = 1 },
+	} {
+		r := secret
+		set(&r)
+		if !r.HasHeaderFields() {
+			t.Errorf("%s is not a header field", name)
+		}
+	}
+}
