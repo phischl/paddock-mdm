@@ -404,6 +404,11 @@ func (m *LUKS) pendingFor(volume string) bool {
 // expected (enrollmentAdded) and recorded without a report.
 func (m *LUKS) watch(kinds []string) {
 	if m.State.Keyslots != nil && slices.Equal(kinds, m.State.Keyslots) {
+		// Keyslots recorded by change() carry no report; a TPM keyslot among them ends the expectation all the same.
+		if m.State.EnrollmentExpected && hasTPMKeyslot(kinds) {
+			m.State.EnrollmentExpected = false
+			m.save()
+		}
 		return
 	}
 	if m.State.Keyslots != nil && m.enrollmentAdded(m.State.Keyslots, kinds) {
@@ -413,7 +418,7 @@ func (m *LUKS) watch(kinds []string) {
 		slog.Warn("LUKS keyslots changed outside Paddock", "volume", m.rootUUID, "before", m.State.Keyslots, "after", kinds)
 	}
 	m.State.Keyslots = kinds
-	if slices.Contains(kinds, luks.KindTPM2) || slices.Contains(kinds, luks.KindTPM2PIN) {
+	if hasTPMKeyslot(kinds) {
 		m.State.EnrollmentExpected = false
 	}
 	m.save()
@@ -425,11 +430,16 @@ func (m *LUKS) watch(kinds []string) {
 // no marker hides the change from watch any more (plan M8e amendment 2026-10-22, item 22). Any other change stays
 // tampering.
 func (m *LUKS) enrollmentAdded(before, after []string) bool {
-	if !m.State.EnrollmentExpected || slices.Contains(before, luks.KindTPM2) || slices.Contains(before, luks.KindTPM2PIN) {
+	if !m.State.EnrollmentExpected || hasTPMKeyslot(before) {
 		return false
 	}
 	i := slices.Index(after, tpmKind(m.diskSetupMode()))
 	return i >= 0 && slices.Equal(slices.Delete(slices.Clone(after), i, i+1), before)
+}
+
+// hasTPMKeyslot reports whether keyslot kinds include a TPM keyslot.
+func hasTPMKeyslot(kinds []string) bool {
+	return slices.Contains(kinds, luks.KindTPM2) || slices.Contains(kinds, luks.KindTPM2PIN)
 }
 
 // diskSetupMode is the unlock mode the first-boot disk setup enrolls: tpm_only when disk-setup.json says so, tpm_pin

@@ -909,14 +909,15 @@ func (a *Agent) deferredEnrollment(ctx context.Context) string {
 	md, err := luks.Dump(ctx, encrypt.LUKSTools(a.d.Encrypt), c.Partition)
 	if err != nil {
 		slog.DebugContext(ctx, "the converted volume's header is unreadable for the enrollment check", "error", err)
-		return ""
 	}
-	if c.Phase == state.ConversionCompleted && !encrypt.HasTPMKeyslot(md) && !a.st.LUKS.EnrollmentExpected &&
+	// An unreadable header expects the enrollment as well: the worker may arm the marker in this pass, and an expectation
+	// with a TPM keyslot present exempts nothing.
+	if c.Phase == state.ConversionCompleted && (err != nil || !encrypt.HasTPMKeyslot(md)) && !a.st.LUKS.EnrollmentExpected &&
 		!a.conversionRevoked() {
 		a.st.LUKS.EnrollmentExpected = true
 		a.saveState()
 	}
-	if !md.ReencryptRequired() && !md.Reencrypting() || encrypt.HasTPMKeyslot(md) {
+	if err != nil || !md.ReencryptRequired() && !md.Reencrypting() || encrypt.HasTPMKeyslot(md) {
 		return ""
 	}
 	if c.Phase == state.ConversionEncrypting {

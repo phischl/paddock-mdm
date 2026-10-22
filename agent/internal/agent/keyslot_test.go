@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/health"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -267,8 +268,9 @@ func TestEnrollmentAfterCompletionNoTamper(t *testing.T) {
 	}
 }
 
-// TestEnrollmentExpectationRevoked (item 22): a revocation hand-over after the completion withdraws the expected
-// enrollment, so that any later keyslot change is reported.
+// TestEnrollmentExpectationRevoked (item 22, amendment 2026-10-22 b): a revocation hand-over after the completion
+// withdraws the expected enrollment at once and in the saved state, so that any later keyslot change is reported; a
+// conversion pass after a revocation withdraws one that is set; the cleared conversion leaves none behind.
 func TestEnrollmentExpectationRevoked(t *testing.T) {
 	a, d, _ := convertedAgent(t)
 	a.startConversion(context.Background())
@@ -279,10 +281,52 @@ func TestEnrollmentExpectationRevoked(t *testing.T) {
 	if a.st.Conversion.Phase != state.ConversionCompleted || !a.st.LUKS.EnrollmentExpected {
 		t.Fatalf("completed %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
 	}
-	at := a.d.Now()
-	a.st.Conversion.RevokedAt = &at
+	a.d.Sleep = func(context.Context, time.Duration) error { return nil }
+	var saved bool
+	a.d.Revoke = func(context.Context, []byte) (string, error) {
+		st, _ := state.Load(a.d.Layout.State())
+		saved = st.LUKS.EnrollmentExpected
+		return "", nil
+	}
+	a.handRevocations(context.Background(), []json.RawMessage{revocationEnvelope(t, `{"a":1}`)})
+	if a.st.Conversion.RevokedAt == nil || a.st.LUKS.EnrollmentExpected || saved {
+		t.Fatalf("after the hand-over: revoked %v, expected %v, saved %v", a.st.Conversion.RevokedAt, a.st.LUKS.EnrollmentExpected, saved)
+	}
+	a.st.LUKS.EnrollmentExpected = true
 	a.tickConversion(context.Background())
 	if a.st.LUKS.EnrollmentExpected {
-		t.Fatal("still expected after the revocation")
+		t.Fatal("still expected at the pass after the revocation")
+	}
+}
+
+// TestEnrollmentExpectationCleared (item 22): clearing a completed, regenerated conversion withdraws an expectation
+// that no TPM keyslot ended.
+func TestEnrollmentExpectationCleared(t *testing.T) {
+	a, _, _ := convertedAgent(t)
+	a.st.Conversion.Phase, a.st.Conversion.InitrdRegenerated, a.st.LUKS.EnrollmentExpected = state.ConversionCompleted, true, true
+	a.d.Health.Update(func(r *health.Report) { r.Disk = &protocol.DiskHealth{State: protocol.DiskCompliant} })
+	a.clearConversion(context.Background())
+	if a.st.Conversion != nil || a.st.LUKS.EnrollmentExpected {
+		t.Fatalf("conversion %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
+	}
+}
+
+// TestEnrollmentExpectedWithUnreadableHeader (item 22): the pass that records the completion expects the enrollment
+// even when it cannot read the header.
+func TestEnrollmentExpectedWithUnreadableHeader(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	a.startConversion(context.Background())
+	runWorker(t, a)
+	d.set(func(d *convDevice) { d.slots = []string{"password"} })
+	inner := d.Handle
+	d.Handle = func(line string) (string, int, bool) {
+		if line == "cryptsetup luksDump --dump-json-metadata -- "+testPartition && a.st.Conversion.Phase == state.ConversionCompleted {
+			return "", 1, true
+		}
+		return inner(line)
+	}
+	a.tickConversion(context.Background())
+	if a.st.Conversion.Phase != state.ConversionCompleted || !a.st.LUKS.EnrollmentExpected {
+		t.Fatalf("completed %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
 	}
 }

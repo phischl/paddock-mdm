@@ -42,6 +42,7 @@ type volume struct {
 	keyFile     string
 	installSlot int
 	failEnroll  bool
+	requirement bool                   // the header carries the mandatory online-reencrypt requirement
 	changes     []string               // keyslot changes made through the tools
 	extra       map[string]*dataVolume // the other volumes of /etc/crypttab by device
 	// boot is the mount point findmnt reports for /boot ("" fails the call); calls collects every tool call.
@@ -220,7 +221,11 @@ func (v *volume) metadata() string {
 			keyslots[slot] = map[string]any{"type": "reencrypt", "mode": "encrypt", "direction": "forward"}
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"keyslots": keyslots, "tokens": tokens, "segments": map[string]any{}})
+	md := map[string]any{"keyslots": keyslots, "tokens": tokens, "segments": map[string]any{}}
+	if v.requirement {
+		md["config"] = map[string]any{"requirements": map[string]any{"mandatory": []string{"online-reencrypt-v2"}}}
+	}
+	b, _ := json.Marshal(md)
 	return string(b)
 }
 
@@ -1300,5 +1305,43 @@ func TestLUKSPassesWhileConversionArmed(t *testing.T) {
 	f.vol.slots = append(f.vol.slots, "password")
 	if f.pass(); len(f.events) != 1 || f.events[0].Type != protocol.EventTamperKeyslotChanged {
 		t.Fatalf("foreign keyslot: events %v", f.events)
+	}
+}
+
+// TestLUKSWaitsForReencryptRequirement (item 22): a header with the mandatory online-reencrypt requirement and no
+// reencrypt keyslot refuses every new keyslot, so a held conversion's armed marker does not let the pass record,
+// enroll, escrow or report anything: the disk is encrypting.
+func TestLUKSWaitsForReencryptRequirement(t *testing.T) {
+	f := newLUKSFixture(t, "password")
+	f.vol.requirement = true
+	f.m.ConversionHold = func() bool { return true }
+	f.write(f.layout.DiskSetupPending(), "")
+	if s := f.pass(); s != protocol.DiskEncrypting || len(f.server.requests) != 0 || f.st.Keyslots != nil || len(f.vol.changes) != 0 {
+		t.Fatalf("state %s, escrows %+v, keyslots %v, changes %v", s, f.server.requests, f.st.Keyslots, f.vol.changes)
+	}
+	f.vol.slots = append(f.vol.slots, "password")
+	if f.pass(); len(f.events) != 0 || f.st.Keyslots != nil {
+		t.Fatalf("events %v, keyslots %v", f.events, f.st.Keyslots)
+	}
+}
+
+// TestLUKSExpectationEndsWithTPMKeyslot (amendment 2026-10-22 b): an expectation set while the recorded keyslots
+// already include the TPM keyslot ends at the next pass, so that removing and re-adding the TPM keyslot is reported.
+func TestLUKSExpectationEndsWithTPMKeyslot(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.m.ConversionHold = func() bool { return true }
+	f.pass()
+	f.poll()
+	f.pass()
+	f.st.EnrollmentExpected = true
+	if f.pass(); f.st.EnrollmentExpected || len(f.events) != 0 {
+		t.Fatalf("expected %v, events %v", f.st.EnrollmentExpected, f.events)
+	}
+	tpm := slices.Index(f.vol.slots, "tpm2+pin")
+	f.vol.slots[tpm] = ""
+	f.pass()
+	f.vol.slots[tpm] = "tpm2+pin"
+	if f.pass(); len(f.events) != 2 {
+		t.Fatalf("removal and re-addition: events %v", f.events)
 	}
 }
