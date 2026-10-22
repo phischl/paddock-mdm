@@ -41,6 +41,8 @@ type fakeVolume struct {
 	untyped   bool   // one more keyslot whose JSON carries no type
 	extraType string // one more keyslot of this type
 	noSlots   bool   // metadata without a keyslots object
+	nullSlots bool   // metadata with "keyslots": null
+	rawSlot   string // one more keyslot with this literal JSON
 	luks1     bool   // only the text dump of a LUKS1 header, no JSON metadata
 	eraseFail bool
 	// hang blocks luksErase until it is closed, whatever the context says (a disk stuck in the kernel).
@@ -95,8 +97,14 @@ func (s *fakeSys) Command(_ context.Context, _ []string, name string, args ...st
 			slots["30"] = map[string]any{"type": v.extraType, "key_size": 64}
 		}
 		meta := map[string]any{"keyslots": slots, "tokens": map[string]any{}}
+		if v.rawSlot != "" {
+			slots["29"] = json.RawMessage(v.rawSlot)
+		}
 		if v.noSlots {
 			delete(meta, "keyslots")
+		}
+		if v.nullSlots {
+			meta["keyslots"] = nil
 		}
 		out, _ := json.Marshal(meta)
 		return string(out), "", 0, nil
@@ -432,11 +440,28 @@ func TestUnknownKeyslotType(t *testing.T) {
 // TestMetadataWithoutKeyslots: LUKS2 metadata without a keyslots object gives no count, so the volume is never reported
 // as erased.
 func TestMetadataWithoutKeyslots(t *testing.T) {
-	sys := newSys(t)
-	sys.volumes["/dev/vda3"] = &fakeVolume{noSlots: true}
-	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
-	if err != nil || e.Erased || e.SlotsAfter != -1 || e.Volumes[0].SlotsAfter != -1 || e.Volumes[0].Erased {
-		t.Fatalf("execute: %+v %v", e, err)
+	for name, v := range map[string]*fakeVolume{"missing": {noSlots: true}, "null": {nullSlots: true}} {
+		sys := newSys(t)
+		sys.volumes["/dev/vda3"] = v
+		e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
+		if err != nil || e.Erased || e.SlotsAfter != -1 || e.Volumes[0].SlotsAfter != -1 || e.Volumes[0].Erased {
+			t.Fatalf("%s: %+v %v", name, e, err)
+		}
+	}
+}
+
+// TestKeyslotTypeExactKey: only the exact key "type" names the type, as cryptsetup reads it; a keyslot that claims
+// reencrypt under another spelling, or carries a non-string or null type, gives no count, and a luks2 keyslot that
+// also claims reencrypt as "TYPE" stays key-bearing.
+func TestKeyslotTypeExactKey(t *testing.T) {
+	for raw, after := range map[string]int{`{"TYPE":"reencrypt"}`: -1, `{"type":"luks2","TYPE":"reencrypt"}`: 1,
+		`{"type":1}`: -1, `{"type":null}`: -1, `null`: -1, `"luks2"`: -1} {
+		sys := newSys(t)
+		sys.volumes["/dev/vda3"] = &fakeVolume{slots: 1, rawSlot: raw}
+		e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
+		if err != nil || e.Erased || e.Volumes[0].SlotsAfter != after {
+			t.Fatalf("%s: %+v %v", raw, e, err)
+		}
 	}
 }
 

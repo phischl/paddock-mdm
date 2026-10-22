@@ -402,20 +402,20 @@ func (r *Revoker) keyslots(ctx context.Context, device string) (int, int, error)
 		}
 		keys, other := 0, 0
 		for slot, raw := range m.Keyslots {
-			var ks struct {
-				Type string `json:"type"`
-			}
-			if err := json.Unmarshal(raw, &ks); err != nil {
+			// The exact key "type", as cryptsetup reads it: a struct tag would also match "TYPE" or "Type".
+			var fields map[string]json.RawMessage
+			var typ string
+			if json.Unmarshal(raw, &fields) != nil || json.Unmarshal(fields["type"], &typ) != nil {
 				return 0, 0, fmt.Errorf("revoke: keyslot %s of %s has no readable type", slot, device)
 			}
 			// A type cryptsetup adds later might hold a key: it fails closed instead of counting as non-key.
-			switch ks.Type {
+			switch typ {
 			case "luks2":
 				keys++
 			case "reencrypt":
 				other++
 			default:
-				return 0, 0, fmt.Errorf("revoke: keyslot %s of %s has the unknown type %q", slot, device, ks.Type)
+				return 0, 0, fmt.Errorf("revoke: keyslot %s of %s has the unknown type %q", slot, device, typ)
 			}
 		}
 		return keys, other, nil
