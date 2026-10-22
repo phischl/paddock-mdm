@@ -111,10 +111,11 @@ as for a damaged header (`docs/operations/disk-recovery.md`):
    *Revocations* page shows `confirmed` with the device's result (`slots_before`, `slots_after: 0`, and per volume
    in `volumes`, each with its LUKS `uuid`; the counts are key-bearing keyslots — a Lock during an unfinished in-place
    encryption leaves the key-less `reencrypt` keyslot on the volume, reported as `other_slots_after` and shown as a
-   line under the volume; it holds no key and does not make the erasure incomplete; the device page lists every
-   volume, the volumes the Lock skipped because their header was not escrowed (they stay readable), and the crypttab
-   entries the device could not erase with certainty; with such entries the erasure is incomplete and the request
-   `failed`). Restore every erased volume as below.
+   line under the volume; it holds no key and does not make the erasure incomplete;
+   the device page lists every volume, the volumes the Lock skipped because
+   their header was not escrowed (they stay readable), and the crypttab entries the device could not erase with
+   certainty; with such entries the erasure is incomplete and the request `failed`). Restore every erased volume as
+   below.
 2. Portal → device → *Disk encryption*: *Download header of <device>* for each erased volume (the newest stored
    generation was taken before the Lock; the Lock does not escrow a new one) and *Show recovery key*. Each needs a
    step-up and the typed hostname. The file is `<hostname>-luks-header-<volume UUID>-<generation>.img` (a root volume
