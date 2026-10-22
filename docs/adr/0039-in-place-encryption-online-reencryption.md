@@ -228,3 +228,18 @@ The device asks its users to restart once the reencryption completed and says, o
 not protected at rest until then (RR-57 extended). The window in which the conversion key is the only unlock path
 therefore spans the whole reencryption plus the time to the next restart; the stop condition S15 of the plan
 catches a refusal that outlives the requirement.
+
+## Amendment 2026-10-22 — keyslot operations on a header marked for reencryption (stop condition S14)
+
+Decided by the maintainer on 2026-10-22 (plan M8e, amendment 2026-10-22, item 23). Two rows of the source table
+above are corrected by evidence from the PDK-247 gates: (1) `crypt_keyslot_add_by_keyslot_context`, as used by
+`systemd-cryptenroll`, **does** refuse while the header carries the `online-reencrypt` requirement (`Operation
+incompatible with device marked for LUKS2 reencryption`, cryptsetup 2.7.0 on Ubuntu 24.04; amendment 2026-10-22,
+item 22); (2) `cryptsetup luksErase` (`crypt_keyslot_destroy` over the active keyslots) removes the key-bearing
+keyslots but leaves the `reencrypt` keyslot in place — that keyslot is not unlockable and holds no key material,
+and it disappears only when the reencryption finishes or the header is repaired. Consequence for decision 7's
+Lock and for the revocation path: `paddock-revoke` counts key-bearing keyslots (LUKS2 type `luks2`, enabled LUKS1
+keyslots) when it decides whether a volume is erased, and reports non-key keyslots that remain separately. This is
+a change to the revocation path under the two-person rule; the maintainer's decision is its approval and the
+verification on real hardware (plan item 23) is still required before the change ships. A Lock during an unfinished
+reencryption remains unrestorable (no header escrowed, RR-57); the change corrects the report, not the outcome.
