@@ -333,11 +333,24 @@ func (a *Agent) tickConversion(ctx context.Context) {
 	}
 }
 
-// tickConversionSessions runs at every session poll: the operator's abort request and the restart notification.
+// tickConversionSessions runs at every session poll: the operator's abort request and the restart notification —
+// while prepared (plan M8e decision 28), and once completed while the first-boot disk setup is armed and no TPM
+// keyslot exists (amendment 2026-10-22, item 22).
 func (a *Agent) tickConversionSessions(ctx context.Context) {
 	a.handleAbortRequest(ctx)
 	c := a.st.Conversion
-	if a.d.Encrypt == nil || c == nil || c.Phase != state.ConversionPrepared {
+	if a.d.Encrypt == nil || c == nil {
+		return
+	}
+	notice := encrypt.NoticePrepared
+	var ready func(context.Context) bool
+	switch {
+	case c.Phase == state.ConversionPrepared:
+	case c.Phase == state.ConversionCompleted && !c.InitrdRegenerated && !a.conversionRevoked() &&
+		encrypt.DiskSetupArmed(a.d.Layout):
+		notice = encrypt.NoticeCompleted
+		ready = func(ctx context.Context) bool { return a.completedNoticeReady(ctx, c.Partition) }
+	default:
 		return
 	}
 	mode := encrypt.DefaultUnlockMode
@@ -347,9 +360,29 @@ func (a *Agent) tickConversionSessions(ctx context.Context) {
 	if c.Notified == nil {
 		c.Notified = map[string]time.Time{}
 	}
-	if encrypt.NotifyRestart(ctx, a.d.Encrypt, a.d.Layout.Root, mode, c.Notified, a.d.Now()) {
+	if encrypt.NotifyRestart(ctx, a.d.Encrypt, a.d.Layout.Root, mode, notice, c.Notified, a.d.Now(), ready) {
 		a.saveState()
 	}
+}
+
+// completedNoticeReady reports whether the header asks for the restart after the completion: no TPM keyslot and no
+// reencryption mark, under which the restart would defer again (stop condition S15). It is asked only when a session
+// is due; any other answer, a header that cannot be read included, reads the header again after NotifyEvery, so that
+// the session poll does not dump the header every 10 seconds.
+func (a *Agent) completedNoticeReady(ctx context.Context, partition string) bool {
+	now := a.d.Now()
+	if now.Before(a.noticeCheckAt) {
+		return false
+	}
+	md, err := luks.Dump(ctx, encrypt.LUKSTools(a.d.Encrypt), partition)
+	if err != nil {
+		slog.DebugContext(ctx, "the converted volume's header is unreadable for the restart notification", "error", err)
+	}
+	if err != nil || encrypt.HasTPMKeyslot(md) || md.ReencryptRequired() || md.Reencrypting() {
+		a.noticeCheckAt = now.Add(encrypt.NotifyEvery)
+		return false
+	}
+	return true
 }
 
 // handleAbortRequest answers `paddockd encrypt-abort` (plan M8e decision 14 as corrected on 2026-10-21): the agent
@@ -503,9 +536,10 @@ func (a *Agent) runConversions(ctx context.Context) {
 }
 
 // finishConversion is the initrd work of a converted disk on the worker, while the initrd was not regenerated yet: the
-// re-arm of the boot PIN dialogue while no TPM keyslot exists (plan M8e decision 52), the reinstall of an unlock path a
-// cleanup had removed (decision 18), and, once a TPM keyslot exists, the initrd regeneration (decision 20). Nothing
-// runs unless the partition is LUKS (invariant I1). A failure is logged; the next full pass queues the work again.
+// arming of the first-boot disk setup once completed while no TPM keyslot exists (plan M8e decision 52 as amended on
+// 2026-10-22, item 22), the reinstall of an unlock path a cleanup had removed (decision 18), and, once a TPM keyslot
+// exists, the initrd regeneration (decision 20). Nothing runs unless the partition is LUKS (invariant I1). A failure
+// is logged; the next full pass queues the work again.
 func (a *Agent) finishConversion(fctx context.Context, c state.DiskConversion, due bool) (attempted, succeeded bool, err error) {
 	// Only the regeneration follows fctx (a revocation hand-over); the reinstall, which brings the unlock path back,
 	// runs to its end.
@@ -521,7 +555,9 @@ func (a *Agent) finishConversion(fctx context.Context, c state.DiskConversion, d
 	if a.revokedSince(ctx) {
 		return false, false, nil
 	}
-	if err == nil && !tpm {
+	// No keyslot can be added before the reencryption completed (plan M8e amendment 2026-10-22, item 22): the first
+	// arming at completed is the enrollment's marker.
+	if err == nil && !tpm && c.Phase == state.ConversionCompleted {
 		if armed, err := encrypt.RearmDiskSetup(a.d.Layout); err != nil {
 			slog.ErrorContext(ctx, "re-arming the boot PIN dialogue failed", "error", err)
 		} else if armed {
@@ -847,11 +883,53 @@ func (a *Agent) tickConverted(ctx context.Context) {
 	if c.Phase == state.ConversionEncrypting {
 		a.tickResume(ctx)
 	}
+	a.enrollmentDeferred = a.deferredEnrollment(ctx)
 	// After a revocation hand-over the keyslots may be erased: no PIN re-arm or rebuild for a locked disk.
 	if !c.InitrdRegenerated && !a.conversionBusy && !a.conversionRevoked() {
 		a.queueConversion()
 	}
 	a.clearConversion(ctx)
+}
+
+// deferredEnrollment is enrollment_deferred (plan M8e amendment 2026-10-22, item 22): while the initrd was not
+// regenerated, the converted volume's header is marked for the reencryption — the mandatory requirement or the
+// reencrypt keyslot — and no TPM keyslot exists, reencrypt while encrypting and reencrypt_after_completed once
+// completed (how stop condition S15 shows on the device, logged once per start). An unreadable header reports none.
+// A completed conversion without a TPM keyslot also records that the luks reconciler is to expect the first-boot
+// enrollment (state.LUKS.EnrollmentExpected); a revocation hand-over withdraws it.
+func (a *Agent) deferredEnrollment(ctx context.Context) string {
+	c := a.st.Conversion
+	if a.st.LUKS.EnrollmentExpected && a.conversionRevoked() {
+		a.st.LUKS.EnrollmentExpected = false
+		a.saveState()
+	}
+	if !converted(c) || c.InitrdRegenerated {
+		return ""
+	}
+	md, err := luks.Dump(ctx, encrypt.LUKSTools(a.d.Encrypt), c.Partition)
+	if err != nil {
+		slog.DebugContext(ctx, "the converted volume's header is unreadable for the enrollment check", "error", err)
+	}
+	// An unreadable header expects the enrollment as well: the worker may arm the marker in this pass, and an expectation
+	// with a TPM keyslot present exempts nothing.
+	if c.Phase == state.ConversionCompleted && (err != nil || !encrypt.HasTPMKeyslot(md)) &&
+		!a.st.LUKS.EnrollmentExpected && !a.conversionRevoked() {
+		a.st.LUKS.EnrollmentExpected = true
+		a.saveState()
+	}
+	if err != nil || !md.ReencryptRequired() && !md.Reencrypting() || encrypt.HasTPMKeyslot(md) {
+		return ""
+	}
+	if c.Phase == state.ConversionEncrypting {
+		return encrypt.EnrollmentDeferredReencrypt
+	}
+	if !a.reencryptLogged {
+		slog.WarnContext(ctx, "the converted volume is still marked for reencryption after the completion; the boot PIN or "+
+			"the TPM unlock cannot be enrolled", "conversion_id", c.ID, "requirements", md.Config.Requirements.Mandatory,
+			"reencrypt_keyslot", md.Reencrypting(), "keyslots", md.Kinds())
+		a.reencryptLogged = true
+	}
+	return encrypt.EnrollmentDeferredReencryptAfterCompleted
 }
 
 // recordResumeResult reads result.json (plan M8e decision 22): completed ends the background phase — only
@@ -1114,13 +1192,14 @@ func (a *Agent) clearConversion(ctx context.Context) {
 		return
 	}
 	slog.InfoContext(ctx, "in-place encryption finished", "conversion_id", c.ID, "disk", disk.State)
-	a.st.Conversion = nil
+	a.st.Conversion, a.st.LUKS.EnrollmentExpected = nil, false
 	a.saveState()
 }
 
 // conversionHealth is the conversion's part of health.disk (plan M8e decisions 22 and 52): the phase, key_on_boot from
 // prepared until the initrd was regenerated, and while encrypting the progress of progress.json, paused with
-// helper_not_running while the helper's unit does not run.
+// helper_not_running while the helper's unit does not run, and, encrypting or completed, enrollment_deferred as the
+// last full pass found it (amendment 2026-10-22, item 22).
 func (a *Agent) conversionHealth() *protocol.DiskConversion {
 	c := a.st.Conversion
 	if c == nil {
@@ -1136,6 +1215,12 @@ func (a *Agent) conversionHealth() *protocol.DiskConversion {
 	if c.Phase == state.ConversionPreparing && c.PackagesBusySince != nil {
 		at := *c.PackagesBusySince
 		h.PausedReason, h.PausedSince = encrypt.PausedPackagesBusy, &at
+	}
+	// The value of the last full pass, only in its own phase: the pass that completes reads the header after this
+	// report was taken.
+	if d := a.enrollmentDeferred; c.Phase == state.ConversionEncrypting && d == encrypt.EnrollmentDeferredReencrypt ||
+		c.Phase == state.ConversionCompleted && d == encrypt.EnrollmentDeferredReencryptAfterCompleted {
+		h.EnrollmentDeferred = d
 	}
 	if c.Phase != state.ConversionEncrypting {
 		return h

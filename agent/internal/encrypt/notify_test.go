@@ -54,7 +54,7 @@ func newDesktop(t *testing.T, sessions ...session) *desktop {
 }
 
 func (d *desktop) notify(mode string, notified map[string]time.Time, now time.Time) bool {
-	return encrypt.NotifyRestart(context.Background(), d, d.Root, mode, notified, now)
+	return encrypt.NotifyRestart(context.Background(), d, d.Root, mode, encrypt.NoticePrepared, notified, now, nil)
 }
 
 // TestNotifyRestart: plan M8e decision 28 — the exact command line once per graphical session, again after 4 hours
@@ -67,7 +67,7 @@ func TestNotifyRestart(t *testing.T) {
 	if !d.notify("tpm_pin", notified, now) {
 		t.Fatal("notified unchanged")
 	}
-	summary, body := encrypt.Texts("en", "tpm_pin")
+	summary, body := encrypt.Texts("en", "tpm_pin", encrypt.NoticePrepared)
 	want := fmt.Sprintf("systemd-run --quiet --wait --collect --uid=1000 --gid=1000 --setenv=XDG_RUNTIME_DIR=/run/user/1000 "+
 		"--unit=paddock-notify-3-%d -- busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications "+
 		"org.freedesktop.Notifications Notify susssasa{sv}i Paddock 0 drive-harddisk %s %s 0 1 urgency y 1 0", now.Unix(), summary, body)
@@ -75,7 +75,8 @@ func TestNotifyRestart(t *testing.T) {
 		t.Fatalf("runs %q\nwant %q", d.runs, want)
 	}
 	if summary != "Disk encryption is ready — please restart" || !strings.HasSuffix(body,
-		"keep the device on mains power during the restart. At the restart you will be asked to choose a boot PIN that you type every time the device starts.") {
+		"keep the device on mains power during the restart. You will be asked to choose a boot PIN at the first restart after "+
+			"the encryption has completed; from then on you type it every time the device starts.") {
 		t.Fatalf("texts %q %q", summary, body)
 	}
 	d.notify("tpm_pin", notified, now.Add(time.Hour))
@@ -103,12 +104,14 @@ func TestNotifyRestartLanguage(t *testing.T) {
 	d := newDesktop(t, session{"3", "user", "wayland", 1000})
 	d.Write("/etc/default/locale", "LANG=\"de_DE.UTF-8\"\n")
 	d.notify("tpm_only", map[string]time.Time{}, time.Now())
-	summary, body := encrypt.Texts("de", "tpm_only")
+	summary, body := encrypt.Texts("de", "tpm_only", encrypt.NoticePrepared)
 	if summary != "Festplattenverschlüsselung bereit — bitte neu starten" || strings.Contains(body, "Boot-PIN") ||
 		len(d.runs) != 1 || !strings.Contains(d.runs[0], summary+" "+body+" 0 1 urgency") {
 		t.Fatalf("runs %v", d.runs)
 	}
-	if _, body := encrypt.Texts("de", "tpm_pin"); !strings.HasSuffix(body, "die Sie bei jedem Start des Geräts eingeben.") {
+	if _, body := encrypt.Texts("de", "tpm_pin", encrypt.NoticePrepared); !strings.HasSuffix(body,
+		" Beim ersten Neustart nach Abschluss der Verschlüsselung werden Sie gebeten, eine Boot-PIN zu wählen; danach geben "+
+			"Sie sie bei jedem Start des Geräts ein.") {
 		t.Fatalf("German PIN sentence missing: %q", body)
 	}
 }
@@ -134,5 +137,53 @@ func TestNotifyRestartFailure(t *testing.T) {
 	d.notify("tpm_pin", notified, now.Add(time.Minute))
 	if len(d.runs) != 1 || notified["3"] != now {
 		t.Fatalf("runs %v, notified %v", d.runs, notified)
+	}
+}
+
+// TestNotifyRestartCompleted: plan M8e amendment 2026-10-22, item 22 — the completed notice shows the completed texts
+// in both languages and either unlock mode, keys its sessions with the prefix completed: and repeats after 4 hours;
+// while ready is false nothing runs and nothing is recorded, and ready is asked once per call.
+func TestNotifyRestartCompleted(t *testing.T) {
+	en := [2]string{"Disk encryption completed — please restart", "The background encryption of this device has completed. " +
+		"Restart the device to finish the setup; under TPM + PIN you will be asked to choose a boot PIN at that start. " +
+		"Until then the disk is not fully protected."}
+	de := [2]string{"Festplattenverschlüsselung abgeschlossen — bitte neu starten", "Die Verschlüsselung dieses Geräts im " +
+		"Hintergrund ist abgeschlossen. Starten Sie das Gerät neu, um die Einrichtung abzuschließen; unter TPM + PIN werden " +
+		"Sie bei diesem Start gebeten, eine Boot-PIN zu wählen. Bis dahin ist die Festplatte nicht vollständig geschützt."}
+	for _, mode := range []string{"tpm_only", "tpm_pin"} {
+		if s, b := encrypt.Texts("en", mode, encrypt.NoticeCompleted); [2]string{s, b} != en {
+			t.Fatalf("%s: English %q %q", mode, s, b)
+		}
+		if s, b := encrypt.Texts("de", mode, encrypt.NoticeCompleted); [2]string{s, b} != de {
+			t.Fatalf("%s: German %q %q", mode, s, b)
+		}
+	}
+
+	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	d := newDesktop(t, session{"3", "user", "wayland", 1000}, session{"4", "user", "x11", 1001})
+	notified := map[string]time.Time{}
+	asked := 0
+	ready := false
+	run := func(at time.Time) bool {
+		return encrypt.NotifyRestart(context.Background(), d, d.Root, "tpm_pin", encrypt.NoticeCompleted, notified, at,
+			func(context.Context) bool { asked++; return ready })
+	}
+	if run(now) || len(d.runs) != 0 || len(notified) != 0 || asked != 1 {
+		t.Fatalf("not ready: runs %v, notified %v, asked %d", d.runs, notified, asked)
+	}
+	ready = true
+	if !run(now) || len(d.runs) != 2 || asked != 2 || !strings.Contains(d.runs[0], en[0]+" "+en[1]+" 0 1 urgency") {
+		t.Fatalf("runs %q, asked %d", d.runs, asked)
+	}
+	if _, ok := notified["completed:3"]; !ok || len(notified) != 2 {
+		t.Fatalf("notified %v", notified)
+	}
+	run(now.Add(time.Hour))
+	if len(d.runs) != 2 || asked != 2 {
+		t.Fatalf("notified again within 4 hours: runs %d, asked %d", len(d.runs), asked)
+	}
+	run(now.Add(4 * time.Hour))
+	if len(d.runs) != 4 {
+		t.Fatalf("no reminder after 4 hours: %v", d.runs)
 	}
 }

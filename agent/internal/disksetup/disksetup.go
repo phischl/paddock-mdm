@@ -45,8 +45,9 @@ type Options struct {
 }
 
 // Run runs the disk setup if it is pending. It removes the pending marker when the PIN is enrolled, when the user
-// skips, and when the device cannot use TPM2+PIN; a failed enrollment keeps it, so the next boot asks again. Run
-// returns an error only if the console cannot be used; the boot continues in every case.
+// skips, and when the device cannot use TPM2+PIN; a failed enrollment and a header marked for reencryption keep it,
+// so the next boot asks again. Run returns an error only if the console cannot be used; the boot continues in every
+// case.
 func Run(ctx context.Context, o Options) error {
 	if _, err := os.Stat(o.Layout.DiskSetupPending()); errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -65,6 +66,9 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		slog.ErrorContext(ctx, "disk setup skipped: no LUKS root volume", "error", err)
 		return done(o.Layout)
+	}
+	if deferred(ctx, o, d, vol.Device) {
+		return nil
 	}
 	if _, err := os.Stat(o.Layout.InstallPassphrase()); err != nil {
 		slog.ErrorContext(ctx, "disk setup skipped: the install passphrase is missing", "error", err)
@@ -99,6 +103,24 @@ func Run(ctx context.Context, o Options) error {
 	}
 	d.say("The boot PIN could not be set. The device starts without it for now and asks again at the next start.\n\n")
 	return nil
+}
+
+// deferred reports whether the volume's header is marked for an unfinished online reencryption, which refuses every
+// new keyslot (plan M8e amendment 2026-10-22, item 22): the setup then says so in one line and keeps the marker
+// without an attempt, so the first start after the reencryption completed enrolls. An unreadable header defers
+// nothing; the enrollment's own failure handling applies as before.
+func deferred(ctx context.Context, o Options, d *dialogue, device string) bool {
+	md, err := luks.Dump(ctx, o.Tools, device)
+	if err != nil {
+		slog.WarnContext(ctx, "the LUKS metadata is unreadable; the disk setup goes on", "device", device, "error", err)
+		return false
+	}
+	if !md.ReencryptRequired() && !md.Reencrypting() {
+		return false
+	}
+	d.say("Paddock disk encryption setup is deferred until the background encryption has completed.\n")
+	slog.InfoContext(ctx, "disk setup deferred: the volume is marked for reencryption", "device", device)
+	return true
 }
 
 // enrollTPMOnly enrolls the TPM without a PIN (unlock mode tpm_only, plan M8d decision 47): no dialogue and no skip,

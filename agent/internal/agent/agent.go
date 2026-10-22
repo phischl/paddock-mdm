@@ -133,6 +133,12 @@ type Agent struct {
 	// helperRunning is whether the background reencryption's unit was running at the last full pass (plan M8e decision
 	// 22); helperNoExecLogged and helperLimitLogged log a launch that cannot happen once per start.
 	helperRunning bool
+	// enrollmentDeferred is health.disk.conversion.enrollment_deferred as the last full pass found it (plan M8e
+	// amendment 2026-10-22, item 22); reencryptLogged logs stop condition S15 once per start; noticeCheckAt is when the
+	// completed notice may read the header again.
+	enrollmentDeferred string
+	reencryptLogged    bool
+	noticeCheckAt      time.Time
 	// initrdFailures and initrdRetryAt are the backoff of the converted disk's initrd work and of a cleanup;
 	// finishCancel cancels a regeneration the worker runs, at a revocation hand-over (PDK-374).
 	initrdFailures int

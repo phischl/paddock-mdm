@@ -98,15 +98,17 @@ func (a *Agent) handRevocations(ctx context.Context, envelopes []json.RawMessage
 			// The wait for dpkg's locks is reported anew by the next pass that waits (amendment item 19).
 			c.PackagesBusySince = nil
 		}
+		expected := a.st.LUKS.EnrollmentExpected
 		if c := a.st.Conversion; c != nil && c.StartedAt != nil && c.RevokedAt == nil {
 			at := now.UTC()
-			c.RevokedAt, revoked = &at, true
+			// A revoked conversion expects no enrollment (plan M8e amendment 2026-10-22 b).
+			c.RevokedAt, revoked, a.st.LUKS.EnrollmentExpected = &at, true, false
 		}
 		if err := state.Save(a.d.Layout.State(), a.st); err != nil {
 			slog.ErrorContext(ctx, "saving the agent state failed; revocation not handed", "error", err)
 			delete(a.st.HandedRevocations, h)
 			if revoked {
-				a.st.Conversion.RevokedAt = nil
+				a.st.Conversion.RevokedAt, a.st.LUKS.EnrollmentExpected = nil, expected
 			}
 			continue
 		}

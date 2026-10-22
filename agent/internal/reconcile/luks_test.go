@@ -42,6 +42,7 @@ type volume struct {
 	keyFile     string
 	installSlot int
 	failEnroll  bool
+	requirement bool                   // the header carries the mandatory online-reencrypt requirement
 	changes     []string               // keyslot changes made through the tools
 	extra       map[string]*dataVolume // the other volumes of /etc/crypttab by device
 	// boot is the mount point findmnt reports for /boot ("" fails the call); calls collects every tool call.
@@ -220,7 +221,11 @@ func (v *volume) metadata() string {
 			keyslots[slot] = map[string]any{"type": "reencrypt", "mode": "encrypt", "direction": "forward"}
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"keyslots": keyslots, "tokens": tokens, "segments": map[string]any{}})
+	md := map[string]any{"keyslots": keyslots, "tokens": tokens, "segments": map[string]any{}}
+	if v.requirement {
+		md["config"] = map[string]any{"requirements": map[string]any{"mandatory": []string{"online-reencrypt-v2"}}}
+	}
+	b, _ := json.Marshal(md)
 	return string(b)
 }
 
@@ -1209,5 +1214,134 @@ func TestLUKSConversionHold(t *testing.T) {
 	if h := f.m.Tick(context.Background(), f.keys, true, f.mode); h.State != protocol.DiskEncrypting || h.Conversion == nil ||
 		h.Conversion.DoneBytes != 8192 {
 		t.Fatalf("encrypting: %+v", h)
+	}
+}
+
+// TestLUKSEnrollmentAfterCompletion (plan M8e amendment 2026-10-22, item 22): while the agent expects the enrollment
+// of a completed conversion, the first-boot enrollment of the TPM keyslot of disk-setup.json's unlock mode into a
+// header without one is no tampering and ends the expectation; the other mode's TPM keyslot, the same change without
+// the expectation, a further keyslot beside it, a removed keyslot or a second TPM keyslot is.
+func TestLUKSEnrollmentAfterCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		expected   bool
+		change     func(slots []string) []string
+		tamper     bool
+	}{
+		{"tpm2+pin enrolled", "tpm_pin", true, func(s []string) []string { return append(s, "tpm2+pin") }, false},
+		{"tpm2 enrolled", "tpm_only", true, func(s []string) []string { return append(s, "tpm2") }, false},
+		{"tpm2 under tpm_pin", "tpm_pin", true, func(s []string) []string { return append(s, "tpm2") }, true},
+		{"tpm2+pin under tpm_only", "tpm_only", true, func(s []string) []string { return append(s, "tpm2+pin") }, true},
+		{"not expected", "tpm_pin", false, func(s []string) []string { return append(s, "tpm2+pin") }, true},
+		{"and a passphrase", "tpm_pin", true, func(s []string) []string { return append(s, "tpm2+pin", "password") }, true},
+		{"a passphrase only", "tpm_pin", true, func(s []string) []string { return append(s, "password") }, true},
+		{"recovery replaced", "tpm_pin", true, func(s []string) []string { s[slices.Index(s, "recovery")] = "tpm2+pin"; return s }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLUKSFixture(t, "password")
+			f.write(f.layout.DiskSetupConfig(), `{"boot_pin_min_length":8,"unlock_mode":"`+tc.mode+`"}`)
+			f.m.ConversionHold = func() bool { return true }
+			f.pass()
+			f.poll()
+			f.pass()
+			if !slices.Equal(f.st.Keyslots, []string{"password", "recovery"}) || len(f.events) != 0 {
+				t.Fatalf("before: keyslots %v, events %v", f.st.Keyslots, f.events)
+			}
+			f.st.EnrollmentExpected = tc.expected
+			f.vol.slots = tc.change(f.vol.slots)
+			f.pass()
+			if tampered := slices.ContainsFunc(f.events, func(e protocol.Event) bool {
+				return e.Type == protocol.EventTamperKeyslotChanged
+			}); tampered != tc.tamper {
+				t.Fatalf("tamper %v, events %v, keyslots %v", tampered, f.events, f.st.Keyslots)
+			}
+			if f.st.EnrollmentExpected && slices.ContainsFunc(f.st.Keyslots, func(k string) bool { return strings.HasPrefix(k, "tpm2") }) {
+				t.Fatalf("still expected after %v", f.st.Keyslots)
+			}
+		})
+	}
+	// The first pass that sees the enrollment may come after the regeneration ended the hold (a failed dump before).
+	f := newLUKSFixture(t, "password")
+	hold := true
+	f.m.ConversionHold = func() bool { return hold }
+	f.pass()
+	f.poll()
+	f.pass()
+	f.st.EnrollmentExpected, hold = true, false
+	f.vol.slots = append(f.vol.slots, "tpm2+pin")
+	if f.pass(); len(f.events) != 0 || f.st.EnrollmentExpected {
+		t.Fatalf("after the regeneration: events %v, expected %v", f.events, f.st.EnrollmentExpected)
+	}
+	for _, kinds := range [][2]string{{"tpm2", "tpm2+pin"}, {"tpm2+pin", "tpm2"}} {
+		f := newLUKSFixture(t, "password", kinds[0])
+		mode := map[string]string{"tpm2": "tpm_only", "tpm2+pin": "tpm_pin"}[kinds[1]]
+		f.write(f.layout.DiskSetupConfig(), `{"unlock_mode":"`+mode+`"}`)
+		f.m.ConversionHold = func() bool { return true }
+		f.pass()
+		f.poll()
+		f.pass()
+		f.st.EnrollmentExpected = true
+		f.vol.slots = append(f.vol.slots, kinds[1])
+		if f.pass(); len(f.events) != 1 || f.events[0].Type != protocol.EventTamperKeyslotChanged {
+			t.Fatalf("%s beside %s: events %v", kinds[1], kinds[0], f.events)
+		}
+	}
+}
+
+// TestLUKSPassesWhileConversionArmed (item 22): the marker a completed conversion armed does not stop the passes while
+// the conversion holds the disk — the recovery key and the header are escrowed and a foreign keyslot is reported;
+// without the hold the marker still stops them (TestLUKSWaitsForDiskSetup).
+func TestLUKSPassesWhileConversionArmed(t *testing.T) {
+	f := newLUKSFixture(t, "password")
+	f.m.ConversionHold = func() bool { return true }
+	f.write(f.layout.DiskSetupPending(), "")
+	f.pass()
+	f.poll()
+	f.pass()
+	if len(f.server.of(escrow.KindLUKSRecoveryKey)) != 1 || len(f.server.of(escrow.KindLUKSHeader)) != 1 ||
+		!slices.Equal(f.st.Keyslots, []string{"password", "recovery"}) {
+		t.Fatalf("escrows %+v, keyslots %v", f.server.requests, f.st.Keyslots)
+	}
+	f.vol.slots = append(f.vol.slots, "password")
+	if f.pass(); len(f.events) != 1 || f.events[0].Type != protocol.EventTamperKeyslotChanged {
+		t.Fatalf("foreign keyslot: events %v", f.events)
+	}
+}
+
+// TestLUKSWaitsForReencryptRequirement (item 22): a header with the mandatory online-reencrypt requirement and no
+// reencrypt keyslot refuses every new keyslot, so a held conversion's armed marker does not let the pass record,
+// enroll, escrow or report anything: the disk is encrypting.
+func TestLUKSWaitsForReencryptRequirement(t *testing.T) {
+	f := newLUKSFixture(t, "password")
+	f.vol.requirement = true
+	f.m.ConversionHold = func() bool { return true }
+	f.write(f.layout.DiskSetupPending(), "")
+	if s := f.pass(); s != protocol.DiskEncrypting || len(f.server.requests) != 0 || f.st.Keyslots != nil || len(f.vol.changes) != 0 {
+		t.Fatalf("state %s, escrows %+v, keyslots %v, changes %v", s, f.server.requests, f.st.Keyslots, f.vol.changes)
+	}
+	f.vol.slots = append(f.vol.slots, "password")
+	if f.pass(); len(f.events) != 0 || f.st.Keyslots != nil {
+		t.Fatalf("events %v, keyslots %v", f.events, f.st.Keyslots)
+	}
+}
+
+// TestLUKSExpectationEndsWithTPMKeyslot (amendment 2026-10-22 b): an expectation set while the recorded keyslots
+// already include the TPM keyslot ends at the next pass, so that removing and re-adding the TPM keyslot is reported.
+func TestLUKSExpectationEndsWithTPMKeyslot(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.m.ConversionHold = func() bool { return true }
+	f.pass()
+	f.poll()
+	f.pass()
+	f.st.EnrollmentExpected = true
+	if f.pass(); f.st.EnrollmentExpected || len(f.events) != 0 {
+		t.Fatalf("expected %v, events %v", f.st.EnrollmentExpected, f.events)
+	}
+	tpm := slices.Index(f.vol.slots, "tpm2+pin")
+	f.vol.slots[tpm] = ""
+	f.pass()
+	f.vol.slots[tpm] = "tpm2+pin"
+	if f.pass(); len(f.events) != 2 {
+		t.Fatalf("removal and re-addition: events %v", f.events)
 	}
 }

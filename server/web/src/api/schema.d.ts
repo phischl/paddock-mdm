@@ -3331,6 +3331,11 @@ export interface components {
             initramfs_removes?: string[];
             /** @description The conversion key lies in the initrd on the unencrypted /boot until the user chose the boot PIN. */
             key_on_boot?: boolean;
+            /**
+             * @description reencrypt while encrypting: the header is marked for the reencryption and no TPM keyslot exists, so the boot PIN or the TPM unlock is set up at the first start after the completion (plan M8e amendment 2026-10-22, item 22). reencrypt_after_completed: the header is still marked after the completion, so the enrollment cannot run (stop condition S15; see the device's log).
+             * @enum {string}
+             */
+            enrollment_deferred?: "reencrypt" | "reencrypt_after_completed";
         };
         /** @description Asset facts the inventory reports (ADR 0037 decision 7); empty strings and zeros where it reports none. Free disk space, uptime and network addresses stay in Fleet. */
         DeviceHardware: {

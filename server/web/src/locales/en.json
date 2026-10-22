@@ -910,7 +910,9 @@
           "not_abortable": "it had already restarted and started the encryption",
           "unknown_conversion": "it knows no such request"
         },
-        "keyOnBoot": "The disk is encrypted but not protected at rest yet: until the user chooses the boot PIN, the key that unlocks it lies on the unencrypted boot partition. The device asks for the PIN at every start.",
+        "enrollmentDeferred": "The boot PIN or the TPM unlock is set up at the first start after the background encryption has completed; it cannot be added while the encryption is unfinished.",
+        "enrollmentDeferredAfterCompleted": "The encryption has completed, but the disk still refuses the boot PIN and the TPM unlock: its header is still marked for the background encryption. The key stays on the boot partition; see the device's log and the runbook.",
+        "keyOnBoot": "The disk is encrypted but not protected at rest yet: the key that unlocks it lies on the unencrypted boot partition until the background encryption has completed, the device has been restarted and the boot PIN or TPM unlock has been set up. The device asks for the restart and, under TPM + PIN, for the PIN at every start.",
         "runbook": "Runbook: in-place encryption"
       }
     },

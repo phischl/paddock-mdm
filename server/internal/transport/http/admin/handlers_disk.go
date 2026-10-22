@@ -86,6 +86,9 @@ func toDiskConversionHealth(c *protocol.DiskConversion) *adminapi.DiskConversion
 	if c.KeyOnBoot {
 		out.KeyOnBoot = &c.KeyOnBoot
 	}
+	if d := adminapi.DiskConversionHealthEnrollmentDeferred(c.EnrollmentDeferred); d.Valid() {
+		out.EnrollmentDeferred = &d
+	}
 	return out
 }
 

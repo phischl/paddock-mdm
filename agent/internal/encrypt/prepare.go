@@ -493,7 +493,8 @@ func (p *Preparer) notStored(ctx context.Context, cause error) error {
 	return &failure{ReasonEscrowNotStored}
 }
 
-// diskSetup is step 5: the settings of the PIN dialogue at the conversion boot and its pending marker.
+// diskSetup is step 5: the settings of the first-boot disk setup. Its pending marker is armed only once the
+// reencryption completed, because no keyslot can be added before (plan M8e amendment 2026-10-22, item 22).
 func (p *Preparer) diskSetup(context.Context, state.DiskConversion) error {
 	plan, err := ReadPlan(p.Layout)
 	if err != nil || plan == nil {
@@ -503,10 +504,7 @@ func (p *Preparer) diskSetup(context.Context, state.DiskConversion) error {
 	if err != nil {
 		return err
 	}
-	if err := fsutil.WriteFile(p.Layout.DiskSetupConfig(), cfg, 0o644, 0o755); err != nil {
-		return err
-	}
-	return fsutil.WriteFile(p.Layout.DiskSetupPending(), nil, 0o600, 0o700)
+	return fsutil.WriteFile(p.Layout.DiskSetupConfig(), cfg, 0o644, 0o755)
 }
 
 // dracut is step 6 (plan M8e decisions 32 and 33): dracut is installed when dpkg-query reports it not installed,

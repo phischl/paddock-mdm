@@ -223,3 +223,37 @@ func TestReencryptKeyslot(t *testing.T) {
 		t.Fatalf("a finished volume reports a reencryption: %v", err)
 	}
 }
+
+// TestReencryptRequired (plan M8e amendment 2026-10-22, item 22): a mandatory requirement starting with
+// online-reencrypt marks the header, with or without the reencrypt keyslot; another requirement or none does not.
+func TestReencryptRequired(t *testing.T) {
+	reencrypt, err := os.ReadFile(filepath.Join("testdata", "reencrypt-password.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, err := os.ReadFile(filepath.Join("testdata", "tpm2-recovery-password.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, dump             string
+		required, reencrypting bool
+	}{
+		{"requirement and reencrypt keyslot", string(reencrypt), true, true},
+		{"requirement only", `{"keyslots":{"0":{"type":"luks2"}},"tokens":{},"config":{"requirements":{"mandatory":["online-reencrypt"]}}}`, true, false},
+		{"reencrypt keyslot only", `{"keyslots":{"0":{"type":"luks2"},"1":{"type":"reencrypt"}},"tokens":{},"config":{}}`, false, true},
+		{"another requirement", `{"keyslots":{"0":{"type":"luks2"}},"tokens":{},"config":{"requirements":{"mandatory":["opal"]}}}`, false, false},
+		{"finished volume", string(done), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeTools{answers: map[string]answer{"cryptsetup luksDump --dump-json-metadata -- /dev/sda3": {stdout: tc.dump}}}
+			m, err := luks.Dump(context.Background(), f, "/dev/sda3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.ReencryptRequired() != tc.required || m.Reencrypting() != tc.reencrypting {
+				t.Fatalf("required %v, reencrypting %v", m.ReencryptRequired(), m.Reencrypting())
+			}
+		})
+	}
+}

@@ -76,8 +76,9 @@ func TestPrepareLVM(t *testing.T) {
 	if f.mode("/var/lib/paddock/encrypt/plan.env") != 0o600 {
 		t.Fatal("plan.env not 0600")
 	}
+	// The marker waits for the completed reencryption (plan M8e amendment 2026-10-22, item 22).
 	if got := f.read("/etc/paddock/disk-setup.json"); got != `{"boot_pin_min_length":6,"unlock_mode":"tpm_only"}` ||
-		!f.dev.Exists("/var/lib/paddock/disk-setup-pending") {
+		f.dev.Exists("/var/lib/paddock/disk-setup-pending") {
 		t.Fatalf("disk setup %q", got)
 	}
 	if got := f.read(encrypt.TPM2Conf); got != "# Paddock: unlock LUKS with systemd-cryptsetup and TPM2+PIN (plan M4b)\nhostonly=\"yes\"\n"+
@@ -500,6 +501,8 @@ func stoppedBeforePrepared(t *testing.T) *fixture {
 	if got := p.Prepare(context.Background()); got != encrypt.Stopped || !f.dev.initrdCarriesModule(olderKernel) {
 		t.Fatalf("outcome %v", got)
 	}
+	// The marker an agent before plan M8e amendment 2026-10-22 (item 22) armed at step 5.
+	f.dev.Write("/var/lib/paddock/disk-setup-pending", "")
 	return f
 }
 

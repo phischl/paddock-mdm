@@ -19,6 +19,8 @@ func preparedFixture(t *testing.T) *fixture {
 		t.Fatalf("outcome %v", got)
 	}
 	f.store.events = nil
+	// The marker an agent before plan M8e amendment 2026-10-22 (item 22) armed at step 5: the cleanup still removes it.
+	f.dev.Write("/var/lib/paddock/disk-setup-pending", "")
 	// A kernel whose modules are left over without an initrd has nothing that could carry the module.
 	f.dev.MkdirAll("/lib/modules/6.5.0-9-generic")
 	return f

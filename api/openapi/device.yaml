@@ -372,7 +372,10 @@ components:
             with reason cleanup_pending also cleanup_error (why the last cleanup attempt did not finish); while a
             preparation waits for a package run, paused_reason packages_busy and paused_since; initrd_issue
             (boot_space_low with boot_space_needed and boot_space_free, no_bootable_kernel, kernel_not_buildable with
-            initrd_issue_kernel, orphan_initrd_removed, key_material_hardlinked, or key_material_shared_bootable with initrd_issue_kernel) while the initrd work cannot go on.
+            initrd_issue_kernel, orphan_initrd_removed, key_material_hardlinked, or key_material_shared_bootable with initrd_issue_kernel) while the initrd work cannot go on;
+            enrollment_deferred (closed set) with the header marked for the reencryption and no TPM keyslot:
+            reencrypt while encrypting, reencrypt_after_completed once completed (plan M8e amendment 2026-10-22,
+            item 22, stop condition S15).
           properties:
             components:
               type: object

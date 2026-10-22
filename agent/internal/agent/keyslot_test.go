@@ -14,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/health"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // rootVolume is the converted root volume behind the LUKS tools of the luks reconciler: the conversion key's keyslot
@@ -204,5 +207,126 @@ func TestKeyslotPassNotParallel(t *testing.T) {
 	<-done
 	if vol.overlap.Load() || len(vol.wiped()) != 1 {
 		t.Fatalf("overlap %v, wipes %v", vol.overlap.Load(), vol.wiped())
+	}
+}
+
+// TestEnrollmentAfterCompletionNoTamper: plan M8e amendment 2026-10-22, item 22 — the luks passes and the conversion
+// passes through the completion, the armed disk setup and the boot that enrolls the boot PIN report no tampering; a
+// foreign keyslot added at the same boot is reported.
+func TestEnrollmentAfterCompletionNoTamper(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		a, d, _ := convertedAgent(t)
+		a.startConversion(context.Background())
+		d.set(func(d *convDevice) { d.slots = []string{"password", "recovery"} })
+		vol := &rootVolume{t: t, slots: []string{"password", "", "recovery"}}
+		a.d.LUKS = vol
+		a.luks = a.luksReconciler()
+		a.luks.Background = func(fn func()) { fn() }
+		if a.st.DeviceID == "" {
+			a.st.DeviceID = "device-1"
+		}
+		md, err := luks.Dump(context.Background(), vol, "/dev/sda3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(md.Raw)
+		install, recovery := 0, 2
+		a.st.LUKS.InstallSlot, a.st.LUKS.RecoverySlot, a.st.LUKS.RecoveryAttempted, a.st.LUKS.RecoveryStored = &install, &recovery, 1, 1
+		a.st.LUKS.HeaderStored, a.st.LUKS.HeaderDigest, a.st.LUKS.Keyslots = 1, hex.EncodeToString(sum[:]), md.Kinds()
+		d.Write("/var/lib/paddock/install-passphrase", "the conversion key")
+
+		a.tickLUKS(context.Background(), true)
+		a.tickConversion(context.Background())
+		runWorker(t, a)
+		a.tickLUKS(context.Background(), true)
+		if a.st.Conversion.Phase != state.ConversionCompleted || !d.Exists("/var/lib/paddock/disk-setup-pending") ||
+			!a.st.LUKS.EnrollmentExpected {
+			t.Fatalf("foreign %v: completed %+v, expected %v", foreign, a.st.Conversion, a.st.LUKS.EnrollmentExpected)
+		}
+
+		// The next boot: disk-setup enrolls the PIN and removes the marker.
+		vol.mu.Lock()
+		vol.slots[1] = "tpm2+pin"
+		if foreign {
+			vol.slots = append(vol.slots, "password")
+		}
+		vol.mu.Unlock()
+		d.set(func(d *convDevice) { d.slots = append(d.slots, "tpm2+pin") })
+		if err := os.Remove(d.Path("/var/lib/paddock/disk-setup-pending")); err != nil {
+			t.Fatal(err)
+		}
+		a.tickLUKS(context.Background(), true)
+		a.tickConversion(context.Background())
+		runWorker(t, a)
+		a.tickLUKS(context.Background(), true)
+		if n := len(eventsOfType(t, a, protocol.EventTamperKeyslotChanged)); (n == 1) != foreign || n > 1 {
+			t.Fatalf("foreign %v: tamper events %d", foreign, n)
+		}
+		if !foreign && !a.st.Conversion.InitrdRegenerated || a.st.LUKS.EnrollmentExpected {
+			t.Fatalf("not regenerated: %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
+		}
+	}
+}
+
+// TestEnrollmentExpectationRevoked (item 22, amendment 2026-10-22 b): a revocation hand-over after the completion
+// withdraws the expected enrollment at once and in the saved state, so that any later keyslot change is reported; a
+// conversion pass after a revocation withdraws one that is set; the cleared conversion leaves none behind.
+func TestEnrollmentExpectationRevoked(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	a.startConversion(context.Background())
+	runWorker(t, a)
+	d.set(func(d *convDevice) { d.slots = []string{"password"} })
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if a.st.Conversion.Phase != state.ConversionCompleted || !a.st.LUKS.EnrollmentExpected {
+		t.Fatalf("completed %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
+	}
+	a.d.Sleep = func(context.Context, time.Duration) error { return nil }
+	var saved bool
+	a.d.Revoke = func(context.Context, []byte) (string, error) {
+		st, _ := state.Load(a.d.Layout.State())
+		saved = st.LUKS.EnrollmentExpected
+		return "", nil
+	}
+	a.handRevocations(context.Background(), []json.RawMessage{revocationEnvelope(t, `{"a":1}`)})
+	if a.st.Conversion.RevokedAt == nil || a.st.LUKS.EnrollmentExpected || saved {
+		t.Fatalf("after the hand-over: revoked %v, expected %v, saved %v", a.st.Conversion.RevokedAt, a.st.LUKS.EnrollmentExpected, saved)
+	}
+	a.st.LUKS.EnrollmentExpected = true
+	a.tickConversion(context.Background())
+	if a.st.LUKS.EnrollmentExpected {
+		t.Fatal("still expected at the pass after the revocation")
+	}
+}
+
+// TestEnrollmentExpectationCleared (item 22): clearing a completed, regenerated conversion withdraws an expectation
+// that no TPM keyslot ended.
+func TestEnrollmentExpectationCleared(t *testing.T) {
+	a, _, _ := convertedAgent(t)
+	a.st.Conversion.Phase, a.st.Conversion.InitrdRegenerated, a.st.LUKS.EnrollmentExpected = state.ConversionCompleted, true, true
+	a.d.Health.Update(func(r *health.Report) { r.Disk = &protocol.DiskHealth{State: protocol.DiskCompliant} })
+	a.clearConversion(context.Background())
+	if a.st.Conversion != nil || a.st.LUKS.EnrollmentExpected {
+		t.Fatalf("conversion %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
+	}
+}
+
+// TestEnrollmentExpectedWithUnreadableHeader (item 22): the pass that records the completion expects the enrollment
+// even when it cannot read the header.
+func TestEnrollmentExpectedWithUnreadableHeader(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	a.startConversion(context.Background())
+	runWorker(t, a)
+	d.set(func(d *convDevice) { d.slots = []string{"password"} })
+	inner := d.Handle
+	d.Handle = func(line string) (string, int, bool) {
+		if line == "cryptsetup luksDump --dump-json-metadata -- "+testPartition && a.st.Conversion.Phase == state.ConversionCompleted {
+			return "", 1, true
+		}
+		return inner(line)
+	}
+	a.tickConversion(context.Background())
+	if a.st.Conversion.Phase != state.ConversionCompleted || !a.st.LUKS.EnrollmentExpected {
+		t.Fatalf("completed %+v, expected %v", a.st.Conversion, a.st.LUKS.EnrollmentExpected)
 	}
 }

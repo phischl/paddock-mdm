@@ -337,3 +337,55 @@ func TestDeviceDiskConversionNotes(t *testing.T) {
 		t.Fatalf("after a check-in without notes %s", raw)
 	}
 }
+
+// TestDeviceDiskEnrollmentDeferred (plan M8e amendment 2026-10-22, item 22): health.disk.conversion.enrollment_deferred
+// reencrypt and reencrypt_after_completed are passed through as reported; an unknown value and a report without it give none; another organization
+// gets 404.
+func TestDeviceDiskEnrollmentDeferred(t *testing.T) {
+	e := newEnv(t)
+	auditor := e.session(e.acme, principal.RoleOrgAuditor)
+	other := e.session(e.globex, principal.RoleOrgAuditor)
+	device := e.insertDevice(e.acme, "lt-deferred", "active")
+	path := "/api/v1/devices/" + device.String() + "/disk"
+	ctx := context.Background()
+	health := func(deferred string) string {
+		return `{"status":"ok","disk":{"state":"encrypting","keyslots":1,"conversion":{"eligible":false,"phase":"encrypting",
+			"key_on_boot":true` + deferred + `}}}`
+	}
+	if _, err := e.super.Exec(ctx, `INSERT INTO device_status (device_id, organization_id, last_contact_at, health)
+		VALUES ($1, $2, now(), $3)`, device, e.acme, health(`,"enrollment_deferred":"reencrypt"`)); err != nil {
+		t.Fatal(err)
+	}
+	get := func() *adminapi.DiskConversionHealth {
+		t.Helper()
+		var disk adminapi.DiskEncryption
+		e.do(call{method: "GET", path: path, cookie: auditor}).decode(t, &disk)
+		if disk.Conversion == nil {
+			t.Fatal("no conversion health")
+		}
+		return disk.Conversion
+	}
+	if c := get(); c.EnrollmentDeferred == nil || *c.EnrollmentDeferred != adminapi.Reencrypt {
+		raw, _ := json.Marshal(c)
+		t.Fatalf("deferred %s", raw)
+	}
+	if res := e.do(call{method: "GET", path: path, cookie: other}); res.status != http.StatusNotFound || res.problemCode(t) != "not_found" {
+		t.Fatalf("another organization: %d %s", res.status, res.body)
+	}
+	if _, err := e.super.Exec(ctx, `UPDATE device_status SET health = $2 WHERE device_id = $1`, device,
+		health(`,"enrollment_deferred":"reencrypt_after_completed"`)); err != nil {
+		t.Fatal(err)
+	}
+	if c := get(); c.EnrollmentDeferred == nil || *c.EnrollmentDeferred != adminapi.ReencryptAfterCompleted {
+		raw, _ := json.Marshal(c)
+		t.Fatalf("after completed %s", raw)
+	}
+	for _, deferred := range []string{`,"enrollment_deferred":"tpm"`, ``} {
+		if _, err := e.super.Exec(ctx, `UPDATE device_status SET health = $2 WHERE device_id = $1`, device, health(deferred)); err != nil {
+			t.Fatal(err)
+		}
+		if c := get(); c.EnrollmentDeferred != nil {
+			t.Fatalf("%q: deferred %v", deferred, *c.EnrollmentDeferred)
+		}
+	}
+}

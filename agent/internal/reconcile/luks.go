@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -250,8 +251,9 @@ func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 		return
 	}
 	kinds := md.Kinds()
-	if md.Reencrypting() {
-		// An unfinished online reencryption (plan M8e decision 3): no keyslot is recorded, changed, escrowed or reported
+	if md.Reencrypting() || md.ReencryptRequired() {
+		// An unfinished online reencryption (plan M8e decision 3) — its keyslot, or its mandatory requirement, which
+		// refuses every new keyslot (amendment 2026-10-22, item 22): no keyslot is recorded, changed, escrowed or reported
 		// as tampering until it completes. The root volume alone is listed, not escrowed (decision 23).
 		uuid, err := luks.UUID(ctx, m.Tools, vol.Device)
 		if err != nil {
@@ -267,8 +269,10 @@ func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 		m.health = m.report(protocol.DiskUnmanaged, kinds)
 		return
 	}
-	if exists(m.Layout.DiskSetupPending()) {
-		// The first-boot disk setup has not enrolled the PIN yet; its changes are no tampering.
+	if exists(m.Layout.DiskSetupPending()) && !m.held() {
+		// The first-boot disk setup has not enrolled the PIN yet; its changes are no tampering. A conversion arms it only
+		// after the completion and may leave it armed for weeks (plan M8e amendment 2026-10-22, item 22): its passes go
+		// on, and watch expects the enrollment (enrollmentAdded).
 		m.health = m.report(m.state(md, passphrase), kinds)
 		return
 	}
@@ -396,17 +400,59 @@ func (m *LUKS) pendingFor(volume string) bool {
 }
 
 // watch reports keyslots that differ from the recorded ones (plan M4b decision 12) and records the new set; the
-// changed metadata makes the next steps escrow the header again.
+// changed metadata makes the next steps escrow the header again. The first-boot enrollment of a held conversion is
+// expected (enrollmentAdded) and recorded without a report.
 func (m *LUKS) watch(kinds []string) {
 	if m.State.Keyslots != nil && slices.Equal(kinds, m.State.Keyslots) {
+		// Keyslots recorded by change() carry no report; a TPM keyslot among them ends the expectation all the same.
+		if m.State.EnrollmentExpected && hasTPMKeyslot(kinds) {
+			m.State.EnrollmentExpected = false
+			m.save()
+		}
 		return
 	}
-	if m.State.Keyslots != nil {
+	if m.State.Keyslots != nil && m.enrollmentAdded(m.State.Keyslots, kinds) {
+		slog.Info("the TPM unlock of the converted disk is enrolled", "volume", m.rootUUID, "before", m.State.Keyslots, "after", kinds)
+	} else if m.State.Keyslots != nil {
 		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Volume: m.rootUUID, Before: m.State.Keyslots, After: kinds})
 		slog.Warn("LUKS keyslots changed outside Paddock", "volume", m.rootUUID, "before", m.State.Keyslots, "after", kinds)
 	}
 	m.State.Keyslots = kinds
+	if hasTPMKeyslot(kinds) {
+		m.State.EnrollmentExpected = false
+	}
 	m.save()
+}
+
+// enrollmentAdded reports whether after is before plus the TPM keyslot the first-boot disk setup enrolls under the
+// unlock mode of /etc/paddock/disk-setup.json, while the agent expects that enrollment of a completed conversion
+// (State.EnrollmentExpected) and before has no TPM keyslot: the setup runs only after the reencryption completed, when
+// no marker hides the change from watch any more (plan M8e amendment 2026-10-22, item 22). Any other change stays
+// tampering.
+func (m *LUKS) enrollmentAdded(before, after []string) bool {
+	if !m.State.EnrollmentExpected || hasTPMKeyslot(before) {
+		return false
+	}
+	i := slices.Index(after, tpmKind(m.diskSetupMode()))
+	return i >= 0 && slices.Equal(slices.Delete(slices.Clone(after), i, i+1), before)
+}
+
+// hasTPMKeyslot reports whether keyslot kinds include a TPM keyslot.
+func hasTPMKeyslot(kinds []string) bool {
+	return slices.Contains(kinds, luks.KindTPM2) || slices.Contains(kinds, luks.KindTPM2PIN)
+}
+
+// diskSetupMode is the unlock mode the first-boot disk setup enrolls: tpm_only when disk-setup.json says so, tpm_pin
+// otherwise, as paddockd disk-setup reads it.
+func (m *LUKS) diskSetupMode() string {
+	var cfg struct {
+		UnlockMode string `json:"unlock_mode"`
+	}
+	if raw, err := os.ReadFile(m.Layout.DiskSetupConfig()); err == nil && json.Unmarshal(raw, &cfg) == nil &&
+		cfg.UnlockMode == bundle.UnlockModeTPMOnly {
+		return bundle.UnlockModeTPMOnly
+	}
+	return bundle.UnlockModeTPMPIN
 }
 
 // step takes the next step: replace a recovery key that was lost before the server stored it, enroll and escrow a

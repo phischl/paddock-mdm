@@ -92,6 +92,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The boot PIN, or under TPM-only unlock the TPM, is now set up at the first start after the background encryption
+  has completed rather than at the restart that starts it: the disk cannot take a new unlock method while its
+  encryption is unfinished, and the device no longer tries and fails at every start meanwhile. Until then the health
+  reports `enrollment_deferred: reencrypt` (an optional addition to the disk's conversion health in the admin API;
+  `reencrypt_after_completed` if the disk still refuses after the completion) and the portal's progress panel says
+  so. The restart notification before the encryption no longer promises the PIN at that restart; once the encryption
+  has completed, signed-in users are asked with a desktop notification, repeated every 4 hours, to restart. The key
+  stays on the boot partition until that restart and the setup at it, and the setup is not reported as tampering.
 - Updated bundled components: Fleet and fleetctl v4.93.1 (was v4.93.0; bug fixes), AWS CLI 2.38.2 (was 2.38.1).
 
 ### Fixed
