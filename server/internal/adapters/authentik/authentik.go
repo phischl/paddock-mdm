@@ -30,6 +30,13 @@ type Client struct {
 	http    *http.Client
 	retries int
 	backoff time.Duration
+	// slots bounds the requests in flight; nil means unbounded.
+	slots chan struct{}
+
+	platformMu    sync.Mutex
+	platformCache *platformObjects
+	platformAt    time.Time
+	now           func() time.Time
 }
 
 var (
@@ -44,7 +51,7 @@ func New(baseURL, token string) *Client {
 	return &Client{
 		base: strings.TrimRight(baseURL, "/"), token: token,
 		http:    &http.Client{Timeout: 10 * time.Second},
-		retries: 3, backoff: 500 * time.Millisecond,
+		retries: 3, backoff: 500 * time.Millisecond, now: time.Now,
 	}
 }
 
@@ -53,6 +60,14 @@ func (c *Client) WithHTTPClient(h *http.Client) *Client { c.http = h; return c }
 
 // WithBackoff changes the initial retry back-off (tests).
 func (c *Client) WithBackoff(d time.Duration) *Client { c.backoff = d; return c }
+
+// WithClock replaces the clock of the platform-object cache (tests).
+func (c *Client) WithClock(now func() time.Time) *Client { c.now = now; return c }
+
+// WithMaxConcurrent bounds the requests this client has in flight at once to n; further requests wait for a free
+// slot. The worker's reconcile round uses it so it cannot saturate Authentik while an administrator waits for an
+// interactive call such as an organization create (PDK-392).
+func (c *Client) WithMaxConcurrent(n int) *Client { c.slots = make(chan struct{}, n); return c }
 
 // errStatus is a non-2xx answer.
 type errStatus struct {
@@ -292,8 +307,12 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 			}
 			backoff *= 2
 		}
+		if err := c.acquire(ctx); err != nil {
+			return err
+		}
 		began := time.Now()
 		retry, err := c.once(ctx, method, path, payload, out)
+		c.release()
 		if took := time.Since(began); took >= slowRequest {
 			slog.WarnContext(ctx, "authentik request slow", "method", method, "path", path, "attempt", attempt+1, "duration", took)
 		}
@@ -307,6 +326,24 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		slog.WarnContext(ctx, "authentik request failed; retrying", "method", method, "path", path, "attempt", attempt+1, "error", err)
 	}
 	return lastErr
+}
+
+func (c *Client) acquire(ctx context.Context) error {
+	if c.slots == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case c.slots <- struct{}{}:
+		return nil
+	}
+}
+
+func (c *Client) release() {
+	if c.slots != nil {
+		<-c.slots
+	}
 }
 
 func (c *Client) once(ctx context.Context, method, path string, payload []byte, out any) (retry bool, err error) {

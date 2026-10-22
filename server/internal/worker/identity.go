@@ -24,6 +24,12 @@ const (
 	brandRetryInterval = 15 * time.Second
 )
 
+// ReconcileAuthentikConcurrency bounds the Authentik requests of the reconcile round's EnsureOrganization, which fans
+// out about a dozen requests per organization. A loaded Authentik serves only one or two at a time, so an organization
+// create in the portal waited 2–6 s per request behind the round (PDK-392). No one waits for the round, so it sends
+// one request at a time and leaves Authentik's capacity to the interactive calls of the API.
+const ReconcileAuthentikConcurrency = 1
+
 // BrandFlows keeps the platform-wide flows of the identity provider's default brand (authentik.Client).
 type BrandFlows interface {
 	EnsureBrandFlows(ctx context.Context) error

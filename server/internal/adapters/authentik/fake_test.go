@@ -44,8 +44,18 @@ type fakeAuthentik struct {
 	failStatus int
 	// failReactivation makes every PATCH with is_active true answer 503 (a lock interrupted after the deactivation).
 	failReactivation bool
+	// failOnce makes the next request "METHOD path" answer with the given status, once per entry.
+	failOnce map[string]int
 	// latency delays every answer (an Authentik under load); requests are served concurrently meanwhile.
 	latency atomic.Int64
+	// slots bounds the requests Authentik serves at once (its web workers × threads); further requests queue. nil
+	// means unbounded. inFlight and peak count the requests being served or queued.
+	slots          chan struct{}
+	inFlight, peak atomic.Int64
+	// hostMu guards the requests in flight and their peak per listener (r.Host), to tell clients apart.
+	hostMu       sync.Mutex
+	hostInFlight map[string]int
+	hostPeak     map[string]int
 	// loseCreateAnswers makes the first POST to every path create its object and then never answer, as when the
 	// response is lost or the client times out after Authentik committed; lostCreates records the paths done.
 	loseCreateAnswers bool
@@ -69,7 +79,7 @@ func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
 	f := &fakeAuthentik{
 		t: t, groups: map[string]*fakeGroup{}, users: map[int]*fakeUser{}, nextPK: 1,
 		objects: map[string]map[string]map[string]any{}, tokens: map[string][]int{}, sessions: map[int]int{},
-		lostCreates: map[string]bool{},
+		lostCreates: map[string]bool{}, hostInFlight: map[string]int{}, hostPeak: map[string]int{},
 	}
 	// Objects of Authentik's defaults and of the Paddock blueprints.
 	for _, slug := range []string{"paddock-device-authentication", "paddock-device-authorization", "default-provider-invalidation-flow",
@@ -90,6 +100,20 @@ func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv
+}
+
+// hostPeakOf returns the most requests the client of srv had in flight at once since resetPeaks.
+func (f *fakeAuthentik) hostPeakOf(srv *httptest.Server) int {
+	f.hostMu.Lock()
+	defer f.hostMu.Unlock()
+	return f.hostPeak[strings.TrimPrefix(srv.URL, "http://")]
+}
+
+// resetPeaks clears the peaks of all clients.
+func (f *fakeAuthentik) resetPeaks() {
+	f.hostMu.Lock()
+	defer f.hostMu.Unlock()
+	clear(f.hostPeak)
 }
 
 func (f *fakeAuthentik) put(collection string, obj map[string]any) {
@@ -174,6 +198,23 @@ var collections = map[string]struct{ name, fixture string }{
 }
 
 func (f *fakeAuthentik) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.hostMu.Lock()
+	f.hostInFlight[r.Host]++
+	f.hostPeak[r.Host] = max(f.hostPeak[r.Host], f.hostInFlight[r.Host])
+	f.hostMu.Unlock()
+	defer func() {
+		f.hostMu.Lock()
+		f.hostInFlight[r.Host]--
+		f.hostMu.Unlock()
+	}()
+	n := f.inFlight.Add(1)
+	defer f.inFlight.Add(-1)
+	for p := f.peak.Load(); n > p && !f.peak.CompareAndSwap(p, n); p = f.peak.Load() {
+	}
+	if f.slots != nil {
+		f.slots <- struct{}{}
+		defer func() { <-f.slots }()
+	}
 	time.Sleep(time.Duration(f.latency.Load()))
 	f.mu.Lock()
 	unlocked := false
@@ -189,6 +230,12 @@ func (f *fakeAuthentik) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if f.failNext > 0 {
 		f.failNext--
 		w.WriteHeader(f.failStatus)
+		_, _ = w.Write([]byte(`{"detail":"injected"}`))
+		return
+	}
+	if status, ok := f.failOnce[r.Method+" "+r.URL.Path]; ok {
+		delete(f.failOnce, r.Method+" "+r.URL.Path)
+		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"detail":"injected"}`))
 		return
 	}
@@ -367,6 +414,9 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			return http.StatusNotFound, f.fixture("delete_core_groups_id_404.json")
 		}
 		if r.Method == http.MethodPut || r.Method == http.MethodPatch {
+			if coll == "providers" && f.unknownFlow(body) {
+				return http.StatusBadRequest, map[string]any{"authorization_flow": []string{"Invalid pk - object does not exist."}}
+			}
 			for k, v := range body {
 				obj[k] = v
 			}
@@ -402,13 +452,29 @@ func (f *fakeAuthentik) taken(name string, body map[string]any) bool {
 	return false
 }
 
+// unknownFlow reports whether a provider body names a flow that does not exist (Authentik validates the pks).
+func (f *fakeAuthentik) unknownFlow(body map[string]any) bool {
+	for _, field := range []string{"authentication_flow", "authorization_flow", "invalidation_flow"} {
+		if _, ok := f.objects["flows"][key(body[field])]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
 // collection lists (filtered by every query parameter that names a field) or creates objects.
 func (f *fakeAuthentik) collection(method, name, fixture string, q map[string][]string, body map[string]any) (int, any) {
 	if method == http.MethodPost {
 		if f.taken(name, body) {
 			return http.StatusBadRequest, map[string]any{"non_field_errors": []string{"The fields must make a unique set."}}
 		}
+		if name == "providers" && f.unknownFlow(body) {
+			return http.StatusBadRequest, map[string]any{"authorization_flow": []string{"Invalid pk - object does not exist."}}
+		}
 		obj := f.fixture(fixture)
+		if name == "applications" {
+			obj["provider"] = nil
+		}
 		for k, v := range body {
 			obj[k] = v
 		}

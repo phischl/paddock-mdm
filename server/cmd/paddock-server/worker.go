@@ -118,7 +118,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	loginHistory := worker.NewLoginHistory(app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, loginHistoryEvery)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
-	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak),
+	reconcileAK := authentik.New(authentikURL, authentikToken).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
+	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, reconcileAK, ak, ak),
 		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
