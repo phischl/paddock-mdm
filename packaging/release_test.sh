@@ -213,6 +213,19 @@ for tags in paddock_testbroken_supervisor "paddock_dev,paddock_testbroken_superv
   check "agent-release refuses TAGS=$tags" "$got" 1
 done
 
+# The in-place encryption test delays (plan M8e decision 19, PDK-391) never reach a published release. MAKE=false stops
+# the target at its first build step if the guard is missing, so the test never builds or uploads anything.
+for tags in paddock_dev "paddock_testbroken_probation,paddock_dev" "paddock_testbroken_selftest paddock_dev"; do
+  out="$(make -s -C "$root" --no-print-directory MAKE=false agent-release VERSION=1.2.3 TAGS="$tags" 2>&1)" && got=0 || got=1
+  [[ "$out" == *"never builds with paddock_dev"* ]] || got="$got: $out"
+  check "agent-release refuses TAGS=$tags" "$got" 1
+done
+for tags in "" paddock_testbroken_probation; do
+  out="$(make -s -C "$root" --no-print-directory MAKE=false agent-release VERSION=1.2.3 TAGS="$tags" 2>&1)" || true
+  if [[ "$out" == *"never builds"* ]]; then got="refused: $out"; else got=passed; fi
+  check "agent-release guards pass TAGS=$tags" "$got" passed
+done
+
 if ((failures > 0)); then
   echo "$failures failure(s)"
   exit 1
