@@ -32,7 +32,7 @@ const (
 // notifyTimeout bounds one notification.
 const notifyTimeout = 30 * time.Second
 
-// Texts of plan M8e §6.7 (binding); the PIN sentence as corrected by amendment 2026-10-22, item 22.
+// Texts of plan M8e §6.7 (binding); the PIN sentence as replaced by amendment 2026-10-22 b.
 const (
 	summaryEN = "Disk encryption is ready — please restart"
 	bodyEN    = "Your IT department has switched on disk encryption for this device. It starts at the next restart, which " +
