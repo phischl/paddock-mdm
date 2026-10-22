@@ -55,6 +55,9 @@ commands:
                  (started by the agent in the transient unit paddock-uninstall)
   encrypt-abort  abandon a prepared in-place encryption before the restart (root only): the running agent removes
                  the module and the conversion key and rebuilds the initrd; exit 0 aborted, 2 refused, 1 error
+  encrypt-resume [--partition DEV]
+                 encrypt the rest of the disk after the conversion restart, pausing on battery (started by the agent
+                 in the transient unit paddock-encrypt-resume); exit 0 completed, 1 failed, 143 stopped by SIGTERM
   version        print the version
 `
 
@@ -95,6 +98,8 @@ func run(args []string, stdout io.Writer) int {
 		return runUninstall(ctx, layout, rest)
 	case "encrypt-abort":
 		return runEncryptAbort(ctx, layout, rest)
+	case "encrypt-resume":
+		return runEncryptResume(ctx, layout, rest)
 	case "self-test":
 		r := selftest.Run(ctx, layout)
 		enc := json.NewEncoder(stdout)
@@ -325,6 +330,24 @@ func runEncryptAbort(ctx context.Context, layout paths.Layout, args []string) in
 	}
 	fmt.Fprintln(os.Stderr, "in-place encryption aborted; the disk stays unencrypted")
 	return 0
+}
+
+// runEncryptResume runs the background phase of the in-place encryption (plan M8e decision 21). SIGTERM (ctx) is
+// forwarded to cryptsetup; the helper then writes no result.
+func runEncryptResume(ctx context.Context, layout paths.Layout, args []string) int {
+	fs := flag.NewFlagSet("encrypt-resume", flag.ContinueOnError)
+	partition := fs.String("partition", "", "the conversion's partition (/dev/disk/by-partuuid/<uuid>)")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return 1
+	}
+	if layout.Root == "/" && os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "paddockd encrypt-resume must run as root")
+		return 1
+	}
+	r := &encrypt.Resumer{Sys: encrypt.OS{}, Layout: layout, Partition: *partition, Start: encrypt.StartProcess, Now: time.Now,
+		Sleep: sleep}
+	return r.Run(ctx)
 }
 
 // sleep waits d or until ctx ends.

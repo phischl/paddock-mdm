@@ -41,6 +41,10 @@ $ findmnt --fstab -no SOURCE /
 UUID=c0ffee00-1234-4abc-8def-001122334455
 $ dpkg-query -W -f=${db:Status-Status} dracut
 installed
+$ lsinitrd /boot/initrd.img-6.8.0-85-generic
+Image: /boot/initrd.img-6.8.0-85-generic
+> /proc/sys/kernel/osrelease
+6.8.0-85-generic
 > /etc/os-release
 NAME="Ubuntu"
 VERSION_ID="26.04"

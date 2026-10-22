@@ -329,3 +329,14 @@ func TestVersionOf(t *testing.T) {
 		t.Fatal("another package accepted")
 	}
 }
+
+// TestUpgradeDeferredWhenLocked: plan M8e amendment 2026-10-21, item 16 — dpkg refusing the install for a lock another
+// package run holds (apt, the in-place encryption's initrd work) defers the upgrade: no install_failed.
+func TestUpgradeDeferredWhenLocked(t *testing.T) {
+	w := newUpgradeWorld(t)
+	w.sys.DpkgLocked = true
+	if r := w.upgrader().Run(context.Background(), w.deb, "1.1.0"); r.Outcome != OutcomeDeferred {
+		t.Fatalf("outcome %s", r.Outcome)
+	}
+	w.result(t, OutcomeDeferred)
+}

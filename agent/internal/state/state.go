@@ -128,6 +128,26 @@ type DiskConversion struct {
 	// ModuleWritten is set before step 7 writes the module (decision 13): from then on any initrd may carry the module
 	// and the key, so the cleanup must verify every initrd before it deletes them (invariant I3).
 	ModuleWritten bool `json:"module_written,omitempty"`
+	// ModuleRestorePending is set when an adoption found the module, its dracut configuration or plan.env removed by a
+	// cleanup: they are reinstalled and the initrds rebuilt before the initrd regeneration or the background phase
+	// runs (plan M8e decision 18, invariant I2).
+	ModuleRestorePending bool `json:"module_restore_pending,omitempty"`
+	// CleanupError is why the last attempt of the pending cleanup did not finish (its first line); it is cleared whenever
+	// CleanupPending is set or cleared, so that it never names an earlier cleanup (PDK-376).
+	CleanupError string `json:"cleanup_error,omitempty"`
+	// InitrdIssue is why the initrd work (cleanup, reinstall, regeneration) cannot go on: boot_space_low with
+	// BootSpaceNeeded and BootSpaceFree, or no_bootable_kernel; "" otherwise (plan M8e amendment 2026-10-21, item 19).
+	InitrdIssue     string `json:"initrd_issue,omitempty"`
+	BootSpaceNeeded int64  `json:"boot_space_needed,omitempty"`
+	BootSpaceFree   int64  `json:"boot_space_free,omitempty"`
+	// InitrdIssueKernel is the kernel of kernel_not_buildable.
+	InitrdIssueKernel string `json:"initrd_issue_kernel,omitempty"`
+	// PackagesBusySince is when the preparation began to wait for a package run holding dpkg's locks (step 8); nil
+	// while it does not wait (plan M8e amendment 2026-10-21, item 18).
+	PackagesBusySince *time.Time `json:"packages_busy_since,omitempty"`
+	// RevokedAt is a revocation hand-over after the conversion started encrypting: the conversion is terminal on the
+	// device from then on (plan M8e amendment 2026-10-21, item 10).
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 	// TransientErrors counts the passes of the preparation that ended on a tool error outside the closed set of
 	// reasons; the preparation fails once encrypt.TransientRetries are used up.
 	TransientErrors int `json:"transient_errors,omitempty"`
@@ -144,6 +164,9 @@ type SupervisorRetry struct {
 	Version   string    `json:"version"`
 	Attempts  int       `json:"attempts"`
 	NotBefore time.Time `json:"not_before"`
+	// Deferrals counts the upgrades of Version dpkg refused because another package run held its lock; they count
+	// toward no failure.
+	Deferrals int `json:"deferrals,omitempty"`
 }
 
 // PendingUninstall is an accepted uninstall command; Reported is set once the server accepted its result (2xx),

@@ -37,6 +37,9 @@ const (
 	moduleName = "paddock-encrypt"
 )
 
+// moduleConf is the content of ModuleConf.
+const moduleConf = "add_dracutmodules+=\" " + moduleName + " \"\n"
+
 // tpm2Conf is the content of TPM2Conf: exactly the three lines of the 24.04 autoinstall template.
 const tpm2Conf = "# Paddock: unlock LUKS with systemd-cryptsetup and TPM2+PIN (plan M4b)\nhostonly=\"yes\"\n" +
 	"add_dracutmodules+=\" systemd crypt tpm2-tss lvm \"\n"
@@ -128,6 +131,14 @@ type transient struct{ err error }
 func (t *transient) Error() string { return t.err.Error() }
 func (t *transient) Unwrap() error { return t.err }
 
+// errBusy is a step that waits for a package run holding dpkg's locks: the next full pass runs it again, and the wait
+// counts toward no retry (an apt run may hold the locks for many minutes).
+var errBusy = errors.New("a package run holds the dpkg lock")
+
+// errWait is a step that waits for room in /boot or a buildable kernel: the next full pass runs it again, and the wait
+// counts toward no retry; unlike errBusy it is no wait for dpkg's locks (review 10, M6).
+var errWait = errors.New("the initrd cannot be built yet")
+
 // errStop ends a preparation that the next start re-queues.
 var errStop = errors.New("preparation stopped")
 
@@ -155,6 +166,9 @@ func (p *Preparer) Prepare(ctx context.Context) Outcome {
 		if c.AbortRequested {
 			return p.abort(ctx, c)
 		}
+		if p.converted(ctx, c) {
+			return Stopped
+		}
 		err := step(ctx, c)
 		if err == nil {
 			continue
@@ -163,6 +177,20 @@ func (p *Preparer) Prepare(ctx context.Context) Outcome {
 			return p.abort(ctx, c)
 		}
 		if errors.Is(err, errStop) || ctx.Err() != nil {
+			return Stopped
+		}
+		if errors.Is(err, errWait) {
+			slog.InfoContext(ctx, "the preparation waits until the initrds can be built", "conversion_id", c.ID, "step", i+1)
+			return Stopped
+		}
+		if errors.Is(err, errBusy) {
+			slog.InfoContext(ctx, "the preparation waits for a package run that holds the dpkg lock", "conversion_id", c.ID, "step", i+1)
+			if c.PackagesBusySince == nil {
+				now := p.Now().UTC()
+				if err := p.State.Update(func(c *state.DiskConversion, _ *state.LUKS) { c.PackagesBusySince = &now }); err != nil {
+					slog.ErrorContext(ctx, "recording the wait for the dpkg lock failed", "error", err)
+				}
+			}
 			return Stopped
 		}
 		var t *transient
@@ -177,6 +205,22 @@ func (p *Preparer) Prepare(ctx context.Context) Outcome {
 		return p.fail(ctx, c, i+1, reason)
 	}
 	return Prepared
+}
+
+// converted reports whether the partition of a planned conversion is LUKS or its header cannot be checked: no step
+// runs then (invariants I1 and I2) — the disk converted at a boot and the worker adopts the conversion, or the next
+// full pass looks again.
+func (p *Preparer) converted(ctx context.Context, c state.DiskConversion) bool {
+	if c.Partition == "" {
+		return false
+	}
+	luks, ok := IsLUKS(ctx, p.Sys, p.Layout, DiskOf(c))
+	if luks || !ok {
+		slog.WarnContext(ctx, "the partition is LUKS or its header cannot be checked; the preparation stops", "conversion_id", c.ID,
+			"luks", luks)
+		return true
+	}
+	return false
 }
 
 // retry counts the transient error of step n and stops; the worker queues the preparation again at the next full
@@ -211,7 +255,7 @@ func (p *Preparer) fail(ctx context.Context, c state.DiskConversion, n int, reas
 	cleanup := n >= 7 || c.ModuleWritten
 	runCleanup := cleanup
 	if cleanup {
-		luks, ok := IsLUKS(ctx, p.Sys, p.Layout, c.Partition)
+		luks, ok := IsLUKS(ctx, p.Sys, p.Layout, DiskOf(c))
 		if luks {
 			slog.WarnContext(ctx, "the partition is LUKS already; adopting the conversion instead of cleaning up", "conversion_id", c.ID)
 			return Stopped
@@ -220,14 +264,19 @@ func (p *Preparer) fail(ctx context.Context, c state.DiskConversion, n int, reas
 	}
 	if err := p.State.Transition(func(c *state.DiskConversion, _ *state.LUKS) *Event {
 		c.Phase, c.FailureStage, c.FailureReason, c.CleanupPending = state.ConversionFailed, state.StagePrepare, reason, cleanup
+		c.CleanupError, c.PackagesBusySince = "", nil
 		return &Event{protocol.EventDiskConversionFailed, map[string]any{"conversion_id": c.ID, "stage": state.StagePrepare,
 			"reason": reason, "volume": c.LUKSUUID}}
 	}); err != nil {
 		slog.ErrorContext(ctx, "recording the failed preparation failed; retrying at the next full pass", "error", err)
+		// An abort deferred while the step ran is run now rather than answered not_abortable by the worker (decision 27).
+		if cur, ok := p.State.Conversion(); ok && cur.Phase == state.ConversionPreparing && cur.AbortRequested {
+			return p.abort(ctx, cur)
+		}
 		return Stopped
 	}
 	if runCleanup {
-		RunCleanup(ctx, p.Sys, p.Layout, p.State)
+		_, _ = RunCleanup(ctx, p.Sys, p.Layout, p.State) // logged; a later full pass retries
 	}
 	return Failed
 }
@@ -601,7 +650,7 @@ func (p *Preparer) module(_ context.Context, c state.DiskConversion) error {
 	if err := WriteModule(p.Layout, p.Module); err != nil {
 		return err
 	}
-	if err := fsutil.WriteFile(p.Layout.Join(ModuleConf), []byte("add_dracutmodules+=\" "+moduleName+" \"\n"), 0o644, 0o755); err != nil {
+	if err := fsutil.WriteFile(p.Layout.Join(ModuleConf), []byte(moduleConf), 0o644, 0o755); err != nil {
 		return err
 	}
 	if err := fsutil.WriteFile(p.Layout.EncryptPlanEnv(), env, 0o600, 0o700); err != nil {
@@ -662,29 +711,71 @@ var initrdBinaries = []string{"cryptsetup", "e2fsck", "resize2fs"}
 // initrd is step 8: every initrd is rebuilt with the module, the running kernel's is verified, and every initrd is
 // made readable by root only (it carries the conversion key).
 func (p *Preparer) initrd(ctx context.Context, c state.DiskConversion) error {
-	if err := regenerate(ctx, p.Sys); err != nil {
+	// Under dpkg's locks, as every initrd change of the conversion (amendment 2026-10-21, item 16): a kernel package's
+	// dracut run in between could leave the newest initrd without the module. Busy waits for the next pass (errBusy).
+	unlock, err := p.Sys.LockPackages()
+	if errors.Is(err, ErrPackagesBusy) {
+		return errBusy
+	}
+	if err != nil {
 		return &transient{err}
 	}
-	release, err := os.ReadFile(p.Layout.Join("/proc/sys/kernel/osrelease"))
-	if err != nil {
-		return err
-	}
-	initrd := p.Layout.Join("/boot/initrd.img-" + strings.TrimSpace(string(release)))
-	out, _, exit, err := p.Sys.Command(ctx, "lsinitrd", initrd)
-	if err != nil || exit != 0 || !complete(out, c.Layout) {
-		slog.WarnContext(ctx, "the initrd lacks files of the in-place encryption", "initrd", initrd, "exit", exit, "error", err)
-		return &failure{ReasonInitrdIncomplete}
-	}
-	initrds, err := filepath.Glob(p.Layout.Join("/boot/initrd.img-*"))
-	if err != nil {
-		return err
-	}
-	for _, f := range initrds {
-		if err := os.Chmod(f, 0o600); err != nil {
-			return err
+	defer unlock()
+	if c.PackagesBusySince != nil {
+		// The bookkeeping of the wait never fails the preparation (review 9, m6).
+		if err := p.State.Update(func(c *state.DiskConversion, _ *state.LUKS) { c.PackagesBusySince = nil }); err != nil {
+			slog.ErrorContext(ctx, "recording the end of the wait for the dpkg lock failed", "error", err)
 		}
 	}
-	return nil
+	// One kernel after the other through a temporary file, with the room in /boot checked (item 19(h)): a full /boot
+	// or a killed build never leaves a half-written initrd.
+	listers := initrdListers
+	err = rebuildInitrds(ctx, p.Sys, p.Layout, func(initrd string) error {
+		out, err := listInitrd(ctx, p.Sys, &listers, initrd)
+		if err == nil && !complete(out, c.Layout) {
+			slog.WarnContext(ctx, "the initrd lacks files of the in-place encryption", "initrd", initrd)
+			return errIncomplete
+		}
+		return err
+	})
+	var space *BootSpaceError
+	var notBuildable *KernelNotBuildableError
+	switch {
+	case err == nil:
+		return p.clearInitrdIssue(c)
+	case errors.Is(err, errIncomplete):
+		return &failure{ReasonInitrdIncomplete}
+	case errors.As(err, &notBuildable):
+		slog.WarnContext(ctx, "the preparation waits: a kernel's initrd cannot be built", "kernel", notBuildable.Version)
+		if uerr := p.State.Update(func(c *state.DiskConversion, _ *state.LUKS) {
+			c.InitrdIssue, c.BootSpaceNeeded, c.BootSpaceFree, c.InitrdIssueKernel = IssueKernelNotBuildable, 0, 0, notBuildable.Version
+		}); uerr != nil {
+			slog.ErrorContext(ctx, "recording the kernel that cannot be built failed", "error", uerr)
+		}
+		return errWait
+	case errors.As(err, &space):
+		slog.WarnContext(ctx, "the preparation waits for room in /boot", "needed", space.Needed, "free", space.Free)
+		if uerr := p.State.Update(func(c *state.DiskConversion, _ *state.LUKS) {
+			c.InitrdIssue, c.BootSpaceNeeded, c.BootSpaceFree, c.InitrdIssueKernel = IssueBootSpaceLow, space.Needed, space.Free, ""
+		}); uerr != nil {
+			slog.ErrorContext(ctx, "recording the lack of room in /boot failed", "error", uerr)
+		}
+		return errWait
+	}
+	return &transient{err}
+}
+
+// errIncomplete is a rebuilt initrd that lacks files of the init step.
+var errIncomplete = errors.New("the initrd lacks files of the in-place encryption")
+
+// clearInitrdIssue ends a reported lack of room once step 8 passed.
+func (p *Preparer) clearInitrdIssue(c state.DiskConversion) error {
+	if c.InitrdIssue == "" {
+		return nil
+	}
+	return p.State.Update(func(c *state.DiskConversion, _ *state.LUKS) {
+		c.InitrdIssue, c.BootSpaceNeeded, c.BootSpaceFree, c.InitrdIssueKernel = "", 0, 0, ""
+	})
 }
 
 // complete reports whether an lsinitrd listing has the files and the binaries of the init step.
@@ -722,15 +813,6 @@ func complete(listing, layout string) bool {
 	return true
 }
 
-// regenerate runs dracut -f --regenerate-all, bounded by LongTimeout.
-func regenerate(ctx context.Context, sys Host) error {
-	_, stderr, exit, err := sys.CommandWithin(ctx, LongTimeout, nil, "dracut", "-f", "--regenerate-all")
-	if err == nil && exit != 0 {
-		err = fmt.Errorf("dracut: exit %d: %s", exit, firstLine(stderr))
-	}
-	return err
-}
-
 // prepared is step 9. An abort requested since the check before this step keeps the phase preparing and runs instead:
 // otherwise its deferred command would be answered not_abortable for a conversion that is prepared, and so abortable.
 func (p *Preparer) prepared(ctx context.Context, c state.DiskConversion) error {
@@ -740,7 +822,7 @@ func (p *Preparer) prepared(ctx context.Context, c state.DiskConversion) error {
 		if abort = c.AbortRequested; abort {
 			return nil
 		}
-		c.Phase, c.PreparedAt = state.ConversionPrepared, &now
+		c.Phase, c.PreparedAt, c.PackagesBusySince = state.ConversionPrepared, &now, nil
 		return &Event{protocol.EventDiskConversionPrepared, map[string]any{"conversion_id": c.ID, "layout": c.Layout,
 			"volume": c.LUKSUUID, "data_bytes": c.DataBytes}}
 	}); err != nil {

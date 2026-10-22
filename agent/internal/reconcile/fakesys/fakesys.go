@@ -53,6 +53,7 @@ type System struct {
 	DpkgInterrupted bool
 	// DpkgTimeout makes dpkg -i time out (an error wrapping context.DeadlineExceeded).
 	DpkgTimeout bool
+	DpkgLocked  bool // dpkg -i finds the frontend lock held by another process
 	// Sessions are the logind sessions loginctl lists.
 	Sessions []Session
 	// Passwd are the users getent passwd resolves (name → UID), with an empty GECOS like Himmelblau's synthetic entry
@@ -369,6 +370,8 @@ func (s *System) Dpkg(_ context.Context, args ...string) (string, int, error) {
 	switch {
 	case s.DpkgTimeout:
 		return "", -1, fmt.Errorf("dpkg: %w", context.DeadlineExceeded)
+	case s.DpkgLocked:
+		return "dpkg: error: dpkg frontend lock was locked by another process with pid 4242\n", 2, nil
 	case s.DpkgInterrupted:
 		return "dpkg: error: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.\n", 2, nil
 	case cmd == s.FailCmd || s.Files[args[1]] == nil:

@@ -5,3 +5,6 @@ func HimmelblauKey() []byte { return himmelblauKey }
 
 // PackageCommand exposes the process-group runner of apt-get and dpkg.
 var PackageCommand = packageCommand
+
+// Shred exposes the overwrite of the install passphrase.
+var Shred = shred

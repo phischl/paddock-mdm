@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -52,6 +54,21 @@ type device struct {
 	luksExit int
 	// dpkgExit makes dpkg-query fail with this exit code for dracut (2: dpkg could not answer).
 	dpkgExit int
+	// afterDracut changes the device while dracut runs (a header that appears or becomes unreadable meanwhile).
+	afterDracut func(d *device)
+	// slots are the keyslot kinds luksDump shows for the LUKS partition.
+	slots []string
+	// noTPM builds initrds without systemd-cryptsetup and the TPM2 libraries.
+	noTPM bool
+	// pe makes dracut write a unified kernel image (a host with uefi=yes) into its output file.
+	pe bool
+	// beforeFinalList runs once at the first lsinitrd -m of an initrd in place (not a temporary one): a package's late
+	// write over a renamed initrd.
+	beforeFinalList func(d *device)
+	// onTempCrypttab runs at every lsinitrd -f etc/crypttab of a temporary initrd (the last check of its build).
+	onTempCrypttab func()
+	// partDevices is what blkid names for the partition's PARTUUID ("" = one device, /dev/sda3).
+	partDevices string
 	// missing are the tools that are not installed.
 	missing map[string]bool
 }
@@ -68,8 +85,9 @@ func newDevice(t *testing.T) *device {
 		realRemove: map[string]string{"brltty": "config-files", "initramfs-tools": "not-installed"}}
 	h.Write("/proc/sys/kernel/osrelease", runningKernel+"\n")
 	h.Write("/boot/vmlinuz-"+runningKernel, "kernel")
-	h.MkdirAll("/lib/modules/" + runningKernel)
-	h.MkdirAll("/lib/modules/" + olderKernel)
+	h.Write("/lib/modules/"+runningKernel+"/modules.dep", "")
+	h.Write("/boot/vmlinuz-"+olderKernel, "kernel")
+	h.Write("/lib/modules/"+olderKernel+"/modules.dep", "")
 	h.Write("/boot/initrd.img-"+runningKernel, "initramfs-tools image\n")
 	h.Write("/boot/initrd.img-"+olderKernel, "initramfs-tools image\n")
 	h.MkdirAll("/sys/module/dm_crypt")
@@ -125,17 +143,92 @@ func (d *device) handle(line string) (string, int, bool) {
 		}
 		return "", 1, true
 	case line == "dracut -f --regenerate-all":
+		if d.afterDracut != nil {
+			d.afterDracut(d)
+		}
 		if d.dracutExit != 0 {
 			return "", d.dracutExit, true
 		}
 		d.buildInitrds()
 		return "", 0, true
-	case strings.HasPrefix(line, "lsinitrd /boot/initrd.img-"), strings.HasPrefix(line, "lsinitramfs /boot/initrd.img-"):
+	case strings.HasPrefix(line, "dracut -f --no-uefi /boot/.initrd.img-"):
+		f := strings.Fields(line)
+		if d.afterDracut != nil {
+			d.afterDracut(d)
+		}
+		if d.dracutExit != 0 {
+			return "", d.dracutExit, true
+		}
+		module := d.Exists(encrypt.ModuleConf) && d.Exists(encrypt.ModuleDir) && d.Exists("/var/lib/paddock/encrypt/plan.env")
+		d.buildInitrd(f[3], f[4], module)
+		if d.pe {
+			d.Write(f[3], "MZ\x90\x00 a unified kernel image")
+		}
+		// dracut writes its output readable by all; the agent makes it root-only.
+		_ = os.Chmod(d.Path(f[3]), 0o644)
+		return "", 0, true
+	case strings.HasPrefix(line, "dracut -f --no-uefi --omit paddock-encrypt "):
+		f := strings.Fields(line)
+		if d.afterDracut != nil {
+			d.afterDracut(d)
+		}
+		if d.dracutExit != 0 {
+			return "", d.dracutExit, true
+		}
+		d.buildInitrd(f[5], f[6], false)
+		// What real lsinitrd prints for a build with --omit: dracut's command line names the module.
+		raw, _ := os.ReadFile(d.Path(f[5]))
+		d.Write(f[5], strings.Replace(string(raw), "Version: dracut-060\n", "Version: dracut-060\nArguments: -f --omit 'paddock-encrypt'\n", 1))
+		if d.pe {
+			d.Write(f[5], "MZ\x90\x00 a unified kernel image")
+		}
+		return "", 0, true
+	case line == "blkid -o device -t PARTUUID=8c2f8d4e-5b7a-4f1c-9e0d-2a6b3c4d5e6f":
+		if d.partDevices == "" {
+			return "/dev/sda3\n", 0, true
+		}
+		return d.partDevices, 0, true
+	case line == "cryptsetup luksDump --dump-json-metadata -- "+partition:
+		if !d.luks {
+			return "", 1, true
+		}
+		return luksMetadata(d.slots), 0, true
+	case strings.HasPrefix(line, "lsinitrd -m /boot/initrd.img-") && d.beforeFinalList != nil:
+		hook := d.beforeFinalList
+		d.beforeFinalList = nil
+		hook(d)
+		raw, _ := os.ReadFile(d.Path(strings.TrimPrefix(line, "lsinitrd -m ")))
+		listing, _, _ := strings.Cut(string(raw), crypttabMark)
+		return lsinitrdModules(listing), 0, true
+	case strings.HasPrefix(line, "lsinitrd -m /boot/"):
+		raw, err := os.ReadFile(d.Path(strings.TrimPrefix(line, "lsinitrd -m ")))
+		if err != nil {
+			return "", 1, true
+		}
+		listing, _, _ := strings.Cut(string(raw), crypttabMark)
+		return lsinitrdModules(listing), 0, true
+	case strings.HasPrefix(line, "lsinitrd -f etc/crypttab /boot/.initrd.img-") && d.onTempCrypttab != nil:
+		d.onTempCrypttab()
+		raw, _ := os.ReadFile(d.Path(strings.TrimPrefix(line, "lsinitrd -f etc/crypttab ")))
+		_, crypttab, _ := strings.Cut(string(raw), crypttabMark)
+		return crypttab, 0, true
+	case strings.HasPrefix(line, "lsinitrd -f etc/crypttab /boot/"):
+		raw, err := os.ReadFile(d.Path(strings.TrimPrefix(line, "lsinitrd -f etc/crypttab ")))
+		if err != nil {
+			return "", 1, true
+		}
+		_, crypttab, _ := strings.Cut(string(raw), crypttabMark)
+		return crypttab, 0, true
+	case (strings.HasPrefix(line, "lsinitrd /boot/") || strings.HasPrefix(line, "lsinitramfs /boot/")) &&
+		strings.HasPrefix(d.readOrEmpty(line[strings.Index(line, " ")+1:]), "TRUNCATED"):
+		return "", 1, true
+	case strings.HasPrefix(line, "lsinitrd /boot/"), strings.HasPrefix(line, "lsinitramfs /boot/"):
 		raw, err := os.ReadFile(d.Path(line[strings.Index(line, " ")+1:]))
 		if err != nil {
 			return "", 1, true
 		}
-		return string(raw), 0, true
+		listing, _, _ := strings.Cut(string(raw), crypttabMark)
+		return listing, 0, true
 	}
 	return "", 0, false
 }
@@ -143,27 +236,76 @@ func (d *device) handle(line string) (string, int, bool) {
 // buildInitrds writes, as dracut would, an initrd listing for every kernel: with the module while its configuration
 // and plan.env exist (the module's check()).
 func (d *device) buildInitrds() {
-	listing := "Image: initrd\ndracut modules:\nsystemd\ncrypt\n" +
-		"-rwxr-xr-x   1 root root   123 Oct 21 10:00 usr/sbin/cryptsetup\n" +
-		"-rwxr-xr-x   1 root root   123 Oct 21 10:00 usr/sbin/e2fsck\n" +
-		"-rwxr-xr-x   1 root root   123 Oct 21 10:00 usr/sbin/lvm\n"
-	if !d.incomplete {
-		listing += "-rwxr-xr-x   1 root root   123 Oct 21 10:00 usr/sbin/resize2fs\n"
-	}
 	module := d.Exists(encrypt.ModuleConf) && d.Exists(encrypt.ModuleDir) && d.Exists("/var/lib/paddock/encrypt/plan.env")
-	if module {
-		listing += "paddock-encrypt\n" +
-			"-rw-------   1 root root   300 Oct 21 10:00 etc/paddock/encrypt-plan.env\n" +
-			"-rw-------   1 root root    71 Oct 21 10:00 etc/paddock/encrypt-key\n" +
-			"-rw-r--r--   1 root root   400 Oct 21 10:00 usr/lib/systemd/system/paddock-encrypt-init.service\n"
-	}
 	for _, v := range []string{runningKernel, olderKernel} {
-		content := listing
-		if v == olderKernel && d.stale {
-			content += "paddock-encrypt\n"
-		}
-		d.Write("/boot/initrd.img-"+v, content)
+		d.buildInitrd("/boot/initrd.img-"+v, v, module)
 	}
+}
+
+// buildInitrd writes one initrd listing (and the crypttab it carries) to path.
+func (d *device) buildInitrd(path, v string, module bool) {
+	modules := "systemd\ncrypt\n"
+	if module || v == olderKernel && d.stale {
+		modules += "paddock-encrypt\n"
+	}
+	files := []string{"usr/sbin/cryptsetup", "usr/sbin/e2fsck", "usr/sbin/lvm"}
+	if !d.incomplete {
+		files = append(files, "usr/sbin/resize2fs")
+	}
+	if !d.noTPM {
+		files = append(files, "usr/lib/systemd/systemd-cryptsetup", "usr/lib/x86_64-linux-gnu/libtss2-esys.so.0")
+	}
+	if module {
+		files = append(files, "etc/paddock/encrypt-plan.env", "etc/paddock/encrypt-key",
+			"usr/lib/systemd/system/paddock-encrypt-init.service")
+	}
+	crypttab, err := os.ReadFile(d.Path("/etc/crypttab"))
+	if err == nil {
+		files = append(files, "etc/crypttab")
+	}
+	d.Write(path, lsinitrdOutput(modules, files)+crypttabMark+string(crypttab))
+}
+
+// lsinitrdOutput is what lsinitrd prints: the header with the dracut modules, then the files as ls -l lines.
+func lsinitrdOutput(modules string, files []string) string {
+	var b strings.Builder
+	b.WriteString("Image: initrd\n========================================================================\n" +
+		"Version: dracut-060\n\ndracut modules:\n" + modules +
+		"========================================================================\n")
+	for _, f := range files {
+		b.WriteString("-rwxr-xr-x   1 root     root          123 Oct 21 10:00 " + f + "\n")
+	}
+	b.WriteString("========================================================================\n")
+	return b.String()
+}
+
+// lsinitrdModules is what lsinitrd -m prints: the header only.
+func lsinitrdModules(output string) string {
+	head, _, _ := strings.Cut(output, "dracut modules:\n")
+	mods, _, _ := strings.Cut(strings.TrimPrefix(output, head+"dracut modules:\n"), "====")
+	return head + "dracut modules:\n" + mods
+}
+
+// crypttabMark separates a fake initrd's listing from the crypttab it carries.
+const crypttabMark = "--- etc/crypttab ---\n"
+
+// luksMetadata is the LUKS2 JSON metadata of keyslots by kind.
+func luksMetadata(slots []string) string {
+	keyslots, tokens := map[string]any{}, map[string]any{}
+	for i, kind := range slots {
+		slot := strconv.Itoa(i)
+		keyslots[slot] = map[string]any{"type": "luks2"}
+		switch kind {
+		case "tpm2+pin":
+			tokens[slot] = map[string]any{"type": "systemd-tpm2", "keyslots": []string{slot}, "tpm2-pin": true}
+		case "tpm2":
+			tokens[slot] = map[string]any{"type": "systemd-tpm2", "keyslots": []string{slot}}
+		case "reencrypt":
+			keyslots[slot] = map[string]any{"type": "reencrypt"}
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"keyslots": keyslots, "tokens": tokens})
+	return string(b)
 }
 
 func (d *device) set(fn func(d *device)) {
@@ -175,7 +317,12 @@ func (d *device) set(fn func(d *device)) {
 // initrdCarriesModule reports whether a kernel's initrd lists the module.
 func (d *device) initrdCarriesModule(v string) bool {
 	raw, _ := os.ReadFile(d.Path("/boot/initrd.img-" + v))
-	return strings.Contains(string(raw), "paddock-encrypt")
+	for line := range strings.Lines(string(raw)) {
+		if !strings.HasPrefix(line, "Arguments:") && strings.Contains(line, "paddock-encrypt") {
+			return true
+		}
+	}
+	return false
 }
 
 // event is an emitted device event.
@@ -382,3 +529,9 @@ func statMode(path string) (os.FileMode, error) {
 }
 
 func removeAll(path string) error { return os.RemoveAll(path) }
+
+// readOrEmpty is a file below the root, "" when it cannot be read.
+func (d *device) readOrEmpty(path string) string {
+	raw, _ := os.ReadFile(d.Path(path))
+	return string(raw)
+}

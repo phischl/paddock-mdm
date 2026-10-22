@@ -1659,3 +1659,274 @@ Found while implementing PDK-244. The binding text of decisions 2, 15 and 16 is 
   concurrently with the module at all. (c) Whether 26.04 has the LVM devices file enabled by default. (d) A
   `resume=` set only through `kernel_cmdline` in `/etc/dracut.conf.d` is refused by the preflight
   (`hibernation_configured`); if one slips through, the init step skips with `resume_set`.
+
+### Amendment 2026-10-21 — resume and completion interpretations (decided by the orchestrator as architect)
+
+Found while implementing PDK-245. The binding text of decisions 3, 18, 21, 22 and 52 is made precise as follows:
+
+1. **Decision 3/52, health while unencrypted.** While the disk is `not_encrypted`, `health.disk.conversion` carries
+   `phase` and `key_on_boot` from the conversion state next to the preflight (so `key_on_boot` is true from
+   `prepared`). The failure fields of decision 3 stay with PDK-364.
+2. **Decision 18, a failed or skipped init step on a partition that is not LUKS** fails the conversion at stage `init`
+   and starts the I3 cleanup only in phase `preparing` or `prepared`. In `cancelled` or `failed` (a stale initrd ran
+   during an unfinished cleanup) the boot result is logged and removed; the phase is kept, no second
+   `disk.conversion_failed` is emitted, and the running cleanup goes on.
+3. **Decision 52, the re-arm** of `/var/lib/paddock/disk-setup-pending` happens only while the root volume has no
+   `tpm2` or `tpm2+pin` keyslot. Once a TPM keyslot exists the marker would make the dialogue enroll again at every
+   boot and hold the `luks` reconciler, which waits while the marker exists.
+4. **Decision 22, "per boot".** `ResumeFailures` is reset at every agent start; after 3 failed results the helper is
+   not relaunched until the next start.
+5. **Decision 21, `duration_s`** is the sum of the intervals in which cryptsetup ran during this helper run. Waits on
+   battery do not count, and `progress.json` carries nothing across helper runs.
+6. **Decision 22, clearing.** `state.Conversion` is cleared once the phase is `completed`, `InitrdRegenerated` is true,
+   no cleanup is pending and the disk reports `compliant` or `escrow_pending`. Decision 3's hold ends with
+   `InitrdRegenerated`.
+7. **Decisions 20 and 21, plan.json** (review 1 of PDK-245, B1). Decision 20 may run while the conversion is still
+   encrypting (the TPM keyslot exists from the conversion boot under `tpm_only`, or once the PIN is set), and the
+   helper reads the plan. Step (5) therefore removes plan.json only when the phase is `completed`; otherwise it stays
+   until the conversion is cleared (item 6), which removes it before `state.Conversion` is cleared. As a second
+   guard the agent passes the partition to the helper: `paddockd encrypt-resume --partition <partition>`. The helper
+   resumes without plan.json and fails with `resume_plan_mismatch` when both name different partitions.
+8. **Decision 20, the rebuild** (adversarial review of PDK-245, M1; invariant I1). No working initrd is replaced by
+   one that was not verified. The order becomes:
+   (1) the crypttab line;
+   (2) for every bootable kernel (`/boot/vmlinuz-<v>`, or a current `/boot/initrd.img-<v>`; a leftover
+   `/lib/modules/<v>` without either has no boot entry), `dracut -f --omit paddock-encrypt <tmp> <v>` into
+   `/boot/.initrd.img-<v>.paddock`. The new initrd is verified with `lsinitrd`: the crypttab line for the volume,
+   `systemd-cryptsetup` and the TPM2 libraries (`libtss2`), and none of the module, the key or the plan. Only when every
+   kernel passed are the files renamed into place;
+   (3) only then are the module's configuration and directory, test-hooks and plan.json (item 7) removed, plan.env last.
+   While (2) fails, the current initrds and the host files stay, the temporary files are removed, and the next full
+   pass retries.
+9. **Decision 21, exit 0 as mains is lost.** When cryptsetup ends just as the helper stopped it for a lost mains
+   supply, the helper checks the header first; without a `reencrypt` keyslot it writes `completed` instead of waiting
+   on battery.
+10. **Decisions 39 and 22, after a revocation hand-over** (replaced in fix round 2; not a 24-hour window). A
+    revocation handed to paddock-revoke at any time after the conversion started encrypting (`StartedAt`) makes the
+    conversion terminal on the device until `state.Conversion` is cleared (re-enrollment or reset). The helper is not
+    relaunched, a disk without the `reencrypt` keyslot is not reported `completed`, and a result the helper wrote is
+    discarded without an event. The initrd work of decisions 18, 20 and 52 (PIN re-arm, rebuild) does not run, at
+    start, at a full pass, or from a job the worker had queued before the hand-over. The hand-over is recorded as `state.Conversion.RevokedAt` in the same save as the
+    envelope's hash, so the pruning of `HandedRevocations` after 31 days does not end it. A hand-over before
+    `StartedAt` (refused, the disk was unencrypted) does not count. `activating`, `reloading` and `deactivating`
+    count as running, both for the launch check and for the stop before the hand-over.
+11. **I2 for a state that says converted, and helper runs without a result** (adversarial review m3). When the state
+    says `encrypting` or `completed` but `cryptsetup isLuks` says the partition is not LUKS and `luksDump` fails as
+    well, the conversion fails at stage `init` with reason `not_luks`, and the cleanup of invariant I3 runs. A helper
+    run that ends without a result counts as a failed run (`resume_no_result`) toward the limit of item 4.
+12. **Item 8, reading lsinitrd** (review 2 of PDK-245). lsinitrd prints dracut's command line (`Arguments: -f --omit
+    'paddock-encrypt'`, from `build-parameter.txt`). That line is not content and is skipped when an initrd is checked
+    for the module, here and in the I3 cleanup. A systemctl that cannot say whether the helper runs counts as running
+    for the launch, but never as a helper that ended without a result. Item 10 also holds at the agent's start. The
+    verification of item 8 reads dracut's module list with `lsinitrd -m` and the file entries by exact path (no
+    module, `etc/crypttab`, a file named `systemd-cryptsetup`, a `libtss2-*` library, none of the module's files).
+13. **"Not LUKS" needs positive evidence** (adversarial review round 2 of PDK-245, B1; invariant I1). A cleanup may
+    remove the unlock path only when the partition is known not to be LUKS. `encrypt.IsLUKS`, the one helper for the
+    adoption, the not-converted check of item 11, the cleanup retry, the abort and the init-failure path, answers
+    LUKS when `cryptsetup isLuks` exits 0. It answers "not LUKS" only when all of these hold:
+    - the conversion's `/dev/mapper/<mapping>` is not active;
+    - no `/dev/disk/by-uuid/<luks uuid>` exists;
+    - `blkid -o device -t PARTUUID=<uuid>` names exactly one device (a cloned unencrypted disk plugged in makes the
+      link ambiguous);
+    - `cryptsetup isLuks` exits exactly 1.
+    Anything else is unknown, which never cleans up and is retried. After a boot result `ok` no "not LUKS" leads to a
+    cleanup until the agent's next start. After the renames of item 8 the bootable kernels are listed again and
+    every initrd is verified once more: a kernel installed during the rebuild keeps `InitrdRegenerated` false, and the
+    next full pass rebuilds it.
+14. **dpkg's locks and the helper's unit state** (adversarial review round 3 of PDK-245; invariants I1 and I3). A
+    kernel package's own dracut run (postinst) could otherwise finish after a verified rename and write an initrd
+    with the module and the key but without the crypttab line, or rebuild one with the module after the I3 check.
+    Decision 20's steps (1) to (3) and the cleanup's steps (1) to (4) therefore hold dpkg's locks, taken as apt takes
+    them: fcntl write locks on `/var/lib/dpkg/lock-frontend`, then `/var/lib/dpkg/lock`, without waiting. While a
+    package run holds them, nothing changes and the next full pass retries; the agent never waits while it holds the
+    state. Under the locks, every installed kernel's initrd is verified again right before the module leaves the host
+    (item 13). The I3 check right before (4) is that verification for the cleanup. The cleanup removes the module's
+    configuration before its directory, so that an interrupted removal never leaves a configuration naming a missing
+    module, which would fail every dracut run. `systemctl is-active` counts as stopped only with `inactive` or
+    `failed` on stdout. Any other answer (an error, empty output, an unknown state) is unknown: running for the
+    launch, never a failed run.
+15. **Initrd tools, the kernel set, and boot ok first** (adversarial review round 4 of PDK-245).
+    - Decision 2 gains the reason `initrd_tools_missing`: with dracut installed, `lsinitrd` must list the running
+      kernel's initrd (dracut-ng's lsinitrd needs 3cpio or dracut-extractinitrd). Under initramfs-tools, lsinitrd
+      arrives with dracut, so step 8 of decision 13 checks it (`initrd_incomplete`). PDK-247 checks the 26.04 case on
+      the throwaway VM, and PDK-248 adds the portal text.
+    - The kernels the conversion rebuilds and requires to pass (item 8 and the reinstall of decision 18) are the set
+      `dracut --regenerate-all` builds (corrected by item 17): every `/lib/modules/<v>` with `modules.dep` or
+      `modules.dep.bin`. A leftover initrd or
+      module directory of a removed kernel is ignored there. The I3 check of a cleanup still reads every initrd it
+      finds.
+    - A boot result `ok` is recorded before any look at the disk. During that start no "not LUKS" answer leads to a
+      cleanup, in any phase.
+    - A worker job re-checks item 10 before each change it makes.
+    - PDK-247 asserts on the VMs that the cancelled and failed:init cleanups finish, because the not-LUKS rule needs
+      blkid's PARTUUID lookup as root.
+16. **dpkg's locks without blocking apt, the supervisor upgrade, and a hand-over during the work** (final adversarial
+    review and PDK-374). These amend item 14.
+    - Decision 20's new initrds are built and verified without dpkg's locks. Under the locks come only these steps:
+      the check that no bootable kernel was added or removed and that no current initrd changed since its build
+      started (size and mtime), the renames, the final verification and the removal from the host. A change means
+      nothing is replaced and the next attempt rebuilds.
+    - The reinstall of decision 18 and step 8 of decision 13 run their `dracut --regenerate-all` and verification
+      under the locks. The reinstall re-lists the kernels after verifying.
+    - A busy lock is a transient error. The agent backs off every failed cleanup, reinstall or regeneration: 5
+      minutes, doubling, at most 6 hours. A success resets it, and an agent start retries at once. The PIN re-arm of
+      decision 52 is not delayed.
+    - Within the agent one section holds the locks at a time (an in-process mutex, since fcntl locks belong to the
+      process).
+    - Decision 37, extended: no supervisor upgrade starts while the conversion worker runs or a cleanup is unfinished.
+      An upgrade that dpkg refuses because another package run holds its lock is `deferred`, a device-local outcome:
+      no event, no failure and no attempt counted, retried after 10 minutes, doubling up to 6 hours.
+    - A revocation hand-over cancels a regeneration the worker runs. Item 10 is checked again before every change and
+      before `InitrdRegenerated` is saved, and a cancelled regeneration replaces no initrd and leaves no temporary
+      file. The reinstall's `--regenerate-all` is not killed, because it writes initrds in place.
+17. **Review 6 of PDK-245** (decided by the orchestrator as architect). It amends items 15 and 16.
+    - A busy dpkg lock is no failure. Step 8 of decision 13 waits and counts no transient retry, because an apt run
+      may hold the locks for many minutes. The cleanup, the reinstall and the regeneration retry at the next pass,
+      and their backoff (item 16) grows only on real failures.
+    - Decision 37's busy rule covers only the conversion worker, not an unfinished cleanup. A cleanup may never
+      finish, and it must not hold supervisor upgrades back silently. The same holds for the whole
+      `!InitrdRegenerated` window: a skipped PIN can last weeks and must not block supervisor updates. A lock
+      collision only defers the upgrade (item 16).
+    - The kernel set of item 15 is what dracut 060's `--regenerate-all` builds: every `/lib/modules/<v>` with
+      `modules.dep` or `modules.dep.bin`. A vmlinuz is not required.
+    - A cleanup that does not finish logs its reason at warning level. The health reports the reason of the last
+      attempt as `disk.conversion.cleanup_error` (first line, at most 200 runes) next to the reason
+      `cleanup_pending`. The server and the portal show it with PDK-379 (see item 18).
+    - At every agent start, under dpkg's locks, the agent removes temporary initrds a killed regeneration left
+      (`/boot/.initrd.img-<v>.paddock`, that pattern only). While a package run holds the locks they stay until the
+      next start, and a later regeneration overwrites them.
+    - The conversion worker runs no cleanup, reinstall or regeneration while a supervisor upgrade runs
+      (`supervisor-upgrade.json`, younger than 30 minutes; review 7 of PDK-245). The upgrade's rollback restarts
+      the supervisor and kills the agent, and with it a `--regenerate-all` writing an initrd in place. The next
+      full pass retries, without a backoff. The upgrade itself is not held back.
+    - Item 10's re-check before the reinstall of decision 18 is dropped. Only the PIN re-arm's file write lies
+      between it and the re-check after the keyslot dump. The re-checks after the dump, before the regeneration
+      and before `InitrdRegenerated` is saved remain.
+18. **Review 7 of PDK-245 and the following adversarial reviews** (decided by the orchestrator as architect).
+    - A supervisor upgrade and the conversion's initrd work exclude each other in both directions. While a
+      conversion step runs, no upgrade starts (decision 37 and item 17). While `supervisor-upgrade.json` exists, no
+      cleanup, reinstall or regeneration runs: they are deferred, not failed. In addition, the cleanup of decision
+      14 and the reinstall of decision 18 rebuild like decision 20: every bootable kernel's initrd is built into
+      `/boot/.initrd.img-<v>.paddock` (`dracut -f <file> <v>`), verified, and renamed into place only when every
+      one passed, never an in-place `--regenerate-all`. A killed rebuild leaves only temporary files, which the
+      start removes (item 17). Step 8 of decision 13 keeps its in-place rebuild, because the disk is still
+      unencrypted then.
+    - Decision 20 probes dpkg's locks before its builds: while a package run holds them it builds nothing and
+      retries at the next pass.
+    - Step 8 waits for a held lock without a time limit, because the conversion simply stays `preparing`: a
+      failure after step 7 would start a cleanup that needs the same lock. The health reports `paused_reason:
+      packages_busy` with `paused_since`, the start of the wait, in its health and the conversion state. The server
+      and the portal do not show it yet: the server drops `paused_reason` outside `encrypting` and does not read
+      `cleanup_error`, `initrd_issue` or the boot-space fields. Their display is PDK-379, a separate ticket before
+      the alpha.5 release. Decision 37's hold applies only while the worker runs a step, not to a
+      preparation that waits between its passes. The wait has no upper bound, and holding upgrades during it would
+      let a foreign dpkg process block the agent's update channel, the only way to ship a fix to that device,
+      indefinitely. That conflicts with fail safe. A lock collision only defers the upgrade (item 16). A new agent
+      version picks the waiting preparation up from `plan.json` and the conversion state (decision 13's idempotent
+      steps).
+    - The cleanup's reason is kept in the conversion's state (`cleanup_error`) and cleared whenever `CleanupPending`
+      is set or cleared, so the health never shows the reason of an earlier cleanup.
+    - The start takes dpkg's locks only when a temporary initrd is left over.
+19. **Room in /boot and stuck initrd work** (review 8 of PDK-245, decided by the orchestrator as architect). This
+    amends items 16 to 18.
+    - Every rebuild (decision 20, the cleanup, the reinstall) works through the kernels strictly one at a time:
+      build the temporary file, verify it, and rename it into place, then the next kernel. At most one temporary
+      initrd exists in `/boot` at any moment. Decision 20 renames under dpkg's locks with its stamp check per kernel
+      and verifies every initrd again before the module leaves the host.
+    - Before each build, the file system holding `/boot` must have 1.5 times the size of that kernel's current
+      initrd free (the largest existing initrd when it has none), plus 32 MiB. Otherwise nothing is built. The health
+      reports `initrd_issue: boot_space_low` with `boot_space_needed` and `boot_space_free`, the step stays pending
+      and is retried with the backoff of item 16. It is never a failure of the conversion.
+    - A build that runs out of space, or any other failed build or verification, removes its temporary file and
+      leaves the current initrd untouched: the rename is the only write to the real file. A build that runs out of
+      space also reports `boot_space_low`.
+    - `InitrdRegenerated`, a finished cleanup and a finished reinstall are recorded only once every kernel has its
+      verified new initrd. I1 holds, because an existing initrd is never replaced by an unverified one.
+    - Without a kernel that `--regenerate-all` would build, the cleanup, the reinstall and the regeneration report
+      `initrd_issue: no_bootable_kernel` and stay pending with the backoff.
+    - `PackagesBusySince` ends on every path that leaves the wait: step 8 takes the lock, an abort, a failure, an
+      adoption, or a revocation hand-over.
+    - (g) **Orphan initrds.** A kernel without `/lib/modules/<v>/modules.dep` (or `modules.dep.bin`) can neither
+      boot nor be rebuilt. When its initrd carries the module, the cleanup overwrites and removes that initrd
+      (otherwise the key would stay on the unencrypted `/boot` for good), logs a warning with the kernel version, and
+      reports `initrd_issue: orphan_initrd_removed` once (it stays until the conversion ends). An orphan initrd
+      without the module stays, and a kernel with `modules.dep` is never touched this way. The cleanup and every
+      rebuild also remove every temporary initrd (`/boot/.initrd.img-*.paddock`) under the locks, before and after
+      their builds. A cleanup finishes only when none is left, because one a killed reinstall left (of a kernel
+      removed since) would carry the key.
+    - (h) **Step 8 as well.** Step 8 of decision 13 rebuilds through the same path: per kernel, the room checked,
+      a temporary file, verified (all files of the init step), renamed. Too little room reports
+      `initrd_issue: boot_space_low` and waits like `packages_busy` (no retry counted), and the original initrd
+      stays. No Paddock path runs an in-place `dracut --regenerate-all` any more. Item 18's reason for an exception
+      (the disk is still unencrypted) did not cover a full `/boot`.
+    - Every Paddock dracut call passes `--no-uefi`, so the output is a plain initrd whatever `uefi=yes` the host
+      configured. The verification also rejects a file that starts with the PE signature `MZ`.
+    - A build first removes the same kernel's own temporary file a kill left, so it does not count against the room.
+      The room is the file system's free blocks (`Bfree`, not `Bavail`): the agent runs as root and may use the
+      blocks reserved for root, and the margin of 1.5 times plus 32 MiB is the buffer.
+    - The initrd issue is updated when an attempt of the initrd work ran. A pass that does not attempt it (dpkg busy,
+      not due yet, a supervisor upgrade) keeps the last issue until the next attempt.
+    - (i) **Stray initrds.** The kernels a cleanup checks (I3) include every regular file `/boot/initrd.img-<v>`, not
+      only the kernels with a vmlinuz or a module directory. An initrd left by a kernel removed without it is found
+      that way. When it carries the module and its kernel is not bootable, it is removed like an orphan (g).
+      Symlinks are never looked at or followed. A non-bootable kernel whose initrd is a symlink keeps the cleanup
+      pending instead.
+    - (j) Decision 20's regeneration removes the temporary initrds at its start (under the probe of the locks) and
+      in its final locked section, before the host files go.
+    - (k) **Bootable and buildable.** A kernel is *bootable* with `/lib/modules/<v>/modules.dep` or
+      `modules.dep.bin`. A bootable kernel's initrd is never removed by the orphan rule, because it boots with it. A
+      kernel is *buildable* with `modules.dep`. Before a rebuild (step 8, the cleanup, the reinstall, the
+      regeneration) builds anything, every bootable kernel must be buildable. Otherwise nothing is built, the
+      kernel's initrd stays, the health reports `initrd_issue: kernel_not_buildable` with `initrd_issue_kernel`, and
+      the step stays pending with its backoff (step 8 waits without counting a retry). This narrows item 15's kernel
+      set, which counted `modules.dep.bin` as buildable.
+    - (i, continued) Every regular file counts. An unreadable file (a failed listing, a remnant, a truncated build) of
+      a version without a kernel image (`vmlinuz-<v>`, `vmlinux-<v>`, `kernel-<v>` or a kept `vmlinuz-<v>.old`),
+      `modules.dep` and `modules.dep.bin` is an orphan: it is removed, with a warning naming the file and the listing
+      error, and reported as `orphan_initrd_removed`. A version with any of them is no stray: a listing error stays an
+      error, and its initrd is never deleted. With no lister installed, no file is an orphan.
+    - **Hard links and symlinks.** Every overwrite opens the file with `O_NOFOLLOW` and checks the open handle
+      (`f.Stat()`), so that a name swapped after a check cannot redirect the zeros.
+      - Rule A, pure key material (the conversion key, `install-passphrase`): always overwritten, whatever its link
+        count, then unlinked; more than one link is logged as a warning. No bootable file shares it, so zeroing it
+        erases the key under every name. Anything but a regular file is not written to, and the step fails closed.
+      - Rule B, initrd-type files (orphans, strays, temporary initrds): the listed names are every regular
+        `/boot/initrd.img-*` and `/boot/.initrd.img-*.paddock`, grouped by device and inode. A `/boot/initrd.img-*`
+        symlink to a regular file is a reference to that file's group (a dangling link is ignored). For each file:
+        (0) when a bootable kernel's symlink refers to it, nothing is written or unlinked, not even the target, so the
+        link never dangles. The kernel stays among those carrying the module until its verified rebuild renames over
+        the link. Where no rebuild runs (dracut in `config-files`, verify only), the step stays pending, and the health
+        reports `initrd_issue: key_material_shared_bootable` with `initrd_issue_kernel`. (1) When every listed name of
+        the file is to be removed and they are all its links, the file is overwritten once and every name is
+        unlinked. (2) When a listed name of a bootable kernel shares the file, only the names to remove are unlinked
+        and nothing is written; that kernel's verified rebuild replaces the file. (3) When the file has links outside
+        the listed names, nothing is written or unlinked. The step stays pending, and the health reports
+        `initrd_issue: key_material_hardlinked`, with path, inode and link count in the cleanup error and a warning
+        in the log. Once the outside link is gone, the next attempt finishes. Every file is handled; one kept file
+        does not keep the others from going (the errors are joined).
+      - An orphan name that is a symlink goes with the file it refers to, by the same rules. One that points outside
+        the listed names stays and keeps the step pending. At a temporary path, a symlink or FIFO is unlinked
+        without any write; a directory is not removed and the step fails closed. Right before dracut runs, nothing
+        may be at its temporary path. Every temporary initrd that does not go into place is removed by rule B, never
+        by a plain unlink; a test checks the sources for that.
+      - Overwrites write zeros only over the allocated ranges of a file (SEEK_DATA/SEEK_HOLE), in chunks of 1 MiB,
+        so they allocate nothing and cannot fill `/boot`. On btrfs nothing is written (copy-on-write would allocate
+        new blocks and keep the old ones); the names are only unlinked, with a warning. A failed write (no space left,
+        any other error) empties the file (`ftruncate` to 0) and the names are unlinked, with a warning: no partly
+        overwritten file keeps taking room.
+      - A finished cleanup clears every initrd issue and its fields, except `orphan_initrd_removed`, which stays
+        until the conversion ends. A cleanup that stops for another reason clears `key_material_hardlinked` and
+        `key_material_shared_bootable`.
+      - **Residual risk (RR-71, reserved; PDK-248 writes the row).** Freed blocks of the unencrypted `/boot` can hold
+        the conversion key: blocks freed by a rename over an older initrd or by unlinking a name are not zeroed;
+        zeroing does not reliably erase data on copy-on-write file systems (btrfs is not even written), on SSDs (wear
+        levelling, TRIM) or with ext4 `data=journal`. The key is worthless once its keyslot (the install keyslot) is
+        wiped. Right after `InitrdRegenerated` is recorded, the worker runs the M4b luks reconciler's own pass on the
+        run loop, which wipes the keyslot and then shreds the key file, with every precondition unchanged. The window is
+        therefore normally seconds; after a crash in between, or while a precondition of the reconciler does not hold
+        (its error in the health), it lasts until the next successful pass. This is far smaller than the window that
+        exists by design: the key lies in the live initrd on `/boot` for the whole conversion (`key_on_boot`). The abort
+        path is not affected: no keyslot ever existed for that key.
+    - Waiting for room in `/boot` or for a buildable kernel is not waiting for dpkg's locks. It counts no retry,
+      leaves `PackagesBusySince` and `packages_busy` alone, and sets all four initrd-issue fields, clearing the
+      ones that do not apply.

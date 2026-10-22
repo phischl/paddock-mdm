@@ -368,7 +368,11 @@ components:
             encrypting (an online reencryption of the root volume is unfinished), and disk.conversion carries, in state
             not_encrypted, the in-place encryption preflight: eligible, reasons (closed set, sorted), release, layout
             (lvm or plain), initramfs (dracut or initramfs-tools) and, under initramfs-tools, initramfs_removes (the
-            packages installing dracut would remove); from the preparation on also phase, progress and key_on_boot.
+            packages installing dracut would remove); from the preparation on also phase, progress and key_on_boot;
+            with reason cleanup_pending also cleanup_error (why the last cleanup attempt did not finish); while a
+            preparation waits for a package run, paused_reason packages_busy and paused_since; initrd_issue
+            (boot_space_low with boot_space_needed and boot_space_free, no_bootable_kernel, kernel_not_buildable with
+            initrd_issue_kernel, orphan_initrd_removed, key_material_hardlinked, or key_material_shared_bootable with initrd_issue_kernel) while the initrd work cannot go on.
           properties:
             components:
               type: object

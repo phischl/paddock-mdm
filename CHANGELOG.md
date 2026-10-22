@@ -41,6 +41,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root disk is not eligible (`other_luks_present`), nor is one set up to resume from hibernation
   (`hibernation_configured`) or, with LVM, one whose LVM configuration filters devices or uses a devices file
   (`lvm_filter`, `lvm_devicesfile`) or whose LVM configuration cannot be read (`lvm_unknown`).
+- After that restart the device encrypts the rest of its disk in the background at low priority, while it is in
+  normal use. The work pauses on battery power, continues when mains power returns or after any restart, and is
+  reported in the device's health with its progress, the remaining time and the reason for a pause, together with the
+  start, the completion or a failure of the encryption. The device trusts what its disk says: if the disk was
+  encrypted at a restart the device did not expect (for example after a cancelled preparation whose clean-up was
+  still unfinished), it continues that encryption and restores the start-up step first. Once the boot PIN (or, under
+  TPM-only unlock, the TPM) is set up, the device rebuilds its start-up images so that the disk unlocks through the
+  TPM and the stored key leaves the boot partition. Until then a skipped PIN is asked for again at every start, the
+  health reports that the key still lies on the boot partition, and the disk is not reported compliant. The device
+  then completes the usual disk setup on its own, right after the rebuild rather than at its next check, and removes
+  the temporary disk key. Before a Lock or Destroy is carried out the background encryption is stopped, and it does
+  not resume for 24 hours.
+- Start-up images are rebuilt one kernel at a time into a separate file, checked, and only then put in place, so that
+  an interrupted rebuild never leaves a device without a working start-up image. The device waits instead of failing
+  while the boot partition has too little room (health `initrd_issue: boot_space_low` with the bytes needed and free),
+  while a kernel cannot be rebuilt (`kernel_not_buildable` with the kernel), when no kernel can boot
+  (`no_bootable_kernel`), or while a package installation holds the package manager (`paused_reason: packages_busy`
+  with the time since when). A clean-up that cannot finish reports why in `cleanup_error`.
+- Leftover start-up images of removed kernels that still carry the encryption key are overwritten and removed
+  (`orphan_initrd_removed`). A file that may carry the key and also has a link outside the boot images is left alone
+  and reported as `key_material_hardlinked`; one that a bootable kernel's start-up image points to is kept until that
+  kernel's image is rebuilt (`key_material_shared_bootable` with the kernel). Overwriting never takes extra room on
+  the boot partition; on btrfs such files are only removed.
 
 ### Security
 

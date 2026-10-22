@@ -23,6 +23,7 @@ const (
 	ReasonCleanupPending           = "cleanup_pending"
 	ReasonDMCryptMissing           = "dm_crypt_missing" // checked at the preparation only (decision 7)
 	ReasonHibernationConfigured    = "hibernation_configured"
+	ReasonInitrdToolsMissing       = "initrd_tools_missing"
 	ReasonLowFreeSpace             = "low_free_space"
 	ReasonLVMDevicesFile           = "lvm_devicesfile"
 	ReasonLVMFilter                = "lvm_filter"
@@ -468,10 +469,26 @@ func (p *preflight) cmdlineRoot() string {
 func (p *preflight) initramfs() {
 	if status, ok := p.run("dpkg-query", "-W", "-f=${db:Status-Status}", "dracut"); ok && status == "installed" {
 		p.l.Initramfs = InitramfsDracut
+		p.initrdLister()
 		return
 	}
 	p.l.Initramfs = InitramfsTools
 	p.l.InitramfsRemoves = simulatedRemovals(p.ctx, p.sys)
+}
+
+// initrdLister fails with initrd_tools_missing when lsinitrd cannot list the running kernel's initrd (amendment
+// 2026-10-21, item 15): every verification of the conversion reads initrds with it, and dracut-ng's lsinitrd needs 3cpio
+// or dracut-extractinitrd. Under initramfs-tools lsinitrd arrives with dracut, so step 8 of the preparation checks it
+// (initrd_incomplete).
+func (p *preflight) initrdLister() {
+	release, err := p.sys.ReadFile(filepath.Join(p.root, "/proc/sys/kernel/osrelease"))
+	if err != nil {
+		p.fail(ReasonInitrdToolsMissing)
+		return
+	}
+	if _, ok := p.run("lsinitrd", filepath.Join(p.root, "/boot/initrd.img-"+strings.TrimSpace(string(release)))); !ok {
+		p.fail(ReasonInitrdToolsMissing)
+	}
 }
 
 // simulatedRemovals returns the packages installing dracut would remove: the Remv lines of

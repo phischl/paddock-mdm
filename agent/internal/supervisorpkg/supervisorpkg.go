@@ -136,6 +136,16 @@ type Marker struct {
 	StartedAt   time.Time `json:"started_at"`
 }
 
+// OutcomeDeferred is an upgrade dpkg refused because another package run held its lock: nothing changed, the agent
+// retries after DeferBackoff. It is local to the device: no event reports it, and it counts toward no failure.
+const OutcomeDeferred = "deferred"
+
+// Backoff of a deferred upgrade: DeferFirst after the first deferral, doubling up to DeferMax.
+const (
+	DeferFirst = 10 * time.Minute
+	DeferMax   = 6 * time.Hour
+)
+
 // Result is supervisor-upgrade-result.json, the outcome of one upgrade.
 type Result struct {
 	Version     string    `json:"version"`

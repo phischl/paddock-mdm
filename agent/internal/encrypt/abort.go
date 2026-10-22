@@ -1,10 +1,12 @@
 package encrypt
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,83 +63,178 @@ func Abort(ctx context.Context, sys Host, l paths.Layout, store Store, id, by st
 	if c.Phase != state.ConversionPrepared && (!preparing || c.Phase != state.ConversionPreparing) {
 		return false, ReasonNotAbortable
 	}
-	if luksOrUnknown(ctx, sys, l, c.Partition) {
+	if luksOrUnknown(ctx, sys, l, DiskOf(c)) {
 		return false, ReasonNotAbortable
 	}
 	if err := store.Transition(func(c *state.DiskConversion, _ *state.LUKS) *Event {
-		c.Phase, c.AbortRequested, c.CleanupPending, c.Notified = state.ConversionCancelled, false, true, nil
+		c.Phase, c.AbortRequested, c.CleanupPending, c.CleanupError, c.Notified = state.ConversionCancelled, false, true, "", nil
+		c.PackagesBusySince = nil
 		return &Event{protocol.EventDiskConversionAborted, map[string]any{"conversion_id": c.ID, "by": by}}
 	}); err != nil {
 		slog.ErrorContext(ctx, "recording the abort of the in-place encryption failed", "error", err)
 		return false, ReasonNotAbortable
 	}
 	slog.InfoContext(ctx, "in-place encryption aborted", "conversion_id", c.ID, "by", by)
-	RunCleanup(ctx, sys, l, store)
+	_, _ = RunCleanup(ctx, sys, l, store) // logged; a later full pass retries
 	return true, ""
 }
 
-// RunCleanup runs Cleanup and clears CleanupPending once it is done; a failure is logged and the next full pass
+// RunCleanup runs Cleanup and clears CleanupPending once it is done, and reports whether it did and why not
+// (ErrPackagesBusy: a package run held dpkg's locks); the reason is logged at warning level and a later full pass
 // retries (invariant I3). The caller has checked that the partition is not LUKS (invariant I1).
-func RunCleanup(ctx context.Context, sys Host, l paths.Layout, store Store) {
+func RunCleanup(ctx context.Context, sys Host, l paths.Layout, store Store) (done bool, err error) {
 	c, ok := store.Conversion()
-	done, err := Cleanup(ctx, sys, l, !ok || c.ModuleWritten)
+	done, orphans, err := Cleanup(ctx, sys, l, !ok || c.ModuleWritten)
+	if len(orphans) > 0 {
+		if uerr := store.Update(func(c *state.DiskConversion, _ *state.LUKS) { c.InitrdIssue = IssueOrphanInitrdRemoved }); uerr != nil {
+			slog.ErrorContext(ctx, "recording the removed orphan initrds failed", "error", uerr)
+		}
+	}
 	if !done {
-		slog.WarnContext(ctx, "cleanup of the in-place encryption unfinished; retrying at the next full pass", "error", err)
-		return
+		slog.WarnContext(ctx, "cleanup of the in-place encryption unfinished; retrying later", "reason", err)
+		reason := ""
+		if err != nil {
+			reason = firstLine(err.Error())
+		}
+		var hardlinked *KeyMaterialHardlinkedError
+		var shared *KeySharedBootableError
+		if uerr := store.Update(func(c *state.DiskConversion, _ *state.LUKS) {
+			c.CleanupError = reason
+			switch {
+			case errors.As(err, &shared):
+				c.InitrdIssue, c.BootSpaceNeeded, c.BootSpaceFree, c.InitrdIssueKernel = IssueKeyMaterialSharedBootable, 0, 0, shared.Kernel
+			case errors.As(err, &hardlinked):
+				c.InitrdIssue, c.BootSpaceNeeded, c.BootSpaceFree, c.InitrdIssueKernel = IssueKeyMaterialHardlinked, 0, 0, ""
+			case c.InitrdIssue == IssueKeyMaterialHardlinked || c.InitrdIssue == IssueKeyMaterialSharedBootable:
+				c.InitrdIssue, c.InitrdIssueKernel = "", ""
+			}
+		}); uerr != nil {
+			slog.ErrorContext(ctx, "recording the reason of the unfinished cleanup failed", "error", uerr)
+		}
+		return false, err
 	}
-	if err := store.Update(func(c *state.DiskConversion, _ *state.LUKS) { c.CleanupPending = false }); err != nil {
+	if err := store.Update(func(c *state.DiskConversion, _ *state.LUKS) {
+		c.CleanupPending, c.CleanupError = false, ""
+		// orphan_initrd_removed stays until the conversion ends (amendment item 19(g)); every other issue is over.
+		if c.InitrdIssue != IssueOrphanInitrdRemoved {
+			c.InitrdIssue = ""
+		}
+		c.BootSpaceNeeded, c.BootSpaceFree, c.InitrdIssueKernel = 0, 0, ""
+	}); err != nil {
 		slog.ErrorContext(ctx, "recording the finished cleanup failed", "error", err)
+		return false, err
 	}
+	return true, nil
 }
 
 // Cleanup removes what a preparation left, in the binding order of plan M8e decision 14 (review round 4, X1) under
-// invariant I3: (1) only the module directory and its dracut configuration; (2) dracut -f --regenerate-all; (3) the
+// invariant I3: (1) only the module directory and its dracut configuration; (2) every bootable kernel's initrd rebuilt
+// into a temporary file, verified without the module and renamed into place (rebuildInitrds); (3) the
 // initrd of every installed kernel must show no paddock-encrypt; (4) only then the conversion key, plan.json, plan.env,
 // test-hooks and the two disk-setup files. done is true once (4) ran. While (2) or (3) fails the key and the plan stay:
 // an initrd that still carries the module converts the disk at the next boot, which then needs them (I2 adoption).
 // (2) and (3) are skipped only when step 7 never started (moduleWritten false and no module file found at (1)): no
 // initrd can carry the module then. Otherwise (3) always runs, because the dpkg status of dracut cannot tell what an
 // initrd carries: on 24.04 dracut and lsinitrd stay in dracut-core when dracut goes to rc, and another initramfs tool
-// rebuilds only the newest kernel's image. (2) runs while dpkg reports dracut installed; with any other status the
+// rebuilds only the newest kernel's image. Steps (1) to (4) hold dpkg's locks (Host.LockPackages; busy: the next full
+// pass retries), so that no kernel package rebuilds an initrd with the module after (3). (2) runs while dpkg reports
+// dracut installed; with any other status the
 // initrds are only verified. While dpkg cannot tell (an error, or an upgrade under way) or no tool can list an
 // initrd, nothing after (1) runs.
-func Cleanup(ctx context.Context, sys Host, l paths.Layout, moduleWritten bool) (done bool, err error) {
-	for _, p := range []string{l.Join(ModuleDir), l.Join(ModuleConf)} {
+func Cleanup(ctx context.Context, sys Host, l paths.Layout, moduleWritten bool) (done bool, orphans []string, err error) {
+	unlock, err := sys.LockPackages()
+	if err != nil {
+		return false, nil, err
+	}
+	defer unlock()
+	// The configuration first: without the module directory it would fail every dracut run (dracut exits on a module
+	// it cannot find), a kernel package's included.
+	for _, p := range []string{l.Join(ModuleConf), l.Join(ModuleDir)} {
 		if _, err := os.Lstat(p); err == nil {
 			moduleWritten = true
 		}
 		if err := os.RemoveAll(p); err != nil {
-			return false, err
+			return false, orphans, err
 		}
 	}
 	if moduleWritten {
 		installed, err := dracutInstalled(ctx, sys)
 		if err != nil {
-			return false, err
+			return false, orphans, err
 		}
 		if installed {
-			if err := regenerate(ctx, sys); err != nil {
-				return false, err
+			listers := initrdListers
+			if err := rebuildInitrds(ctx, sys, l, func(initrd string) error {
+				out, err := listInitrd(ctx, sys, &listers, initrd)
+				if err == nil && carriesModule(out) {
+					err = fmt.Errorf("it carries %s", moduleName)
+				}
+				return err
+			}); err != nil {
+				return false, orphans, err
 			}
 		}
-		carrying, err := initrdsWithModule(ctx, sys, l)
+		carrying, unreadable, err := initrdsWithModule(ctx, sys, l)
 		if err != nil {
-			return false, err
+			return false, orphans, err
+		}
+		// One pass over both, so that names of one file are removed together (amendment item 19, rule B).
+		if carrying, orphans, err = removeOrphans(ctx, l, append(carrying, slices.Sorted(maps.Keys(unreadable))...)); err != nil {
+			return false, orphans, err
+		}
+		for _, v := range orphans {
+			if lerr, ok := unreadable[v]; ok {
+				slog.WarnContext(ctx, "removed an unreadable initrd of no kernel", "file", "/boot/initrd.img-"+v, "listing", lerr)
+			}
 		}
 		if len(carrying) > 0 {
-			return false, fmt.Errorf("the initrd of %s still carries %s", strings.Join(carrying, ", "), moduleName)
+			return false, orphans, fmt.Errorf("the initrd of %s still carries %s", strings.Join(carrying, ", "), moduleName)
 		}
 	}
+	if err := removeTemps(l); err != nil {
+		return false, orphans, err
+	}
+	if left, _ := filepath.Glob(l.Join(tempInitrd("*"))); len(left) > 0 {
+		return false, orphans, fmt.Errorf("temporary initrds left in /boot: %s", strings.Join(left, ", "))
+	}
 	if err := shred(l.InstallPassphrase()); err != nil {
-		return false, err
+		return false, orphans, err
 	}
 	for _, p := range []string{l.EncryptPlan(), l.EncryptPlanEnv(), l.EncryptTestHooks(), l.EncryptDir(), l.DiskSetupConfig(),
 		l.DiskSetupPending()} {
 		if err := os.RemoveAll(p); err != nil {
-			return false, err
+			return false, orphans, err
 		}
 	}
-	return true, nil
+	return true, orphans, nil
+}
+
+// removeOrphans removes, from the kernels whose initrd carries the module, the initrds of kernels dracut can never
+// rebuild (no /lib/modules/<v>/modules.dep, so no boot either): they would keep the conversion key on the unencrypted
+// /boot for good (amendment 2026-10-21, item 19(g)). Each is overwritten before it is unlinked. It returns the kernels
+// that still carry the module and the orphans removed.
+func removeOrphans(ctx context.Context, l paths.Layout, carrying []string) (still, orphans []string, err error) {
+	bootable := bootableKernels(l)
+	var names []string
+	for _, v := range carrying {
+		if slices.Contains(bootable, v) {
+			still = append(still, v)
+			continue
+		}
+		slog.WarnContext(ctx, "removing the initrd of a kernel without modules: it carries the conversion key", "kernel", v)
+		names = append(names, l.Join("/boot/initrd.img-"+v))
+	}
+	removed, err := removeInitrdNames(ctx, l, names)
+	for _, name := range names {
+		v := strings.TrimPrefix(filepath.Base(name), "initrd.img-")
+		if slices.Contains(removed, name) {
+			orphans = append(orphans, v)
+		} else {
+			// Kept: a symlink to a file Paddock does not list, or a file rule B keeps (amendment item 19).
+			still = append(still, v)
+		}
+	}
+	return still, orphans, err
 }
 
 // initrdListers list the files of an initrd: dracut's (dracut-core), else initramfs-tools' (initramfs-tools-core).
@@ -147,12 +244,26 @@ var initrdListers = []string{"lsinitrd", "lsinitramfs"}
 // unit is named after it), the key and the plan.
 var initrdMarkers = []string{moduleName, "etc/paddock/encrypt-key", "etc/paddock/encrypt-plan.env"}
 
+// carriesModule reports whether an lsinitrd listing shows a marker. The "Arguments:" line is dracut's command line
+// (build-parameter.txt), which names the module when it was omitted with --omit, and is no content (review 2 of
+// PDK-245, B2).
+func carriesModule(listing string) bool {
+	for line := range strings.Lines(listing) {
+		if strings.HasPrefix(strings.TrimSpace(line), "Arguments:") {
+			continue
+		}
+		if slices.ContainsFunc(initrdMarkers, func(m string) bool { return strings.Contains(line, m) }) {
+			return true
+		}
+	}
+	return false
+}
+
 // initrdsWithModule returns the kernel versions whose initrd lists the module, the key or the plan. The installed
 // kernels are every <v> with /boot/vmlinuz-<v> or /lib/modules/<v> — every GRUB entry (plan M8e §14.10); a kernel
 // without an initrd has none that could carry anything. It fails when an initrd exists and no lister is installed or
 // a listing fails: an initrd that was not read is no initrd without the module.
-func initrdsWithModule(ctx context.Context, sys System, l paths.Layout) ([]string, error) {
-	var carrying []string
+func initrdsWithModule(ctx context.Context, sys System, l paths.Layout) (carrying []string, unreadable map[string]error, err error) {
 	listers := initrdListers
 	for _, v := range installedKernels(l) {
 		initrd := l.Join("/boot/initrd.img-" + v)
@@ -161,13 +272,34 @@ func initrdsWithModule(ctx context.Context, sys System, l paths.Layout) ([]strin
 		}
 		out, err := listInitrd(ctx, sys, &listers, initrd)
 		if err != nil {
-			return nil, err
+			// A stray file no kernel boots (a remnant, a truncated build) is an orphan even unread (item 19(i)); a
+			// bootable kernel's initrd that cannot be read stays an error.
+			if stray(l, v) && !errors.Is(err, errNoLister) {
+				if unreadable == nil {
+					unreadable = map[string]error{}
+				}
+				unreadable[v] = err
+				continue
+			}
+			return nil, nil, err
 		}
-		if slices.ContainsFunc(initrdMarkers, func(m string) bool { return strings.Contains(out, m) }) {
+		if carriesModule(out) {
 			carrying = append(carrying, v)
 		}
 	}
-	return carrying, nil
+	return carrying, unreadable, nil
+}
+
+// stray reports whether v has no kernel image (vmlinuz, vmlinux, kernel, or a kept vmlinuz-<v>.old), no modules.dep
+// and no modules.dep.bin: no boot entry uses its initrd.
+func stray(l paths.Layout, v string) bool {
+	for _, p := range []string{"/boot/vmlinuz-" + v, "/boot/vmlinux-" + v, "/boot/kernel-" + v, "/boot/vmlinuz-" + v + ".old",
+		"/lib/modules/" + v + "/modules.dep", "/lib/modules/" + v + "/modules.dep.bin"} {
+		if _, err := os.Stat(l.Join(p)); err == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // listInitrd lists initrd with the first of listers that is installed; listers not installed are dropped from it.
@@ -184,10 +316,14 @@ func listInitrd(ctx context.Context, sys System, listers *[]string, initrd strin
 		}
 		return out, err
 	}
-	return "", fmt.Errorf("no tool to list %s (%s)", initrd, strings.Join(initrdListers, ", "))
+	return "", fmt.Errorf("%w: %s (%s)", errNoLister, initrd, strings.Join(initrdListers, ", "))
 }
 
-// installedKernels lists the kernel versions of /boot/vmlinuz-* and /lib/modules/*, without duplicates.
+// errNoLister is no tool to list an initrd: nothing is known about any initrd then, not even a stray one.
+var errNoLister = errors.New("no tool to list an initrd")
+
+// installedKernels lists the kernel versions of /boot/vmlinuz-*, /lib/modules/* and the regular files
+// /boot/initrd.img-*, without duplicates.
 func installedKernels(l paths.Layout) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -207,62 +343,82 @@ func installedKernels(l paths.Layout) []string {
 			add(e.Name())
 		}
 	}
+	// An initrd of a kernel removed without its initrd still carries what it carries (amendment 2026-10-21, item
+	// 19(i)); symlinks such as initrd.img-<v> pointing elsewhere are no initrd of their own.
+	initrds, _ := filepath.Glob(l.Join("/boot/initrd.img-*"))
+	for _, f := range initrds {
+		if info, err := os.Lstat(f); err == nil && info.Mode().IsRegular() {
+			add(strings.TrimPrefix(filepath.Base(f), "initrd.img-"))
+		}
+	}
 	return out
 }
 
-// luksOrUnknown reports whether partition carries a LUKS header or cryptsetup could not tell: nothing of the unlock
-// path is removed on a guess (invariant I1).
-func luksOrUnknown(ctx context.Context, sys System, l paths.Layout, partition string) bool {
-	luks, ok := IsLUKS(ctx, sys, l, partition)
+// luksOrUnknown reports whether the conversion's partition carries a LUKS header or the disk could not tell: nothing
+// of the unlock path is removed on a guess (invariant I1).
+func luksOrUnknown(ctx context.Context, sys System, l paths.Layout, d Disk) bool {
+	luks, ok := IsLUKS(ctx, sys, l, d)
 	return luks || !ok
 }
 
-// IsLUKS reports whether the conversion's partition carries a LUKS header (cryptsetup isLuks); ok is false when
-// cryptsetup could not tell. Without a partition in the state the answer comes from plan.json, which step 2 writes
-// before the state: without plan.json no partition was ever planned and nothing is LUKS; a plan that cannot be read
-// or names no partition is unknown (invariant I1).
-func IsLUKS(ctx context.Context, sys System, l paths.Layout, partition string) (luks, ok bool) {
-	if partition == "" {
+// Disk names the conversion's partition and what the conversion would make of it: the mapping and the LUKS UUID.
+type Disk struct {
+	Partition, Mapping, LUKSUUID string
+}
+
+// DiskOf is the Disk of a conversion state.
+func DiskOf(c state.DiskConversion) Disk {
+	return Disk{Partition: c.Partition, Mapping: c.Mapping, LUKSUUID: c.LUKSUUID}
+}
+
+// IsLUKS reports whether the conversion's partition carries a LUKS header; ok is false when the disk does not tell for
+// sure. LUKS is cryptsetup isLuks exiting 0. "Not LUKS" — on which a cleanup may remove the unlock path (invariants
+// I1 and I3) — needs positive evidence on all counts (amendment 2026-10-21, item 13): the conversion's mapping is not
+// active, no /dev/disk/by-uuid/<luks uuid> exists, blkid names exactly one device with the PARTUUID (a cloned disk
+// plugged in makes the link ambiguous), and isLuks exits exactly 1 on the partition. Anything else is unknown. Without
+// a partition, a mapping or a LUKS UUID in d the plan supplies them; without plan.json and a partition no conversion
+// was ever planned and nothing is LUKS; a plan that cannot be read or lacks them is unknown.
+func IsLUKS(ctx context.Context, sys System, l paths.Layout, d Disk) (luks, ok bool) {
+	if d.Partition == "" || d.Mapping == "" || d.LUKSUUID == "" {
 		plan, err := ReadPlan(l)
 		switch {
-		case err == nil && plan == nil:
+		case err == nil && plan == nil && d.Partition == "":
 			return false, true
-		case err != nil || plan.Partition == "":
-			return false, false
+		case err == nil && plan != nil:
+			d.Partition, d.Mapping, d.LUKSUUID = cmp.Or(d.Partition, plan.Partition), cmp.Or(d.Mapping, plan.Mapping),
+				cmp.Or(d.LUKSUUID, plan.LUKSUUID)
 		}
-		partition = plan.Partition
 	}
 	// isLuks exits 1 for a device it cannot open as well (agent/internal/luks/crypttab.go): only a partition that
 	// exists makes exit 1 mean "not LUKS" — a by-partuuid link udev has not created yet is no answer.
-	if exists, err := sys.Stat(l.Join(partition)); err != nil || !exists {
+	if d.Partition == "" {
 		return false, false
 	}
-	_, _, exit, err := sys.Command(ctx, "cryptsetup", "isLuks", partition)
-	if err != nil || (exit != 0 && exit != 1) {
+	if exists, err := sys.Stat(l.Join(d.Partition)); err != nil || !exists {
 		return false, false
 	}
-	return exit == 0, true
-}
-
-// shred overwrites a key file with zeros and flushes them before it removes it; a missing file is no error.
-func shred(path string) error {
-	info, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	_, _, exit, err := sys.Command(ctx, "cryptsetup", "isLuks", d.Partition)
+	switch {
+	case err != nil || (exit != 0 && exit != 1):
+		return false, false
+	case exit == 0:
+		return true, true
 	}
-	if err != nil {
-		return err
+	if d.Mapping == "" || d.LUKSUUID == "" {
+		return false, false
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // a key path of the agent layout
-	if err != nil {
-		return err
+	for _, p := range []string{"/dev/mapper/" + d.Mapping, "/dev/disk/by-uuid/" + d.LUKSUUID} {
+		if exists, err := sys.Stat(l.Join(p)); err != nil || exists {
+			return false, false
+		}
 	}
-	_, werr := f.Write(make([]byte, info.Size()))
-	if werr == nil {
-		werr = f.Sync()
+	partUUID := strings.TrimPrefix(d.Partition, "/dev/disk/by-partuuid/")
+	if partUUID == d.Partition || partUUID == "" {
+		return false, false
 	}
-	if err := errors.Join(werr, f.Close()); err != nil {
-		return err
+	out, _, exit, err := sys.Command(ctx, "blkid", "-o", "device", "-t", "PARTUUID="+partUUID)
+	if err != nil || exit != 0 || len(strings.Fields(out)) != 1 {
+		return false, false
 	}
-	return os.Remove(path)
+	return false, true
 }

@@ -30,9 +30,11 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 	result, rerr := supervisorpkg.ReadResult(a.d.Layout)
 	// An accepted uninstall removes the supervisor package; an upgrade started now would race the removal.
 	busy := marker != nil || result != nil || err != nil || rerr != nil || update.Pending(a.d.Layout) || a.st.PendingUninstall != nil
-	// A preparation holds the dpkg lock at step 6 and must not be interrupted by a supervisor restart (plan M8e
-	// decision 37).
-	busy = busy || (a.st.Conversion != nil && a.st.Conversion.Phase == state.ConversionPreparing)
+	// The conversion worker may hold dpkg's locks and must not be interrupted by a supervisor restart (plan M8e
+	// decision 37 as amended on 2026-10-21, items 16 to 18): only while it runs. A preparation waiting between its
+	// passes, possibly for a long time for a foreign dpkg run, and a cleanup waiting for its next attempt do not hold
+	// the agent's update channel; a lock collision only defers the upgrade.
+	busy = busy || a.conversionBusy
 	installed := a.d.Sys.PackageVersion(supervisorpkg.Package)
 	retry := a.st.SupervisorRetry
 	backoff := retry != nil && retry.Version == ref.Version && a.d.Now().Before(retry.NotBefore)
@@ -83,6 +85,10 @@ func (a *Agent) reportSupervisorUpgrade() {
 	if a.st.ReportedSupervisorUpgradeAt != nil && a.st.ReportedSupervisorUpgradeAt.Equal(r.At) {
 		return
 	}
+	if r.Outcome == supervisorpkg.OutcomeDeferred {
+		a.deferSupervisor(r)
+		return
+	}
 	slog.Info("supervisor upgrade finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
 	a.event(protocol.EventAgentSupervisorUpdated, map[string]string{"version": r.Version, "from_version": r.FromVersion, "outcome": r.Outcome})
 	switch r.Outcome {
@@ -95,6 +101,30 @@ func (a *Agent) reportSupervisorUpgrade() {
 	}
 	at := r.At
 	a.st.ReportedSupervisorUpgradeAt = &at
+	a.saveState()
+}
+
+// deferSupervisor schedules the next attempt of an upgrade dpkg refused for a held lock (plan M8e amendment 2026-10-21,
+// item 16): no event, no failure, no attempt counted; the wait doubles with every deferral of the version.
+func (a *Agent) deferSupervisor(r *supervisorpkg.Result) {
+	retry := a.st.SupervisorRetry
+	if retry == nil || retry.Version != r.Version {
+		retry = &state.SupervisorRetry{Version: r.Version}
+	}
+	retry.Deferrals++
+	wait := supervisorpkg.DeferMax
+	if retry.Deferrals <= 10 {
+		wait = min(supervisorpkg.DeferFirst<<(retry.Deferrals-1), supervisorpkg.DeferMax)
+	}
+	retry.NotBefore = r.At.Add(wait)
+	a.st.SupervisorRetry = retry
+	at := r.At
+	a.st.ReportedSupervisorUpgradeAt = &at
+	// No event waits for it: the result goes at once, so that it holds no later upgrade back.
+	if err := supervisorpkg.RemoveResult(a.d.Layout); err != nil {
+		slog.Error("removing the supervisor upgrade result failed", "error", err)
+	}
+	slog.Info("supervisor upgrade deferred: dpkg is locked by another package run", "version", r.Version, "retry_at", retry.NotBefore)
 	a.saveState()
 }
 

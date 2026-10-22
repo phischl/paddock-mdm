@@ -267,3 +267,64 @@ func TestAgentUpdateWaitsForSupervisorUpgrade(t *testing.T) {
 		t.Fatalf("not staged after the supervisor upgrade: signalled %d", signalled)
 	}
 }
+
+// TestSupervisorUpgradeDeferred: plan M8e amendment 2026-10-21, item 16 — a deferred upgrade (dpkg locked by another
+// package run) reports no event, counts toward no failure, and is retried after a doubling wait.
+func TestSupervisorUpgradeDeferred(t *testing.T) {
+	a, g, launched := supervisorAgent(t, "")
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	a.d.Now = func() time.Time { return now }
+	defer_ := func() {
+		t.Helper()
+		if err := os.Remove(a.d.Layout.SupervisorUpgrade()); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if err := supervisorpkg.WriteResult(a.d.Layout, supervisorpkg.Result{Version: buildinfo.Version, Outcome: supervisorpkg.OutcomeDeferred,
+			At: now}); err != nil {
+			t.Fatal(err)
+		}
+		a.reportSupervisorUpgrade()
+	}
+	defer_()
+	if r, _ := supervisorpkg.ReadResult(a.d.Layout); r != nil || a.st.FailedSupervisorVersion != "" || a.st.SupervisorRetry == nil ||
+		a.st.SupervisorRetry.Attempts != 0 || !a.st.SupervisorRetry.NotBefore.Equal(now.Add(supervisorpkg.DeferFirst)) {
+		t.Fatalf("deferred: result %+v, retry %+v", r, a.st.SupervisorRetry)
+	}
+	for _, e := range spooled(t, a) {
+		if e.Type == protocol.EventAgentSupervisorUpdated {
+			t.Fatalf("a deferral was reported: %+v", e)
+		}
+	}
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 0 {
+		t.Fatal("retried within the wait")
+	}
+	now = now.Add(supervisorpkg.DeferFirst)
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 1 {
+		t.Fatal("not retried after the wait")
+	}
+	defer_()
+	if !a.st.SupervisorRetry.NotBefore.Equal(now.Add(2 * supervisorpkg.DeferFirst)) {
+		t.Fatalf("second deferral: %+v", a.st.SupervisorRetry)
+	}
+	_ = g
+}
+
+// TestSupervisorUpgradeHeldDuringInitrdWork: plan M8e amendment 2026-10-21, items 16 and 17 — no supervisor upgrade
+// starts while the conversion worker runs (it may hold dpkg's locks); a cleanup waiting for its next attempt, which may
+// never finish, does not hold it.
+func TestSupervisorUpgradeHeldDuringInitrdWork(t *testing.T) {
+	a, _, launched := supervisorAgent(t, "")
+	a.conversionBusy = true
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 0 {
+		t.Fatalf("installed while the worker ran: %v", *launched)
+	}
+	a.conversionBusy = false
+	a.st.Conversion = &state.DiskConversion{ID: testConversionID, Phase: state.ConversionCancelled, CleanupPending: true}
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 1 {
+		t.Fatal("a pending cleanup held the upgrade")
+	}
+}

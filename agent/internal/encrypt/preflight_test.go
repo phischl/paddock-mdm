@@ -93,7 +93,7 @@ func (f *fakeSystem) load(name string, files map[string]*strings.Builder) {
 }
 
 func (f *fakeSystem) Command(_ context.Context, name string, args ...string) (string, string, int, error) {
-	line := strings.Join(append([]string{name}, args...), " ")
+	line := strings.ReplaceAll(strings.Join(append([]string{name}, args...), " "), f.root, "")
 	f.calls = append(f.calls, line)
 	r, ok := f.commands[line]
 	if !ok {
@@ -126,7 +126,7 @@ func (f *fakeSystem) set(line, stdout string, exit int) {
 const lsblkList = "lsblk --noheadings --list --paths --output NAME,FSTYPE"
 
 // tools are the commands a preflight may run (plan M8e decision 34).
-var tools = []string{"findmnt", "lsblk", "blkid", "lvm", "dpkg-query", "apt-get"}
+var tools = []string{"findmnt", "lsblk", "blkid", "lvm", "dpkg-query", "apt-get", "lsinitrd"}
 
 // checkCalls asserts that the preflight ran only the tools of decision 34 and apt-get only without dracut.
 func (f *fakeSystem) checkCalls(dracut bool) {
@@ -390,5 +390,20 @@ func (f *fakeSystem) write(path, content string) {
 	}
 	if err := os.WriteFile(filepath.Join(f.root, path), []byte(content), 0o644); err != nil {
 		f.t.Fatal(err)
+	}
+}
+
+// TestPreflightInitrdTools: amendment 2026-10-21, item 15 — with dracut installed, an lsinitrd that cannot list the
+// running kernel's initrd (dracut-ng without 3cpio or dracut-extractinitrd) makes the device not eligible.
+func TestPreflightInitrdTools(t *testing.T) {
+	f := loadFixture(t, "plain")
+	f.set("lsinitrd /boot/initrd.img-6.8.0-85-generic", "", 1)
+	if got := f.preflight(); got.Eligible || !slices.Equal(got.Reasons, []string{"initrd_tools_missing"}) {
+		t.Fatalf("lsinitrd fails: %+v", got)
+	}
+	f = loadFixture(t, "plain")
+	f.remove("/proc/sys/kernel/osrelease")
+	if got := f.preflight(); !slices.Equal(got.Reasons, []string{"initrd_tools_missing"}) {
+		t.Fatalf("no kernel release: %+v", got)
 	}
 }

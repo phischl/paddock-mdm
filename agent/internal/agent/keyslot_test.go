@@ -1,0 +1,208 @@
+package agent
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/phischl/paddock-mdm/agent/internal/luks"
+)
+
+// rootVolume is the converted root volume behind the LUKS tools of the luks reconciler: the conversion key's keyslot
+// (password, 0), the TPM keyslot (1) and the recovery keyslot (2). It records wipes and any overlapping call.
+type rootVolume struct {
+	t       *testing.T
+	mu      sync.Mutex
+	slots   []string
+	wipes   []int
+	in      atomic.Int32
+	overlap atomic.Bool
+}
+
+func (v *rootVolume) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
+	if v.in.Add(1) > 1 {
+		v.overlap.Store(true)
+	}
+	defer v.in.Add(-1)
+	// Long enough for a second caller to show up while a call runs.
+	time.Sleep(100 * time.Microsecond)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	line := strings.Join(append([]string{name}, args...), " ")
+	switch {
+	case name == "findmnt" && strings.Contains(line, "/boot"):
+		return "", "", 1, nil
+	case name == "findmnt":
+		return "/dev/mapper/dm_crypt-0\n", "", 0, nil
+	case name == "lsblk":
+		return `{"blockdevices":[{"name":"/dev/mapper/dm_crypt-0","type":"crypt","fstype":"ext4","children":[` +
+			`{"name":"/dev/sda3","type":"part","fstype":"crypto_LUKS"}]}]}`, "", 0, nil
+	case line == "cryptsetup luksDump --dump-json-metadata -- /dev/sda3":
+		return v.metadata(), "", 0, nil
+	case line == "cryptsetup luksUUID -- /dev/sda3":
+		return testLUKSUUID + "\n", "", 0, nil
+	case strings.HasPrefix(line, "systemd-cryptenroll --wipe-slot="):
+		slot, err := strconv.Atoi(strings.TrimPrefix(args[0], "--wipe-slot="))
+		if err != nil || slot >= len(v.slots) || v.slots[slot] == "" {
+			return "", "no such keyslot", 1, nil
+		}
+		v.wipes = append(v.wipes, slot)
+		v.slots[slot] = ""
+		return "", "", 0, nil
+	}
+	return "", "", 1, nil
+}
+
+func (v *rootVolume) metadata() string {
+	keyslots, tokens := map[string]any{}, map[string]any{}
+	for i, kind := range v.slots {
+		if kind == "" {
+			continue
+		}
+		slot := strconv.Itoa(i)
+		keyslots[slot] = map[string]any{"type": "luks2"}
+		switch kind {
+		case "tpm2+pin":
+			tokens[slot] = map[string]any{"type": "systemd-tpm2", "keyslots": []string{slot}, "tpm2-pin": true, "tpm2-pcrs": []int{7}}
+		case "recovery":
+			tokens[slot] = map[string]any{"type": "systemd-recovery", "keyslots": []string{slot}}
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"keyslots": keyslots, "tokens": tokens, "segments": map[string]any{}})
+	return string(b)
+}
+
+func (v *rootVolume) wiped() []int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return append([]int(nil), v.wipes...)
+}
+
+// keyslotAgent is a converted agent whose initrd work is due, with the luks reconciler on rootVolume. With escrowed,
+// the recovery key and the header are escrowed: the next luks pass after the hold wipes the conversion key's keyslot.
+func keyslotAgent(t *testing.T, escrowed bool) (*Agent, *convDevice, *rootVolume) {
+	t.Helper()
+	a, d, _ := convertedAgent(t)
+	a.startConversion(context.Background())
+	d.set(func(d *convDevice) { d.slots = []string{"password", "tpm2+pin", "reencrypt"} })
+	vol := &rootVolume{t: t, slots: []string{"password", "tpm2+pin", "recovery"}}
+	a.d.LUKS = vol
+	a.luks = a.luksReconciler()
+	a.luks.Background = func(fn func()) { fn() }
+	if a.st.DeviceID == "" {
+		a.st.DeviceID = "device-1"
+	}
+	install, recovery := 0, 2
+	a.st.LUKS.InstallSlot = &install
+	if escrowed {
+		md, err := luks.Dump(context.Background(), vol, "/dev/sda3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(md.Raw)
+		a.st.LUKS.RecoverySlot, a.st.LUKS.RecoveryAttempted, a.st.LUKS.RecoveryStored = &recovery, 1, 1
+		a.st.LUKS.HeaderStored, a.st.LUKS.HeaderDigest, a.st.LUKS.Keyslots = 1, hex.EncodeToString(sum[:]), md.Kinds()
+	}
+	d.Write("/var/lib/paddock/install-passphrase", "the conversion key")
+	// The boot PIN is set (the TPM keyslot exists): the first-boot disk setup is done.
+	if err := os.Remove(d.Path("/var/lib/paddock/disk-setup-pending")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	return a, d, vol
+}
+
+// TestKeyslotWipedWithRegeneration: plan M8e amendment 2026-10-21, item 19 (RR-71) — once the initrd is regenerated,
+// the same worker run wipes the conversion key's keyslot and then shreds the key file, through the luks reconciler's
+// own pass.
+func TestKeyslotWipedWithRegeneration(t *testing.T) {
+	a, d, vol := keyslotAgent(t, true)
+	runWorker(t, a)
+	if !a.st.Conversion.InitrdRegenerated {
+		t.Fatalf("not regenerated: %+v", a.st.Conversion)
+	}
+	if w := vol.wiped(); len(w) != 1 || w[0] != 0 || d.Exists("/var/lib/paddock/install-passphrase") {
+		t.Fatalf("wipes %v, key file there %v", w, d.Exists("/var/lib/paddock/install-passphrase"))
+	}
+}
+
+// TestKeyslotStaysOnFailedPrecondition: item 19 (RR-71) — a precondition of the luks reconciler that does not hold
+// (here: no recovery key escrowed yet) keeps the keyslot and the key file after the regeneration, the disk is not
+// compliant, and the next pass wipes the keyslot once it holds.
+func TestKeyslotStaysOnFailedPrecondition(t *testing.T) {
+	a, d, vol := keyslotAgent(t, false)
+	runWorker(t, a)
+	if !a.st.Conversion.InitrdRegenerated || len(vol.wiped()) != 0 || !d.Exists("/var/lib/paddock/install-passphrase") {
+		t.Fatalf("wipes %v", vol.wiped())
+	}
+	if h := a.luks.Tick(context.Background(), nil, false, ""); h == nil || h.State == "compliant" {
+		t.Fatalf("health %+v", h)
+	}
+	md, err := luks.Dump(context.Background(), vol, "/dev/sda3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(md.Raw)
+	recovery := 2
+	a.st.LUKS.RecoverySlot, a.st.LUKS.RecoveryAttempted, a.st.LUKS.RecoveryStored = &recovery, 1, 1
+	a.st.LUKS.HeaderStored, a.st.LUKS.HeaderDigest = 1, hex.EncodeToString(sum[:])
+	a.tickLUKS(context.Background(), true)
+	if w := vol.wiped(); len(w) != 1 || w[0] != 0 || d.Exists("/var/lib/paddock/install-passphrase") {
+		t.Fatalf("next pass: wipes %v", w)
+	}
+}
+
+// TestKeyslotWipedAfterCrash: item 19 (RR-71) — an agent stopped between recording the regenerated initrd and the
+// wipe catches up at its next luks pass.
+func TestKeyslotWipedAfterCrash(t *testing.T) {
+	a, d, vol := keyslotAgent(t, true)
+	a.st.Conversion.InitrdRegenerated = true
+	a.tickLUKS(context.Background(), true)
+	if w := vol.wiped(); len(w) != 1 || w[0] != 0 || d.Exists("/var/lib/paddock/install-passphrase") {
+		t.Fatalf("wipes %v", w)
+	}
+}
+
+// TestKeyslotPassNotParallel: item 19 (RR-71) — the luks pass the worker brings forward runs on the run loop, like the
+// regular passes, and never at the same time as one (run with -race).
+func TestKeyslotPassNotParallel(t *testing.T) {
+	a, _, vol := keyslotAgent(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.runConversions(ctx)
+	}()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	timeout := time.After(10 * time.Second)
+	for finished := false; !finished; {
+		select {
+		case fn := <-a.conversionCalls:
+			fn()
+			finished = !a.conversionBusy
+		case <-tick.C:
+			a.tickLUKS(ctx, true)
+		case <-timeout:
+			t.Fatal("the conversion worker hangs")
+		}
+	}
+	// The worker's pass has run by now; regular passes go on, which a pass of the worker's own would overlap.
+	for range 50 {
+		a.tickLUKS(ctx, true)
+	}
+	cancel()
+	<-done
+	if vol.overlap.Load() || len(vol.wiped()) != 1 {
+		t.Fatalf("overlap %v, wipes %v", vol.overlap.Load(), vol.wiped())
+	}
+}

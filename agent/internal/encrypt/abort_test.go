@@ -2,6 +2,8 @@ package encrypt_test
 
 import (
 	"context"
+	"errors"
+	"os"
 	"testing"
 
 	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
@@ -82,10 +84,10 @@ func TestAbortCleanupOrder(t *testing.T) {
 		t.Fatal("the fake initrd lost the module without a rebuild")
 	}
 	f.dev.set(func(d *device) { d.dracutExit, d.stale = 0, true })
-	encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
+	_, _ = encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
 	pending("older initrd still carries the module")
 	f.dev.set(func(d *device) { d.stale = false })
-	encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
+	_, _ = encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
 	if c := f.conversion(); c.CleanupPending || c.Phase != state.ConversionCancelled {
 		t.Fatalf("conversion %+v", c)
 	}
@@ -181,7 +183,7 @@ func TestCleanupWaitsForDracutStatus(t *testing.T) {
 			}
 		}
 		f.dev.set(func(d *device) { d.dpkgExit, d.packages["dracut"] = 0, "installed" })
-		encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
+		_, _ = encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
 		if c := f.conversion(); c.CleanupPending || f.dev.Exists("/var/lib/paddock/install-passphrase") {
 			t.Fatalf("%s: retry did not finish: %+v", name, c)
 		}
@@ -200,7 +202,7 @@ func TestCleanupWaitsForDracutStatus(t *testing.T) {
 			t.Fatalf("dracut %q: not aborted", status)
 		}
 		f.dev.Write("/boot/initrd.img-"+runningKernel, "initramfs-tools image\n")
-		encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
+		_, _ = encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
 		if c := f.conversion(); !c.CleanupPending {
 			t.Fatalf("dracut %q: cleanup recorded as done while the older initrd carries the module: %+v", status, c)
 		}
@@ -209,11 +211,12 @@ func TestCleanupWaitsForDracutStatus(t *testing.T) {
 				t.Fatalf("dracut %q: %s deleted while the older initrd carries the module", status, p)
 			}
 		}
-		if f.longCalls("dracut") != 1 {
+		// Only step 8's per-kernel builds of the preparation (two kernels).
+		if f.longCalls("dracut") != 2 {
 			t.Fatalf("dracut %q: the cleanup rebuilt the initrds of another tool: %v", status, f.dev.Long())
 		}
 		f.dev.Write("/boot/initrd.img-"+olderKernel, "initramfs-tools image\n")
-		encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
+		_, _ = encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
 		if c := f.conversion(); c.CleanupPending || f.dev.Exists("/var/lib/paddock/install-passphrase") {
 			t.Fatalf("dracut %q: retry did not finish once every initrd was clean: %+v", status, c)
 		}
@@ -229,11 +232,11 @@ func TestCleanupListsWithAnyTool(t *testing.T) {
 		t.Fatal("not aborted")
 	}
 	if !f.conversion().CleanupPending || !f.dev.Exists("/var/lib/paddock/install-passphrase") ||
-		f.dev.Count("lsinitramfs /boot/initrd.img-"+olderKernel) != 1 {
+		f.dev.Count("lsinitramfs /boot/.initrd.img-"+olderKernel+".paddock") != 1 {
 		t.Fatalf("lsinitramfs: the older initrd was not listed or its module ignored: %v", f.dev.Calls())
 	}
 	f.dev.set(func(d *device) { d.missing["lsinitramfs"], d.stale = true, false })
-	encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
+	_, _ = encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
 	if !f.conversion().CleanupPending || !f.dev.Exists("/var/lib/paddock/encrypt/plan.env") {
 		t.Fatal("no lister: the cleanup finished without reading the initrds")
 	}
@@ -243,7 +246,7 @@ func TestCleanupListsWithAnyTool(t *testing.T) {
 		}
 	}
 	f.dev.set(func(d *device) { d.packages["dracut"] = "config-files" })
-	encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
+	_, _ = encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
 	if f.conversion().CleanupPending || f.dev.Exists("/var/lib/paddock/install-passphrase") {
 		t.Fatal("no initrd at all: the cleanup did not finish")
 	}
@@ -254,13 +257,94 @@ func TestCleanupListsWithAnyTool(t *testing.T) {
 func TestCleanupBeforeModule(t *testing.T) {
 	f := newFixture(t)
 	f.dev.set(func(d *device) { d.packages["dracut"] = "installed" })
-	if done, err := encrypt.Cleanup(context.Background(), f.dev, f.dev.layout, false); !done || err != nil ||
+	if done, _, err := encrypt.Cleanup(context.Background(), f.dev, f.dev.layout, false); !done || err != nil ||
 		len(f.dev.Calls()) != 0 {
 		t.Fatalf("no module: %v %v, calls %v", done, err, f.dev.Calls())
 	}
 	f.dev.Write(encrypt.ModuleConf, "add_dracutmodules+=\" paddock-encrypt \"\n")
 	f.dev.set(func(d *device) { d.stale = true })
-	if done, _ := encrypt.Cleanup(context.Background(), f.dev, f.dev.layout, false); done {
+	if done, _, _ := encrypt.Cleanup(context.Background(), f.dev, f.dev.layout, false); done {
 		t.Fatal("a module configuration found: the cleanup finished without verifying the initrds")
+	}
+}
+
+// TestIsLUKSEvidence: amendment item 13 — "not LUKS" only with every piece of evidence; LUKS on isLuks exit 0.
+func TestIsLUKSEvidence(t *testing.T) {
+	f := preparedFixture(t)
+	c := f.conversion()
+	d := encrypt.DiskOf(c)
+	if luks, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, d); luks || !ok {
+		t.Fatalf("plain partition: %v %v", luks, ok)
+	}
+	for name, set := range map[string]func(){
+		"mapping active": func() { f.dev.Write("/dev/mapper/"+c.Mapping, "") },
+		"by-uuid link":   func() { f.dev.Write("/dev/disk/by-uuid/"+c.LUKSUUID, "") },
+		"two devices":    func() { f.dev.set(func(d *device) { d.partDevices = "/dev/sda3\n/dev/sdb3\n" }) },
+		"no device":      func() { f.dev.set(func(d *device) { d.partDevices = "\n" }) },
+		"isLuks error":   func() { f.dev.set(func(d *device) { d.luksExit = 4 }) },
+	} {
+		set()
+		if luks, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, d); luks || ok {
+			t.Fatalf("%s: %v %v", name, luks, ok)
+		}
+		_ = os.Remove(f.dev.Path("/dev/mapper/" + c.Mapping))
+		_ = os.Remove(f.dev.Path("/dev/disk/by-uuid/" + c.LUKSUUID))
+		f.dev.set(func(d *device) { d.partDevices, d.luksExit = "", 0 })
+	}
+	f.dev.set(func(d *device) { d.luks = true })
+	f.dev.Write("/dev/mapper/"+c.Mapping, "")
+	if luks, ok := encrypt.IsLUKS(context.Background(), f.dev, f.dev.layout, d); !luks || !ok {
+		t.Fatalf("LUKS: %v %v", luks, ok)
+	}
+}
+
+// TestCleanupPackageLock: amendment item 14 — the cleanup holds dpkg's locks from (1) to (4) and waits for the next
+// pass while a package run holds them, with nothing removed.
+func TestCleanupPackageLock(t *testing.T) {
+	f := preparedFixture(t)
+	f.dev.PackagesBusy = true
+	if done, _, err := encrypt.Cleanup(context.Background(), f.dev, f.dev.layout, true); done || !errors.Is(err, encrypt.ErrPackagesBusy) ||
+		!f.dev.Exists(encrypt.ModuleConf) || !f.dev.Exists(encrypt.ModuleDir) {
+		t.Fatalf("cleanup while apt held the lock: %v %v", done, err)
+	}
+	f.dev.PackagesBusy = false
+	held := true
+	f.dev.set(func(d *device) { d.afterDracut = func(d *device) { held = held && d.PackagesLocked() } })
+	if done, _, err := encrypt.Cleanup(context.Background(), f.dev, f.dev.layout, true); !done || err != nil || !held || f.dev.PackagesLocked() {
+		t.Fatalf("cleanup: %v %v, held %v", done, err, held)
+	}
+}
+
+// TestCleanupRemovesConfFirst: adversarial review round 3, minor — the module's dracut configuration goes before its
+// directory: a cleanup stopped in between never leaves a configuration that names a missing module (every dracut run
+// would fail on it).
+func TestCleanupRemovesConfFirst(t *testing.T) {
+	f := preparedFixture(t)
+	if err := os.RemoveAll(f.dev.Path("/usr/lib/dracut/modules.d")); err != nil {
+		t.Fatal(err)
+	}
+	f.dev.Write("/usr/lib/dracut/modules.d", "not a directory") // removing the module directory fails
+	if done, _, err := encrypt.Cleanup(context.Background(), f.dev, f.dev.layout, true); done || err == nil {
+		t.Fatalf("cleanup %v %v", done, err)
+	}
+	if f.dev.Exists(encrypt.ModuleConf) {
+		t.Fatal("the configuration outlived a failed removal of the module directory")
+	}
+}
+
+// TestAbortClearsCleanupError: PDK-381 — the abort's own transition clears an earlier cleanup reason, also when the
+// cleanup after it cannot record anything (the run loop is gone).
+func TestAbortClearsCleanupError(t *testing.T) {
+	f := preparedFixture(t)
+	since := f.now
+	_ = f.store.Update(func(c *state.DiskConversion, _ *state.LUKS) {
+		c.CleanupError, c.PackagesBusySince = "an earlier reason", &since
+	})
+	f.store.goneAfter = func(c *state.DiskConversion) bool { return c.Phase == state.ConversionCancelled }
+	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false); !aborted {
+		t.Fatal("not aborted")
+	}
+	if f.store.c.CleanupError != "" || !f.store.c.CleanupPending || f.store.c.PackagesBusySince != nil {
+		t.Fatalf("conversion %+v", f.store.c)
 	}
 }
