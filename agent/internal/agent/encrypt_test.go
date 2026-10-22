@@ -59,6 +59,8 @@ type convDevice struct {
 	headerReadable bool
 	// partDevices is what blkid names for the partition's PARTUUID ("" = one device, /dev/sda3).
 	partDevices string
+	// requirement puts the mandatory online-reencrypt requirement into the metadata.
+	requirement bool
 }
 
 func (d *convDevice) setLUKS(v bool) {
@@ -127,7 +129,11 @@ func (d *convDevice) metadata() string {
 			keyslots[slot] = map[string]any{"type": "reencrypt"}
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"keyslots": keyslots, "tokens": tokens})
+	md := map[string]any{"keyslots": keyslots, "tokens": tokens}
+	if d.requirement {
+		md["config"] = map[string]any{"requirements": map[string]any{"mandatory": []string{"online-reencrypt-v2"}}}
+	}
+	b, _ := json.Marshal(md)
 	return string(b)
 }
 

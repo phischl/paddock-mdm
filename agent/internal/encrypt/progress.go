@@ -21,6 +21,14 @@ const (
 	PausedPackagesBusy = "packages_busy"
 )
 
+// Why the boot PIN or the TPM unlock is not enrolled yet (health.disk.conversion.enrollment_deferred, plan M8e
+// amendment 2026-10-22, item 22): the header is marked for the reencryption, which refuses every new keyslot — while
+// encrypting, or still after the completion (stop condition S15).
+const (
+	EnrollmentDeferredReencrypt               = "reencrypt"
+	EnrollmentDeferredReencryptAfterCompleted = "reencrypt_after_completed"
+)
+
 // Why the initrd work of a conversion cannot go on (health.disk.conversion.initrd_issue, plan M8e amendment
 // 2026-10-21, item 19).
 const (

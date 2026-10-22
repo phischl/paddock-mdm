@@ -5130,6 +5130,14 @@ components:
         key_on_boot:
           type: boolean
           description: The conversion key lies in the initrd on the unencrypted /boot until the user chose the boot PIN.
+        enrollment_deferred:
+          type: string
+          enum: [reencrypt, reencrypt_after_completed]
+          description: >-
+            reencrypt while encrypting: the header is marked for the reencryption and no TPM keyslot exists, so the boot
+            PIN or the TPM unlock is set up at the first start after the completion (plan M8e amendment 2026-10-22,
+            item 22). reencrypt_after_completed: the header is still marked after the completion, so the enrollment
+            cannot run (stop condition S15; see the device's log).
     DeviceHardware:
       type: object
       description: >-

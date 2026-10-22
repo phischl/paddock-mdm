@@ -86,8 +86,16 @@ func findLUKS(devs []blockDevice, parent *blockDevice) (Volume, bool) {
 type Metadata struct {
 	Keyslots map[string]json.RawMessage `json:"keyslots"`
 	Tokens   map[string]Token           `json:"tokens"`
+	Config   Config                     `json:"config"`
 	// Raw is the complete JSON metadata; its digest tells whether the header changed since it was escrowed.
 	Raw []byte `json:"-"`
+}
+
+// Config is the part of the LUKS2 config section Paddock reads.
+type Config struct {
+	Requirements struct {
+		Mandatory []string `json:"mandatory"`
+	} `json:"requirements"`
 }
 
 // Token is a LUKS2 token.
@@ -200,6 +208,14 @@ func (m Metadata) Reencrypting() bool {
 		}
 	}
 	return false
+}
+
+// ReencryptRequired reports whether the header carries the mandatory online-reencrypt requirement of an unfinished
+// online reencryption; libcryptsetup refuses to add a keyslot while it does (plan M8e amendment 2026-10-22, item 22).
+func (m Metadata) ReencryptRequired() bool {
+	return slices.ContainsFunc(m.Config.Requirements.Mandatory, func(r string) bool {
+		return strings.HasPrefix(r, "online-reencrypt")
+	})
 }
 
 // Kind returns the kind of keyslot slot, "" if the slot is not in use.

@@ -910,7 +910,8 @@
           "not_abortable": "es hatte bereits neu gestartet und die Verschlüsselung begonnen",
           "unknown_conversion": "es kennt keine solche Anforderung"
         },
-        "keyOnBoot": "Die Festplatte ist verschlüsselt, aber noch nicht im Ruhezustand geschützt: Bis der Benutzer die Boot-PIN wählt, liegt der Schlüssel, der sie entsperrt, auf der unverschlüsselten Boot-Partition. Das Gerät fragt bei jedem Start nach der PIN.",
+        "enrollmentDeferred": "Die Boot-PIN bzw. die TPM-Entsperrung wird beim ersten Start nach Abschluss der Verschlüsselung im Hintergrund eingerichtet; während die Verschlüsselung unvollständig ist, kann sie nicht hinzugefügt werden.",
+        "keyOnBoot": "Die Festplatte ist verschlüsselt, aber noch nicht im Ruhezustand geschützt: Der Schlüssel, der sie entsperrt, liegt auf der unverschlüsselten Boot-Partition, bis die Verschlüsselung im Hintergrund abgeschlossen ist, das Gerät neu gestartet wurde und die Boot-PIN bzw. die TPM-Entsperrung eingerichtet ist. Das Gerät bittet um den Neustart und fragt unter TPM + PIN bei jedem Start nach der PIN.",
         "runbook": "Runbook: Nachträgliche Verschlüsselung"
       }
     },

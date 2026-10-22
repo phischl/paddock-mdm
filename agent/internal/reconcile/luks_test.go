@@ -1211,3 +1211,53 @@ func TestLUKSConversionHold(t *testing.T) {
 		t.Fatalf("encrypting: %+v", h)
 	}
 }
+
+// TestLUKSEnrollmentAfterCompletion (plan M8e amendment 2026-10-22, item 22): while a conversion holds the disk, the
+// first-boot enrollment of one TPM keyslot into a header without one is no tampering, under either unlock mode; the
+// same change without the hold, a further keyslot beside it, a removed keyslot or a second TPM keyslot is.
+func TestLUKSEnrollmentAfterCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		held   bool
+		change func(slots []string) []string
+		tamper bool
+	}{
+		{"tpm2+pin enrolled", true, func(s []string) []string { return append(s, "tpm2+pin") }, false},
+		{"tpm2 enrolled", true, func(s []string) []string { return append(s, "tpm2") }, false},
+		{"no hold", false, func(s []string) []string { return append(s, "tpm2+pin") }, true},
+		{"and a passphrase", true, func(s []string) []string { return append(s, "tpm2+pin", "password") }, true},
+		{"a passphrase only", true, func(s []string) []string { return append(s, "password") }, true},
+		{"recovery replaced", true, func(s []string) []string { s[slices.Index(s, "recovery")] = "tpm2+pin"; return s }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLUKSFixture(t, "password")
+			held := true
+			f.m.ConversionHold = func() bool { return held }
+			f.pass()
+			f.poll()
+			f.pass()
+			if !slices.Equal(f.st.Keyslots, []string{"password", "recovery"}) || len(f.events) != 0 {
+				t.Fatalf("before: keyslots %v, events %v", f.st.Keyslots, f.events)
+			}
+			held = tc.held
+			f.vol.slots = tc.change(f.vol.slots)
+			f.pass()
+			if tampered := slices.ContainsFunc(f.events, func(e protocol.Event) bool {
+				return e.Type == protocol.EventTamperKeyslotChanged
+			}); tampered != tc.tamper {
+				t.Fatalf("tamper %v, events %v, keyslots %v", tampered, f.events, f.st.Keyslots)
+			}
+		})
+	}
+	for _, kinds := range [][2]string{{"tpm2", "tpm2+pin"}, {"tpm2+pin", "tpm2"}} {
+		f := newLUKSFixture(t, "password", kinds[0])
+		f.m.ConversionHold = func() bool { return true }
+		f.pass()
+		f.poll()
+		f.pass()
+		f.vol.slots = append(f.vol.slots, kinds[1])
+		if f.pass(); len(f.events) != 1 || f.events[0].Type != protocol.EventTamperKeyslotChanged {
+			t.Fatalf("%s beside %s: events %v", kinds[1], kinds[0], f.events)
+		}
+	}
+}

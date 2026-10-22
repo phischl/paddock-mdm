@@ -332,6 +332,10 @@ type DiskConversion struct {
 	// KeyOnBoot is true from the preparation until the initrd was regenerated: the conversion key lies in the
 	// initrd on the unencrypted /boot (plan M8e decision 52).
 	KeyOnBoot bool `json:"key_on_boot,omitempty"`
+	// EnrollmentDeferred is set while the converted header is marked for the reencryption and no TPM keyslot exists:
+	// reencrypt while encrypting (the boot PIN or the TPM unlock waits for the completion), reencrypt_after_completed
+	// once completed (stop condition S15) (plan M8e amendment 2026-10-22, item 22).
+	EnrollmentDeferred string `json:"enrollment_deferred,omitempty"`
 	// CleanupError is why the last attempt of an unfinished cleanup (reason cleanup_pending) did not finish, its first
 	// line (plan M8e amendment 2026-10-21, item 17).
 	CleanupError string `json:"cleanup_error,omitempty"`

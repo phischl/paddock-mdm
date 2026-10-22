@@ -374,6 +374,13 @@ onBeforeUnmount(hide)
               >
                 {{ progressText }}
               </p>
+              <p
+                v-if="health?.enrollment_deferred === 'reencrypt'"
+                class="pd-type-caption"
+                data-testid="disk-convert-enrollment-deferred"
+              >
+                {{ t('devices.disk.convert.enrollmentDeferred') }}
+              </p>
             </template>
           </template>
           <p

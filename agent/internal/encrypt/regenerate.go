@@ -511,6 +511,12 @@ func RearmDiskSetup(l paths.Layout) (bool, error) {
 	return true, fsutil.WriteFile(l.DiskSetupPending(), nil, 0o600, 0o700)
 }
 
+// DiskSetupArmed reports whether the marker of the first-boot disk setup exists.
+func DiskSetupArmed(l paths.Layout) bool {
+	_, err := os.Stat(l.DiskSetupPending())
+	return err == nil
+}
+
 // LUKSTools runs the LUKS tools of luks.Dump through sys (the environment is the tool's own).
 func LUKSTools(sys System) luks.Tools { return luksTools{sys} }
 

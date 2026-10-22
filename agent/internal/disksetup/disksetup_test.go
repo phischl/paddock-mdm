@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,12 +14,18 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 )
 
-// tools fakes the LUKS tools of a device whose root is on /dev/sda3; enroll answers systemd-cryptenroll.
+// tools fakes the LUKS tools of a device whose root is on /dev/sda3; enroll answers systemd-cryptenroll, dump
+// cryptsetup luksDump (plainDump when empty, an error when dumpFails).
 type tools struct {
-	keyFile string
-	enrolls []string // NEWPIN values
-	enroll  func() (exit int, stderr string)
+	keyFile   string
+	enrolls   []string // NEWPIN values
+	enroll    func() (exit int, stderr string)
+	dump      string
+	dumpFails bool
 }
+
+// plainDump is the metadata of a converted volume whose reencryption has completed: one passphrase keyslot.
+const plainDump = `{"keyslots":{"0":{"type":"luks2"}},"tokens":{},"config":{"json_size":"12288"}}`
 
 func (f *tools) Command(_ context.Context, env []string, name string, args ...string) (string, string, int, error) {
 	switch name {
@@ -26,6 +33,14 @@ func (f *tools) Command(_ context.Context, env []string, name string, args ...st
 		return "/dev/mapper/vg-root\n", "", 0, nil
 	case "lsblk":
 		return `{"blockdevices":[{"name":"/dev/mapper/vg-root","type":"lvm","fstype":"ext4","children":[{"name":"/dev/mapper/dm_crypt-0","type":"crypt","fstype":"LVM2_member","children":[{"name":"/dev/sda3","type":"part","fstype":"crypto_LUKS"}]}]}]}`, "", 0, nil
+	case "cryptsetup":
+		if strings.Join(args, " ") != "luksDump --dump-json-metadata -- /dev/sda3" || f.dumpFails {
+			return "", "cannot read the header", 1, nil
+		}
+		if f.dump == "" {
+			return plainDump, "", 0, nil
+		}
+		return f.dump, "", 0, nil
 	case "systemd-cryptenroll":
 		if strings.Join(args, " ") != "--tpm2-device=auto --tpm2-with-pin=yes --tpm2-pcrs=7 --unlock-key-file="+f.keyFile+" /dev/sda3" {
 			return "", "", -1, errors.New("unexpected arguments " + strings.Join(args, " "))
@@ -253,6 +268,63 @@ func TestTPMOnlyFailuresKeepMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	if tt.calls != disksetup.MaxEnrollFailures || f.pending() {
+		t.Fatalf("enrollments %d, pending %v", tt.calls, f.pending())
+	}
+}
+
+// Dumps of a header marked for an unfinished online reencryption: the mandatory requirement libcryptsetup checks, and
+// the reencrypt keyslot alone (plan M8e amendment 2026-10-22, item 22).
+const (
+	requirementDump      = `{"keyslots":{"0":{"type":"luks2"}},"tokens":{},"config":{"requirements":{"mandatory":["online-reencrypt-v2"]}}}`
+	reencryptKeyslotDump = `{"keyslots":{"0":{"type":"luks2"},"1":{"type":"reencrypt"}},"tokens":{},"config":{}}`
+)
+
+// TestDeferredWhileReencrypting (item 22): while the header is marked for reencryption, the setup under tpm_only and
+// tpm_pin makes no enrollment attempt and asks for nothing, prints exactly the deferral line, keeps the marker,
+// returns nil and logs one info entry and no error.
+func TestDeferredWhileReencrypting(t *testing.T) {
+	for _, dump := range map[string]string{"requirement": requirementDump, "reencrypt keyslot": reencryptKeyslotDump} {
+		for _, mode := range []string{"tpm_only", "tpm_pin"} {
+			f, tt := tpmOnlyFixture(t, 0)
+			if err := os.WriteFile(f.layout.DiskSetupConfig(), []byte(`{"boot_pin_min_length":8,"unlock_mode":"`+mode+`"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			tt.dump, f.tools.dump = dump, dump
+			var logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			var err error
+			if mode == "tpm_only" {
+				err = f.runWith(t, tt)
+			} else {
+				err = f.run(t, "12345678\n12345678\n")
+			}
+			slog.SetDefault(prev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "Paddock disk encryption setup is deferred until the background encryption has completed.\n"; f.out.String() != want {
+				t.Fatalf("%s: console:\n%s", mode, f.out.String())
+			}
+			if tt.calls != 0 || len(f.tools.enrolls) != 0 || len(f.echo) != 0 || !f.pending() {
+				t.Fatalf("%s: enrollments %d/%d, echo %v, pending %v", mode, tt.calls, len(f.tools.enrolls), f.echo, f.pending())
+			}
+			if strings.Count(logs.String(), "level=INFO") != 1 || !strings.Contains(logs.String(), "disk setup deferred: the volume is marked for reencryption") ||
+				strings.Contains(logs.String(), "level=ERROR") {
+				t.Fatalf("%s: logs:\n%s", mode, logs.String())
+			}
+		}
+	}
+}
+
+// TestUnreadableHeaderEnrolls: a header that cannot be read defers nothing; the enrollment runs as before.
+func TestUnreadableHeaderEnrolls(t *testing.T) {
+	f, tt := tpmOnlyFixture(t, 0)
+	tt.dumpFails = true
+	if err := f.runWith(t, tt); err != nil {
+		t.Fatal(err)
+	}
+	if tt.calls != 1 || f.pending() {
 		t.Fatalf("enrollments %d, pending %v", tt.calls, f.pending())
 	}
 }

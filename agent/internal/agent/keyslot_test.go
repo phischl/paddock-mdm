@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // rootVolume is the converted root volume behind the LUKS tools of the luks reconciler: the conversion key's keyslot
@@ -204,5 +206,62 @@ func TestKeyslotPassNotParallel(t *testing.T) {
 	<-done
 	if vol.overlap.Load() || len(vol.wiped()) != 1 {
 		t.Fatalf("overlap %v, wipes %v", vol.overlap.Load(), vol.wiped())
+	}
+}
+
+// TestEnrollmentAfterCompletionNoTamper: plan M8e amendment 2026-10-22, item 22 — the luks passes and the conversion
+// passes through the completion, the armed disk setup and the boot that enrolls the boot PIN report no tampering; a
+// foreign keyslot added at the same boot is reported.
+func TestEnrollmentAfterCompletionNoTamper(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		a, d, _ := convertedAgent(t)
+		a.startConversion(context.Background())
+		d.set(func(d *convDevice) { d.slots = []string{"password", "recovery"} })
+		vol := &rootVolume{t: t, slots: []string{"password", "", "recovery"}}
+		a.d.LUKS = vol
+		a.luks = a.luksReconciler()
+		a.luks.Background = func(fn func()) { fn() }
+		if a.st.DeviceID == "" {
+			a.st.DeviceID = "device-1"
+		}
+		md, err := luks.Dump(context.Background(), vol, "/dev/sda3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(md.Raw)
+		install, recovery := 0, 2
+		a.st.LUKS.InstallSlot, a.st.LUKS.RecoverySlot, a.st.LUKS.RecoveryAttempted, a.st.LUKS.RecoveryStored = &install, &recovery, 1, 1
+		a.st.LUKS.HeaderStored, a.st.LUKS.HeaderDigest, a.st.LUKS.Keyslots = 1, hex.EncodeToString(sum[:]), md.Kinds()
+		d.Write("/var/lib/paddock/install-passphrase", "the conversion key")
+
+		a.tickLUKS(context.Background(), true)
+		a.tickConversion(context.Background())
+		runWorker(t, a)
+		a.tickLUKS(context.Background(), true)
+		if a.st.Conversion.Phase != state.ConversionCompleted || !d.Exists("/var/lib/paddock/disk-setup-pending") {
+			t.Fatalf("foreign %v: completed %+v", foreign, a.st.Conversion)
+		}
+
+		// The next boot: disk-setup enrolls the PIN and removes the marker.
+		vol.mu.Lock()
+		vol.slots[1] = "tpm2+pin"
+		if foreign {
+			vol.slots = append(vol.slots, "password")
+		}
+		vol.mu.Unlock()
+		d.set(func(d *convDevice) { d.slots = append(d.slots, "tpm2+pin") })
+		if err := os.Remove(d.Path("/var/lib/paddock/disk-setup-pending")); err != nil {
+			t.Fatal(err)
+		}
+		a.tickLUKS(context.Background(), true)
+		a.tickConversion(context.Background())
+		runWorker(t, a)
+		a.tickLUKS(context.Background(), true)
+		if n := len(eventsOfType(t, a, protocol.EventTamperKeyslotChanged)); (n == 1) != foreign || n > 1 {
+			t.Fatalf("foreign %v: tamper events %d", foreign, n)
+		}
+		if !foreign && !a.st.Conversion.InitrdRegenerated {
+			t.Fatalf("not regenerated: %+v", a.st.Conversion)
+		}
 	}
 }

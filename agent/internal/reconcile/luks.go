@@ -396,17 +396,36 @@ func (m *LUKS) pendingFor(volume string) bool {
 }
 
 // watch reports keyslots that differ from the recorded ones (plan M4b decision 12) and records the new set; the
-// changed metadata makes the next steps escrow the header again.
+// changed metadata makes the next steps escrow the header again. The first-boot enrollment of a held conversion is
+// expected (enrollmentAdded) and recorded without a report.
 func (m *LUKS) watch(kinds []string) {
 	if m.State.Keyslots != nil && slices.Equal(kinds, m.State.Keyslots) {
 		return
 	}
-	if m.State.Keyslots != nil {
+	if m.State.Keyslots != nil && m.enrollmentAdded(m.State.Keyslots, kinds) {
+		slog.Info("the TPM unlock of the converted disk is enrolled", "volume", m.rootUUID, "before", m.State.Keyslots, "after", kinds)
+	} else if m.State.Keyslots != nil {
 		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Volume: m.rootUUID, Before: m.State.Keyslots, After: kinds})
 		slog.Warn("LUKS keyslots changed outside Paddock", "volume", m.rootUUID, "before", m.State.Keyslots, "after", kinds)
 	}
 	m.State.Keyslots = kinds
 	m.save()
+}
+
+// enrollmentAdded reports whether after is before plus one TPM keyslot while a conversion holds the disk and before
+// has none: the first-boot disk setup enrolls it only after the reencryption completed, when no marker hides the
+// change from watch any more (plan M8e amendment 2026-10-22, item 22). Any other change stays tampering.
+func (m *LUKS) enrollmentAdded(before, after []string) bool {
+	if !m.held() || slices.Contains(before, luks.KindTPM2) || slices.Contains(before, luks.KindTPM2PIN) ||
+		len(after) != len(before)+1 {
+		return false
+	}
+	for _, kind := range []string{luks.KindTPM2, luks.KindTPM2PIN} {
+		if i := slices.Index(after, kind); i >= 0 && slices.Equal(slices.Delete(slices.Clone(after), i, i+1), before) {
+			return true
+		}
+	}
+	return false
 }
 
 // step takes the next step: replace a recovery key that was lost before the server stored it, enroll and escrow a

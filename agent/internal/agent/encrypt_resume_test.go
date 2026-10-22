@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -383,9 +384,10 @@ func TestConversionHealth(t *testing.T) {
 }
 
 // TestConversionInitrdRegeneration: plan M8e decisions 20 and 52 — while no TPM keyslot exists (the PIN was skipped)
-// the PIN dialogue is re-armed at the start and at every full pass and nothing of the unlock path changes; once a TPM
-// keyslot exists — while encrypting or completed — the crypttab line is written, the module goes, the initrds are
-// rebuilt and verified, the plan files go and InitrdRegenerated is set; a failed rebuild keeps plan.env and is retried.
+// the PIN dialogue is re-armed at the start and at every full pass once completed, never while encrypting (amendment
+// 2026-10-22, item 22), and nothing of the unlock path changes; once a TPM keyslot exists — while encrypting or
+// completed — the crypttab line is written, the module goes, the initrds are rebuilt and verified, the plan files go
+// and InitrdRegenerated is set; a failed rebuild keeps plan.env and is retried.
 func TestConversionInitrdRegeneration(t *testing.T) {
 	for _, phase := range []string{state.ConversionEncrypting, state.ConversionCompleted} {
 		a, d, _ := convertedAgent(t)
@@ -393,14 +395,15 @@ func TestConversionInitrdRegeneration(t *testing.T) {
 		a.st.Conversion.Phase = phase
 		_ = os.Remove(d.Path("/var/lib/paddock/disk-setup-pending"))
 		runWorker(t, a)
-		if !d.Exists("/var/lib/paddock/disk-setup-pending") || a.st.Conversion.InitrdRegenerated || d.Exists("/etc/crypttab") {
-			t.Fatalf("%s: no re-arm at the start, or regenerated without a TPM keyslot", phase)
+		armed := phase == state.ConversionCompleted
+		if d.Exists("/var/lib/paddock/disk-setup-pending") != armed || a.st.Conversion.InitrdRegenerated || d.Exists("/etc/crypttab") {
+			t.Fatalf("%s: re-arm at the start not %v, or regenerated without a TPM keyslot", phase, armed)
 		}
 		_ = os.Remove(d.Path("/var/lib/paddock/disk-setup-pending"))
 		a.tickConversion(context.Background())
 		runWorker(t, a)
-		if !d.Exists("/var/lib/paddock/disk-setup-pending") || !d.Exists(encrypt.ModuleDir) {
-			t.Fatalf("%s: no re-arm at the full pass", phase)
+		if d.Exists("/var/lib/paddock/disk-setup-pending") != armed || !d.Exists(encrypt.ModuleDir) {
+			t.Fatalf("%s: re-arm at the full pass not %v", phase, armed)
 		}
 
 		// The PIN is set at the next boot; the first rebuild fails.
@@ -1475,5 +1478,231 @@ func TestInitrdIssueFieldsReplaced(t *testing.T) {
 	runWorker(t, a)
 	if h := a.conversionHealth(); h.InitrdIssue != encrypt.IssueBootSpaceLow || h.InitrdIssueKernel != "" {
 		t.Fatalf("boot space after not buildable: %+v", h)
+	}
+}
+
+// desktopSessions gives the fake device one wayland session of uid 1000 (ID 3, *id changes it) and records the
+// notifications' systemd-run lines.
+func desktopSessions(d *convDevice, id *string) *[]string {
+	var runs []string
+	inner := d.Handle
+	d.Handle = func(line string) (string, int, bool) {
+		switch {
+		case line == "loginctl list-sessions --no-legend":
+			return *id + " 1000 u -\n", 0, true
+		case strings.HasPrefix(line, "loginctl show-session"):
+			return "Id=" + *id + "\nUser=1000\nName=u\nClass=user\nType=wayland\n", 0, true
+		case line == "getent passwd 1000":
+			return "u:x:1000:1000::/home/u:/bin/bash\n", 0, true
+		case strings.HasPrefix(line, "systemd-run --quiet"):
+			runs = append(runs, line)
+			return "", 0, true
+		}
+		return inner(line)
+	}
+	return &runs
+}
+
+// TestEnrollmentAfterCompletion: plan M8e amendment 2026-10-22, item 22 — while encrypting without a TPM keyslot the
+// first-boot disk setup is never armed and the health reports enrollment_deferred while the header carries the
+// requirement or the reencrypt keyslot; at completed it is armed at the first full pass and re-armed after a removal,
+// the health drops the deferral, and the session poll shows the completed notification once per session and 4 hours,
+// in German under LANG=de_DE.UTF-8, until a TPM keyslot exists; with a TPM keyslot the marker is never armed.
+func TestEnrollmentAfterCompletion(t *testing.T) {
+	const marker = "/var/lib/paddock/disk-setup-pending"
+	a, d, _ := convertedAgent(t)
+	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	a.d.Now = func() time.Time { return now }
+	session := "3"
+	runs := desktopSessions(d, &session)
+	if h := a.conversionHealth(); h.EnrollmentDeferred != "" {
+		t.Fatalf("prepared: %+v", h)
+	}
+	a.tickConversionSessions(context.Background())
+	if len(*runs) != 1 || !strings.Contains((*runs)[0], "Disk encryption is ready — please restart") {
+		t.Fatalf("prepared notification: %q", *runs)
+	}
+
+	// The conversion boot: the reencrypt keyslot; then the requirement alone while the helper runs.
+	a.startConversion(context.Background())
+	runWorker(t, a)
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if d.Exists(marker) || a.st.Conversion.Phase != state.ConversionEncrypting {
+		t.Fatalf("armed while encrypting: %+v", a.st.Conversion)
+	}
+	if h := a.conversionHealth(); h.EnrollmentDeferred != "reencrypt" {
+		t.Fatalf("reencrypt keyslot: %+v", h)
+	}
+	d.set(func(d *convDevice) { d.slots, d.requirement, d.unit = []string{"password"}, true, "active" })
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if h := a.conversionHealth(); h.EnrollmentDeferred != "reencrypt" || d.Exists(marker) {
+		t.Fatalf("requirement: %+v", h)
+	}
+	a.tickConversionSessions(context.Background())
+	if len(*runs) != 1 {
+		t.Fatalf("notified while encrypting: %q", *runs)
+	}
+
+	// Completed: the header is clear, the marker is armed and the session is asked to restart.
+	d.set(func(d *convDevice) { d.requirement, d.unit = false, "inactive" })
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if a.st.Conversion.Phase != state.ConversionCompleted || !d.Exists(marker) {
+		t.Fatalf("completed: %+v, armed %v", a.st.Conversion, d.Exists(marker))
+	}
+	if h := a.conversionHealth(); h.EnrollmentDeferred != "" {
+		t.Fatalf("completed: %+v", h)
+	}
+	_ = os.Remove(d.Path(marker))
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if !d.Exists(marker) {
+		t.Fatal("not re-armed after a removal")
+	}
+	completed := "Disk encryption completed — please restart"
+	a.tickConversionSessions(context.Background())
+	a.tickConversionSessions(context.Background())
+	if len(*runs) != 2 || !strings.Contains((*runs)[1], completed) {
+		t.Fatalf("completed notification: %q", *runs)
+	}
+	if _, ok := a.st.Conversion.Notified["completed:3"]; !ok {
+		t.Fatalf("notified %v", a.st.Conversion.Notified)
+	}
+	now = now.Add(3 * time.Hour)
+	a.tickConversionSessions(context.Background())
+	if len(*runs) != 2 {
+		t.Fatalf("notified again within 4 hours: %q", *runs)
+	}
+	now = now.Add(time.Hour)
+	a.tickConversionSessions(context.Background())
+	session = "8"
+	d.Write("/etc/default/locale", "LANG=de_DE.UTF-8\n")
+	a.tickConversionSessions(context.Background())
+	if len(*runs) != 4 || !strings.Contains((*runs)[2], completed) ||
+		!strings.Contains((*runs)[3], "Festplattenverschlüsselung abgeschlossen — bitte neu starten") {
+		t.Fatalf("after 4 hours and for a new session: %q", *runs)
+	}
+
+	// The PIN is set at the next start: no notification, no re-arm.
+	d.set(func(d *convDevice) { d.slots = []string{"password", "tpm2+pin"} })
+	now = now.Add(5 * time.Hour)
+	a.tickConversionSessions(context.Background())
+	if len(*runs) != 4 {
+		t.Fatalf("notified with a TPM keyslot: %q", *runs)
+	}
+	_ = os.Remove(d.Path(marker))
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if d.Exists(marker) || !a.st.Conversion.InitrdRegenerated {
+		t.Fatalf("armed with a TPM keyslot, or not regenerated: %+v", a.st.Conversion)
+	}
+}
+
+// TestEnrollmentNotDeferredWithTPMKeyslot (item 22): a header marked for the reencryption that already carries a TPM
+// keyslot reports no enrollment_deferred.
+func TestEnrollmentNotDeferredWithTPMKeyslot(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	a.startConversion(context.Background())
+	d.set(func(d *convDevice) { d.slots, d.requirement = []string{"password", "reencrypt", "tpm2"}, true })
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if h := a.conversionHealth(); h.Phase != state.ConversionEncrypting || h.EnrollmentDeferred != "" ||
+		d.Exists("/var/lib/paddock/disk-setup-pending") {
+		t.Fatalf("health %+v, armed %v", h, d.Exists("/var/lib/paddock/disk-setup-pending"))
+	}
+}
+
+// TestEnrollmentDeferredAfterCompletion: stop condition S15 of plan M8e amendment 2026-10-22, item 22 — a header
+// still marked for the reencryption after the completion reports reencrypt_after_completed, logs one warning per
+// start and asks no session to restart, which would only defer again; the header is read again after 4 hours only.
+// Once the mark is gone the report ends and the notification follows.
+func TestEnrollmentDeferredAfterCompletion(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	a.d.Now = func() time.Time { return now }
+	session := "3"
+	runs := desktopSessions(d, &session)
+	a.startConversion(context.Background())
+	runWorker(t, a)
+	d.set(func(d *convDevice) { d.slots, d.requirement = []string{"password"}, true })
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	slog.SetDefault(prev)
+	if a.st.Conversion.Phase != state.ConversionCompleted || !d.Exists("/var/lib/paddock/disk-setup-pending") {
+		t.Fatalf("not completed and armed: %+v", a.st.Conversion)
+	}
+	if h := a.conversionHealth(); h.EnrollmentDeferred != "reencrypt_after_completed" {
+		t.Fatalf("health %+v", h)
+	}
+	if n := strings.Count(logs.String(), "still marked for reencryption after the completion"); n != 1 {
+		t.Fatalf("%d warnings:\n%s", n, logs.String())
+	}
+	dumps := 0
+	inner := d.Handle
+	d.Handle = func(line string) (string, int, bool) {
+		if strings.HasPrefix(line, "cryptsetup luksDump") {
+			dumps++
+		}
+		return inner(line)
+	}
+	for range 3 {
+		a.tickConversionSessions(context.Background())
+	}
+	if len(*runs) != 0 || dumps != 1 {
+		t.Fatalf("notified %q, header dumps %d", *runs, dumps)
+	}
+	d.set(func(d *convDevice) { d.requirement = false })
+	now = now.Add(4 * time.Hour)
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	a.tickConversionSessions(context.Background())
+	if h := a.conversionHealth(); h.EnrollmentDeferred != "" || len(*runs) != 1 ||
+		!strings.Contains((*runs)[0], "Disk encryption completed — please restart") {
+		t.Fatalf("health %+v, notified %q", h, *runs)
+	}
+}
+
+// TestCompletedNoticeUnreadableHeader (item 22): a header that cannot be read shows no completed notification and is
+// read again only after 4 hours, not at every session poll.
+func TestCompletedNoticeUnreadableHeader(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	a.d.Now = func() time.Time { return now }
+	session := "3"
+	runs := desktopSessions(d, &session)
+	a.startConversion(context.Background())
+	runWorker(t, a)
+	d.set(func(d *convDevice) { d.slots = []string{"password"} })
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if a.st.Conversion.Phase != state.ConversionCompleted || !d.Exists("/var/lib/paddock/disk-setup-pending") {
+		t.Fatalf("not completed and armed: %+v", a.st.Conversion)
+	}
+	dumps := 0
+	inner := d.Handle
+	d.Handle = func(line string) (string, int, bool) {
+		if strings.HasPrefix(line, "cryptsetup luksDump") {
+			dumps++
+			return "", 1, true
+		}
+		return inner(line)
+	}
+	for range 3 {
+		a.tickConversionSessions(context.Background())
+	}
+	if len(*runs) != 0 || dumps != 1 {
+		t.Fatalf("notified %q, header dumps %d", *runs, dumps)
+	}
+	now = now.Add(4 * time.Hour)
+	a.tickConversionSessions(context.Background())
+	if len(*runs) != 0 || dumps != 2 {
+		t.Fatalf("after 4 hours: notified %q, header dumps %d", *runs, dumps)
 	}
 }
