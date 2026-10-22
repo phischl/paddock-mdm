@@ -1930,3 +1930,98 @@ Found while implementing PDK-245. The binding text of decisions 3, 18, 21, 22 an
     - Waiting for room in `/boot` or for a buildable kernel is not waiting for dpkg's locks. It counts no retry,
       leaves `PackagesBusySince` and `packages_busy` alone, and sets all four initrd-issue fields, clearing the
       ones that do not apply.
+
+### Amendment 2026-10-22 — enrollment after completion (stop condition S2; decided by the architect lead)
+
+Stop condition S2 (§11) was hit in PDK-247, gate S-IE2 on Ubuntu 24.04 (cryptsetup 2.7.0, systemd 255), on
+2026-10-22: at the conversion boot — boot 2 after the shrink, the header written, root on `dm_crypt-0` —
+`paddock-disk-setup` under `tpm_only` ran `systemd-cryptenroll --tpm2-device=auto` three times, and every attempt
+ended with `Operation incompatible with device marked for LUKS2 reencryption. Aborting. Failed to add new TPM2 key
+to /dev/sda3: Invalid argument`. The unit ended, the boot went on fail safe, the marker stayed, so every later boot
+repeated the three attempts; the agent reported `encrypting`, `initrd_regenerated: false`, the reencryption ran.
+libcryptsetup refuses a keyslot addition while the header carries the `online-reencrypt` requirement — the claim
+of ADR 0039 (correction 3, "the PIN can be enrolled during the reencryption") was wrong; ADR 0039 amendment
+2026-10-22 records it. Gate S-IE1 (26.04, `tpm_pin`) never exercised the enrollment during `encrypting` because
+decision 51 skips the PIN at the conversion boot; the same rule most likely holds there (PDK-247's probe
+`probeEnrollWhileEncrypting`, which enrolls into a copy of the header on a loop device, is the evidence). The
+fallback design named in S2 is adopted:
+
+22. **The enrollment — the PIN dialogue under `tpm_pin`, the automatic TPM enrollment under `tpm_only` — happens
+    only after `completed`.** Binding changes:
+    - **Decision 13 step 5** writes only `/etc/paddock/disk-setup.json`; it no longer creates
+      `/var/lib/paddock/disk-setup-pending` (`agent/internal/encrypt/prepare.go::(*Preparer).diskSetup`). The
+      conversion boot and every boot during `encrypting` run no dialogue and no enrollment.
+    - **The marker is set at `completed`.** The agent arms `/var/lib/paddock/disk-setup-pending`
+      (`encrypt.RearmDiskSetup`, called from `agent/internal/agent/encrypt.go::(*Agent).finishConversion`) only
+      while `state.Conversion.Phase == "completed"` and the root volume has no `tpm2` or `tpm2+pin` keyslot —
+      never while `encrypting`. Decision 52's "encrypting or completed" becomes "completed"; the re-arm at every
+      start and full pass stays, so a skipped PIN is asked again at every boot. Under `tpm_only` the first boot
+      after completion enrolls the TPM without a dialogue (`disksetup.enrollTPMOnly`); under `tpm_pin` the
+      dialogue appears at that boot and the user may still skip.
+    - **`paddockd disk-setup` makes no attempt while the header is marked for reencryption**
+      (`agent/internal/disksetup/disksetup.go::Run`): after `luks.Root` and before any dialogue text or
+      enrollment, it reads `luks.Dump` and, when `md.ReencryptRequired()` or `md.Reencrypting()` is true, prints
+      one line on the console — `Paddock disk encryption setup is deferred until the background encryption has
+      completed.` —, logs one info line (`disk setup deferred: the volume is marked for reencryption`), keeps the
+      marker and returns nil. No error, no `MaxEnrollFailures` counting, no attempt, in both unlock modes.
+      `luks.Metadata` gains `Config` (`config.requirements.mandatory []string`, read from the dump's JSON) and
+      `func (m Metadata) ReencryptRequired() bool`, true when a mandatory requirement starts with
+      `online-reencrypt` — the condition libcryptsetup checks; `Reencrypting()` (the `reencrypt` keyslot) is the
+      second test, so a header with either mark defers. The agent uses the same two tests (next bullet).
+    - **Health.** `protocol.DiskConversion` (decision 3) gains `EnrollmentDeferred string
+      json:"enrollment_deferred,omitempty"` with the single closed value `reencrypt`: set by the agent's
+      `conversionHealth` while the phase is `encrypting`, the dump shows `ReencryptRequired()` or
+      `Reencrypting()` and no TPM keyslot exists; empty otherwise (and after `completed`). The device and admin
+      contracts (`api/openapi/device.yaml`, `admin.yaml`: `DiskConversionHealth.enrollment_deferred`, enum
+      `[reencrypt]`) carry it (the admin schema is PDK-390's file; PDK-397 adds the field in both contracts and
+      regenerates). The portal's progress panel (decision 25, state `encrypting`) shows the line
+      `devices.disk.convert.enrollmentDeferred` (texts below) while it is `reencrypt`.
+    - **Restart after completion.** At the transition to `completed`, while the marker is armed and no TPM
+      keyslot exists, the agent shows the desktop notification of decision 28 once per graphical session (the same
+      mechanism, the same 4-hour repeat, keyed in `state.Conversion.Notified` with the prefix `completed:`) with
+      the texts of the `completed` row below; it stops once a TPM keyslot exists. The restart stays the user's
+      action; the device never restarts on its own. Without the restart a `tpm_only` device stays `key_on_boot`
+      and `active` (the uninstall refused) for good — the portal alert `devices.disk.convert.keyOnBoot` says so
+      (text amended below).
+    - **Consequences stated.** Decision 20 keeps its trigger (a `tpm2+pin` or `tpm2` keyslot) and therefore runs
+      only after `completed` and a successful enrollment; `InitrdRegenerated` is set only after that enrollment and
+      the verified rebuild, as before. The keyslot wipe right after the regeneration (amendment 2026-10-21,
+      item 19; RR-71) stays tied to `InitrdRegenerated`. Decision 3's hold now spans the completion, the
+      enrollment at the next boot and the regeneration. The `key_on_boot` window grows by the time between
+      `completed` and the first boot after it (plus the time a user keeps skipping the PIN); RR-57 is extended
+      (below). The gate that proves it needs no new VM: S-IE1, S-IE2 part B and S-IE4 assert no dialogue and no
+      attempt at the conversion boot and during `encrypting` (`requireNoDiskSetup`, `requireNoFailedEnrollment`),
+      the marker present after `completed`, the enrollment at the first boot after it, and the probe as evidence
+      on both releases. Decision 51's "skip at boot 2" is void — nothing asks at boot 2 — and its first skip moves
+      to the first boot after `completed`. The dracut module and the init script are not affected (they never
+      touch the marker). The abort cleanup (decision 14) still removes the marker and `disk-setup.json`.
+    - **Upgrade.** A device that is `encrypting` with a marker armed by an older agent: the new `disk-setup`
+      defers without an attempt, the marker stays, and the flow continues at `completed`; the three-attempt loop
+      ends with the agent update. No migration, no state change.
+    - **§14.10.** I1 is unchanged in letter; made explicit: the key in the initrd and the conversion keyslot stay
+      until the enrollment has succeeded (a TPM keyslot exists) and the rebuild without the module is verified.
+      Table, row `encrypting`, column "PIN set / skipped": no dialogue and no attempt — the marker is not armed
+      while `encrypting`; a leftover marker makes `disk-setup` return without an attempt and the health reports
+      `enrollment_deferred: reencrypt`. Row `completed`, `!InitrdRegenerated`, column "Reboot": the marker armed at
+      completion runs the dialogue (`tpm_pin`) or the enrollment (`tpm_only`) at this boot; a `tpm_only` device
+      needs this one restart. Row `prepared`, column "Reboot": the conversion boot runs no dialogue.
+    - **Stop conditions.** S2 is closed by this item. S15: `systemd-cryptenroll` refuses the enrollment after
+      `completed` (the dump shows no `online-reencrypt` requirement and no `reencrypt` keyslot) on either release —
+      report the dump and the output; do not retry in a loop.
+    - **RR-57, extension** (PDK-248 carries it): "Because a keyslot cannot be added while the header is marked for
+      reencryption, the boot PIN or the TPM unlock is enrolled only at the first start after the background
+      encryption completed; until then, and for as long as a user keeps skipping the PIN, the conversion key in
+      the initrd on `/boot` is the only unlock path. The device reports `key_on_boot` and `enrollment_deferred`,
+      the portal says so, and the device asks the user to restart once the encryption completed."
+    - **Texts (binding; `en.json` / `de.json`; §6.6 and §6.7).**
+
+      | Key | English | German |
+      | --- | --- | --- |
+      | `devices.disk.convert.enrollmentDeferred` | The boot PIN or the TPM unlock is set up at the first start after the background encryption has completed; it cannot be added while the encryption is unfinished. | Die Boot-PIN bzw. die TPM-Entsperrung wird beim ersten Start nach Abschluss der Verschlüsselung im Hintergrund eingerichtet; während die Verschlüsselung unvollständig ist, kann sie nicht hinzugefügt werden. |
+      | `devices.disk.convert.keyOnBoot` (replaces §14.8) | The disk is encrypted but not protected at rest yet: the key that unlocks it lies on the unencrypted boot partition until the background encryption has completed, the device has been restarted and the boot PIN or TPM unlock has been set up. The device asks for the restart and, under TPM + PIN, for the PIN at every start. | Die Festplatte ist verschlüsselt, aber noch nicht im Ruhezustand geschützt: Der Schlüssel, der sie entsperrt, liegt auf der unverschlüsselten Boot-Partition, bis die Verschlüsselung im Hintergrund abgeschlossen ist, das Gerät neu gestartet wurde und die Boot-PIN bzw. die TPM-Entsperrung eingerichtet ist. Das Gerät bittet um den Neustart und fragt unter TPM + PIN bei jedem Start nach der PIN. |
+      | §6.7, `completed` summary | Disk encryption completed — please restart | Festplattenverschlüsselung abgeschlossen — bitte neu starten |
+      | §6.7, `completed` body | The background encryption of this device has completed. Restart the device to finish the setup; under TPM + PIN you will be asked to choose a boot PIN at that start. Until then the disk is not fully protected. | Die Verschlüsselung dieses Geräts im Hintergrund ist abgeschlossen. Starten Sie das Gerät neu, um die Einrichtung abzuschließen; unter TPM + PIN werden Sie bei diesem Start gebeten, eine Boot-PIN zu wählen. Bis dahin ist die Festplatte nicht vollständig geschützt. |
+
+    - **Ticket.** PDK-397 implements this item (agent, protocol and contracts, portal texts, unit tests); the VM
+      evidence is PDK-247's gates S-IE1, S-IE2 part B and S-IE4 as amended above; PDK-248 carries RR-57, the
+      runbook and the architecture note; PDK-390 takes the admin schema change if it lands first.

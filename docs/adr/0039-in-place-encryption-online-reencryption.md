@@ -211,3 +211,20 @@ Consequences: + the switch to dracut is bounded and visible; the conversion cann
 by a removal of Paddock or by the device's other lifecycle actions; the two-person rule's path stays untouched.
 − Paddock cannot be removed from a device until its conversion completed or was cancelled; a Lock during
 `encrypting` is unrestorable (RR-57).
+
+## Amendment 2026-10-22 — the enrollment happens after the reencryption completed (stop condition S2)
+
+Decided by the architect lead on 2026-10-22 (plan M8e, amendment 2026-10-22, item 22). Correction 3 above ("the
+PIN can be enrolled during the reencryption") is withdrawn: libcryptsetup refuses to add a keyslot while the header
+carries the `online-reencrypt` requirement — observed in gate S-IE2 on Ubuntu 24.04 (cryptsetup 2.7.0, systemd
+255) as `Operation incompatible with device marked for LUKS2 reencryption` from `systemd-cryptenroll`; the table
+row that reads a missing reencryption check into `crypt_keyslot_add_by_keyslot_context` was wrong. Decisions 4 and
+5 are amended accordingly: the first-boot dialogue does not run at the conversion boot. The agent arms the
+first-boot disk setup only once the background reencryption has completed; the first start after that enrolls the
+TPM (`tpm_only`) or asks for the boot PIN (`tpm_pin`); `paddockd disk-setup` makes no enrollment attempt while the
+header is marked for reencryption and the device reports that deferral in its health. The initrd regeneration
+without the module, and with it the end of the conversion key's life on `/boot`, follows the enrollment as before.
+The device asks its users to restart once the reencryption completed and says, on the device page, that the disk is
+not protected at rest until then (RR-57 extended). The window in which the conversion key is the only unlock path
+therefore spans the whole reencryption plus the time to the next restart; the stop condition S15 of the plan
+catches a refusal that outlives the requirement.
