@@ -912,8 +912,8 @@ func (a *Agent) deferredEnrollment(ctx context.Context) string {
 	}
 	// An unreadable header expects the enrollment as well: the worker may arm the marker in this pass, and an expectation
 	// with a TPM keyslot present exempts nothing.
-	if c.Phase == state.ConversionCompleted && (err != nil || !encrypt.HasTPMKeyslot(md)) && !a.st.LUKS.EnrollmentExpected &&
-		!a.conversionRevoked() {
+	if c.Phase == state.ConversionCompleted && (err != nil || !encrypt.HasTPMKeyslot(md)) &&
+		!a.st.LUKS.EnrollmentExpected && !a.conversionRevoked() {
 		a.st.LUKS.EnrollmentExpected = true
 		a.saveState()
 	}
