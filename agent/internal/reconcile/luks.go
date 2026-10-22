@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -412,20 +413,29 @@ func (m *LUKS) watch(kinds []string) {
 	m.save()
 }
 
-// enrollmentAdded reports whether after is before plus one TPM keyslot while a conversion holds the disk and before
-// has none: the first-boot disk setup enrolls it only after the reencryption completed, when no marker hides the
-// change from watch any more (plan M8e amendment 2026-10-22, item 22). Any other change stays tampering.
+// enrollmentAdded reports whether after is before plus the TPM keyslot the first-boot disk setup enrolls under the
+// unlock mode of /etc/paddock/disk-setup.json, while a conversion holds the disk and before has no TPM keyslot: the
+// setup runs only after the reencryption completed, when no marker hides the change from watch any more (plan M8e
+// amendment 2026-10-22, item 22). Any other change stays tampering.
 func (m *LUKS) enrollmentAdded(before, after []string) bool {
-	if !m.held() || slices.Contains(before, luks.KindTPM2) || slices.Contains(before, luks.KindTPM2PIN) ||
-		len(after) != len(before)+1 {
+	if !m.held() || slices.Contains(before, luks.KindTPM2) || slices.Contains(before, luks.KindTPM2PIN) {
 		return false
 	}
-	for _, kind := range []string{luks.KindTPM2, luks.KindTPM2PIN} {
-		if i := slices.Index(after, kind); i >= 0 && slices.Equal(slices.Delete(slices.Clone(after), i, i+1), before) {
-			return true
-		}
+	i := slices.Index(after, tpmKind(m.diskSetupMode()))
+	return i >= 0 && slices.Equal(slices.Delete(slices.Clone(after), i, i+1), before)
+}
+
+// diskSetupMode is the unlock mode the first-boot disk setup enrolls: tpm_only when disk-setup.json says so, tpm_pin
+// otherwise, as paddockd disk-setup reads it.
+func (m *LUKS) diskSetupMode() string {
+	var cfg struct {
+		UnlockMode string `json:"unlock_mode"`
 	}
-	return false
+	if raw, err := os.ReadFile(m.Layout.DiskSetupConfig()); err == nil && json.Unmarshal(raw, &cfg) == nil &&
+		cfg.UnlockMode == bundle.UnlockModeTPMOnly {
+		return bundle.UnlockModeTPMOnly
+	}
+	return bundle.UnlockModeTPMPIN
 }
 
 // step takes the next step: replace a recovery key that was lost before the server stored it, enroll and escrow a

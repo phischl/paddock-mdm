@@ -1213,24 +1213,28 @@ func TestLUKSConversionHold(t *testing.T) {
 }
 
 // TestLUKSEnrollmentAfterCompletion (plan M8e amendment 2026-10-22, item 22): while a conversion holds the disk, the
-// first-boot enrollment of one TPM keyslot into a header without one is no tampering, under either unlock mode; the
-// same change without the hold, a further keyslot beside it, a removed keyslot or a second TPM keyslot is.
+// first-boot enrollment of the TPM keyslot of disk-setup.json's unlock mode into a header without one is no tampering;
+// the other mode's TPM keyslot, the same change without the hold, a further keyslot beside it, a removed keyslot or a
+// second TPM keyslot is.
 func TestLUKSEnrollmentAfterCompletion(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		held   bool
-		change func(slots []string) []string
-		tamper bool
+		name, mode string
+		held       bool
+		change     func(slots []string) []string
+		tamper     bool
 	}{
-		{"tpm2+pin enrolled", true, func(s []string) []string { return append(s, "tpm2+pin") }, false},
-		{"tpm2 enrolled", true, func(s []string) []string { return append(s, "tpm2") }, false},
-		{"no hold", false, func(s []string) []string { return append(s, "tpm2+pin") }, true},
-		{"and a passphrase", true, func(s []string) []string { return append(s, "tpm2+pin", "password") }, true},
-		{"a passphrase only", true, func(s []string) []string { return append(s, "password") }, true},
-		{"recovery replaced", true, func(s []string) []string { s[slices.Index(s, "recovery")] = "tpm2+pin"; return s }, true},
+		{"tpm2+pin enrolled", "tpm_pin", true, func(s []string) []string { return append(s, "tpm2+pin") }, false},
+		{"tpm2 enrolled", "tpm_only", true, func(s []string) []string { return append(s, "tpm2") }, false},
+		{"tpm2 under tpm_pin", "tpm_pin", true, func(s []string) []string { return append(s, "tpm2") }, true},
+		{"tpm2+pin under tpm_only", "tpm_only", true, func(s []string) []string { return append(s, "tpm2+pin") }, true},
+		{"no hold", "tpm_pin", false, func(s []string) []string { return append(s, "tpm2+pin") }, true},
+		{"and a passphrase", "tpm_pin", true, func(s []string) []string { return append(s, "tpm2+pin", "password") }, true},
+		{"a passphrase only", "tpm_pin", true, func(s []string) []string { return append(s, "password") }, true},
+		{"recovery replaced", "tpm_pin", true, func(s []string) []string { s[slices.Index(s, "recovery")] = "tpm2+pin"; return s }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newLUKSFixture(t, "password")
+			f.write(f.layout.DiskSetupConfig(), `{"boot_pin_min_length":8,"unlock_mode":"`+tc.mode+`"}`)
 			held := true
 			f.m.ConversionHold = func() bool { return held }
 			f.pass()
@@ -1251,6 +1255,8 @@ func TestLUKSEnrollmentAfterCompletion(t *testing.T) {
 	}
 	for _, kinds := range [][2]string{{"tpm2", "tpm2+pin"}, {"tpm2+pin", "tpm2"}} {
 		f := newLUKSFixture(t, "password", kinds[0])
+		mode := map[string]string{"tpm2": "tpm_only", "tpm2+pin": "tpm_pin"}[kinds[1]]
+		f.write(f.layout.DiskSetupConfig(), `{"unlock_mode":"`+mode+`"}`)
 		f.m.ConversionHold = func() bool { return true }
 		f.pass()
 		f.poll()
