@@ -53,14 +53,6 @@ func forEachVM(t *testing.T, body func(t *testing.T, s *Stack, vm *VM)) {
 	}
 }
 
-// debDir holds the packages under test (make deb).
-func debDir(s *Stack) string {
-	if d := os.Getenv("PADDOCK_SYSTEM_DEBS"); d != "" {
-		return d
-	}
-	return filepath.Join(s.root, "bin", "deb")
-}
-
 // TestAgentGates runs gates S1–S4 of plan M2b §8 on the VMs in parallel, each from a fresh base-installed. The stack
 // outage of S3 and the releases of S4 are shared: they happen once, when every VM reached them.
 func TestAgentGates(t *testing.T) {

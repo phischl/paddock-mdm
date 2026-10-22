@@ -213,6 +213,11 @@ func (g *Gateway) escrow(w http.ResponseWriter, r *http.Request) {
 	defer g.Mu.Unlock()
 	var req escrow.Request
 	_ = json.Unmarshal(body, &req)
+	// The real gateway refuses a secret that carries a header field (PDK-009); PDK-247 found an agent sending one.
+	if req.Kind != escrow.KindLUKSHeader && req.HasHeaderFields() {
+		http.Error(w, "a secret carries a header field", http.StatusBadRequest)
+		return
+	}
 	g.Escrows = append(g.Escrows, req)
 	writeJSON(w, http.StatusAccepted, escrow.Accepted{EscrowID: req.EscrowID})
 }
