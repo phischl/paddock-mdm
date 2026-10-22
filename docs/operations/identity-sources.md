@@ -41,6 +41,11 @@ The `paddock-worker` role runs two rounds for every active organization (only on
 The worker needs `PADDOCK_AUTHENTIK_URL` and `PADDOCK_AUTHENTIK_TOKEN_FILE` (the `paddock-service` token). The
 development stack runs the sync round every 60 seconds.
 
+The reconcile round sends one Authentik request at a time, so it never competes with an administrator's interactive
+calls such as creating an organization. It needs about 14 requests per organization (roughly 2–5 s on a busy
+Authentik); with about 200 organizations a round can take longer than its interval, and the next round then starts
+right away.
+
 Consequences:
 
 - A new upstream user appears in Paddock within one sync round; a user removed upstream loses its Paddock groups and

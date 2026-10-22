@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 )
@@ -77,20 +79,72 @@ func (n named) pk() string {
 	return ""
 }
 
+// platformTTL is how long the pks of the platform-wide objects are reused. They are blueprint-managed or Authentik's
+// defaults and change only when an object is deleted and recreated; a failed provider write forgets them earlier.
+// Looking them up costs every create four flow lookups, the most expensive requests of a loaded Authentik, because
+// Authentik computes each flow's cache count from its cache keys (PDK-392).
+const platformTTL = time.Hour
+
+// platformObjects are the pks of the platform-wide objects every device provider uses.
+type platformObjects struct {
+	authFlow, authzFlow, invalFlow, signing string
+	mappings                                []string
+}
+
+// platform returns the platform-wide pks, looked up concurrently unless known for less than platformTTL; cached
+// reports a reused answer. An answer without the optional invalidation flow or signing key is not kept, so the next
+// call finds them once they exist.
+func (c *Client) platform(ctx context.Context) (o platformObjects, cached bool, err error) {
+	c.platformMu.Lock()
+	known, at := c.platformCache, c.platformAt
+	c.platformMu.Unlock()
+	if known != nil && c.now().Sub(at) < platformTTL {
+		return *known, true, nil
+	}
+	o = platformObjects{mappings: make([]string, len(standardScopes))}
+	steps := []func(context.Context) error{
+		c.lookup(&o.authFlow, "/api/v3/flows/instances/", url.Values{"slug": {deviceAuthenticationFlow}},
+			"flow "+deviceAuthenticationFlow+" missing (blueprint paddock-device.yaml not applied)"),
+		c.lookup(&o.authzFlow, "/api/v3/flows/instances/", url.Values{"slug": {authorizationFlow}},
+			"flow "+authorizationFlow+" missing (blueprint paddock-device.yaml not applied)"),
+		c.lookup(&o.invalFlow, "/api/v3/flows/instances/", url.Values{"slug": {invalidationFlow}}, ""),
+		c.lookup(&o.signing, "/api/v3/crypto/certificatekeypairs/", url.Values{"name": {signingKeyName}}, ""),
+	}
+	for i, managed := range standardScopes {
+		steps = append(steps, c.lookup(&o.mappings[i], "/api/v3/propertymappings/provider/scope/", url.Values{"managed": {managed}},
+			"scope mapping "+managed+" missing"))
+	}
+	if err := parallel(ctx, steps...); err != nil {
+		return platformObjects{}, false, err
+	}
+	if o.invalFlow != "" && o.signing != "" {
+		c.platformMu.Lock()
+		c.platformCache, c.platformAt = &o, c.now()
+		c.platformMu.Unlock()
+	}
+	return o, false, nil
+}
+
+func (c *Client) forgetPlatform() {
+	c.platformMu.Lock()
+	c.platformCache = nil
+	c.platformMu.Unlock()
+}
+
 // ensureDeviceLogin creates or corrects the organization's groups mapping, OAuth2 provider, application, access
-// policy and its binding (plan M3a decision 5, settings of PoC M1). The lookups and the objects without dependencies
-// are handled concurrently.
+// policy and its binding (plan M3a decision 5, settings of PoC M1). The objects without dependencies are handled
+// concurrently. The application and its access policy binding are ensured before the provider is attached, so the
+// application never admits users without the policy and the binding is off the critical path (PDK-392).
 func (c *Client) ensureDeviceLogin(ctx context.Context, slug string) error {
 	app := organization.DeviceLoginApp(slug)
-	var authFlow, authzFlow, invalFlow, signing, groups, policy string
-	mappings := make([]string, len(standardScopes))
-	steps := []func(context.Context) error{
-		c.lookup(&authFlow, "/api/v3/flows/instances/", url.Values{"slug": {deviceAuthenticationFlow}},
-			"flow "+deviceAuthenticationFlow+" missing (blueprint paddock-device.yaml not applied)"),
-		c.lookup(&authzFlow, "/api/v3/flows/instances/", url.Values{"slug": {authorizationFlow}},
-			"flow "+authorizationFlow+" missing (blueprint paddock-device.yaml not applied)"),
-		c.lookup(&invalFlow, "/api/v3/flows/instances/", url.Values{"slug": {invalidationFlow}}, ""),
-		c.lookup(&signing, "/api/v3/crypto/certificatekeypairs/", url.Values{"name": {signingKeyName}}, ""),
+	var platform platformObjects
+	var cached bool
+	var groups string
+	err := parallel(ctx,
+		func(ctx context.Context) (err error) {
+			platform, cached, err = c.platform(ctx)
+			return err
+		},
 		func(ctx context.Context) (err error) {
 			groups, err = c.upsert(ctx, "/api/v3/propertymappings/provider/scope/", GroupsMappingName(slug), http.MethodPatch, map[string]any{
 				"name": GroupsMappingName(slug), "scope_name": "profile", "description": "Paddock device groups",
@@ -98,38 +152,71 @@ func (c *Client) ensureDeviceLogin(ctx context.Context, slug string) error {
 			})
 			return err
 		},
-		func(ctx context.Context) (err error) {
-			policy, err = c.upsert(ctx, "/api/v3/policies/expression/", AccessPolicyName(slug), http.MethodPatch, map[string]any{
-				"name": AccessPolicyName(slug), "expression": AccessExpression(slug),
-			})
-			return err
-		},
-	}
-	for i, managed := range standardScopes {
-		steps = append(steps, c.lookup(&mappings[i], "/api/v3/propertymappings/provider/scope/", url.Values{"managed": {managed}},
-			"scope mapping "+managed+" missing"))
-	}
-	if err := parallel(ctx, steps...); err != nil {
+		func(ctx context.Context) error { return c.ensureAccess(ctx, slug, app) },
+	)
+	if err != nil {
 		return err
 	}
-	provider, err := c.upsert(ctx, "/api/v3/providers/oauth2/", app, http.MethodPut, map[string]any{
+	provider, err := c.ensureProvider(ctx, app, platform, groups)
+	if err != nil && cached {
+		// An administrator may have changed a platform-wide object in Authentik; the next call looks them up again.
+		c.forgetPlatform()
+		// A 400 names an object recreated with a new pk within platformTTL: retry at once with fresh pks.
+		var st *errStatus
+		if errors.As(err, &st) && st.code == http.StatusBadRequest {
+			if platform, _, err = c.platform(ctx); err != nil {
+				return err
+			}
+			provider, err = c.ensureProvider(ctx, app, platform, groups)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	providerPK, err := strconv.Atoi(provider)
+	if err != nil {
+		return fmt.Errorf("authentik: provider pk %q: %w", provider, err)
+	}
+	if err := c.do(ctx, http.MethodPatch, "/api/v3/core/applications/"+url.PathEscape(app)+"/",
+		applicationBody(app, providerPK), nil); err != nil {
+		return upstream(err)
+	}
+	return nil
+}
+
+// ensureProvider creates or corrects the organization's OAuth2 provider and returns its pk.
+func (c *Client) ensureProvider(ctx context.Context, app string, platform platformObjects, groups string) (string, error) {
+	return c.upsert(ctx, "/api/v3/providers/oauth2/", app, http.MethodPut, map[string]any{
 		"name": app, "client_type": "public", "client_id": app,
 		"grant_types":         []string{"urn:ietf:params:oauth:grant-type:device_code", "refresh_token", "authorization_code"},
-		"authentication_flow": authFlow, "authorization_flow": authzFlow, "invalidation_flow": invalFlow,
+		"authentication_flow": platform.authFlow, "authorization_flow": platform.authzFlow, "invalidation_flow": platform.invalFlow,
 		"redirect_uris": []map[string]string{{"matching_mode": "strict", "url": DeviceRedirectURI, "redirect_uri_type": "authorization"}},
-		"signing_key":   signing, "include_claims_in_id_token": true, "sub_mode": "hashed_user_id", "issuer_mode": "per_provider",
+		"signing_key":   platform.signing, "include_claims_in_id_token": true, "sub_mode": "hashed_user_id", "issuer_mode": "per_provider",
 		"access_token_validity": "minutes=10", "refresh_token_validity": "days=30",
 		// The device code lives ten minutes; Authentik's default access_code_validity of one minute let the code expire
 		// before a user had signed in on the second device (lab finding L29). refresh_token_threshold is pinned to zero
 		// and reset if changed by hand: with a threshold Authentik omits refresh_token from the refresh response, which
 		// Himmelblau 4.0.x treats as an incomplete authentication and refuses every PIN login (RR-40).
 		"access_code_validity": "minutes=10", "refresh_token_threshold": "seconds=0",
-		"property_mappings": append(mappings, groups),
+		"property_mappings": append(slices.Clone(platform.mappings), groups),
 	})
-	if err != nil {
-		return err
-	}
-	appPK, err := c.ensureApplication(ctx, app, provider)
+}
+
+// ensureAccess ensures the access policy, the application and the binding of the policy to the application.
+func (c *Client) ensureAccess(ctx context.Context, slug, app string) error {
+	var policy, appPK string
+	err := parallel(ctx,
+		func(ctx context.Context) (err error) {
+			policy, err = c.upsert(ctx, "/api/v3/policies/expression/", AccessPolicyName(slug), http.MethodPatch, map[string]any{
+				"name": AccessPolicyName(slug), "expression": AccessExpression(slug),
+			})
+			return err
+		},
+		func(ctx context.Context) (err error) {
+			appPK, err = c.ensureApplication(ctx, app)
+			return err
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -165,29 +252,31 @@ func (c *Client) lookup(pk *string, collection string, q url.Values, missing str
 	}
 }
 
-// ensureApplication creates or corrects the application app (slug = name) and returns its pk.
-func (c *Client) ensureApplication(ctx context.Context, app, provider string) (string, error) {
-	providerPK, err := strconv.Atoi(provider)
-	if err != nil {
-		return "", fmt.Errorf("authentik: provider pk %q: %w", provider, err)
+// applicationBody is the application app (slug = name); provider 0 leaves it without a provider.
+func applicationBody(app string, provider int) map[string]any {
+	body := map[string]any{"name": app, "slug": app, "policy_engine_mode": "all"}
+	if provider != 0 {
+		body["provider"] = provider
 	}
-	body := map[string]any{"name": app, "slug": app, "provider": providerPK, "policy_engine_mode": "all"}
+	return body
+}
+
+// ensureApplication creates the application app without a provider if missing and returns its pk; ensureDeviceLogin
+// attaches the provider.
+func (c *Client) ensureApplication(ctx context.Context, app string) (string, error) {
 	// The application list is filtered by the caller's own access (policies) for non-superusers, so the application is
 	// looked up by slug.
 	var existing named
-	err = c.do(ctx, http.MethodGet, "/api/v3/core/applications/"+url.PathEscape(app)+"/", nil, &existing)
+	err := c.do(ctx, http.MethodGet, "/api/v3/core/applications/"+url.PathEscape(app)+"/", nil, &existing)
 	var st *errStatus
 	switch {
 	case err == nil:
-		if err := c.do(ctx, http.MethodPatch, "/api/v3/core/applications/"+url.PathEscape(app)+"/", body, nil); err != nil {
-			return "", upstream(err)
-		}
 		return existing.pk(), nil
 	case !errors.As(err, &st) || st.code != http.StatusNotFound:
 		return "", upstream(err)
 	}
 	var created named
-	if err := c.do(ctx, http.MethodPost, "/api/v3/core/applications/", body, &created); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/v3/core/applications/", applicationBody(app, 0), &created); err != nil {
 		// A retried POST whose answer was lost may have created it (the slug is unique).
 		if ferr := c.do(ctx, http.MethodGet, "/api/v3/core/applications/"+url.PathEscape(app)+"/", nil, &existing); ferr == nil {
 			return existing.pk(), nil

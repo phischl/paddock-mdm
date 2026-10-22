@@ -11,11 +11,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/worker"
 )
+
+func providerPK(f *fakeAuthentik) string {
+	for pk := range f.objects["providers"] {
+		return pk
+	}
+	return ""
+}
 
 func client(srv *httptest.Server) *authentik.Client {
 	return authentik.New(srv.URL, "test-token").WithBackoff(time.Millisecond)
@@ -108,6 +118,241 @@ func TestEnsureOrganizationOnSlowAuthentik(t *testing.T) {
 		if n < 20 || took > 14*latency {
 			t.Fatalf("%s: %d requests took %s at %s each, want at most %s", run, n, took, latency, 14*latency)
 		}
+	}
+}
+
+// A client with a bound never has more requests in flight than the bound, although EnsureOrganization fans out.
+func TestMaxConcurrentBoundsRequestsInFlight(t *testing.T) {
+	f, srv := newFake(t)
+	f.latency.Store(int64(20 * time.Millisecond))
+	if _, err := client(srv).EnsureOrganization(context.Background(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.peak.Load(); p <= 2 {
+		t.Fatalf("unbounded client: peak %d requests in flight, want the fan-out above 2", p)
+	}
+	f.peak.Store(0)
+	if _, err := client(srv).WithMaxConcurrent(2).EnsureOrganization(context.Background(), "globex"); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.peak.Load(); p != 2 {
+		t.Fatalf("bounded client: peak %d requests in flight, want 2", p)
+	}
+}
+
+// A waiting request gives up with its context instead of waiting for a slot forever.
+func TestMaxConcurrentWaitEndsWithContext(t *testing.T) {
+	f, srv := newFake(t)
+	f.latency.Store(int64(time.Second))
+	c := client(srv).WithMaxConcurrent(1)
+	go func() { _, _ = c.FindGroup(context.Background(), "paddock.acme") }()
+	for f.inFlight.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := c.FindGroup(ctx, "paddock.globex"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+	if n := f.inFlight.Load(); n != 1 {
+		t.Fatalf("%d requests reached Authentik, want only the first", n)
+	}
+}
+
+// The worker's reconcile round runs while an administrator creates an organization (PDK-392: in CI the round ten
+// minutes after start coincided with the e2e create, and the create waited 2–6 s per request behind the round's
+// fan-out). Authentik serves requests in arrival order, a few at once. With the worker bounded, the round never has
+// more than one request at Authentik during the create, so each request of the create waits behind at most one of
+// the round's (unbounded: about a dozen).
+func TestCreateDuringReconcileRound(t *testing.T) {
+	f, apiSrv := newFake(t)
+	for _, slug := range []string{"acme", "globex", "initech"} {
+		if _, err := client(apiSrv).EnsureOrganization(context.Background(), slug); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The round's client talks to its own listener of the same fake, so its requests can be told apart.
+	roundSrv := httptest.NewServer(f)
+	t.Cleanup(roundSrv.Close)
+	f.latency.Store(int64(20 * time.Millisecond))
+	f.slots = make(chan struct{}, 2)
+	ctx, stop := context.WithCancel(context.Background())
+	round := make(chan struct{})
+	background := client(roundSrv).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
+	go func() {
+		defer close(round)
+		for ctx.Err() == nil {
+			for _, slug := range []string{"acme", "globex", "initech"} {
+				_, _ = background.EnsureOrganization(ctx, slug)
+			}
+		}
+	}()
+	for f.inFlight.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	f.resetPeaks()
+	_, err := client(apiSrv).EnsureOrganization(context.Background(), "e2e")
+	roundPeak := f.hostPeakOf(roundSrv)
+	stop()
+	<-round
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundPeak == 0 {
+		t.Fatal("the round sent no request during the create")
+	}
+	if roundPeak > worker.ReconcileAuthentikConcurrency {
+		t.Fatalf("the round had %d requests at Authentik during the create, want at most %d", roundPeak,
+			worker.ReconcileAuthentikConcurrency)
+	}
+}
+
+// The platform-wide objects are looked up once per client, not by every create (PDK-392: the flow lookups were the
+// most expensive requests of a loaded Authentik).
+func TestPlatformObjectsAreReused(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	if _, err := c.EnsureOrganization(context.Background(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.requests = nil
+	f.mu.Unlock()
+	if _, err := c.EnsureOrganization(context.Background(), "globex"); err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{"GET /api/v3/flows/", "GET /api/v3/crypto/"} {
+		if n := f.count(prefix); n != 0 {
+			t.Fatalf("%d requests %s for the second organization, want 0", n, prefix)
+		}
+	}
+}
+
+// The platform-wide pks are looked up again once platformTTL has passed, and after a failed provider write.
+func TestPlatformObjectsExpireAndAreForgotten(t *testing.T) {
+	f, srv := newFake(t)
+	now := time.Now()
+	c := client(srv).WithClock(func() time.Time { return now })
+	lookups := func(slug string) int {
+		t.Helper()
+		f.mu.Lock()
+		f.requests = nil
+		f.mu.Unlock()
+		if _, err := c.EnsureOrganization(context.Background(), slug); err != nil {
+			t.Fatal(err)
+		}
+		return f.count("GET /api/v3/flows/")
+	}
+	if n := lookups("acme"); n != 3 {
+		t.Fatalf("first run: %d flow lookups, want 3", n)
+	}
+	now = now.Add(59 * time.Minute)
+	if n := lookups("acme"); n != 0 {
+		t.Fatalf("within the TTL: %d flow lookups, want 0", n)
+	}
+	now = now.Add(2 * time.Minute)
+	if n := lookups("acme"); n != 3 {
+		t.Fatalf("after the TTL: %d flow lookups, want 3", n)
+	}
+	f.mu.Lock()
+	f.failOnce = map[string]int{"PUT /api/v3/providers/oauth2/" + providerPK(f) + "/": http.StatusForbidden}
+	f.mu.Unlock()
+	if _, err := c.EnsureOrganization(context.Background(), "acme"); err == nil {
+		t.Fatal("provider write failure not reported")
+	}
+	if n := lookups("acme"); n != 3 {
+		t.Fatalf("after a failed provider write: %d flow lookups, want 3", n)
+	}
+}
+
+// A failure between creating the application and binding its access policy leaves an application without provider,
+// which no one can sign in to; the next run binds the policy and only then attaches the provider.
+func TestApplicationWithoutBindingHasNoProvider(t *testing.T) {
+	f, srv := newFake(t)
+	f.failOnce = map[string]int{"POST /api/v3/policies/bindings/": http.StatusBadRequest}
+	if _, err := client(srv).EnsureOrganization(context.Background(), "acme"); err == nil {
+		t.Fatal("binding failure not reported")
+	}
+	f.mu.Lock()
+	app := f.objects["applications"]["paddock-device-acme"]
+	bindings := len(f.objects["bindings"])
+	f.mu.Unlock()
+	if app == nil || app["provider"] != nil || bindings != 0 {
+		t.Fatalf("after the failure: application %v, %d bindings; want an application without provider", app, bindings)
+	}
+	if _, err := client(srv).EnsureOrganization(context.Background(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	if app["provider"] == nil || len(f.objects["bindings"]) != 1 || len(f.objects["applications"]) != 1 {
+		t.Fatalf("after the retry: application %v, %d bindings", app, len(f.objects["bindings"]))
+	}
+}
+
+// A platform-wide object recreated with a new pk within the cache's lifetime makes the provider write fail; the
+// objects are looked up again and the provider is written with the new pk in the same call.
+func TestRecreatedFlowIsLookedUpAgain(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	if _, err := c.EnsureOrganization(context.Background(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	delete(f.objects["flows"], f.flowPK("paddock-device-authorization"))
+	f.put("flows", map[string]any{"pk": uuid.NewString(), "slug": "paddock-device-authorization", "name": "paddock-device-authorization"})
+	recreated := f.flowPK("paddock-device-authorization")
+	f.mu.Unlock()
+	for _, slug := range []string{"acme", "globex"} {
+		if _, err := c.EnsureOrganization(context.Background(), slug); err != nil {
+			t.Fatalf("%s: %v", slug, err)
+		}
+	}
+	for _, p := range f.objects["providers"] {
+		if p["authorization_flow"] != recreated {
+			t.Fatalf("%s: authorization_flow = %v, want the recreated flow %s", p["name"], p["authorization_flow"], recreated)
+		}
+	}
+}
+
+// Without a signing key the answer is not kept: once the key exists, the next run sets it on the provider.
+func TestMissingSigningKeyIsNotCached(t *testing.T) {
+	f, srv := newFake(t)
+	f.mu.Lock()
+	keys := f.objects["certificatekeypairs"]
+	f.objects["certificatekeypairs"] = nil
+	f.mu.Unlock()
+	c := client(srv)
+	if _, err := c.EnsureOrganization(context.Background(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.objects["certificatekeypairs"] = keys
+	f.mu.Unlock()
+	if _, err := c.EnsureOrganization(context.Background(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	for pk := range keys {
+		for _, p := range f.objects["providers"] {
+			if p["signing_key"] != pk {
+				t.Fatalf("signing_key = %v, want %s", p["signing_key"], pk)
+			}
+		}
+	}
+}
+
+// The access policy is bound to the device application before the provider is attached, so the application never
+// admits users without it.
+func TestAccessPolicyBoundBeforeProviderAttached(t *testing.T) {
+	f, srv := newFake(t)
+	if _, err := client(srv).EnsureOrganization(context.Background(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	binding := slices.Index(f.requests, "POST /api/v3/policies/bindings/")
+	attach := slices.Index(f.requests, "PATCH /api/v3/core/applications/paddock-device-acme/")
+	if binding < 0 || attach < 0 || binding > attach {
+		t.Fatalf("binding created at request %d, provider attached at %d: %v", binding, attach, f.requests)
+	}
+	if f.objects["applications"]["paddock-device-acme"]["provider"] == nil {
+		t.Fatal("application without provider")
 	}
 }
 

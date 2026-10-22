@@ -101,6 +101,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finds the object instead of failing, and the setup continues when the browser gives up. It is bounded at 60 s;
   beyond that, or when Authentik is down, the request fails with `502 upstream_unavailable` (never a 500) and the
   organization can be created again. Single Authentik requests slower than 2 s are logged.
+- Creating an organization in the portal no longer waits on the worker's periodic identity reconcile: that round
+  sends one Authentik request at a time instead of a dozen, so it no longer saturates Authentik while an
+  administrator waits. The create itself no longer looks up Authentik's flows, signing key and scope mappings every
+  time (they are reused for an hour; the most expensive requests on a loaded Authentik), and the device login
+  application gets its access policy before its provider is attached, so it never admits users without the policy.
 
 ## [0.1.0-alpha.4] - 2026-10-19
 
