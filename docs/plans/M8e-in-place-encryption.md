@@ -2104,3 +2104,35 @@ the maintainer's separate approval before it runs (it is destructive on the devi
       is destructive on the device it runs on and MUST NOT be carried out before the maintainer has approved it
       separately for the specific device and disk; `docs/operations/revocation-acceptance.md` gains the case as a
       row of its protocol.
+
+### Amendment 2026-10-22 b — item 22 addendum (decided by the architect lead)
+
+Decided by the architect lead on 2026-10-22 from the reviews of PDK-397; it adds to item 22 and changes nothing else.
+
+- **Health: second closed value.** `enrollment_deferred` takes `reencrypt` while `encrypting` (item 22) and
+  `reencrypt_after_completed` at `completed` while the header still carries the `online-reencrypt` requirement or the
+  `reencrypt` keyslot and no TPM keyslot exists. `reencrypt_after_completed` is a runtime signal: it is how stop
+  condition S15 becomes visible on the device (the enrollment cannot run after the completion), not a redefinition of
+  S15. The agent logs the header's mandatory requirements and keyslot kinds once per start and shows no restart
+  notification while it is reported (a restart would only defer again). Additive in `device.yaml`, `admin.yaml`
+  (`DiskConversionHealth.enrollment_deferred`, enum `[reencrypt, reencrypt_after_completed]`) and
+  `pkg/protocol`. Each value is reported only in its own phase. The portal shows a warning at `completed`
+  (`devices.disk.convert.enrollmentDeferredAfterCompleted`, texts below).
+- **The expected enrollment is no tampering.** The marker is armed only at `completed`, so the luks reconciler's
+  passes no longer pause while it exists and the conversion holds the disk (header escrow, recovery key and tamper
+  reports go on). The agent records `state.LUKS.EnrollmentExpected` once a conversion completed without a TPM keyslot
+  and withdraws it at a revocation hand-over or when the conversion is cleared; while it is set, a keyslot change that
+  adds exactly the TPM keyslot of the unlock mode in `/etc/paddock/disk-setup.json` to a set without one is recorded
+  without `tamper.keyslot_changed`, and recording a TPM keyslot ends it. Every other change stays tampering. A header
+  with the `online-reencrypt` requirement is treated like one with the `reencrypt` keyslot (no keyslot change).
+- **§6.7, `prepared`, the sentence appended under `tpm_pin` (replaces the row of §6.7).** The PIN is no longer asked
+  at the conversion restart.
+- **Texts (binding).**
+
+  | Key | English | German |
+  | --- | --- | --- |
+  | §6.7, body, appended under `tpm_pin` | You will be asked to choose a boot PIN at the first restart after the encryption has completed; from then on you type it every time the device starts. | Beim ersten Neustart nach Abschluss der Verschlüsselung werden Sie gebeten, eine Boot-PIN zu wählen; danach geben Sie sie bei jedem Start des Geräts ein. |
+  | `devices.disk.convert.enrollmentDeferredAfterCompleted` | The encryption has completed, but the disk still refuses the boot PIN and the TPM unlock: its header is still marked for the background encryption. The key stays on the boot partition; see the device's log and the runbook. | Die Verschlüsselung ist abgeschlossen, aber die Festplatte nimmt die Boot-PIN und die TPM-Entsperrung weiterhin nicht an: Ihr Header ist noch für die Verschlüsselung im Hintergrund markiert. Der Schlüssel bleibt auf der Boot-Partition; siehe das Protokoll des Geräts und das Runbook. |
+
+- The portal texts `devices.disk.convert.eligible` and `devices.disk.convert.check.pin` still name the PIN at the
+  conversion restart; PDK-399 carries their new wording.
