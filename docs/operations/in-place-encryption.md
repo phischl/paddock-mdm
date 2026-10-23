@@ -89,22 +89,34 @@ opens the partition with the key and the encryption continues where it stopped.
 
 ## The device does not come back after the restart
 
-(Pending verification on a VM — PDK-247 hand test; the steps below are not yet confirmed.)
-
-When the initrd cannot open the partition, the boot stops in dracut's emergency shell ("Entering emergency mode …
-Press Enter for maintenance"). Press Enter, then open the partition with the revealed recovery key of the conversion
-and continue the boot:
+When the initrd cannot open the partition (the journal of that boot says `paddock-encrypt: result failed open …`),
+the boot stops in dracut's emergency shell: "Entering emergency mode … Press Enter for maintenance". Press Enter;
+the shell opens without a password. Open the partition with the revealed recovery key of the conversion (*Show
+recovery key*; generation 1 while the device has not reached `compliant`) under the device's mapping name and
+continue the boot:
 
 ```sh
 cryptsetup open /dev/disk/by-partuuid/<partuuid> dm_crypt-0    # type the revealed key at the prompt
 exit
 ```
 
-To reach that shell on purpose (for example when the init step itself misbehaves), add `rd.systemd.unit=emergency.target`
-to the kernel command line in the GRUB menu (`e`). That shell starts without udev, so start it first
-(`systemctl start systemd-udevd.service systemd-udev-trigger.service && udevadm settle`), open the partition as above,
-and continue with `systemctl default`. A kernel parameter `systemd.mask=paddock-encrypt-init.service` does **not** stop the init step:
-the initrd enables the unit itself.
+The PARTUUID is the one of the root partition (`ls -l /dev/disk/by-partuuid/` in the shell lists the partitions;
+on the running device, `partition` in `/var/lib/paddock/state/state.json` names it). The device boots on dm-crypt and
+the background encryption resumes.
+
+To reach that shell on purpose, for example when the init step itself misbehaves, add
+`rd.systemd.unit=emergency.target` to the kernel command line in the GRUB menu (`e`). That shell starts without udev,
+so start it first, open the partition as above and continue with `systemctl default` (the init step then finds the
+mapping open and leaves it as it is):
+
+```sh
+systemctl start systemd-udevd.service systemd-udev-trigger.service && udevadm settle
+cryptsetup open /dev/disk/by-partuuid/<partuuid> dm_crypt-0
+systemctl default
+```
+
+A kernel parameter `systemd.mask=paddock-encrypt-init.service` does **not** stop the init step: the initrd enables the
+unit itself.
 
 ## Aborting at the device: `paddockd encrypt-abort`
 
