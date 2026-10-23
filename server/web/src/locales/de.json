@@ -832,7 +832,7 @@
         "title": "{hostname} nachträglich verschlüsseln",
         "explanation": "Paddock verschlüsselt die Root-Partition dieses Geräts ohne Neuinstallation. Bis zum Neustart ändert sich nichts; der Wiederherstellungsschlüssel wird in Paddock hinterlegt, bevor das erste Byte verschlüsselt wird. Daten außerhalb der Root-Partition (andere Partitionen, Swap-Partitionen) werden nicht verschlüsselt.",
         "check": {
-          "backup": "Ich bestätige, dass eine aktuelle Sicherung dieses Geräts existiert. Das Dateisystem wird beim Neustart verkleinert; ein Stromausfall in diesen Sekunden kann es beschädigen.",
+          "backup": "Ich bestätige, dass eine aktuelle Sicherung dieses Geräts existiert. Das Dateisystem wird beim Neustart geprüft und verkleinert, was einige Minuten dauern kann; ein Stromausfall oder ein erzwungenes Ausschalten in dieser Zeit kann es beschädigen.",
           "restart": "Der Benutzer muss das Gerät einmal neu starten, um die Verschlüsselung zu beginnen, und nach ihrem Abschluss noch einmal. Bis zum ersten Neustart wird nichts verschlüsselt; er dauert einige Minuten länger als üblich.",
           "power": "Ein Laptop muss bei diesem Neustart am Netzteil hängen; die Verschlüsselung im Hintergrund pausiert im Akkubetrieb.",
           "pin": "Beim ersten Neustart nach Abschluss der Verschlüsselung im Hintergrund fragt das Gerät den Benutzer auf einer Textkonsole nach einer Boot-PIN (Entsperrmodus: TPM + Boot-PIN). Die PIN gelangt nie zu Paddock.",

@@ -181,6 +181,9 @@ describe('in-place encryption: the dialogue (plan M8e decision 24, §14.4 decisi
     resumeFor = 'disk-convert'
     await mountCard({ diskTotalBytes: 500e9 })
     expect(el('encrypt-dialog')?.textContent).toContain('Encrypt lt-1 in place')
+    expect(el('encrypt-backup')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'I confirm that a current backup of this device exists. The file system is checked and shrunk at the restart, which can take several minutes; a power cut or a forced power-off during that time can damage it.',
+    )
     expect(dialogLines()).toEqual([
       'The user must restart the device once to start the encryption, and once more after it has completed. Nothing is encrypted until the first restart, which takes a few minutes longer than usual.',
       'A laptop must be on mains power at that restart; the background encryption pauses on battery.',
