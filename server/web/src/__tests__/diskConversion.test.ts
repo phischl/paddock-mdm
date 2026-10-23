@@ -275,6 +275,27 @@ describe('in-place encryption: progress and cancel (plan M8e decisions 8 and 25)
     expect(button('Cancel encryption')).toBeUndefined()
   })
 
+  it.each([
+    ['requested', row('requested')],
+    ['prepared', row('prepared')],
+    ['prepared with a cancellation sent', row('prepared', { abort_command_id: 'k2', abort_command_status: 'pending' })],
+    ['requested and waiting for the package manager', row('requested', { paused_reason: 'packages_busy', paused_since: at })],
+  ])('shows no reinstall advice while a conversion is %s on an unencrypted disk', async (_, conversion) => {
+    disk = { ...base, state: 'not_encrypted', conversion: eligible, disk_conversion: conversion }
+    await mountCard()
+    expect(el('disk-convert-phase')).not.toBeNull()
+    expect(el('disk-reinstall')).toBeNull()
+  })
+
+  it('shows the reinstall advice again once the conversion failed on a layout that is no longer eligible', async () => {
+    disk = {
+      ...base, state: 'not_encrypted', disk_conversion: row('failed', { failure_stage: 'prepare', failure_reason: 'x' }),
+      conversion: { eligible: false, reasons: ['low_free_space'] },
+    }
+    await mountCard()
+    expect(el('disk-reinstall')).not.toBeNull()
+  })
+
   it.each(['failed', 'expired', 'cancelled'])('offers the cancel again when the abort command is %s', async (status) => {
     disk = { ...base, state: 'not_encrypted', conversion: eligible, disk_conversion: row('prepared', { abort_command_id: 'k2', abort_command_status: status }) }
     await mountCard()
