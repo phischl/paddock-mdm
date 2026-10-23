@@ -101,7 +101,8 @@ func (w *ieWorld) requireFinalDisk(t *testing.T, partition, luksUUID, conversion
 // the middle of the background reencryption; no boot asks for the PIN while the header is marked for reencryption
 // (stop condition S2: no keyslot can be added then). After completion the dialogue comes and the user skips it, so the
 // conversion key stays the only unlock path (key_on_boot, the uninstall refused, a manual initrd rebuild keeps the
-// module); once the PIN is set the device is compliant and the conversion key no longer opens the disk. It runs only with PADDOCK_SYSTEM_VMS=paddock-ie-2604.
+// module); once the PIN is set the device is compliant and the conversion key no longer opens the disk. It runs only
+// with PADDOCK_SYSTEM_VMS=paddock-ie-2604.
 func TestInPlaceEncryptionLVM(t *testing.T) {
 	w := newIEWorld(t, ieVM2604, "26.04", "unencrypted-lvm.yaml.tmpl")
 	w.logEvidence(t, "root reference (PDK-242: the installer's fstab form)", "findmnt --fstab -no SOURCE /; cat /proc/cmdline")
@@ -148,7 +149,7 @@ func TestInPlaceEncryptionLVM(t *testing.T) {
 	conv := w.convState(t)
 	partition := w.partition(t, strings.TrimPrefix(conv.Partition, "/dev/disk/by-partuuid/"))
 
-	// Boot 1: the conversion; the power is cut while the open step waits (test delay).
+	// The power is cut while the open step waits, after the header is written: the next boot must recover it.
 	w.kernelArg("paddock.encrypt.testdelay=open:60")
 	mark := w.rebootRequest(t)
 	began := w.waitSerial(t, "paddock-encrypt: ", mark, 10*time.Minute)
@@ -158,10 +159,12 @@ func TestInPlaceEncryptionLVM(t *testing.T) {
 	if initDone.Sub(began) > 10*time.Minute {
 		t.Fatalf("stop condition S10: the init step took %s", initDone.Sub(began))
 	}
+	// Only a delay that really runs makes the power cut land in the open step.
+	w.waitSerial(t, "paddock-encrypt: test delay open", mark, time.Minute)
 	time.Sleep(10 * time.Second)
 	w.powerCut(t, "during the open delay")
 
-	// Boot 2: the header is found and opened; no PIN dialogue while the reencryption is unfinished (item 22).
+	// No PIN dialogue while the reencryption is unfinished (item 22).
 	w.LimitDisk(t, ieDiskLimit)
 	w.powerOn(t)
 	w.waitSerial(t, "paddock-encrypt: header found, opening", 0, 10*time.Minute)
@@ -194,7 +197,7 @@ func TestInPlaceEncryptionLVM(t *testing.T) {
 	t.Logf("%s: API done_bytes %d, eta_s %d", w.Name, *c.DoneBytes, *c.ETASeconds)
 	w.dropKernelArg("paddock.encrypt.testdelay=")
 
-	// Boot 3: the power is cut in the middle of the background phase; still no PIN dialogue.
+	// A power cut in the middle of the background phase must cost nothing but the resume (decision 21).
 	last = max(last, w.powerCutMidway(t))
 	w.powerOn(t)
 	w.waitSerial(t, "paddock-encrypt: header found, opening", 0, 10*time.Minute)
@@ -205,7 +208,7 @@ func TestInPlaceEncryptionLVM(t *testing.T) {
 	w.restartWithDiskLimit(t, diskUnlimited)
 	w.WaitEvent(t, "device.disk_conversion_completed", 30*time.Minute, func(p map[string]any) bool { return p["conversion_id"] == id })
 
-	// Completed without a TPM keyslot: the conversion key is the only unlock path (invariant I1).
+	// Without a TPM keyslot the conversion key is the only unlock path (invariant I1).
 	h = w.waitHealth(t, "tpm_pin_missing with the key on /boot", 10*time.Minute, func(h conversionHealth) bool {
 		return h.Disk.State == "tpm_pin_missing" && h.Disk.Conversion != nil && h.Disk.Conversion.KeyOnBoot
 	})
@@ -228,7 +231,7 @@ func TestInPlaceEncryptionLVM(t *testing.T) {
 	w.requireLUKSRoot(t, partition, conv.Mapping)
 	w.requireInitrds(t, true, "")
 
-	// The dialogue returns by the re-arm alone; the PIN is set.
+	// The dialogue must return by the agent's re-arm alone (decision 52), with no marker set by the test.
 	w.rebootRequest(t)
 	w.AnswerDiskSetup(t, pin)
 	info := w.WaitDisk(t, "compliant", 15*time.Minute, func(i diskInfo) bool { return i.state() == "compliant" })
@@ -367,6 +370,8 @@ func TestInPlaceEncryptionPlain(t *testing.T) {
 		began := w.waitSerial(t, "paddock-encrypt: ", mark, 10*time.Minute)
 		shrunk := w.waitSerial(t, "paddock-encrypt: shrink done", mark, 20*time.Minute)
 		t.Logf("%s: init step to shrink done %s", w.Name, shrunk.Sub(began).Round(time.Second))
+		// Only a delay that really runs makes the power cut land between the shrink and the header.
+		w.waitSerial(t, "paddock-encrypt: test delay init", mark, time.Minute)
 		time.Sleep(10 * time.Second)
 		w.powerCut(t, "during the init delay after the shrink")
 
@@ -384,9 +389,13 @@ func TestInPlaceEncryptionPlain(t *testing.T) {
 		w.requireEnrollmentDeferred(t)
 		started := w.WaitEvent(t, "device.disk_conversion_started", 10*time.Minute, func(p map[string]any) bool { return p["conversion_id"] == id })
 		t.Logf("%s: disk.conversion_started %v", w.Name, started)
+		// Stop condition S10 from the init step's own timing; this boot includes the 120 s test delay.
+		if s, _ := started["init_s"].(float64); s <= 0 || s > (10*time.Minute+120*time.Second).Seconds() {
+			t.Fatalf("stop condition S10: init_s %v", started["init_s"])
+		}
 		w.waitHealth(t, "encrypting", 5*time.Minute, func(h conversionHealth) bool { return h.Disk.State == "encrypting" })
 
-		// Boot 3: the module opens the volume without input; the reencryption resumes.
+		// An open boot needs no input: the module opens the volume with the key in the initrd.
 		w.dropKernelArg("paddock.encrypt.testdelay=")
 		w.reboot(t)
 		w.requireNoDiskSetup(t)
@@ -398,8 +407,8 @@ func TestInPlaceEncryptionPlain(t *testing.T) {
 			return w.fileState("/var/lib/paddock/disk-setup-pending") == "present"
 		})
 
-		// Boot 4 enrolls the TPM without a dialogue; a package run holds the dpkg lock while the agent would regenerate
-		// the initrds, and a kernel is installed during the regeneration (PDK-245 verification items).
+		// The first boot after completion enrolls the TPM; a package run holds the dpkg lock while the agent would
+		// regenerate the initrds, and a kernel is installed meanwhile (PDK-245 verification items).
 		kernel := w.stageKernel(t)
 		w.holdDpkgAtBoot(t)
 		w.reboot(t)
@@ -642,7 +651,7 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 		t.Fatalf("an uninstall is still open after the cancel: %s", *u)
 	}
 
-	// A reboot converts the disk through the stale initrd; the agent adopts the conversion (I2).
+	// The stale initrd still converts the disk at the next boot; the agent must adopt it (I2).
 	w.powerDown(t)
 	w.LimitDisk(t, ieDiskLimit)
 	w.powerOn(t)
@@ -656,26 +665,29 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 		return p["conversion_id"] == id && p["init_result"] == "ok"
 	})
 	t.Logf("%s: disk.conversion_started %v (init step of the conversion boot)", w.Name, started)
+	if s, _ := started["init_s"].(float64); s <= 0 || s > (10 * time.Minute).Seconds() {
+		t.Fatalf("stop condition S10: init_s %v", started["init_s"])
+	}
 	w.waitConversion(t, "adopted", 5*time.Minute, func(c apiConversion) bool { return c.ID == id && c.Phase == "encrypting" })
 	w.waitHealth(t, "encrypting", 5*time.Minute, func(h conversionHealth) bool { return h.Disk.State == "encrypting" })
 	Until(t, w.Name+": module reinstalled", 5*time.Minute, 5*time.Second, nil, func() bool {
 		return w.fileState("/usr/lib/dracut/modules.d/99paddock-encrypt") == "present" && w.fileState("/etc/dracut.conf.d/91-paddock-encrypt.conf") == "present"
 	})
-	w.logEvidence(t, "rebuild failing while dracut is diverted", "sudo journalctl -b -u paddock-supervisor --no-pager -o cat | grep -i 'unlock path' | tail -5")
-	w.Must("sudo rm /usr/bin/dracut && sudo dpkg-divert --remove --rename /usr/bin/dracut >/dev/null && test -x /usr/bin/dracut")
-	Until(t, w.Name+": every initrd carries the module again", 20*time.Minute, 15*time.Second, nil, func() bool {
-		c := w.convState(t)
-		if c == nil || c.InitrdRegenerated {
-			return true
-		}
-		for _, i := range w.initrds(t) {
-			if !i.Module {
-				return false
-			}
-		}
-		return true
+	unlockPath := "sudo journalctl -b -u paddock-supervisor --no-pager -o cat | grep -c '%s' || true"
+	Until(t, w.Name+": the reinstall fails while dracut is diverted", 10*time.Minute, 10*time.Second, nil, func() bool {
+		return w.Must(fmt.Sprintf(unlockPath, "reinstalling the unlock path of the converted disk failed")) != "0"
 	})
-	// A kernel update's rebuild: still booting on dm-crypt (I1).
+	w.Must("sudo rm /usr/bin/dracut && sudo dpkg-divert --remove --rename /usr/bin/dracut >/dev/null && test -x /usr/bin/dracut")
+	// The stale initrd carries the module anyway; only the agent's own success line proves the rebuild.
+	Until(t, w.Name+": the agent reinstalled the unlock path", 20*time.Minute, 15*time.Second, nil, func() bool {
+		return w.Must(fmt.Sprintf(unlockPath, "the unlock path of the converted disk is reinstalled in every initrd")) != "0"
+	})
+	for name, i := range w.initrds(t) {
+		if !i.Module || !i.Key {
+			t.Fatalf("%s lacks the module or the key after the reinstall: %+v", name, i)
+		}
+	}
+	// A kernel update's rebuild by anyone must keep the device booting on dm-crypt (I1).
 	w.Must("sudo dracut -f --regenerate-all >/dev/null 2>&1")
 	w.reboot(t)
 	w.requireLUKSRoot(t, partition, conv.Mapping)
@@ -683,7 +695,7 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 	w.requireProgress(t, 0)
 	w.restartWithDiskLimit(t, diskUnlimited)
 	w.WaitEvent(t, "device.disk_conversion_completed", 30*time.Minute, func(p map[string]any) bool { return p["conversion_id"] == id })
-	// The TPM is enrolled at the first boot after completion (amendment item 22).
+	// No keyslot can be added before completion; the first boot after it enrolls the TPM (amendment item 22).
 	Until(t, w.Name+": disk setup armed at completion", 10*time.Minute, 10*time.Second, nil, func() bool {
 		return w.fileState("/var/lib/paddock/disk-setup-pending") == "present"
 	})

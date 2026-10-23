@@ -108,7 +108,13 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 // logFree logs the free space of the file system that holds the VirtualBox machine folder (the result document
 // records it per run).
 func logFree(t *testing.T, when string) {
-	out, err := run(context.Background(), "df", "-h", "--output=avail,target", os.Getenv("HOME"))
+	props, err := run(context.Background(), "VBoxManage", "list", "systemproperties")
+	folder := regexp.MustCompile(`(?m)^Default machine folder:\s*(.+)$`).FindStringSubmatch(props)
+	if err != nil || folder == nil {
+		t.Logf("free space %s: no machine folder (%v)", when, err)
+		return
+	}
+	out, err := run(context.Background(), "df", "-h", "--output=avail,target", strings.TrimSpace(folder[1]))
 	t.Logf("free space %s: %s %v", when, strings.Join(strings.Fields(out), " "), err)
 }
 
@@ -570,14 +576,21 @@ systemd-cryptenroll --tpm2-device=auto --unlock-key-file=/var/lib/paddock/instal
 systemctl --version | head -1; cryptsetup --version'`)
 }
 
-// requestUninstall asks to remove Paddock (mode leave) and returns the HTTP status and the problem detail.
+// requestUninstall asks to remove Paddock (mode leave) with the expected HTTP status; a refusal must be 409
+// invalid_state (plan M8e decision 50), whose detail it returns.
 func (w *ieWorld) requestUninstall(t *testing.T, status int) string {
 	t.Helper()
 	res := w.RequestUninstall("leave", nil, status)
+	if status != http.StatusConflict {
+		return ""
+	}
 	var p struct {
+		Code   string `json:"code"`
 		Detail string `json:"detail"`
 	}
-	_ = json.Unmarshal(res.Body, &p)
+	if err := json.Unmarshal(res.Body, &p); err != nil || p.Code != "invalid_state" {
+		t.Fatalf("uninstall refusal: %v %s", err, res.Body)
+	}
 	return p.Detail
 }
 
@@ -622,6 +635,8 @@ func (w *ieWorld) shots(t *testing.T, name string) (wait func()) {
 			t.Logf("screenshot %s list: %v: %s", name, err, out)
 		}
 		_, _ = run(context.Background(), "VBoxManage", "controlvm", w.Name, "keyboardputscancode", "01", "81")
+		t.Logf("%s: notification screenshots in %s; without OCR whether \"Disk encryption is ready\" shows is read by eye",
+			w.Name, w.evidenceDir())
 	}()
 	return func() { <-done }
 }
@@ -658,11 +673,15 @@ done`))
 func (w *ieWorld) requireProgress(t *testing.T, atLeast int64) int64 {
 	t.Helper()
 	var first, second int64
+	read := false
 	Until(t, w.Name+": reencryption progress", 5*time.Minute, 10*time.Second, nil, func() bool {
 		h := w.convHealth()
 		first = second
 		second, _ = h.done()
-		return h.Disk.State == "encrypting" && first >= atLeast && second > first
+		// Two reads at least: a single read above zero says nothing about a reencryption that stalled.
+		grew := read && h.Disk.State == "encrypting" && first >= atLeast && second > first
+		read = h.Disk.State == "encrypting"
+		return grew
 	})
 	t.Logf("%s: done_bytes %d → %d", w.Name, first, second)
 	return second

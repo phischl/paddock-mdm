@@ -2,9 +2,10 @@
 
 An organization administrator can encrypt an adopted, unencrypted Ubuntu device from the portal without reinstalling
 it (ADR 0039, plan M8e). The device converts its root partition to LUKS2 at one restart and encrypts the rest in the
-background while the user works. Afterwards it is indistinguishable from a device installed with the Paddock
-autoinstall (`autoinstall.md`, `disk-recovery.md`): `compliant`, TPM2 + boot PIN (or TPM2 alone under the unlock mode
-*TPM only*), a recovery key and the LUKS header escrowed. Paddock never starts a conversion on its own initiative.
+background while the user works. Afterwards it is managed like a device installed with the Paddock autoinstall
+(`autoinstall.md`, `disk-recovery.md`): `compliant`, TPM2 + boot PIN (or TPM2 alone under the unlock mode *TPM only*),
+a recovery key and the LUKS header escrowed. It differs in details: the initrd is built by dracut, the mapping is
+called `dm_crypt-0`, and GRUB names root as `/dev/mapper/dm_crypt-0`. Paddock never starts a conversion on its own initiative.
 
 ## How it works
 
@@ -101,21 +102,25 @@ continue the boot:
 
 ```sh
 cryptsetup open /dev/disk/by-partuuid/<partuuid> dm_crypt-0    # type the revealed key at the prompt
+lvm vgchange -ay                                               # lvm layout only: activate the volume group
 exit
 ```
 
 The PARTUUID is the one of the root partition (`ls -l /dev/disk/by-partuuid/` in the shell lists the partitions;
 on the running device, `partition` in `/var/lib/paddock/state/state.json` names it). The device boots on dm-crypt and
-the background encryption resumes.
+the background encryption resumes. Alternatively, choose an older kernel under *Advanced options* in the GRUB menu:
+until the conversion has finished, the initrd of every installed kernel carries the module and the key.
 
 To reach that shell on purpose, for example when the init step itself misbehaves, add
 `rd.systemd.unit=emergency.target` to the kernel command line in the GRUB menu (`e`). That shell starts without udev,
 so start it first, open the partition as above and continue with `systemctl default` (the init step then finds the
-mapping open and leaves it as it is):
+mapping open and leaves it as it is; the boot continues after about 90 seconds, while systemd stops the emergency
+shell):
 
 ```sh
 systemctl start systemd-udevd.service systemd-udev-trigger.service && udevadm settle
 cryptsetup open /dev/disk/by-partuuid/<partuuid> dm_crypt-0
+lvm vgchange -ay                                               # lvm layout only
 systemctl default
 ```
 
@@ -179,7 +184,8 @@ resume the reencryption with the revealed recovery key of the conversion (*Show 
 encrypting reveals generation 1, the conversion key):
 
 ```sh
-sudo systemctl stop paddock-supervisor paddock-encrypt-resume.service
+sudo systemctl stop paddock-supervisor
+sudo systemctl stop paddock-encrypt-resume.service   # "not loaded" means the helper is not running
 sudo sh -c 'umask 077; read -r k; printf %s "$k" > /run/key'   # paste the revealed key, Enter (no newline is stored)
 sudo cryptsetup reencrypt --resume-only --key-file /run/key /dev/disk/by-partuuid/<partuuid>
 sudo shred -u /run/key

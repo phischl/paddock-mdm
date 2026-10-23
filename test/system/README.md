@@ -69,7 +69,8 @@ gates would run on the throwaway name. The in-place encryption gates (plan M8e Â
 encryption from `test/vms/virtualbox/autoinstall/unencrypted-lvm.yaml.tmpl` (26.04, guided LVM) or
 `unencrypted-plain.yaml.tmpl` (24.04, ext4 on a partition), with GDM logging the test user in, and then install the
 packages like the base gates. S-IE2 and S-IE4 set the organization's unlock mode to `tpm_only` for their run, so no
-other gate may run at the same time. A gate fails before it creates its VM when the VirtualBox machine folder has
+other gate may run at the same time; a killed run leaves it, and the release it rolled out, in place (set the mode
+back under *Login & privileges* and halt the rollout). A gate fails before it creates its VM when the VirtualBox machine folder has
 less than 24 GiB free: the reencryption grows the dynamic disk to its full size (`df -h`, `docker builder prune`
 first). The VM's serial console is written to `bin/system-ai/<vm>/serial.log` (the gates read the init step's
 console lines there), and its disk is throttled while the background reencryption runs, so that a power cut lands in

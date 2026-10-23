@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Runbook `docs/operations/in-place-encryption.md` for the in-place encryption: how it works, the supported layouts
+  and every preflight reason, what the user sees, the escrowed keys, recovery when a device does not come back after
+  the restart, aborting with and without a running agent, a cleanup that does not finish, completing the encryption
+  by hand, and removing Paddock, Lock and Destroy during a conversion. The VM system gates of the in-place encryption
+  run on throwaway VMs (`make system-test VM=paddock-ie-2604|paddock-ie-2404`).
 - An unencrypted device now checks, without changing anything, whether its disk can be encrypted in place and
   reports the result with its health: eligible or not and why, the release, the disk layout, the initramfs generator
   and, on devices still on initramfs-tools, which packages the switch to dracut would remove. The check runs at most
