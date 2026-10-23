@@ -2203,3 +2203,24 @@ yet; it changes no behaviour.
 - **§6.6, the runbook link (PDK-246).** The key `devices.disk.convert.runbook` is the text of the runbook link that
   decision 25's failure and cleanup alerts carry: en "Runbook: in-place encryption", de "Runbook: Nachträgliche
   Verschlüsselung".
+- **§6.6, preflight reason `initrd_tools_missing` (amendment 2026-10-21, item 15; decided by the architect lead on
+  2026-10-23).** `devices.disk.convert.reasons.initrd_tools_missing`: en "the initrd tools cannot list the running
+  kernel's initrd (dracut's lsinitrd needs 3cpio or dracut-extractinitrd)", de "die Initrd-Werkzeuge können die
+  Initrd des laufenden Kernels nicht auflisten (lsinitrd von dracut braucht 3cpio oder dracut-extractinitrd)".
+- **Decision 3, the conversion phase in the health while `not_encrypted` (PDK-364; decided by the architect lead on
+  2026-10-23): deferred.** While the disk is `not_encrypted`, `health.disk.conversion` carries the preflight, `phase`
+  and `key_on_boot` (amendment 2026-10-21, item 1); `failure_stage` and `failure_reason` of a `failed` conversion are
+  not reported there. The server learns them from the conversion events, so the portal and the admin API are complete
+  without them. PDK-364 stays open for a later milestone.
+
+### Amendment 2026-10-23 — PDK-399 wording (decided by the architect lead)
+
+Item 22 moved the enrollment to the first start after the completion; four texts of §6.6 still described the old
+order. They are replaced (binding; `en.json` / `de.json`):
+
+| Key | English | German |
+| --- | --- | --- |
+| `devices.disk.convert.eligible` | This device is not encrypted. Its disk layout allows encrypting it in place: the device prepares itself, the recovery key is stored in Paddock first, the user restarts once to start the encryption, the rest is encrypted in the background, and the boot PIN or the TPM unlock is set up at the first restart after that. | Dieses Gerät ist nicht verschlüsselt. Sein Festplattenlayout erlaubt die nachträgliche Verschlüsselung: Das Gerät bereitet sich vor, der Wiederherstellungsschlüssel wird zuerst in Paddock hinterlegt, der Benutzer startet einmal neu, um die Verschlüsselung zu beginnen, der Rest wird im Hintergrund verschlüsselt, und die Boot-PIN bzw. die TPM-Entsperrung wird beim ersten Neustart danach eingerichtet. |
+| `devices.disk.convert.check.restart` | The user must restart the device once to start the encryption, and once more after it has completed. Nothing is encrypted until the first restart, which takes a few minutes longer than usual. | Der Benutzer muss das Gerät einmal neu starten, um die Verschlüsselung zu beginnen, und nach ihrem Abschluss noch einmal. Bis zum ersten Neustart wird nichts verschlüsselt; er dauert einige Minuten länger als üblich. |
+| `devices.disk.convert.check.pin` | At the first restart after the background encryption has completed, the device asks the user for a boot PIN on a text console (unlock mode: TPM + boot PIN). The PIN never reaches Paddock. | Beim ersten Neustart nach Abschluss der Verschlüsselung im Hintergrund fragt das Gerät den Benutzer auf einer Textkonsole nach einer Boot-PIN (Entsperrmodus: TPM + Boot-PIN). Die PIN gelangt nie zu Paddock. |
+| `devices.disk.convert.check.tpmOnly` | The device sets up its TPM unlock without a PIN at the first restart after the background encryption has completed (unlock mode: TPM only). | Das Gerät richtet seine TPM-Entsperrung ohne PIN beim ersten Neustart nach Abschluss der Verschlüsselung im Hintergrund ein (Entsperrmodus: Nur TPM). |

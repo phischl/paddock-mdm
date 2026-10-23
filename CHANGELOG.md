@@ -102,6 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so. The restart notification before the encryption no longer promises the PIN at that restart; once the encryption
   has completed, signed-in users are asked with a desktop notification, repeated every 4 hours, to restart. The key
   stays on the boot partition until that restart and the setup at it, and the setup is not reported as tampering.
+  The portal's disk card and encryption dialogue say the same: the user restarts once to start the encryption and
+  once more after it has completed, when the boot PIN or the TPM unlock is set up. The disk card also names the
+  reason `initrd_tools_missing` (the device's tools cannot list its start-up image) instead of showing the code.
 - Updated bundled components: Fleet and fleetctl v4.93.1 (was v4.93.0; bug fixes), AWS CLI 2.38.2 (was 2.38.1).
 
 ### Fixed
