@@ -108,8 +108,11 @@ exit
 
 The PARTUUID is the one of the root partition (`ls -l /dev/disk/by-partuuid/` in the shell lists the partitions;
 on the running device, `partition` in `/var/lib/paddock/state/state.json` names it). The device boots on dm-crypt and
-the background encryption resumes. Alternatively, choose an older kernel under *Advanced options* in the GRUB menu:
-until the conversion has finished, the initrd of every installed kernel carries the module and the key.
+the background encryption resumes. Alternatively, boot an older kernel: in the GRUB menu select *Advanced options for
+Ubuntu*, press Enter, select the older kernel and press Enter. Until the conversion has finished, the initrd of every
+installed kernel carries the module and the key (verified on a VM: every initrd carries the same key as the host; the
+GRUB menu offers the entry; the boot of the older kernel itself was not verified on a VM, because VirtualBox did not
+deliver the second key press into the GRUB submenu).
 
 To reach that shell on purpose, for example when the init step itself misbehaves, add
 `rd.systemd.unit=emergency.target` to the kernel command line in the GRUB menu (`e`). That shell starts without udev,
