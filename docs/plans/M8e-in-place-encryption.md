@@ -2162,3 +2162,14 @@ Decided by the architect lead on 2026-10-22 from the reviews of PDK-397; it adds
 
 - The portal texts `devices.disk.convert.eligible` and `devices.disk.convert.check.pin` still name the PIN at the
   conversion restart; PDK-399 carries their new wording.
+
+### Amendment 2026-10-23 — a refused uninstall during a cleanup (decision 53; decided by the architect lead)
+
+Gate S-IE4 run 1 (PDK-247) showed that the device refuses the uninstall during an unfinished cleanup as decision 53
+expects (`{accepted: false, reason: conversion_pending}`, command `failed`), but the server does not end the request:
+`EndFailedUninstall` runs only for a removal report with the outcome `helper_failed`. That is the uninstall behaviour of
+plan M8d and stays: a refusal ends the command, not the request; the request stays open with the command `failed`
+and the administrator cancels it (`POST /api/v1/devices/{id}/uninstall/cancel`, allowed while the command is
+`pending`, `failed` or `expired`). Decision 53's "the server has ended the request … nothing to cancel" is corrected
+accordingly; S-IE4 asserts the failed command and the cancel. Whether a refusal with a terminal reason should end the
+request on its own is PDK-403.

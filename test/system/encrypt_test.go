@@ -574,9 +574,9 @@ func (w *ieWorld) installKernelDuringRegeneration(t *testing.T, kernel, luksUUID
 
 // TestInPlaceEncryptionCleanupAdopt is gate S-IE4 of plan M8e (§14.6 decision 53; the cancelled and failed:prepare
 // rows of §14.10): an operator abort whose initrd rebuild fails leaves cleanup_pending with the key and the plan on
-// the device; an uninstall is refused by the device (conversion_pending) and ended by the server; a reboot converts
-// through the stale initrd, the agent adopts the conversion, reinstalls the module once dracut works again, and a
-// kernel-update rebuild keeps the device booting on dm-crypt until it is compliant. It runs only with
+// the device; an uninstall is refused by the device (conversion_pending) and cancelled by the administrator; a reboot
+// converts through the stale initrd, the agent adopts the conversion, reinstalls the module once dracut works again,
+// and a kernel-update rebuild keeps the device booting on dm-crypt until it is compliant. It runs only with
 // PADDOCK_SYSTEM_VMS=paddock-ie-2404.
 func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 	w := newIEWorldTPMOnly(t, ieVM2404, "24.04")
@@ -615,21 +615,32 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 		t.Fatal("the running kernel's initrd lost the module although the rebuild failed")
 	}
 
-	// The server accepts the uninstall (the row is cancelled); the device refuses it and the server ends the request.
+	// The server accepts the uninstall (the row is cancelled); the device refuses it, which ends the command but not the
+	// request: the administrator cancels it (amendment 2026-10-23 to decision 53, the uninstall behaviour of plan M8d).
 	res := w.RequestUninstall("leave", nil, http.StatusOK)
+	type uninstall struct {
+		CommandID     string `json:"command_id"`
+		CommandStatus string `json:"command_status"`
+	}
 	var dev struct {
-		Uninstall *struct {
-			CommandID string `json:"command_id"`
-		} `json:"uninstall"`
+		Uninstall *uninstall `json:"uninstall"`
 	}
 	if err := json.Unmarshal(res.Body, &dev); err != nil || dev.Uninstall == nil {
 		t.Fatalf("uninstall request: %v %s", err, res.Body)
 	}
 	w.Checkin()
 	Until(t, w.Name+": the device refuses the uninstall", 10*time.Minute, 10*time.Second, w.Checkin, func() bool {
-		return w.device(t).Uninstall == nil
+		var d struct {
+			Uninstall *uninstall `json:"uninstall"`
+		}
+		_ = json.Unmarshal(w.s.Call(t, http.MethodGet, "/api/v1/devices/"+w.ID, nil, http.StatusOK).Body, &d)
+		return d.Uninstall != nil && d.Uninstall.CommandStatus == "failed"
 	})
 	w.requireCommandResult(t, dev.Uninstall.CommandID, `{"accepted":false,"reason":"conversion_pending"}`)
+	w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/uninstall/cancel", nil, http.StatusOK)
+	if u := w.device(t).Uninstall; u != nil {
+		t.Fatalf("an uninstall is still open after the cancel: %s", *u)
+	}
 
 	// A reboot converts the disk through the stale initrd; the agent adopts the conversion (I2).
 	w.powerDown(t)

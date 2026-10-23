@@ -146,7 +146,8 @@ from the portal (*Cancel encryption*): the device confirms the abort, finishes i
 After an abort or a failure before the restart the device removes the module from every initrd before it deletes the
 conversion key and the plan. While an initrd still carries the module the device reports the preflight reason
 `cleanup_pending` (with the reason of the last attempt as `cleanup_error`), keeps the key and the plan, and retries at
-every check-in; meanwhile the device refuses an uninstall (`conversion_pending`) and the server ends that request. A restart in that state may still convert the disk through the
+every check-in; meanwhile the device refuses an uninstall (`conversion_pending`): the command fails and the request
+stays open until you cancel it (the removal's *Cancel request* on the device page). A restart in that state may still convert the disk through the
 old initrd: the device then adopts the conversion (`device.disk_conversion_started`) and continues as if it had been
 started normally. Typical causes and remedies:
 
