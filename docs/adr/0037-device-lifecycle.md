@@ -356,3 +356,17 @@ amendment of 2026-10-18
 (IV), a revocation request or a retirement withdraws an undelivered `encrypt_disk` command and records it on its
 own audit event (`conversion_cancelled`, `conversion_id`, `conversion_phase`). The uninstall-during-supervisor-upgrade
 rule of 2026-10-19 is mirrored for the preparation of a conversion. Details and texts: plan M8e §14.5 and §14.8.
+
+## Amendment 2026-10-23 — the active conversion, aligned with invariant I1
+
+Decided by the architect lead on 2026-10-21 (plan M8e, amendment 2026-10-21, row ordering of decisions 6 and 36)
+and recorded here on 2026-10-23. The server-side clause of the amendment of 2026-10-20 is replaced: an in-place
+encryption is active — and the uninstall refused with 409 `invalid_state` — iff (a) the device's latest conversion
+row, the open one first and otherwise the one whose phase changed last, is `requested`, `prepared` or
+`encrypting`; or (b) the last health reports `disk.state = encrypting`; or (c) the last health reports
+`disk.conversion.key_on_boot = true`, whatever the rows say — the window in which the conversion key in the initrd
+on `/boot` is the only unlock path (invariant I1 of plan M8e §14.10; since amendment item 22 it lasts until the
+first start after the completed reencryption has enrolled the TPM or the boot PIN and the initrd was rebuilt); or
+(d) fail safe: the device's latest completed row is less than 30 days old and the last health is missing or
+carries no `conversion` block. A health with `disk.state = compliant` is never active. The device-side refusal
+(`conversion_pending`) is unchanged. Lock, Destroy and Retire remain never blocked.
