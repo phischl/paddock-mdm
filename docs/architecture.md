@@ -1313,6 +1313,13 @@ Expired commands are marked `expired` and never executed (platform outage questi
 > `agent.uninstalled` retires the device (`device.retired` with reason `uninstalled`). The request can be cancelled
 > while the command is not delivered. Runbook `docs/operations/uninstall.md`.
 
+> **Amendment 2026-10-17 (M8e, ADR 0039):** command `encrypt_disk` (7 d, params `{conversion_id}`): the agent runs
+> the preflight, escrows the conversion key and prepares the in-place encryption of the root volume for the next
+> restart (§12.4); it never restarts the device. Command `encrypt_disk_abort` (7 d, params `{conversion_id}`), sent
+> when an administrator cancels after delivery: the agent discards the preparation and answers `{aborted: true}`, or
+> refuses with `not_abortable` once the device has restarted into the encryption. Older agents fail both with
+> `unsupported_type`. Runbook `docs/operations/in-place-encryption.md`.
+
 ### 11.5 Events and detection (layer 3)
 
 | Check | Interval | Event on deviation |
@@ -1456,7 +1463,8 @@ At first apply (`luks` reconciler, once per device and after every keyslot chang
    random temporary passphrase (stored root-only on the device until step 5); at first boot a console setup unit asks
    the person installing the device for the PIN (twice) before the display manager starts and enrolls it. The PIN never
    leaves the device. Skipping is possible (fail safe); the device is then reported non-compliant. Devices not installed
-   by the Paddock autoinstall stay in passphrase mode and are reported `luks.unmanaged` (no in-place conversion).
+   by the Paddock autoinstall stay in passphrase mode and are reported `luks.unmanaged`; unencrypted devices can be
+   encrypted in place (amendment 2026-10-17, ADR 0039, below).
 4. Escrow: header backup (`cryptsetup luksHeaderBackup`), encrypted with a random DEK (AES-256-GCM);
    DEK and recovery key wrapped with `escrow_wrap_public`; uploaded via `/v1/escrow`; wait for `stored`.
 5. Only after `stored`: remove remaining low-entropy keyslots (installer passphrase), escrow the
@@ -1479,9 +1487,31 @@ device with a short-lived presigned PUT issued by the gateway, not through the q
 > autoinstall embeds the mode of the token's group in `disk-setup.json`; `tpm_only` enrolls without a PIN dialogue.
 > The bundle's `disk.unlock_mode` defines the compliant keyslot set (`recovery` + `tpm2+pin` or `tpm2`); a disk
 > enrolled for the other mode is `unlock_mode_mismatch`, converted by an operator with the recovery key
-> (`docs/operations/disk-recovery.md`). The agent never enrolls or wipes a TPM keyslot of an enrolled device. "No
-> in-place conversion" is now: in-place conversion is deferred to M8e (ADR 0038); unencrypted devices report whether
-> `/boot` is separate, and the portal asks for a reinstall.
+> (`docs/operations/disk-recovery.md`). The agent never enrolls or wipes a TPM keyslot of an enrolled device.
+> Unencrypted devices report whether `/boot` is separate; the in-place encryption of ADR 0039 (amendment of the same
+> date below) replaces the reinstall where the layout allows it.
+
+> **Amendment 2026-10-17 (M8e, ADR 0039; enrollment order as amended 2026-10-22):** an unencrypted device whose
+> layout allows it is encrypted in place with LUKS2 online reencryption after one restart. Ubuntu 24.04 or 26.04,
+> UEFI, TPM 2.0, a separate `/boot`, ext4 root on a GPT partition (`plain`) or on a logical volume at the end of the
+> single physical volume of its volume group (`lvm`); the agent reports the eligibility and every reason against it in
+> `health.disk.conversion`. An organization administrator requests it with a step-up, a backup acknowledgement and
+> the typed hostname (`device.encrypt_requested`; cancellable until the restart, `device.encrypt_cancelled`). On
+> the command `encrypt_disk` (§11.4) the agent escrows a random conversion key as recovery-key generation 1 before
+> anything on the disk changes, switches a device on initramfs-tools to dracut, builds the initrd with the
+> `paddock-encrypt` module and the key, and asks the signed-in user by desktop notification to restart
+> (`device.disk_conversion_prepared`). At the restart the module checks mains power, runs `e2fsck -f`, shrinks the
+> file system (and the logical volume) to make room for the 32 MiB LUKS2 header and initialises LUKS2; the device
+> boots on dm-crypt (`device.disk_conversion_started`) and the agent encrypts the rest in the background at idle I/O
+> priority, pausing on battery and resuming after every restart (`device.disk_conversion_completed`; a failure at
+> any stage is `device.disk_conversion_failed` with the stage and reason, an abort before the restart is
+> `device.disk_conversion_aborted`). The disk state is `encrypting` meanwhile. Because LUKS2 refuses a new keyslot
+> while the header is marked for reencryption, the boot PIN (`tpm_pin`) or the TPM unlock (`tpm_only`) is set up at
+> the first start after the completion; the agent then rebuilds the initrd without the module and the key, and the
+> M4b flow (steps 2–6 above) enrolls recovery-key generation 2, wipes the conversion keyslot and escrows the header,
+> so the device becomes `compliant`. Removing Paddock is refused while a conversion is active; a Lock or Destroy
+> during `encrypting` stops the background encryption first. Residual risks RR-56 … RR-61, RR-71 … RR-73; runbook
+> `docs/operations/in-place-encryption.md`; plan `docs/plans/M8e-in-place-encryption.md`.
 
 **A14 (decided 2026-10-05):** boot PIN (TPM2+PIN, set at installation) **and** Hello PIN (login) — both. The separate UX
 test is replaced by the pilot feedback of the reference deployment.
@@ -1849,6 +1879,14 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > `organization_update_settings.agent_update_policy`; `device.agent_update_requested_*`, `uninstall_*`,
 > `uninstalled_at`, `retired_reason`; `device_status.arch`, `components_outdated`.
 
+> **Amendment 2026-10-17 (M8e, ADR 0039):** new organization-scoped table `device_disk_conversion` (RLS), one row per
+> in-place encryption request: `phase` (`requested | prepared | encrypting | completed | failed | cancelled`), the
+> `encrypt_disk` command, requester and reason, `layout`, `luks_uuid`, `data_bytes`, `failure_stage` and
+> `failure_reason`, `abort_command_id` and `abort_refused_reason` for a cancel after delivery, `phase_at` and
+> `finished_at`; at most one open row (`requested`, `prepared`, `encrypting`) per device. Progress (`done_bytes`,
+> `eta_s`, the pause reason) is read from the device's last health, not stored. A failed conversion is the attention
+> kind `disk_conversion_failed`; the disk state `encrypting` keeps the device under `disk_not_compliant`.
+
 > **Amendment 2026-10-18 (M8h):** `device.name` (nullable) is the managed name the device applies as its
 > hostname, unique per organization among devices that are not retired (`device_org_name_key`). `device.hostname` is
 > the name the device **reports**: set at enrollment and refreshed from `health.hostname` at every check-in (a
@@ -1891,6 +1929,13 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > `GET /api/v1/devices/{id}/logins`, `GET /api/v1/users/{id}/devices`, `POST /api/v1/devices/{id}/update-agent`,
 > `POST /api/v1/devices/{id}/uninstall` (step-up) and `…/uninstall/cancel`, `GET /api/platform/v1/component-targets`;
 > the device list gains the filters `owner_id` and `component_outdated`. Plan: `docs/plans/M8d-device-lifecycle.md`.
+
+> **Amendment 2026-10-17 (M8e, ADR 0039):** new endpoints `POST /api/v1/devices/{id}/encrypt` (org_admin with
+> step-up; `reason`, `confirm_hostname`, `backup_confirmed`; audited as `device.encrypt_requested`) and
+> `POST /api/v1/devices/{id}/encrypt/cancel` (org_admin with step-up; `confirm_hostname`; `device.encrypt_cancelled`,
+> 409 `conversion_not_cancellable` once the device started the encryption). `Device` carries `disk_conversion` (the
+> latest conversion with its phase and progress) on the detail; the device list's `disk_state` filter accepts
+> `encrypting`. Plan: `docs/plans/M8e-in-place-encryption.md`.
 
 > **Amendment 2026-10-18 (M8h):** `PUT /api/v1/devices/{id}/name` (`{name: string | null}`, org_admin and
 > org_operator, no step-up) sets or clears the managed name, audited as `device.name_changed`; 409 `conflict` for a
@@ -2065,7 +2110,7 @@ Implementation plans are written per milestone in `docs/plans/`, in the format o
 | O1 | ~~A2 Himmelblau PoC~~ — **resolved**: Himmelblau 4.x OIDC (ADR 0019, accepted); deny list in auth + account phase (§9.5) | – |
 | O2 | ~~A14~~ — **resolved 2026-10-05**: both PINs; boot PIN set at installation (§12.4) | Both technically supported; per-organization setting `pin_model: tpm_pin_only \| tpm_pin_and_hello_pin`; default `tpm_pin_and_hello_pin` |
 | O3 | **Object storage — decided: RustFS (ADR 0017, accepted).** The concept names MinIO. MinIO stopped publishing community images and binaries in October 2025, put the community edition into maintenance mode in December 2025 and archived the repository in 2026; the Docker Hub images no longer resolve. It can therefore not be the bundled component. The Paddock code is unaffected (it uses only the S3 API with Object Lock). Candidates: **Ceph RGW** (LGPL, mature Object Lock, heavy to operate), **RustFS** (Apache-2.0, 1.0 GA in September 2026, had an Object Lock enforcement CVE before 1.0), **SeaweedFS** (Apache-2.0, recent issues with COMPLIANCE enforcement on delete), **external S3** of a provider with Object Lock. **Decision owner:** product owner, on the architect's recommendation (ADR 0017). **Verification:** not the Himmelblau PoC, but the audit acceptance gate ("an event in WORM storage cannot be deleted, even with admin credentials") run against the chosen product in M0. | Proposed: RustFS for bundles + escrow and as default audit store, gated by the WORM acceptance test in M0; Ceph RGW or external S3 documented for operators who need a proven WORM store. If RustFS fails the gate, Ceph RGW becomes the default |
-| O4 | ~~Ubuntu 24.04 TPM2+PIN via dracut~~ — **resolved by PoC M1 (C7)**: works with dracut 060 (`hostonly`, explicit modules, text prompt — no Plymouth). Supported only for devices installed by the Paddock autoinstall, which installs dracut from the start; no in-place switch on existing 24.04 devices (it removes `initramfs-tools` and `brltty`). Recovery: the recovery key is accepted at the PIN prompt only after the TPM PIN attempts are used up — operator docs must say so; re-test lockout on real hardware in M4 | – |
+| O4 | ~~Ubuntu 24.04 TPM2+PIN via dracut~~ — **resolved by PoC M1 (C7)**: works with dracut 060 (`hostonly`, explicit modules, text prompt — no Plymouth). Supported only for devices installed by the Paddock autoinstall, which installs dracut from the start; ~~no in-place switch on existing 24.04 devices (it removes `initramfs-tools` and `brltty`)~~ — superseded by ADR 0039, bounded by plan M8e §14.4: the in-place encryption switches a device on initramfs-tools to dracut, removing `initramfs-tools` and, where installed, `brltty` (RR-58). Recovery: the recovery key is accepted at the PIN prompt only after the TPM PIN attempts are used up — operator docs must say so; re-test lockout on real hardware in M4 | – |
 | O5 | Shared devices: attribution when several users log in | Login assignment by group; audit carries the session user |
 | O6 | Hardware reissue process (re-enrollment, re-encryption, deletion evidence) | Retire → Destroy (two-person) → re-image → new enrollment; evidence = Destroy audit events; runbook in M6 |
 | O7 | Permanently offline devices | `presumed_lost` after critical staleness; admin action list; optional auto-destroy after Lock |

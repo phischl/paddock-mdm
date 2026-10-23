@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- In-place encryption, admin API and server (M8e, ADR 0039): `POST /api/v1/devices/{id}/encrypt` asks an
+  unencrypted device with a supported disk layout to encrypt its root volume in place (organization administrators,
+  with a step-up, the typed hostname and a backup acknowledgement), and `POST /api/v1/devices/{id}/encrypt/cancel`
+  cancels the request until the device restarts. The device and its disk (`GET /api/v1/devices/{id}`, `…/disk`)
+  carry the conversion's phase and progress as `disk_conversion`, `GET /api/v1/devices` filters by the disk state
+  `encrypting`, the attention list reports `disk_conversion_failed`, and a device's command list
+  (`GET /api/v1/devices/{id}/commands`) shows each command's `params`. Devices receive the organization's boot PIN
+  length in their bundle. An uninstall is refused while a conversion is active; Lock, Destroy and Retire withdraw a
+  request the device has not received. Upgrade: server first, then the agents; agents before M8e fail the command as
+  unsupported. Schema: migration 00066.
 - Runbook `docs/operations/in-place-encryption.md` for the in-place encryption: how it works, the supported layouts
   and every preflight reason, what the user sees, the escrowed keys, recovery when a device does not come back after
   the restart, aborting with and without a running agent, a cleanup that does not finish, completing the encryption
@@ -57,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   health reports that the key still lies on the boot partition, and the disk is not reported compliant. The device
   then completes the usual disk setup on its own, right after the rebuild rather than at its next check, and removes
   the temporary disk key. Before a Lock or Destroy is carried out the background encryption is stopped, and it does
-  not resume for 24 hours.
+  not resume on that device afterwards, also when the revocation is refused.
 - Start-up images are rebuilt one kernel at a time into a separate file, checked, and only then put in place, so that
   an interrupted rebuild never leaves a device without a working start-up image. The device waits instead of failing
   while the boot partition has too little room (health `initrd_issue: boot_space_low` with the bytes needed and free),
@@ -81,19 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Go toolchain 1.27.3 (was 1.27.2; build image `golang:1.27.3-trixie`, CI, every module): a security release with
   fixes to `crypto/x509`, which every Paddock binary uses for its TLS and device certificates.
-
-### Added
-
-- In-place encryption, admin API and server (M8e, ADR 0039): `POST /api/v1/devices/{id}/encrypt` asks an
-  unencrypted device with a supported disk layout to encrypt its root volume in place (organization administrators,
-  with a step-up, the typed hostname and a backup acknowledgement), and `POST /api/v1/devices/{id}/encrypt/cancel`
-  cancels the request until the device restarts. The device and its disk (`GET /api/v1/devices/{id}`, `…/disk`)
-  carry the conversion's phase and progress as `disk_conversion`, `GET /api/v1/devices` filters by the disk state
-  `encrypting`, the attention list reports `disk_conversion_failed`, and a device's command list
-  (`GET /api/v1/devices/{id}/commands`) shows each command's `params`. Devices receive the organization's boot PIN
-  length in their bundle. An uninstall is refused while a conversion is active; Lock, Destroy and Retire withdraw a
-  request the device has not received. Upgrade: server first, then the agents; agents before M8e fail the command as
-  unsupported. Schema: migration 00066.
 
 ### Changed
 

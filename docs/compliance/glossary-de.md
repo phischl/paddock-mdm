@@ -26,6 +26,8 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Command palette | Befehlspalette | |
 | Configuration (navigation group) | Konfiguration | |
 | Contact thresholds | Kontaktschwellen | Warning and critical threshold of a device group. |
+| Conversion (in-place encryption) | Umwandlung | The process from the request to `compliant`; the disk state *encrypting* is *Verschlüsselung läuft*. |
+| Conversion key | Umwandlungsschlüssel | Recovery-key generation 1 of a device encrypted in place; it no longer opens the disk once its keyslot is wiped after the completion. |
 | Danger zone | Gefahrenbereich | Lock, Destroy and Retire on the device page. |
 | Dead man's switch | Totmannschalter | Its period is the *Frist*. |
 | Denied path | Gesperrter Pfad | Managed files on it are refused and not shipped. |
@@ -41,6 +43,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Escrow; escrowed | Treuhand-Ablage; in der Treuhand-Ablage hinterlegt (kurz: hinterlegt) | Recovery keys, LUKS headers, local administrator passwords. |
 | Finding (vulnerability) | Fund | a CVE matched on a device |
 | Hold (package) | Zurückhalten; zurückgehaltenes Paket | Not *Sperre*, which is reserved for locks. |
+| In-place encryption | Nachträgliche Verschlüsselung | *Encrypt in place*: *nachträglich verschlüsseln*. |
 | Install now | Sofort installieren; Sofortinstallation | |
 | Inventory (navigation group) | Inventar | |
 | Issue (revocation) | Ausstellen | The revocation issuer is the *Widerrufsaussteller*. |

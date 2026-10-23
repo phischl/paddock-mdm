@@ -2173,3 +2173,33 @@ and the administrator cancels it (`POST /api/v1/devices/{id}/uninstall/cancel`, 
 `pending`, `failed` or `expired`). Decision 53's "the server has ended the request … nothing to cancel" is corrected
 accordingly; S-IE4 asserts the failed command and the cancel. Whether a refusal with a terminal reason should end the
 request on its own is PDK-403.
+
+### Amendment 2026-10-23 — documentation pass (PDK-248)
+
+Records what the tickets PDK-242, PDK-243 and PDK-246 decided during their implementation and the plan did not carry
+yet; it changes no behaviour.
+
+- **Decision 2, `root_reference_unsupported` (correction from PDK-242, approved by the architect lead on
+  2026-10-21).** For an LV root, fstab and `root=` also accept `/dev/disk/by-id/dm-uuid-LVM-<vg uuid without
+  dashes><lv uuid without dashes>`, the form curtin and subiquity write for LVM roots; the LV UUID survives the
+  conversion. Only an exact match counts (a prefix, the VG alone or another LV is rejected). The UUIDs come from one
+  `lvm lvs --noheadings -o vg_name,lv_name,vg_uuid,lv_uuid -- <root source>` call. The accepted set (`UUID=`,
+  `/dev/mapper/<vg>-<lv>`, `/dev/<vg>/<lv>`, the dm-uuid link) applies to fstab and the kernel command line alike
+  (the last `root=` wins; a missing `root=` is unsupported).
+- **Decision 13, transient tool errors (PDK-243; formerly PDK-365).** A tool error outside the closed set of reasons
+  (`dpkg-query` at step 6, `dracut --regenerate-all` at step 8) does not fail the conversion: the run stops and the
+  preparation is retried at the next full pass, at most `TransientRetries = 3` times per preparation. The count is the
+  persisted state field `transient_errors` and is never reset within a conversion; the fourth such error fails the
+  conversion at stage `prepare` with the error's first line as the reason. A held dpkg lock is no such error
+  (amendment 2026-10-21, item 17).
+- **Decision 13, a failure on a LUKS partition (PDK-243; I1, I2).** A preparation failure on a partition that is LUKS
+  records no failure: the disk converted at a boot, and the worker adopts the conversion (I2). On a partition whose
+  header cannot be checked the failure is recorded with `CleanupPending` and no cleanup runs (I1); the full pass
+  retries it. A failure whose save fails keeps the conversion `preparing`, and every full pass re-queues a `preparing`
+  conversion that has no worker job.
+- **Decision 14, the X1 cleanup (PDK-243).** The cleanup runs `dracut --regenerate-all` only while dpkg reports dracut
+  `installed`; with any other status the initrds are only verified (`lsinitrd`), and while dpkg cannot tell (an error,
+  or an upgrade under way) or no tool can list an initrd, nothing after the removal of the module files runs.
+- **§6.6, the runbook link (PDK-246).** The key `devices.disk.convert.runbook` is the text of the runbook link that
+  decision 25's failure and cleanup alerts carry: en "Runbook: in-place encryption", de "Runbook: Nachträgliche
+  Verschlüsselung".
