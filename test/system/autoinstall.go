@@ -214,11 +214,23 @@ func buildAIVM(t *testing.T, root string, spec aiSpec, iso string, userData []by
 	t.Logf("%s: installing from the autoinstall", spec.Name)
 	// Polled here rather than with lib.sh wait_vm_state, whose state query fails now and then while the VM shuts down
 	// and then ends the wait as a failure (PDK-247 hand test run 4); VM.state retries it.
-	deadline := time.Now().Add(2 * time.Hour)
+	started := time.Now()
+	deadline := started.Add(2 * time.Hour)
+	checked := false
 	for vm.state(ctx) != "poweroff" {
 		if time.Now().After(deadline) {
 			vm.Shot(t, "install")
 			t.Fatalf("installation did not finish within 2 hours (%s)", vm.state(ctx))
+		}
+		// The firmware once hung before the installer started, burning CPU for an hour (PDK-247 hand run 8): a disk
+		// still empty and no display after five minutes fail at once.
+		if !checked && time.Since(started) > 5*time.Minute {
+			checked = true
+			fi, err := os.Stat(disk)
+			shot, _ := run(ctx, "VBoxManage", "controlvm", spec.Name, "screenshotpng", filepath.Join(work, "install-check.png"))
+			if err == nil && fi.Size() < 16<<20 && strings.Contains(shot, "0x0") {
+				t.Fatalf("%s: firmware hang at boot, the VM did not start the installer (disk %d bytes, no display)", spec.Name, fi.Size())
+			}
 		}
 		time.Sleep(30 * time.Second)
 	}
