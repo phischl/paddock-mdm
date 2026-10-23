@@ -555,6 +555,11 @@ func (w *ieWorld) requireDpkgDeferral(t *testing.T, conversionID string) {
 		}
 	}
 	w.Must("sudo rm /run/systest-dpkg-held")
+	// The holder notices the flag within a second; a package run started before it exits finds the lock still held
+	// (S-IE2 run 5).
+	Until(t, w.Name+": the dpkg lock holder ended", time.Minute, time.Second, nil, func() bool {
+		return w.Must("systemctl is-active systest-dpkg-hold.service || true") != "active"
+	})
 }
 
 // installKernelDuringRegeneration installs the staged kernel while the agent regenerates the initrds and waits until
@@ -562,11 +567,13 @@ func (w *ieWorld) requireDpkgDeferral(t *testing.T, conversionID string) {
 func (w *ieWorld) installKernelDuringRegeneration(t *testing.T, kernel, luksUUID string) {
 	t.Helper()
 	w.Must(fmt.Sprintf("sudo systemd-run --quiet --unit systest-kernel --setenv=DEBIAN_FRONTEND=noninteractive /bin/sh -c "+
-		"'apt-get install -y linux-image-%s linux-modules-%s > /root/systest-kernel.log 2>&1'", kernel, kernel))
+		"'apt-get install -y linux-image-%s linux-modules-%s > /root/systest-kernel.log 2>&1; echo apt exit=$? >> /root/systest-kernel.log'", kernel, kernel))
 	Until(t, w.Name+": kernel installed", 15*time.Minute, 5*time.Second, nil, func() bool {
 		return w.Must("systemctl is-active systest-kernel.service || true") != "active"
 	})
-	w.logEvidence(t, "kernel install during the regeneration", "sudo tail -20 /root/systest-kernel.log")
+	if out := w.logEvidence(t, "kernel install during the regeneration", "sudo tail -20 /root/systest-kernel.log"); !strings.Contains(out, "apt exit=0") {
+		t.Fatalf("the kernel package was not installed")
+	}
 	if w.Must("test -f /boot/initrd.img-"+kernel+" && echo yes || echo no") != "yes" {
 		t.Fatalf("no initrd for kernel %s", kernel)
 	}
@@ -665,7 +672,7 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 		return p["conversion_id"] == id && p["init_result"] == "ok"
 	})
 	t.Logf("%s: disk.conversion_started %v (init step of the conversion boot)", w.Name, started)
-	if s, _ := started["init_s"].(float64); s <= 0 || s > (10 * time.Minute).Seconds() {
+	if s, _ := started["init_s"].(float64); s <= 0 || s > (10*time.Minute).Seconds() {
 		t.Fatalf("stop condition S10: init_s %v", started["init_s"])
 	}
 	w.waitConversion(t, "adopted", 5*time.Minute, func(c apiConversion) bool { return c.ID == id && c.Phase == "encrypting" })
