@@ -77,6 +77,13 @@ swap partitions and other data partitions stay unencrypted.
   start. Until the PIN is chosen (or, under *TPM only*, until that restart) the portal shows that the disk is encrypted
   but not protected at rest: the key that unlocks it lies in the initrd on the unencrypted `/boot`.
 
+- **A device updated during the background phase.** An agent older than the one that moved the boot PIN to after the
+  completion armed the PIN dialogue at the conversion restart. On such a device every start until the completion runs
+  `paddock-disk-setup.service` (the splash quits, the console switches to tty1) only to print one line: "Paddock disk
+  encryption setup is deferred until the background encryption has completed." That is expected and needs no action;
+  the health reports `enrollment_deferred: reencrypt` meanwhile, and the dialogue appears at the first start after the
+  completion as on any other device.
+
 ## Background phase
 
 The background encryption runs at the disk's sequential speed with idle I/O priority, typically 100–300 MB/s on a
@@ -96,7 +103,8 @@ opens the partition with the key and the encryption continues where it stopped.
 ## The device does not come back after the restart
 
 When the initrd cannot open the partition (the journal of that boot says `paddock-encrypt: result failed open …`),
-the boot stops in dracut's emergency shell after dracut has waited for the root device for about three minutes:
+the boot stops in dracut's emergency shell once dracut has waited for the root device as long as its default
+`rd.retry=180` allows (observed on 24.04; on 26.04 the wait was not seen):
 "Entering emergency mode … Press Enter for maintenance". Press Enter;
 the shell opens without a password. Open the partition with the revealed recovery key of the conversion (*Show
 recovery key*; generation 1 while the device has not reached `compliant`) under the device's mapping name and
@@ -208,10 +216,32 @@ that it finishes the setup.
 
 ## After the conversion: GRUB names the mapping
 
-On a device without LVM, once the root file system lies on the mapping, `update-grub` (run by every kernel update)
-writes `root=/dev/mapper/dm_crypt-0` (the device's mapping name) into the boot entries instead of `root=UUID=…`. That
-is expected: the initrd opens the partition under exactly that name. With LVM the entries keep naming the logical
-volume (`root=/dev/mapper/ubuntu--vg-ubuntu--lv` on an Ubuntu default install), which now lies on the mapping.
+Once the root file system lies on the mapping, `update-grub` (run by every kernel update) may write a different
+`root=` into the boot entries. Observed in one run each: on 24.04 without LVM (`plain`) the entries name the mapping,
+`root=/dev/mapper/dm_crypt-0` (the device's mapping name), instead of `root=UUID=…`; on 26.04 with LVM they keep
+naming the logical volume (`root=/dev/mapper/ubuntu--vg-ubuntu--lv` on an Ubuntu default install), which now lies on
+the mapping. Which form appears depends on the layout. Both are expected: the initrd opens the partition under
+exactly the mapping name.
+
+## The boot PIN or TPM unlock is not set up after the completion
+
+The device enrolls the boot PIN (or, under *TPM only*, the TPM) at the first start after the background encryption
+has completed. Until then, and for as long as a user keeps skipping the PIN, the key that unlocks the disk lies in the
+initrd on `/boot` (`key_on_boot`; residual risk RR-57). Follow up on devices whose `key_on_boot` stays true for longer
+than a day: ask the user to restart, and to choose the PIN at that start.
+
+While the agent expects this enrollment (a completed conversion without a TPM keyslot, a skipped PIN, or a TPM
+enrollment that failed three times), one added TPM keyslot of the device's unlock mode is recorded without
+`tamper.keyslot_changed`, whoever added it and with any PCR policy; only the keyslot kind is compared (residual risk
+RR-73). Every other keyslot change is reported as tampering.
+
+If the portal says that the encryption has completed but the disk still refuses the boot PIN and the TPM unlock
+(health `enrollment_deferred: reencrypt_after_completed`), the LUKS header still carries the reencryption mark after
+the completion. The device logs the header's mandatory requirements and keyslot kinds once per start
+(`journalctl -u paddock-supervisor`, the line "still marked for reencryption after the completion"); it shows no
+restart notification, because a restart would only defer again. Record the `cryptsetup luksDump` output of the root
+partition and report it: the key stays on `/boot` until the cause is found.
+Do not run `cryptsetup reencrypt` while the agent runs (see below).
 
 ## Removing Paddock during a conversion
 

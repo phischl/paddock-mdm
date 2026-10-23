@@ -93,10 +93,9 @@ hostname typed as confirmation. Each is recorded once in the audit log (`disk.re
 
 1. Portal → device → *Disk encryption* → *Show recovery key* (`POST /api/v1/devices/{id}/disk/recovery-key`). The
    key looks like `cbdefghi-…` (8 groups of 8 characters) and is hidden again after 60 seconds.
-   On a device that was encrypted in place, the first revealed generation (generation 1) is the conversion key
-   escrowed before the encryption started; the recovery key enrolled after the completion follows as the next
-   generation and is the one that opens the disk once the conversion keyslot is wiped. The dialog lists the newest
-   first.
+   The dialog reveals the newest stored generation. On a device that was encrypted in place, the first generation
+   is the conversion key escrowed before the encryption started: it is revealed until the recovery key enrolled after
+   the completion is stored as generation 2, which opens the disk once the conversion keyslot is wiped.
 2. At the boot prompt **"Please enter LUKS2 token PIN"**, type the recovery key instead of the PIN and press Enter.
    The device first spends its TPM PIN attempts: **repeat the recovery key until the disk unlocks** (PoC M1: 3 or 4
    entries). Each wrong entry counts as a TPM authorization failure.
