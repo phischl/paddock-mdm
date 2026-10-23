@@ -5,7 +5,8 @@ it (ADR 0039, plan M8e). The device converts its root partition to LUKS2 at one 
 background while the user works. Afterwards it is managed like a device installed with the Paddock autoinstall
 (`autoinstall.md`, `disk-recovery.md`): `compliant`, TPM2 + boot PIN (or TPM2 alone under the unlock mode *TPM only*),
 a recovery key and the LUKS header escrowed. It differs in details: the initrd is built by dracut, the mapping is
-called `dm_crypt-0`, and GRUB names root as `/dev/mapper/dm_crypt-0`. Paddock never starts a conversion on its own initiative.
+called `dm_crypt-0`, and on a device without LVM GRUB names root as `/dev/mapper/dm_crypt-0` (with LVM it keeps the
+logical volume, for example `/dev/mapper/ubuntu--vg-ubuntu--lv`). Paddock never starts a conversion on its own initiative.
 
 ## How it works
 
@@ -95,7 +96,8 @@ opens the partition with the key and the encryption continues where it stopped.
 ## The device does not come back after the restart
 
 When the initrd cannot open the partition (the journal of that boot says `paddock-encrypt: result failed open …`),
-the boot stops in dracut's emergency shell: "Entering emergency mode … Press Enter for maintenance". Press Enter;
+the boot stops in dracut's emergency shell after dracut has waited for the root device for about three minutes:
+"Entering emergency mode … Press Enter for maintenance". Press Enter;
 the shell opens without a password. Open the partition with the revealed recovery key of the conversion (*Show
 recovery key*; generation 1 while the device has not reached `compliant`) under the device's mapping name and
 continue the boot:
@@ -117,8 +119,8 @@ deliver the second key press into the GRUB submenu).
 To reach that shell on purpose, for example when the init step itself misbehaves, add
 `rd.systemd.unit=emergency.target` to the kernel command line in the GRUB menu (`e`). That shell starts without udev,
 so start it first, open the partition as above and continue with `systemctl default` (the init step then finds the
-mapping open and leaves it as it is; the boot continues after about 90 seconds, while systemd stops the emergency
-shell):
+mapping open and leaves it as it is; the boot continues once systemd has stopped the emergency shell, which can take
+a while):
 
 ```sh
 systemctl start systemd-udevd.service systemd-udev-trigger.service && udevadm settle
@@ -202,9 +204,10 @@ that it finishes the setup.
 
 ## After the conversion: GRUB names the mapping
 
-Once the root file system lies on the mapping, `update-grub` (run by every kernel update) writes
-`root=/dev/mapper/dm_crypt-0` (the device's mapping name) into the boot entries instead of `root=UUID=…`. That is
-expected: the initrd opens the partition under exactly that name.
+On a device without LVM, once the root file system lies on the mapping, `update-grub` (run by every kernel update)
+writes `root=/dev/mapper/dm_crypt-0` (the device's mapping name) into the boot entries instead of `root=UUID=…`. That
+is expected: the initrd opens the partition under exactly that name. With LVM the entries keep naming the logical
+volume (`root=/dev/mapper/ubuntu--vg-ubuntu--lv` on an Ubuntu default install), which now lies on the mapping.
 
 ## Removing Paddock during a conversion
 

@@ -58,6 +58,10 @@ func (w *ieWorld) fileState(path string) string {
 // generation 1 (the conversion key) no longer opening the disk while the newest generation does.
 func (w *ieWorld) requireFinalDisk(t *testing.T, partition, luksUUID, conversionKey string) {
 	t.Helper()
+	// An empty UUID would make every crypttab check below pass vacuously.
+	if luksUUID == "" {
+		t.Fatalf("the conversion reports no LUKS UUID")
+	}
 	var md struct {
 		Keyslots map[string]struct {
 			Type string `json:"type"`
@@ -566,6 +570,9 @@ func (w *ieWorld) requireDpkgDeferral(t *testing.T, conversionID string) {
 // the regeneration is recorded with every installed kernel's initrd verified: the crypttab line, no module, no key.
 func (w *ieWorld) installKernelDuringRegeneration(t *testing.T, kernel, luksUUID string) {
 	t.Helper()
+	if luksUUID == "" {
+		t.Fatalf("the conversion reports no LUKS UUID")
+	}
 	w.Must(fmt.Sprintf("sudo systemd-run --quiet --unit systest-kernel --setenv=DEBIAN_FRONTEND=noninteractive /bin/sh -c "+
 		"'apt-get install -y linux-image-%s linux-modules-%s > /root/systest-kernel.log 2>&1; echo apt exit=$? >> /root/systest-kernel.log'", kernel, kernel))
 	Until(t, w.Name+": kernel installed", 15*time.Minute, 5*time.Second, nil, func() bool {
