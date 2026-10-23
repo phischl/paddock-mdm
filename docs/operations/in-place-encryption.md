@@ -116,11 +116,15 @@ installed kernel carries the module and the key (verified on a VM: every initrd 
 GRUB menu offers the entry; the boot of the older kernel itself was not verified on a VM, because VirtualBox did not
 deliver the second key press into the GRUB submenu).
 
+Ubuntu hides the GRUB menu on a single-system device. To show it, press Esc repeatedly right after the firmware logo
+(UEFI) or hold Shift while the device starts (BIOS); this is Ubuntu's standard behaviour and was not exercised on a
+VM (the gates set kernel arguments through `/etc/default/grub` instead).
+
 To reach that shell on purpose, for example when the init step itself misbehaves, add
 `rd.systemd.unit=emergency.target` to the kernel command line in the GRUB menu (`e`). That shell starts without udev,
 so start it first, open the partition as above and continue with `systemctl default` (the init step then finds the
-mapping open and leaves it as it is; the boot continues once systemd has stopped the emergency shell, which can take
-a while):
+mapping open and leaves it as it is; the boot continues once systemd has stopped the emergency shell: a few seconds on
+Ubuntu 26.04, about 90 seconds on 24.04):
 
 ```sh
 systemctl start systemd-udevd.service systemd-udev-trigger.service && udevadm settle
