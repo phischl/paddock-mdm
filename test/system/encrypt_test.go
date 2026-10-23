@@ -586,7 +586,7 @@ func (w *ieWorld) installKernelDuringRegeneration(t *testing.T, kernel, luksUUID
 	}
 	// The package's own initrd must already unlock the disk (I1): the module and the key before the agent's
 	// regeneration, or the crypttab line once it ran.
-	if i := w.initrds(t)["/boot/initrd.img-"+kernel]; !(i.Module && i.Key) && !strings.Contains(i.Crypttab, luksUUID) {
+	if i := w.initrds(t)["/boot/initrd.img-"+kernel]; !(i.Module && i.Key || strings.Contains(i.Crypttab, luksUUID)) {
 		t.Fatalf("the new kernel's initrd has no unlock path: %+v", i)
 	}
 	Until(t, w.Name+": initrd regenerated", 15*time.Minute, 10*time.Second, nil, func() bool {
