@@ -2212,6 +2212,10 @@ yet; it changes no behaviour.
   and `key_on_boot` (amendment 2026-10-21, item 1); `failure_stage` and `failure_reason` of a `failed` conversion are
   not reported there. The server learns them from the conversion events, so the portal and the admin API are complete
   without them. PDK-364 stays open for a later milestone.
+- **Residual risks numbered in PDK-248.** Besides RR-56 … RR-61 (§12, as amended) and RR-71 (item 19),
+  `residual-risks.md` gains RR-72 (the dracut initrd emergency shell gives a root shell without a password; found in
+  PDK-247's hand test run 5) and RR-73 (the expected first-boot TPM enrollment is recorded without
+  `tamper.keyslot_changed`; amendment 2026-10-22 b, from the PDK-397 reviews).
 
 ### Amendment 2026-10-23 — PDK-399 wording (decided by the architect lead)
 
