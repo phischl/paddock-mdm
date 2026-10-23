@@ -3949,7 +3949,7 @@ export interface components {
              * @enum {string}
              */
             uninstall_cancelled?: "before_delivery" | "after_delivery";
-            /** @description The device's confirmation: erased (true only if every LUKS volume has no keyslot left and unresolved is empty), slots_before and slots_after (sums over the reported volumes), volumes (one {device, slots_before, slots_after, erased} per reported volume, failed ones included, the root volume last) and unresolved (the crypttab entries the device could not erase with certainty; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
+            /** @description The device's confirmation: erased (true only if every LUKS volume has no key-bearing keyslot left and unresolved is empty), slots_before and slots_after (sums of key-bearing keyslots over the reported volumes), volumes (one {device, slots_before, slots_after, other_slots_after, erased} per reported volume, failed ones included, the root volume last; other_slots_after is an optional integer, absent when 0: the key-less keyslots left on the volume, such as the reencrypt keyslot of an unfinished reencryption, which do not make the erasure incomplete) and unresolved (the crypttab entries the device could not erase with certainty; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
             result?: {
                 [key: string]: unknown;
             };

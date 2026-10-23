@@ -58,3 +58,22 @@ func TestAllErased(t *testing.T) {
 		}
 	}
 }
+
+// TestKeylessKeyslotLeft (plan M8e, amendment 2026-10-22, item 23): the key-less reencrypt keyslot a Lock leaves on a
+// header marked for reencryption is read and does not make the erasure incomplete; a key-bearing keyslot left beside
+// it does.
+func TestKeylessKeyslotLeft(t *testing.T) {
+	erased := ParseConfirmation([]byte(`{"erased":true,"slots_before":1,"slots_after":0,"volumes":[{"device":"/dev/vda3",` +
+		`"slots_before":1,"slots_after":0,"other_slots_after":1,"erased":true}]}`))
+	want := Confirmation{Erased: true, SlotsBefore: 1, Volumes: []VolumeConfirmation{
+		{Device: "/dev/vda3", SlotsBefore: 1, OtherSlotsAfter: 1, Erased: true},
+	}}
+	if !reflect.DeepEqual(erased, want) || !erased.AllErased() {
+		t.Fatalf("erased confirmation %+v", erased)
+	}
+	kept := ParseConfirmation([]byte(`{"erased":false,"slots_before":2,"slots_after":1,"volumes":[{"device":"/dev/vda3",` +
+		`"slots_before":2,"slots_after":1,"other_slots_after":1,"erased":false}]}`))
+	if kept.Volumes[0].OtherSlotsAfter != 1 || kept.AllErased() {
+		t.Fatalf("incomplete confirmation %+v", kept)
+	}
+}

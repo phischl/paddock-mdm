@@ -58,6 +58,23 @@ exists (flag on).
 volume right before the Lock, so its header is not stored yet. **Expected:** the confirmation reports that volume under
 `skipped_not_escrowed` and it still unlocks with its passphrase; root and the escrowed volume are erased.
 
+**2c. Lock on a header marked for reencryption** (plan M8e, amendment 2026-10-22, item 23). Destructive on the volume
+it runs on: run it only after the maintainer has approved it for the specific device and disk, and record that
+approval (date, device, disk) in the sign-off row. Use the `paddock_revoke_testtarget` build (`make agent
+REVOKE_TAGS=paddock_revoke_testtarget`) on the laptop, never the release package, and a dedicated LUKS2 volume on a USB
+disk or a spare partition — never the system disk:
+
+1. Put the volume into an unfinished reencryption by hand: `cryptsetup reencrypt --encrypt --init-only
+   --reduce-device-size 32M --key-file <key> <dev> <name>`, then `cryptsetup reencrypt --resume-only --key-file <key>
+   <dev>`, interrupted with SIGTERM after a few percent. `cryptsetup luksDump <dev>` shows a `luks2` and a
+   `reencrypt` keyslot and the `online-reencrypt` requirement.
+2. Name the volume in `/etc/paddock/revoke-test-target` and Lock the device from the portal as in step 2.
+
+**Expected:** the confirmation shows `erased: true`, `slots_before: 1`, `slots_after: 0` and, for the volume,
+`other_slots_after: 1` (the key-less `reencrypt` keyslot `luksErase` leaves behind); the portal shows the volume as
+erased with the line about the key-less keyslot left. `cryptsetup open --key-file <key> <dev>` fails afterwards; the
+system disk is untouched.
+
 ## 3. Restore from the escrow with the recovery key (live USB)
 
 1. Admin A: device page → *Disk encryption* → *Download header backup* and *Show recovery key* (each with a step-up
@@ -138,7 +155,7 @@ tested in steps 1–5. Check every item and note the file and line you checked.
 
 | # | Check |
 | --- | --- |
-| 1 | **Sequence order** (`revoke.go`, `execute`): the token ID is recorded first, then (1) sessions terminated, (2) every keyslot erased and verified (`luksDump` shows none), (3) the confirmation posted with at most `ConfirmTimeout` (20 s), (4) reboot regardless of the confirmation. Nothing else runs between (2) and (4). |
+| 1 | **Sequence order** (`revoke.go`, `execute`): the token ID is recorded first, then (1) sessions terminated, (2) every keyslot erased and verified (`luksDump` shows no key-bearing keyslot: LUKS2 type `luks2`, enabled LUKS1 keyslots; a key-less `reencrypt` keyslot is reported as `other_slots_after`; a keyslot of any other type, or metadata without keyslots, makes the count unknown and the volume not erased), (3) the confirmation posted with at most `ConfirmTimeout` (20 s), (4) reboot regardless of the confirmation. Nothing else runs between (2) and (4). |
 | 2 | **No network calls before the erasure**: the trust checks read local files only (`revoke-enabled`, `revoke-trust.json`, `state.json`); the only network call is the confirmation in step (3). `main.go` builds the client but does not use it before `Confirm`. |
 | 3 | **No erasure without a verified token**: every path to `erase` passes `verify` (DSSE signature against a key of `revoke-trust.json`, payload type, this device ID) and `check` (not executed before, 24 h limit, root device found). A Lock or Destroy also passes the lifetime check; a self-lock passes `VerifyStored` (lifetime checked when it was stored) and the period check against the uptime counted by `paddockd`. A refusal (`*Refusal`) returns before any session or keyslot is touched. |
 | 4 | **Trust anchor**: the keys come only from `/etc/paddock/revoke-trust.json` (pinned at enrollment, or once on first use for older devices, `agent/internal/agent/revocation.go`), never from the token, a bundle at run time or the network. |
@@ -160,6 +177,7 @@ tested in steps 1–5. Check every item and note the file and line you checked.
 | 1 Install | | | | |
 | 2 Lock | | | | |
 | 2b Lock skips unescrowed volume | | | | |
+| 2c Lock on a header marked for reencryption (maintainer approval: date, device, disk) | pass: `erased: true`, `slots_before: 1`, `slots_after: 0`, `other_slots_after: 1`; afterwards only the `reencrypt` keyslot is listed and the key no longer opens the volume ("no usable keyslot"); system disk untouched. Approved by the maintainer on 2026-10-22 for the test laptop (Dell XPS 13 9300) and a Verbatim Store 'n' Go USB stick (3.8 GB); the stick was wiped afterwards | 2ff96581, `paddock_revoke_testtarget` build, Ubuntu 24.04.5, cryptsetup 2.7.0 | 2026-10-22 | maintainer (approval); run by the implementation agent |
 | 3 Restore | | | | |
 | 4 Destroy | | | | |
 | 5 Dead man's switch | | | | |

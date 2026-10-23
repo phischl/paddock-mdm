@@ -173,4 +173,29 @@ describe('danger zone (plan M7c decision 24)', () => {
     const chips = [...document.querySelectorAll('[data-testid="revocation-timeline"] .pd-chip')].map((c) => c.textContent?.trim())
     expect(chips).toEqual(['Failed', 'Failed', 'Confirmed', 'Confirmed'])
   })
+
+  it('names the key-less keyslots a Lock left on a volume marked for reencryption (plan M8e item 23)', async () => {
+    requests.push({
+      ...base, id: 'r5', status: 'confirmed', result: {
+        erased: true, slots_before: 2, slots_after: 0, volumes: [
+          { device: '/dev/sdb1', slots_before: 1, slots_after: 0, erased: true },
+          { device: '/dev/sda3', slots_before: 1, slots_after: 0, other_slots_after: 1, erased: true },
+        ],
+      },
+    })
+    try {
+      await mountZone()
+      const lists = document.querySelectorAll('[aria-label="Encrypted volumes"]')
+      const items = [...lists[lists.length - 1].querySelectorAll('li')]
+      expect(items.map((li) => li.firstChild?.textContent?.trim())).toEqual(['/dev/sdb1: 1 keyslot erased', '/dev/sda3: 1 keyslot erased'])
+      expect(items[0].textContent).not.toContain('key-less')
+      expect(items[1].textContent).toContain('1 key-less keyslot of an unfinished reencryption remains on the volume; it holds no key and does not make the erasure incomplete.')
+      expect(items[1].textContent).toContain('The keys are erased, but the part of the disk the encryption had not reached stays readable.')
+      // Only the volume with a leftover keyslot carries the line, and the erasure is not marked incomplete.
+      expect(document.querySelectorAll('[data-testid="revocation-other-slots"]')).toHaveLength(1)
+      expect([...document.querySelectorAll('p')].filter((p) => p.textContent?.includes('Incomplete: not every encrypted volume'))).toHaveLength(2)
+    } finally {
+      requests.pop()
+    }
+  })
 })

@@ -2104,6 +2104,19 @@ the maintainer's separate approval before it runs (it is destructive on the devi
       is destructive on the device it runs on and MUST NOT be carried out before the maintainer has approved it
       separately for the specific device and disk; `docs/operations/revocation-acceptance.md` gains the case as a
       row of its protocol.
+    - **Note 2026-10-22 (decided by the maintainer during PDK-400).** (1) The audit event that carries `erased`,
+      `slots_before` and `slots_after` is `device.revocation_confirmed`; `revocation.executed` above does not exist —
+      read it as `device.revocation_confirmed` (its description and note say "key-bearing keyslot"). (2) Unknown
+      keyslot types fail closed, tightening the definition above: only `reencrypt` counts as a non-key keyslot;
+      `luks2` is key-bearing; any other, empty or unreadable type, read from the exact JSON key `type`, leaves the
+      count unknown (`-1`, never erased). (3) LUKS2 metadata whose `keyslots` object is missing or `null` leaves the
+      count unknown as well (`luks.Dump` itself is unchanged; follow-up PDK-401). (4) `otherSlotsLeft` adds, in both
+      languages, that the keys are erased but the part of the disk the encryption had not reached stays readable
+      (RR-57): en "… The keys are erased, but the part of the disk the encryption had not reached stays readable.",
+      de "… Die Schlüssel sind gelöscht, aber der Teil der Festplatte, den die Verschlüsselung noch nicht erreicht
+      hatte, bleibt lesbar." Evidence (b) passed on 2026-10-22 on real hardware (a USB stick of the test laptop,
+      approved by the maintainer; row 2c of `docs/operations/revocation-acceptance.md`); evidence (a) follows
+      after the merge.
 
 ### Amendment 2026-10-22 b — item 22 addendum (decided by the architect lead)
 

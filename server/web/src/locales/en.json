@@ -998,7 +998,8 @@
         "conversionWarning": {
           "unencrypted": "This device is not encrypted yet; it refuses a Lock or Destroy until the encryption has started.",
           "encrypting": "The in-place encryption is unfinished: the header is not stored in Paddock, so this action cannot be undone with a stored header, and data the encryption has not reached stays readable. The background encryption is stopped before the device acts."
-        }
+        },
+        "otherSlotsLeft": "{count, plural, one {# key-less keyslot of an unfinished reencryption remains on the volume; it holds no key and does not make the erasure incomplete.} other {# key-less keyslots of an unfinished reencryption remain on the volume; they hold no key and do not make the erasure incomplete.}} The keys are erased, but the part of the disk the encryption had not reached stays readable."
       }
     },
     "contactFilter": "Contact",
