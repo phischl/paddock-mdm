@@ -21,11 +21,7 @@ func TestAutoinstallGate(t *testing.T) {
 		t.Skip("gate D-AI runs with PADDOCK_SYSTEM_VMS=" + aiVMName)
 	}
 	s := newStack(t)
-	iso := os.Getenv("PADDOCK_SYSTEM_ISO_2604")
-	if iso == "" {
-		home, _ := os.UserHomeDir()
-		iso = filepath.Join(home, "Downloads", "ubuntu-26.04.1-desktop-amd64.iso")
-	}
+	iso := isoPath(t, "26.04")
 	v := s.InstallRelease(t)
 
 	tok := s.Call(t, http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{
@@ -51,7 +47,7 @@ func TestAutoinstallGate(t *testing.T) {
 		t.Fatalf("the user-data does not install release %s", v)
 	}
 	passphrase := storagePassphrase(t, userData)
-	vm := buildAIVM(t, s.root, iso, withTestAccess(t, userData, s.root, &VM{dir: filepath.Join(s.root, "test", "vms", "virtualbox")}))
+	vm := buildAIVM(t, s.root, aiVM, iso, withTestAccess(t, userData, s.root, &VM{dir: filepath.Join(s.root, "test", "vms", "virtualbox")}))
 
 	pin := randomDigits(t, 8)
 	vm.StartWithPassphrase(t, passphrase)

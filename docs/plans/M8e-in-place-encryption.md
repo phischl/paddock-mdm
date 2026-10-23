@@ -1930,6 +1930,19 @@ Found while implementing PDK-245. The binding text of decisions 3, 18, 21, 22 an
     - Waiting for room in `/boot` or for a buildable kernel is not waiting for dpkg's locks. It counts no retry,
       leaves `PackagesBusySince` and `packages_busy` alone, and sets all four initrd-issue fields, clearing the
       ones that do not apply.
+20. **The conversion key's escrow request carries no volume** (found by gate S-IE1 in PDK-247, decided by the
+    orchestrator as architect, 2026-10-22). Decision 13 step 4 is corrected: the conversion key is escrowed as
+    `luks_recovery_key` without `Volume`. The device contract of `POST /v1/escrow` (PDK-009) allows the header fields
+    (`volume`, `wrapped_dek`, `nonce`, `sha256`, `size`) only on `luks_header` and answers 400 to a secret that carries
+    one, so every preparation failed with `escrow_not_stored`. The LUKS UUID reaches the server in
+    `disk.conversion_prepared{volume}` and the conversion row's `luks_uuid`. `escrow.Request.HasHeaderFields` is the
+    one predicate the server's validation and the agent's tests share.
+21. **Root reference `/dev/disk/by-uuid/<fs uuid>`** (found by gate S-IE2 in PDK-247, decided by the orchestrator as
+    architect, 2026-10-22). Decision 2's reason `root_reference_unsupported` also accepts `/dev/disk/by-uuid/<fs uuid>`
+    in `/etc/fstab` and in `root=` — the form curtin writes for a root file system without LVM —, but only with the
+    root file system's own UUID, the same comparison as for `UUID=`; `by-label`, `by-partuuid`, `by-path` and every
+    other link stay refused. After the conversion udev links the file system UUID on the dm-crypt mapping, so the
+    reference still names the root; the gates assert that it resolves to the mounted root on the mapping.
 
 ### Amendment 2026-10-22 — enrollment after completion (stop condition S2; decided by the architect lead)
 
@@ -2149,3 +2162,14 @@ Decided by the architect lead on 2026-10-22 from the reviews of PDK-397; it adds
 
 - The portal texts `devices.disk.convert.eligible` and `devices.disk.convert.check.pin` still name the PIN at the
   conversion restart; PDK-399 carries their new wording.
+
+### Amendment 2026-10-23 — a refused uninstall during a cleanup (decision 53; decided by the architect lead)
+
+Gate S-IE4 run 1 (PDK-247) showed that the device refuses the uninstall during an unfinished cleanup as decision 53
+expects (`{accepted: false, reason: conversion_pending}`, command `failed`), but the server does not end the request:
+`EndFailedUninstall` runs only for a removal report with the outcome `helper_failed`. That is the uninstall behaviour of
+plan M8d and stays: a refusal ends the command, not the request; the request stays open with the command `failed`
+and the administrator cancels it (`POST /api/v1/devices/{id}/uninstall/cancel`, allowed while the command is
+`pending`, `failed` or `expired`). Decision 53's "the server has ended the request … nothing to cancel" is corrected
+accordingly; S-IE4 asserts the failed command and the cancel. Whether a refusal with a terminal reason should end the
+request on its own is PDK-403.

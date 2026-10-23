@@ -7,14 +7,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
 // TestDiskGates runs the disk encryption gates of plan M4b §6 on each VM, from base-installed with the Paddock
-// autoinstall simulated (PrepareDisk): the LUKS flow (gate D-24 on 24.04, the same flow on 26.04), D-ESC and D-TAMP
-// on that device, then D-SKIP and D-KEEP (plan M4b.1 AC2) from fresh base-installed snapshots. The VMs run in
-// parallel.
+// autoinstall simulated (PrepareDisk): the LUKS flow (gate S-IE3 of plan M8e on the freshly installed device, gate
+// D-24 on 24.04, the same flow on 26.04), D-ESC and D-TAMP on that device, then D-SKIP and D-KEEP (plan M4b.1 AC2)
+// from fresh base-installed snapshots. The VMs run in parallel.
 func TestDiskGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		t.Run("LUKS flow", func(t *testing.T) {
@@ -22,6 +23,7 @@ func TestDiskGates(t *testing.T) {
 			vm.Bind(t)
 			d := Install(t, s, vm, debDir(s))
 			w := &diskWorld{Device: d, pin: randomDigits(t, 8)}
+			t.Run("S-IE3 not eligible", func(t *testing.T) { d.Bind(t); gateSIE3(t, d) })
 			if !t.Run("D-24 TPM2+PIN and escrow", func(t *testing.T) { w.Bind(t); gateDiskFlow(t, w) }) {
 				t.FailNow()
 			}
@@ -42,6 +44,41 @@ func TestDiskGates(t *testing.T) {
 			gateDKEEP(t, Install(t, s, vm, debDir(s)))
 		})
 	})
+}
+
+// gateSIE3 is gate S-IE3 of plan M8e: a device whose root volume is LUKS already reports no eligible in-place
+// encryption, and the request is refused with 409 invalid_state naming already_encrypted.
+func gateSIE3(t *testing.T, d *Device) {
+	info := d.WaitDisk(t, "disk state reported", 5*time.Minute, func(i diskInfo) bool { return i.state() != "" })
+	if info.state() == "not_encrypted" {
+		t.Fatalf("a LUKS device reports %s", info.state())
+	}
+	var h struct {
+		Disk struct {
+			Conversion *struct {
+				Eligible bool     `json:"eligible"`
+				Reasons  []string `json:"reasons"`
+			} `json:"conversion"`
+		} `json:"disk"`
+	}
+	if err := json.Unmarshal([]byte(d.Health()), &h); err != nil {
+		t.Fatal(err)
+	}
+	if c := h.Disk.Conversion; c != nil && (c.Eligible || !slices.Contains(c.Reasons, "already_encrypted")) {
+		t.Fatalf("health of a LUKS device: conversion %+v", *c)
+	}
+	d.s.StepUp(t)
+	res := d.s.Call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/encrypt", map[string]any{
+		"confirm_hostname": d.Must("hostname"), "reason": "gate S-IE3 " + d.run, "backup_confirmed": true,
+	}, http.StatusConflict)
+	var p struct {
+		Code   string `json:"code"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(res.Body, &p); err != nil || p.Code != "invalid_state" || !strings.Contains(p.Detail, "already_encrypted") {
+		t.Fatalf("encrypt request on a LUKS device: %v %s", err, res.Body)
+	}
+	t.Logf("%s: disk %s, encrypt refused: %s", d.Name, info.state(), p.Detail)
 }
 
 type diskWorld struct {

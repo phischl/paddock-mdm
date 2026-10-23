@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,6 +30,14 @@ type Device struct {
 // managedPath is a managed file of this run.
 func (d *Device) managedPath(name string) string {
 	return "/etc/paddock-systest/" + d.run + "-" + name + ".conf"
+}
+
+// debDir holds the packages under test (make deb).
+func debDir(s *Stack) string {
+	if d := os.Getenv("PADDOCK_SYSTEM_DEBS"); d != "" {
+		return d
+	}
+	return filepath.Join(s.root, "bin", "deb")
 }
 
 // Install prepares the guest (hosts entries, Caddy CA), installs the packages from debDir and enrolls the device

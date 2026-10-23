@@ -673,12 +673,14 @@ func TestEscrow(t *testing.T) {
 	e.expectProblem(status(other, otherID), http.StatusNotFound, "not_found")
 
 	for name, mutate := range map[string]func(map[string]any){
-		"kind":       func(b map[string]any) { b["kind"] = "luks_keyfile" },
-		"header":     func(b map[string]any) { b["kind"] = "luks_header" },
-		"extra":      func(b map[string]any) { b["sha256"] = strings.Repeat("a", 64) },
-		"generation": func(b map[string]any) { b["generation"] = 0 },
-		"escrow_id":  func(b map[string]any) { b["escrow_id"] = "x" },
-		"ciphertext": func(b map[string]any) { b["ciphertext"] = base64.StdEncoding.EncodeToString(make([]byte, 4097)) },
+		"kind":   func(b map[string]any) { b["kind"] = "luks_keyfile" },
+		"header": func(b map[string]any) { b["kind"] = "luks_header" },
+		"extra":  func(b map[string]any) { b["sha256"] = strings.Repeat("a", 64) },
+		// The conversion key of plan M8e travelled with its volume until PDK-247 found the refusal on a VM.
+		"secret with a volume": func(b map[string]any) { b["kind"] = "luks_recovery_key"; b["volume"] = uuid.NewString() },
+		"generation":           func(b map[string]any) { b["generation"] = 0 },
+		"escrow_id":            func(b map[string]any) { b["escrow_id"] = "x" },
+		"ciphertext":           func(b map[string]any) { b["ciphertext"] = base64.StdEncoding.EncodeToString(make([]byte, 4097)) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := map[string]any{}

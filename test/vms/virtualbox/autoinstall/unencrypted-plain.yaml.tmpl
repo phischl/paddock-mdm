@@ -1,0 +1,60 @@
+# Ubuntu 24.04 Desktop without disk encryption and without LVM: the layout plain of the in-place encryption gates
+# S-IE2 and S-IE4 (plan M8e §9), rendered by test/system (in-place encryption gates), which adds its test access
+# before these late-commands.
+# Placeholders: @@HOSTNAME@@ @@USERNAME@@ @@PASSWORD_HASH@@
+autoinstall:
+  version: 1
+  interactive-sections: []
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: Europe/Berlin
+  source:
+    id: ubuntu-desktop-minimal
+  identity:
+    hostname: @@HOSTNAME@@
+    realname: Paddock Test
+    username: @@USERNAME@@
+    password: '@@PASSWORD_HASH@@'
+  # GPT with a 1 GiB ESP, a 2 GiB ext4 /boot and ext4 / directly on the rest of the disk.
+  storage:
+    config:
+      - {type: disk, id: disk0, match: {size: largest}, ptable: gpt, wipe: superblock-recursive, preserve: false, grub_device: false}
+      - {type: partition, id: part-esp, device: disk0, number: 1, size: 1G, flag: boot, grub_device: true, wipe: superblock, preserve: false}
+      - {type: format, id: fs-esp, volume: part-esp, fstype: fat32, preserve: false}
+      - {type: partition, id: part-boot, device: disk0, number: 2, size: 2G, wipe: superblock, preserve: false}
+      - {type: format, id: fs-boot, volume: part-boot, fstype: ext4, preserve: false}
+      - {type: partition, id: part-root, device: disk0, number: 3, size: -1, wipe: superblock, preserve: false}
+      - {type: format, id: fs-root, volume: part-root, fstype: ext4, preserve: false}
+      - {type: mount, id: mount-root, device: fs-root, path: /}
+      - {type: mount, id: mount-boot, device: fs-boot, path: /boot}
+      - {type: mount, id: mount-esp, device: fs-esp, path: /boot/efi}
+  updates: security
+  codecs:
+    install: false
+  drivers:
+    install: false
+  # The agent package depends on both.
+  packages:
+    - cryptsetup
+    - tpm2-tools
+  late-commands:
+    # The test user logs in at boot, so the gate sees the restart notification of a graphical session.
+    - mkdir -p /target/home/@@USERNAME@@/.config
+    - echo yes > /target/home/@@USERNAME@@/.config/gnome-initial-setup-done
+    - curtin in-target --target=/target -- chown -R @@USERNAME@@:@@USERNAME@@ /home/@@USERNAME@@/.config
+    - printf '[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=@@USERNAME@@\n' > /target/etc/gdm3/custom.conf
+    # The screen never blanks or locks, so a screenshot shows the notification however long the gate ran before.
+    - mkdir -p /target/etc/dconf/profile /target/etc/dconf/db/local.d
+    - printf 'user-db:user\nsystem-db:local\n' > /target/etc/dconf/profile/user
+    - printf '[org/gnome/desktop/session]\nidle-delay=uint32 0\n\n[org/gnome/desktop/screensaver]\nlock-enabled=false\n\n[org/gnome/settings-daemon/plugins/power]\nidle-dim=false\n' > /target/etc/dconf/db/local.d/00-systest
+    - curtin in-target --target=/target -- dconf update
+    # Nothing else claims the notification banner while the gate looks for the restart notification.
+    - sh -c 'rm -f /target/etc/xdg/autostart/update-notifier.desktop /target/etc/xdg/autostart/*initial-setup* /target/etc/xdg/autostart/*welcome*'
+    # The gate reads the init step's lines from the serial port: journald (also in the initrd, which carries this
+    # drop-in) copies the journal there. tty0 stays the console, so prompts appear on the screen as on a real device.
+    - mkdir -p /target/etc/systemd/journald.conf.d
+    - printf '[Journal]\nForwardToConsole=yes\nTTYPath=/dev/ttyS0\nMaxLevelConsole=info\n' > /target/etc/systemd/journald.conf.d/90-systest-serial.conf
+    - sed -i -E 's/^GRUB_CMDLINE_LINUX="(.*)"$/GRUB_CMDLINE_LINUX="\1 console=ttyS0,115200 console=tty0"/' /target/etc/default/grub
+    - curtin in-target --target=/target -- update-grub
+  shutdown: poweroff

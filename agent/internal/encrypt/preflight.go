@@ -430,13 +430,14 @@ func (p *preflight) boot(rootPartition string) {
 }
 
 // reference checks how /etc/fstab and the kernel command line name the root file system (reason
-// root_reference_unsupported): by its UUID or, for lvm, by a path of the root LV — /dev/mapper/<vg>-<lv>,
+// root_reference_unsupported): by its UUID — UUID=<uuid> or the /dev/disk/by-uuid/<uuid> link curtin writes for a
+// root without LVM (plan M8e amendment item 21) — or, for lvm, by a path of the root LV — /dev/mapper/<vg>-<lv>,
 // /dev/<vg>/<lv> or the /dev/disk/by-id/dm-uuid-LVM-<vg uuid><lv uuid> link curtin writes (correction of plan M8e
 // decision 2, 2026-10-21) — all of which still resolve once the partition below is LUKS.
 func (p *preflight) reference() {
 	accepted := []string{}
 	if p.l.FSUUID != "" {
-		accepted = append(accepted, "UUID="+p.l.FSUUID)
+		accepted = append(accepted, "UUID="+p.l.FSUUID, "/dev/disk/by-uuid/"+p.l.FSUUID)
 	}
 	if p.lv != "" {
 		mapper := strings.ReplaceAll(p.vg, "-", "--") + "-" + strings.ReplaceAll(p.lv, "-", "--")

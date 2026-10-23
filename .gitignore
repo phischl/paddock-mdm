@@ -17,3 +17,5 @@ coverage.*
 # Playwright
 server/web/test-results/
 server/web/playwright-report/
+# A link to the VM secrets of another worktree (a directory pattern does not match a symlink).
+test/vms/virtualbox/.secrets

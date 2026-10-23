@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -20,6 +21,41 @@ const (
 	aiVMName  = "paddock-ai-2604"
 	aiSSHPort = "2228"
 )
+
+// aiSpec names a throwaway VM and sizes its disk (plan M8e decision 42).
+type aiSpec struct {
+	Name, SSHPort string
+	DiskMB        int
+}
+
+// The throwaway VMs: gates D-AI and S-DU1 on paddock-ai-2604, the in-place encryption gates of plan M8e on two
+// unencrypted installs. The reencryption writes every sector of the root partition and so grows a dynamic VDI to its
+// full size; 16 GiB keep two runs within the development host's headroom (decision 42).
+var (
+	aiVM     = aiSpec{Name: aiVMName, SSHPort: aiSSHPort, DiskMB: 40960}
+	ieVM2604 = aiSpec{Name: "paddock-ie-2604", SSHPort: "2229", DiskMB: 16384}
+	ieVM2404 = aiSpec{Name: "paddock-ie-2404", SSHPort: "2230", DiskMB: 16384}
+)
+
+// minMachineFolderFree is the free space the VirtualBox machine folder needs before a throwaway VM is created (plan
+// M8e decision 42).
+const minMachineFolderFree = 24 << 30
+
+// isoPath is the Ubuntu Desktop ISO of release (24.04 or 26.04): PADDOCK_SYSTEM_ISO_2404 or PADDOCK_SYSTEM_ISO_2604,
+// by default in ~/Downloads (plan M8e decision 43). A missing file fails the test with the path.
+func isoPath(t *testing.T, release string) string {
+	t.Helper()
+	defaults := map[string]string{"24.04": "ubuntu-24.04.5.1-desktop-amd64.iso", "26.04": "ubuntu-26.04.1-desktop-amd64.iso"}
+	iso := os.Getenv("PADDOCK_SYSTEM_ISO_" + strings.ReplaceAll(release, ".", ""))
+	if iso == "" {
+		home, _ := os.UserHomeDir()
+		iso = filepath.Join(home, "Downloads", defaults[release])
+	}
+	if _, err := os.Stat(iso); err != nil {
+		t.Fatalf("Ubuntu %s ISO %s: %v", release, iso, err)
+	}
+	return iso
+}
 
 // withTestAccess adds the test environment to generated user-data, before the Paddock late-commands: the development
 // stack's hostnames and Caddy CA (the installer downloads the packages from bundles.paddock.localhost) and SSH access
@@ -75,32 +111,34 @@ func storagePassphrase(t *testing.T, userData []byte) string {
 }
 
 // buildAIVM remasters the ISO with the user-data as /autoinstall.yaml and the autoinstall kernel argument (like
-// create-vm.sh), creates the VM with EFI, Secure Boot and TPM 2.0, runs the installer until it powers off, ejects
-// the medium and returns the VM. The VM and the work directory (it holds the user-data) are deleted when the test
-// ends.
-func buildAIVM(t *testing.T, root, iso string, userData []byte) *VM {
+// create-vm.sh), creates the VM of spec with EFI, Secure Boot and TPM 2.0, runs the installer until it powers off,
+// ejects the medium and returns the VM. The VM's first serial port writes to its work directory (VM.Serial), and
+// its disk is in the bandwidth group of VM.LimitDisk. The VM and the work directory (it holds the user-data) are
+// deleted when the test ends.
+func buildAIVM(t *testing.T, root string, spec aiSpec, iso string, userData []byte) *VM {
 	t.Helper()
-	vm := &VM{Name: aiVMName, port: aiSSHPort, dir: filepath.Join(root, "test", "vms", "virtualbox"), t: t}
+	vm := &VM{Name: spec.Name, port: spec.SSHPort, dir: filepath.Join(root, "test", "vms", "virtualbox"), t: t}
 	ctx := context.Background()
 	if vm.state(ctx) != "" {
-		t.Fatalf("VM %s exists already; delete it first (VBoxManage unregistervm %s --delete)", aiVMName, aiVMName)
+		t.Fatalf("VM %s exists already; delete it first (VBoxManage unregistervm %s --delete)", spec.Name, spec.Name)
 	}
-	work := filepath.Join(root, "bin", "system-ai")
+	work := filepath.Join(root, "bin", "system-ai", spec.Name)
+	vm.serial = filepath.Join(work, "serial.log")
 	if err := os.MkdirAll(work, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		if t.Failed() && os.Getenv("PADDOCK_SYSTEM_KEEP") != "" {
-			t.Logf("PADDOCK_SYSTEM_KEEP: %s and %s left for inspection; delete both yourself", aiVMName, work)
+			t.Logf("PADDOCK_SYSTEM_KEEP: %s and %s left for inspection; delete both yourself", spec.Name, work)
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		if err := vm.PowerOff(ctx); err != nil {
-			t.Errorf("power off %s: %v", aiVMName, err)
+			t.Errorf("power off %s: %v", spec.Name, err)
 		}
-		if out, err := run(ctx, "VBoxManage", "unregistervm", aiVMName, "--delete"); err != nil {
-			t.Errorf("delete %s: %v: %s", aiVMName, err, out)
+		if out, err := run(ctx, "VBoxManage", "unregistervm", spec.Name, "--delete"); err != nil {
+			t.Errorf("delete %s: %v: %s", spec.Name, err, out)
 		}
 		if err := os.RemoveAll(work); err != nil {
 			t.Errorf("remove %s: %v", work, err)
@@ -142,32 +180,91 @@ func buildAIVM(t *testing.T, root, iso string, userData []byte) *VM {
 	if folder == nil {
 		t.Fatal("no default machine folder")
 	}
-	disk := filepath.Join(strings.TrimSpace(folder[1]), aiVMName, aiVMName+".vdi")
-	must("VBoxManage", "createvm", "--name", aiVMName, "--ostype", "Ubuntu_64", "--register")
-	must("VBoxManage", "modifyvm", aiVMName, "--firmware=efi", "--tpm-type=2.0", "--cpus=2", "--memory=4096",
+	var fs syscall.Statfs_t
+	if err := syscall.Statfs(strings.TrimSpace(folder[1]), &fs); err != nil {
+		t.Fatalf("free space of the machine folder %s: %v", folder[1], err)
+	}
+	if free := fs.Bavail * uint64(fs.Bsize); free < minMachineFolderFree {
+		t.Fatalf("the machine folder %s has %.1f GiB free; %s needs %d GiB (plan M8e decision 42)", strings.TrimSpace(folder[1]),
+			float64(free)/(1<<30), spec.Name, minMachineFolderFree>>30)
+	} else {
+		t.Logf("%s: %.1f GiB free in the machine folder before the build", spec.Name, float64(free)/(1<<30))
+	}
+	disk := filepath.Join(strings.TrimSpace(folder[1]), spec.Name, spec.Name+".vdi")
+	must("VBoxManage", "createvm", "--name", spec.Name, "--ostype", "Ubuntu_64", "--register")
+	must("VBoxManage", "modifyvm", spec.Name, "--firmware=efi", "--tpm-type=2.0", "--cpus=2", "--memory=4096",
 		"--graphicscontroller=vmsvga", "--vram=128", "--ioapic=on", "--rtc-use-utc=on", "--audio-enabled=off",
-		"--usb-ohci=off", "--usb-ehci=off", "--usb-xhci=off", "--nic1=nat", "--natpf1=ssh,tcp,127.0.0.1,"+aiSSHPort+",,22",
+		"--usb-ohci=off", "--usb-ehci=off", "--usb-xhci=off", "--nic1=nat", "--natpf1=ssh,tcp,127.0.0.1,"+spec.SSHPort+",,22",
 		// The development stack listens on the host's loopback, which the guest reaches as 10.0.2.2 (like the test VMs).
 		"--nat-localhostreachable1=on",
+		// The init step of plan M8e logs to the kernel console; a guest that names ttyS0 as its console writes it here,
+		// where a gate reads it while no SSH is available.
+		"--uart1", "0x3F8", "4", "--uart-mode1", "file", vm.serial,
 		"--boot1=disk", "--boot2=dvd", "--boot3=none", "--boot4=none")
-	if out, err := vm.lib(ctx, "enroll_secure_boot "+aiVMName); err != nil {
+	if out, err := vm.lib(ctx, "enroll_secure_boot "+spec.Name); err != nil {
 		t.Fatalf("Secure Boot: %v: %s", err, out)
 	}
-	must("VBoxManage", "createmedium", "disk", "--filename", disk, "--size", "40960", "--format", "VDI", "--variant", "Standard")
-	must("VBoxManage", "storagectl", aiVMName, "--name", "SATA", "--add", "sata", "--controller", "IntelAhci", "--portcount", "2", "--bootable", "on")
-	must("VBoxManage", "storageattach", aiVMName, "--storagectl", "SATA", "--port", "0", "--device", "0", "--type", "hdd", "--medium", disk,
-		"--nonrotational", "on", "--discard", "on")
-	must("VBoxManage", "storageattach", aiVMName, "--storagectl", "SATA", "--port", "1", "--device", "0", "--type", "dvddrive", "--medium", installISO)
-	must("VBoxManage", "startvm", aiVMName, "--type", "headless")
-	t.Logf("%s: installing from the Paddock autoinstall", aiVMName)
-	installCtx, cancel := context.WithTimeout(ctx, 2*time.Hour)
-	defer cancel()
-	if out, err := vm.lib(installCtx, fmt.Sprintf("wait_vm_state %s poweroff %d 30", aiVMName, 2*60*60)); err != nil {
-		vm.Shot(t, "install")
-		t.Fatalf("installation did not finish: %v: %s", err, out)
+	must("VBoxManage", "createmedium", "disk", "--filename", disk, "--size", fmt.Sprint(spec.DiskMB), "--format", "VDI", "--variant", "Standard")
+	must("VBoxManage", "bandwidthctl", spec.Name, "add", diskBandwidthGroup, "--type", "disk", "--limit", diskUnlimited)
+	must("VBoxManage", "storagectl", spec.Name, "--name", "SATA", "--add", "sata", "--controller", "IntelAhci", "--portcount", "2", "--bootable", "on")
+	must("VBoxManage", "storageattach", spec.Name, "--storagectl", "SATA", "--port", "0", "--device", "0", "--type", "hdd", "--medium", disk,
+		"--nonrotational", "on", "--discard", "on", "--bandwidthgroup", diskBandwidthGroup)
+	must("VBoxManage", "storageattach", spec.Name, "--storagectl", "SATA", "--port", "1", "--device", "0", "--type", "dvddrive", "--medium", installISO)
+	must("VBoxManage", "startvm", spec.Name, "--type", "headless")
+	t.Logf("%s: installing from the autoinstall", spec.Name)
+	// Polled here rather than with lib.sh wait_vm_state, whose state query fails now and then while the VM shuts down
+	// and then ends the wait as a failure (PDK-247 hand test run 4); VM.state retries it.
+	started := time.Now()
+	deadline := started.Add(2 * time.Hour)
+	checked := false
+	for vm.state(ctx) != "poweroff" {
+		if time.Now().After(deadline) {
+			vm.Shot(t, "install")
+			t.Fatalf("installation did not finish within 2 hours (%s)", vm.state(ctx))
+		}
+		// The firmware once hung before the installer started, burning CPU for an hour (PDK-247 hand run 8): a disk
+		// still empty and no display after five minutes fail at once.
+		if !checked && time.Since(started) > 5*time.Minute {
+			checked = true
+			fi, err := os.Stat(disk)
+			shot, _ := run(ctx, "VBoxManage", "controlvm", spec.Name, "screenshotpng", filepath.Join(work, "install-check.png"))
+			if err == nil && fi.Size() < 16<<20 && strings.Contains(shot, "0x0") {
+				t.Fatalf("%s: firmware hang at boot, the VM did not start the installer (disk %d bytes, no display)", spec.Name, fi.Size())
+			}
+		}
+		time.Sleep(30 * time.Second)
 	}
-	must("VBoxManage", "storageattach", aiVMName, "--storagectl", "SATA", "--port", "1", "--device", "0", "--type", "dvddrive", "--medium", "emptydrive")
+	if out, err := vm.lib(ctx, "wait_vm_process_exit "+spec.Name); err != nil {
+		t.Fatalf("%s: %v: %s", spec.Name, err, out)
+	}
+	must("VBoxManage", "storageattach", spec.Name, "--storagectl", "SATA", "--port", "1", "--device", "0", "--type", "dvddrive", "--medium", "emptydrive")
 	return vm
+}
+
+// diskBandwidthGroup is the bandwidth group of a throwaway VM's disk. Unlimited during the install, a gate limits it
+// so that the background reencryption of a 16 GiB disk lasts long enough to cut the power in its middle.
+const (
+	diskBandwidthGroup = "disk"
+	diskUnlimited      = "100000M"
+)
+
+// LimitDisk sets the throughput limit of a throwaway VM's disk (VBoxManage bandwidthctl, e.g. "20M"; diskUnlimited
+// lifts it). Set it while the VM is powered off: a change made while it ran did not take effect (PDK-247 hand test).
+func (v *VM) LimitDisk(t *testing.T, limit string) {
+	t.Helper()
+	if out, err := run(context.Background(), "VBoxManage", "bandwidthctl", v.Name, "set", diskBandwidthGroup, "--limit", limit); err != nil {
+		t.Fatalf("%s: disk limit %s: %v: %s", v.Name, limit, err, out)
+	}
+}
+
+// Serial returns what the throwaway VM wrote to its first serial port since its last start.
+func (v *VM) Serial(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(v.serial)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("serial console of %s: %v", v.Name, err)
+	}
+	return string(b)
 }
 
 // StartWithPassphrase starts the VM and types passphrase once at the disk prompt, then waits for SSH. Unlike lib.sh

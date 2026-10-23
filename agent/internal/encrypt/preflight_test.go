@@ -306,7 +306,8 @@ func TestPreflightAlreadyEncrypted(t *testing.T) {
 	}
 }
 
-// TestPreflightRootReference: fstab and the kernel command line may name the root by its file system UUID or, for
+// TestPreflightRootReference: fstab and the kernel command line may name the root by its file system UUID (UUID= or
+// /dev/disk/by-uuid/, plan M8e amendment item 21) or, for
 // lvm, by /dev/mapper/<vg>-<lv>, /dev/<vg>/<lv> or the exact dm-uuid-LVM link of the root LV (correction of plan M8e
 // decision 2, 2026-10-21).
 func TestPreflightRootReference(t *testing.T) {
@@ -316,9 +317,13 @@ func TestPreflightRootReference(t *testing.T) {
 		"/dev/mapper/ubuntu--vg-ubuntu--lv":         true,
 		"/dev/ubuntu-vg/ubuntu-lv":                  true,
 		dmUUID:                                      true,
-		"UUID=00000000-8e4b-4f09-a1c6-7b2e9d0f4a85": false,
-		"/dev/sda3":                                 false,
-		"/dev/mapper/ubuntu-vg-ubuntu-lv":           false,
+		"/dev/disk/by-uuid/3d5a2c71-8e4b-4f09-a1c6-7b2e9d0f4a85":     true,
+		"UUID=00000000-8e4b-4f09-a1c6-7b2e9d0f4a85":                  false,
+		"/dev/disk/by-uuid/00000000-8e4b-4f09-a1c6-7b2e9d0f4a85":     false, // another file system
+		"/dev/disk/by-label/root":                                    false,
+		"/dev/disk/by-partuuid/8c2f8d4e-5b7a-4f1c-9e0d-2a6b3c4d5e6f": false,
+		"/dev/sda3":                       false,
+		"/dev/mapper/ubuntu-vg-ubuntu-lv": false,
 		"/dev/disk/by-id/dm-uuid-LVM-Xb3k9f0aQeLm2T7yRvPq4Wn8ZsJc1dHg":                                   false, // the VG only
 		"/dev/disk/by-id/dm-uuid-LVM-Xb3k9f0aQeLm2T7yRvPq4Wn8ZsJc1dHg0000000000000000000000000000000":    false, // another LV
 		"/dev/disk/by-id/dm-uuid-LVM-Xb3k9f0aQeLm2T7yRvPq4Wn8ZsJc1dHg4fRt2x9KpL0mWqZx7cVb3nHy6uTg5eQaXX": false,
@@ -340,6 +345,24 @@ func TestPreflightRootReference(t *testing.T) {
 	f.write("/proc/cmdline", "BOOT_IMAGE=/vmlinuz ro\n")
 	if got := f.preflight(); !slices.Equal(got.Reasons, []string{"root_reference_unsupported"}) {
 		t.Fatalf("a command line without root=: %v", got.Reasons)
+	}
+}
+
+// TestPreflightRootReferencePlainCurtin: curtin writes the root of an install without LVM into fstab as
+// /dev/disk/by-uuid/<uuid> (plan M8e amendment item 21, found by gate S-IE2); that form is accepted only with the root
+// file system's own UUID.
+func TestPreflightRootReferencePlainCurtin(t *testing.T) {
+	for ref, ok := range map[string]bool{
+		"/dev/disk/by-uuid/a7c41e09-2b6d-4f3a-9e85-0c1d2e3f4a5b": true,
+		"/dev/disk/by-uuid/00000000-2b6d-4f3a-9e85-0c1d2e3f4a5b": false,
+		"/dev/disk/by-label/root":                                false,
+	} {
+		f := loadFixture(t, "plain")
+		f.set("findmnt --fstab -no SOURCE /", ref+"\n", 0)
+		got := f.preflight()
+		if got.Eligible != ok || got.Kind != encrypt.KindPlain || (!ok && !slices.Equal(got.Reasons, []string{"root_reference_unsupported"})) {
+			t.Errorf("fstab %s: eligible %v, reasons %v", ref, got.Eligible, got.Reasons)
+		}
 	}
 }
 

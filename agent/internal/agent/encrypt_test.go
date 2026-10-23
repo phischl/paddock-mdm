@@ -392,7 +392,7 @@ func TestConversionWorker(t *testing.T) {
 	if conv.Phase != state.ConversionPrepared || conv.KeyEscrowGeneration != 1 || a.st.LUKS.RecoveryStored != 1 || a.conversionBusy {
 		t.Fatalf("conversion %+v, luks %+v", conv, a.st.LUKS)
 	}
-	if len(g.Escrows) != 1 || g.Escrows[0].Kind != "luks_recovery_key" || g.Escrows[0].Generation != 1 || g.Escrows[0].Volume != conv.LUKSUUID {
+	if len(g.Escrows) != 1 || g.Escrows[0].Kind != "luks_recovery_key" || g.Escrows[0].Generation != 1 || g.Escrows[0].HasHeaderFields() {
 		t.Fatalf("escrows %+v", g.Escrows)
 	}
 	events := spooled(t, a)

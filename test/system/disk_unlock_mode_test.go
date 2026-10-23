@@ -47,11 +47,7 @@ func TestDiskUnlockModeTPMOnly(t *testing.T) {
 		t.Skip("gate S-DU1 runs with PADDOCK_SYSTEM_VMS=" + aiVMName)
 	}
 	s := newStack(t)
-	iso := os.Getenv("PADDOCK_SYSTEM_ISO_2604")
-	if iso == "" {
-		home, _ := os.UserHomeDir()
-		iso = filepath.Join(home, "Downloads", "ubuntu-26.04.1-desktop-amd64.iso")
-	}
+	iso := isoPath(t, "26.04")
 	s.InstallRelease(t)
 	setUnlockMode(t, s, "tpm_only")
 	t.Cleanup(func() { setUnlockMode(t, s, "tpm_pin") })
@@ -79,7 +75,7 @@ func TestDiskUnlockModeTPMOnly(t *testing.T) {
 		t.Fatal("the user-data does not configure tpm_only")
 	}
 	passphrase := storagePassphrase(t, userData)
-	vm := buildAIVM(t, s.root, iso, withTestAccess(t, userData, s.root, &VM{dir: filepath.Join(s.root, "test", "vms", "virtualbox")}))
+	vm := buildAIVM(t, s.root, aiVM, iso, withTestAccess(t, userData, s.root, &VM{dir: filepath.Join(s.root, "test", "vms", "virtualbox")}))
 	vm.StartWithPassphrase(t, passphrase)
 	d := &Device{VM: vm, s: s}
 	Until(t, aiVMName+": disk setup finished without input", 5*time.Minute, 3*time.Second, nil, func() bool {

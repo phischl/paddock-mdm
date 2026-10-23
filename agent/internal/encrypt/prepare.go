@@ -454,8 +454,10 @@ func (p *Preparer) escrow(ctx context.Context, c state.DiskConversion) error {
 	}); err != nil {
 		return err
 	}
+	// Without Volume: the device API refuses a secret with a header field (plan M8e amendment item 20); the LUKS UUID
+	// reaches the server with disk.conversion_prepared.
 	if err := p.Escrow.Upload(ctx, escrow.Request{EscrowID: id, Kind: escrow.KindLUKSRecoveryKey, Generation: generation,
-		Volume: c.LUKSUUID, KeyVersion: version, Ciphertext: ct}); err != nil {
+		KeyVersion: version, Ciphertext: ct}); err != nil {
 		if ctx.Err() != nil {
 			return errStop
 		}

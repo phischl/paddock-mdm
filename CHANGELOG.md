@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Runbook `docs/operations/in-place-encryption.md` for the in-place encryption: how it works, the supported layouts
+  and every preflight reason, what the user sees, the escrowed keys, recovery when a device does not come back after
+  the restart, aborting with and without a running agent, a cleanup that does not finish, completing the encryption
+  by hand, and removing Paddock, Lock and Destroy during a conversion. The VM system gates of the in-place encryption
+  run on throwaway VMs (`make system-test VM=paddock-ie-2604|paddock-ie-2404`).
 - An unencrypted device now checks, without changing anything, whether its disk can be encrypted in place and
   reports the result with its health: eligible or not and why, the release, the disk layout, the initramfs generator
   and, on devices still on initramfs-tools, which packages the switch to dracut would remove. The check runs at most
@@ -120,6 +125,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   administrator waits. The create itself no longer looks up Authentik's flows, signing key and scope mappings every
   time (they are reused for an hour; the most expensive requests on a loaded Authentik), and the device login
   application gets its access policy before its provider is attached, so it never admits users without the policy.
+- In-place encryption no longer fails at the preparation with `escrow_not_stored`: the device stored the conversion
+  key in a form the server refused, so no device could be prepared. Found by the new VM gates; the server's
+  acceptance rules are unchanged.
+- In-place encryption now accepts an installed device whose `/etc/fstab` names the root file system as
+  `/dev/disk/by-uuid/<uuid>`, the form the Ubuntu installer writes for a root without LVM; such devices were reported
+  `root_reference_unsupported`. Other device links stay refused.
 
 ## [0.1.0-alpha.4] - 2026-10-19
 
