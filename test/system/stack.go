@@ -99,6 +99,11 @@ func (s *Stack) Call(t *testing.T, method, path string, body any, status int) po
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	res, err := s.session().Do(ctx, method, path, body)
+	// A gate of an hour outlives alice's session (in-place encryption gates): sign in again once.
+	if err == nil && res.Status == http.StatusUnauthorized && status != http.StatusUnauthorized {
+		s.Login(t)
+		res, err = s.session().Do(ctx, method, path, body)
+	}
 	if err != nil || res.Status != status {
 		t.Fatalf("%s %s: HTTP %d (want %d) %v %s", method, path, res.Status, status, err, res.Body)
 	}
@@ -169,6 +174,10 @@ func (s *Stack) Events(t *testing.T, code, deviceID string) []portal.AuditEvent 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	all, err := s.session().AuditEvents(ctx, code)
+	if err != nil && strings.Contains(err.Error(), "HTTP 401") {
+		s.Login(t)
+		all, err = s.session().AuditEvents(ctx, code)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
