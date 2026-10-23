@@ -672,19 +672,30 @@ done`))
 // value.
 func (w *ieWorld) requireProgress(t *testing.T, atLeast int64) int64 {
 	t.Helper()
-	var first, second int64
-	read := false
+	var p progress
 	Until(t, w.Name+": reencryption progress", 5*time.Minute, 10*time.Second, nil, func() bool {
 		h := w.convHealth()
-		first = second
-		second, _ = h.done()
-		// Two reads at least: a single read above zero says nothing about a reencryption that stalled.
-		grew := read && h.Disk.State == "encrypting" && first >= atLeast && second > first
-		read = h.Disk.State == "encrypting"
-		return grew
+		done, _ := h.done()
+		return p.next(h.Disk.State == "encrypting", done, atLeast)
 	})
+	first, second := p.prev, p.last
 	t.Logf("%s: done_bytes %d → %d", w.Name, first, second)
 	return second
+}
+
+// progress tracks the device's done_bytes over successive reads 10 s apart: it grew only when two consecutive reads
+// were both taken while encrypting, the earlier one at least atLeast, and the later one strictly larger. A single
+// read above zero says nothing about a reencryption that stalled.
+type progress struct {
+	prev, last int64
+	read       bool
+}
+
+// next records a read and reports whether the reencryption grew since the previous one.
+func (p *progress) next(encrypting bool, done, atLeast int64) bool {
+	grew := p.read && encrypting && p.last >= atLeast && done > p.last
+	p.prev, p.last, p.read = p.last, done, encrypting
+	return grew
 }
 
 // powerCutMidway waits until the device reports done_bytes between 10 % and 90 % of data_bytes and cuts the power;

@@ -101,6 +101,7 @@ func (s *Stack) Call(t *testing.T, method, path string, body any, status int) po
 	res, err := s.session().Do(ctx, method, path, body)
 	// A gate of an hour outlives alice's session (in-place encryption gates): sign in again once.
 	if err == nil && res.Status == http.StatusUnauthorized && status != http.StatusUnauthorized {
+		t.Logf("%s %s: HTTP 401, alice's session expired; signing in again once", method, path)
 		s.Login(t)
 		res, err = s.session().Do(ctx, method, path, body)
 	}
@@ -175,6 +176,7 @@ func (s *Stack) Events(t *testing.T, code, deviceID string) []portal.AuditEvent 
 	defer cancel()
 	all, err := s.session().AuditEvents(ctx, code)
 	if err != nil && strings.Contains(err.Error(), "HTTP 401") {
+		t.Logf("audit events %s: HTTP 401, alice's session expired; signing in again once", code)
 		s.Login(t)
 		all, err = s.session().AuditEvents(ctx, code)
 	}

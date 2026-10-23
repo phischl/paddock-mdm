@@ -677,11 +677,19 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 	Until(t, w.Name+": the reinstall fails while dracut is diverted", 10*time.Minute, 10*time.Second, nil, func() bool {
 		return w.Must(fmt.Sprintf(unlockPath, "reinstalling the unlock path of the converted disk failed")) != "0"
 	})
+	// The stale initrd carries the module anyway (I1), so the proof is the failure while diverted, then the agent's
+	// success line and initrds newer than the moment the diversion was removed.
+	if out := w.Must(fmt.Sprintf(unlockPath, "the unlock path of the converted disk is reinstalled in every initrd")); out != "0" {
+		t.Fatalf("the reinstall succeeded while dracut was diverted (%s lines)", out)
+	}
+	removed := w.Must("date +%s")
 	w.Must("sudo rm /usr/bin/dracut && sudo dpkg-divert --remove --rename /usr/bin/dracut >/dev/null && test -x /usr/bin/dracut")
-	// The stale initrd carries the module anyway; only the agent's own success line proves the rebuild.
 	Until(t, w.Name+": the agent reinstalled the unlock path", 20*time.Minute, 15*time.Second, nil, func() bool {
 		return w.Must(fmt.Sprintf(unlockPath, "the unlock path of the converted disk is reinstalled in every initrd")) != "0"
 	})
+	if stale := w.Must("find /boot -maxdepth 1 -name 'initrd.img-*' -type f ! -newermt @" + removed + " | wc -l"); stale != "0" {
+		t.Fatalf("%s initrds were not rebuilt after the diversion was removed", stale)
+	}
 	for name, i := range w.initrds(t) {
 		if !i.Module || !i.Key {
 			t.Fatalf("%s lacks the module or the key after the reinstall: %+v", name, i)

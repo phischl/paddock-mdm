@@ -28,6 +28,34 @@ func TestParseInitrds(t *testing.T) {
 	}
 }
 
+// TestProgress: progress needs two consecutive reads while encrypting with a strict increase from at least atLeast;
+// a first read above zero, a stalled value and a read outside encrypting never count.
+func TestProgress(t *testing.T) {
+	var p progress
+	if p.next(true, 500, 0) {
+		t.Fatal("a single read counts as progress")
+	}
+	if p.next(true, 500, 0) {
+		t.Fatal("a stalled reencryption counts as progress")
+	}
+	if !p.next(true, 600, 0) {
+		t.Fatal("a growth is not seen")
+	}
+	var q progress
+	q.next(false, 100, 0)
+	if q.next(true, 200, 0) {
+		t.Fatal("growth from a read outside encrypting counts")
+	}
+	var r progress
+	r.next(true, 100, 150)
+	if r.next(true, 200, 150) {
+		t.Fatal("growth from below atLeast counts")
+	}
+	if !r.next(true, 300, 150) || r.prev != 200 || r.last != 300 {
+		t.Fatalf("progress %+v", r)
+	}
+}
+
 // TestIETemplates: both throwaway templates render without a placeholder left, keep the late-commands that
 // withTestAccess extends, log the test user in and put the console on the serial port the gates read.
 func TestIETemplates(t *testing.T) {
