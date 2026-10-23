@@ -19,12 +19,15 @@ autoinstall (`autoinstall.md`, `disk-recovery.md`): `compliant`, TPM2 + boot PIN
 3. **Restart (the init step).** At the next restart, before the root file system is mounted, the module checks the
    file system, shrinks it by 64 MiB (32 MiB for the LUKS2 header, the rest as margin), writes the LUKS2 header and
    opens the partition. The device then boots on dm-crypt.
-4. **Boot PIN.** On the text console the device asks for the boot PIN (unlock mode *TPM + boot PIN*) or enrolls the
-   TPM without a dialogue (*TPM only*), as after an autoinstall.
-5. **Background phase.** `paddockd encrypt-resume` encrypts the remaining data while the device is in use. When it
-   has finished and the TPM keyslot exists, the agent rebuilds every initrd without the module and the key, enrolls
-   and escrows a new recovery key (generation 2) and the header, and removes the conversion key's keyslot. The
-   device becomes `compliant`.
+4. **Background phase.** `paddockd encrypt-resume` encrypts the remaining data while the device is in use. No keyslot
+   can be added while the encryption is unfinished, so nothing asks for a PIN yet (the device reports
+   `enrollment_deferred`).
+5. **Boot PIN after completion.** When the background encryption has completed, the device asks the user to restart
+   (desktop notification *Disk encryption completed — please restart*). At that start it asks for the boot PIN on the
+   text console (unlock mode *TPM + boot PIN*) or enrolls the TPM without a dialogue (*TPM only*), as after an
+   autoinstall. Then the agent rebuilds every initrd without the module and the key, enrolls and escrows a new
+   recovery key (generation 2) and the header, and removes the conversion key's keyslot. The device becomes
+   `compliant`.
 
 ## Supported layouts and preflight reasons
 
@@ -66,10 +69,11 @@ swap partitions and other data partitions stay unencrypted.
 - **At the restart:** the text console shows the module's steps (`paddock-encrypt: …`). The init step takes seconds
   to a few minutes (a full `e2fsck` of the root file system and the move of 32 MiB); a laptop must be on mains power,
   otherwise the device boots unencrypted and the conversion fails with reason `on_battery`.
-- **The boot PIN dialogue** follows on the text console under *TPM + boot PIN*. The user may skip it (Enter twice);
-  the device then asks again at every start, and the portal shows that the disk is encrypted but not protected at
-  rest: until the PIN is chosen, the key that unlocks the disk lies in the initrd on the unencrypted `/boot`.
-- **Afterwards** the device works as usual.
+- **During the background phase** the device works as usual; restarts open the disk without input.
+- **After the background phase** the device asks for one more restart. Under *TPM + boot PIN* that start shows the
+  boot PIN dialogue on the text console; the user may skip it (Enter twice), and the device then asks again at every
+  start. Until the PIN is chosen (or, under *TPM only*, until that restart) the portal shows that the disk is encrypted
+  but not protected at rest: the key that unlocks it lies in the initrd on the unencrypted `/boot`.
 
 ## Background phase
 
