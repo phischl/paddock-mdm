@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation: the architecture and the compliance pack now mark every unbuilt feature as planned (with its
+  milestone) or dropped: Authentik event ingestion, event-gap and clock-drift detection, Himmelblau component check
+  and log shipper, per-organization retention, evidence export, `collect_status`, `playbook`, Git export, SIEM
+  forward (plan M8b, ADR 0030).
+
 ## [0.1.0-alpha.5] - 2026-10-24
 
 In-place encryption of installed devices (M8e, ADR 0039): an organization administrator encrypts the disk of an

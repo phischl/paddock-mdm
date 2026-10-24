@@ -25,7 +25,7 @@ Fleet's features that could collect such data are switched off and kept off by `
 | What | When | Stored |
 | --- | --- | --- |
 | Enrollment: hostname (refreshed at every check-in from the health report, plan M8h), hardware UUID (`/sys/class/dmi/id/product_uuid`), machine ID, `/etc/os-release`, agent version, public identity key | once | device record |
-| Check-in: applied bundle version, agent version, bundle schema versions, architecture, health (agent status and last error, sudo implementation, disk encryption state with the kinds of the LUKS keyslots and, per encrypted volume, its device path, LUKS UUID and keyslot count, the capabilities of `paddock-revoke`, the current hostname), whether a reboot is required | every check-in (5 minutes) | device status |
+| Check-in: applied bundle version, agent version, bundle schema versions, architecture, health (agent status and last error, sudo implementation, disk encryption state with the kinds of the LUKS keyslots and, per encrypted volume, its device path, LUKS UUID and keyslot count, the capabilities of `paddock-revoke`, the current hostname), whether a reboot is required, the highest event sequence number the agent assigned (`event_seq_high`), the signed request timestamp, from which the server derives the device's clock offset (stored as one number per device; `device.clock_drift` above 60 s) *(planned: M8b, PDK-107)* | every check-in (5 minutes) | device status |
 | Events of the agent's own work: bundle applied or rejected (resource IDs and error messages), configuration drift corrected, agent updated or rolled back, login and sudo configuration applied or failed, locks and suspensions applied | when they happen | audit log |
 | Update runs (`updates.run`): kind (security or regular), start and end, result, number of upgraded packages, held-back package names, reboot required | after each run | audit log, device update status |
 | Revocation results: per volume the device path and the keyslot counts before and after, unresolved crypttab entries, refusals with their reason | after a Lock, Destroy or refused token | audit log, revocation request |
@@ -75,7 +75,7 @@ device and are never stored:
 | `paddock_agent_running` | a process named `paddockd` runs from `/opt/paddock/agent/`. The query reads the process table on the device to answer one yes/no question; it is not a process list, and no process name, command line or user is collected. |
 | `disk_encrypted` | the root file system is on an encrypted (dm-crypt) device |
 
-There is no time synchronization policy: osquery has no table for it on Linux.
+There is no time synchronization policy: osquery has no table for it on Linux; Paddock measures drift from the check-in instead (*Paddock agent* table).
 
 ### What Paddock stores of it
 
@@ -109,3 +109,7 @@ Paddock stores of its administrators the account (user name, display name, organ
 and in every audit event of their actions the actor's name, the client IP address and whether the action had a
 step-up. API tokens (`paddockctl`) are stored only as hashes, with their name, creator and expiry. Audit events are kept for
 the retention of the WORM store (at least 400 days) and cannot be deleted earlier.
+
+Paddock snapshots the membership of its portal role groups (`paddock.<slug>.admins`, `.operators`, `.auditors`,
+`paddock.platform.admins`) and the set of Authentik superusers every 5 minutes: user name and Authentik ID per role,
+and an audit event for every change *(planned: M8b, PDK-111)*.
