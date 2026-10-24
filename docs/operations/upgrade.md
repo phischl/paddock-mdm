@@ -28,6 +28,10 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
 - From 0.1.0-alpha.4: the fix that keeps the Hello PIN working while a user stays signed in is on the device (the
   agent writes `cache_timeout` into `himmelblau.conf`). Roll out the agent release first; devices with an older agent
   keep losing the PIN after a few minutes of use (residual risk RR-40).
+- From 0.1.0-alpha.5: upgrade the server first, then roll out the agent release; agents older than this release refuse
+  the in-place encryption request as unsupported. Its migration 00067 builds an index on the vulnerability findings;
+  on large finding tables the migration step takes a little longer (well under a second at 200 000 findings), and
+  vulnerability updates from the inventory sync wait for it.
 
 ## Upgrade (each host)
 
