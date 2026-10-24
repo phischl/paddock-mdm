@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.5] - 2026-10-24
+
+In-place encryption of installed devices (M8e, ADR 0039): an organization administrator encrypts the disk of an
+unencrypted device with a supported layout without reinstalling it and follows the encryption in the portal
+(`docs/operations/in-place-encryption.md`). Organization creation no longer fails when Authentik answers slowly, and
+the software list answers quickly at a few thousand packages. **Upgrade order: the server first, then the agents**
+(`docs/operations/upgrade.md`): agents older than this release refuse the encryption request as unsupported. Coming
+from 0.1.0-alpha.3 or earlier, follow the notes of 0.1.0-alpha.4 first (agents before the server). Fleet moves to
+v4.93.1: take the Fleet dump before the upgrade (`docs/operations/upgrade.md`, step 3). Migration 00067 builds an
+index on the vulnerability findings during the migration step; it takes well under a second at 200 000 findings,
+while vulnerability updates from the inventory sync wait. `paddock-revoke` stays unsigned, and revocation (Lock,
+Destroy, dead man's switch) stays disabled behind `PADDOCK_REVOCATION_ENABLED`. Schema: migrations 00066–00067
+(control-plane database); the audit database is unchanged.
+
 ### Added
 
 - In-place encryption, admin API and server (M8e, ADR 0039): `POST /api/v1/devices/{id}/encrypt` asks an
@@ -1178,7 +1192,8 @@ acceptance.
   in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
-[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.4...HEAD
+[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.5...HEAD
+[0.1.0-alpha.5]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.2
