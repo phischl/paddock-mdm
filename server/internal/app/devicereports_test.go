@@ -73,13 +73,43 @@ func TestAgentUpdateEventsAreClassifiedByOutcome(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.eventType+"/"+tt.outcome, func(t *testing.T) {
 			data, _ := json.Marshal(map[string]string{"version": "1.1.0", "from_version": "1.0.0", "outcome": tt.outcome})
-			entry, ok := eventEntry(uuid.New(), protocol.Event{EventSeq: 1, Type: tt.eventType, OccurredAt: time.Now(), Data: data})
+			entry, ok := eventEntry(uuid.New(), protocol.Event{EventSeq: 1, Type: tt.eventType, OccurredAt: time.Now(), Data: data}, time.Now())
 			if !ok || entry.Spec.Code != tt.code {
 				t.Fatalf("audit code %q (audited %t), want %q", entry.Spec.Code, ok, tt.code)
 			}
 			counted, ok := updateOutcome(tt.eventType, entry.Spec.Params)
 			if counted != tt.counted || ok != (tt.counted != "") {
 				t.Fatalf("counted as %q (%t), want %q", counted, ok, tt.counted)
+			}
+		})
+	}
+}
+
+// TestDroppedRange (plan M8b decision 19, PDK-108 review 1): only a range below the event's own number counts as
+// dropped; the agent numbers agent.events_dropped after the range it lost.
+func TestDroppedRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      string
+		seq      int64
+		params   map[string]any
+		from, to int64
+		ok       bool
+	}{
+		{"range below the event", protocol.EventAgentEventsDropped, 7, map[string]any{"from_seq": int64(5), "to_seq": int64(6)}, 5, 6, true},
+		{"single number", protocol.EventAgentEventsDropped, 2, map[string]any{"from_seq": int64(1), "to_seq": int64(1)}, 1, 1, true},
+		{"range up to the event's own number", protocol.EventAgentEventsDropped, 6, map[string]any{"from_seq": int64(5), "to_seq": int64(6)}, 0, 0, false},
+		{"range beyond the event", protocol.EventAgentEventsDropped, 7, map[string]any{"from_seq": int64(5), "to_seq": int64(9_000_000_000_000_000_000)}, 0, 0, false},
+		{"reversed", protocol.EventAgentEventsDropped, 9, map[string]any{"from_seq": int64(6), "to_seq": int64(5)}, 0, 0, false},
+		{"from below 1", protocol.EventAgentEventsDropped, 9, map[string]any{"from_seq": int64(0), "to_seq": int64(5)}, 0, 0, false},
+		{"missing to_seq", protocol.EventAgentEventsDropped, 9, map[string]any{"from_seq": int64(5)}, 0, 0, false},
+		{"another type", protocol.EventBundleApplied, 9, map[string]any{"from_seq": int64(5), "to_seq": int64(6)}, 0, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			from, to, ok := droppedRange(tt.typ, tt.seq, tt.params)
+			if ok != tt.ok || (ok && (from != tt.from || to != tt.to)) {
+				t.Fatalf("droppedRange = %d %d %v, want %d %d %v", from, to, ok, tt.from, tt.to, tt.ok)
 			}
 		})
 	}

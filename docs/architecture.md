@@ -1342,7 +1342,7 @@ package version *(not scheduled)*; `/etc/himmelblau/himmelblau.conf` is re-rende
 
 Every event carries `event_seq` (per device, monotonic, persisted). The worker reports a hole in a device's sequence
 numbers as `device.event_gap`, a counter that restarted as `device.event_seq_reset`, and a hole that was filled
-later as `device.event_gap_filled` *(planned: M8b, PDK-108)*; a spool overflow the agent admits
+later as `device.event_gap_filled`; a spool overflow the agent admits
 (`device.agent_events_dropped`) is not a gap. Event types form a closed enum; the gateway rejects unknown
 types (N5). **Mutual watch:** an osquery policy in Fleet checks that `paddockd` runs and its binary hash
 matches the release manifest; the agent checks that `fleetd` runs. Disabling one is reported by the other.

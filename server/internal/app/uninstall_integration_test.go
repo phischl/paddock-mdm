@@ -471,11 +471,11 @@ func TestUninstalledOnlyForTheRequest(t *testing.T) {
 		t.Fatal("device marked by a report without a successful command")
 	}
 	w.exec(t, "UPDATE device_command SET status = 'delivered' WHERE id = $1", cmd)
-	if err := w.reports.RecordEvents(systemCtx(w.org), w.device, []protocol.Event{uninstalledEvent(4, cmd)}); err == nil {
+	if err := w.reports.RecordEvents(systemCtx(w.org), w.device, time.Now(), []protocol.Event{uninstalledEvent(4, cmd)}); err == nil {
 		t.Fatal("report before the result was not retried")
 	}
 	w.exec(t, "UPDATE device_command SET status = 'succeeded' WHERE id = $1", cmd)
-	if err := w.reports.RecordEvents(systemCtx(w.org), w.device, []protocol.Event{uninstalledEvent(4, cmd)}); err != nil {
+	if err := w.reports.RecordEvents(systemCtx(w.org), w.device, time.Now(), []protocol.Event{uninstalledEvent(4, cmd)}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup

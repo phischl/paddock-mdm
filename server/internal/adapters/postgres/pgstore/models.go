@@ -252,10 +252,30 @@ type DeviceDiskConversion struct {
 	AbortRefusedReason *string
 }
 
+type DeviceEventDropped struct {
+	DeviceID       uuid.UUID
+	FromSeq        int64
+	ToSeq          int64
+	OrganizationID uuid.UUID
+}
+
+type DeviceEventGap struct {
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	DeviceID         uuid.UUID
+	FromSeq          int64
+	ToSeq            int64
+	FirstSeenAt      time.Time
+	FirstSeenLastSeq int64
+	ReportedAt       *time.Time
+	FilledAt         *time.Time
+}
+
 type DeviceEventSeen struct {
 	DeviceID       uuid.UUID
 	EventSeq       int64
 	OrganizationID uuid.UUID
+	ReceivedAt     *time.Time
 }
 
 type DeviceGroup struct {

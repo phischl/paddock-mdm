@@ -36,9 +36,13 @@ func NewDeviceReports(runner *ActionRunner, org *db.OrgPool) *DeviceReports {
 	return &DeviceReports{runner: runner, org: org, now: time.Now}
 }
 
-// RecordStatus materializes a heartbeat into device_status; an older heartbeat never overwrites a newer one. It then
-// evaluates the clock drift of the device (plan M8b decision 14).
+// RecordStatus materializes a heartbeat into device_status; an older heartbeat never overwrites a newer one. A heartbeat
+// that shows a restarted event counter is recorded first (plan M8b decision 22); afterwards the clock drift of the
+// device is evaluated (decision 14).
 func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) error {
+	if err := d.detectEventSeqReset(ctx, hb); err != nil {
+		return err
+	}
 	health := hb.Health
 	if len(health) == 0 {
 		health = json.RawMessage(`{}`)
@@ -87,6 +91,60 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 		return err
 	}
 	return d.recordClockDrift(ctx, hb.DeviceID, raise)
+}
+
+// detectEventSeqReset records device.event_seq_reset when the heartbeat claims a highest event number below one the
+// gateway received before it (plan M8b decision 22, amendment 2026-10-24). Events received after the heartbeat are no
+// evidence: the agent sends the events it numbered after a check-in right after it, and the worker may record them
+// first. The contiguous pointer is not compared: every number up to it was delivered or lies below a delivered
+// agent.events_dropped event, so the bounded maximum covers it without counting events received later.
+func (d *DeviceReports) detectEventSeqReset(ctx context.Context, hb ingest.Heartbeat) error {
+	var before int64
+	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		before, err = q.MaxDeviceEventSeenBefore(ctx, pgstore.MaxDeviceEventSeenBeforeParams{DeviceID: hb.DeviceID, Before: hb.ReceivedAt})
+		return err
+	})
+	if err != nil || hb.EventSeqHigh >= before {
+		return err
+	}
+	return d.recordEventSeqReset(ctx, hb)
+}
+
+// recordEventSeqReset forgets the event numbers the device delivered before the heartbeat, its dropped ranges and its
+// open gaps (closed without an event), recorded once under the lock of the device's status row: the claim re-reads the delivered numbers in the event's
+// transaction, so a second delivery of the same heartbeat finds nothing left to forget and records nothing.
+func (d *DeviceReports) recordEventSeqReset(ctx context.Context, hb ingest.Heartbeat) error {
+	spec := ActionSpec{Code: audit.CodeDeviceEventSeqReset, Target: &audit.Target{Type: "device", ID: hb.DeviceID.String()}}
+	_, err := d.runner.RecordOnceWith(ctx, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
+		// The event gap round takes the same lock (EventGaps.evaluate); a device that never checked in has no row.
+		if _, err := q.LockDeviceEventSeq(ctx, hb.DeviceID); err != nil && !db.IsNoRows(err) {
+			return false, err
+		}
+		previous, err := q.MaxDeviceEventSeenBefore(ctx, pgstore.MaxDeviceEventSeenBeforeParams{DeviceID: hb.DeviceID, Before: hb.ReceivedAt})
+		if err != nil || hb.EventSeqHigh >= previous {
+			return false, err
+		}
+		forgotten, err := q.DeleteDeviceEventSeenBefore(ctx, pgstore.DeleteDeviceEventSeenBeforeParams{DeviceID: hb.DeviceID, Before: hb.ReceivedAt})
+		if err != nil || forgotten == 0 {
+			return false, err
+		}
+		if err := q.DeleteDeviceEventDropped(ctx, hb.DeviceID); err != nil {
+			return false, err
+		}
+		now := d.now()
+		if err := q.CloseOpenDeviceEventGaps(ctx, pgstore.CloseOpenDeviceEventGapsParams{Now: &now, DeviceID: hb.DeviceID}); err != nil {
+			return false, err
+		}
+		if err := q.ResetEventSeq(ctx, pgstore.ResetEventSeqParams{High: hb.EventSeqHigh, DeviceID: hb.DeviceID}); err != nil {
+			return false, err
+		}
+		rec.SetParam("previous_high", previous)
+		rec.SetParam("reported_high", hb.EventSeqHigh)
+		rec.SetParam("events_seen", forgotten)
+		return true, nil
+	})
+	return err
 }
 
 // clockTransition evaluates the stored clock state, which reflects the newest materialized check-in: a heartbeat that
@@ -296,7 +354,7 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 	if ev.Type == protocol.EventSessionLogin {
 		return true, d.recordSessionLogin(ctx, deviceID, ev)
 	}
-	entry, ok := eventEntry(deviceID, ev)
+	entry, ok := eventEntry(deviceID, ev, d.now())
 	if !ok {
 		return false, nil // the gateway admits only known types; anything else is ignored
 	}
@@ -304,12 +362,16 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 }
 
 // RecordEvents is RecordEvent for the events of one ingest message, session logins included, in one transaction
-// (ActionRunner.RecordOnceBatch). An error means that some event could not be recorded; the others are, and a
-// redelivery skips them by (device_id, event_seq).
-func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, events []protocol.Event) error {
+// (ActionRunner.RecordOnceBatch); receivedAt is when the gateway received the message (zero: unknown, now is used).
+// An error means that some event could not be recorded; the others are, and a redelivery skips them by
+// (device_id, event_seq).
+func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, receivedAt time.Time, events []protocol.Event) error {
+	if receivedAt.IsZero() {
+		receivedAt = d.now()
+	}
 	entries := make([]OnceEntry, 0, len(events))
 	for _, ev := range events {
-		entry, ok := eventEntry(deviceID, ev)
+		entry, ok := eventEntry(deviceID, ev, receivedAt)
 		if ev.Type == protocol.EventSessionLogin {
 			entry, ok = sessionLoginEntry(deviceID, ev, d.now())
 		}
@@ -324,9 +386,9 @@ func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, ev
 	return err
 }
 
-// eventEntry is the audited action of a device event and the claim of its (device, event_seq); false for a type that
-// is not audited.
-func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
+// eventEntry is the audited action of a device event and the claim of its (device, event_seq), received by the gateway
+// at receivedAt; false for a type that is not audited.
+func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (OnceEntry, bool) {
 	code, ok := eventCodes[ev.Type]
 	if !ok {
 		return OnceEntry{}, false
@@ -351,10 +413,17 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 			return false, err
 		}
 		n, err := q.InsertDeviceEventSeen(ctx, pgstore.InsertDeviceEventSeenParams{
-			DeviceID: deviceID, EventSeq: ev.EventSeq, OrganizationID: org,
+			DeviceID: deviceID, EventSeq: ev.EventSeq, OrganizationID: org, ReceivedAt: &receivedAt,
 		})
 		if err != nil || n != 1 {
 			return false, err
+		}
+		if from, to, ok := droppedRange(ev.Type, ev.EventSeq, spec.Params); ok {
+			if err := q.InsertDeviceEventDropped(ctx, pgstore.InsertDeviceEventDroppedParams{
+				DeviceID: deviceID, FromSeq: from, ToSeq: to, OrganizationID: org,
+			}); err != nil {
+				return false, err
+			}
 		}
 		if outcome, ok := updateOutcome(ev.Type, spec.Params); ok {
 			if version, ok := spec.Params["version"].(string); ok {
@@ -387,6 +456,19 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 		}
 		return true, err
 	}}, true
+}
+
+// droppedRange is the range of event numbers an agent.events_dropped event with number eventSeq declares (plan M8b
+// decision 19); false for another type or a range that is missing or not 1 ≤ from_seq ≤ to_seq < eventSeq. The agent
+// numbers the event after the range it dropped, so a range up to or beyond its own number was never assigned and
+// would only switch gap detection off for the device (PDK-108 review 1).
+func droppedRange(eventType string, eventSeq int64, params map[string]any) (from, to int64, ok bool) {
+	if eventType != protocol.EventAgentEventsDropped {
+		return 0, 0, false
+	}
+	from, okFrom := params["from_seq"].(int64)
+	to, okTo := params["to_seq"].(int64)
+	return from, to, okFrom && okTo && 1 <= from && from <= to && to < eventSeq
 }
 
 // recordSessionLogin notes that a user logged in on a device (device_user_seen, plan M3a decision 10); logins are not

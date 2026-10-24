@@ -83,6 +83,16 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
     expect(row.findAll('a.v-btn').map((b) => b.text())).toEqual(['Open device'])
   })
 
+  it('labels an event gap with its range and opens the device (plan M8b decision 23)', async () => {
+    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'event_gap', since: '2026-10-24T10:00:00Z', detail: '3-3' }] }]
+    const w = await mountAttention()
+    const row = w.find('[data-testid="attention-list"] tbody tr')
+    const chip = row.find('.pd-chip')
+    expect(chip.text()).toBe('Event gap')
+    expect(chip.attributes('title')).toBe('3-3')
+    expect(row.findAll('a.v-btn').map((b) => b.text())).toEqual(['Open device'])
+  })
+
   it('explains the empty list', async () => {
     items = []
     const w = await mountAttention()

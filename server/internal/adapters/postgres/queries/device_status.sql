@@ -35,10 +35,17 @@ UPDATE device_status SET clock_drift_since = NULL WHERE device_id = @device_id A
 -- name: ListDeviceSeqs :many
 SELECT device_id, last_seq FROM device_status WHERE last_seq > 0 ORDER BY device_id;
 
--- Device events are deduplicated by (device_id, event_seq) (plan M2a decision 14).
+-- Device events are deduplicated by (device_id, event_seq) (plan M2a decision 14); received_at is the gateway's
+-- receipt time of the event's batch (plan M8b amendment of 2026-10-24).
 -- name: InsertDeviceEventSeen :execrows
-INSERT INTO device_event_seen (device_id, event_seq, organization_id)
-VALUES (@device_id, @event_seq, @organization_id)
+INSERT INTO device_event_seen (device_id, event_seq, organization_id, received_at)
+VALUES (@device_id, @event_seq, @organization_id, @received_at)
+ON CONFLICT DO NOTHING;
+
+-- A range of event sequence numbers the agent admits it dropped (agent.events_dropped, plan M8b decision 19): no gap.
+-- name: InsertDeviceEventDropped :exec
+INSERT INTO device_event_dropped (device_id, from_seq, to_seq, organization_id)
+VALUES (@device_id, @from_seq, @to_seq, @organization_id)
 ON CONFLICT DO NOTHING;
 
 -- The latest login.* or sudo.* event of a device per area (plan M3b decision 17); an older event never overwrites a
