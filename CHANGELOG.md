@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `device.event_seq_reset`, `device.clock_drift`, `device.clock_drift_cleared`, `audit.chain_verified`,
   `audit.chain_verification_failed`, `admin.role_granted` and `admin.role_revoked` are registered and documented in
   `docs/compliance/audit-codes.md`, with portal texts in English and German. Paddock does not record them yet.
+- Clock drift detection (plan M8b, ISO 27001 A.8.17): the server measures the clock offset of every device from the
+  signed time of its check-in, without an agent change. A device whose clock is more than 60 s off records
+  `device.clock_drift` and appears on the attention list with the kind `clock_drift` and the offset; once the clock
+  is back within 30 s, `device.clock_drift_cleared` ends the episode. A device more than 300 s off is still refused
+  (`clock_skew`) and shows as silent. Schema: migration 00068 adds the clock and event sequence columns to the device
+  status and the attention kind `clock_drift`.
 
 ### Changed
 

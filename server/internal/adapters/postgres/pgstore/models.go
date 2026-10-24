@@ -342,6 +342,10 @@ type DeviceStatus struct {
 	AgentVersionKey      *string
 	Arch                 string
 	ComponentsOutdated   []string
+	ClockOffsetS         *int64
+	ClockDriftSince      *time.Time
+	EventSeqHigh         int64
+	EventSeqContiguous   int64
 }
 
 type DeviceUserSeen struct {

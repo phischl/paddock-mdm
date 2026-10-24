@@ -36,14 +36,16 @@ func NewDeviceReports(runner *ActionRunner, org *db.OrgPool) *DeviceReports {
 	return &DeviceReports{runner: runner, org: org, now: time.Now}
 }
 
-// RecordStatus materializes a heartbeat into device_status; an older heartbeat never overwrites a newer one.
+// RecordStatus materializes a heartbeat into device_status; an older heartbeat never overwrites a newer one. It then
+// evaluates the clock drift of the device (plan M8b decision 14).
 func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) error {
 	health := hb.Health
 	if len(health) == 0 {
 		health = json.RawMessage(`{}`)
 	}
 	at := hb.ReceivedAt
-	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	var raise, clear bool
+	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		versions := make([]int32, 0, len(hb.SchemaVersions))
 		for _, v := range hb.SchemaVersions {
 			versions = append(versions, int32(v)) //nolint:gosec // the gateway bounds versions to 1–1000
@@ -60,6 +62,7 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 			DeviceID: hb.DeviceID, OrganizationID: hb.OrganizationID, LastContactAt: &at,
 			AppliedBundleVersion: &hb.AppliedBundleVersion, AgentVersion: &hb.AgentVersion, LastSeq: hb.Seq, Health: health,
 			SchemaVersions: versions, Arch: hb.Arch, ComponentsOutdated: outdated,
+			ClockOffsetS: &hb.ClockOffsetS, EventSeqHigh: hb.EventSeqHigh,
 		}); err != nil {
 			return err
 		}
@@ -69,11 +72,71 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 			}
 		}
 		if root, ok := RootVolume(diskHealth(health)); ok {
-			_, err := q.SetRootHeaderVolume(ctx, pgstore.SetRootHeaderVolumeParams{Volume: root, DeviceID: hb.DeviceID})
+			if _, err := q.SetRootHeaderVolume(ctx, pgstore.SetRootHeaderVolumeParams{Volume: root, DeviceID: hb.DeviceID}); err != nil {
+				return err
+			}
+		}
+		clock, err := q.GetDeviceClockState(ctx, hb.DeviceID)
+		if err != nil {
 			return err
 		}
+		raise, clear = clockTransition(clock)
 		return nil
 	})
+	if err != nil || (!raise && !clear) {
+		return err
+	}
+	return d.recordClockDrift(ctx, hb.DeviceID, raise)
+}
+
+// clockTransition evaluates the stored clock state, which reflects the newest materialized check-in: a heartbeat that
+// arrived out of order did not overwrite it and so changes nothing.
+func clockTransition(clock pgstore.GetDeviceClockStateRow) (raise, clear bool) {
+	if clock.ClockOffsetS == nil {
+		return false, false
+	}
+	return device.DriftState(time.Duration(*clock.ClockOffsetS)*time.Second, clock.ClockDriftSince != nil)
+}
+
+// recordClockDrift opens (device.clock_drift) or closes (device.clock_drift_cleared) the clock drift episode of a
+// device, recorded once: the claim re-reads the clock state in the event's transaction and records nothing when
+// another delivery got there first or a newer check-in changed the offset meanwhile. Only an active device raises an
+// episode; an open one is closed in every state, so a device that was quarantined while drifting does not keep it.
+func (d *DeviceReports) recordClockDrift(ctx context.Context, deviceID uuid.UUID, raise bool) error {
+	spec := ActionSpec{Code: audit.CodeDeviceClockDriftCleared, Target: &audit.Target{Type: "device", ID: deviceID.String()}}
+	if raise {
+		spec.Code = audit.CodeDeviceClockDrift
+	}
+	_, err := d.runner.RecordOnceWith(ctx, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
+		clock, err := q.GetDeviceClockState(ctx, deviceID)
+		if err != nil {
+			return false, notFound(err)
+		}
+		up, down := clockTransition(clock)
+		if up != raise || down == raise {
+			return false, nil
+		}
+		offset := *clock.ClockOffsetS
+		rec.SetParam("offset_s", offset)
+		if !raise {
+			rec.SetParam("threshold_s", int64(device.DriftClearThreshold/time.Second))
+			rec.SetParam("since", audit.Timestamp(*clock.ClockDriftSince).Format(time.RFC3339Nano))
+			n, err := q.ClearClockDrift(ctx, deviceID)
+			return n == 1, err
+		}
+		dev, err := q.GetDevice(ctx, deviceID)
+		if err != nil || dev.State != device.StateActive {
+			return false, notFound(err)
+		}
+		rec.SetParam("threshold_s", int64(device.DriftThreshold/time.Second))
+		if clock.LastContactAt != nil {
+			rec.SetParam("last_contact_at", audit.Timestamp(*clock.LastContactAt).Format(time.RFC3339Nano))
+		}
+		now := d.now()
+		n, err := q.SetClockDrift(ctx, pgstore.SetClockDriftParams{Now: &now, DeviceID: deviceID})
+		return n == 1, err
+	})
+	return err
 }
 
 // HealthComponents reads health.components (plan M8d decision 52): the installed version per component, "" for one

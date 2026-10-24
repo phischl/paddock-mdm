@@ -45,6 +45,8 @@ type Heartbeat struct {
 	Seq            int64           `json:"seq"`
 	ReportedSeq    int64           `json:"reported_seq"`
 	CloneSuspected bool            `json:"clone_suspected"`
+	// ClockOffsetS is server time minus the device's signed timestamp in seconds (plan M8b decision 11).
+	ClockOffsetS int64 `json:"clock_offset_s"`
 	// DeliveredCommands are the commands the check-in response carried (plan M4a decision 3).
 	DeliveredCommands []uuid.UUID `json:"delivered_commands,omitempty"`
 }

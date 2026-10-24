@@ -73,6 +73,16 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
     expect(chip.attributes('title')).toBe('init:on_battery')
   })
 
+  it('labels a clock drift with its offset and opens the device (plan M8b decision 15)', async () => {
+    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'clock_drift', since: '2026-10-21T10:00:00Z', detail: '120 s' }] }]
+    const w = await mountAttention()
+    const row = w.find('[data-testid="attention-list"] tbody tr')
+    const chip = row.find('.pd-chip')
+    expect(chip.text()).toBe('Clock drift')
+    expect(chip.attributes('title')).toBe('120 s')
+    expect(row.findAll('a.v-btn').map((b) => b.text())).toEqual(['Open device'])
+  })
+
   it('explains the empty list', async () => {
     items = []
     const w = await mountAttention()

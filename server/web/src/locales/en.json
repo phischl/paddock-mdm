@@ -1865,7 +1865,8 @@
       "agent_not_running": "Agent not running",
       "uninstall_pending": "Removal of Paddock pending",
       "config_behind": "Configuration behind",
-      "disk_conversion_failed": "In-place encryption failed"
+      "disk_conversion_failed": "In-place encryption failed",
+      "clock_drift": "Clock drift"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1882,7 +1883,8 @@
       "agent_not_running": "Open device",
       "uninstall_pending": "Open device",
       "config_behind": "Open device",
-      "disk_conversion_failed": "Open device"
+      "disk_conversion_failed": "Open device",
+      "clock_drift": "Open device"
     },
     "more": "+{count}",
     "empty": {

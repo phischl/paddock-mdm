@@ -177,12 +177,14 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issued := seq - 1 // the value the device should have sent
+	received := g.d.Now().UTC()
 	hb := ingest.Heartbeat{
-		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: g.d.Now().UTC(),
+		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: received,
 		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion, Arch: boundedArch(req.Arch),
 		SchemaVersions: boundedSchemaVersions(req.SchemaVersions), Health: req.Health,
 		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq,
 		CloneSuspected: dev.headers.Seq < issued-1, DeliveredCommands: delivered,
+		ClockOffsetS: received.Unix() - dev.headers.Timestamp,
 	}
 	body, err := json.Marshal(hb)
 	if err != nil {

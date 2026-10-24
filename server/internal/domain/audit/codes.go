@@ -1180,7 +1180,7 @@ var registry = map[Code]Definition{
 		Description: "The clock of a device differs from the server's by more than threshold_s seconds, measured from the signed timestamp of its check-in (actor: system). Recorded once per episode; device.clock_drift_cleared ends it.",
 		Params:      []string{"offset_s", "threshold_s", "last_contact_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "offset_s is server time minus device time in seconds (positive: the device is behind). A device off by more than 300 s cannot authenticate and is silent instead (RR-37).",
+		Note:        "offset_s is server time minus device time in seconds (positive: the device is behind). A device off by more than 300 s cannot authenticate and is silent instead (RR-76).",
 	},
 	CodeDeviceClockDriftCleared: {
 		Code: CodeDeviceClockDriftCleared, Emitted: true,
