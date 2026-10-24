@@ -111,6 +111,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
 	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
 		min(worker.StalenessInterval, stalenessUnit/4))
+	eventGaps := worker.NewEventGaps(app.NewEventGaps(runner, pool), pool, platformPool, min(worker.StalenessInterval, stalenessUnit/4))
 	loginHistoryEvery := worker.LoginHistoryInterval
 	if retentionDay < time.Hour {
 		loginHistoryEvery = 15 * time.Second
@@ -157,6 +158,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		cacheSync.Run,
 		dms.Run,
 		staleness.Run,
+		eventGaps.Run,
 		loginHistory.Run,
 		rollouts.Run,
 		identity.RunSync,

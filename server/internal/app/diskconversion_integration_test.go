@@ -696,7 +696,7 @@ func TestDiskConversionConcurrentCancel(t *testing.T) {
 		go func() {
 			<-start
 			data := func(m map[string]any) json.RawMessage { raw, _ := json.Marshal(m); return raw }
-			errs <- w.reports.RecordEvents(systemCtx(w.org), w.device, []protocol.Event{
+			errs <- w.reports.RecordEvents(systemCtx(w.org), w.device, time.Now(), []protocol.Event{
 				{EventSeq: 1, Type: protocol.EventDiskConversionPrepared, OccurredAt: time.Now(),
 					Data: data(map[string]any{"conversion_id": conversion.String(), "layout": "lvm"})},
 				{EventSeq: 2, Type: protocol.EventDiskConversionStarted, OccurredAt: time.Now(),

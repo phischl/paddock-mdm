@@ -853,3 +853,27 @@ run in parallel with PDK-107/108 (disjoint files except `codes.go`, which PDK-10
   requested.
 - **Open (default chosen):** `GroupMemberUsers` uses `include_groups=true` (nested membership counts, matching the
   login claim). If the Authentik version disagrees, the stop condition applies.
+
+## Amendment 2026-10-24 (PDK-108, main as architect lead)
+
+**Race.** The agent reports `event_seq_high` in a check-in and sends the events it numbers afterwards right after that
+check-in; the worker handles check-ins one at a time (after the 60 s coalescing claim) and events eight at a time, so
+events N+1… can be recorded before the check-in that reported N. Decision 22 as written would then see a reset on a
+healthy device: a false `device.event_seq_reset`, the device's deduplication rows deleted and its open gaps closed.
+
+- **Decision 18:** migration `00069_event_gaps.sql` (the numbers 00045/00046 were taken) also adds
+  `device_event_seen.received_at timestamptz` (nullable), the gateway's receipt time of the event's batch
+  (`ingest.Events.ReceivedAt`; `RecordEvents` takes it, `RecordEvent` uses the worker's clock). Rows from before
+  the migration have none and count as received earlier.
+- **Decision 22:** a reset is a heartbeat whose `event_seq_high` is below the highest number received before
+  `hb.ReceivedAt` (`MaxDeviceEventSeenBefore`). The `< event_seq_contiguous` arm is dropped: every number up to the
+  pointer was delivered or lies below a delivered `agent.events_dropped` event, so the bounded maximum covers it, and
+  the pointer itself may include events received after the check-in. The claim forgets only the rows received before
+  the check-in (`DeleteDeviceEventSeenBefore`): later rows already belong to the new numbering, which narrows the
+  documented race of RR-74 to events whose new numbers collided with old ones before the reset was processed.
+  `previous_high` is that bounded maximum.
+- **Decision 20 (same race, gap side):** the upper bound of holes is `max(event_seq_high, highest number received
+  before the device's last materialized check-in)`, not the highest delivered number: an event received after the
+  check-in is no evidence of a hole below it yet. A trailing gap that grows with a later claim opens a row for the
+  new numbers only (open rows never overlap). A false gap remains possible only if the event queue lags the
+  check-in queue by more than one check-in interval; the late events then close it with `device.event_gap_filled`.

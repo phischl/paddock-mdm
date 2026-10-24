@@ -94,7 +94,7 @@ func (r *Reports) events(ctx context.Context, messageID string, body []byte) out
 		return poison
 	}
 	ctx = systemContext(ctx, batch.OrganizationID, messageID)
-	if err := r.reports.RecordEvents(ctx, batch.DeviceID, batch.Events); err != nil {
+	if err := r.reports.RecordEvents(ctx, batch.DeviceID, batch.ReceivedAt, batch.Events); err != nil {
 		slog.WarnContext(ctx, "recording device events failed; retrying", "device_id", batch.DeviceID,
 			"events", len(batch.Events), "error", err)
 		return retry

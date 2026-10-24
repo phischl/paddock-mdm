@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is back within 30 s, `device.clock_drift_cleared` ends the episode. A device more than 300 s off is still refused
   (`clock_skew`) and shows as silent. Schema: migration 00068 adds the clock and event sequence columns to the device
   status and the attention kind `clock_drift`.
+- Event gap detection (plan M8b, ISO 27001 A.8.16): the worker checks the event numbering of every active device. A
+  hole that is still open after two further check-ins records `device.event_gap` and appears on the attention list
+  with the kind `event_gap` and the missing range; if the events arrive later, `device.event_gap_filled` closes it.
+  Ranges the agent admits it dropped (`device.agent_events_dropped`) are no gap. A device whose event counter
+  restarted (agent re-installed or state wiped) records `device.event_seq_reset`, and its new numbering is recorded
+  instead of being discarded as duplicates. A check-in is only compared with events the gateway received before it.
+  Schema: migration 00069 adds the event gap and dropped-range tables, the receipt time of delivered events and the
+  attention kind `event_gap`.
 
 ### Changed
 

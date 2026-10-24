@@ -1347,7 +1347,8 @@ export interface paths {
          *     the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days,
          *     an agent release whose rollback failed and is still pending on the device (ADR 0024), a device clock more than
          *     60 s off the server's, measured at check-in and cleared once it is back within 30 s (clock_drift, plan M8b
-         *     decision 15). Read-only; the actions are the device's own (retire, release quarantine, lock).
+         *     decision 15), a hole in a device's event numbering still open after two further check-ins (event_gap, plan M8b
+         *     decision 23). Read-only; the actions are the device's own (retire, release quarantine, lock).
          */
         get: operations["listAttention"];
         put?: never;
@@ -3694,7 +3695,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap";
         Attention: {
             /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
             id: string;
@@ -3704,10 +3705,10 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; otherwise empty. */
             detail: string;
         };
         AttentionPage: {

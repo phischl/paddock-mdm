@@ -217,7 +217,7 @@ func TestRecordEventsBatch(t *testing.T) {
 		{EventSeq: 4, Type: "unknown.type", OccurredAt: at},
 	}
 	for range 2 {
-		if err := h.reports.RecordEvents(systemCtx(org), device, batch); err != nil {
+		if err := h.reports.RecordEvents(systemCtx(org), device, time.Now(), batch); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -283,7 +283,7 @@ func TestRecordEventsStripsControls(t *testing.T) {
 		{EventSeq: 1, Type: protocol.EventLoginApplyFailed, OccurredAt: at, Data: json.RawMessage(`{"stage":"apt","message":"dpkg\u0000 lock\u001b"}`)},
 		{EventSeq: 2, Type: protocol.EventSessionLogin, OccurredAt: at, Data: json.RawMessage(`{"username":"eve\u0000@acme.test"}`)},
 	}
-	if err := h.reports.RecordEvents(systemCtx(org), device, events); err != nil {
+	if err := h.reports.RecordEvents(systemCtx(org), device, time.Now(), events); err != nil {
 		t.Fatal(err)
 	}
 	var seen int

@@ -48,7 +48,8 @@ type Device struct {
 	SchemaVersions []int
 	// Health is the check-in health; nil reports {"reconcile":"ok"}.
 	Health json.RawMessage
-	// EventSeqHigh is the highest event sequence number the device reports in check-ins (event gap tests).
+	// EventSeqHigh is the highest event sequence number the device reports in check-ins (event gap tests). SendEvents
+	// raises it to the highest number it sent, as the agent does; a test lowers it to simulate a reset.
 	EventSeqHigh int64
 }
 
@@ -270,9 +271,15 @@ func (d *Device) Upload(ctx context.Context, url string, body []byte) (int, erro
 	return res.StatusCode, nil
 }
 
-// SendEvents posts a batch of events.
+// SendEvents posts a batch of events; an accepted batch raises EventSeqHigh to its highest number.
 func (d *Device) SendEvents(ctx context.Context, events []protocol.Event) (Response, error) {
-	return d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/events", Body: protocol.EventsRequest{Events: events}})
+	res, err := d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/events", Body: protocol.EventsRequest{Events: events}})
+	if err == nil && res.Status == http.StatusAccepted {
+		for _, ev := range events {
+			d.EventSeqHigh = max(d.EventSeqHigh, ev.EventSeq)
+		}
+	}
+	return res, err
 }
 
 // CommandResult posts the result of a command.

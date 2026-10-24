@@ -1866,7 +1866,8 @@
       "uninstall_pending": "Entfernung von Paddock ausstehend",
       "config_behind": "Konfiguration im Rückstand",
       "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen",
-      "clock_drift": "Zeitabweichung"
+      "clock_drift": "Zeitabweichung",
+      "event_gap": "Ereignislücke"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1884,7 +1885,8 @@
       "uninstall_pending": "Gerät öffnen",
       "config_behind": "Gerät öffnen",
       "disk_conversion_failed": "Gerät öffnen",
-      "clock_drift": "Gerät öffnen"
+      "clock_drift": "Gerät öffnen",
+      "event_gap": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

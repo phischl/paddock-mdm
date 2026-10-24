@@ -93,7 +93,7 @@ func (w historyWorld) logins(t *testing.T, seq int64, user string, at ...time.Ti
 		data, _ := json.Marshal(protocol.SessionLogin{Username: user, At: a})
 		events = append(events, protocol.Event{EventSeq: seq + int64(i), Type: protocol.EventSessionLogin, OccurredAt: a.Add(time.Second), Data: data})
 	}
-	if err := w.reports.RecordEvents(systemCtx(w.org), w.device, events); err != nil {
+	if err := w.reports.RecordEvents(systemCtx(w.org), w.device, time.Now(), events); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -298,7 +298,7 @@ func TestLoginHistorySwitchOffRace(t *testing.T) {
 	go func() {
 		defer close(done)
 		data, _ := json.Marshal(protocol.SessionLogin{Username: "hank@acme.test", At: time.Now()})
-		_ = w.reports.RecordEvents(systemCtx(w.org), w.device, []protocol.Event{{EventSeq: 1, Type: protocol.EventSessionLogin,
+		_ = w.reports.RecordEvents(systemCtx(w.org), w.device, time.Now(), []protocol.Event{{EventSeq: 1, Type: protocol.EventSessionLogin,
 			OccurredAt: time.Now(), Data: data}})
 	}()
 	select {

@@ -45,9 +45,33 @@ func (q *Queries) GetDeviceClockState(ctx context.Context, deviceID uuid.UUID) (
 	return i, err
 }
 
+const insertDeviceEventDropped = `-- name: InsertDeviceEventDropped :exec
+INSERT INTO device_event_dropped (device_id, from_seq, to_seq, organization_id)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING
+`
+
+type InsertDeviceEventDroppedParams struct {
+	DeviceID       uuid.UUID
+	FromSeq        int64
+	ToSeq          int64
+	OrganizationID uuid.UUID
+}
+
+// A range of event sequence numbers the agent admits it dropped (agent.events_dropped, plan M8b decision 19): no gap.
+func (q *Queries) InsertDeviceEventDropped(ctx context.Context, arg InsertDeviceEventDroppedParams) error {
+	_, err := q.db.Exec(ctx, insertDeviceEventDropped,
+		arg.DeviceID,
+		arg.FromSeq,
+		arg.ToSeq,
+		arg.OrganizationID,
+	)
+	return err
+}
+
 const insertDeviceEventSeen = `-- name: InsertDeviceEventSeen :execrows
-INSERT INTO device_event_seen (device_id, event_seq, organization_id)
-VALUES ($1, $2, $3)
+INSERT INTO device_event_seen (device_id, event_seq, organization_id, received_at)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT DO NOTHING
 `
 
@@ -55,11 +79,18 @@ type InsertDeviceEventSeenParams struct {
 	DeviceID       uuid.UUID
 	EventSeq       int64
 	OrganizationID uuid.UUID
+	ReceivedAt     *time.Time
 }
 
-// Device events are deduplicated by (device_id, event_seq) (plan M2a decision 14).
+// Device events are deduplicated by (device_id, event_seq) (plan M2a decision 14); received_at is the gateway's
+// receipt time of the event's batch (plan M8b amendment of 2026-10-24).
 func (q *Queries) InsertDeviceEventSeen(ctx context.Context, arg InsertDeviceEventSeenParams) (int64, error) {
-	result, err := q.db.Exec(ctx, insertDeviceEventSeen, arg.DeviceID, arg.EventSeq, arg.OrganizationID)
+	result, err := q.db.Exec(ctx, insertDeviceEventSeen,
+		arg.DeviceID,
+		arg.EventSeq,
+		arg.OrganizationID,
+		arg.ReceivedAt,
+	)
 	if err != nil {
 		return 0, err
 	}
