@@ -56,8 +56,8 @@ needs a documented reason to deviate, **MAY** is a genuine degree of freedom.
 | sudo ownership (A13) | Paddock alone; Himmelblau never grants sudo; sudo-granting local groups are reconciled | [0008](adr/0008-sudo-ownership.md) |
 | Fleet depth (A10) | Fleet behind an `inventory` port; Paddock owns its own normalized model | [0009](adr/0009-fleet-integration-depth.md) |
 | Audit storage | Outbox → RabbitMQ → PostgreSQL audit index (separate DB) + WORM object storage with signed daily hash chain | [0010](adr/0010-audit-pipeline.md) |
-| Configuration source of truth | PostgreSQL with versioned change sets; declarative YAML API used by portal and `paddockctl`; optional Git export | [0011](adr/0011-configuration-source-of-truth.md) |
-| Apply engine on device | Native Go reconcilers for a fixed resource set; optional Ansible `playbook` resource, off by default | [0012](adr/0012-agent-apply-engine.md) |
+| Configuration source of truth | PostgreSQL with versioned change sets; declarative YAML API used by portal and `paddockctl`; optional Git export *(not scheduled)* | [0011](adr/0011-configuration-source-of-truth.md) |
+| Apply engine on device | Native Go reconcilers for a fixed resource set; `playbook` resource *(not scheduled; ADR 0012 keeps the option)* | [0012](adr/0012-agent-apply-engine.md) |
 | Version compatibility (A7) | Protocol `/v1`, bundle schema versions, support window N-2 minor / 6 months | [0013](adr/0013-version-compatibility.md) |
 | Mass-revocation protection (A4) | Revocation issuer as separate role; approvals carry Authentik step-up ID tokens; hard rate limits | [0014](adr/0014-mass-revocation-protection.md) |
 | Portal | Vue 3 + TypeScript SPA (Vuetify), BFF cookie session, ICU messages via FormatJS | [0015](adr/0015-portal-frontend.md) |
@@ -98,6 +98,7 @@ owner objects.
 | K9 | *(Confirmed by PoC M1, C7.)* TPM2+PIN with `systemd-cryptenroll` requires a systemd-capable initramfs. Ubuntu 24.04 uses `initramfs-tools`, which does not support TPM2 unlock through `systemd-cryptenroll`; newer Ubuntu releases ship `dracut`. | Primary target is **Ubuntu 26.04 LTS** (dracut). Ubuntu 24.04 is supported only with dracut installed by the Paddock autoinstall. Verified in the PoC (§25). |
 | K11 | The concept's repository layout lists `ansible/roles/`. | **Confirmed:** the product repository contains no operator configuration; at most examples under `examples/` (§23). |
 | K10 | Shared devices are open, but device-to-person assignment drives login allow lists, audit attribution and revocation. | Every device has a **login assignment** (users and/or groups). Default at enrollment: the enrolling user only. Shared devices get a group assignment. §9.4. |
+| K12 | The concept lists a log shipper among the watched units and protected areas (layer 3, protected area 3). | **Dropped (M8b):** Paddock ships no device log shipper; continuous shipping of device logs is out of scope (roadmap *Won't*). Protected area 3 is the agent, the supervisor, fleetd and the update timer. |
 
 ### 2.2 Consolidated requirements with acceptance criteria
 
@@ -161,8 +162,8 @@ flowchart LR
 
   upstream[(Upstream IdP<br/>e.g. Entra ID)]
   vulndb[(Vulnerability feeds<br/>NVD, Ubuntu OVAL)]
-  git[(Optional Git remote<br/>config export)]
-  siem[(Optional SIEM)]
+  git[("Optional Git remote<br/>config export (not scheduled)")]
+  siem[("Optional SIEM<br/>(planned: M12; cursor feed M9)")]
 
   admin -->|HTTPS, OIDC| paddock
   auditor -->|HTTPS, OIDC| paddock
@@ -813,7 +814,7 @@ flowchart LR
   um -->|admin API| users
   lock -->|add to locked group,<br/>revoke tokens| users
   src --> users
-  users -->|events webhook| P
+  P -->|polls role-group membership| users
   comp --> agent --> hb
   hb -->|OIDC + MFA| apps
   apps --> pol
@@ -1019,7 +1020,7 @@ offline PASS, unlock FAIL; in the auth phase — unlock refused, fail safe. Henc
 | --- | --- |
 | `org_admin` | Everything in the organization, including reveal, Lock, Destroy approval |
 | `org_operator` | Devices, users, profiles, commands except reveal, Lock, Destroy |
-| `org_auditor` | Read-only, including audit log and evidence export |
+| `org_auditor` | Read-only: audit log, attention list, evidence integrity *(planned: M8b, PDK-110)*; evidence export *(planned: M10)* |
 | `platform_admin` | Create organizations, manage releases; **no** access to organization data |
 
 **Amended 2026-10-16 (ADR 0034, plan M8s):** the step-up keys on the *effective* class of a permission profile
@@ -1251,14 +1252,14 @@ Fixed resource types, each idempotent, each with `Plan()` (diff without changes)
 | `local_admin` | account existence, groups, password rotation (§12.2) |
 | `apt_hold` | `apt-mark hold/unhold`, `/etc/apt/preferences.d/paddock` for version pins, `Unattended-Upgrade::Package-Blacklist` |
 | `updates` | `unattended-upgrades` config for daily security updates; systemd timer `paddock-updates.timer` for regular upgrades |
-| `systemd_unit` | enable/active state of listed units (agent, fleetd, log shipper, Himmelblau, time sync) |
+| `systemd_unit` | enable/active state of listed units (agent, fleetd, Himmelblau, time sync) |
 | `luks` | keyslot policy, TPM2+PIN enrollment, recovery key, header escrow (§12.4) |
 | `time` | NTP enabled (`systemd-timesyncd` or `chrony`), drift report |
-| `playbook` (optional) | runs a signed Ansible playbook archive with the locally installed `ansible-core`; disabled unless the organization enables it |
+| `playbook` *(not scheduled)* | the slot in the apply order is reserved; no reconciler exists |
 
 Apply order: `time` → `systemd_unit` → `file` → `apt_hold` → `updates` → `local_admin` → `sudo` →
-`login` → `luks` → `playbook` → **re-verify protected areas** (so a playbook cannot silently change
-them; any change it made is reverted and reported as `config.playbook_touched_protected`).
+`login` → `luks` → `playbook` *(not scheduled)* → **re-verify protected areas** (so a playbook cannot silently change
+them; any change it made is reverted and reported as `config.playbook_touched_protected` *(not a registry code; defined with the playbook)*).
 
 > **Amendment 2026-10-08 (M5b):** `apt_hold` and `updates` are delivered as the optional top-level
 > bundle section `updates` (schema v2), not as resource entries; the agent maps it to one internal
@@ -1299,8 +1300,9 @@ Commands are delivered in the check-in response, signed individually (DSSE,
 | --- | --- | --- |
 | `install_now` | 24 h | by `command_id`; re-delivery returns stored result |
 | `rotate_admin_password` | 7 d | by `command_id` |
-| `escrow_luks_header` | 7 d | by `command_id` |
-| `collect_status` | 1 h | by `command_id` |
+| `delete_self_lock` | 30 d | by `command_id` |
+| `escrow_luks_header` *(dropped; header escrow is part of the `luks` reconciler, §12.4)* | — | — |
+| `collect_status` *(planned: M12 diagnostics bundle)* | 1 h | by `command_id` |
 | `lock` | 30 d | by `command_id`; device-bound token |
 | `destroy` | 30 d | by `command_id`; device-bound token |
 
@@ -1322,18 +1324,26 @@ Expired commands are marked `expired` and never executed (platform outage questi
 
 ### 11.5 Events and detection (layer 3)
 
-| Check | Interval | Event on deviation |
+| Check | Interval | Event (registry code) |
 | --- | --- | --- |
-| Hash of protected files (inotify + full rescan) | inotify immediate, rescan 5 min | `tamper.protected_file_changed` |
-| Units active: `paddockd`, `paddock-supervisor`, `fleetd`, log shipper, Himmelblau | 60 s | `tamper.service_stopped` |
-| LUKS keyslot inventory (`cryptsetup luksDump --dump-json-metadata`) | 5 min | `tamper.keyslot_changed` |
-| Himmelblau version and config hash | 5 min | `tamper.login_component_changed` |
-| Members of sudo-granting groups | 5 min | `tamper.sudo_group_member` |
-| Clock offset vs. server time (from check-in) | each check-in | `policy.clock_drift` (> 60 s) |
-| Local admin login (journal, `pam_unix` for `paddock-admin`) | journal follow | `local_admin.login` |
+| Drift loop over every resource of the applied bundle: re-plan and correct what changed | 300 s | `config.drift_corrected` (`device.config_drift_corrected`) |
+| `/etc/sudoers` hash and `/etc/sudoers.d/` contents | every apply and drift round | `tamper.sudoers_changed`, `tamper.sudoers_d_file` (`device.tamper_sudoers_changed`, `device.tamper_sudoers_d_file`) |
+| Members of sudo-granting groups | every apply and drift round | `tamper.sudo_group_member` (`device.tamper_sudo_group_member`) |
+| LUKS keyslot inventory per volume (`cryptsetup luksDump --dump-json-metadata`) | every apply and drift round | `tamper.keyslot_changed` (`device.tamper_keyslot_changed`) |
+| Fields of the managed local administrator | every apply and drift round | `tamper.local_admin_changed` (`device.tamper_local_admin_changed`) |
+| Deny-list lines of `/etc/pam.d/common-auth` and `common-account`; the files the updates and inventory reconcilers own | every apply and drift round | `tamper.protected_file_changed` (`device.tamper_protected_file_changed`) |
+| `orbit.service` active | every apply and drift round | `tamper.service_stopped` (`device.tamper_service_stopped`) |
+| `paddockd` running (osquery policy `paddock_agent_running` in Fleet) | Fleet policy results | `device.tamper_agent_not_running` after 15 min without check-in |
+| Local admin login (journal, `pam_unix` for `paddock-admin`) | journal follow | `local_admin.login` (`local_admin.login`) |
+| Clock offset of each check-in *(planned: M8b, PDK-107)* | each check-in | `device.clock_drift` (> 60 s) |
 
-Every event carries `event_seq` (per device, monotonic, persisted). The worker reports gaps as
-`audit.event_gap` with the missing range. Event types form a closed enum; the gateway rejects unknown
+Not watched today: `/etc/nsswitch.conf`, `/etc/security/`, `/etc/pam.d/` beyond the deny-list lines, Himmelblau's
+package version *(not scheduled)*; `/etc/himmelblau/himmelblau.conf` is re-rendered by the drift loop.
+
+Every event carries `event_seq` (per device, monotonic, persisted). The worker reports a hole in a device's sequence
+numbers as `device.event_gap`, a counter that restarted as `device.event_seq_reset`, and a hole that was filled
+later as `device.event_gap_filled` *(planned: M8b, PDK-108)*; a spool overflow the agent admits
+(`device.agent_events_dropped`) is not a gap. Event types form a closed enum; the gateway rejects unknown
 types (N5). **Mutual watch:** an osquery policy in Fleet checks that `paddockd` runs and its binary hash
 matches the release manifest; the agent checks that `fleetd` runs. Disabling one is reported by the other.
 
@@ -1341,7 +1351,7 @@ matches the release manifest; the agent checks that `fleetd` runs. Disabling one
 
 1. `/etc/sudoers`, `/etc/sudoers.d/`, all files of `file` resources
 2. LUKS keyslots and header
-3. `/opt/paddock/`, `/etc/paddock/`, systemd units of agent, supervisor, fleetd, log shipper, update timer
+3. `/opt/paddock/`, `/etc/paddock/`, systemd units of agent, supervisor, fleetd, update timer
 4. `/etc/himmelblau/`, `/etc/pam.d/`, `/etc/nsswitch.conf`, `/etc/security/`, Himmelblau packages
 
 ---
@@ -1627,8 +1637,8 @@ flowchart LR
   subgraph sources[Sources]
     portal[api: privileged actions<br/>outbox in same tx]
     dev[gateway → worker:<br/>tamper, local admin login,<br/>revocation, updates]
-    idp[Authentik events<br/>webhook → gateway-internal]
-    fleet[Fleet activities<br/>polled]
+    idp["Authentik role-group membership<br/>polled by the worker (M8b)"]
+    fleet["Fleet activities<br/>(not scheduled)"]
     sys[revocation-issuer,<br/>compiler, scheduler]
   end
   sources --> norm[Normalize to AuditEvent v1<br/>stable code, English, params]
@@ -1639,8 +1649,9 @@ flowchart LR
   aw --> chain[Daily: per organization manifest<br/>sha256 of each object, prev manifest hash,<br/>signed with audit-chain]
   chain --> worm
   worm --> rep[(Replica outside<br/>primary failure domain)]
-  idx --> ui[Portal audit view,<br/>alert rules]
-  aw -.-> siem[(Optional SIEM forward)]
+  idx --> ui["Portal audit view, evidence integrity (M8b);<br/>notifications (planned: M9)"]
+  aw -.-> siem[("SIEM forward<br/>planned: M12; cursor feed M9")]
+  aw --> ver[Nightly chain verification<br/>audit_verification_run, audit.chain_verified]
 ```
 
 ### 14.2 Event schema
@@ -1686,8 +1697,10 @@ Generated code tends to emit audit events on success only. The rule in the appli
 ### 14.4 WORM store
 
 - Bucket `paddock-audit`, created with Object Lock enabled, default retention **COMPLIANCE** mode with
-  the platform minimum (default 400 days). Organization-specific longer retention is set per object at
-  write time; deletion after retention is performed by a lifecycle rule. Shortening is impossible by design.
+  the platform minimum (default 400 days). One platform-wide retention (`PADDOCK_AUDIT_RETENTION_DAYS`,
+  at least 400 days) applies to every object; per-organization retention *(planned: M10)*. Paddock never deletes
+  audit objects; expiry after the retention is an operator lifecycle rule (`docs/operations/audit-bucket.md`).
+  Shortening is impossible by design.
 - The audit-writer's credential may `PutObject` and `PutObjectRetention` (extend only); no credential
   that any operator account uses has `DeleteObject` or `BypassGovernanceRetention`.
 - Deployment checklist step "create production audit bucket" is a one-shot, verified by the acceptance gate.
@@ -1698,6 +1711,8 @@ Generated code tends to emit audit events on success only. The rule in the appli
   exactly one sealed manifest. `occurred_at` stays in each event and drives index queries. Writer transactions
   have a 5-minute timeout, and day *D* is sealed at *D*+1 00:15 UTC, so no object of day *D* can be committed
   after its seal. Object retention is `recording day + retention days`.
+
+> **Amendment 2026-10-15 (M8b):** the audit writer verifies its chain every night (ADR 0030, §6.4 of plan M8b) *(planned: M8b, PDK-109)*.
 
 ---
 
@@ -1947,9 +1962,9 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 
 See §6.8; contract in `api/openapi/device.yaml`; Go types shared with the agent in `pkg/protocol`.
 
-### 17.3 Git export (optional)
+### 17.3 Git export *(not scheduled)*
 
-A worker job serializes each change set into `orgs/<slug>/paddock.yml` and pushes to a configured Git
+Design only; not implemented: a worker job serializes each change set into `orgs/<slug>/paddock.yml` and pushes to a configured Git
 remote with a deploy key per organization. Import from Git is **not** automatic; operators use
 `paddockctl apply` in their CI against the API with an API token (scoped, audited).
 
@@ -1977,7 +1992,8 @@ remote with a deploy key per organization. Import from Git is **not** automatic;
 Key screens: Devices (status, last contact, compliance, commands), Device detail (bundle version,
 effective sudo per user, tamper findings, escrow actions), Users & Groups (source badge, lock),
 Profiles (editor with root-equivalent warning, effective-profile view with derivation), Updates
-(holds, schedules, immediate install), Audit (search, export), Settings (staleness, DMS, login options, retention).
+(holds, schedules, immediate install), Audit (search; evidence integrity *(planned: M8b, PDK-110)*;
+export *(planned: M10)*), Settings (staleness, DMS, login options, updates; retention *(planned: M10)*).
 
 ---
 
@@ -2075,7 +2091,7 @@ paddock/
 ├── packaging/debian/            # paddock-agent, paddock-supervisor, paddock-revoke, fleetd
 ├── deploy/compose/
 ├── docs/{architecture.md,adr/,operations/,compliance/}
-├── examples/                    # example paddock.yml, example playbooks — never operator data
+├── examples/                    # example paddock.yml (example playbooks: not scheduled) — never operator data
 └── test/{vms/,acceptance/,load/}
 ```
 
@@ -2096,6 +2112,8 @@ to the operator's private repository (concept: operator configuration never in t
 | **M4 Device controls** | Local admin rotation + reveal, LUKS escrow, Lock/Destroy, revocation-issuer, mass-revocation limits, DMS | Local administrator, Revocation, Mass revocation |
 | **M5 Inventory & updates** | Fleet adapter, vulnerability view, holds, schedules, immediate install, staleness | Scalability, F4, F6, F12 |
 | **M6 Hardening & release** | Load tests, restore drill, German locale, documentation, compliance pack | All gates |
+| **M7 Operations, distribution, portal** | IP allow list, operator bundle, portal redesign, lab profile (plans M7a–M7c, M8a) | Edge, bundle smoke, lab smoke |
+| **M8b Evidence integrity** | Document correction, event gap and clock-drift detection, nightly chain verification with auditor-visible status, audited role-group membership (plan M8b, ADR 0030) | Event gap, clock drift, audit integrity, role membership |
 
 Implementation plans are written per milestone in `docs/plans/`, in the format of the existing plans.
 
@@ -2122,7 +2140,7 @@ Implementation plans are written per milestone in `docs/plans/`, in the format o
 | --- | --- | --- |
 | RLS misconfiguration (table without policy) | Cross-organization leak | Migration lint: CI fails if any table with `organization_id` lacks `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY` + policy; isolation gate |
 | OpenBao sealed after restart | Bundles and reveals stop | Fail safe on devices; alerting; documented unseal procedure; optional automatic unseal (ADR 0035, RR-43) |
-| Authentik superuser sees all organizations | Insider risk across organizations | Authentik admin accounts limited to platform operators; Authentik admin events forwarded to the audit pipeline |
+| Authentik superuser sees all organizations | Insider risk across organizations | Authentik admin accounts limited to platform operators; membership of the Paddock role groups and the set of Authentik superusers are snapshotted by the worker and every change is audited (`admin.role_granted`, `admin.role_revoked`) *(planned: M8b, PDK-111)*; ingestion of Authentik's own event log *(planned: AUD-03, not scheduled)* |
 | Self-lock token for DMS lives on the device before it is needed | A root user could trigger an early self-lock of their own device | Token encodes `elapsed ≥ period`; abuse only harms the user's own device and is visible in audit; acceptable |
 | One binary with many roles | A bug in shared code affects all roles | Role-specific OpenBao and DB credentials limit blast radius; separate container per role |
 | RabbitMQ or Valkey outage | Ingest or check-ins stop | 3-node RabbitMQ cluster with quorum queues, Valkey with replica + Sentinel; devices continue working (C2); agent spool covers 50 MiB of events |
