@@ -48,6 +48,8 @@ type Device struct {
 	SchemaVersions []int
 	// Health is the check-in health; nil reports {"reconcile":"ok"}.
 	Health json.RawMessage
+	// EventSeqHigh is the highest event sequence number the device reports in check-ins (event gap tests).
+	EventSeqHigh int64
 }
 
 func (d *Device) schemaVersions() []int {
@@ -203,7 +205,7 @@ func (d *Device) Checkin(ctx context.Context) (protocol.CheckinResponse, Respons
 	}
 	res, err := d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/checkin", Body: protocol.CheckinRequest{
 		AppliedBundleVersion: d.Applied, AgentVersion: d.agentVersion(), SchemaVersions: d.schemaVersions(),
-		Health: health, Arch: d.Arch,
+		Health: health, Arch: d.Arch, EventSeqHigh: d.EventSeqHigh,
 	}})
 	if err != nil || res.Status != http.StatusOK {
 		return protocol.CheckinResponse{}, res, err

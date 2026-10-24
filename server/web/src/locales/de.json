@@ -1865,7 +1865,8 @@
       "agent_not_running": "Agent läuft nicht",
       "uninstall_pending": "Entfernung von Paddock ausstehend",
       "config_behind": "Konfiguration im Rückstand",
-      "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen"
+      "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen",
+      "clock_drift": "Zeitabweichung"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1882,7 +1883,8 @@
       "agent_not_running": "Gerät öffnen",
       "uninstall_pending": "Gerät öffnen",
       "config_behind": "Gerät öffnen",
-      "disk_conversion_failed": "Gerät öffnen"
+      "disk_conversion_failed": "Gerät öffnen",
+      "clock_drift": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

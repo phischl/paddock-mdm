@@ -1335,7 +1335,7 @@ Expired commands are marked `expired` and never executed (platform outage questi
 | `orbit.service` active | every apply and drift round | `tamper.service_stopped` (`device.tamper_service_stopped`) |
 | `paddockd` running (osquery policy `paddock_agent_running` in Fleet) | Fleet policy results | `device.tamper_agent_not_running` after 15 min without check-in |
 | Local admin login (journal, `pam_unix` for `paddock-admin`) | journal follow | `local_admin.login` (`local_admin.login`) |
-| Clock offset of each check-in *(planned: M8b, PDK-107)* | each check-in | `device.clock_drift` (> 60 s) |
+| Clock offset of each check-in: server time minus the signed request timestamp, measured by the gateway; the worker opens a drift episode above 60 s and closes it at 30 s or less | each materialized check-in (at most once per 60 s) | `device.clock_drift` (> 60 s), `device.clock_drift_cleared` (≤ 30 s); attention kind `clock_drift` |
 
 Not watched today: `/etc/nsswitch.conf`, `/etc/security/`, `/etc/pam.d/` beyond the deny-list lines, Himmelblau's
 package version *(not scheduled)*; `/etc/himmelblau/himmelblau.conf` is re-rendered by the drift loop.

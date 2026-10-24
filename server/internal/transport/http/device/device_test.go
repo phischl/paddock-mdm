@@ -514,6 +514,19 @@ func TestCheckinSeqBundleAndClone(t *testing.T) {
 	if !hb.CloneSuspected || hb.ReportedSeq != 2 || hb.Seq != 6 {
 		t.Fatalf("clone not suspected: %+v", hb)
 	}
+	if hb.ClockOffsetS != 0 {
+		t.Fatalf("clock offset of an in-sync device: %d", hb.ClockOffsetS)
+	}
+
+	// The offset is server time minus the signed timestamp: a device 2 min behind is +120 (plan M8b decision 11).
+	if r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(3), seq: 6, signedAt: e.now.Add(-2 * time.Minute)}); r.status != http.StatusOK {
+		t.Fatalf("skewed checkin: %d %s", r.status, r.body)
+	}
+	hb = ingest.Heartbeat{}
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.ClockOffsetS != 120 {
+		t.Fatalf("clock offset %d, want 120", hb.ClockOffsetS)
+	}
 
 	q := newClient(t)
 	qid := e.enrolled(q, "quarantined")

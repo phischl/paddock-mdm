@@ -98,6 +98,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'uninstall_pending':
     case 'config_behind':
     case 'disk_conversion_failed':
+    case 'clock_drift':
     case 'login_apply_failed':
     case 'sudo_apply_failed':
       return { status: 'warn', label }
