@@ -23,11 +23,13 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Bundle | Bundle | Signed configuration of a device. |
 | Change set | Änderungssatz | declarative configuration (paddockctl) |
 | Check-in | Check-in | |
+| Clock drift | Zeitabweichung | Difference between a device clock and the server clock (`device.clock_drift`). |
 | Command palette | Befehlspalette | |
 | Configuration (navigation group) | Konfiguration | |
 | Contact thresholds | Kontaktschwellen | Warning and critical threshold of a device group. |
 | Conversion (in-place encryption) | Umwandlung | The process from the request to `compliant`; the disk state *encrypting* is *Verschlüsselung läuft*. |
 | Conversion key | Umwandlungsschlüssel | Recovery-key generation 1 of a device encrypted in place; it no longer opens the disk once its keyslot is wiped after the completion. |
+| Counter reset | Zählerrücksetzung | The event numbering of a device starts again after a reset of its agent state (`device.event_seq_reset`). |
 | Danger zone | Gefahrenbereich | Lock, Destroy and Retire on the device page. |
 | Dead man's switch | Totmannschalter | Its period is the *Frist*. |
 | Denied path | Gesperrter Pfad | Managed files on it are refused and not shipped. |
@@ -41,7 +43,10 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Enroll, enrollment | Registrieren, Registrierung | |
 | Enrollment token | Registrierungstoken | |
 | Escrow; escrowed | Treuhand-Ablage; in der Treuhand-Ablage hinterlegt (kurz: hinterlegt) | Recovery keys, LUKS headers, local administrator passwords. |
+| Event gap | Ereignislücke | Event sequence numbers of a device that never arrived (`device.event_gap`). |
+| Evidence integrity | Nachweisintegrität | |
 | Finding (vulnerability) | Fund | a CVE matched on a device |
+| Hash chain | Hash-Kette | Daily chain of signed manifests over the audit objects. |
 | Hold (package) | Zurückhalten; zurückgehaltenes Paket | Not *Sperre*, which is reserved for locks. |
 | In-place encryption | Nachträgliche Verschlüsselung | *Encrypt in place*: *nachträglich verschlüsseln*. |
 | Install now | Sofort installieren; Sofortinstallation | |
@@ -52,6 +57,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Login component | Anmeldekomponente | Himmelblau on the device: the device-code and Hello PIN sign-in. |
 | Login history | Anmeldeverlauf | |
 | Managed file / unit | Verwaltete Datei / Unit | |
+| Manifest | Manifest | Signed daily manifest of the audit hash chain. |
 | Navigation | Navigation | Navigation drawer; *einblenden* / *ausblenden* to show or hide it. |
 | Never contacted | Nie verbunden | |
 | No recent contact | Kein aktueller Kontakt | No check-in for more than 15 minutes, below the organization's silence threshold. |
@@ -103,5 +109,6 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Update policy (agent) | Update-Richtlinie | automatic / manual |
 | User lock | Sperre; Benutzer sperren / entsperren | *Benutzersperre* where it must be told apart from a device lock. |
 | User menu | Benutzermenü | |
+| Verification run | Prüflauf | One run of the audit hash chain verification (`audit.chain_verified`). |
 | Volume (LUKS) | Volume | kept in English, as in cryptsetup |
 | Vulnerability | Schwachstelle | |

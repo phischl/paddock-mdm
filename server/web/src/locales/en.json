@@ -251,7 +251,13 @@
     },
     "admin": {
       "login": "{actor} signed in",
-      "sessions_revoked": "{reason, select, step_up_role_mismatch {The sessions of {target} were ended: the role at the step-up did not match} role_changed {The sessions of {target} were ended: the role changed from {old_role} to {new_role}} deactivated {The sessions of {target} were ended: the account was deactivated} other {The sessions of {target} were ended: the account no longer has a role}}"
+      "sessions_revoked": "{reason, select, step_up_role_mismatch {The sessions of {target} were ended: the role at the step-up did not match} role_changed {The sessions of {target} were ended: the role changed from {old_role} to {new_role}} deactivated {The sessions of {target} were ended: the account was deactivated} other {The sessions of {target} were ended: the account no longer has a role}}",
+      "role_granted": "{username} became {role, select, org_admin {organization administrator} org_operator {operator} org_auditor {auditor} platform_admin {platform administrator} authentik_superuser {Authentik superuser} other {{role}}}",
+      "role_revoked": "{username} is no longer {role, select, org_admin {organization administrator} org_operator {operator} org_auditor {auditor} platform_admin {platform administrator} authentik_superuser {Authentik superuser} other {{role}}}"
+    },
+    "audit": {
+      "chain_verified": "The audit hash chain was verified for {from_day} to {to_day} ({days, number} days, {objects, number} objects, {trigger})",
+      "chain_verification_failed": "The audit hash chain verification found {problem_count, plural, one {# problem} other {# problems}} for {from_day} to {to_day} ({trigger})"
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
@@ -337,7 +343,12 @@
       "disk_conversion_started": "The device {target} started encrypting its disk in place ({init_result})",
       "disk_conversion_completed": "The device {target} finished encrypting its disk in place",
       "disk_conversion_failed": "The in-place encryption of the device {target} failed ({stage}: {reason})",
-      "disk_conversion_aborted": "The device {target} abandoned the in-place encryption of its disk ({by})"
+      "disk_conversion_aborted": "The device {target} abandoned the in-place encryption of its disk ({by})",
+      "event_gap": "Events {from_seq} to {to_seq} of the device {target} never arrived (event gap)",
+      "event_gap_filled": "The missing events {from_seq} to {to_seq} of the device {target} arrived later",
+      "event_seq_reset": "The event numbering of the device {target} was reset: highest number {reported_high} after {previous_high} (counter reset)",
+      "clock_drift": "The clock of the device {target} differs from the server's by {offset_s, number} seconds (threshold {threshold_s, number} seconds)",
+      "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Audit codes for evidence integrity (plan M8b): `device.event_gap`, `device.event_gap_filled`,
+  `device.event_seq_reset`, `device.clock_drift`, `device.clock_drift_cleared`, `audit.chain_verified`,
+  `audit.chain_verification_failed`, `admin.role_granted` and `admin.role_revoked` are registered and documented in
+  `docs/compliance/audit-codes.md`, with portal texts in English and German. Paddock does not record them yet.
+
 ### Changed
 
 - Documentation: the architecture and the compliance pack now mark every unbuilt feature as planned (with its

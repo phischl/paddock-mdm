@@ -181,6 +181,18 @@ const (
 	CodePlatformAutoUnsealEnabled   Code = "platform.auto_unseal_enabled"
 	CodePlatformAutoUnsealDisabled  Code = "platform.auto_unseal_disabled"
 	CodePlatformOpenBaoAutoUnsealed Code = "platform.openbao_auto_unsealed"
+
+	// Evidence integrity: event gaps, counter resets, clock drift, chain verification and role grants (plan M8b
+	// decision 9).
+	CodeDeviceEventGap               Code = "device.event_gap"
+	CodeDeviceEventGapFilled         Code = "device.event_gap_filled"
+	CodeDeviceEventSeqReset          Code = "device.event_seq_reset"
+	CodeDeviceClockDrift             Code = "device.clock_drift"
+	CodeDeviceClockDriftCleared      Code = "device.clock_drift_cleared"
+	CodeAuditChainVerified           Code = "audit.chain_verified"
+	CodeAuditChainVerificationFailed Code = "audit.chain_verification_failed"
+	CodeAdminRoleGranted             Code = "admin.role_granted"
+	CodeAdminRoleRevoked             Code = "admin.role_revoked"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1142,6 +1154,66 @@ var registry = map[Code]Definition{
 		Params:      []string{"unseals", "last_unseal_at", "failures", "last_failure_at", "last_failure_reason"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "One event per observed change of the counters, at most every 30 s; a failure carries error code auto_unseal_failed and last_failure_reason unreachable, invalid_share or still_sealed. Actor is the system actor paddock-unsealer. Platform pseudo-organization.",
+	},
+	CodeDeviceEventGap: {
+		Code: CodeDeviceEventGap, Emitted: true,
+		Description: "The worker found event sequence numbers from_seq..to_seq of a device missing after two further check-ins: the events never arrived and the agent did not report them as dropped (actor: system).",
+		Params:      []string{"from_seq", "to_seq", "event_seq_high", "first_seen_at", "last_contact_at"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "event_seq_high is the highest number the device reported in its last check-in; to_seq may equal it when the device claims events it never delivered. A spool overflow the agent admits (device.agent_events_dropped) is not a gap. Recorded once per gap; device.event_gap_filled follows if the events arrive later.",
+	},
+	CodeDeviceEventGapFilled: {
+		Code: CodeDeviceEventGapFilled, Emitted: true,
+		Description: "Every event of a gap that was reported as device.event_gap arrived later (actor: system).",
+		Params:      []string{"from_seq", "to_seq", "reported_at"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceEventSeqReset: {
+		Code: CodeDeviceEventSeqReset, Emitted: true,
+		Description: "A device reported a highest event sequence number below the numbers it had already delivered: its agent state was reset (re-installed or wiped). The worker forgets the delivered numbers so that the new numbering is recorded, and closes open gaps without an event (actor: system).",
+		Params:      []string{"previous_high", "reported_high", "events_seen"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "events_seen is the number of forgotten sequence numbers. A state wipe also restarts the check-in sequence, which quarantines the device as a suspected clone (device.clone_suspected).",
+	},
+	CodeDeviceClockDrift: {
+		Code: CodeDeviceClockDrift, Emitted: true,
+		Description: "The clock of a device differs from the server's by more than threshold_s seconds, measured from the signed timestamp of its check-in (actor: system). Recorded once per episode; device.clock_drift_cleared ends it.",
+		Params:      []string{"offset_s", "threshold_s", "last_contact_at"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "offset_s is server time minus device time in seconds (positive: the device is behind). A device off by more than 300 s cannot authenticate and is silent instead (RR-37).",
+	},
+	CodeDeviceClockDriftCleared: {
+		Code: CodeDeviceClockDriftCleared, Emitted: true,
+		Description: "The clock of a device is back within 30 s of the server's (actor: system).",
+		Params:      []string{"offset_s", "threshold_s", "since"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeAuditChainVerified: {
+		Code: CodeAuditChainVerified, Emitted: true,
+		Description: "The audit writer verified the organization's hash chain for from_day..to_day: every manifest exists, is signed by audit-chain, links to the previous day and lists exactly the indexed objects, and every object's SHA-256 matches (actor: system audit-writer).",
+		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "trigger is nightly (the last 7 sealed days), sample (one random older day) or cli (paddock-server audit verify).",
+	},
+	CodeAuditChainVerificationFailed: {
+		Code: CodeAuditChainVerificationFailed, Emitted: true,
+		Description: "The audit writer found problems in the organization's hash chain for from_day..to_day (actor: system audit-writer).",
+		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects", "problem_count", "problems"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "problems lists at most 50 findings of at most 500 characters each; problem_count is the full number. Raises PaddockAuditChainBroken.",
+	},
+	CodeAdminRoleGranted: {
+		Code: CodeAdminRoleGranted, Emitted: true,
+		Description: "A user became member of a Paddock role group in Authentik, or an Authentik superuser, as seen by the worker's snapshot (actor: system).",
+		Params:      []string{"role", "username", "authentik_pk", "group", "baseline"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "role is org_admin, org_operator, org_auditor, platform_admin or authentik_superuser; group is the Authentik group name, empty for authentik_superuser; baseline is true for every member found by the first snapshot of an organization (or of the platform). failure with error_code upstream_unavailable when Authentik could not be read.",
+	},
+	CodeAdminRoleRevoked: {
+		Code: CodeAdminRoleRevoked, Emitted: true,
+		Description: "A user left a Paddock role group in Authentik, or lost Authentik superuser status, as seen by the worker's snapshot (actor: system).",
+		Params:      []string{"role", "username", "authentik_pk", "group"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,
