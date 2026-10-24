@@ -52,7 +52,7 @@ func (d *Device) PrepareDisk(t *testing.T) {
 	d.MustIn([]byte(credential(t, d.VM, "PADDOCK_LUKS_PASSPHRASE")),
 		"sudo sh -c 'umask 077 && mkdir -p /var/lib/paddock && cat > /var/lib/paddock/install-passphrase'")
 	if d.Release() == "24.04" {
-		d.Must("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y dracut >/dev/null 2>&1")
+		d.Must("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=600 dracut >/dev/null")
 		d.MustIn([]byte(dracutConf), "sudo tee /etc/dracut.conf.d/90-paddock-tpm2.conf >/dev/null")
 	}
 	d.Must("sudo sed -i -E '" + crypttabTPM2 + "' /etc/crypttab && grep -q tpm2-device=auto /etc/crypttab")

@@ -63,10 +63,14 @@ UEFI with Secure Boot and a TPM 2.0.
 
 ## Encrypting an installed device
 
-Paddock does not encrypt a running device in place (ADR 0038). A device that is not encrypted — the portal shows
-*Not encrypted* and the attention page *Disk encryption not compliant* — is encrypted by reinstalling it with the
-Paddock autoinstall after a backup of its data; the same applies to a device encrypted outside Paddock (*Encrypted,
-not managed*), whose recovery key and header Paddock does not hold. In-place conversion is planned for devices whose
-`/boot` is a file system of its own (the disk card names such devices; milestone M8e). Never run `cryptsetup
-reencrypt` by hand on a Paddock device: the agent would report the new keyslots as tampering, and no recovery key or
-header of the result would be escrowed.
+A device that is not encrypted — the portal shows *Not encrypted* and the attention page *Disk encryption not
+compliant* — can be encrypted in place from the portal when its layout allows it (ADR 0039): Ubuntu 24.04 or 26.04,
+UEFI, a TPM 2.0, `/boot` on a partition of its own, and an ext4 root file system on a GPT partition or on a logical
+volume at the end of the single physical volume of its volume group. The disk card names every reason that rules a
+device out. The procedure, what the user sees and the recovery are in `docs/operations/in-place-encryption.md`.
+
+A device whose layout does not allow it (no separate `/boot`, as on Ubuntu Desktop's default install, xfs, btrfs,
+RAID, no TPM) is encrypted by reinstalling it with the Paddock autoinstall after a backup of its data; the same
+applies to a device encrypted outside Paddock (*Encrypted, not managed*), whose recovery key and header Paddock does
+not hold. Never run `cryptsetup reencrypt` by hand on a Paddock device whose agent is running: the agent would report
+the new keyslots as tampering, and no recovery key or header of the result would be escrowed.

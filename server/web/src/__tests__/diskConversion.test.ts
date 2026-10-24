@@ -117,7 +117,10 @@ describe('in-place encryption: eligibility (plan M8e decision 24)', () => {
   it('shows the eligible panel and, for an administrator of an active device, the button that starts the step-up', async () => {
     disk = { ...base, state: 'not_encrypted', conversion: eligible, disk_conversion: null }
     await mountCard()
-    expect(text('disk-convert-eligible')).toContain('Its disk layout allows encrypting it in place')
+    expect(text('disk-convert-eligible')).toBe(
+      'This device is not encrypted. Its disk layout allows encrypting it in place: the device prepares itself, the recovery key is stored in Paddock first, the user restarts once to start the encryption, the rest is encrypted in the background, and the boot PIN or the TPM unlock is set up at the first restart after that.',
+    )
+    expect(text('disk-convert-eligible')).not.toContain('chooses the boot PIN')
     expect(el('disk-reinstall')).toBeNull()
     button('Encrypt this device…')!.click()
     await flushPromises()
@@ -140,7 +143,7 @@ describe('in-place encryption: eligibility (plan M8e decision 24)', () => {
   it('lists the reasons under the reinstall alert when the layout is not eligible', async () => {
     disk = {
       ...base, state: 'not_encrypted', disk_conversion: null,
-      conversion: { eligible: false, reasons: ['no_separate_boot', 'root_not_ext4', 'cleanup_pending'] },
+      conversion: { eligible: false, reasons: ['no_separate_boot', 'root_not_ext4', 'cleanup_pending', 'initrd_tools_missing'] },
     }
     await mountCard()
     expect(text('disk-reinstall')).toContain('its agent reports no disk layout that can be encrypted in place. Encrypt it by reinstalling it')
@@ -149,6 +152,7 @@ describe('in-place encryption: eligibility (plan M8e decision 24)', () => {
       '/boot is not on its own partition',
       'the root file system is not ext4',
       'the device is still removing an abandoned encryption from its boot files; try again after its next check-in',
+      "the initrd tools cannot list the running kernel's initrd (dracut's lsinitrd needs 3cpio or dracut-extractinitrd)",
     ])
     expect(el('disk-convert-eligible')).toBeNull()
     expect(button('Encrypt this device…')).toBeUndefined()
@@ -177,10 +181,13 @@ describe('in-place encryption: the dialogue (plan M8e decision 24, §14.4 decisi
     resumeFor = 'disk-convert'
     await mountCard({ diskTotalBytes: 500e9 })
     expect(el('encrypt-dialog')?.textContent).toContain('Encrypt lt-1 in place')
+    expect(el('encrypt-backup')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'I confirm that a current backup of this device exists. The file system is checked and shrunk at the restart, which can take several minutes; a power cut or a forced power-off during that time can damage it.',
+    )
     expect(dialogLines()).toEqual([
-      'The user must restart the device once. Until then nothing is encrypted. The restart takes a few minutes longer than usual.',
+      'The user must restart the device once to start the encryption, and once more after it has completed. Nothing is encrypted until the first restart, which takes a few minutes longer than usual.',
       'A laptop must be on mains power at that restart; the background encryption pauses on battery.',
-      'At the restart the device asks the user for a boot PIN on a text console (unlock mode: TPM + boot PIN). The PIN never reaches Paddock.',
+      'At the first restart after the background encryption has completed, the device asks the user for a boot PIN on a text console (unlock mode: TPM + boot PIN). The PIN never reaches Paddock.',
       'The background encryption takes about 1 hour on this disk; the device stays usable meanwhile.',
     ])
     const accept = button('Encrypt at the next restart')!
@@ -207,7 +214,7 @@ describe('in-place encryption: the dialogue (plan M8e decision 24, §14.4 decisi
     resumeFor = 'disk-convert'
     await mountCard()
     const lines = dialogLines()
-    expect(lines[2]).toBe('The device unlocks with its TPM without a PIN (unlock mode: TPM only).')
+    expect(lines[2]).toBe('The device sets up its TPM unlock without a PIN at the first restart after the background encryption has completed (unlock mode: TPM only).')
     expect(lines[3]).toBe('The background encryption takes minutes to hours depending on the disk size; the device stays usable meanwhile.')
     expect(lines[4]).toContain('this removes the packages brltty, initramfs-tools — initramfs-tools itself and, where listed, brltty')
   })
@@ -269,6 +276,27 @@ describe('in-place encryption: progress and cancel (plan M8e decisions 8 and 25)
     await mountCard()
     expect(text('disk-convert-cancel-sent')).toMatch(/^Cancellation sent .+; the device confirms it at its next check-in/)
     expect(button('Cancel encryption')).toBeUndefined()
+  })
+
+  it.each([
+    ['requested', row('requested')],
+    ['prepared', row('prepared')],
+    ['prepared with a cancellation sent', row('prepared', { abort_command_id: 'k2', abort_command_status: 'pending' })],
+    ['requested and waiting for the package manager', row('requested', { paused_reason: 'packages_busy', paused_since: at })],
+  ])('shows no reinstall advice while a conversion is %s on an unencrypted disk', async (_, conversion) => {
+    disk = { ...base, state: 'not_encrypted', conversion: eligible, disk_conversion: conversion }
+    await mountCard()
+    expect(el('disk-convert-phase')).not.toBeNull()
+    expect(el('disk-reinstall')).toBeNull()
+  })
+
+  it('shows the reinstall advice again once the conversion failed on a layout that is no longer eligible', async () => {
+    disk = {
+      ...base, state: 'not_encrypted', disk_conversion: row('failed', { failure_stage: 'prepare', failure_reason: 'x' }),
+      conversion: { eligible: false, reasons: ['low_free_space'] },
+    }
+    await mountCard()
+    expect(el('disk-reinstall')).not.toBeNull()
   })
 
   it.each(['failed', 'expired', 'cancelled'])('offers the cancel again when the abort command is %s', async (status) => {

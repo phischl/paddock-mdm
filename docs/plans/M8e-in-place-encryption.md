@@ -2173,3 +2173,60 @@ and the administrator cancels it (`POST /api/v1/devices/{id}/uninstall/cancel`, 
 `pending`, `failed` or `expired`). Decision 53's "the server has ended the request … nothing to cancel" is corrected
 accordingly; S-IE4 asserts the failed command and the cancel. Whether a refusal with a terminal reason should end the
 request on its own is PDK-403.
+
+### Amendment 2026-10-23 — documentation pass (PDK-248)
+
+Records what the tickets PDK-242, PDK-243 and PDK-246 decided during their implementation and the plan did not carry
+yet; it changes no behaviour.
+
+- **Decision 2, `root_reference_unsupported` (correction from PDK-242, approved by the architect lead on
+  2026-10-21).** For an LV root, fstab and `root=` also accept `/dev/disk/by-id/dm-uuid-LVM-<vg uuid without
+  dashes><lv uuid without dashes>`, the form curtin and subiquity write for LVM roots; the LV UUID survives the
+  conversion. Only an exact match counts (a prefix, the VG alone or another LV is rejected). The UUIDs come from one
+  `lvm lvs --noheadings -o vg_name,lv_name,vg_uuid,lv_uuid -- <root source>` call. The accepted set (`UUID=`,
+  `/dev/mapper/<vg>-<lv>`, `/dev/<vg>/<lv>`, the dm-uuid link) applies to fstab and the kernel command line alike
+  (the last `root=` wins; a missing `root=` is unsupported).
+- **Decision 13, transient tool errors (PDK-243; formerly PDK-365).** A tool error outside the closed set of reasons
+  (`dpkg-query` at step 6, `dracut --regenerate-all` at step 8) does not fail the conversion: the run stops and the
+  preparation is retried at the next full pass, at most `TransientRetries = 3` times per preparation. The count is the
+  persisted state field `transient_errors` and is never reset within a conversion; the fourth such error fails the
+  conversion at stage `prepare` with the error's first line as the reason. A held dpkg lock is no such error
+  (amendment 2026-10-21, item 17).
+- **Decision 13, a failure on a LUKS partition (PDK-243; I1, I2).** A preparation failure on a partition that is LUKS
+  records no failure: the disk converted at a boot, and the worker adopts the conversion (I2). On a partition whose
+  header cannot be checked the failure is recorded with `CleanupPending` and no cleanup runs (I1); the full pass
+  retries it. A failure whose save fails keeps the conversion `preparing`, and every full pass re-queues a `preparing`
+  conversion that has no worker job.
+- **Decision 14, the X1 cleanup (PDK-243).** The cleanup runs `dracut --regenerate-all` only while dpkg reports dracut
+  `installed`; with any other status the initrds are only verified (`lsinitrd`), and while dpkg cannot tell (an error,
+  or an upgrade under way) or no tool can list an initrd, nothing after the removal of the module files runs.
+- **§6.6, the runbook link (PDK-246).** The key `devices.disk.convert.runbook` is the text of the runbook link that
+  decision 25's failure and cleanup alerts carry: en "Runbook: in-place encryption", de "Runbook: Nachträgliche
+  Verschlüsselung".
+- **§6.6, preflight reason `initrd_tools_missing` (amendment 2026-10-21, item 15; decided by the architect lead on
+  2026-10-23).** `devices.disk.convert.reasons.initrd_tools_missing`: en "the initrd tools cannot list the running
+  kernel's initrd (dracut's lsinitrd needs 3cpio or dracut-extractinitrd)", de "die Initrd-Werkzeuge können die
+  Initrd des laufenden Kernels nicht auflisten (lsinitrd von dracut braucht 3cpio oder dracut-extractinitrd)".
+- **Decision 3, the conversion phase in the health while `not_encrypted` (PDK-364; decided by the architect lead on
+  2026-10-23): deferred.** While the disk is `not_encrypted`, `health.disk.conversion` carries the preflight, `phase`
+  and `key_on_boot` (amendment 2026-10-21, item 1); `failure_stage` and `failure_reason` of a `failed` conversion are
+  not reported there. The server learns them from the conversion events, so the portal and the admin API are complete
+  without them. PDK-364 stays open for a later milestone.
+- **Residual risks numbered in PDK-248.** Besides RR-56 … RR-61 (§12, as amended) and RR-71 (item 19),
+  `residual-risks.md` gains RR-72 (the dracut initrd emergency shell gives a root shell without a password; found in
+  PDK-247's hand test run 5) and RR-73 (the expected first-boot TPM enrollment is recorded without
+  `tamper.keyslot_changed`; amendment 2026-10-22 b, from the PDK-397 reviews).
+
+### Amendment 2026-10-23 — PDK-399 wording (decided by the architect lead)
+
+Item 22 moved the enrollment to the first start after the completion; four texts of §6.6 still described the old
+order, and `check.backup` promised that the shrink takes seconds (amended RR-56: minutes; PDK-405, folded in). They
+are replaced (binding; `en.json` / `de.json`):
+
+| Key | English | German |
+| --- | --- | --- |
+| `devices.disk.convert.eligible` | This device is not encrypted. Its disk layout allows encrypting it in place: the device prepares itself, the recovery key is stored in Paddock first, the user restarts once to start the encryption, the rest is encrypted in the background, and the boot PIN or the TPM unlock is set up at the first restart after that. | Dieses Gerät ist nicht verschlüsselt. Sein Festplattenlayout erlaubt die nachträgliche Verschlüsselung: Das Gerät bereitet sich vor, der Wiederherstellungsschlüssel wird zuerst in Paddock hinterlegt, der Benutzer startet einmal neu, um die Verschlüsselung zu beginnen, der Rest wird im Hintergrund verschlüsselt, und die Boot-PIN bzw. die TPM-Entsperrung wird beim ersten Neustart danach eingerichtet. |
+| `devices.disk.convert.check.backup` | I confirm that a current backup of this device exists. The file system is checked and shrunk at the restart, which can take several minutes; a power cut or a forced power-off during that time can damage it. | Ich bestätige, dass eine aktuelle Sicherung dieses Geräts existiert. Das Dateisystem wird beim Neustart geprüft und verkleinert, was einige Minuten dauern kann; ein Stromausfall oder ein erzwungenes Ausschalten in dieser Zeit kann es beschädigen. |
+| `devices.disk.convert.check.restart` | The user must restart the device once to start the encryption, and once more after it has completed. Nothing is encrypted until the first restart, which takes a few minutes longer than usual. | Der Benutzer muss das Gerät einmal neu starten, um die Verschlüsselung zu beginnen, und nach ihrem Abschluss noch einmal. Bis zum ersten Neustart wird nichts verschlüsselt; er dauert einige Minuten länger als üblich. |
+| `devices.disk.convert.check.pin` | At the first restart after the background encryption has completed, the device asks the user for a boot PIN on a text console (unlock mode: TPM + boot PIN). The PIN never reaches Paddock. | Beim ersten Neustart nach Abschluss der Verschlüsselung im Hintergrund fragt das Gerät den Benutzer auf einer Textkonsole nach einer Boot-PIN (Entsperrmodus: TPM + Boot-PIN). Die PIN gelangt nie zu Paddock. |
+| `devices.disk.convert.check.tpmOnly` | The device sets up its TPM unlock without a PIN at the first restart after the background encryption has completed (unlock mode: TPM only). | Das Gerät richtet seine TPM-Entsperrung ohne PIN beim ersten Neustart nach Abschluss der Verschlüsselung im Hintergrund ein (Entsperrmodus: Nur TPM). |

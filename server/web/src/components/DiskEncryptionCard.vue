@@ -299,7 +299,7 @@ onBeforeUnmount(hide)
           {{ t('devices.disk.convert.eligible') }}
         </v-alert>
         <v-alert
-          v-else-if="disk.state === 'not_encrypted' || disk.state === 'unmanaged'"
+          v-else-if="disk.state === 'unmanaged' || (disk.state === 'not_encrypted' && !conversionOpen(conversion))"
           type="warning"
           variant="tonal"
           class="conflict"

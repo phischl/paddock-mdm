@@ -37,8 +37,9 @@ The device page (*Disk encryption*) and the device list filter show the state of
 | `tpm_pin_missing` | The boot PIN was skipped; the disk keeps the install passphrase. |
 | `unlock_mode_mismatch` | The root volume is enrolled for the other unlock mode than the device's policy (a `tpm2` keyslot under `tpm_pin`, or a `tpm2+pin` keyslot under `tpm_only`); see "Changing the unlock mode". |
 | `tpm_missing` | The device has no TPM 2.0. |
-| `unmanaged` | Encrypted, but not installed with the Paddock autoinstall (no in-place conversion). |
-| `not_encrypted` | The root file system is not encrypted. |
+| `unmanaged` | Encrypted, but not installed with the Paddock autoinstall; Paddock holds neither its recovery key nor its header. |
+| `not_encrypted` | The root file system is not encrypted; where the layout allows it, the device can be encrypted in place (`docs/operations/in-place-encryption.md`). |
+| `encrypting` | An in-place encryption is running: the root partition is LUKS2 and the rest is encrypted in the background. The device stays on the attention page until it is `compliant` after the completion and the next start. |
 
 The *Disk encryption* card lists every LUKS volume with its device, keyslots and whether its current header is
 escrowed, and the `/etc/crypttab` entries the agent could not classify (for example `LABEL=` sources); those are not
@@ -92,6 +93,9 @@ hostname typed as confirmation. Each is recorded once in the audit log (`disk.re
 
 1. Portal → device → *Disk encryption* → *Show recovery key* (`POST /api/v1/devices/{id}/disk/recovery-key`). The
    key looks like `cbdefghi-…` (8 groups of 8 characters) and is hidden again after 60 seconds.
+   The dialog reveals the newest stored generation. On a device that was encrypted in place, the first generation
+   is the conversion key escrowed before the encryption started: it is revealed until the recovery key enrolled after
+   the completion is stored as generation 2, which opens the disk once the conversion keyslot is wiped.
 2. At the boot prompt **"Please enter LUKS2 token PIN"**, type the recovery key instead of the PIN and press Enter.
    The device first spends its TPM PIN attempts: **repeat the recovery key until the disk unlocks** (PoC M1: 3 or 4
    entries). Each wrong entry counts as a TPM authorization failure.
