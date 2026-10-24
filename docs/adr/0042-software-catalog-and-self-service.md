@@ -104,7 +104,7 @@ Constraints from the existing architecture:
   in the check-in health as `health.software` (`digest` always; `items` when the digest changed since the last
   successful check-in and at least once per 24 h), stored by `RecordStatus` in `device_software_status`.**
   + Reuses the health channel (`health.disk` is the precedent), bounded size, one row per app × device. − After a
-  restore from backup the status can lag up to 24 h (RR-79). **Chosen.**
+  restore from backup the status can lag up to 24 h (RR-82). **Chosen.**
 - **Event compatibility (ADR 0024).** The agent emits the new event types `software.installed`,
   `software.reinstalled`, `software.removed` and `software.apply_failed` only while applying a bundle that carries
   the `software` section. Only a server that knows the section renders it, and that server knows the event types.
@@ -218,9 +218,9 @@ Constraints from the existing architecture:
   from a stale policy.
 - − Two files per source and a hand-written OpenPGP reader (small, fuzzed, refusing everything but v4 public keys);
   a 24 h status lag after a restore; a user on a device they do not own sees only device-targeted apps.
-- Residual risks (plan §6.7): RR-74 source key root-equivalence, RR-75 maintainer scripts as root, RR-76 Flathub as
-  an external trust anchor, RR-77 local root bypasses apt pins, RR-78 refused operations that would remove
-  dependents, RR-79 status lag, RR-80 pinned versions that vanish from a repository.
+- Residual risks (plan §6.7): RR-77 source key root-equivalence, RR-78 maintainer scripts as root, RR-79 Flathub as
+  an external trust anchor, RR-80 local root bypasses apt pins, RR-81 refused operations that would remove
+  dependents, RR-82 status lag, RR-83 pinned versions that vanish from a repository.
 - Follow-ups: architecture amendments to §11.3 (reconciler table and apply order), §11.5 (protected-file check
   covers the new paths), §11.6 (item 5), §12.5 (software catalog paragraph), §16 (new tables); the runbook
   `docs/operations/software.md`; M13b (self-service app, Flatpak, user targets) and M13c as outlined in the plan.

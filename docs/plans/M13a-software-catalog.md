@@ -87,8 +87,8 @@ state of every application on every device. The managed source files and keyring
   `updates_test.go` (`holdIn`, `auditCase`), `devicesim` (`--health <json>`); system `updates_test.go`
   (`TestUpdatesGates`, `forEachVM`, `vm.Fresh`, `Install`, `Device.hold`, `Until`, `Device.WaitEvent`,
   `Device.Must`), `test/system/README.md`.
-- **Residual risks.** `docs/compliance/residual-risks.md`: RR-73 is the highest; RR-41 and RR-42 are unassigned and
-  stay so. **M13a reserves RR-74 to RR-80.**
+- **Residual risks.** `docs/compliance/residual-risks.md`: RR-76 is the highest (RR-74 to RR-76 are taken by M8b); RR-41 and RR-42 are unassigned and
+  stay so. **M13a reserves RR-77 to RR-83.**
 
 ## 3. Binding decisions
 
@@ -296,7 +296,7 @@ state of every application on every device. The managed source files and keyring
 
 35. Acceptance tests `TestSoftwareSources`, `TestSoftwareCatalog`, `TestSoftwareStatus` (§9); audit-once cases;
     isolation fixtures; the system gate `TestSoftwareGates` with SW1–SW8 (§9); `docs/operations/software.md`;
-    RR-74 to RR-80 (§6.7); architecture amendments (§7); CLAUDE.md item 5 of "Protected areas on the device";
+    RR-77 to RR-83 (§6.7); architecture amendments (§7); CLAUDE.md item 5 of "Protected areas on the device";
     `CHANGELOG.md`; the full regression.
 
 ## 4. Non-goals
@@ -342,7 +342,7 @@ state of every application on every device. The managed source files and keyring
 | `test/acceptance/software_test.go`, `isolation_fixtures.go`, `audit_once_*_test.go` | new / change | §9 |
 | `test/system/software.go`, `software_test.go`, `README.md` | new / change | gate SW1–SW8, the gate repository |
 | `docs/operations/software.md` | new | runbook |
-| `docs/compliance/residual-risks.md` | change | RR-74 … RR-80 |
+| `docs/compliance/residual-risks.md` | change | RR-77 … RR-83 |
 | `docs/architecture.md` | change | §7 amendments (architect decision: this plan) |
 | `CLAUDE.md` | change | protected areas item 5 |
 | `CHANGELOG.md`, `docs/compliance/audit-codes.md` (generated) | change | — |
@@ -713,17 +713,17 @@ ALTER TABLE device_status ADD COLUMN software_digest text NOT NULL DEFAULT '';
 | `problems.in_use` | This source is used by a catalog entry. |
 | `device.tabs.managedSoftware` | Managed software |
 
-### 6.7 Residual risks (`docs/compliance/residual-risks.md`, new section "Software catalog (M13a)"; RR-74 to RR-80)
+### 6.7 Residual risks (`docs/compliance/residual-risks.md`, new section "Software catalog (M13a)"; RR-77 to RR-83)
 
 | ID | Risk | Mitigation in Paddock | Record in the ISMS |
 | --- | --- | --- | --- |
-| RR-74 | **A source key is root-equivalent.** Whoever holds a source's signing key, or controls the HTTPS endpoint of a repository whose key is trusted, ships packages that install as root on every device of the assignment. Paddock never checks a repository's content or reachability; it trusts the key the administrator entered. | Per-source keyring (`Signed-By`), never the global keyring; HTTPS only; `org_admin` with a WebAuthn step-up for every source change; the typed fingerprint must match the uploaded key; the fingerprint is in every audit event; the agent refuses a keyring whose fingerprint differs from the signed bundle. | The verification of vendor fingerprints out of band; who may be `org_admin`. |
-| RR-75 | **Maintainer scripts run as root.** `preinst`, `postinst`, `prerm` and `postrm` of every installed or removed package run as root with no sandbox; Paddock cannot confine dpkg. | Only packages from trusted sources or the distribution; the install simulation refuses operations that would remove other packages; every install, reinstall and removal is an audit event. | Which vendors are trusted; review of own repositories. |
-| RR-76 | **Flathub is an external trust anchor** (M13b). Apps from Flathub are built and signed by Flathub, not by the vendor; a remote's key change is outside Paddock's control. Reserved here; M13b records the mitigation. | — (M13b) | — (M13b) |
-| RR-77 | **Local root bypasses pins and holds.** A local administrator can `dpkg -i` a forbidden package, delete a keyring or edit a source file; apt's pin priority −1 stops `apt-get install`, not `dpkg`. | Protected area with correction within the drift interval and `device.tamper_protected_file_changed`; forbidden packages are removed again and `device.software_removed` recorded; required packages are reinstalled (`device.software_reinstalled`). Nothing is prevented (RR-01). | The reaction to repeated tamper and reinstall events on one device. |
-| RR-78 | **Refused operations stay refused.** An install or removal that would remove any package other than the targets is refused (`would_remove_dependents`) and stays refused until the assignment or the device changes; a `forbid` of a package another package depends on never removes it. | The state `failed` with the reason on the device page and the catalog's device list; the event `device.software_apply_failed` once per failure. | Who reviews failed assignments. |
-| RR-79 | **Status can lag.** The per-app status travels with the check-in only when it changed and at least daily; after a restore from backup the portal shows the status of the backup until the next change or up to 24 h; removals are deferred while the device had no check-in for 15 minutes. | Every change is also an audit event; `reported_at` is shown. | None beyond reading `reported_at` for decisions. |
-| RR-80 | **Pinned versions vanish.** A repository that drops a pinned version leaves a `required pinned` package in `failed/no_candidate` and a `hold` at a version the repository no longer has; the installed version stays. | The state and reason are shown; `required latest` is unaffected. | The policy for pinning versions from third-party repositories. |
+| RR-77 | **A source key is root-equivalent.** Whoever holds a source's signing key, or controls the HTTPS endpoint of a repository whose key is trusted, ships packages that install as root on every device of the assignment. Paddock never checks a repository's content or reachability; it trusts the key the administrator entered. | Per-source keyring (`Signed-By`), never the global keyring; HTTPS only; `org_admin` with a WebAuthn step-up for every source change; the typed fingerprint must match the uploaded key; the fingerprint is in every audit event; the agent refuses a keyring whose fingerprint differs from the signed bundle. | The verification of vendor fingerprints out of band; who may be `org_admin`. |
+| RR-78 | **Maintainer scripts run as root.** `preinst`, `postinst`, `prerm` and `postrm` of every installed or removed package run as root with no sandbox; Paddock cannot confine dpkg. | Only packages from trusted sources or the distribution; the install simulation refuses operations that would remove other packages; every install, reinstall and removal is an audit event. | Which vendors are trusted; review of own repositories. |
+| RR-79 | **Flathub is an external trust anchor** (M13b). Apps from Flathub are built and signed by Flathub, not by the vendor; a remote's key change is outside Paddock's control. Reserved here; M13b records the mitigation. | — (M13b) | — (M13b) |
+| RR-80 | **Local root bypasses pins and holds.** A local administrator can `dpkg -i` a forbidden package, delete a keyring or edit a source file; apt's pin priority −1 stops `apt-get install`, not `dpkg`. | Protected area with correction within the drift interval and `device.tamper_protected_file_changed`; forbidden packages are removed again and `device.software_removed` recorded; required packages are reinstalled (`device.software_reinstalled`). Nothing is prevented (RR-01). | The reaction to repeated tamper and reinstall events on one device. |
+| RR-81 | **Refused operations stay refused.** An install or removal that would remove any package other than the targets is refused (`would_remove_dependents`) and stays refused until the assignment or the device changes; a `forbid` of a package another package depends on never removes it. | The state `failed` with the reason on the device page and the catalog's device list; the event `device.software_apply_failed` once per failure. | Who reviews failed assignments. |
+| RR-82 | **Status can lag.** The per-app status travels with the check-in only when it changed and at least daily; after a restore from backup the portal shows the status of the backup until the next change or up to 24 h; removals are deferred while the device had no check-in for 15 minutes. | Every change is also an audit event; `reported_at` is shown. | None beyond reading `reported_at` for decisions. |
+| RR-83 | **Pinned versions vanish.** A repository that drops a pinned version leaves a `required pinned` package in `failed/no_candidate` and a `hold` at a version the repository no longer has; the installed version stays. | The state and reason are shown; `required latest` is unaffected. | The policy for pinning versions from third-party repositories. |
 
 ## 7. Architecture and rule amendments (binding text; PDK-414 writes them)
 
@@ -955,7 +955,7 @@ PDK-409.
 
 ## 12. Risks and open points
 
-Residual risks: §6.7 (RR-74 to RR-80; PDK-414 writes the rows).
+Residual risks: §6.7 (RR-77 to RR-83; PDK-414 writes the rows).
 
 Risks with countermeasures:
 
@@ -1014,7 +1014,7 @@ Open questions (default chosen; the maintainer may overrule):
   a protected area (`flatpak remotes --columns=name,url` compared against the spec; a rogue `paddock-*` remote is
   removed); the event `software.self_service{user, app, action, outcome}` and the audit code
   `device.software_self_service`; desktop notifications (`notify-send` in the user's session via `systemd-run
-  --machine=<user>@`) for installs, updates and restart needs; RR-76 written; the uninstall step removes
+  --machine=<user>@`) for installs, updates and restart needs; RR-79 written; the uninstall step removes
   Paddock-managed Flatpak remotes (apps stay).
 - **Gates:** SS1 list for a user shows only their audience; SS2 install as user → event with the UPN; SS3 a user
   cannot remove a `required` app (403 `required_by_policy`); SS4 a Flatpak remote key change needs step-up;
