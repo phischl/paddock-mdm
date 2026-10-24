@@ -131,6 +131,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In-place encryption now accepts an installed device whose `/etc/fstab` names the root file system as
   `/dev/disk/by-uuid/<uuid>`, the form the Ubuntu installer writes for a root without LVM; such devices were reported
   `root_reference_unsupported`. Other device links stay refused.
+- The software list (`GET /api/v1/software`, portal Software page) answers within a second at a few thousand
+  packages: the check whether a package has vulnerabilities scanned every finding of the organization once per
+  package, so a page took about a minute and timed out. Migration 00067 adds an index for that check; the migration
+  step of the upgrade builds it and holds back vulnerability updates from the inventory sync for well under a second.
 
 ## [0.1.0-alpha.4] - 2026-10-19
 
