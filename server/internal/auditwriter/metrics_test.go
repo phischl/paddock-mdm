@@ -118,12 +118,30 @@ func TestWriterLatencyMetrics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		failOrg := uuid.Must(uuid.NewV7())
+		ev := event(failOrg, time.Now(), audit.CodeDeviceGroupDeleted)
 		got := observe(t, all, func() {
-			if _, err := writer.WriteBatch(ctx, []audit.Event{event(org, time.Now(), audit.CodeDeviceGroupDeleted)}); err == nil {
+			if _, err := writer.WriteBatch(ctx, []audit.Event{ev}); err == nil {
 				t.Fatal("WriteBatch succeeded with a failing WORM store")
 			}
 		})
 		want(t, got, 0, 1, 0, 1, 0)
+		// The object row precedes the put (PDK-422): the failed put rolls back both index rows.
+		if n := s.count(t, "SELECT count(*) FROM audit_event WHERE event_id = $1", ev.EventID); n != 0 {
+			t.Fatalf("%d audit_event rows after the failed put, want 0", n)
+		}
+		if n := s.count(t, "SELECT count(*) FROM audit_object WHERE organization_id = $1", failOrg); n != 0 {
+			t.Fatalf("%d audit_object rows after the failed put, want 0", n)
+		}
+		if n, err := s.writer.WriteBatch(ctx, []audit.Event{ev}); err != nil || n != 1 {
+			t.Fatalf("redelivery with a working store = %d, %v; want 1", n, err)
+		}
+		if n := s.count(t, "SELECT count(*) FROM audit_event WHERE event_id = $1", ev.EventID); n != 1 {
+			t.Fatalf("%d audit_event rows after the redelivery, want 1", n)
+		}
+		if n := s.count(t, "SELECT count(*) FROM audit_object WHERE organization_id = $1", failOrg); n != 1 {
+			t.Fatalf("%d audit_object rows after the redelivery, want 1", n)
+		}
 	})
 
 	t.Run("sealed manifest", func(t *testing.T) {

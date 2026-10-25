@@ -1710,7 +1710,10 @@ Generated code tends to emit audit events on success only. The rule in the appli
   land in the objects and the manifest of the day they are recorded, so every stored event is covered by
   exactly one sealed manifest. `occurred_at` stays in each event and drives index queries. Writer transactions
   have a 5-minute timeout, and day *D* is sealed at *D*+1 00:15 UTC, so no object of day *D* can be committed
-  after its seal. Object retention is `recording day + retention days`.
+  after its seal. Should the recording day already be sealed (an early development seal, or a writer clock ahead
+  of the database), `audit_object.day` is the first unsealed day instead; the object key keeps its recording hour
+  and a trigger on `audit_object` refuses any object for a sealed day (ADR 0010, amendment 2026-10-25). Object
+  retention is `audit_object.day + retention days`.
 
 > **Amendment 2026-10-15 (M8b):** the audit writer verifies its chain every night (ADR 0030, §6.4 of plan M8b).
 

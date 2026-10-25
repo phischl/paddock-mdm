@@ -15,6 +15,12 @@ import (
 // SetTransactionTimeout lowers the writer's transaction timeout.
 func SetTransactionTimeout(w *Writer, d time.Duration) { w.txTimeout = d }
 
+// SetDayChosen runs fn in the writer transaction after it chose the object's day and before it inserts the object.
+func SetDayChosen(w *Writer, fn func(day time.Time)) { w.dayChosen = fn }
+
+// SetRowInserted runs fn in the writer transaction after it inserted the audit_object row and before the WORM put.
+func SetRowInserted(w *Writer, fn func(day time.Time)) { w.rowInserted = fn }
+
 // SetSealerClock replaces the sealer's clock.
 func SetSealerClock(s *Sealer, now func() time.Time) { s.now = now }
 

@@ -363,6 +363,13 @@ func IsForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
+// IsAuditDaySealed reports whether err is the audit_object trigger's refusal of an object for an already sealed day
+// (SQLSTATE PA422, audit migration 00005).
+func IsAuditDaySealed(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "PA422"
+}
+
 // IsCheckViolation reports whether err is a check constraint violation.
 func IsCheckViolation(err error) bool {
 	var pgErr *pgconn.PgError

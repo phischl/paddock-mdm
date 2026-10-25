@@ -646,12 +646,11 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {isolationVerifyDay + ": no manifest"}, "page_size": {"100"}},
 		{"trigger": {"cli"}, "ok": {"false"}, "sort": {"-started_at"}, "page_size": {"100"}},
 	},
-	// Temporary exception (PDK-422, which removes it): no search here. A fresh stack has no sealed globex day, and
-	// this gate must not seal or write into a seeded organization: sealing globex's current day breaks its chain for
-	// every later event of the day. TestAuditIntegrity seals a fresh organization instead, checks that alice and carol
-	// see none of its manifests and exercises the list contract (q, sort, paging) on its manifest; the leak check of
-	// the fixture above still runs on alice's whole list.
-	"/api/v1/audit/manifests": {},
+	// globex's sealed current day (seedGlobexManifest); the manifest's object key carries the globex ID.
+	"/api/v1/audit/manifests": {
+		{"q": {"manifests"}, "page_size": {"100"}},
+		{"from": {isolationVerifyDay}, "sort": {"-day"}, "page_size": {"100"}},
+	},
 }
 
 // currentLoginSettings returns acme's login settings as an update body (unchanged values).
@@ -705,6 +704,19 @@ func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
 	"/api/v1/devices/{id}/logins":     seedGlobexLogin,
 	"/api/v1/audit/verification-runs": seedGlobexVerificationRun,
+	"/api/v1/audit/manifests":         seedGlobexManifest,
+}
+
+// seedGlobexManifest seals globex's unsealed days through today with the development-only `audit seal --day --org`.
+// Events recorded later today are filed under the first unsealed day (ADR 0010 amendment 2026-10-25), so the early
+// seal leaves globex's chain intact for the next nightly verification.
+func seedGlobexManifest(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	globex := orgOf(t, w.carol)
+	today := time.Now().UTC().Format(time.DateOnly)
+	if code, out, err := stack.PaddockServer(testContext(t, 2*time.Minute), "audit", "seal", "--day", today, "--org", globex.String()); err != nil || code != 0 {
+		t.Fatalf("audit seal for globex: exit %d, %v\n%s", code, err, out)
+	}
 }
 
 // isolationVerifyDay is a day long before any audit data: its verification fails with "no manifest" whatever the
