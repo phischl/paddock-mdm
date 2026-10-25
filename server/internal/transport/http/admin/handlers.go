@@ -29,6 +29,8 @@ type handlers struct {
 	devices   *app.Devices
 	managed   *app.ManagedConfig
 	releases  *app.AgentReleases
+	// imports is the agent release import from the release source (ADR 0043).
+	imports *app.ReleaseImports
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative

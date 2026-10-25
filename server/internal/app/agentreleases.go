@@ -406,7 +406,13 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 				fmt.Errorf("package %s %s: %w", pkg.Name, pkg.Arch, err))
 		}
 	}
+	return a.publishVerified(ctx, version, artifacts, packages)
+}
 
+// publishVerified creates the release version (or continues its draft), uploads every artifact and package and
+// publishes it, with the principal of ctx: the host command's system actor or the administrator of an import (ADR 0043
+// decision 1). The caller has verified every file; a published release is refused.
+func (a *AgentReleases) publishVerified(ctx context.Context, version string, artifacts []HostArtifact, packages []HostPackage) (ReleaseDetail, error) {
 	if _, err := a.Create(ctx, version); err != nil {
 		if !errors.Is(err, problem.AlreadyExists) {
 			return ReleaseDetail{}, err

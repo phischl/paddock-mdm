@@ -51,6 +51,7 @@ type releaseHarness struct {
 	releases *app.AgentReleases
 	reports  *app.DeviceReports
 	runner   *app.ActionRunner
+	platform *db.PlatformPool
 	store    *fakeArtifactStore
 	priv     minisign.PrivateKey
 	super    *pgx.Conn
@@ -84,7 +85,7 @@ func newReleaseHarness(t *testing.T, development bool) releaseHarness {
 	verify := app.NewReleaseVerifier(pub)
 	return releaseHarness{
 		releases: app.NewAgentReleases(runner, platform, store, verify, verify, development),
-		reports:  app.NewDeviceReports(runner, worker), runner: runner, store: store, priv: priv, super: super,
+		reports:  app.NewDeviceReports(runner, worker), runner: runner, platform: platform, store: store, priv: priv, super: super,
 	}
 }
 

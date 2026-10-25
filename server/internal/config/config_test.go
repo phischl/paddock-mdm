@@ -225,3 +225,68 @@ func TestTrustedProxies(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadReleaseSource: the agent release source defaults to the official repository on api.github.com, "off"
+// switches it off, and plain http is a development-only value (ADR 0043 decisions 5 and 6).
+func TestLoadReleaseSource(t *testing.T) {
+	const repo, src, token = "PADDOCK_AGENT_RELEASE_SOURCE_REPO", "PADDOCK_AGENT_RELEASE_SOURCE_URL",
+		"PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE"
+	prod, dev := Common{Env: "production"}, Common{Env: "development"}
+
+	l := NewLoaderFrom(nil)
+	got := LoadReleaseSource(l, prod)
+	if want := (ReleaseSource{Repository: "phischl/paddock-mdm", URL: "https://api.github.com"}); got != want || l.Err() != nil {
+		t.Fatalf("defaults = %+v, err %v", got, l.Err())
+	}
+	if !got.Enabled() {
+		t.Fatal("the default source is disabled")
+	}
+
+	l = NewLoaderFrom(map[string]string{repo: "off", src: "http://ignored"})
+	if got := LoadReleaseSource(l, prod); got.Enabled() || got != (ReleaseSource{}) || l.Err() != nil {
+		t.Fatalf("off = %+v, err %v", got, l.Err())
+	}
+
+	l = NewLoaderFrom(map[string]string{repo: "owner"})
+	if LoadReleaseSource(l, prod); l.Err() == nil || !strings.Contains(l.Err().Error(), repo) {
+		t.Fatalf("owner without repo: %v", l.Err())
+	}
+
+	l = NewLoaderFrom(map[string]string{src: "http://github-fixture:8080"})
+	if LoadReleaseSource(l, prod); l.Err() == nil ||
+		!strings.Contains(l.Err().Error(), src+": http is only allowed with PADDOCK_ENV=development") {
+		t.Fatalf("http in production: %v", l.Err())
+	}
+	l = NewLoaderFrom(map[string]string{src: "http://github-fixture:8080/"})
+	if got := LoadReleaseSource(l, dev); got.URL != "http://github-fixture:8080" || l.Err() != nil {
+		t.Fatalf("http in development = %+v, err %v", got, l.Err())
+	}
+	l = NewLoaderFrom(map[string]string{src: "https://ghe.example.com/api/v3/"})
+	if got := LoadReleaseSource(l, prod); got.URL != "https://ghe.example.com/api/v3" || l.Err() != nil {
+		t.Fatalf("trailing slash = %+v, err %v", got, l.Err())
+	}
+	for _, bad := range []string{"ftp://x", "https://u:p@api.github.com", "https://api.github.com?x=1", "https://api.github.com#f", "api.github.com"} {
+		l = NewLoaderFrom(map[string]string{src: bad})
+		if LoadReleaseSource(l, dev); l.Err() == nil {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("ghp_x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l = NewLoaderFrom(map[string]string{token: path})
+	if got := LoadReleaseSource(l, prod); got.Token != "ghp_x" || l.Err() != nil {
+		t.Fatalf("token = %q, err %v", got.Token, l.Err())
+	}
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l = NewLoaderFrom(map[string]string{token: empty})
+	if LoadReleaseSource(l, prod); l.Err() == nil || !strings.Contains(l.Err().Error(), token) {
+		t.Fatalf("empty token file: %v", l.Err())
+	}
+}

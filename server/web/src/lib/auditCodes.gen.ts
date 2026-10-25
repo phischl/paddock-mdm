@@ -8,6 +8,7 @@ export const auditCodes = [
   'admin.sessions_revoked',
   'agent_release.artifact_uploaded',
   'agent_release.created',
+  'agent_release.imported',
   'agent_release.published',
   'agent_rollout.advanced',
   'agent_rollout.completed',

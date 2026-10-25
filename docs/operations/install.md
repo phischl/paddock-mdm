@@ -242,7 +242,14 @@ Authentik is down. Run the action again once Authentik is back, so that the iden
 
 ## 10. First agent release
 
-The agent binaries and packages are not part of the bundle: the release workflow signs `paddockd` and the
+**Import from GitHub (first option).** When the control plane reaches GitHub (directly or through `HTTPS_PROXY`), a
+platform administrator imports the latest release in the portal: *Agent releases*, check for a new release, import
+it with a step-up. The api downloads the signed files of the official repository, verifies every signature with the
+release public key and publishes the release; `paddock-revoke` is never imported this way and is uploaded after the
+offline signing as below. Configuration, bounds and what is imported: `docs/operations/agent-releases.md` "Import from
+GitHub". Air-gapped installations set `PADDOCK_AGENT_RELEASE_SOURCE_REPO=off` in `.env` and use the host command.
+
+**Host command (fallback).** The agent binaries and packages are not part of the bundle: the release workflow signs `paddockd` and the
 `paddock-agent` and `paddock-supervisor` packages and attaches them with their `.minisig` files to the GitHub release;
 `paddock-revoke` is attached `-unsigned` and signed offline by the revocation key holders, fleetd is built and signed
 by the release manager (`docs/operations/agent-releases.md`). Put them on the control plane in this layout (the

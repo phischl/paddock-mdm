@@ -33,6 +33,8 @@ type Deps struct {
 	Devices        *app.Devices
 	Managed        *app.ManagedConfig
 	Releases       *app.AgentReleases
+	// ReleaseImports import agent releases from the configured release source (ADR 0043).
+	ReleaseImports *app.ReleaseImports
 	Users          *app.Users
 	UserGroups     *app.UserGroups
 	Logins         *app.Logins
@@ -123,6 +125,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/api-tokens/{id}/revoke":                                  {app.ScopeOrg, app.SpecAPITokenRevoke},
 	"PUT /api/v1/config":                                                   {app.ScopeOrg, app.SpecConfigApply},
 	"POST /api/platform/v1/agent-releases":                                 {app.ScopePlatform, app.SpecAgentReleaseCreate},
+	"POST /api/platform/v1/agent-releases/import":                          {app.ScopePlatform, app.SpecAgentReleaseImport},
 	"PUT /api/platform/v1/agent-releases/{version}/artifacts/{arch}":       {app.ScopePlatform, app.SpecAgentReleaseUpload},
 	"PUT /api/platform/v1/agent-releases/{version}/packages/{name}/{arch}": {app.ScopePlatform, app.SpecAgentReleaseUpload},
 	"POST /api/platform/v1/agent-releases/{version}/publish":               {app.ScopePlatform, app.SpecAgentReleasePublish},
@@ -210,6 +213,7 @@ func NewHandler(d Deps) http.Handler {
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
+		imports:      d.ReleaseImports,
 		stepUpWindow: tokenTTL, serverVersion: d.ServerVersion,
 	}
 	if d.ExposeStepUp {

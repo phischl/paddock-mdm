@@ -3636,6 +3636,73 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-releases/import:
+    post:
+      operationId: importAgentRelease
+      tags: [platform]
+      description: >-
+        Roles: platform_admin, with a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy
+        it). Imports the version from the configured release source (ADR 0043): the version must be newer than the
+        newest published release, every file is verified with the release public key before anything is stored, and
+        the release is published without a rollout; paddock-revoke is never imported. The whole import is bounded by
+        90 s.
+      x-paddock-audit: agent_release.imported
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentReleaseImport" }
+      responses:
+        "201":
+          description: Imported and published.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentReleaseDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-release-source:
+    get:
+      operationId: getAgentReleaseSource
+      tags: [platform]
+      description: >-
+        Roles: platform_admin. The configured agent release source (ADR 0043 decision 6); repository and url are null
+        while the source is switched off. No outbound request.
+      responses:
+        "200":
+          description: The release source.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentReleaseSource" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-release-source/check:
+    post:
+      operationId: checkAgentReleaseSource
+      tags: [platform]
+      description: >-
+        Roles: platform_admin. Lists the releases of the source and compares the latest with the newest published
+        release (ADR 0043 decision 3); changes nothing and is not audited. 403 release_source_disabled while the source
+        is switched off, 502 release_source_unavailable when the source does not answer.
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The latest release of the source.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentReleaseCheck" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases/{version}:
     parameters:
       - $ref: "#/components/parameters/Version"
@@ -4495,6 +4562,32 @@ components:
       additionalProperties: false
       properties:
         version: { type: string, maxLength: 64 }
+    AgentReleaseImport:
+      type: object
+      required: [version]
+      additionalProperties: false
+      properties:
+        version: { type: string, maxLength: 64, description: "The version without the leading v, e.g. 0.1.0-alpha.6." }
+    AgentReleaseSource:
+      type: object
+      required: [enabled, repository, url]
+      properties:
+        enabled: { type: boolean }
+        repository: { type: string, nullable: true, description: "<owner>/<repo>; null while switched off." }
+        url: { type: string, nullable: true, description: The API base of the source; null while switched off. }
+    AgentReleaseCheck:
+      type: object
+      required: [latest, published_at, newest_stored, importable, reason]
+      properties:
+        latest: { type: string, nullable: true, description: The newest release on the source; null when none matches. }
+        published_at: { type: string, format: date-time, nullable: true }
+        newest_stored: { type: string, nullable: true, description: The newest published release on this installation. }
+        importable: { type: boolean }
+        reason:
+          type: string
+          enum: [none_found, not_newer]
+          nullable: true
+          description: Why latest cannot be imported; null when importable.
     AgentRelease:
       type: object
       required: [version, status, created_by, created_at, artifact_count]

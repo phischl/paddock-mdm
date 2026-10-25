@@ -136,6 +136,66 @@ func PackageObjectKey(version, name, packageVersion, arch string) string {
 	return fmt.Sprintf("packages/%s/%s_%s_%s.deb", version, name, packageVersion, arch)
 }
 
+// ErrInvalidSourceVersion is a version outside the release channel pattern.
+var ErrInvalidSourceVersion = errors.New("version must be x.y.z or x.y.z-alpha.N, -beta.N or -rc.N")
+
+// sourceVersion is the rule of make release-check for the stable channel (ADR 0043 decision 3).
+var sourceVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$`)
+
+// ValidateSourceVersion checks a version of the release source against the rule of make release-check (ADR 0043
+// decision 3).
+func ValidateSourceVersion(v string) error {
+	if !sourceVersion.MatchString(v) {
+		return ErrInvalidSourceVersion
+	}
+	return nil
+}
+
+// SourceAsset is one release file of the import; Package is "" for paddockd; Required is false for the optional ones.
+type SourceAsset struct {
+	Name, Arch, Package string
+	Required            bool
+}
+
+// requiredPackageArch is the only architecture make deb builds packages for today (ADR 0043 decision 4).
+const requiredPackageArch = "amd64"
+
+// SourceAssets are the Paddock assets of version v the import looks for (ADR 0043 decision 4), in this order:
+// required paddockd_<v>_linux_amd64, paddockd_<v>_linux_arm64, paddock-agent_<v>_amd64.deb,
+// paddock-supervisor_<v>_amd64.deb (exactly what the release workflow ships, see packaging/release_test.sh); optional
+// paddock-agent_<v>_<arch>.deb and paddock-supervisor_<v>_<arch>.deb for every other arch of Arches. Each present
+// asset needs "<Name>.minisig".
+func SourceAssets(v string) []SourceAsset {
+	var out []SourceAsset
+	for _, arch := range Arches {
+		out = append(out, SourceAsset{Name: fmt.Sprintf("paddockd_%s_linux_%s", v, arch), Arch: arch, Required: true})
+	}
+	for _, name := range RequiredPackages {
+		out = append(out, SourceAsset{Name: fmt.Sprintf("%s_%s_%s.deb", name, v, requiredPackageArch), Arch: requiredPackageArch,
+			Package: name, Required: true})
+	}
+	for _, arch := range Arches {
+		if arch == requiredPackageArch {
+			continue
+		}
+		for _, name := range RequiredPackages {
+			out = append(out, SourceAsset{Name: fmt.Sprintf("%s_%s_%s.deb", name, v, arch), Arch: arch, Package: name})
+		}
+	}
+	return out
+}
+
+var fleetdAsset = regexp.MustCompile(`^` + PackageFleetd + `_([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})_([a-z0-9]+)\.deb$`)
+
+// ParseFleetdAsset recognises fleet-osquery_<fleetd version>_<arch>.deb (the optional asset).
+func ParseFleetdAsset(name string) (packageVersion, arch string, ok bool) {
+	m := fleetdAsset.FindStringSubmatch(name)
+	if m == nil || !slices.Contains(Arches, m[2]) {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
 // Bucket is the rollout bucket of a device: FNV-1a (32 bit) of the canonical UUID text modulo 100. The SQL function
 // paddock_rollout_bucket computes the same value.
 func Bucket(device uuid.UUID) int {

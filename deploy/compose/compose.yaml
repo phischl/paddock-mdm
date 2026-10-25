@@ -421,6 +421,13 @@ services:
       # Break-glass of a locked-out platform (plan M7a decision 22): true ignores the application IP allow list;
       # prod-check fails while it is set.
       PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
+      # Agent release import from GitHub (ADR 0043): the repository ("off" switches the import off, e.g. air-gapped),
+      # the API base, and the proxy of the outbound request; the optional token file is a Compose override.
+      PADDOCK_AGENT_RELEASE_SOURCE_REPO: ${PADDOCK_AGENT_RELEASE_SOURCE_REPO:-phischl/paddock-mdm}
+      PADDOCK_AGENT_RELEASE_SOURCE_URL: ${PADDOCK_AGENT_RELEASE_SOURCE_URL:-https://api.github.com}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
       - valkey_password

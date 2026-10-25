@@ -25,6 +25,8 @@ func TestOutcomeOf(t *testing.T) {
 		{"wrapped forbidden", fmt.Errorf("x: %w", problem.Forbidden.WithDetail("role")), audit.OutcomeDenied, "forbidden"},
 		{"no organization", problem.NoOrganization, audit.OutcomeDenied, "no_organization"},
 		{"step-up required", problem.StepUpRequired.WithDetail("old"), audit.OutcomeDenied, "step_up_required"},
+		{"release source disabled", problem.ReleaseSourceDisabled, audit.OutcomeDenied, "release_source_disabled"},
+		{"release source unavailable", problem.ReleaseSourceUnavailable, audit.OutcomeFailure, "release_source_unavailable"},
 		{"validation", problem.InvalidRequest.WithDetail("name"), audit.OutcomeFailure, "invalid_request"},
 		{"not found", problem.NotFound, audit.OutcomeFailure, "not_found"},
 		{"conflict", problem.NameTaken, audit.OutcomeFailure, "name_taken"},

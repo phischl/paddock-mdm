@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/githubreleases"
 	"github.com/phischl/paddock-mdm/server/internal/allowlistcache"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
@@ -84,6 +85,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	devStepUp := config.LoadDevStepUp(l, common)
 	loginMFAOptional := config.LoadDevLoginMFAOptional(l, common)
+	cfgSource := config.LoadReleaseSource(l, common)
 	if devStepUp.Window > 0 {
 		runnerOpts = append(runnerOpts, app.WithStepUpWindow(devStepUp.Window))
 	}
@@ -141,6 +143,11 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	stepUpTokens := stepupproof.NewStore(vk)
 	sessionStore := sessions.NewStore(vk)
 	releases := app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development())
+	var source app.ReleaseSource
+	if cfgSource.Enabled() {
+		source = githubreleases.New(cfgSource.URL, cfgSource.Repository, cfgSource.Token, common.Development())
+	}
+	imports := app.NewReleaseImports(runner, platformPool, releases, source, cfgSource)
 	accounts := app.NewAccounts(runner, orgPool, platformPool, sessionStore)
 	escrowAccess := app.NewEscrowAccess(escrowreader.NewClient(escrowReaderURL, escrowReaderToken), stepUpTokens)
 	keys := &admin.Keyring{}
@@ -193,6 +200,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Inventory:      app.NewInventory(orgPool),
 		Accounts:       accounts,
 		Releases:       releases,
+		ReleaseImports: imports,
 		AgentUpdates:   app.NewAgentUpdates(runner, orgPool, devicecache.New(vk)),
 		Uninstalls:     app.NewUninstalls(runner, orgPool, devicecache.New(vk)),
 		Conversions:    app.NewDiskConversions(runner, orgPool, devicecache.New(vk)),

@@ -2256,6 +2256,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/agent-releases/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: platform_admin, with a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. The whole import is bounded by 90 s. */
+        post: operations["importAgentRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/agent-release-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: platform_admin. The configured agent release source (ADR 0043 decision 6); repository and url are null while the source is switched off. No outbound request. */
+        get: operations["getAgentReleaseSource"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/agent-release-source/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: platform_admin. Lists the releases of the source and compares the latest with the newest published release (ADR 0043 decision 3); changes nothing and is not audited. 403 release_source_disabled while the source is switched off, 502 release_source_unavailable when the source does not answer. */
+        post: operations["checkAgentReleaseSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases/{version}": {
         parameters: {
             query?: never;
@@ -2665,6 +2716,31 @@ export interface components {
         AgentRolloutStatus: "running" | "halted" | "completed";
         AgentReleaseCreate: {
             version: string;
+        };
+        AgentReleaseImport: {
+            /** @description The version without the leading v, e.g. 0.1.0-alpha.6. */
+            version: string;
+        };
+        AgentReleaseSource: {
+            enabled: boolean;
+            /** @description <owner>/<repo>; null while switched off. */
+            repository: string | null;
+            /** @description The API base of the source; null while switched off. */
+            url: string | null;
+        };
+        AgentReleaseCheck: {
+            /** @description The newest release on the source; null when none matches. */
+            latest: string | null;
+            /** Format: date-time */
+            published_at: string | null;
+            /** @description The newest published release on this installation. */
+            newest_stored: string | null;
+            importable: boolean;
+            /**
+             * @description Why latest cannot be imported; null when importable.
+             * @enum {string|null}
+             */
+            reason: "none_found" | "not_newer" | null;
         };
         AgentRelease: {
             version: string;
@@ -9153,6 +9229,87 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    importAgentRelease: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentReleaseImport"];
+            };
+        };
+        responses: {
+            /** @description Imported and published. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentReleaseDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    getAgentReleaseSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The release source. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentReleaseSource"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    checkAgentReleaseSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest release of the source. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentReleaseCheck"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     getAgentRelease: {
