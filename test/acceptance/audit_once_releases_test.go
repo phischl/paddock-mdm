@@ -163,6 +163,7 @@ func signedPackage(t *testing.T, p *env.Portal, v string) env.Response {
 
 // releaseAuditCases are the A3 cases of the agent release operations (plan M2b decision 20).
 var releaseAuditCases = map[string][]auditCase{
+	"POST /api/platform/v1/agent-releases/import": importAuditCases(),
 	"POST /api/platform/v1/agent-releases": {
 		platformCase("success", "agent_release.created", "success", http.StatusCreated, "", unknownRelease, func(t *testing.T, p *env.Portal, v string) env.Response {
 			return call(t, p, http.MethodPost, "/api/platform/v1/agent-releases", map[string]string{"version": v})

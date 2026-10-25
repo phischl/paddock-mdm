@@ -8,6 +8,10 @@ RETURNING *;
 -- name: GetAgentRelease :one
 SELECT * FROM agent_release WHERE version = @version;
 
+-- name: NewestPublishedAgentRelease :one
+-- The published release with the highest SemVer precedence, the bar a release import must pass (ADR 0043 decision 3).
+SELECT * FROM agent_release WHERE status = 'published' ORDER BY version_key DESC LIMIT 1;
+
 -- name: PublishAgentRelease :one
 UPDATE agent_release SET status = 'published', published_at = now()
 WHERE version = @version

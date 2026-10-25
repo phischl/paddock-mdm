@@ -293,6 +293,7 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 	p := problem.From(err)
 	if errors.Is(err, problem.Forbidden) || errors.Is(err, problem.NoOrganization) || errors.Is(err, problem.CSRFMissing) ||
 		errors.Is(err, problem.StepUpRequired) || errors.Is(err, problem.RevocationDisabled) ||
+		errors.Is(err, problem.ReleaseSourceDisabled) ||
 		errors.Is(err, problem.RevocationFrozen) || errors.Is(err, problem.RevocationRejected) ||
 		errors.Is(err, problem.IPNotAllowed) {
 		return audit.OutcomeDenied, p.Code

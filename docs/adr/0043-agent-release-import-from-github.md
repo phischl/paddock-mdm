@@ -194,3 +194,11 @@ Facts about the code that bound the design (checked 2026-10-25):
   offline (then the Sigstore provenance is an independent factor worth the dependency).
 - Follow-ups: PDK-427 (server, API, gate, docs) and PDK-428 (portal). Rotation of the release key continues to need a
   new supervisor package and a changed `PADDOCK_RELEASE_PUBLIC_KEY_FILE`; the import inherits the new key with it.
+
+## Amendment 2026-10-25
+
+Decision 5 says an exhausted rate limit is reported "with the reset time in the detail". The server never sends the
+detail of a 5xx problem to the client (`httpx.WriteProblem`), so the client receives 502 `release_source_unavailable`
+without the reset time; the portal shows the generic text of the problem code and the api log keeps the reset time
+(PDK-427, accepted by the architect lead). Raw source errors are never returned to the client. A structured, safe
+problem extension for the reset time (e.g. `retry_after`) is a follow-up.

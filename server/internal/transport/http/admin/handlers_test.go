@@ -30,6 +30,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
@@ -411,6 +412,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		PublicURL:      "https://admin.test",
 		Static:         static,
 	}
+	d.ReleaseImports = app.NewReleaseImports(runner, platformPool, d.Releases, nil, config.ReleaseSource{})
 	if deps != nil {
 		deps(&d)
 	}

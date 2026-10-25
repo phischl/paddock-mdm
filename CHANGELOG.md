@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Agent release import from GitHub (ADR 0043, PDK-427): a platform administrator checks the official repository for a
+  newer agent release and imports it with one step-up-protected action instead of downloading, renaming and uploading
+  the files on the host. Every file is verified with the release public key before anything is stored; the release is
+  published ready for a staged rollout, which the import never starts; `paddock-revoke` and unsigned files are never
+  imported. API: `GET /api/platform/v1/agent-release-source`, `POST /api/platform/v1/agent-release-source/check`,
+  `POST /api/platform/v1/agent-releases/import`. Configuration of `paddock-api`: `PADDOCK_AGENT_RELEASE_SOURCE_REPO`
+  (default `phischl/paddock-mdm`, `off` for air-gapped installations), `PADDOCK_AGENT_RELEASE_SOURCE_URL` (default
+  `https://api.github.com`), the optional `PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE`, and the proxy variables
+  `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, which Compose now passes to the api. New audit code
+  `agent_release.imported`; new problem codes `release_source_disabled`, `release_source_unavailable`,
+  `release_not_newer` and `release_incomplete`; residual risk RR-84. The host command `./paddock agent-release` stays
+  the fallback (`docs/operations/agent-releases.md` "Import from GitHub").
 - Server version in the portal (PDK-430): after sign-in, the bottom of the navigation shows the version of the running
   control plane, e.g. "Paddock 0.1.0-alpha.5" (in the collapsed navigation as a tooltip). `GET /api/v1/me` answers it
   as `server_version`; the login page and anonymous requests learn no version. The release images carry the release

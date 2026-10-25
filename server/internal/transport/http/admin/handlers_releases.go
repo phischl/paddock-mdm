@@ -76,6 +76,52 @@ func (h *handlers) GetAgentRelease(ctx context.Context, req adminapi.GetAgentRel
 	return adminapi.GetAgentRelease200JSONResponse(toAgentReleaseDetail(d)), nil
 }
 
+// GetAgentReleaseSource reports the configured release source (ADR 0043 decision 7).
+func (h *handlers) GetAgentReleaseSource(ctx context.Context, _ adminapi.GetAgentReleaseSourceRequestObject) (adminapi.GetAgentReleaseSourceResponseObject, error) {
+	info, err := h.imports.Source(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := adminapi.GetAgentReleaseSource200JSONResponse{Enabled: info.Enabled}
+	if info.Enabled {
+		out.Repository, out.Url = &info.Repository, &info.URL
+	}
+	return out, nil
+}
+
+// CheckAgentReleaseSource compares the latest release of the source with the newest published one; not audited.
+func (h *handlers) CheckAgentReleaseSource(ctx context.Context, _ adminapi.CheckAgentReleaseSourceRequestObject) (adminapi.CheckAgentReleaseSourceResponseObject, error) {
+	c, err := h.imports.Check(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := adminapi.CheckAgentReleaseSource200JSONResponse{Importable: c.Importable}
+	if c.Latest != "" {
+		published := c.PublishedAt.UTC()
+		out.Latest, out.PublishedAt = &c.Latest, &published
+	}
+	if c.NewestStored != "" {
+		out.NewestStored = &c.NewestStored
+	}
+	if c.Reason != "" {
+		reason := adminapi.AgentReleaseCheckReason(c.Reason)
+		out.Reason = &reason
+	}
+	return out, nil
+}
+
+// ImportAgentRelease imports a release from the source (ADR 0043 decision 7).
+func (h *handlers) ImportAgentRelease(ctx context.Context, req adminapi.ImportAgentReleaseRequestObject) (adminapi.ImportAgentReleaseResponseObject, error) {
+	d, err := h.imports.Import(ctx, req.Body.Version)
+	if err != nil {
+		return nil, err
+	}
+	loc := "/api/platform/v1/agent-releases/" + url.PathEscape(d.Release.Version)
+	return adminapi.ImportAgentRelease201JSONResponse{
+		Body: toAgentReleaseDetail(d), Headers: adminapi.ImportAgentRelease201ResponseHeaders{Location: &loc},
+	}, nil
+}
+
 func (h *handlers) UploadAgentArtifact(ctx context.Context, req adminapi.UploadAgentArtifactRequestObject) (adminapi.UploadAgentArtifactResponseObject, error) {
 	body, err := io.ReadAll(io.LimitReader(req.Body, agentrelease.MaxArtifactBytes+1))
 	if err != nil {

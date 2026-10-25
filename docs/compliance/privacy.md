@@ -99,6 +99,12 @@ from Ubuntu's public vulnerability data (OSV), which the server downloads (`docs
 the request carries no device, organization or inventory data, devices never contact OSV, and no additional data is
 collected from devices. Findings Ubuntu has not rated show severity "unknown".
 
+The api role contacts GitHub (`api.github.com`, `github.com`, `*.githubusercontent.com`, or the configured release
+source) only when a platform administrator checks for or imports an agent release (`docs/operations/agent-releases.md`
+"Import from GitHub", ADR 0043): the request carries the installation's public IP address and the user agent
+`paddock-server`, and with a configured token that token; it carries no device, organization, user or inventory
+data. `PADDOCK_AGENT_RELEASE_SOURCE_REPO=off` switches it off.
+
 Organization members see the stored inventory of their organization's devices in the portal (*Software* and
 *Vulnerabilities*); reading it is not audited. Fleet's own UI and API are not published; only platform operators reach
 them, through a local port forward (`docs/operations/fleet.md`).

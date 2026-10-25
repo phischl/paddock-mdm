@@ -551,6 +551,25 @@ func (q *Queries) ListRunningAgentRollouts(ctx context.Context) ([]AgentRollout,
 	return items, nil
 }
 
+const newestPublishedAgentRelease = `-- name: NewestPublishedAgentRelease :one
+SELECT version, status, created_by, created_at, published_at, version_key FROM agent_release WHERE status = 'published' ORDER BY version_key DESC LIMIT 1
+`
+
+// The published release with the highest SemVer precedence, the bar a release import must pass (ADR 0043 decision 3).
+func (q *Queries) NewestPublishedAgentRelease(ctx context.Context) (AgentRelease, error) {
+	row := q.db.QueryRow(ctx, newestPublishedAgentRelease)
+	var i AgentRelease
+	err := row.Scan(
+		&i.Version,
+		&i.Status,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.VersionKey,
+	)
+	return i, err
+}
+
 const publishAgentRelease = `-- name: PublishAgentRelease :one
 UPDATE agent_release SET status = 'published', published_at = now()
 WHERE version = $1

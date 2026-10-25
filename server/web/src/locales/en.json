@@ -222,7 +222,11 @@
     "session_store_unavailable": "The portal cannot reach its session store. Try again in a moment.",
     "disclaimer_outdated": "The disclaimer has changed. Read the new text and confirm it again.",
     "tpm_in_use_by_disk": "The disk of this device unlocks with the TPM; it cannot be cleared.",
-    "conversion_not_cancellable": "The device already started the encryption; it cannot be cancelled."
+    "conversion_not_cancellable": "The device already started the encryption; it cannot be cancelled.",
+    "release_source_disabled": "The agent release source is switched off on this installation.",
+    "release_source_unavailable": "The release source did not answer. Check the connection and try again.",
+    "release_not_newer": "This version is not newer than the newest published release.",
+    "release_incomplete": "The release on the source lacks a required file or signature."
   },
   "audit": {
     "retention": {
@@ -371,7 +375,8 @@
     "agent_release": {
       "created": "{actor} created the agent release {version}",
       "artifact_uploaded": "{kind, select, deb {{actor} uploaded the {arch} package {name} of agent release {version}} other {{actor} uploaded the {arch} binary of agent release {version}}}",
-      "published": "{actor} published the agent release {version}"
+      "published": "{actor} published the agent release {version}",
+      "imported": "{actor} imported the agent release {version} from the release source"
     },
     "platform": {
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",

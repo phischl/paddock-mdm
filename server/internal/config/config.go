@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -349,4 +350,54 @@ func LoadValkey(l *Loader) Valkey {
 		Addr:     l.Required("PADDOCK_VALKEY_ADDR"),
 		Password: l.SecretFile("PADDOCK_VALKEY_PASSWORD_FILE"),
 	}
+}
+
+// ReleaseSource is the GitHub-compatible release source of the agent release import (ADR 0043 decision 6).
+type ReleaseSource struct {
+	Repository string // "<owner>/<repo>"; "" when disabled
+	URL        string // API base without a trailing slash, e.g. https://api.github.com
+	Token      string // "" without PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE
+}
+
+// Enabled reports whether the agent release import is switched on.
+func (s ReleaseSource) Enabled() bool { return s.Repository != "" }
+
+// Defaults of the agent release source (ADR 0043 decision 6).
+const (
+	DefaultReleaseSourceRepo = "phischl/paddock-mdm"
+	DefaultReleaseSourceURL  = "https://api.github.com"
+)
+
+var releaseSourceRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// LoadReleaseSource reads PADDOCK_AGENT_RELEASE_SOURCE_REPO (default phischl/paddock-mdm; "off" disables; otherwise
+// ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$), PADDOCK_AGENT_RELEASE_SOURCE_URL (default https://api.github.com; scheme https,
+// http only with PADDOCK_ENV=development; no query, fragment or userinfo; a trailing slash is trimmed) and the
+// optional PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE (read like SecretFile when the variable is set).
+func LoadReleaseSource(l *Loader, c Common) ReleaseSource {
+	const repoName, urlName, tokenName = "PADDOCK_AGENT_RELEASE_SOURCE_REPO", "PADDOCK_AGENT_RELEASE_SOURCE_URL",
+		"PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE"
+	repo := l.String(repoName, DefaultReleaseSourceRepo)
+	if repo == "off" {
+		return ReleaseSource{}
+	}
+	if !releaseSourceRepo.MatchString(repo) {
+		l.Invalid(repoName, fmt.Sprintf("not <owner>/<repo> or off: %q", repo))
+	}
+	s := ReleaseSource{Repository: repo, URL: strings.TrimRight(l.String(urlName, DefaultReleaseSourceURL), "/")}
+	u, err := url.Parse(s.URL)
+	switch {
+	case err != nil || u.Host == "" || u.Opaque != "":
+		l.Invalid(urlName, fmt.Sprintf("not an absolute URL: %q", s.URL))
+	case u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "":
+		l.Invalid(urlName, "must not carry userinfo, a query or a fragment")
+	case u.Scheme == "http" && !c.Development():
+		l.Invalid(urlName, "http is only allowed with PADDOCK_ENV=development")
+	case u.Scheme != "https" && u.Scheme != "http":
+		l.Invalid(urlName, fmt.Sprintf("scheme must be https: %q", u.Scheme))
+	}
+	if _, ok := l.get(tokenName); ok {
+		s.Token = l.SecretFile(tokenName)
+	}
+	return s
 }

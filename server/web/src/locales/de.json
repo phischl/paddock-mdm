@@ -222,7 +222,11 @@
     "session_store_unavailable": "Das Portal erreicht seinen Sitzungsspeicher nicht. Versuchen Sie es gleich noch einmal.",
     "disclaimer_outdated": "Der Hinweistext hat sich geändert. Lesen Sie den neuen Text und bestätigen Sie erneut.",
     "tpm_in_use_by_disk": "Die Festplatte dieses Geräts wird mit dem TPM entsperrt; er kann nicht gelöscht werden.",
-    "conversion_not_cancellable": "Das Gerät hat die Verschlüsselung bereits begonnen; sie kann nicht abgebrochen werden."
+    "conversion_not_cancellable": "Das Gerät hat die Verschlüsselung bereits begonnen; sie kann nicht abgebrochen werden.",
+    "release_source_disabled": "Die Quelle für Agent-Releases ist auf dieser Installation ausgeschaltet.",
+    "release_source_unavailable": "Die Release-Quelle hat nicht geantwortet. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
+    "release_not_newer": "Diese Version ist nicht neuer als das neueste veröffentlichte Release.",
+    "release_incomplete": "Dem Release in der Quelle fehlt eine erforderliche Datei oder Signatur."
   },
   "audit": {
     "retention": {
@@ -371,7 +375,8 @@
     "agent_release": {
       "created": "{actor} hat das Agent-Release {version} angelegt",
       "artifact_uploaded": "{kind, select, deb {{actor} hat das {arch}-Paket {name} des Agent-Releases {version} hochgeladen} other {{actor} hat das {arch}-Binary des Agent-Releases {version} hochgeladen}}",
-      "published": "{actor} hat das Agent-Release {version} veröffentlicht"
+      "published": "{actor} hat das Agent-Release {version} veröffentlicht",
+      "imported": "{actor} hat das Agent-Release {version} aus der Release-Quelle importiert"
     },
     "platform": {
       "osv_stale": "Die Schwachstellendaten von Ubuntu wurden seit 3 Tagen nicht aktualisiert",

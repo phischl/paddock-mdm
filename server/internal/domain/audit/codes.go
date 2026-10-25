@@ -60,6 +60,7 @@ const (
 	CodeAgentReleaseCreated          Code = "agent_release.created"
 	CodeAgentReleaseArtifactUploaded Code = "agent_release.artifact_uploaded"
 	CodeAgentReleasePublished        Code = "agent_release.published"
+	CodeAgentReleaseImported         Code = "agent_release.imported" // from the configured release source (ADR 0043)
 	CodeAgentRolloutStarted          Code = "agent_rollout.started"
 	CodeAgentRolloutAdvanced         Code = "agent_rollout.advanced"
 	CodeAgentRolloutHalted           Code = "agent_rollout.halted"
@@ -575,6 +576,13 @@ var registry = map[Code]Definition{
 		Description: "A platform administrator published an agent release; it can now be rolled out.",
 		Params:      []string{"version", "arches"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeAgentReleaseImported: {
+		Code: CodeAgentReleaseImported, Emitted: true,
+		Description: "A platform administrator imported an agent release from the configured release source (GitHub); every file was verified with the release public key before anything was stored.",
+		Params:      []string{"source", "source_url", "version", "newest_stored", "files"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up, release_source_disabled while the source is off, forbidden for a non-platform principal. The created, uploaded and published events of the release are recorded as well, by the same actor. No token or credential is recorded. Platform pseudo-organization.",
 	},
 	CodeAgentRolloutStarted: {
 		Code: CodeAgentRolloutStarted, Emitted: true,

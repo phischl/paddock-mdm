@@ -22,6 +22,7 @@
 103 TestEffectiveStepUp
 102 TestDeviceName
 98 TestIPAllowlist
+90 TestAgentReleaseImport
 85 TestStepUp
 81 TestDeclarativeConfig
 81 TestDiskEscrowVolumes

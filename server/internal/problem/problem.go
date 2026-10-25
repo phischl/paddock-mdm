@@ -85,6 +85,13 @@ var (
 	// ReleaseSignatureMismatch: the signed trusted comment of an agent binary names another version or architecture
 	// (plan M4b.1 decision 12).
 	ReleaseSignatureMismatch = &Error{Code: "release_signature_mismatch", Status: http.StatusUnprocessableEntity}
+	// Agent release import (ADR 0043 decision 7): the source is switched off (recorded as denied), the source did not
+	// answer or answered outside its bounds, the version is not newer than the newest published release, or the release
+	// lacks a required asset or signature.
+	ReleaseSourceDisabled    = &Error{Code: "release_source_disabled", Status: http.StatusForbidden}
+	ReleaseSourceUnavailable = &Error{Code: "release_source_unavailable", Status: http.StatusBadGateway}
+	ReleaseNotNewer          = &Error{Code: "release_not_newer", Status: http.StatusConflict}
+	ReleaseIncomplete        = &Error{Code: "release_incomplete", Status: http.StatusUnprocessableEntity}
 	// Revocation (plan M4c): the feature flag PADDOCK_REVOCATION_ENABLED is off (decision 1), or the administrator's
 	// revocations are frozen after a limit was exceeded (ADR 0014). Both are recorded as denied.
 	RevocationDisabled = &Error{Code: "revocation_disabled", Status: http.StatusForbidden}

@@ -115,6 +115,72 @@ the bucket and every other prefix still need credentials or a presigned URL. The
 (`aws s3api put-bucket-policy --bucket paddock-agent-artifacts --policy file://policy.json`; the development
 bootstrap `deploy/compose/scripts/rustfs-bundles-bootstrap.sh` sets it).
 
+### Import from GitHub
+
+A platform administrator imports an agent release from the official repository in the portal (*Agent releases*,
+check and import) or through the platform API (ADR 0043):
+
+- `GET /api/platform/v1/agent-release-source` names the configured source; it makes no outbound request.
+- `POST /api/platform/v1/agent-release-source/check` lists the source's releases and reports the latest one and
+  whether it can be imported; it changes nothing and is not audited.
+- `POST /api/platform/v1/agent-releases/import {"version": "<version>"}` imports that version. It needs a step-up
+  within the last 300 s (API tokens cannot import) and is audited as `agent_release.imported`; the release's
+  `agent_release.created`, `agent_release.artifact_uploaded` and `agent_release.published` events follow with the
+  administrator as actor.
+
+**What is imported.** The candidates are the releases on the first page of the source (100 releases) that are not
+drafts and whose tag is `v<version>` with a version of the release channel, `x.y.z` or `x.y.z-alpha.N`, `-beta.N`,
+`-rc.N` (the rule of `make release-check`; GitHub's pre-release flag is ignored). The latest is the candidate with the
+highest SemVer precedence. A version can be imported when it is newer than the newest **published** release on this
+installation and no published release has it; a draft of the same version is continued, an equal or older version is
+refused (409 `release_not_newer`). The import needs exactly what the release workflow ships, each file with its
+`.minisig`: `paddockd_<version>_linux_amd64`, `paddockd_<version>_linux_arm64`, `paddock-agent_<version>_amd64.deb`
+and `paddock-supervisor_<version>_amd64.deb`; packages of other architectures and `fleet-osquery_<fleetd
+version>_<arch>.deb` are imported when they are attached with their signature. A missing file or signature refuses
+the import (422 `release_incomplete`, naming the file). Every file is verified with the release public key
+(`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) — the binaries also with the trusted comment `paddock-agent version=<v>
+arch=<arch>` — before anything is stored; GitHub is transport only, and `SHA256SUMS` and its Sigstore bundle are not
+checked (RR-84). The release is published, ready for a rollout; the import never starts one.
+
+**What is never imported.** `paddock-revoke` stays on the offline two-person path: sign it with the revocation key and
+upload it with the host command or the package upload above, with or without a signature on GitHub. Unsigned files,
+`SHA256SUMS*` and every other asset are ignored. fleetd that is not attached to the GitHub release is uploaded by hand
+as above.
+
+**Configuration** (environment of the `paddock-api` service, `.env`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PADDOCK_AGENT_RELEASE_SOURCE_REPO` | `phischl/paddock-mdm` | `<owner>/<repo>`; `off` switches the import off (air-gapped installations): the portal hides it, check and import answer 403 `release_source_disabled`. |
+| `PADDOCK_AGENT_RELEASE_SOURCE_URL` | `https://api.github.com` | The API base; GitHub Enterprise Server: `https://<host>/api/v3`. `https` only (plain `http` is refused outside `PADDOCK_ENV=development`). |
+| `PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE` | unset | Optional file with a token that can read the repository's releases; never logged, audited or shown. |
+
+Without a token GitHub allows 60 API requests per hour per public address; a check costs one request, an import one
+(the downloads are not counted). An exhausted limit answers 502 `release_source_unavailable` with the reset time;
+nothing is retried. The token needs a Compose override next to the bundle's files, e.g.
+
+```yaml
+services:
+  paddock-api:
+    environment:
+      PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE: /run/secrets/agent_release_source_token
+    secrets: [agent_release_source_token]
+secrets:
+  agent_release_source_token:
+    file: ./.secrets/agent_release_source_token
+```
+
+**Proxy.** The api reaches GitHub (`api.github.com`, `github.com` and `*.githubusercontent.com`, which serves the
+downloads) directly or through the proxy of `HTTPS_PROXY` / `HTTP_PROXY`, which Compose passes to `paddock-api`. With
+a proxy, `NO_PROXY` must list the stack's internal hosts the api talks to (`openbao`, `rustfs`, `escrow-reader` and
+the hosts below `PADDOCK_DOMAIN`). Downloads follow at most 5 redirects and only to these hosts.
+
+**Bounds.** The release list may have 1 MiB and 15 s, each file 128 MiB and 60 s, each signature 4 KiB, and the
+whole import 90 s. A slow or filtered uplink fails the import without storing anything; an error after the release
+was created (the artifact store fails mid-way) leaves a draft that the next import of the same version continues.
+The host command `./paddock agent-release` (step 3 above, `docs/operations/install.md` section 10) remains the
+fallback for installations without access to GitHub.
+
 ## Server release
 
 A tag `v<version>` runs the release workflow (`.github/workflows/release.yml`, plan M6b decision 4, plan M7b
