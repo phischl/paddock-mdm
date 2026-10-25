@@ -47,3 +47,13 @@ risk: a platform administrator acknowledges a versioned disclaimer in the portal
 operator starts a dedicated unsealer that holds three shares on the control-plane host and submits them while the
 setting is enabled. While it is on, the custodian threshold no longer gates the unseal (residual risk RR-43); it
 still gates rekeying and root-token generation. Nothing in OpenBao's seal configuration changes.
+
+## Amendment 2026-10-25 — the control plane's copy of the release public key anchors the GitHub import
+
+ADR 0043 lets a platform administrator import an agent release from the GitHub release source into the control plane.
+The control plane's copy of the production release public key (`PADDOCK_RELEASE_PUBLIC_KEY_FILE`, the same key the
+api checks at upload and the supervisor compiles in) is the only trust anchor of that import; GitHub is transport.
+Nothing changes for the keys themselves: the signing copy stays in the protected environment `release`, the backup
+copy with the custodians, rotation still ships a new supervisor package and a new `PADDOCK_RELEASE_PUBLIC_KEY_FILE`,
+and the import inherits the new key with it. The revocation release key is not involved: `paddock-revoke` is never
+imported through that path.

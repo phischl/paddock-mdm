@@ -246,7 +246,7 @@ flowchart TB
 
 | Role | Responsibility | Scales by | Keys it may use |
 | --- | --- | --- | --- |
-| `api` | Portal BFF (OIDC session), admin REST API, `paddockctl` API; writes configuration and commands in one DB transaction with an outbox record | replicas behind proxy | none (escrow reveal is delegated to the `escrow-reader` role) |
+| `api` | Portal BFF (OIDC session), admin REST API, `paddockctl` API; writes configuration and commands in one DB transaction with an outbox record; imports agent releases from the configured GitHub release source after verifying them with the release public key (ADR 0043, the api's only outbound request to a third party) | replicas behind proxy | none (escrow reveal is delegated to the `escrow-reader` role) |
 | `gateway` | Device endpoints: enroll, check-in, events, results, escrow upload; verifies device signatures; reads only from Valkey; writes only to RabbitMQ (and nonces to Valkey) | replicas | none |
 | `worker` | Consumes ingest queues, materializes device status and the Valkey cache, inventory sync with Fleet, staleness evaluation, Authentik sync | competing consumers on quorum queues | `command-signing` |
 | `compiler` | Recomputes effective state on input change, renders and signs bundles | consumer replicas, partitioned by organization | `bundle-signing`, `time-ticket` |
