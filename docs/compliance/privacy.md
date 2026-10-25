@@ -112,4 +112,4 @@ the retention of the WORM store (at least 400 days) and cannot be deleted earlie
 
 Paddock snapshots the membership of its portal role groups (`paddock.<slug>.admins`, `.operators`, `.auditors`,
 `paddock.platform.admins`) and the set of Authentik superusers every 5 minutes: user name and Authentik ID per role,
-and an audit event for every change *(planned: M8b, PDK-111)*.
+and an audit event for every change.

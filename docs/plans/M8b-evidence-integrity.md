@@ -917,3 +917,53 @@ process records into.
 - **V5 wording:** the seeded user bob is the acme **auditor** (development blueprint), not an operator. V5 means an
   account with the role org_operator; the gates use a temporary user in the organization's `operators` group.
   V5 stays otherwise as written.
+
+## Amendment 2026-10-25 (PDK-111)
+
+PDK-173 (M8s) added the worker round admin-accounts, which already lists the same Authentik role groups
+(`ports.UserDirectory.RoleGroupUsers`). Per the orchestrator's note in PDK-111, role membership reuses that listing
+instead of polling the groups a second time. This replaces parts of decisions 33, 35 and 36:
+
+- **Decision 33:** there is no `GroupDirectory.GroupMemberUsers`. `RoleGroupUsers` already returns pk, username, name,
+  e-mail, UID and the active flag of every direct member. It reports a missing group as `ports.ErrGroupNotFound`, and
+  its paged listing is ordered by pk and repeated until it settles. The reason given for `include_groups=true` does
+  not hold: in the pinned Authentik 2026.8.4 the parameter only toggles the serialization of `groups_obj` and does not
+  widen the `groups_by_*` filter to nested groups. Direct membership counts, as in admin-accounts.
+  `UserDirectory.Superusers(ctx)` is added as planned and uses the same settled listing (`is_superuser=true`).
+- **Decision 35:** there is no `FindGroup` step. Signatures:
+  `NewRoleMembership(runner *ActionRunner, org *db.OrgPool, platform *db.PlatformPool, users ports.UserDirectory)`,
+  `SyncOrganization(ctx, groups *RoleGroups) error` and `SyncPlatform(ctx, groups *RoleGroups) error`. `RoleGroups`
+  (`app.ListRoleGroups`) is one round's listing, keeping each group's members or error. `OrganizationRoleGroups(ctx)`
+  returns the listing of an active organization's three groups (nil otherwise), and `PlatformRoleGroups(ctx)` the
+  listing of `paddock.platform.admins`. `AdminAccounts.Reconcile(ctx, groups)` and
+  `ReconcilePlatform(ctx, groups)` take the same listing. The snapshot is marked only after a round in which every
+  role compared without a read error; a missing group counts as compared.
+- **Decision 36:** the diff runs in the round admin-accounts, per organization after `Reconcile` on the same listing,
+  and in the round platform-admins, under its own leader lock, after `ReconcilePlatform`. It does not run in
+  identity-sync. The interval is the same (`PADDOCK_IDENTITY_SYNC_INTERVAL`).
+  `worker.NewIdentity(s, accounts, roles, brand, org, platform, syncEvery, reconcile)`. The role groups of an active
+  organization are now listed every round, even when it has no enabled administrator account.
+- **Migration number:** 00070 (00045 was taken).
+- **Addendum (review 1 of PDK-111) — decisions 34 and 35:**
+  - *Baseline per role.* `organization_role_snapshot` is keyed `(organization_id, role)`, and `platform_role_snapshot`
+    by `role`. A role's snapshot is written after its own first comparison without error, and `baseline` is true
+    until then. A role that keeps failing neither keeps the other roles in baseline nor is relabelled by them.
+  - *Empty listing (scope level, review 2).* In an organization, when every role listing read without error is empty
+    while members of those roles are stored, the scope is refused like `ErrDirectoryEmpty` in
+    `AdminAccounts.Reconcile`: nothing is recorded, rows, marks and snapshots stay, and the round fails. On the
+    platform, an empty superuser listing refuses the scope, including `platform_admin`, because an Authentik always has
+    a superuser. A single emptied role (the last operator, auditor or platform administrator) is compared as usual, and
+    its last holder is revoked after the two-listing confirmation. This replaces the per-role guard of the first
+    review round, which could never record the departure of a role's last holder.
+  - *Confirmed revocation.* A grant rests on one listing. A revocation needs two consecutive successful listings that
+    miss the member: the first marks the row (`missing_since`), a listing that shows the member clears the mark, and
+    the second miss records `admin.role_revoked`. A missing group or a failed listing leaves the marks as they are.
+    The revocation therefore follows within two rounds.
+  - *Round end.* When the round's context ends, the remaining changes are not attempted and no failure is recorded for
+    them. A read error records nothing per member; `failure` is recorded only when a change cannot be stored.
+  - *Schema.* Migration 00071, because 00070 is applied and frozen: `missing_since` on both member tables (column
+    `UPDATE` grant to `paddock_worker` / `paddock_platform`), and both snapshot tables re-keyed by role, with existing
+    snapshots copied to every role of their scope.
+  - *Gate R2.* Because a revocation needs two consecutive listings, `TestRoleMembership` waits for R2 up to two rounds
+    plus one interval of slack (4 minutes in the development stack) instead of 3 minutes. The assertion is unchanged:
+    exactly one `admin.role_revoked` and no other grant.

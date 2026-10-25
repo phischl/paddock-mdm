@@ -121,7 +121,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	ak := authentik.New(authentikURL, authentikToken)
 	reconcileAK := authentik.New(authentikURL, authentikToken).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, reconcileAK, ak, ak),
-		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), ak, pool, platformPool, syncEvery, reconcileEvery)
+		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), app.NewRoleMembership(runner, pool, platformPool, ak),
+		ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
 		platformPool, inventoryEvery)

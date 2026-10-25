@@ -578,6 +578,36 @@ func TestRoleGroupUsersSettles(t *testing.T) {
 	}
 }
 
+// TestSuperusers (plan M8b decision 33): the users with superuser rights only, in the settled paged listing of the
+// role groups.
+func TestSuperusers(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	for i := range 1203 {
+		f.users[3000+i] = &fakeUser{pk: 3000 + i, username: "s" + strconv.Itoa(i), superuser: i%2 == 0}
+	}
+	f.users[9000] = &fakeUser{pk: 9000, username: "plain"}
+	users, err := c.Superusers(ctx)
+	if err != nil || len(users) != 602 || users[0].Username != "s0" || users[0].PK != "3000" || users[0].UID != "uid-3000" ||
+		slices.ContainsFunc(users, func(u ports.IdentityUser) bool { return u.Username == "plain" || u.Username == "s1" }) {
+		t.Fatalf("%d superusers, %v", len(users), err)
+	}
+	next := 5000
+	f.afterUserPage = func() {
+		next++
+		f.users[next] = &fakeUser{pk: next, username: "n" + strconv.Itoa(next), superuser: true}
+	}
+	if _, err := c.Superusers(ctx); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("a listing that never settles: %v", err)
+	}
+	f.afterUserPage = nil
+	f.failNext, f.failStatus = 10, http.StatusServiceUnavailable
+	if _, err := c.Superusers(ctx); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("Authentik down: %v", err)
+	}
+}
+
 // TestLockRevokesTokensAndSessions: a lock is the group membership AND the revocation (PoC M1 C2).
 func TestLockRevokesTokensAndSessions(t *testing.T) {
 	f, srv := newFake(t)

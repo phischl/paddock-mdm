@@ -71,6 +71,9 @@ type UserDirectory interface {
 	// groups; found is false when no such user exists (removed, or renamed meanwhile). The worker confirms with it
 	// what a listing suggests before it changes an account (plan M8s decision 22).
 	UserMembership(ctx context.Context, username, uid string) (u IdentityUser, groups []string, found bool, err error)
+	// Superusers lists the users with the identity provider's superuser rights in one paged listing; the worker records
+	// who gains or loses them (plan M8b decision 33).
+	Superusers(ctx context.Context) ([]IdentityUser, error)
 }
 
 // GroupDirectory manages Paddock's user groups (plan M3a decisions 3 and 9).

@@ -31,6 +31,8 @@ func TestRLSLint(t *testing.T) {
 		"openbao_auto_unseal": true,
 		// Expected component versions (plan M8d decision 53), platform data without organization data.
 		"component_target": true,
+		// Platform administrators and Authentik superusers as last seen (plan M8b decision 34), role paddock_platform only.
+		"platform_role_member": true, "platform_role_snapshot": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,

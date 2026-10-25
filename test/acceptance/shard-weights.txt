@@ -3,6 +3,7 @@
 # group weighs as much as its slowest member because its tests run in parallel (PDK-189). A test missing here still
 # runs with the default weight of 60 s; a stale line is ignored. Source: the `--- PASS` lines of the acceptance job of
 # PR #118 (2026-10-21, GitHub ubuntu-24.04 runner); refresh from a recent CI log when the shards drift apart.
+600 TestRoleMembership
 383 TestAuditExactlyOnce
 275 TestSupervisorPackage
 229 TestStalenessGate

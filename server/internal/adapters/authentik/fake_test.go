@@ -73,6 +73,8 @@ type fakeUser struct {
 	attributes            map[string]any
 	groups                []string
 	inactive              bool
+	// superuser makes the user a member of a group with superuser rights (filter is_superuser).
+	superuser bool
 }
 
 func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
@@ -536,6 +538,9 @@ func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
 			continue
 		}
 		if name := first(q["username"]); name != "" && u.username != name {
+			continue
+		}
+		if first(q["is_superuser"]) == "true" && !u.superuser {
 			continue
 		}
 		match = append(match, u)

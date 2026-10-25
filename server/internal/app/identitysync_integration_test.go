@@ -33,12 +33,17 @@ type directory struct {
 	// roleGroups are the members of role groups by group name; roleGroupCalls counts their listings.
 	roleGroups     map[string][]ports.IdentityUser
 	roleGroupCalls int
+	// roleGroupFail makes the listing of a role group fail with its error (the other listings still work).
+	roleGroupFail map[string]error
 	// unlisted are UIDs the role group listings leave out (a paged listing that skipped them); a direct read still
 	// finds them.
 	unlisted map[string]bool
 	// directReads counts UserMembership calls by UID; readFail makes them fail (the listings still work).
 	directReads map[string]int
 	readFail    error
+	// superusers are the users with superuser rights; superFail makes their listing fail.
+	superusers []ports.IdentityUser
+	superFail  error
 }
 
 func newDirectory() *directory {
@@ -66,6 +71,9 @@ func (d *directory) RoleGroupUsers(_ context.Context, name string) ([]ports.Iden
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.roleGroupCalls++
+	if err := d.roleGroupFail[name]; err != nil {
+		return nil, err
+	}
 	var out []ports.IdentityUser
 	for _, m := range d.roleGroups[name] {
 		if !d.unlisted[m.UID] {
@@ -73,6 +81,14 @@ func (d *directory) RoleGroupUsers(_ context.Context, name string) ([]ports.Iden
 		}
 	}
 	return out, d.fail
+}
+func (d *directory) Superusers(context.Context) ([]ports.IdentityUser, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.superFail != nil {
+		return nil, d.superFail
+	}
+	return slices.Clone(d.superusers), d.fail
 }
 func (d *directory) UserMembership(_ context.Context, username, uid string) (ports.IdentityUser, []string, bool, error) {
 	d.mu.Lock()

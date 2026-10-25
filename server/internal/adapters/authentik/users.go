@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -189,24 +190,37 @@ const roleGroupAttempts = 3
 // the listing shifts the next page and another member could be skipped: the listing is ordered by pk and repeated when
 // the total changed between pages or does not match what was read, and fails if it never settles.
 func (c *Client) RoleGroupUsers(ctx context.Context, groupName string) ([]ports.IdentityUser, error) {
+	out, err := c.settledUsers(ctx, url.Values{"groups_by_name": {groupName}}, groupName)
+	var st *errStatus
+	if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
+		return nil, fmt.Errorf("%s: %w", groupName, ports.ErrGroupNotFound)
+	}
+	return out, err
+}
+
+// Superusers lists the users with Authentik superuser rights (is_superuser=true: a member of a group with superuser
+// rights), with the same settled listing as RoleGroupUsers (plan M8b decision 33).
+func (c *Client) Superusers(ctx context.Context) ([]ports.IdentityUser, error) {
+	return c.settledUsers(ctx, url.Values{"is_superuser": {"true"}}, "the superusers")
+}
+
+// settledUsers lists the users matching filter, repeating the listing when it did not settle; what names the listing
+// in the error.
+func (c *Client) settledUsers(ctx context.Context, filter url.Values, what string) ([]ports.IdentityUser, error) {
 	for range roleGroupAttempts {
-		out, settled, err := c.listRoleGroup(ctx, groupName)
-		var st *errStatus
-		if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
-			return nil, fmt.Errorf("%s: %w", groupName, ports.ErrGroupNotFound)
-		}
+		out, settled, err := c.listSettled(ctx, filter, what)
 		if err != nil || settled {
 			return out, err
 		}
 	}
-	return nil, fmt.Errorf("%w: the members of %s changed during every listing", problem.UpstreamUnavailable, groupName)
+	return nil, fmt.Errorf("%w: the members of %s changed during every listing", problem.UpstreamUnavailable, what)
 }
 
-// listRoleGroup reads every page of a role group; settled is false when the total changed between pages or differs
-// from the members read.
-func (c *Client) listRoleGroup(ctx context.Context, groupName string) (out []ports.IdentityUser, settled bool, err error) {
-	q := url.Values{"groups_by_name": {groupName}, "include_groups": {"false"}, "ordering": {"pk"},
-		"page_size": {strconv.Itoa(pageSize)}}
+// listSettled reads every page of the users matching filter; settled is false when the total changed between pages or
+// differs from the members read.
+func (c *Client) listSettled(ctx context.Context, filter url.Values, what string) (out []ports.IdentityUser, settled bool, err error) {
+	q := url.Values{"include_groups": {"false"}, "ordering": {"pk"}, "page_size": {strconv.Itoa(pageSize)}}
+	maps.Copy(q, filter)
 	total := -1
 	for page := 1; page <= maxPages; page++ {
 		q.Set("page", strconv.Itoa(page))
@@ -231,7 +245,7 @@ func (c *Client) listRoleGroup(ctx context.Context, groupName string) (out []por
 			return out, len(out) == total, nil
 		}
 	}
-	return nil, false, fmt.Errorf("authentik: %s has more than %d pages of members", groupName, maxPages)
+	return nil, false, fmt.Errorf("authentik: %s has more than %d pages of members", what, maxPages)
 }
 
 // EndUserSessions deletes every Authentik authenticated session of the users userPKs in one bulk delete and returns

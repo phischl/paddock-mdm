@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ const (
 type Identity struct {
 	sync       *app.IdentitySync
 	accounts   *app.AdminAccounts
+	roles      *app.RoleMembership
 	brand      BrandFlows
 	brandRetry time.Duration
 	org        *db.OrgPool
@@ -62,9 +64,9 @@ type Identity struct {
 }
 
 // NewIdentity creates the identity rounds.
-func NewIdentity(s *app.IdentitySync, accounts *app.AdminAccounts, brand BrandFlows, org *db.OrgPool, platform *db.PlatformPool,
-	syncEvery, reconcile time.Duration) *Identity {
-	return &Identity{sync: s, accounts: accounts, brand: brand, brandRetry: brandRetryInterval, org: org, platform: platform,
+func NewIdentity(s *app.IdentitySync, accounts *app.AdminAccounts, roles *app.RoleMembership, brand BrandFlows, org *db.OrgPool,
+	platform *db.PlatformPool, syncEvery, reconcile time.Duration) *Identity {
+	return &Identity{sync: s, accounts: accounts, roles: roles, brand: brand, brandRetry: brandRetryInterval, org: org, platform: platform,
 		syncEvery: syncEvery, reconcile: reconcile, now: time.Now, conflicts: map[string]time.Time{}}
 }
 
@@ -91,18 +93,31 @@ func (i *Identity) RunSync(ctx context.Context) error {
 }
 
 // RunAdminAccounts runs the round admin-accounts (plan M8s decision 22) at start and then every sync interval until
-// ctx ends: administrator accounts follow their role groups in the identity provider.
+// ctx ends: administrator accounts follow their role groups in the identity provider, and every change of a role
+// group's members is recorded (plan M8b decision 36, PDK-111).
 func (i *Identity) RunAdminAccounts(ctx context.Context) error {
-	return i.every(ctx, i.syncEvery, identityAdminAccountsLockKey, "admin-accounts", i.accounts.Reconcile)
+	return i.every(ctx, i.syncEvery, identityAdminAccountsLockKey, "admin-accounts", i.adminAccounts)
 }
 
-// RunPlatformAdmins ends the sessions of platform administrators the directory no longer lists (PDK-185), at start
-// and then every sync interval until ctx ends, under its own lock.
+// adminAccounts lists an organization's role groups once for both consumers of the round.
+func (i *Identity) adminAccounts(ctx context.Context) error {
+	groups, err := i.roles.OrganizationRoleGroups(ctx)
+	if err != nil || groups == nil {
+		return err
+	}
+	return errors.Join(i.accounts.Reconcile(ctx, groups), i.roles.SyncOrganization(ctx, groups))
+}
+
+// RunPlatformAdmins ends the sessions of platform administrators the directory no longer lists (PDK-185) and records
+// the changes of the platform administrators and the identity provider's superusers (PDK-111), at start and then every
+// sync interval until ctx ends, under its own lock.
 func (i *Identity) RunPlatformAdmins(ctx context.Context) error {
 	return i.loop(ctx, i.syncEvery, "platform-admins", func(ctx context.Context) error {
 		sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 		_, err := i.platform.WithLeaderLock(sys, identityPlatformAdminsLockKey, func(ctx context.Context) error {
-			return i.accounts.ReconcilePlatform(httpx.WithRequestID(ctx, "platform-admins-"+i.now().UTC().Format(time.RFC3339)))
+			ctx = httpx.WithRequestID(ctx, "platform-admins-"+i.now().UTC().Format(time.RFC3339))
+			groups := i.roles.PlatformRoleGroups(ctx)
+			return errors.Join(i.accounts.ReconcilePlatform(ctx, groups), i.roles.SyncPlatform(ctx, groups))
 		})
 		return err
 	})

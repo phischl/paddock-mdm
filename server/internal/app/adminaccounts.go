@@ -68,11 +68,11 @@ func directoryByUID(users map[string]*directoryUser, group string, members []por
 }
 
 // Reconcile compares every account of the caller's organization that is not disabled with the members of the
-// organization's three role groups (one listing each, never one call per account) and records one
-// admin.sessions_revoked per changed account. A failing listing, a missing role group or three empty listings while
+// organization's three role groups as listed in groups (one listing each per round, shared with RoleMembership, never
+// one call per account) and records one admin.sessions_revoked per changed account. A failing listing, a missing role group or three empty listings while
 // the organization has enabled accounts change nothing and fail the organization's round: a renamed group or a
 // service token that may no longer see users must not disable every administrator.
-func (a *AdminAccounts) Reconcile(ctx context.Context) error {
+func (a *AdminAccounts) Reconcile(ctx context.Context, groups *RoleGroups) error {
 	var o pgstore.Organization
 	var accounts []pgstore.AdminAccount
 	err := a.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -92,7 +92,7 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 	for _, g := range []organization.GroupRole{organization.GroupAdmins, organization.GroupOperators, organization.GroupAuditors} {
 		name := organization.RoleGroup(o.Slug, g)
 		roleGroups = append(roleGroups, name)
-		members, err := a.dir.RoleGroupUsers(ctx, name)
+		members, err := groups.Members(name)
 		if err != nil {
 			return fmt.Errorf("role group %s: %w", name, err)
 		}
@@ -165,11 +165,11 @@ func change(acc pgstore.AdminAccount, u *directoryUser) (reason string, newRole 
 }
 
 // ReconcilePlatform ends the portal sessions of every platform administrator whom the directory no longer lists, active,
-// in paddock.platform.admins (PDK-185). A platform administrator has no account state to change: the next login is
+// in paddock.platform.admins as listed in groups (PDK-185). A platform administrator has no account state to change: the next login is
 // refused by the groups claim. One admin.sessions_revoked is recorded in the platform pseudo-organization when sessions
 // were ended, none when there were none, so a removed administrator is recorded once. A failing listing, a missing
 // group or an empty listing while platform administrators exist change nothing.
-func (a *AdminAccounts) ReconcilePlatform(ctx context.Context) error {
+func (a *AdminAccounts) ReconcilePlatform(ctx context.Context, groups *RoleGroups) error {
 	var admins []pgstore.PlatformAdmin
 	if err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
@@ -179,7 +179,7 @@ func (a *AdminAccounts) ReconcilePlatform(ctx context.Context) error {
 		return err
 	}
 	group := organization.PlatformAdminsGroup()
-	members, err := a.dir.RoleGroupUsers(ctx, group)
+	members, err := groups.Members(group)
 	if err != nil {
 		return fmt.Errorf("role group %s: %w", group, err)
 	}
