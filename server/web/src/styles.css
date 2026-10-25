@@ -184,6 +184,9 @@ a.pd-pill:hover { filter: brightness(0.95); }
 .pd-nav-shortcut { color: var(--pd-text-muted); }
 .pd-nav--rail .pd-nav-item { justify-content: center; padding: 0; }
 .pd-nav--rail .pd-nav-label, .pd-nav--rail .pd-nav-shortcut { display: none; }
+.pd-nav-version { color: var(--pd-text-muted); padding: 8px 16px 12px; overflow-wrap: anywhere; }
+.pd-nav--rail .pd-nav-version { display: flex; justify-content: center; padding: 8px 0 12px; }
+.pd-nav-version-icon { display: inline-flex; border-radius: var(--pd-radius-sm); }
 @media (max-width: 599.98px) {
   .pd-nav-item, .v-btn { min-height: 44px; }
 }

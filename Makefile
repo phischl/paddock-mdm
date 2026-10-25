@@ -16,6 +16,8 @@ UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKA
 	./test/acceptance/cmd/acceptanceshard/...
 WEB_DIR       := server/web
 IMAGE         ?= paddock-server:dev
+# The version the server images report (GET /api/v1/me server_version); release-images always uses RELEASE_VERSION.
+SERVER_VERSION ?= $(or $(RELEASE_VERSION),0.0.0-dev)
 UID           := $(shell id -u)
 GID           := $(shell id -g)
 
@@ -188,8 +190,8 @@ web: ## Build the portal into server/web/dist (containerized)
 	else echo "web: no portal yet, skipped"; fi
 
 .PHONY: image
-image: ## Build the paddock-server container image
-	docker build -f $(COMPOSE_DIR)/Dockerfile \
+image: ## Build the paddock-server container image (SERVER_VERSION, default RELEASE_VERSION or 0.0.0-dev)
+	docker build -f $(COMPOSE_DIR)/Dockerfile --build-arg PADDOCK_VERSION=$(SERVER_VERSION) \
 		--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
 		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
 		--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) -t $(IMAGE) .
@@ -557,6 +559,7 @@ release-images: release-check ## Build and push the three images for RELEASE_PLA
 		run docker buildx build --platform $(RELEASE_PLATFORMS) --push $$target -f $$dockerfile $(RELEASE_BUILDX_FLAGS) \
 			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
 			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) --build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) \
+			--build-arg PADDOCK_VERSION=$(RELEASE_VERSION) \
 			--label org.opencontainers.image.source=$(RELEASE_SOURCE) \
 			--label org.opencontainers.image.url=$(RELEASE_SOURCE) \
 			--label org.opencontainers.image.documentation=$(RELEASE_SOURCE)/blob/main/docs/operations/install.md \
@@ -994,7 +997,7 @@ scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tre
 		--skip-dirs /src/server/web/node_modules --skip-dirs /src/bin --skip-dirs /src/test/vms/virtualbox/work /src
 
 image-compiler: ## Build the compiler container image
-	docker build --target compiler -f $(COMPOSE_DIR)/Dockerfile \
+	docker build --target compiler -f $(COMPOSE_DIR)/Dockerfile --build-arg PADDOCK_VERSION=$(SERVER_VERSION) \
 		--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
 		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
 		--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) -t $(COMPILER_IMAGE) .

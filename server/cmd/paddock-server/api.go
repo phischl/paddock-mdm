@@ -14,6 +14,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
 	"github.com/phischl/paddock-mdm/server/internal/allowlistcache"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/bundlesign"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
@@ -197,6 +198,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Conversions:    app.NewDiskConversions(runner, orgPool, devicecache.New(vk)),
 		AuditLog:       app.NewAuditLog(auditReader, orgPool),
 		AuditIntegrity: app.NewAuditIntegrity(auditReader),
+		ServerVersion:  buildinfo.Version,
 		IPAllowlist:    ipAllowlist,
 		IPGuard:        ipGuard,
 		Runner:         runner,

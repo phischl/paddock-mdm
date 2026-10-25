@@ -26,6 +26,8 @@ const session = useSessionStore()
 const showChrome = computed(() => !route.meta.public && session.me !== null)
 const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : ''))
 const initial = computed(() => (session.me?.display_name ?? '').charAt(0).toUpperCase())
+// Only signed-in users learn the server version: GET /api/v1/me answers 401 without a session (PDK-430).
+const versionLabel = computed(() => (session.me?.server_version ? t('app.serverVersion', { version: session.me.server_version }) : ''))
 const groups = computed(() => visibleNavigation(session))
 // The symbol variant follows the theme (plan M4c step 0b); the files are copied from docs/assets/logo/ at build time.
 const theme = useTheme()
@@ -593,6 +595,33 @@ onBeforeUnmount(() => observer.disconnect())
             </RouterLink>
           </div>
         </div>
+        <template #append>
+          <div
+            v-if="versionLabel"
+            class="pd-nav-version pd-type-caption"
+            data-testid="server-version"
+          >
+            <!-- The rail has no room for the text: a focusable icon names it, the tooltip shows it (eager name as
+                 for the rail entries, axe aria-tooltip-name). -->
+            <span
+              v-if="rail"
+              class="pd-nav-version-icon"
+              tabindex="0"
+              role="img"
+              :aria-label="versionLabel"
+            >
+              <PdIcon name="info" />
+              <v-tooltip
+                activator="parent"
+                :aria-label="versionLabel"
+                location="end"
+              >
+                {{ versionLabel }}
+              </v-tooltip>
+            </span>
+            <span v-else>{{ versionLabel }}</span>
+          </div>
+        </template>
       </v-navigation-drawer>
       <v-main
         id="main"

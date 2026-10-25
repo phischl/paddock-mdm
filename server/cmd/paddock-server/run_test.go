@@ -67,3 +67,14 @@ func TestNewHTTPServer(t *testing.T) {
 		}
 	}
 }
+
+// TestVersionCommand (PDK-430): `paddock-server version` prints the build version without any configuration and
+// takes no arguments.
+func TestVersionCommand(t *testing.T) {
+	if code := run([]string{"version"}); code != 0 {
+		t.Fatalf("version: exit %d, want 0", code)
+	}
+	if code := run([]string{"version", "--json"}); code != 2 {
+		t.Fatalf("version --json: exit %d, want 2", code)
+	}
+}

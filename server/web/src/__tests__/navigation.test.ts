@@ -37,6 +37,7 @@ const admin: Me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice Admin',
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: ['acme.test'] },
   locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
+  server_version: '0.1.0-alpha.5',
 }
 
 let wrapper: VueWrapper | null = null
@@ -320,6 +321,54 @@ describe('navigation drawer', () => {
     await flushPromises()
     expect(drawer(w).classes()).not.toContain('v-navigation-drawer--temporary')
     expect(drawer(w).classes()).not.toContain('v-navigation-drawer--rail')
+  })
+})
+
+describe('navigation drawer: server version (PDK-430)', () => {
+  const version = (w: VueWrapper) => drawer(w).find('[data-testid="server-version"]')
+
+  it('shows the server version from GET /api/v1/me at the bottom of the expanded drawer, for every role', async () => {
+    for (const role of ['platform_admin', 'org_admin', 'org_operator', 'org_auditor'] as const) {
+      const { w } = await mountApp({ ...admin, role, organization: role === 'platform_admin' ? null : admin.organization })
+      expect(version(w).text()).toBe('Paddock 0.1.0-alpha.5')
+      w.unmount()
+    }
+  })
+
+  it('names the version in German as well', async () => {
+    const { w } = await mountApp({ ...admin, locale: 'de', server_version: '0.0.0-dev' })
+    expect(version(w).text()).toBe('Paddock 0.0.0-dev')
+  })
+
+  it('keeps the version in the rail behind a named icon with a tooltip', async () => {
+    resize(1279)
+    const { w } = await mountApp()
+    expect(drawer(w).classes()).toContain('v-navigation-drawer--rail')
+    const icon = version(w).find('.pd-nav-version-icon')
+    expect(icon.attributes('aria-label')).toBe('Paddock 0.1.0-alpha.5')
+    expect(icon.attributes('tabindex')).toBe('0')
+    const tooltip = document.getElementById(icon.attributes('aria-describedby')!)
+    expect(tooltip?.getAttribute('role')).toBe('tooltip')
+    expect(tooltip?.getAttribute('aria-label')).toBe('Paddock 0.1.0-alpha.5')
+  })
+
+  it('shows the version in the temporary drawer below 600 px', async () => {
+    resize(375)
+    const { w } = await mountApp()
+    await w.find('[data-testid="nav-toggle"]').trigger('click')
+    expect(version(w).text()).toBe('Paddock 0.1.0-alpha.5')
+  })
+
+  it('shows no version before sign-in', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = testRouter()
+    await router.push('/devices')
+    await router.isReady()
+    wrapper = mount(App, { global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="server-version"]').exists()).toBe(false)
+    expect(document.body.textContent).not.toContain('Paddock 0.')
   })
 })
 

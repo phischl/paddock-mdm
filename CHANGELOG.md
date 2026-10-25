@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Server version in the portal (PDK-430): after sign-in, the bottom of the navigation shows the version of the running
+  control plane, e.g. "Paddock 0.1.0-alpha.5" (in the collapsed navigation as a tooltip). `GET /api/v1/me` answers it
+  as `server_version`; the login page and anonymous requests learn no version. The release images carry the release
+  tag, local builds report `0.0.0-dev`; `paddock-server version` prints it.
 - Audit codes for evidence integrity (plan M8b): `device.event_gap`, `device.event_gap_filled`,
   `device.event_seq_reset`, `device.clock_drift`, `device.clock_drift_cleared`, `audit.chain_verified`,
   `audit.chain_verification_failed`, `admin.role_granted` and `admin.role_revoked` are registered and documented in

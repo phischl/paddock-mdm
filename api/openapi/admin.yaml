@@ -4301,7 +4301,7 @@ components:
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
-        step_up_valid_until]
+        step_up_valid_until, server_version]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -4334,6 +4334,12 @@ components:
           description: |
             Until when the session's last step-up satisfies privileged actions (plan M8x decision 35); null without a
             step-up or once it has expired. The portal shows it in the user menu.
+        server_version:
+          type: string
+          description: |
+            Build version of the paddock-server answering the request: the release tag without the leading v (e.g.
+            0.1.0-alpha.5), edge-<date>-<commit> for edge builds and 0.0.0-dev for local builds. The portal shows it at
+            the bottom of the navigation.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
         api_token:

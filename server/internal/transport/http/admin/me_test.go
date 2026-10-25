@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
@@ -69,5 +71,39 @@ func TestMeNamesTheStepUpFreshness(t *testing.T) {
 	}
 	if m := get(e.steppedUp(alice, time.Now().Add(-app.StepUpValidity-time.Second))); m.StepUpValidUntil != nil {
 		t.Fatalf("after the window: %v", m.StepUpValidUntil)
+	}
+}
+
+// TestMeNamesTheServerVersion (PDK-430): every portal role reads the build version of the server in GET and PATCH
+// /api/v1/me; without a session the endpoint answers 401, so the login page learns no version.
+func TestMeNamesTheServerVersion(t *testing.T) {
+	const version = "0.1.0-alpha.5"
+	e := newEnvWith(t, func(d *admin.Deps) { d.ServerVersion = version })
+	sessions := map[string]*http.Cookie{
+		"platform_admin": e.platformSession(),
+		"org_admin":      e.session(e.acme, principal.RoleOrgAdmin),
+		"org_operator":   e.session(e.acme, principal.RoleOrgOperator),
+		"org_auditor":    e.session(e.acme, principal.RoleOrgAuditor),
+	}
+	for role, c := range sessions {
+		var m adminapi.Me
+		r := e.do(call{method: "GET", path: "/api/v1/me", cookie: c})
+		if r.status != http.StatusOK {
+			t.Fatalf("%s: GET /api/v1/me: %d", role, r.status)
+		}
+		r.decode(t, &m)
+		if m.ServerVersion != version {
+			t.Fatalf("%s: server_version %q, want %q", role, m.ServerVersion, version)
+		}
+	}
+
+	var patched adminapi.Me
+	e.do(call{method: "PATCH", path: "/api/v1/me", cookie: sessions["org_admin"], body: map[string]any{"locale": "de"}}).decode(t, &patched)
+	if patched.ServerVersion != version {
+		t.Fatalf("PATCH /api/v1/me: server_version %q, want %q", patched.ServerVersion, version)
+	}
+
+	if r := e.do(call{method: "GET", path: "/api/v1/me"}); r.status != http.StatusUnauthorized || strings.Contains(string(r.body), version) {
+		t.Fatalf("without a session: %d %s", r.status, r.body)
 	}
 }
