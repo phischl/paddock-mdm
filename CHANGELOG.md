@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agent_release.imported`; new problem codes `release_source_disabled`, `release_source_unavailable`,
   `release_not_newer` and `release_incomplete`; residual risk RR-84. The host command `./paddock agent-release` stays
   the fallback (`docs/operations/agent-releases.md` "Import from GitHub").
+- Portal button for the agent release import (PDK-428): the *Agent releases* page shows a *Release source* panel with
+  *Check for new release* and *Import <version>* (confirmation dialog and step-up); the panel is hidden when
+  `PADDOCK_AGENT_RELEASE_SOURCE_REPO=off`.
 - Server version in the portal (PDK-430): after sign-in, the bottom of the navigation shows the version of the running
   control plane, e.g. "Paddock 0.1.0-alpha.5" (in the collapsed navigation as a tooltip). `GET /api/v1/me` answers it
   as `server_version`; the login page and anonymous requests learn no version. The release images carry the release

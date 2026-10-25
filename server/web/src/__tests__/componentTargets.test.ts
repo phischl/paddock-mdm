@@ -16,6 +16,7 @@ vi.mock('../lib/agentReleases', async (original) => ({
   ...(await original<typeof import('../lib/agentReleases')>()),
   listAgentReleases: () => Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_capped: false, sort: '-created_at' }),
   getComponentTargets: () => Promise.resolve(targets),
+  getAgentReleaseSource: () => Promise.resolve({ enabled: false, repository: null, url: null }),
 }))
 
 let wrapper: VueWrapper | null = null

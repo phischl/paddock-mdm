@@ -226,7 +226,8 @@
     "release_source_disabled": "Die Quelle für Agent-Releases ist auf dieser Installation ausgeschaltet.",
     "release_source_unavailable": "Die Release-Quelle hat nicht geantwortet. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
     "release_not_newer": "Diese Version ist nicht neuer als das neueste veröffentlichte Release.",
-    "release_incomplete": "Dem Release in der Quelle fehlt eine erforderliche Datei oder Signatur."
+    "release_incomplete": "Dem Release in der Quelle fehlt eine erforderliche Datei oder Signatur.",
+    "release_signature_mismatch": "Eine Datei des Releases passt nicht zum öffentlichen Release-Schlüssel; nichts wurde gespeichert."
   },
   "audit": {
     "retention": {
@@ -493,7 +494,7 @@
   },
   "agentReleases": {
     "title": "Agent-Releases",
-    "uploadHint": "Releases werden mit make agent-release gebaut, signiert und hochgeladen; ihre Rollouts starten, halten Sie hier an und setzen sie fort.",
+    "uploadHint": "Importieren Sie ein signiertes Release aus der Release-Quelle oder bauen, signieren und laden Sie eines mit make agent-release hoch; Rollouts starten, halten Sie hier an und setzen sie fort.",
     "back": "Zurück zu den Agent-Releases",
     "heading": "Agent {version}",
     "version": "Version",
@@ -556,6 +557,25 @@
       "title": "Rollout-Ziele",
       "himmelblauHint": "Gesetzt über PADDOCK_HIMMELBLAU_VERSION des Compilers; Geräte installieren sie beim nächsten Apply.",
       "none": "Noch kein Agent-Release hat einen Rollout abgeschlossen."
+    },
+    "source": {
+      "title": "Release-Quelle",
+      "repository": "Repository",
+      "check": "Nach neuem Release suchen",
+      "import": "{version} importieren",
+      "available": "Version {version} ist verfügbar (veröffentlicht {at})",
+      "availableUndated": "Version {version} ist verfügbar",
+      "notNewer": "Kein neueres Release; das neueste veröffentlichte Release ist {version}",
+      "noneFound": "Es wurde kein Release gefunden, das zum Release-Kanal passt",
+      "importTitle": "Agent {version} importieren?",
+      "importMessage": "Paddock lädt Agent {version} aus {repository} herunter, prüft jede Datei mit dem öffentlichen Release-Schlüssel und veröffentlicht ihn. Es wird nichts ausgerollt: Starten Sie den Rollout separat.",
+      "importConfirm": "{version} importieren",
+      "importing": "Das Release wird importiert; das kann bis zu 90 Sekunden dauern.",
+      "imported": "Agent {version} ist veröffentlicht. Starten Sie seinen Rollout auf der Release-Seite.",
+      "openRelease": "Agent {version} öffnen",
+      "problems": {
+        "upstream_unavailable": "Der Artefaktspeicher hat nicht geantwortet. Es wurde nichts ausgerollt; versuchen Sie den Import erneut."
+      }
     }
   },
   "loginDenied": {

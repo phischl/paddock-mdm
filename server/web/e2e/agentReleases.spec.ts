@@ -59,3 +59,26 @@ test('platform admin halts an agent rollout', async ({ page }) => {
   await expectAccessible(page)
   expect(csp).toEqual([])
 })
+
+// ADR 0043 decision 7: the dev stack points the release source at the github-fixture alias, which no container
+// answers outside the acceptance gate, so the check fails with release_source_unavailable and offers no import.
+test('platform admin checks an unreachable release source', async ({ page }) => {
+  const csp = watchCSP(page)
+  await login(page, 'platform-admin@paddock.test', 'dev_platform_admin_password')
+
+  await mainNav(page).getByRole('link', { name: 'Agent releases' }).click()
+  const panel = page.getByTestId('release-source')
+  await expect(panel).toBeVisible()
+  await expect(page.getByTestId('release-source-repository')).toHaveText('phischl/paddock-mdm')
+  await expect(page.getByTestId('release-source-result')).toBeHidden()
+  await expectAccessible(page)
+
+  await page.getByTestId('release-source-check').click()
+  await expect(page.getByTestId('release-source-problem')).toHaveText(
+    'The release source did not answer. Check the connection and try again.',
+  )
+  await expect(page.getByTestId('release-source-import')).toBeHidden()
+  await expect(page.getByTestId('release-source-check')).toBeEnabled()
+  await expectAccessible(page)
+  expect(csp).toEqual([])
+})

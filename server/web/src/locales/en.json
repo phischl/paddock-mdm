@@ -226,7 +226,8 @@
     "release_source_disabled": "The agent release source is switched off on this installation.",
     "release_source_unavailable": "The release source did not answer. Check the connection and try again.",
     "release_not_newer": "This version is not newer than the newest published release.",
-    "release_incomplete": "The release on the source lacks a required file or signature."
+    "release_incomplete": "The release on the source lacks a required file or signature.",
+    "release_signature_mismatch": "A file of the release does not match the release public key; nothing was stored."
   },
   "audit": {
     "retention": {
@@ -493,7 +494,7 @@
   },
   "agentReleases": {
     "title": "Agent releases",
-    "uploadHint": "Releases are built, signed and uploaded with make agent-release; start, halt and resume their rollouts here.",
+    "uploadHint": "Import a signed release from the release source, or build, sign and upload one with make agent-release; start, halt and resume their rollouts here.",
     "back": "Back to agent releases",
     "heading": "Agent {version}",
     "version": "Version",
@@ -556,6 +557,25 @@
       "title": "Rollout targets",
       "himmelblauHint": "Set with PADDOCK_HIMMELBLAU_VERSION of the compiler; devices install it with their next apply.",
       "none": "No agent release has completed a rollout yet."
+    },
+    "source": {
+      "title": "Release source",
+      "repository": "Repository",
+      "check": "Check for new release",
+      "import": "Import {version}",
+      "available": "Version {version} is available (published {at})",
+      "availableUndated": "Version {version} is available",
+      "notNewer": "No newer release; the newest published release is {version}",
+      "noneFound": "No release matching the release channel was found",
+      "importTitle": "Import agent {version}?",
+      "importMessage": "Paddock downloads agent {version} from {repository}, verifies every file with the release public key and publishes it. Nothing is rolled out: start the rollout separately.",
+      "importConfirm": "Import {version}",
+      "importing": "Importing the release; this can take up to 90 seconds.",
+      "imported": "Agent {version} is published. Start its rollout from the release page.",
+      "openRelease": "Open agent {version}",
+      "problems": {
+        "upstream_unavailable": "The artifact store did not answer. Nothing was rolled out; try the import again."
+      }
     }
   },
   "loginDenied": {
