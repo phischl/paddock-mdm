@@ -7,7 +7,8 @@ An operator brings a new agent release onto the control plane by hand: download 
 release, rename them into the layout `<dir>/<arch>/paddockd` and `<dir>/<name>_<version>_<arch>.deb`, make them
 readable for the api service and run `./paddock agent-release <version> <dir>` on the host
 (`docs/operations/install.md` §10). On the lab this took several attempts on 2026-10-25 and needs shell access to the
-host. The maintainer wants one button in the portal that fetches the newest release from the official repository
+host; the upload itself worked as soon as the files were in the `<arch>/paddockd` layout — the manual renaming, not
+the verification, was the failure point. The maintainer wants one button in the portal that fetches the newest release from the official repository
 and publishes it, ready for the existing staged rollout (PDK-427, wanted for 0.1.0-alpha.6).
 
 Facts about the code that bound the design (checked 2026-10-25):
@@ -26,9 +27,12 @@ Facts about the code that bound the design (checked 2026-10-25):
   stack points it at a Caddy file server the acceptance gate starts on the network `cp` under a fixed alias
   (`compose.dev.yaml`, `test/acceptance/osv_test.go`). The Go default transport honours `HTTPS_PROXY`, `HTTP_PROXY`
   and `NO_PROXY`.
-- Release files on GitHub (`.github/workflows/release.yml`, ADR 0006 amendment 2026-10-11): `paddockd_<v>_linux_<arch>`,
-  `paddock-agent_<v>_<arch>.deb` and `paddock-supervisor_<v>_<arch>.deb` for amd64 and arm64, each with a `.minisig`
-  whose trusted comment is `paddock-agent version=<v> arch=<arch>`; `paddock-revoke_<v>_<arch>-unsigned.deb` (never
+- Release files on GitHub (`.github/workflows/release.yml`, `make release-packages`, `packaging/sign-release.sh`, ADR 0006
+  amendment 2026-10-11): `paddockd_<v>_linux_amd64` and `paddockd_<v>_linux_arm64`; `paddock-agent_<v>_amd64.deb` and
+  `paddock-supervisor_<v>_amd64.deb` — `make deb` builds the packages for **amd64 only** (v0.1.0-alpha.5 has 19 assets,
+  the packages exist as `_amd64.deb` alone), while the sign script signs every `paddock-agent` and `paddock-supervisor`
+  package it finds, whatever its architecture; each signed file has a `.minisig` whose trusted comment is
+  `paddock-agent version=<v> arch=<arch>`; `paddock-revoke_<v>_<arch>-unsigned.deb` (never
   signed by CI); `SHA256SUMS` with a keyless Sigstore bundle `SHA256SUMS.sigstore.json`. The tag is `v<v>` with `<v>`
   matching `make release-check`: `x.y.z` or `x.y.z-(alpha|beta|rc).N`. fleetd and the offline-signed `paddock-revoke`
   are attached by hand after the workflow, outside `SHA256SUMS`.
@@ -103,7 +107,7 @@ Facts about the code that bound the design (checked 2026-10-25):
    (`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) and, for the agent binaries, with the trusted comment
    `paddock-agent version=<v> arch=<arch>`, before the release is created. GitHub is transport only: nothing it says
    about a file (size, digest, content type, tag) is trusted beyond the selection of candidates. `SHA256SUMS` and
-   its Sigstore bundle are not fetched or verified (option above; residual risk RR-74). Unsigned files are never
+   its Sigstore bundle are not fetched or verified (option above; residual risk RR-84). Unsigned files are never
    imported; `paddock-revoke` is never imported through this path, with or without a signature — it stays on the
    offline two-person path (`docs/operations/agent-releases.md`).
 3. **Version selection.** Candidates are the releases of the first page of
@@ -115,13 +119,17 @@ Facts about the code that bound the design (checked 2026-10-25):
    that version exists; a stored **draft** of the same version is continued, as `PublishFromHost` continues one.
    Equal is not newer; downgrades are refused (409 `release_not_newer`). The import takes the version from the
    request body and applies the same rule to it, so what the check showed is what is imported.
-4. **Asset set.** Required for an import: `paddockd_<v>_linux_amd64`, `paddockd_<v>_linux_arm64`,
-   `paddock-agent_<v>_amd64.deb`, `paddock-agent_<v>_arm64.deb`, `paddock-supervisor_<v>_amd64.deb` and
-   `paddock-supervisor_<v>_arm64.deb`, each with `<asset>.minisig`. Optional: `fleet-osquery_<fleetd version>_<arch>.deb`
-   with its `.minisig` (imported as package `fleet-osquery` with `package_version`, verified with the agent release
-   key as today); a `fleet-osquery` asset without its signature refuses the import. A missing required asset or
-   signature refuses the import (422 `release_incomplete`, the detail names the first missing asset). Every other
-   asset — `paddock-revoke*`, `*-unsigned*`, `SHA256SUMS*`, `*.sigstore.json`, anything else — is ignored.
+4. **Asset set.** The required set is exactly what the release workflow ships today: `paddockd_<v>_linux_amd64`,
+   `paddockd_<v>_linux_arm64`, `paddock-agent_<v>_amd64.deb` and `paddock-supervisor_<v>_amd64.deb`, each with
+   `<asset>.minisig`. Optional, imported when present with its `.minisig`: `paddock-agent_<v>_<arch>.deb` and
+   `paddock-supervisor_<v>_<arch>.deb` for every other architecture of `agentrelease.Arches` (the sign script signs
+   them as soon as `make deb` builds them, so the import needs no change then), and
+   `fleet-osquery_<fleetd version>_<arch>.deb` (imported as package `fleet-osquery` with `package_version`, verified
+   with the agent release key as today). An optional asset that is present without its signature refuses the import.
+   A missing required asset or signature refuses the import (422 `release_incomplete`, the detail names the first
+   missing asset). Every other asset — `paddock-revoke*`, `*-unsigned*`, `SHA256SUMS*`, `*.sigstore.json`, anything
+   else — is ignored. The required set lives in one place, `agentrelease.SourceAssets`, and a unit test holds it equal
+   to the files `packaging/release_test.sh` expects from the sign job.
 5. **Transport policy.** `https` only; `http` only with `PADDOCK_ENV=development` (the loader refuses it otherwise).
    The client's transport is `http.DefaultTransport.(*http.Transport).Clone()` with `DialContext` timeout 10 s,
    `TLSHandshakeTimeout` 10 s and `ResponseHeaderTimeout` 15 s; proxies come from the environment
@@ -177,7 +185,8 @@ Facts about the code that bound the design (checked 2026-10-25):
 - − The import is bounded by 90 s; a slow or filtered uplink fails it without side effects and the host command
   remains the fallback. If this bounds real installations, the follow-up is an asynchronous import job in the worker
   with a status endpoint — not a longer timeout.
-- − Residual risk **RR-74**: *The import trusts the release public key alone.* A party that controls the GitHub
+- − Residual risk **RR-84** (RR-74 to RR-76 belong to M8b, RR-77 to RR-83 are reserved by plan M13a): *The import
+  trusts the release public key alone.* A party that controls the GitHub
   repository and the release key secret of its `release` environment can publish an agent the import accepts; the
   Sigstore bundle is not verified. Mitigation: the key's protected environment with required approval (ADR 0006
   amendment 2026-10-11), the staged rollout with automatic halt, the step-up on the import, the supervisor's own
