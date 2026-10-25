@@ -134,7 +134,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		"empty listings":     func() { dir.roleGroups = map[string][]ports.IdentityUser{} },
 	} {
 		setup()
-		err := accounts.Reconcile(sys)
+		err := accounts.Reconcile(sys, app.ListRoleGroups(sys, dir, admins, operators, auditors))
 		dir.fail, dir.readFail, dir.roleGroups = nil, nil, full
 		if err == nil || name == "empty listings" && !errors.Is(err, app.ErrDirectoryEmpty) {
 			t.Fatalf("%s: round error %v", name, err)
@@ -145,7 +145,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		}
 	}
 	dir.roleGroupCalls = 0
-	if err := accounts.Reconcile(sys); err != nil {
+	if err := accounts.Reconcile(sys, app.ListRoleGroups(sys, dir, admins, operators, auditors)); err != nil {
 		t.Fatal(err)
 	}
 	if dir.roleGroupCalls != 3 {
@@ -198,7 +198,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	}
 
 	// A second round finds nothing to change: the disabled accounts are no longer listed.
-	if err := accounts.Reconcile(sys); err != nil {
+	if err := accounts.Reconcile(sys, app.ListRoleGroups(sys, dir, admins, operators, auditors)); err != nil {
 		t.Fatal(err)
 	}
 	if n := countRows(t, super, "SELECT count(*) FROM action WHERE code = 'admin.sessions_revoked' AND organization_id = $1", org); n != 4 {
@@ -245,7 +245,9 @@ func TestPlatformRevocationWaitsForLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- accounts.ReconcilePlatform(sys) }()
+	go func() {
+		done <- accounts.ReconcilePlatform(sys, app.ListRoleGroups(sys, dir, organization.PlatformAdminsGroup()))
+	}()
 	select {
 	case err := <-done:
 		t.Fatalf("the revocation did not wait for the login: %v", err)
@@ -309,16 +311,16 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"}), corr)
 
 	dir.fail = errors.New("directory down")
-	if err := accounts.ReconcilePlatform(sys); err == nil || sessions.revoked[removed] != 0 {
+	if err := accounts.ReconcilePlatform(sys, app.ListRoleGroups(sys, dir, organization.PlatformAdminsGroup())); err == nil || sessions.revoked[removed] != 0 {
 		t.Fatalf("directory down: %v, %d revocations", err, sessions.revoked[removed])
 	}
 	dir.fail = nil
 	// The first round fails to end the flaky administrator's session (recorded as failed); the next round retries.
-	if err := accounts.ReconcilePlatform(sys); err == nil {
+	if err := accounts.ReconcilePlatform(sys, app.ListRoleGroups(sys, dir, organization.PlatformAdminsGroup())); err == nil {
 		t.Fatal("a failing revocation did not fail the round")
 	}
 	for round := 2; round <= 3; round++ {
-		if err := accounts.ReconcilePlatform(sys); err != nil {
+		if err := accounts.ReconcilePlatform(sys, app.ListRoleGroups(sys, dir, organization.PlatformAdminsGroup())); err != nil {
 			t.Fatal(err)
 		}
 	}

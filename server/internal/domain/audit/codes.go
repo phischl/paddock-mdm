@@ -1207,7 +1207,7 @@ var registry = map[Code]Definition{
 		Description: "A user became member of a Paddock role group in Authentik, or an Authentik superuser, as seen by the worker's snapshot (actor: system).",
 		Params:      []string{"role", "username", "authentik_pk", "group", "baseline"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "role is org_admin, org_operator, org_auditor, platform_admin or authentik_superuser; group is the Authentik group name, empty for authentik_superuser; baseline is true for every member found by the first snapshot of an organization (or of the platform). failure with error_code upstream_unavailable when Authentik could not be read.",
+		Note:        "role is org_admin, org_operator, org_auditor, platform_admin or authentik_superuser; group is the Authentik group name, empty for authentik_superuser; baseline is true for every member found by the first successful comparison of the role in an organization (or on the platform). A role whose listing fails records nothing that round; when all role listings of an organization, or the superuser listing of the platform, come back empty while members are recorded, nothing is recorded in that scope; a member is revoked only when two consecutive listings miss it. failure only when the change could not be stored.",
 	},
 	CodeAdminRoleRevoked: {
 		Code: CodeAdminRoleRevoked, Emitted: true,

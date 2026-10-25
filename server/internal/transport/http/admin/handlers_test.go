@@ -172,6 +172,10 @@ func (f *fakeIdP) RoleGroupUsers(context.Context, string) ([]ports.IdentityUser,
 	return nil, f.err()
 }
 
+func (f *fakeIdP) Superusers(context.Context) ([]ports.IdentityUser, error) {
+	return nil, f.err()
+}
+
 func (f *fakeIdP) UserMembership(context.Context, string, string) (ports.IdentityUser, []string, bool, error) {
 	return ports.IdentityUser{}, nil, false, f.err()
 }

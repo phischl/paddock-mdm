@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Audit codes for evidence integrity (plan M8b): `device.event_gap`, `device.event_gap_filled`,
   `device.event_seq_reset`, `device.clock_drift`, `device.clock_drift_cleared`, `audit.chain_verified`,
   `audit.chain_verification_failed`, `admin.role_granted` and `admin.role_revoked` are registered and documented in
-  `docs/compliance/audit-codes.md`, with portal texts in English and German. Paddock does not record them yet.
+  `docs/compliance/audit-codes.md`, with portal texts in English and German.
 - Clock drift detection (plan M8b, ISO 27001 A.8.17): the server measures the clock offset of every device from the
   signed time of its check-in, without an agent change. A device whose clock is more than 60 s off records
   `device.clock_drift` and appears on the attention list with the kind `clock_drift` and the offset; once the clock
@@ -43,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covering it. New read-only admin API routes `GET /api/v1/audit/integrity`, `GET /api/v1/audit/verification-runs`
   and `GET /api/v1/audit/manifests` (roles org_admin and org_auditor; lists with search, filters and sorting). No
   platform access is needed to check the evidence.
+- Audited role membership (plan M8b, ISO 27001 A.5.18 and A.8.2): every identity sync interval (default 5 minutes)
+  the worker compares the members of the Paddock role groups in Authentik (`paddock.<slug>.admins`, `.operators`,
+  `.auditors`, `paddock.platform.admins`) and the Authentik superusers with what it saw last, and records every grant
+  as `admin.role_granted` and every revocation as `admin.role_revoked` with the user name, the role and the group.
+  Organization roles are recorded in the organization, platform administrators and superusers in the platform
+  audit. The first successful comparison of each role records its current members once with `baseline: true`. A
+  revocation is recorded only when two consecutive listings miss the member, also for the last holder of a role. A
+  listing that fails records nothing for its role in that round. If all role groups of an organization, or the
+  superusers, come back empty, nothing is recorded in that organization or on the platform. The role groups are
+  listed once per round for both the administrator account check and this record. Schema: migrations 00070 and 00071
+  add the role member and per-role snapshot tables of organizations and of the platform.
 
 ### Changed
 

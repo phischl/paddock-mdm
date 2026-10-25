@@ -529,6 +529,21 @@ type OrganizationManagedFileSetting struct {
 	UpdatedBy                uuid.NullUUID
 }
 
+type OrganizationRoleMember struct {
+	OrganizationID uuid.UUID
+	Role           string
+	AuthentikPk    string
+	Username       string
+	FirstSeenAt    time.Time
+	MissingSince   *time.Time
+}
+
+type OrganizationRoleSnapshot struct {
+	OrganizationID uuid.UUID
+	TakenAt        time.Time
+	Role           string
+}
+
 type OrganizationUpdateSetting struct {
 	OrganizationID        uuid.UUID
 	SecurityDailyAt       string
@@ -615,6 +630,19 @@ type PlatformAdmin struct {
 	Locale       string
 	LastLoginAt  *time.Time
 	Theme        string
+}
+
+type PlatformRoleMember struct {
+	Role         string
+	AuthentikPk  string
+	Username     string
+	FirstSeenAt  time.Time
+	MissingSince *time.Time
+}
+
+type PlatformRoleSnapshot struct {
+	TakenAt time.Time
+	Role    string
 }
 
 type ProfileAssignment struct {

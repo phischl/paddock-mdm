@@ -94,6 +94,11 @@ func TestLiveAuthentik(t *testing.T) {
 	if err != nil || len(users) != 1 || users[0].PK != pk || !users[0].Managed || users[0].Name != "Live Test Renamed" {
 		t.Fatalf("OrganizationUsers: %+v, %v", users, err)
 	}
+	// Every Authentik has its bootstrap administrator as superuser; the new organization user is none.
+	supers, err := c.Superusers(ctx)
+	if err != nil || len(supers) == 0 || slices.ContainsFunc(supers, func(u ports.IdentityUser) bool { return u.PK == pk }) {
+		t.Fatalf("Superusers: %+v, %v", supers, err)
+	}
 
 	groupName := organization.LocalUserGroup(slug, "live")
 	gpk, err := c.EnsureGroup(ctx, slug, groupName)
