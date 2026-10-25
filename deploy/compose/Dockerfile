@@ -32,8 +32,12 @@ RUN --mount=type=cache,target=/go/pkg/mod cd server && go mod download
 COPY pkg/ pkg/
 COPY server/ server/
 COPY --from=web /src/server/web/dist/ server/web/dist/
+# The release tag without the leading v; GET /api/v1/me answers it as server_version (PDK-430). Declared here so a
+# new version does not invalidate the cached module download above.
+ARG PADDOCK_VERSION=0.0.0-dev
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/paddock-server ./server/cmd/paddock-server
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
+    -ldflags="-s -w -X github.com/phischl/paddock-mdm/server/internal/buildinfo.Version=${PADDOCK_VERSION}" -o /out/paddock-server ./server/cmd/paddock-server
 
 # Compiler: the same binary in a Debian image whose visudo validates every rendered sudoers file (plan M3a decision
 # 17). The compiler never runs sudo, so the image keeps no setuid binaries; visudo refuses to run for a uid without a

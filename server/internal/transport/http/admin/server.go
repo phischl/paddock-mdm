@@ -54,6 +54,8 @@ type Deps struct {
 	Overview       *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
+	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
+	ServerVersion string
 	// IPAllowlist and IPGuard are the IP allow list of the administrative surfaces (plan M7a decisions 12 and 17);
 	// a nil IPGuard installs no enforcement (serveAPI always installs one).
 	IPAllowlist *app.IPAllowlist
@@ -208,7 +210,7 @@ func NewHandler(d Deps) http.Handler {
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
-		stepUpWindow: tokenTTL,
+		stepUpWindow: tokenTTL, serverVersion: d.ServerVersion,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"
 )
@@ -40,6 +41,7 @@ commands:
   backup decrypt <in> <out|->
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
   healthcheck
+  version
 
 The audit writer also verifies every organization's last 7 sealed days nightly at 00:45 UTC.
 Commands separated by a lone "+" run one after another; the first failure stops the chain.
@@ -97,6 +99,12 @@ func runOne(ctx context.Context, args []string) int {
 		err = runMigrate(ctx, l, args[1:])
 	case "healthcheck":
 		err = runHealthcheck(ctx, common)
+	case "version":
+		if len(args) != 1 {
+			err = errUsage
+			break
+		}
+		fmt.Fprintln(os.Stdout, buildinfo.Version)
 	case "serve":
 		err = runServe(ctx, l, common, args[1:])
 	case "audit":

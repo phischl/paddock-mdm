@@ -16,6 +16,7 @@
     "loading": "Loading…",
     "signedInAs": "Signed in as {name}",
     "logout": "Sign out",
+    "serverVersion": "Paddock {version}",
     "mainNavigation": "Main navigation",
     "error": "Something went wrong. Please try again.",
     "language": "Language",

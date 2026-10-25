@@ -66,6 +66,8 @@ type handlers struct {
 	stepUpTiming *stepUpTiming
 	// stepUpWindow is how long a step-up satisfies a privileged action (step_up_valid_until of GET /api/v1/me).
 	stepUpWindow time.Duration
+	// serverVersion is server_version of GET and PATCH /api/v1/me.
+	serverVersion string
 }
 
 // stepUpTiming is the step-up window of the action runner and the maximum auth age of the step-up callback.
@@ -137,6 +139,7 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 	out := adminapi.Me{
 		Id: me.ID, Username: me.Username, DisplayName: me.DisplayName, Role: adminapi.MeRole(me.Role),
 		Locale: adminapi.MeLocale(me.Locale), Theme: adminapi.MeTheme(me.Theme), RevocationEnabled: h.revocations.Enabled(),
+		ServerVersion: h.serverVersion,
 	}
 	if me.Organization != nil {
 		domains := me.Organization.Domains

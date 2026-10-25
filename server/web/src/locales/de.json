@@ -16,6 +16,7 @@
     "loading": "Wird geladen …",
     "signedInAs": "Angemeldet als {name}",
     "logout": "Abmelden",
+    "serverVersion": "Paddock {version}",
     "mainNavigation": "Hauptnavigation",
     "error": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
     "language": "Sprache",

@@ -2561,6 +2561,12 @@ export interface components {
              *     step-up or once it has expired. The portal shows it in the user menu.
              */
             step_up_valid_until: string | null;
+            /**
+             * @description Build version of the paddock-server answering the request: the release tag without the leading v (e.g.
+             *     0.1.0-alpha.5), edge-<date>-<commit> for edge builds and 0.0.0-dev for local builds. The portal shows it at
+             *     the bottom of the navigation.
+             */
+            server_version: string;
             step_up?: components["schemas"]["MeStepUp"];
             api_token?: components["schemas"]["MeApiToken"];
         };
