@@ -1,6 +1,6 @@
 # 0044 — MCP server for platform and organization administrators
-Status: Proposed (architect, 2026-10-25; the two open questions in §"Open questions" have defaults and do not block
-implementation)
+Status: Accepted (architect, 2026-10-25; maintainer decisions of 2026-10-25 on the three open points recorded in
+§"Maintainer decisions 2026-10-25")
 
 ## Context
 
@@ -105,8 +105,10 @@ Facts about the code that bound the design (checked 2026-10-25, `main` at `f7137
   never gets another principal.
 - The **scope policy**: a settings row per organization (`organization_mcp_settings`) and one for the platform
   (`platform_mcp_settings`): `enabled`, `write_enabled`, `mode ∈ {all, selected}`, `allowed_operations`. Without a
-  row: enabled, writes allowed, mode `all` — the maintainer's "otherwise everything the API offers". Set by
-  `org_admin` / `platform_admin` with a step-up, audited.
+  row the MCP is **off** for that scope (fail-closed; maintainer decision 2026-10-25): an administrator must save a
+  policy with `enabled: true` first. Once enabled, the maintainer's "otherwise everything the API offers" is the
+  form's starting point (`write_enabled: true`, mode `all`). Set by `org_admin` / `platform_admin` with a step-up,
+  audited.
 - The **write opt-in**: `mcp_write_enabled_at` on the administrator's own account (`admin_account`,
   `platform_admin`), switched on by that administrator in the portal with a confirmation and a step-up, switched off
   without one (the safe direction is never gated), audited. A token inherits its creator's current state at every
@@ -177,12 +179,14 @@ Mitigations, in order of weight:
 
 ## Decision
 
-1. **Transport.** alpha.7 ships the stdio server **`paddockctl mcp`** (option A1). It speaks MCP over stdio,
-   implements the server capability `tools` only (`initialize`, `ping`, `tools/list`, `tools/call`,
-   `notifications/initialized`), negotiates protocol version `2025-06-18` or `2025-11-25`, and calls the admin API
-   with the API token of its configuration (`--token-file`, `PADDOCK_TOKEN_FILE`, config file) exactly like the other
-   `paddockctl` commands. A remote streamable-HTTP endpoint (A2) is a later decision with its own ADR; this ADR
-   records its preconditions in §"Consequences".
+1. **Transport.** alpha.7 ships the stdio server **`paddockctl mcp`** (option A1). It is built on the official Go
+   SDK **`github.com/modelcontextprotocol/go-sdk` v1.8.0** (approved by the maintainer on 2026-10-25, see
+   §"Maintainer decisions 2026-10-25"): the SDK's stdio transport, protocol negotiation and `tools` capability
+   (`tools/list`, `tools/call`) with Paddock's generated catalog registered as tools; Paddock implements no other
+   capability (no resources, prompts, sampling, elicitation). It calls the admin API with the API token of its
+   configuration (`--token-file`, `PADDOCK_TOKEN_FILE`, config file) exactly like the other `paddockctl` commands. A
+   remote streamable-HTTP endpoint (A2) is a later decision with its own ADR; this ADR records its preconditions in
+   §"Consequences".
 2. **Credential.** API tokens gain a **channel** fixed at creation: `api` (today's behaviour, default) or `mcp`.
    `paddockctl mcp` refuses to start with an `api` token (it checks `GET /api/v1/me` → `api_token.channel`) and names
    the portal page that creates an MCP token. The server applies the MCP policy, the write opt-in and the rate limit
@@ -204,7 +208,8 @@ Mitigations, in order of weight:
    are not exposed. The input schema of a tool is `{path parameters, query parameters, body}` dereferenced from the
    contract, OpenAPI `nullable: true` rewritten to a `null` type union.
 5. **Three layers**, enforced as described in option E: role (unchanged), scope policy (`organization_mcp_settings`,
-   `platform_mcp_settings`; defaults enabled/all/writes allowed; `org_admin` or `platform_admin` with a step-up),
+   `platform_mcp_settings`; **off until an administrator saves a policy with `enabled: true`**, for the organization
+   and the platform scope alike; `org_admin` or `platform_admin` with a step-up),
    per-user write opt-in (`mcp_write_enabled_at` on `admin_account` and `platform_admin`; enable needs a step-up,
    disable does not; both refused for API-token principals and for `org_auditor`). The guard `mcpGuard` refuses
    with 403 `mcp_disabled`, `mcp_tool_not_allowed` or `mcp_write_not_enabled` (the detail names the portal page) and
@@ -231,7 +236,10 @@ Mitigations, in order of weight:
 - + Both administrator populations can let an assistant read everything their role reads and, after two explicit
   switches (scope policy, own opt-in), change what their role may change — through the same use cases, RLS and
   audit as the portal; nothing irreversible is reachable; new endpoints become tools with `make gen`.
-- + No new Go module, npm package or container image under the default of the open questions below.
+- − One new Go module in `cli/`: `github.com/modelcontextprotocol/go-sdk` v1.8.0 with its dependency tree
+  (§"Maintainer decisions 2026-10-25"); no npm package or container image. `paddockctl` stays a static binary.
+- + Every scope starts with the MCP off; an organization or the platform that never saves a policy is never
+  reachable through the channel, whatever tokens exist.
 - − Hosted MCP clients are not served in alpha.7. Preconditions for the remote endpoint (A2): a privacy decision on
   tool results leaving the operator's network, the OAuth resource-server design on the api, Valkey-backed MCP
   sessions, and the decision on CLI sessions ADR 0034 deferred (B3).
@@ -253,13 +261,40 @@ Mitigations, in order of weight:
   (RR-85 … RR-89); ADR 0034 cross-reference ("MCP tokens are API tokens: decision 3 applies"); PDK-201 (role switch)
   must keep "one role per token".
 
-## Open questions (with defaults)
+## Maintainer decisions 2026-10-25
 
-1. **MCP SDK.** The official Go SDK `github.com/modelcontextprotocol/go-sdk` (MIT) would implement the protocol,
-   including future transports. It is a new Go module and needs architect approval per `CLAUDE.md`. **Default: no
-   dependency.** The subset in decision 1 is about 400 lines of stdlib code (JSON-RPC framing, five methods), tested
-   against recorded message fixtures; the SDK is reconsidered with the remote endpoint.
-2. **Default state of the scope policy.** This ADR follows the maintainer's wording ("otherwise everything the API
-   offers"): enabled, writes allowed, mode `all` when no row exists. **Default: as decided.** The alternative
-   (disabled until an administrator switches the scope on) is one line in `GetOrDefault` and one sentence in the
-   docs if the maintainer prefers fail-closed.
+The architect's proposal of 2026-10-25 left three points open with defaults; the maintainer decided them the same
+day:
+
+1. **Step-up operations are hidden** (decision 6, option F1) — confirmed as proposed. No pending-action flow in
+   alpha.7.
+2. **MCP SDK approved.** The maintainer approved the new Go dependency `github.com/modelcontextprotocol/go-sdk`
+   for the `cli/` module on 2026-10-25, replacing the hand-written JSON-RPC alternative. Facts checked on
+   2026-10-25:
+   - Pinned version **v1.8.0**, published 2026-09-04 (seven weeks before the decision; the rule "at least two weeks
+     old" holds); requires Go 1.25.0 (the workspace is on Go 1.27).
+   - Licence file of v1.8.0: new code and specification contributions under **Apache-2.0**, older contributions
+     under **MIT**, documentation under CC-BY-4.0 (documentation is not compiled into `paddockctl`). Copyright
+     "Model Context Protocol a Series of LF Projects, LLC". No copyleft.
+   - Direct dependencies and their licences: `github.com/golang-jwt/jwt/v5` v5.3.1 (MIT), `github.com/google/go-cmp`
+     v0.7.0 (BSD-3-Clause), `github.com/google/jsonschema-go` v0.4.3 (MIT), `github.com/segmentio/encoding` v0.5.4
+     (MIT), `github.com/yosida95/uritemplate/v3` v3.0.2 (BSD-3-Clause), `golang.org/x/oauth2` v0.35.0,
+     `golang.org/x/time` v0.15.0, `golang.org/x/tools` v0.42.0 (all BSD-3-Clause); indirect:
+     `github.com/segmentio/asm` v1.1.3 (MIT), `golang.org/x/sync` v0.20.0, `golang.org/x/sys` v0.41.0 (BSD-3-Clause).
+     All are in the licence allow list of `make lint-licenses` (`ALLOWED_LICENSES` in the `Makefile`). The combined
+     licence file of the SDK itself is the one thing the gate must confirm at implementation time: if `go-licenses`
+     cannot classify it (reports `unknown` or `CC-BY-4.0`), PDK-439 stops and reports instead of adding an
+     exception (plan M14 stop condition S10).
+   - What the SDK brings that the hand-written variant lacked: protocol-version negotiation maintained upstream,
+     argument validation against the tool's `inputSchema` (`jsonschema-go`), the streamable-HTTP transport for the
+     later remote endpoint (M14b) without a second implementation.
+   - Consequences: the SDK's `golang.org/x/oauth2` and `jwt` packages are linked but unused in alpha.7; `govulncheck`
+     (`make lint-vuln`) covers them like every other dependency; `docs/compliance/third-party.md` lists the module.
+3. **Scope policy off by default** (fail-closed) for the organization and the platform scope: without a saved row
+   `MCPAccessService.Policy` answers `{enabled: false, write_enabled: false, mode: all}`; the portal says so; an
+   administrator enables the MCP by saving a policy with a step-up. This replaces the architect's proposed default
+   ("enabled, writes allowed, all tools" when no row exists), which had followed the maintainer's wording
+   literally; the wording now describes the policy an administrator may choose, not the state before any choice.
+
+No open questions remain. The residual risk list (RR-85 … RR-89) is unchanged; RR-86 and RR-87 are narrowed by
+decision 3 (a scope that never enabled the MCP is unreachable through the channel).

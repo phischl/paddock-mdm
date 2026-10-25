@@ -1,8 +1,9 @@
 # Implementierungsplan: M14 — MCP server (`paddockctl mcp`), MCP policies, write opt-in, Claude skill
 
-Target: 0.1.0-alpha.7. Decision: ADR 0044 (`docs/adr/0044-mcp-server-and-skill.md`, status *Proposed*; its two open
-questions carry defaults that this plan follows: no MCP SDK dependency, scope policy enabled by default). Epic:
-PDK-433. Tickets: PDK-434 to PDK-444 (§8).
+Target: 0.1.0-alpha.7. Decision: ADR 0044 (`docs/adr/0044-mcp-server-and-skill.md`, status *Accepted*; maintainer
+decisions of 2026-10-25: step-up operations hidden, the Go SDK `github.com/modelcontextprotocol/go-sdk` v1.8.0
+approved for `cli/`, scope policy off until an administrator enables it). Epic: PDK-433. Tickets: PDK-434 to
+PDK-444 (§8).
 
 Language rules of this plan: **MUST** / **MUST NOT** are binding, **SHOULD** is a recommendation with a reasoned
 exception, **MAY** is a freedom. Everything not marked is context.
@@ -11,8 +12,8 @@ exception, **MAY** is a freedom. Everything not marked is context.
 
 After M14 an organization administrator, operator or auditor, and a platform administrator, can connect an MCP
 client (Claude Code, Claude Desktop) to Paddock through `paddockctl mcp` and let the assistant call every admin API
-operation their role allows: reads immediately, writes only after the organization (or the platform) allows writes
-through the MCP and the administrator switched on write access for their own account with a step-up. Nothing that
+operation their role allows: reads once the organization (or the platform) has enabled the MCP, writes only after
+that policy also allows writes and the administrator switched on write access for their own account with a step-up. Nothing that
 needs a step-up is reachable through the channel. Every write is one audit event with source `mcp` and the client's
 name. A Claude skill explains install, upgrade, lab, release and troubleshooting workflows to the assistant.
 
@@ -153,7 +154,8 @@ name. A Claude skill explains install, upgrade, lab, release and troubleshooting
 ### 3.4 Policies, opt-in, guard, access (PDK-437, PDK-438)
 
 14. `app.MCPSettings` (`server/internal/app/mcpsettings.go`): `GetOrg(ctx) (MCPPolicy, error)` (RolesRead; the
-    default `MCPPolicy{Enabled: true, WriteEnabled: true, Mode: "all"}` when no row exists), `UpdateOrg(ctx,
+    default `MCPPolicy{Enabled: false, WriteEnabled: false, Mode: "all"}` when no row exists — the MCP is off until
+    an administrator saves a policy; maintainer decision 2026-10-25), `UpdateOrg(ctx,
     MCPPolicyInput)` (`SpecMCPSettingsUpdate{Code: organization.mcp_policy_changed, AllowedRoles: RolesAdmin,
     RequiresStepUp: true}`, upsert), `GetPlatform`, `UpdatePlatform` (`SpecPlatformMCPSettingsUpdate{Code:
     platform.mcp_policy_changed, AllowedRoles: RolesPlatform, RequiresStepUp: true}`). Validation (400
@@ -168,7 +170,8 @@ name. A Claude skill explains install, upgrade, lab, release and troubleshooting
     `mcp_write_enabled_at` on the caller's own row only; both answer the fresh `Me`. `Me.mcp_write_enabled` is
     `mcp_write_enabled_at IS NOT NULL`; `MeApiToken.channel` is the token's channel.
 16. `app.MCPAccess` (`server/internal/app/mcpaccess.go`): `Policy(ctx, p principal.Principal) (MCPPolicy, error)`
-    (organization row or platform row by `p.Kind`, defaults as item 14) and `Access(ctx, p) (MCPAccess, error)`
+    (organization row or platform row by `p.Kind`; without a row `{Enabled: false, WriteEnabled: false, Mode: all}`
+    for both scopes — never "allowed" by absence) and `Access(ctx, p) (MCPAccess, error)`
     per §6.1 `McpAccess`: `allowed_operations` = exposed, non-step-up tools whose `Scope` matches the principal
     (`organization` tools for organization principals, `platform` for platform administrators, `any` for both),
     filtered by `mode/allowed_operations`, with `write` tools included only when `write_effective` and the
@@ -202,28 +205,37 @@ name. A Claude skill explains install, upgrade, lab, release and troubleshooting
 ### 3.5 `paddockctl mcp` (PDK-439)
 
 21. `cli/go.mod` adds `require github.com/phischl/paddock-mdm/pkg v0.0.0` with `replace … => ../pkg` (the server
-    module does the same); no third-party module is added. Package `cli/internal/mcp` per §6.4.
+    module does the same) and `require github.com/modelcontextprotocol/go-sdk v1.8.0` (approved 2026-10-25, ADR 0044
+    §"Maintainer decisions"; the version MUST be exactly v1.8.0, its transitive modules as `go mod tidy` resolves
+    them). `make lint-licenses` and `make lint-vuln` MUST pass with it; `docs/compliance/third-party.md` gains the
+    module (PDK-443 writes the row, PDK-439 adds the dependency). Package `cli/internal/mcp` per §6.4 uses the SDK's
+    `mcp.NewServer`, `mcp.StdioTransport`, `(*mcp.Server).AddTool` with a raw `mcp.ToolHandler`, `mcp.Tool` with
+    `InputSchema` unmarshalled from the catalog's JSON Schema (`jsonschema.Schema` of
+    `github.com/google/jsonschema-go`), and `mcp.CallToolResult` with `Content`, `StructuredContent` and `IsError`.
+    Paddock registers no resources, prompts or completion handlers.
 22. Command `paddockctl mcp` (stdio server) and `paddockctl mcp tools [-o table|json]` (prints the effective tool
     list and exits). Start-up, in order: connect with the configured token; `GET /api/v1/me`; if `api_token` is
     absent or `api_token.channel != "mcp"` → stderr `paddockctl mcp needs an MCP token (channel mcp); create one on
     the portal page API tokens (organization) or Platform › MCP tokens` and exit 2; `GET /api/v1/mcp/access`; if
     `catalog_version != mcpcatalog.Version` → one stderr warning naming both versions (the server's
     `allowed_operations` stays authoritative; unknown ids are ignored).
-23. Protocol: newline-delimited JSON-RPC 2.0 on stdin/stdout, UTF-8, one message per line, at most 4 MiB per line
-    (larger → JSON-RPC error `-32700`); logs on stderr only, never a token, never tool arguments or results at the
-    default level. Methods: `initialize` (answer `protocolVersion` as negotiated: the requested version when it is
-    `2025-06-18` or `2025-11-25`, else `2025-06-18`; `capabilities: {tools: {listChanged: false}}`;
-    `serverInfo: {name: "paddockctl", version: <paddockctl version>}`; `instructions` = `mcpcatalog.Instructions`),
-    `notifications/initialized` (no answer), `ping` (`{}`), `tools/list` (no pagination; refreshes the access
-    answer when the last one is older than 30 s), `tools/call`, any other method → `-32601`. Notifications from the
-    client other than `initialized` are ignored. Reading EOF on stdin ends the process with exit 0.
+23. Protocol: the SDK's stdio transport and JSON-RPC handling (framing, `initialize` and version negotiation, `ping`,
+    `tools/list`, `tools/call`, error codes) are used as shipped; Paddock sets `mcp.Implementation{Name:
+    "paddockctl", Version: <paddockctl version>}` and `mcp.ServerOptions{Instructions: mcpcatalog.Instructions}`
+    and registers tools only. Logs go to stderr only, never a token, never tool arguments or results at the default
+    level. The tool set is registered once at start-up from `mcpcatalog.Exposed()` ∩ `allowed_operations`; the
+    access answer is refreshed when older than 30 s on every `tools/call`, and a tool whose name left
+    `allowed_operations` answers an `isError` result with `error.code = "mcp_tool_not_allowed"` (the server would
+    refuse it anyway). `tools/list_changed` is not emitted (`ServerOptions` keep the capability off). The process
+    ends with exit 0 when the client closes stdin (the SDK's `Run` returns).
 24. `tools/list` returns, for every tool in `mcpcatalog.Exposed()` whose name is in `allowed_operations`:
     `{name, title: <summary>, description, inputSchema, annotations: {readOnlyHint: Class == read, destructiveHint:
     Destructive, idempotentHint: Idempotent, openWorldHint: false}}`. The client name and version from
     `initialize.params.clientInfo` are sent on every API request as `X-Paddock-MCP-Client: <name>/<version>`
     (sanitised like the server does; `unknown/0` when the client sent none).
-25. `tools/call`: unknown tool or a tool not in the current `allowed_operations` → JSON-RPC error `-32602` with
-    message `unknown tool`; a missing required path parameter or a non-string path parameter → `-32602`; otherwise
+25. `tools/call`: an unknown tool and a missing or mistyped argument are refused by the SDK (JSON-RPC error
+    `-32602`, schema validation against the registered `InputSchema`); a tool no longer in `allowed_operations` →
+    `isError` per item 23; otherwise
     the HTTP request: path parameters substituted with `url.PathEscape`, query parameters from the arguments (arrays
     repeated), `body` as the JSON body, 60 s timeout (`client.Timeout`). Result on 2xx:
     `{content: [{type: "text", text: <JSON of the wrapper>}], structuredContent: <wrapper>, isError: false}` where
@@ -310,7 +322,8 @@ name. A Claude skill explains install, upgrade, lab, release and troubleshooting
 - Any change under `agent/`, in particular `agent/internal/revoke/` and `agent/cmd/paddock-revoke/`.
 - Changes to the revocation endpoints, their two-person rule or their step-up.
 - A role switch (PDK-201); one token keeps one role.
-- The default state of the scope policy other than ADR 0044 open question 2's default.
+- Any default other than "MCP off until an administrator saves a policy with `enabled: true`" (maintainer decision
+  2026-10-25); any MCP SDK version other than v1.8.0 without a new approval.
 
 ## 5. Affected files
 
@@ -561,13 +574,15 @@ func (l *mcpLimiter) Allow(token uuid.UUID, class mcpcatalog.Class) (ok bool, re
 func sanitizeMCPClient(v string) string                           // §3.4 item 19
 // Deps gains: PlatformAPITokens *app.PlatformAPITokens; MCPSettings *app.MCPSettings; MCPAccess *app.MCPAccessService
 
-// cli/internal/mcp
-type Server struct{ /* client *client.Client, version string, access accessCache, stdin, stdout, stderr */ }
-func New(c *client.Client, version string, in io.Reader, out, errw io.Writer) *Server
+// cli/internal/mcp (on github.com/modelcontextprotocol/go-sdk v1.8.0)
+type Server struct{ /* client *client.Client, version string, access accessCache, srv *mcp.Server, errw io.Writer */ }
+func New(c *client.Client, version string, errw io.Writer) *Server
 func (s *Server) Preflight(ctx context.Context) error             // §3.5 item 22; *RefusedError for the wrong token kind
-func (s *Server) Serve(ctx context.Context) error                 // JSON-RPC loop until EOF
-func (s *Server) Tools(ctx context.Context) ([]ToolListEntry, error)
-func (s *Server) Call(ctx context.Context, name string, args map[string]json.RawMessage) (CallResult, error)
+func (s *Server) Register(ctx context.Context) error              // builds mcp.Tool entries from the catalog ∩ access and AddTool()s them
+func (s *Server) Run(ctx context.Context, t mcp.Transport) error  // srv.Run(ctx, t); the command passes &mcp.StdioTransport{}
+func (s *Server) Tools(ctx context.Context) ([]ToolListEntry, error)        // for `paddockctl mcp tools`
+func (s *Server) call(ctx context.Context, req *mcp.CallToolRequest, tool mcpcatalog.Tool) (*mcp.CallToolResult, error)
+func toolFor(t mcpcatalog.Tool) (*mcp.Tool, error)                 // InputSchema: json.Unmarshal into *jsonschema.Schema
 func portalPath(method, path string) string                        // §3.5 item 25
 
 // sqlc queries (names)
@@ -673,7 +688,8 @@ The audit database needs no migration (`source` is `text`; the next free audit m
 | `mcp.class.read` | read |
 | `mcp.class.write` | write |
 | `mcp.portalOnly` | portal only (step-up) |
-| `mcp.defaultsHint` | No policy saved yet: the MCP is enabled, changes are allowed, all tools are available. |
+| `mcp.defaultsHint` | No policy saved yet: the MCP is switched off for this {scope}. Enable it and save the policy to let MCP tokens in. |
+| `mcp.disabledHint` | The MCP is switched off: every MCP token of this {scope} is refused. |
 | `mcp.save` | Save policy |
 | `mcp.confirm.title` | Save MCP policy? |
 | `mcp.confirm.message` | {count} tools will be available to MCP tokens of this {scope}; changes {writes, select, allowed {stay possible} other {are refused}}. |
@@ -748,9 +764,11 @@ PDK-435 holds everything the later tickets need; no later ticket adds a migratio
 - `audit.SourceOf`; `OutcomeOf` for the four problems; `sanitizeMCPClient` (length, control characters, UTF-8).
 - `mcpLimiter`: 120 reads then 429 within a minute, window reset, separate write budget, idle eviction.
 - `ValidateMCPPolicy`: all/selected rules, unknown ids, step-up ids refused, > 500 refused, duplicates refused.
-- `cli/internal/mcp`: table-driven JSON-RPC fixtures in `testdata/` (initialize for both versions and an unknown
-  version, ping, tools/list filtering by access, tools/call success/problem/network error/oversized response,
-  unknown method, malformed line, EOF) against an `httptest` admin API; `portalPath` cases.
+- `cli/internal/mcp`: tests through the SDK's in-memory transport pair (`mcp.NewInMemoryTransports`) with an SDK
+  `mcp.Client` against the Paddock server and an `httptest` admin API: initialize (`serverInfo`, `instructions`),
+  tools/list filtering by access, tools/call success/problem/network error/oversized response, a tool removed from
+  access between calls, schema-validation refusal of a wrong argument type, EOF/close; `toolFor` for every catalog
+  entry (every `InputSchema` unmarshals into `jsonschema.Schema` and resolves); `portalPath` cases.
 
 ### 9.2 Integration (Go, testcontainers)
 - `app.APITokens.Authenticate` returns channel and opt-in; `PlatformAPITokens.Authenticate` with revoked, expired,
@@ -762,10 +780,18 @@ PDK-435 holds everything the later tickets need; no later ticket adds a migratio
 
 ### 9.3 Acceptance gate `test/acceptance/mcp_test.go` (`TestMCP`, sub-tests; `paddockctl mcp` from
 `PADDOCK_ACCEPTANCE_PADDOCKCTL`, driven over stdio with `initialize` → `tools/list` → `tools/call`)
-- **M1 read with each role**: alice creates MCP tokens with roles `org_admin`, `org_operator`, `org_auditor`
-  (step-up); each token's `tools/list` contains `listDevices` and `getMe`; `listDevices` through `tools/call`
-  returns status 200 and the wrapper notice; the platform administrator creates a platform MCP token; its
-  `tools/list` contains `listOrganizations` and not `listDevices`; `listOrganizations` returns 200.
+- **M0 off by default**: before any policy is saved (the gate deletes acme's and the platform's rows through a
+  cleanup helper, or runs first on a fresh seed), `GET /api/v1/settings/mcp` answers `enabled: false`; an acme MCP
+  token gets 403 `mcp_disabled` on `GET /api/v1/devices` and the same on `POST /api/v1/device-groups` with one
+  denied event; `paddockctl mcp tools` prints an empty list and the hint `the MCP is switched off for this scope`;
+  the platform MCP token gets 403 `mcp_disabled` on `GET /api/platform/v1/organizations`.
+- **M1 read with each role**: alice saves `{enabled: true, write_enabled: true, mode: all}` (step-up; one
+  `organization.mcp_policy_changed` event) and the platform administrator saves the same for the platform; alice
+  creates MCP tokens with roles `org_admin`, `org_operator`, `org_auditor` (step-up); each token's `tools/list`
+  contains `listDevices` and `getMe`; `listDevices` through `tools/call` returns status 200 and the wrapper notice;
+  the platform administrator creates a platform MCP token; its `tools/list` contains `listOrganizations` and not
+  `listDevices`; `listOrganizations` returns 200. `t.Cleanup` deletes both policy rows again so the stack ends in
+  the default state.
 - **M2 write refused without opt-in**: alice's `org_admin` MCP token: `tools/list` contains no write tool;
   direct `POST /api/v1/device-groups` with the token → 403 `mcp_write_not_enabled`; exactly one `device_group.created`
   event with outcome `denied`, `error_code mcp_write_not_enabled`, `source mcp`.
@@ -778,7 +804,8 @@ PDK-435 holds everything the later tickets need; no later ticket adds a migratio
   `organization.mcp_policy_changed` event with `allowed_count 1`): `createDeviceGroup` → 403 `mcp_tool_not_allowed`
   with one denied event; `listDeviceGroups` (read, not selected) → 403 without an event; `write_enabled: false,
   mode: all` → `createDeviceGroup` 403 `mcp_write_not_enabled` despite the opt-in; `enabled: false` → `listDevices`
-  403 `mcp_disabled`; restore `enabled: true, write_enabled: true, mode: all` at the end (`t.Cleanup`).
+  403 `mcp_disabled`; restore `enabled: true, write_enabled: true, mode: all` for the remaining sub-tests (the
+  M1 cleanup removes the row at the end).
 - **M5 step-up behaviour**: `tools/list` of every token contains none of `lockDevice`, `destroyDevice`,
   `revealLocalAdmin`, `requestUninstall`, `endAllSessions`; direct `POST /api/v1/devices/{id}/lock` with alice's
   MCP token → 403 `mcp_tool_not_allowed` and one `revocation.requested` denied event; `tools/call
@@ -799,8 +826,8 @@ PDK-435 holds everything the later tickets need; no later ticket adds a migratio
 - **M10 audit display**: the audit list answers the M3 event with `source: "mcp"` and `actor.client`.
 
 ### 9.4 E2E (`server/web/e2e/mcp.spec.ts`)
-- As alice: *Settings › MCP* shows the defaults hint; switch to *Selected tools*, pick two tools, save → confirm →
-  dev step-up (TOTP) → success snackbar; reload shows the selection; *API tokens* → create with purpose *MCP* shows
+- As alice: *Settings › MCP* shows the defaults hint (*switched off*); enable the MCP, switch to *Selected tools*,
+  pick two tools, save → confirm → dev step-up (TOTP) → success snackbar; reload shows the selection; *API tokens* → create with purpose *MCP* shows
   the 90-day bound and the `paddockctl mcp` hint; account menu → *AI assistant (MCP)* → enable → confirm → step-up →
   state *enabled since*; disable without step-up; the audit page shows the `MCP` chip on an event seeded by the
   acceptance gate (skip when absent). `expectAccessible` on every page state; `watchCSP`.
@@ -815,7 +842,8 @@ PDK-435 holds everything the later tickets need; no later ticket adds a migratio
 
 | ID | Role | Given / When / Then |
 | --- | --- | --- |
-| AC-1 | org admin, operator, auditor | Given an MCP token of my role, when I run `paddockctl mcp` in an MCP client, then `tools/list` shows every read tool my role may call and `listDevices` answers 200 with the data notice. |
+| AC-0 | org admin, platform admin | Given no saved MCP policy, when any MCP token of my scope calls the API, then every call answers 403 `mcp_disabled` and the settings page says the MCP is switched off. |
+| AC-1 | org admin, operator, auditor | Given an enabled MCP policy and an MCP token of my role, when I run `paddockctl mcp` in an MCP client, then `tools/list` shows every read tool my role may call and `listDevices` answers 200 with the data notice. |
 | AC-2 | org admin | Given no write opt-in, when the assistant tries a write, then the tool is absent from `tools/list` and a direct call answers 403 `mcp_write_not_enabled`, recorded once as `denied` with `source mcp`. |
 | AC-3 | org admin | Given I enabled write access with a step-up and the policy allows changes, when the assistant creates a device group, then it answers 201 and the audit log shows one success event with `source mcp` and my client's name. |
 | AC-4 | org admin | Given I saved *Selected tools* without `createDeviceGroup`, when the assistant calls it, then 403 `mcp_tool_not_allowed` and one denied event; reads outside the selection are refused without an event. |
@@ -839,18 +867,25 @@ Stop and report instead of deciding when:
   not mark it `expose: false` to pass — report it; the architect decides whether it needs an audit code.
 - S4 `paddock_api_token_lookup` in `main` differs from migration `00047` (an in-flight change); report the diff.
 - S5 `go.work`/module boundaries prevent `cli` from importing `pkg/mcpcatalog` without a third-party module.
-- S6 the MCP client used for manual verification requires a protocol feature outside §3.5 item 23 (for example
-  pagination of `tools/list` or `tools/list_changed`).
+- S6 the MCP client used for manual verification requires a protocol feature the SDK v1.8.0 does not provide, or
+  a server capability outside `tools`.
+- S10 `make lint-licenses` cannot classify the SDK's combined licence file (`unknown` or `CC-BY-4.0` reported for
+  `github.com/modelcontextprotocol/go-sdk`), or `make lint-vuln` reports a vulnerability in its tree; do not add an
+  ignore or an allow-list entry — report.
+- S11 a generated `InputSchema` does not unmarshal into `jsonschema.Schema` or fails the SDK's resolution; do not
+  hand-edit the schema or drop validation — report the operation.
 - S7 a migration number collision at merge time cannot be resolved by renumbering to the next free number.
 - S8 any step would touch `agent/`, the revocation endpoints or ADR 0034 decision 3.
 - S9 `TestOrganizationIsolation` finds a response containing a foreign id through the MCP token principal.
 
 ## 12. Risks and open points
 
-- Open question ADR 0044 §1 (MCP SDK): default *no dependency*. If the maintainer approves the SDK, PDK-439 swaps
-  `cli/internal/mcp/server.go` for the SDK's stdio transport; the tool, result and preflight code stays.
-- Open question ADR 0044 §2 (scope policy default): default *enabled, writes allowed, all tools*. Fail-closed needs
-  a one-line change in `MCPAccessService.Policy` defaults and the `mcp.defaultsHint` text.
+- Decided 2026-10-25 (ADR 0044 §"Maintainer decisions"): SDK v1.8.0 approved; scope policy off by default; step-up
+  operations hidden. No open questions remain in this plan.
+- Risk: the SDK's licence file combines MIT and Apache-2.0 texts (plus CC-BY-4.0 for documentation); `go-licenses`
+  may classify it differently from the per-file expectation → stop condition S10, decided by the architect.
+- Risk: the SDK links `golang.org/x/oauth2` and `golang-jwt/jwt` into `paddockctl` although alpha.7 uses neither;
+  `govulncheck` covers them; the binary stays static.
 - Risk: per-replica rate limiting undercounts behind several api replicas (bounded by replica count; documented in
   `docs/operations/mcp.md`; Valkey-backed counters are a follow-up if needed).
 - Risk: platform `creator_inactive` depends on the worker's role snapshot (10-minute interval); until the first
