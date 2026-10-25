@@ -1,6 +1,6 @@
 # 0044 — MCP server for platform and organization administrators
-Status: Accepted (architect, 2026-10-25; maintainer decisions of 2026-10-25 on the three open points recorded in
-§"Maintainer decisions 2026-10-25")
+Status: Accepted (architect, 2026-10-25; maintainer decisions of 2026-10-25 recorded in §"Maintainer decisions
+2026-10-25" and §"Amendment 2026-10-25 — MCP login via Authentik", which replaces decisions 2 and 3 below)
 
 ## Context
 
@@ -121,7 +121,7 @@ Facts about the code that bound the design (checked 2026-10-25, `main` at `f7137
 
 ### F. Step-up operations through the MCP
 - **F1 — refuse (keep ADR 0034 decision 3) and do not expose always-step-up operations as tools at all.** + The
-  invariant holds by construction: an MCP token cannot Lock, Destroy, reveal, uninstall, end sessions or change the
+  invariant holds by construction: an MCP session cannot Lock, Destroy, reveal, uninstall, end sessions or change the
   allow list, and a prompt injection cannot even attempt them (no `denied` event storm, no target surface);
   conditional step-up refusals (root-equivalent profile, sensitive path, dead man's switch) answer 403
   `step_up_required` with the portal path, and the tool result tells the model to hand over to the human. − The
@@ -187,16 +187,14 @@ Mitigations, in order of weight:
    configuration (`--token-file`, `PADDOCK_TOKEN_FILE`, config file) exactly like the other `paddockctl` commands. A
    remote streamable-HTTP endpoint (A2) is a later decision with its own ADR; this ADR records its preconditions in
    §"Consequences".
-2. **Credential.** API tokens gain a **channel** fixed at creation: `api` (today's behaviour, default) or `mcp`.
-   `paddockctl mcp` refuses to start with an `api` token (it checks `GET /api/v1/me` → `api_token.channel`) and names
-   the portal page that creates an MCP token. The server applies the MCP policy, the write opt-in and the rate limit
-   to **every** request made with an `mcp` token, whatever client sends it. MCP tokens expire after at most
-   **90 days**; `api` tokens keep 365.
-3. **Platform administrators** get **platform MCP tokens** (option C2): table `platform_api_token`, channel `mcp`
-   only, role `platform_admin`, secret prefix `pdkp_`, created with a step-up on the portal page *Platform › MCP
-   tokens*, at most 90 days, audited as `platform.api_token_created` / `platform.api_token_revoked` /
-   `platform.api_token_use_denied`. The platform keeps no `api`-channel token; `docs/operations/api-tokens.md`
-   changes "There are no platform tokens" to "The platform has MCP tokens only".
+2. **Credential** — *replaced on 2026-10-25 by the amendment below (MCP login via Authentik).* The original
+   decision (API tokens with a `channel` of `api` or `mcp`, MCP tokens ≤ 90 days) is withdrawn: the MCP has no
+   tokens; the human signs in through Authentik with `paddockctl mcp login`, and the api keeps a revocable MCP
+   session (ADR 0034 decision 4) bound to the channel `mcp`.
+3. **Platform administrators** — *replaced on 2026-10-25 by the amendment below.* The original decision (platform
+   MCP tokens `pdkp_`, table `platform_api_token`) is withdrawn: a platform administrator signs in like everyone
+   else; `ResolveRole` yields the platform role from `paddock.platform.admins`. "There are no platform tokens"
+   (plan M6c) stays true.
 4. **Tools are generated** (option D2) by `server/cmd/mcpgen` from `api/openapi/admin.yaml` into
    `pkg/mcpcatalog/catalog.gen.go` (`make gen`; CI fails on a diff). Tool name = `operationId`, one to one.
    Classification: `read` for GET, `write` for every other method; `x-paddock-mcp: {expose: false}` removes an
@@ -211,23 +209,26 @@ Mitigations, in order of weight:
    `platform_mcp_settings`; **off until an administrator saves a policy with `enabled: true`**, for the organization
    and the platform scope alike; `org_admin` or `platform_admin` with a step-up),
    per-user write opt-in (`mcp_write_enabled_at` on `admin_account` and `platform_admin`; enable needs a step-up,
-   disable does not; both refused for API-token principals and for `org_auditor`). The guard `mcpGuard` refuses
-   with 403 `mcp_disabled`, `mcp_tool_not_allowed` or `mcp_write_not_enabled` (the detail names the portal page) and
-   with 429 `rate_limited`. `GET /api/v1/mcp/access` tells a client what the token may do right now;
+   disable does not; both refused for API-token principals, MCP sessions and `org_auditor`). The guard `mcpGuard`
+   applies to principals whose session carries the channel `mcp` and refuses with 403 `mcp_disabled`,
+   `mcp_tool_not_allowed` or `mcp_write_not_enabled` (the detail names the portal page) and with 429 `rate_limited`
+   (per account). `GET /api/v1/mcp/access` tells a client what the session may do right now;
    `GET /api/v1/mcp/catalog` publishes the catalog.
-6. **Step-up operations are refused and not exposed** (option F1). ADR 0034 decision 3 stands unchanged. A
-   conditional refusal reaches the model as an error result with `code: step_up_required`, the server's detail and a
-   `portal_path`; the skill tells the assistant to hand the action to the human.
+6. **Step-up operations are refused and not exposed** (option F1). ADR 0034 decision 3 stands and is extended: an
+   MCP session never satisfies a step-up, however fresh the Authentik login behind it was (`checkStepUp` refuses
+   `Channel == mcp` like it refuses API tokens). A conditional refusal reaches the model as an error result with
+   `code: step_up_required`, the server's detail and a `portal_path`; the skill tells the assistant to hand the
+   action to the human.
 7. **Audit** as in option G: source `mcp`, actor `client`, the seven new codes, one event per attempt, no per-read
    events.
 8. **Prompt-injection mitigations** as in option H, all seven; the residual risk is RR-85.
 9. **Skill** as in option I1: `skills/operate-paddock/SKILL.md` with the sections install, upgrade, lab workflow,
    release and rollout, troubleshooting, "what the assistant must hand to the human" (the step-up list), and the
    tool catalog by tag; `test/skill_test.sh` verifies the referenced paths and tool names.
-10. **Portal** (ADR 0018 applies): organization page *Settings › MCP* (`/settings/mcp`), platform pages *Platform ›
-    MCP* (`/platform/mcp`) and *Platform › MCP tokens* (`/platform/mcp-tokens`, a `DataList`), the channel on the API
-    tokens page and form, the user's opt-in in the account menu (`ConfirmDialog` + step-up), and the source/client
-    on audit events. The policy page's tool selection is a **settings form** (grouped checkboxes with a filter
+10. **Portal** (ADR 0018 applies): organization page *Settings › MCP* (`/settings/mcp`), platform page *Platform ›
+    MCP* (`/platform/mcp`), the user's opt-in in the account menu (`ConfirmDialog` + step-up), and the source/client
+    on audit events. *(Amended 2026-10-25: no token pages — the MCP has no tokens; the API tokens page is
+    unchanged.)* The policy page's tool selection is a **settings form** (grouped checkboxes with a filter
     field), not a collection list: the catalog is a fixed enumeration of the contract, not records; the endpoint
     answers `{version, tools}` and is documented as a catalog, not with `x-paddock-list`.
 
@@ -243,23 +244,24 @@ Mitigations, in order of weight:
 - − Hosted MCP clients are not served in alpha.7. Preconditions for the remote endpoint (A2): a privacy decision on
   tool results leaving the operator's network, the OAuth resource-server design on the api, Valkey-backed MCP
   sessions, and the decision on CLI sessions ADR 0034 deferred (B3).
-- − A long-lived platform credential exists for the first time (90 days, step-up to create, `mcp` channel only).
-- − The MCP policy restricts the *credential*, not the person: an administrator with an `api` token can wire that
+- − The MCP policy restricts the *channel*, not the person: an administrator with an `api` token can wire that
   token into any MCP client and bypass the MCP policy and the opt-in with their own role (RR-86).
 - − Residual risks (RR-74 to RR-76 are M8b, RR-77 to RR-83 M13a, RR-84 ADR 0043):
   **RR-85** prompt injection through data (an attacker who controls a string the assistant reads can steer it within
   the user's effective MCP rights; mitigations H1–H7; record who may enable writes). **RR-86** channel bypass with an
   `api` token (above; the audit trail shows `source: api` for such calls; organizations that need hard separation
-  grant `api` tokens sparingly). **RR-87** a long-lived MCP token on an administrator's workstation (90 days, revoke
-  in the portal, `creator_inactive` on role loss; record the workstation baseline). **RR-88** step-up actions are
-  only refused, never staged (the assistant can advise, the human acts; a future human-in-the-loop design is a
-  separate decision). **RR-89** reads are not audited per call (a metric exists; PDK-139 adds sensitive-view
-  recording; record whether your ISMS needs read logging before enabling MCP for auditors).
+  grant `api` tokens sparingly). **RR-87** an Authentik refresh token (8 hours, rotated) and a 30-minute access
+  token in a 0600 file on the administrator's workstation (`paddockctl mcp logout` revokes; deactivation, role
+  change and end-all end the session; record the workstation baseline; an OS keyring is an open question for the
+  maintainer because it needs a dependency). **RR-88** step-up actions are only refused, never staged (the
+  assistant can advise, the human acts; a future human-in-the-loop design is a separate decision). **RR-89** reads
+  are not audited per call (a metric exists; PDK-139 adds sensitive-view recording; record whether your ISMS needs
+  read logging before enabling MCP for auditors).
 - Follow-ups: plan `docs/plans/M14-mcp.md`; architecture amendments (§3.2 api row, §9.6 credentials, §14.2 source,
   §17.1 endpoints, §22 test strategy); `docs/operations/mcp.md`; `docs/operations/api-tokens.md`;
   `docs/compliance/privacy.md` (what an assistant on the administrator's machine sees); `docs/compliance/residual-risks.md`
-  (RR-85 … RR-89); ADR 0034 cross-reference ("MCP tokens are API tokens: decision 3 applies"); PDK-201 (role switch)
-  must keep "one role per token".
+  (RR-85 … RR-89); ADR 0034 cross-reference (MCP sessions are decision-4 sessions; decision 3 applies to them);
+  ADR 0007 amendment (third public provider `paddock-mcp`); PDK-201 (role switch) must keep "one role per session".
 
 ## Maintainer decisions 2026-10-25
 
@@ -296,5 +298,94 @@ day:
    ("enabled, writes allowed, all tools" when no row exists), which had followed the maintainer's wording
    literally; the wording now describes the policy an administrator may choose, not the state before any choice.
 
-No open questions remain. The residual risk list (RR-85 … RR-89) is unchanged; RR-86 and RR-87 are narrowed by
-decision 3 (a scope that never enabled the MCP is unreachable through the channel).
+RR-86 and RR-87 are narrowed by decision 3 (a scope that never enabled the MCP is unreachable through the channel).
+
+## Amendment 2026-10-25 — MCP login via Authentik (maintainer decision; replaces decisions 2 and 3)
+
+**Decision of the maintainer (2026-10-25):** "MCP login via Authentik" — the MCP authenticates the human through
+Authentik (OIDC/OAuth), not with long-lived MCP API tokens. The maintainer wants the central identity for the MCP
+as for the portal.
+
+### Options weighed
+
+- **A — remote MCP endpoint (streamable HTTP) on the api with the MCP authorization specification.** OAuth 2.1
+  with Authentik as authorization server, PKCE, a dedicated provider/application for MCP clients, audience-bound
+  access tokens, protected-resource metadata (RFC 9728). + Hosted clients (claude.ai) work; the SDK's `auth`
+  package provides the resource-server middleware. − Open-source Authentik has no dynamic client registration, so
+  every MCP client is registered by hand by the platform administrator; the api gains an OAuth resource server, a
+  new ingress route and HTTP MCP sessions in Valkey; tool results would travel through the hosted client's
+  infrastructure — a privacy decision operators must take first (`docs/compliance/privacy.md`); the step-up
+  question reappears in a browser-less client. Larger than alpha.7 allows; **M14b**.
+- **B — `paddockctl mcp` (stdio) signs the human in against Authentik itself and calls the admin API with the
+  resulting token.** Two sub-variants: the **device authorization grant** (RFC 8628) and **loopback PKCE** (RFC 8252).
+  + The identity is the OIDC login (password and second factor through the same `paddock-admin-login` flow as the
+  portal); short-lived access tokens with refresh; no new network surface on the api beyond three BFF routes; the
+  existing session store, role resolution and revocation rules apply; no secret in the CLI (public client). − The
+  CLI keeps a refresh token on disk (0600 file; an OS keyring needs a dependency → open question). **Chosen for
+  alpha.7, with the device grant**: Paddock already runs Authentik's device-code flow for device logins (ADR 0019;
+  the worker sets the brand's `flow_device_code`; the acceptance helpers `authflow.StartDevice/ApproveDevice/
+  PollDeviceToken` exercise it), it needs no redirect URI and no local listener, works over SSH, and the browser
+  step runs Authentik's normal flows. Loopback PKCE would need regex redirect URIs for random ports and a local
+  HTTP listener; it stays a later convenience.
+- **C — keep MCP API tokens next to the Authentik login as an automation fallback.** − Two credential types for one
+  channel, two revocation stories, two token lifetimes; the automation use case ("an assistant runs unattended") is
+  the explicitly excluded "autonomous agent without a user identity" of the epic. **Rejected**: MCP API tokens and
+  platform MCP tokens are dropped entirely; `api_token` and `docs/operations/api-tokens.md` stay as they are.
+
+### Decisions
+
+A1. **Flow.** `paddockctl mcp login` obtains `GET /api/auth/mcp/config` (issuer, client id, scopes, the device
+    authorization, token and revocation endpoints), starts the device authorization grant on the public Authentik
+    provider `paddock-mcp` with scopes `openid profile email groups offline_access`, shows the verification URL and
+    user code (and opens the browser), polls the token endpoint, and then calls `POST /api/auth/mcp/session` with
+    the ID token and the access token. The CLI keeps access token, refresh token and expiry in
+    `$XDG_STATE_HOME/paddockctl/mcp-session.json` (directory 0700, file 0600) and refreshes before expiry; every
+    refreshed token pair is presented to `/api/auth/mcp/session` again. `paddockctl mcp` calls the admin API with
+    `Authorization: Bearer <access token>`. No API token is ever used for MCP.
+A2. **Token acceptance on the api.** The api verifies the ID token with the `paddock-mcp` provider's JWKS (issuer,
+    audience `paddock-mcp`, signature, expiry; `amr` must contain `mfa` as for the portal login) and the access
+    token as a JWT with the same verifier (audience `paddock-mcp`); both must carry the same `sub`. The role is
+    resolved from the ID token's `groups` claim with `organization.ResolveRole` (ADR 0007) and the account is
+    upserted through the same `app.Accounts.Login` use case as the portal, recorded as `admin.login` with the
+    params `channel: mcp` (and `renewal: true` for a refreshed token). The session is a `sessions.Record` with
+    `Channel: "mcp"` under the key `sess:mcp:<sha256(access token)>`, TTL = the access token's remaining life
+    (30 minutes in the shipped blueprint), in the account's set `acct-sess:<account_id>` — so the revocation rules
+    of ADR 0034 decision 4 apply unchanged: logout deletes the record, a role change or a deactivation found by the
+    worker revokes every record of the account, *End all sessions* bumps the generation. In addition the api reads
+    the account row on every MCP request: a `disabled_at`, or a `role` that differs from the record, revokes the
+    account's sessions immediately. Every request authenticated this way carries `Channel = mcp` on the principal,
+    so the MCP policy, the write opt-in, the per-account rate limit and the audit source `mcp` apply by
+    construction. A valid Authentik token without a session record answers 401 `mcp_login_required`. JWKS, not
+    introspection: Authentik's introspection needs client credentials the public client does not have, and the
+    session record gives revocation the JWT alone could not.
+A3. **No MCP tokens.** Option C rejected; decisions 2 and 3 withdrawn. The migration shrinks to the opt-in columns
+    and the two policy tables; ticket PDK-436 becomes "MCP login via Authentik".
+A4. **Step-up.** Unchanged: hidden operations; `checkStepUp` refuses MCP sessions; the step-up endpoints refuse an
+    MCP bearer. A fresh Authentik login in the MCP flow is a *login*, not a *step-up*: the WebAuthn-only step-up
+    flow, the `paddock_mfa_classes` check and the 20-second `max_age` (ADR 0034) are not part of it.
+A5. **Authentik blueprint** `deploy/compose/authentik/blueprints/paddock-mcp.yaml`: public provider `paddock-mcp`
+    (no secret), authentication flow `paddock-admin-login`, the MFA-enforcing authorization flow of the device
+    providers (never `implicit-consent`, ADR 0007 amendment 2026-10-04), `sub_mode: hashed_user_id` (the same `sub`
+    as the portal), signing key shared, property mappings openid/email/profile/offline_access and the Paddock groups
+    mapping, `access_token_validity: minutes=30`, `refresh_token_validity: hours=8` (the portal's absolute session
+    lifetime); application `paddock-mcp`. The development overlay applies the blueprint and shortens access tokens
+    to one minute for the expiry gate. The api learns the issuer through `PADDOCK_OIDC_MCP_ISSUER` (empty = MCP
+    login disabled) and `PADDOCK_OIDC_MCP_CLIENT_ID`. Protected identity configuration: changes follow the blueprint
+    pattern and ADR 0007.
+A6. **Gates** (plan M14 §9.3): L1 login (success, denied role), L2 expired token (refresh), L3 revoked session
+    (logout, deactivation), L4 role change, plus the M0–M10 policy gates.
+A7. **SDK.** The MCP SDK v1.8.0 carries `golang.org/x/oauth2`, which the CLI uses for the device grant and the
+    refresh; no further dependency. An OS keyring for the session file would need one (for example
+    `github.com/zalando/go-keyring`) — **open question for the maintainer; default: the 0600 file**.
+
+### Consequences of the amendment
+
+- + One identity for portal and MCP; MFA at every MCP login; revocation shares the portal's mechanisms; no
+  credential to create, rotate or revoke in the portal; the platform scope needs no new token type.
+- + Three BFF routes and one blueprint instead of two token tables, a lookup function change and three portal
+  token surfaces.
+- − A refresh token lives on the administrator's workstation for up to 8 hours (RR-87 reworded).
+- − One `admin.login` event per 30-minute renewal (≤ 16 per working day per user), flagged `renewal: true`.
+- − Hosted MCP clients remain unserved until M14b; the loopback variant is a later convenience.
+- Amended documents: plan M14 (rewritten), tickets PDK-435 … PDK-444, ADR 0007 (third public provider), ADR 0034
+  (MCP sessions are decision-4 sessions; decision 3 applies), architecture §3.2, §9.6, §14.2, §17.1, §22.
