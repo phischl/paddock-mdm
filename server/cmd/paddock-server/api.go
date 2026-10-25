@@ -196,6 +196,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Uninstalls:     app.NewUninstalls(runner, orgPool, devicecache.New(vk)),
 		Conversions:    app.NewDiskConversions(runner, orgPool, devicecache.New(vk)),
 		AuditLog:       app.NewAuditLog(auditReader, orgPool),
+		AuditIntegrity: app.NewAuditIntegrity(auditReader),
 		IPAllowlist:    ipAllowlist,
 		IPGuard:        ipGuard,
 		Runner:         runner,

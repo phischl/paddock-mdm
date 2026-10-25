@@ -170,6 +170,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit/integrity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_auditor. The integrity of the organization's audit evidence (plan M8b decision 30): the last sealed day, the number of sealed days, the newest chain verification run and the times of the last successful and the last failed run. */
+        get: operations["getAuditIntegrity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit/verification-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_auditor. The chain verification runs of the organization (nightly window, random sample day, paddock-server audit verify). q matches the problems of a run. */
+        get: operations["listAuditVerificationRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit/manifests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_auditor. The sealed days of the organization with the result of the newest verification run covering each day. q matches the object key of the manifest. */
+        get: operations["listAuditManifests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/device-groups/{id}/devices": {
         parameters: {
             query?: never;
@@ -2882,6 +2933,86 @@ export interface components {
             sort: string;
         };
         /** @enum {string} */
+        AuditVerificationTrigger: "nightly" | "sample" | "cli";
+        AuditVerificationRun: {
+            /** Format: uuid */
+            id: string;
+            trigger: components["schemas"]["AuditVerificationTrigger"];
+            /** Format: date */
+            from_day: string;
+            /** Format: date */
+            to_day: string;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            finished_at: string;
+            days: number;
+            objects: number;
+            ok: boolean;
+            problems: string[];
+            /**
+             * Format: uuid
+             * @description The audit.chain_verified or audit.chain_verification_failed event of the run.
+             */
+            event_id: string;
+        };
+        AuditVerificationRunPage: {
+            items: components["schemas"]["AuditVerificationRun"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        AuditManifest: {
+            /** Format: date */
+            day: string;
+            /** @description SHA-256 of the canonical manifest, hex. */
+            sha256: string;
+            /** @description SHA-256 of the previous day's manifest, hex; null for the first day. */
+            prev_sha256: string | null;
+            /** @description Version of the OpenBao signing key. */
+            key_version: number;
+            object_key: string;
+            /**
+             * Format: date-time
+             * @description End of the newest verification run covering the day; null when no run covered it.
+             */
+            last_verified_at: string | null;
+            /** @description Result of the newest verification run covering the day; null when no run covered it. */
+            last_verified_ok: boolean | null;
+        };
+        AuditManifestPage: {
+            items: components["schemas"]["AuditManifest"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        AuditIntegrity: {
+            /**
+             * Format: date
+             * @description The last sealed day; null before the first seal.
+             */
+            sealed_through: string | null;
+            /** @description Number of sealed days. */
+            manifests: number;
+            /** @description Days the nightly run verifies (ending with the last sealable day). */
+            verification_window_days: number;
+            last_run: components["schemas"]["AuditVerificationRun"] | null;
+            /** Format: date-time */
+            last_success_at: string | null;
+            /** Format: date-time */
+            last_failure_at: string | null;
+        };
+        /** @enum {string} */
         EnrollmentTokenStatus: "active" | "revoked" | "expired" | "exhausted";
         EnrollmentToken: {
             /** Format: uuid */
@@ -4685,6 +4816,10 @@ export interface components {
         /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
         AuditEventSort: "occurred_at" | "-occurred_at" | "code" | "-code" | "outcome" | "-outcome";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        AuditVerificationRunSort: "started_at" | "-started_at" | "from_day" | "-from_day" | "ok" | "-ok";
+        /** @description Sort field; "-" prefix sorts descending. The day is the primary key. */
+        AuditManifestSort: "day" | "-day";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         IpAllowlistSort: "cidr" | "-cidr" | "label" | "-label" | "created_at" | "-created_at";
         /**
          * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
@@ -5126,6 +5261,100 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditEventPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getAuditIntegrity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The evidence integrity summary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditIntegrity"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    listAuditVerificationRuns: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["AuditVerificationRunSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only runs that found the chain intact (true) or broken (false). */
+                ok?: boolean;
+                /** @description Repeatable. */
+                trigger?: components["schemas"]["AuditVerificationTrigger"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of verification runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditVerificationRunPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    listAuditManifests: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The day is the primary key. */
+                sort?: components["parameters"]["AuditManifestSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description First day (inclusive). */
+                from?: string;
+                /** @description Last day (inclusive). */
+                to?: string;
+                /** @description Only days with (true) or without (false) at least one successful verification run covering them. */
+                verified?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of manifests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditManifestPage"];
                 };
             };
             400: components["responses"]["Problem"];

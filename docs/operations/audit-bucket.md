@@ -98,6 +98,12 @@ every `paddock-server audit verify` (`cli`), is recorded twice:
 - as a row of `audit_verification_run` in the audit index (run ID, trigger, days, objects, result, problems), which
   `paddock-server audit verify` prints as `run <id>`.
 
+Organization administrators and auditors see both without platform access: the portal page *Evidence integrity*
+(*Organization* → *Evidence integrity*, `/audit/integrity`) shows the last sealed day, the number of manifests, the
+last verification with its result and the last failure, every verification run with its problems, and every sealed
+day with its manifest hash and the result of the newest run covering it. The same data is in the admin API:
+`GET /api/v1/audit/integrity`, `GET /api/v1/audit/verification-runs` and `GET /api/v1/audit/manifests`.
+
 The audit writer's `/metrics` exports `paddock_audit_verify_runs_total{trigger,result}`,
 `paddock_audit_verify_failed_organizations` and `paddock_audit_verify_last_run_timestamp_seconds`
 (`docs/operations/monitoring.md`).

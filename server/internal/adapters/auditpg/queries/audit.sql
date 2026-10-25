@@ -119,3 +119,80 @@ SELECT pg_try_advisory_lock(hashtext('audit-verify')) AS locked;
 
 -- name: ReleaseAuditVerifyLock :one
 SELECT pg_advisory_unlock(hashtext('audit-verify')) AS unlocked;
+
+-- Evidence integrity of the caller's organization (plan M8b decisions 30 and 31). The reader role sees only its
+-- organization's rows (RLS); the list queries follow the ADR 0018 pattern of ListAuditEvents.
+
+-- name: ListAuditVerificationRuns :many
+SELECT * FROM audit_verification_run
+WHERE (sqlc.narg(ok_filter)::boolean IS NULL OR ok = sqlc.narg(ok_filter)::boolean)
+  AND (sqlc.narg(triggers)::text[] IS NULL OR trigger = ANY(sqlc.narg(triggers)::text[]))
+  AND (sqlc.narg(q_pattern)::text IS NULL OR problems::text ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+ORDER BY
+  CASE WHEN @sort::text = 'started_at' THEN started_at END ASC,
+  CASE WHEN @sort::text = '-started_at' THEN started_at END DESC,
+  CASE WHEN @sort::text = 'from_day' THEN from_day END ASC,
+  CASE WHEN @sort::text = '-from_day' THEN from_day END DESC,
+  CASE WHEN @sort::text = 'ok' THEN ok END ASC,
+  CASE WHEN @sort::text = '-ok' THEN ok END DESC,
+  id
+LIMIT @max_rows OFFSET @skip_rows;
+
+-- name: CountAuditVerificationRunsFiltered :one
+SELECT count(*) FROM (
+  SELECT 1 FROM audit_verification_run
+  WHERE (sqlc.narg(ok_filter)::boolean IS NULL OR ok = sqlc.narg(ok_filter)::boolean)
+    AND (sqlc.narg(triggers)::text[] IS NULL OR trigger = ANY(sqlc.narg(triggers)::text[]))
+    AND (sqlc.narg(q_pattern)::text IS NULL OR problems::text ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+  LIMIT @count_limit
+) matching;
+
+-- name: GetLatestAuditVerificationRun :one
+SELECT * FROM audit_verification_run ORDER BY started_at DESC, id DESC LIMIT 1;
+
+-- name: GetLatestAuditVerificationRunByOK :one
+SELECT * FROM audit_verification_run WHERE ok = @ok ORDER BY started_at DESC, id DESC LIMIT 1;
+
+-- name: CountAuditManifests :one
+SELECT count(*) FROM audit_manifest;
+
+-- name: LatestAuditManifestDay :one
+SELECT day FROM audit_manifest ORDER BY day DESC LIMIT 1;
+
+-- name: ListAuditManifestsWithVerification :many
+-- The newest run covering a day decides its result: a later failed run over a range that includes the day overrides
+-- an earlier successful one (plan M8b gate V4).
+SELECT m.day, m.sha256, m.prev_sha256, m.key_version, m.object_key,
+       run.finished_at AS last_verified_at, run.ok AS last_verified_ok
+FROM audit_manifest m
+LEFT JOIN LATERAL (
+  SELECT r.id FROM audit_verification_run r
+  WHERE r.organization_id = m.organization_id AND r.from_day <= m.day AND r.to_day >= m.day
+  ORDER BY r.started_at DESC, r.id DESC
+  LIMIT 1
+) newest ON true
+-- Joined as a table, not selected in the lateral subquery, so that sqlc types the columns as nullable.
+LEFT JOIN audit_verification_run run ON run.id = newest.id
+WHERE (sqlc.narg(from_day)::date IS NULL OR m.day >= sqlc.narg(from_day)::date)
+  AND (sqlc.narg(to_day)::date IS NULL OR m.day <= sqlc.narg(to_day)::date)
+  AND (sqlc.narg(verified)::boolean IS NULL OR sqlc.narg(verified)::boolean = EXISTS (
+        SELECT 1 FROM audit_verification_run v
+        WHERE v.organization_id = m.organization_id AND v.ok AND v.from_day <= m.day AND v.to_day >= m.day))
+  AND (sqlc.narg(q_pattern)::text IS NULL OR m.object_key ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+ORDER BY
+  CASE WHEN @sort::text = 'day' THEN day END ASC,
+  CASE WHEN @sort::text = '-day' THEN day END DESC,
+  day
+LIMIT @max_rows OFFSET @skip_rows;
+
+-- name: CountAuditManifestsFiltered :one
+SELECT count(*) FROM (
+  SELECT 1 FROM audit_manifest m
+  WHERE (sqlc.narg(from_day)::date IS NULL OR m.day >= sqlc.narg(from_day)::date)
+    AND (sqlc.narg(to_day)::date IS NULL OR m.day <= sqlc.narg(to_day)::date)
+    AND (sqlc.narg(verified)::boolean IS NULL OR sqlc.narg(verified)::boolean = EXISTS (
+          SELECT 1 FROM audit_verification_run v
+          WHERE v.organization_id = m.organization_id AND v.ok AND v.from_day <= m.day AND v.to_day >= m.day))
+    AND (sqlc.narg(q_pattern)::text IS NULL OR m.object_key ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+  LIMIT @count_limit
+) matching;

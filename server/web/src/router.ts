@@ -49,6 +49,7 @@ export const router = createRouter({
     { path: '/package-holds', name: 'package-holds', component: () => import('./views/PackageHolds.vue') },
     { path: '/revocations', name: 'revocations', component: () => import('./views/RevocationRequests.vue') },
     { path: '/audit', name: 'audit', component: () => import('./views/Audit.vue') },
+    { path: '/audit/integrity', name: 'audit-integrity', component: () => import('./views/AuditIntegrity.vue') },
     { path: '/platform/organizations', name: 'organizations', component: () => import('./views/Organizations.vue') },
     { path: '/platform/agent-releases', name: 'agent-releases', component: () => import('./views/AgentReleases.vue') },
     { path: '/platform/agent-releases/:version', name: 'agent-release', component: () => import('./views/AgentReleaseDetail.vue') },

@@ -89,6 +89,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/api-tokens', label: 'nav.apiTokens', icon: 'key', visible: orgReader },
       { to: '/settings/updates', label: 'nav.updateSettings', icon: 'refresh-cw', visible: orgReader },
       { to: '/audit', label: 'nav.audit', icon: 'scroll-text', shortcut: 'g l', visible: (a) => a.canReadAudit },
+      { to: '/audit/integrity', label: 'nav.auditIntegrity', icon: 'shield-check', visible: (a) => a.canReadAudit, testid: 'nav-audit-integrity' },
     ],
   },
   {

@@ -393,6 +393,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		DMS:            app.NewDMS(runner, orgPool, discardCommands{}, true, false),
 		Inventory:      app.NewInventory(orgPool),
 		AuditLog:       app.NewAuditLog(reader, orgPool),
+		AuditIntegrity: app.NewAuditIntegrity(reader),
 		Attention:      app.NewAttention(orgPool),
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),

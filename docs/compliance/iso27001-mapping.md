@@ -23,7 +23,7 @@ Data collected from devices: [privacy.md](privacy.md). Licenses: [third-party.md
   last seven sealed days and one random older day per organization) and records every run, the CLI's included, as
   `audit.chain_verified` or `audit.chain_verification_failed` in the organization's own audit log
   (`docs/operations/audit-bucket.md` section 3); the result is visible to the auditor role (*Evidence integrity*,
-  `GET /api/v1/audit/integrity`) *(planned: M8b, PDK-110)*.
+  `GET /api/v1/audit/integrity`).
 
 ## Controls
 

@@ -1,7 +1,7 @@
-import { createHmac } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Page } from '@playwright/test'
+import { request, type APIResponse, type Page } from '@playwright/test'
 
 const secrets = process.env.PADDOCK_E2E_SECRETS ?? '../../deploy/compose/.secrets'
 const password = (file: string) => readFileSync(join(secrets, file), 'utf8').trim()
@@ -13,7 +13,56 @@ const baseURL = () => process.env.PADDOCK_E2E_BASE_URL ?? 'https://admin.paddock
  * the browser. The Authentik UI itself is not under test.
  */
 export async function login(page: Page, username: string, passwordFile: string): Promise<void> {
-  await follow(page, new URL('/api/auth/login?return_to=%2F', baseURL()).toString(), '/api/auth/callback', username, password(passwordFile))
+  await loginWithPassword(page, username, password(passwordFile))
+}
+
+/** login with the password itself, for a temporary user (tempUser). */
+export async function loginWithPassword(page: Page, username: string, secret: string): Promise<void> {
+  await follow(page, new URL('/api/auth/login?return_to=%2F', baseURL()).toString(), '/api/auth/callback', username, secret)
+}
+
+/** A temporary Authentik user of tempUser; remove deletes it. */
+export interface TempUser {
+  username: string
+  password: string
+  remove: () => Promise<void>
+}
+
+/**
+ * Creates a temporary Authentik user in one group (e.g. paddock.acme.operators) through Authentik's admin API with
+ * the bootstrap token, like the acceptance helper tempUser: the development stack seeds no user for every role.
+ */
+export async function tempUser(prefix: string, group: string): Promise<TempUser> {
+  const api = await request.newContext({
+    baseURL: (process.env.PADDOCK_E2E_AUTH_URL ?? 'https://auth.paddock.localhost:8443') + '/api/v3/',
+    ignoreHTTPSErrors: true,
+    extraHTTPHeaders: { Authorization: 'Bearer ' + password('authentik_bootstrap_token'), Accept: 'application/json' },
+  })
+  const ok = async <T>(what: string, res: Promise<APIResponse>): Promise<T> => {
+    const r = await res
+    if (!r.ok()) throw new Error(`authentik ${what}: HTTP ${r.status()} ${await r.text()}`)
+    return (r.status() === 204 ? undefined : await r.json()) as T
+  }
+  const username = `${prefix}-${randomBytes(6).toString('hex')}@e2e.test`
+  const secret = 'pw-' + randomUUID()
+  const groups = await ok<{ results: { pk: string; name: string }[] }>('group', api.get('core/groups/', { params: { name: group, include_users: 'false' } }))
+  const groupPK = groups.results.find((g) => g.name === group)?.pk
+  if (!groupPK) throw new Error(`authentik group ${group} not found`)
+  const user = await ok<{ pk: number }>('create user', api.post('core/users/', {
+    data: { username, name: username, email: username, is_active: true, type: 'internal' },
+  }))
+  const remove = async () => {
+    await api.delete(`core/users/${user.pk}/`)
+    await api.dispose()
+  }
+  try {
+    await ok('set password', api.post(`core/users/${user.pk}/set_password/`, { data: { password: secret } }))
+    await ok('add to group', api.post(`core/groups/${groupPK}/add_user/`, { data: { pk: user.pk } }))
+  } catch (e) {
+    await remove()
+    throw e
+  }
+  return { username, password: secret, remove }
 }
 
 /**
