@@ -180,6 +180,7 @@ const columns: ListColumn[] = [
         </dl>
         <p
           v-if="panel.kind === 'checked'"
+          class="release-source-text"
           data-testid="release-source-result"
         >
           {{ resultText(panel.check) }}
@@ -196,6 +197,7 @@ const columns: ListColumn[] = [
           v-if="imported"
           type="success"
           variant="tonal"
+          class="release-source-text"
           data-testid="release-source-success"
         >
           {{ t('agentReleases.source.imported', { version: imported }) }}
@@ -327,5 +329,24 @@ const columns: ListColumn[] = [
 
 .release-source-actions {
   margin-top: var(--pd-space-4);
+}
+
+/* A release version is one long token (a pre-release can exceed 35 characters), wider than the panel at 375 px:
+   it breaks inside the token instead of running out of the panel (PDK-428 review). */
+.release-source-text {
+  overflow-wrap: anywhere;
+}
+
+/* Vuetify keeps a button label on one line at a fixed height; with the version in the import label the button grew
+   past the panel's left edge at 375 px (the actions align right) and was cut off, so the label wraps instead. */
+.release-source-actions .v-btn {
+  max-width: 100%;
+  height: auto;
+  padding-block: var(--pd-space-2);
+}
+
+.release-source-actions :deep(.v-btn__content) {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 </style>
