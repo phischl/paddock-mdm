@@ -58,6 +58,11 @@ SELECT pg_try_advisory_lock(hashtext('audit-seal')) AS locked;
 -- name: ReleaseAuditSealLock :one
 SELECT pg_advisory_unlock(hashtext('audit-seal')) AS unlocked;
 
+-- name: LockAuditDays :exec
+-- Exclusive counterpart of the shared lock the audit_object trigger takes (audit migration 00005): sealing a day
+-- waits for every writer transaction that already inserted an object of the organization.
+SELECT pg_advisory_xact_lock(hashtext('audit-day'), hashtext(CAST(sqlc.arg(organization_id)::uuid AS text)));
+
 -- name: GetAuditEventTime :one
 SELECT occurred_at FROM audit_event WHERE event_id = @event_id LIMIT 1;
 

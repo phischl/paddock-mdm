@@ -821,6 +821,17 @@ func (q *Queries) ListAuditVerificationRuns(ctx context.Context, arg ListAuditVe
 	return items, nil
 }
 
+const lockAuditDays = `-- name: LockAuditDays :exec
+SELECT pg_advisory_xact_lock(hashtext('audit-day'), hashtext(CAST($1::uuid AS text)))
+`
+
+// Exclusive counterpart of the shared lock the audit_object trigger takes (audit migration 00005): sealing a day
+// waits for every writer transaction that already inserted an object of the organization.
+func (q *Queries) LockAuditDays(ctx context.Context, organizationID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockAuditDays, organizationID)
+	return err
+}
+
 const releaseAuditSealLock = `-- name: ReleaseAuditSealLock :one
 SELECT pg_advisory_unlock(hashtext('audit-seal')) AS unlocked
 `

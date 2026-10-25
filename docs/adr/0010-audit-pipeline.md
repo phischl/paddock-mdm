@@ -44,3 +44,26 @@ The "optional SIEM forwarding" of the decision is specified in ADR 0031 (notific
 the SIEM forward): the source is the committed index in commit order (`audit_event.commit_seq`, assigned by the
 audit writer under a per-organization row lock), never the queue; the forward runs in a new control-plane role
 `notifier`, not in the audit domain. Nothing else in this decision changes.
+
+## Amendment 2026-10-25 (PDK-422)
+
+- **Objects are filed under the recording day, or the first unsealed day when the recording day is already sealed.**
+  Inside its transaction the writer sets `audit_object.day = max(recording day, newest manifest day of the
+  organization + 1)`. `recorded_at` stays the database transaction time, and the object key keeps its recording hour,
+  so the date in the key can be one day earlier than `audit_object.day`. Retention follows `audit_object.day`. Sealed
+  objects and manifests are never touched; a sealed day never receives another object.
+- **Fail-closed invariant in the index.** A `BEFORE INSERT` trigger on `audit_object` (audit migration 00005; 00006 pins its `search_path`) refuses
+  an object whose day is on or before the organization's newest manifest (SQLSTATE `PA422`). The trigger takes a
+  per-organization advisory lock shared and the sealer takes it exclusively before it lists a day's objects, so no
+  object of a day can commit after that day was listed. The writer retries a refused transaction (the row is
+  inserted before the WORM put, so a refused attempt leaves no object behind); a retry reads the newest manifest
+  again and files the object under the next day, so no event is lost or written twice.
+- **Which paths can produce an event inside a sealed day.** None of these does in production: device events with old
+  timestamps, an outbox backlog after an outage, CLI verification runs for past days, the gap and drift events of
+  PDK-108 / PDK-107, and the nightly verification run (PDK-109). Every one of them is filed by recording time, not by
+  `occurred_at`, and a day is sealed only at *D*+1 00:15 UTC, after every writer transaction of *D* has ended. The
+  case that did occur was the acceptance gates' development-only early seal of the current day (`audit seal --day
+  <today> --org`), after which their own verification events were recorded into the sealed day. The rule also
+  closes the one production gap: the sealer decides which day is sealable by the writer process's clock, while
+  objects are dated by the database's clock, so a writer clock running more than 15 minutes ahead of the database
+  could seal a day that still receives objects.

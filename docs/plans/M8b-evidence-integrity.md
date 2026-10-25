@@ -967,3 +967,23 @@ instead of polling the groups a second time. This replaces parts of decisions 33
   - *Gate R2.* Because a revocation needs two consecutive listings, `TestRoleMembership` waits for R2 up to two rounds
     plus one interval of slack (4 minutes in the development stack) instead of 3 minutes. The assertion is unchanged:
     exactly one `admin.role_revoked` and no other grant.
+
+## Amendment 2026-10-25 (PDK-422, main as architect lead)
+
+**Reason.** Gates V1–V5 (`TestAuditIntegrity`) and A5 (`TestAuditChain`) seal the current day of a fresh organization
+with the development-only `audit seal --day <today> --org` and then run `audit verify`, whose
+`audit.chain_verified` / `audit.chain_verification_failed` events were recorded into that sealed day. The next nightly
+verification of those organizations would have failed with "indexed object … is missing from the manifest" and
+raised `PaddockAuditChainBroken`.
+
+- **Rule (ADR 0010, amendment 2026-10-25):** an object is filed under its recording day, or the first unsealed day
+  when the recording day is already sealed. Audit migration 00005 adds the `audit_object` trigger that refuses an
+  object for a sealed day (SQLSTATE `PA422`), with a per-organization advisory lock shared with the sealer; the writer
+  retries a refused transaction.
+- **Production paths:** device events with old timestamps, an outbox backlog, CLI verification runs for past days,
+  the PDK-108 gap and PDK-107 drift events and the PDK-109 nightly run all record by transaction time and cannot hit
+  a sealed day in production. The acceptance gates' early seal was the trigger; the rule also closes the gap of a
+  writer clock running ahead of the database clock.
+- **Gates:** V1–V5 and A5 stay as written; their verification events now land in the following day, so the
+  organizations they leave behind verify in the next nightly run. The isolation gate searches the manifests list
+  again: it seals globex's current day before the search (the PDK-110 exception is removed).

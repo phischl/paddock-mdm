@@ -62,6 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and log shipper, per-organization retention, evidence export, `collect_status`, `playbook`, Git export, SIEM
   forward (plan M8b, ADR 0030).
 
+### Fixed
+
+- Audit chain (ADR 0010, amendment 2026-10-25): an audit event recorded on a day whose manifest is already sealed is
+  now filed under the first unsealed day instead of the sealed one, which the next chain verification reported as
+  broken (`PaddockAuditChainBroken`). In production this could only happen when the audit writer's clock ran more
+  than 15 minutes ahead of the audit database; the development-only early seal of the current day triggered it too.
+  Sealed days and their objects are unchanged. Schema: audit migration 00005 adds a trigger that refuses any object
+  for a sealed day; audit migration 00006 pins the trigger function's `search_path`.
+
 ## [0.1.0-alpha.5] - 2026-10-24
 
 In-place encryption of installed devices (M8e, ADR 0039): an organization administrator encrypts the disk of an

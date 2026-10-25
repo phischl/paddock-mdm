@@ -126,7 +126,7 @@ func TestAuditIntegrity(t *testing.T) {
 	}
 
 	// List contract of the manifests (ADR 0018) on data that exists: TestListContract walks acme's list, which holds
-	// no sealed day on a fresh stack, and the isolation gate does not search it (PDK-422).
+	// no sealed day on a fresh stack.
 	manifestTotal := func(query string) int {
 		t.Helper()
 		res := call(t, auditor, http.MethodGet, "/api/v1/audit/manifests"+query, nil)

@@ -202,10 +202,15 @@ func (s *Sealer) sealOrganization(ctx context.Context, q *auditstore.Queries, or
 	return n, nil
 }
 
-// sealDay writes and records one manifest in its own transaction.
+// sealDay writes and records one manifest in its own transaction. It holds the organization's audit-day lock, so
+// every writer transaction that inserted an object of the day has committed before the objects are listed, and every
+// later one sees the manifest and files its object under the next day (audit migration 00005).
 func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev []byte) ([]byte, error) {
 	var sum [32]byte
 	err := s.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		if err := q.LockAuditDays(ctx, org); err != nil {
+			return err
+		}
 		rows, err := q.ListAuditObjectsForDay(ctx, auditstore.ListAuditObjectsForDayParams{OrganizationID: org, Day: day})
 		if err != nil {
 			return err

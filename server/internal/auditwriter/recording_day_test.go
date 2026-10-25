@@ -279,3 +279,138 @@ func TestRetentionFollowsRecordingDay(t *testing.T) {
 		t.Fatalf("manifest retained until %s, want %s", until, want)
 	}
 }
+
+// TestEventAfterSealedRecordingDay (PDK-422): an event recorded on a day that is already sealed is filed under the
+// first unsealed day, so the sealed manifest stays complete and the verification of both days passes. A direct
+// insert into the sealed day is refused by the audit_object trigger.
+func TestEventAfterSealedRecordingDay(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	first := event(org, time.Now(), audit.CodeDeviceGroupCreated)
+	if n, err := s.writer.WriteBatch(ctx, []audit.Event{first}); err != nil || n != 1 {
+		t.Fatalf("WriteBatch = %d, %v", n, err)
+	}
+	recordedAt, _, day := s.recordedObject(t, first.EventID)
+	if !day.Equal(utcDay(recordedAt)) {
+		t.Fatalf("audit_object.day = %s, want recording day %s", day.Format(time.DateOnly), utcDay(recordedAt).Format(time.DateOnly))
+	}
+	if _, err := s.sealer.SealOrganizationThrough(ctx, org, day); err != nil {
+		t.Fatal(err)
+	}
+	sealedBefore, _ := s.manifest(t, org, day)
+
+	late := event(org, time.Now(), audit.CodeAuditChainVerified)
+	if n, err := s.writer.WriteBatch(ctx, []audit.Event{late}); err != nil || n != 1 {
+		t.Fatalf("WriteBatch after the seal = %d, %v", n, err)
+	}
+	lateRecordedAt, key, lateDay := s.recordedObject(t, late.EventID)
+	next := day.AddDate(0, 0, 1)
+	if !utcDay(lateRecordedAt).Equal(day) && !utcDay(lateRecordedAt).Equal(next) {
+		t.Fatalf("recorded at %s, want on %s or %s", lateRecordedAt, day.Format(time.DateOnly), next.Format(time.DateOnly))
+	}
+	if !lateDay.Equal(next) {
+		t.Fatalf("audit_object.day = %s, want the first unsealed day %s", lateDay.Format(time.DateOnly), next.Format(time.DateOnly))
+	}
+	if want := auditwriter.ObjectKey(org, lateRecordedAt.Truncate(time.Hour), late.EventID); key != want {
+		t.Fatalf("object key %s, want %s (recording hour)", key, want)
+	}
+	_, until, err := s.store.Retention(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := s.writer.RetainUntil(next); !until.Equal(want) {
+		t.Fatalf("object retained until %s, want %s", until, want)
+	}
+
+	_, err = s.super.Exec(ctx, "INSERT INTO audit_object (object_key, organization_id, day, event_count, sha256) VALUES ($1, $2, $3, 1, $4)",
+		"org/"+org.String()+"/forged", org, day, []byte{1})
+	if !db.IsAuditDaySealed(err) {
+		t.Fatalf("insert into the sealed day %s: %v, want SQLSTATE PA422", day.Format(time.DateOnly), err)
+	}
+
+	if _, err := s.sealer.SealOrganizationThrough(ctx, org, next); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range [][2]time.Time{{day, day}, {next, next}, {day, next}} {
+		report, err := s.verifier.Verify(ctx, org, r[0], r[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !report.OK() {
+			t.Fatalf("verify %s..%s: %+v", r[0].Format(time.DateOnly), r[1].Format(time.DateOnly), report)
+		}
+	}
+	if sealedAfter, _ := s.manifest(t, org, day); sha256.Sum256(sealedAfter) != sha256.Sum256(sealedBefore) {
+		t.Fatal("the sealed manifest changed")
+	}
+}
+
+// TestDaySealedDuringWriteIsRetried (PDK-422): the writer chose a day that the sealer seals before the object row is
+// inserted. The trigger refuses the row, the transaction rolls back without a WORM object, and the retry files the
+// event once under the next day; the sealed manifest lists only what was committed before it.
+func TestDaySealedDuringWriteIsRetried(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	counting := &slowStore{ObjectStore: s.store}
+	writer, err := auditwriter.NewWriter(s.pool, counting, 400)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := event(org, time.Now(), audit.CodeDeviceGroupCreated)
+	if n, err := writer.WriteBatch(ctx, []audit.Event{first}); err != nil || n != 1 {
+		t.Fatalf("WriteBatch = %d, %v", n, err)
+	}
+
+	var chosen []time.Time
+	auditwriter.SetDayChosen(writer, func(day time.Time) {
+		chosen = append(chosen, day)
+		if len(chosen) == 1 {
+			if _, err := s.sealer.SealOrganizationThrough(ctx, org, day); err != nil {
+				t.Errorf("seal %s during the write: %v", day.Format(time.DateOnly), err)
+			}
+		}
+	})
+	late := event(org, time.Now(), audit.CodeDeviceGroupUpdated)
+	if n, err := writer.WriteBatch(ctx, []audit.Event{late}); err != nil || n != 1 {
+		t.Fatalf("WriteBatch racing the seal = %d, %v", n, err)
+	}
+	if len(chosen) != 2 || !chosen[1].Equal(chosen[0].AddDate(0, 0, 1)) {
+		t.Fatalf("days chosen %v, want the sealed day and the day after it", chosen)
+	}
+	sealed := chosen[0]
+	if puts := counting.puts.Load(); puts != 2 {
+		t.Fatalf("%d object puts, want 2 (the refused attempt writes none)", puts)
+	}
+	if n := s.count(t, "SELECT count(*) FROM audit_event WHERE event_id = $1", late.EventID); n != 1 {
+		t.Fatalf("%d index rows of the late event, want 1", n)
+	}
+	if n := s.count(t, "SELECT count(*) FROM audit_object WHERE organization_id = $1", org); n != 2 {
+		t.Fatalf("%d object rows, want 2", n)
+	}
+	_, firstObject, _ := s.recordedObject(t, first.EventID)
+	_, lateObject, lateDay := s.recordedObject(t, late.EventID)
+	if !lateDay.Equal(chosen[1]) {
+		t.Fatalf("audit_object.day = %s, want %s", lateDay.Format(time.DateOnly), chosen[1].Format(time.DateOnly))
+	}
+	_, m := s.manifest(t, org, sealed)
+	if len(m.Objects) != 1 || m.Objects[0].Key != firstObject {
+		t.Fatalf("manifest of %s lists %+v, want only %s", sealed.Format(time.DateOnly), m.Objects, firstObject)
+	}
+
+	if _, err := s.sealer.SealOrganizationThrough(ctx, org, chosen[1]); err != nil {
+		t.Fatal(err)
+	}
+	_, m = s.manifest(t, org, chosen[1])
+	if len(m.Objects) != 1 || m.Objects[0].Key != lateObject {
+		t.Fatalf("manifest of %s lists %+v, want only %s", chosen[1].Format(time.DateOnly), m.Objects, lateObject)
+	}
+	report, err := s.verifier.Verify(ctx, org, sealed, chosen[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.OK() || report.Objects != 2 {
+		t.Fatalf("verify: %+v", report)
+	}
+}

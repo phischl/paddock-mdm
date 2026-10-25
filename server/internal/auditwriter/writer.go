@@ -66,7 +66,9 @@ type Writer struct {
 	pool          *db.AuditWriterPool
 	store         ObjectStore
 	retentionDays int
-	txTimeout     time.Duration // db.WriterTransactionTimeout; lowered only by tests
+	txTimeout     time.Duration       // db.WriterTransactionTimeout; lowered only by tests
+	dayChosen     func(day time.Time) // nil; tests seal the chosen day here to race the audit_object trigger
+	rowInserted   func(day time.Time) // nil; tests seal here to race the sealer's audit-day lock
 }
 
 // NewWriter creates a writer. retentionDays below MinRetentionDays is an error.
@@ -103,10 +105,12 @@ func Validate(ev audit.Event) error {
 }
 
 // WriteBatch writes events grouped by organization, one transaction per organization: ensure partitions →
-// insert ON CONFLICT DO NOTHING → write only the newly inserted events as one WORM object → insert audit_object →
-// commit. Object key, audit_object.day, recorded_at and retention follow the transaction's start time (the recording
-// day), not occurred_at, so a late event is covered by the manifest of the day it was recorded. It returns the
-// number of newly written events. Duplicates (redelivery, relay restarts) are skipped.
+// insert ON CONFLICT DO NOTHING → insert audit_object → write only the newly inserted events as one WORM object →
+// commit. recorded_at and the object key's hour follow the transaction's start time, not occurred_at. audit_object.day
+// and retention follow the recording day, or the first unsealed day when the recording day is already sealed (ADR
+// 0010 amendment 2026-10-25), so a late event is covered by the manifest of a day that is still open and a sealed
+// day never changes. It returns the number of newly written events. Duplicates (redelivery, relay restarts) are
+// skipped.
 func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, error) {
 	groups := map[uuid.UUID][]audit.Event{}
 	for _, ev := range events {
@@ -129,9 +133,25 @@ func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, err
 	return written, nil
 }
 
+// sealedDayAttempts bounds the transactions of one organization's group when the audit_object trigger refuses a day
+// that was sealed after the writer chose it. Each retry reads the newest manifest again, so a second attempt only
+// fails if another day is sealed in between.
+const sealedDayAttempts = 3
+
 func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.Event) (int, error) {
 	sortEvents(events)
 	events = dedupe(events)
+	for attempt := 1; ; attempt++ {
+		n, err := w.writeGroupOnce(ctx, org, events)
+		if !db.IsAuditDaySealed(err) || attempt == sealedDayAttempts {
+			return n, err
+		}
+		slog.InfoContext(ctx, "audit day sealed during the write; retrying", "organization_id", org, "attempt", attempt)
+	}
+}
+
+// writeGroupOnce writes one organization's events in one transaction.
+func (w *Writer) writeGroupOnce(ctx context.Context, org uuid.UUID, events []audit.Event) (int, error) {
 	written := 0
 	var recordedAt time.Time
 	start := time.Now()
@@ -176,14 +196,25 @@ func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.E
 			return err
 		}
 		sum := sha256.Sum256(body)
-		day := dayOf(recordedAt)
-		if err := putLocked(ctx, w.store, putObjectEvents, key, "application/zstd", body, w.RetainUntil(day)); err != nil {
-			return fmt.Errorf("auditwriter: put %s: %w", key, err)
+		day, err := openDay(ctx, q, org, recordedAt)
+		if err != nil {
+			return err
 		}
+		if w.dayChosen != nil {
+			w.dayChosen(day)
+		}
+		// The row comes before the WORM put: when the trigger refuses a day sealed in the meantime, the transaction
+		// rolls back before a locked object exists that no index row or manifest would ever list.
 		if err := q.InsertAuditObject(ctx, auditstore.InsertAuditObjectParams{
 			ObjectKey: key, OrganizationID: org, Day: day, EventCount: int32(len(inserted)), Sha256: sum[:], //nolint:gosec // batch size ≤ 500
 		}); err != nil {
 			return err
+		}
+		if w.rowInserted != nil {
+			w.rowInserted(day)
+		}
+		if err := putLocked(ctx, w.store, putObjectEvents, key, "application/zstd", body, w.RetainUntil(day)); err != nil {
+			return fmt.Errorf("auditwriter: put %s: %w", key, err)
 		}
 		written = len(inserted)
 		return nil
@@ -201,6 +232,23 @@ func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.E
 		slog.InfoContext(ctx, "audit object written", "organization_id", org, "recorded_at", recordedAt, "events", written)
 	}
 	return written, nil
+}
+
+// openDay is the day an object recorded at recordedAt is filed under: the recording day, or the day after the
+// organization's newest manifest when the recording day is already sealed (ADR 0010 amendment 2026-10-25).
+func openDay(ctx context.Context, q *auditstore.Queries, org uuid.UUID, recordedAt time.Time) (time.Time, error) {
+	day := dayOf(recordedAt)
+	latest, err := q.GetLatestAuditManifest(ctx, org)
+	switch {
+	case db.IsNoRows(err):
+		return day, nil
+	case err != nil:
+		return time.Time{}, err
+	}
+	if next := dayOf(latest.Day).AddDate(0, 0, 1); next.After(day) {
+		return next, nil
+	}
+	return day, nil
 }
 
 // putLocked is store.PutLocked, timed in paddock_audit_worm_put_seconds, so a slow transaction can be attributed to
