@@ -24,9 +24,10 @@ const nameError = computed(() => (touched.value && name.value.trim() === '' ? t(
 const commandsError = computed(() =>
   touched.value && cls.value === 'restricted' && commandLines(commands.value).length === 0 ? t('profiles.commandsRequired') : '',
 )
+const timeoutRange = { min: 0, max: 60 }
 const timeoutError = computed(() => {
   const n = Number(timeout.value)
-  return touched.value && !(Number.isInteger(n) && n >= 0 && n <= 60) ? t('profiles.timeoutInvalid') : ''
+  return touched.value && !(Number.isInteger(n) && n >= timeoutRange.min && n <= timeoutRange.max) ? t('profiles.timeoutInvalid') : ''
 })
 
 // Root equivalence before submit (plan M8x decision 41): 300 ms after the last change the server evaluates the class
@@ -128,9 +129,12 @@ function submit(): void {
       :id="idPrefix + '-timeout'"
       v-model="timeout"
       :label="t('profiles.timeout')"
+      :suffix="t('common.units.minutes')"
+      :hint="t('common.ranges.minutes', timeoutRange)"
+      persistent-hint
       type="number"
-      min="0"
-      max="60"
+      :min="timeoutRange.min"
+      :max="timeoutRange.max"
       :error-messages="timeoutError ? [timeoutError] : []"
     />
     <v-select

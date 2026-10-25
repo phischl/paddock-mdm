@@ -83,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Portal number fields (PDK-429): the unit of a number field no longer disappears when the field is too narrow for its
+  label. The fields under *Login & privileges*, *Updates* and *Dead man's switch*, the password timeout of a
+  permission profile and the contact thresholds of a device group now have a short label, show their unit (days,
+  hours, minutes) next to the value, and name the allowed range below the field; number fields in the settings pages
+  are wider.
 - Audit chain (ADR 0010, amendment 2026-10-25): an audit event recorded on a day whose manifest is already sealed is
   now filed under the first unsealed day instead of the sealed one, which the next chain verification reported as
   broken (`PaddockAuditChainBroken`). In production this could only happen when the audit writer's clock ran more

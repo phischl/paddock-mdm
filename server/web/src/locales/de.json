@@ -116,7 +116,17 @@
     "description": "Beschreibung",
     "createdAt": "Angelegt",
     "updatedAt": "Geändert",
-    "empty": "Noch keine Einträge."
+    "empty": "Noch keine Einträge.",
+    "units": {
+      "days": "Tage",
+      "hours": "Stunden",
+      "minutes": "Minuten"
+    },
+    "ranges": {
+      "days": "{min}–{max} Tage",
+      "hours": "{min}–{max} Stunden",
+      "minutes": "{min}–{max} Minuten"
+    }
   },
   "list": {
     "search": "Suche",
@@ -143,15 +153,17 @@
     "staleness": {
       "title": "Kontaktschwellen",
       "override": "Schwellen der Organisation für diese Gruppe überschreiben",
-      "warning": "Warnung nach (Stunden)",
-      "critical": "Kritisch nach (Stunden)",
+      "warning": "Warnung nach",
+      "critical": "Kritisch nach",
       "laptopPreset": "Laptop-Voreinstellung (5 Tage / 35 Tage)",
       "hint": "Ein Gerät in mehreren Gruppen übernimmt den mildesten Wert seiner Gruppen. Ohne Überschreibung gelten die Schwellen der Organisation.",
       "effective": "Wirksam: Warnung nach {warning} h, kritisch nach {critical} h ({source})",
       "sources": {
         "organization": "Organisation",
         "device_group": "Gerätegruppe"
-      }
+      },
+      "warningHint": "{min}–{max} Stunden ohne Kontakt.",
+      "criticalHint": "Mehr als die Warnung, höchstens {max} Stunden ohne Kontakt."
     },
     "title": "Gerätegruppen",
     "count": "{count, plural, =0 {Keine Gerätegruppen} one {# Gerätegruppe} other {# Gerätegruppen}}",
@@ -1541,7 +1553,7 @@
     "fullPreview": "Die Klasse „vollständig“ gewährt root für jeden Befehl. Zum Speichern braucht es einen Organisationsadministrator mit frischer Identitätsbestätigung.",
     "rootEquivalentPreview": "Dieses Profil gewährt faktisch root durch {commands}. Zum Speichern braucht es einen Organisationsadministrator mit frischer Identitätsbestätigung.",
     "rootEquivalentPair": "{writer} zusammen mit {command}: Der erste schreibt, was der zweite ausführt.",
-    "timeout": "Passwort gemerkt für (Minuten)",
+    "timeout": "Passwort gemerkt für",
     "timeoutInvalid": "Geben Sie 0 bis 60 Minuten ein.",
     "lecture": "Hinweis",
     "lectures": {
@@ -1611,7 +1623,7 @@
     "loginHistory": {
       "title": "Anmeldeverlauf",
       "enabled": "Aufzeichnen, welche Verzeichnisbenutzer sich wann an welchem Gerät anmelden",
-      "days": "Verlauf aufbewahren für (Tage)",
+      "days": "Aufbewahrung des Verlaufs",
       "notice": "Der Anmeldeverlauf sind personenbezogene Daten Ihrer Beschäftigten: Jeder Sitzungsstart wird mit Benutzername, Gerät und Zeitpunkt für die obige Dauer gespeichert und danach gelöscht. Schalten Sie ihn nur mit Zustimmung Ihres Betriebsrats oder der entsprechenden Stelle ein und informieren Sie die Benutzer. Er ist standardmäßig aus; Benutzersperren hängen nicht davon ab.",
       "disableConfirm": "Anmeldeverlauf ausschalten? Jede aufgezeichnete Anmeldung dieser Organisation wird sofort gelöscht.",
       "disableConfirmLabel": "Ausschalten und löschen",
@@ -1640,9 +1652,9 @@
     "localAdmin": "Lokaler Administrator",
     "localAdminUsername": "Kontoname",
     "localAdminUsernameHint": "Paddock legt dieses Konto auf jedem Gerät an und rotiert sein Passwort. Der Name kann nicht mehr geändert werden, sobald ein Gerät ihn verwendet.",
-    "rotationDays": "Passwort rotieren alle … Tage",
-    "rotateAfterReveal": "Rotieren … Stunden nach einer Anzeige",
-    "rotateAfterRevealHint": "Leer lassen, um ein angezeigtes Passwort bis zur nächsten regulären Rotation zu behalten.",
+    "rotationDays": "Rotationsintervall Passwort",
+    "rotateAfterReveal": "Rotation nach einer Anzeige",
+    "rotateAfterRevealHint": "{min}–{max} Stunden. Leer lassen, um ein angezeigtes Passwort bis zur nächsten regulären Rotation zu behalten.",
     "diskEncryption": "Festplattenverschlüsselung",
     "bootPinLength": "Mindestlänge der Boot-PIN",
     "bootPinLengthHint": "Die Boot-PIN entsperrt die Festplatte bei jedem Start. Mit der Paddock-Autoinstallation installierte Geräte fragen sie beim ersten Start ab; ab jetzt erzeugte Autoinstallationen verwenden diese Länge.",
@@ -1736,8 +1748,8 @@
     "title": "Totmannschalter",
     "warning": "Ist Paddock länger als diese Frist nicht erreichbar, sperrt sich jedes Gerät mit eingeschaltetem Schalter selbst. Das gilt auch für ein Gerät, dessen Verbindung zu Paddock absichtlich blockiert wird: Ein Angreifer, der das Gerät von Paddock fernhält, kann die Sperre auslösen.",
     "enabled": "Totmannschalter einschalten",
-    "period": "Frist (Tage)",
-    "periodHint": "Tage Betriebszeit ohne Kontakt zu Paddock, nach denen sich ein Gerät selbst sperrt.",
+    "period": "Frist",
+    "periodHint": "{min}–{max} Tage Betriebszeit ohne Kontakt zu Paddock, nach denen sich ein Gerät selbst sperrt.",
     "periodInvalid": "Geben Sie eine ganze Zahl von Tagen von {min} bis {max} ein.",
     "shortPeriod": "Fristen unter {days} Tagen sperren Geräte, die nur eine Weile offline sind, zum Beispiel während eines Urlaubs.",
     "warnDays": "Warnungen (Tage vorher)",
@@ -1813,18 +1825,19 @@
       "regularEnabled": "Reguläre Updates ausführen",
       "regularSchedule": "Zeitplan",
       "regularScheduleHint": "Wochentage und Uhrzeit, z. B. „Sat 04:00“, „Mon,Thu 12:30“ oder „02:00“ für jeden Tag.",
-      "maxRandomDelay": "Zufällige Verzögerung (Minuten)",
+      "maxRandomDelay": "Zufällige Verzögerung",
       "maxRandomDelayHint": "Geräte starten bis zu so viele Minuten später, damit nicht alle gleichzeitig herunterladen (0–720).",
       "staleness": "Geräte ohne Kontakt",
-      "stalenessWarning": "Warnung nach (Stunden ohne Kontakt)",
-      "stalenessCritical": "Kritisch nach (Stunden ohne Kontakt)",
-      "stalenessCriticalHint": "Ein kritisches Gerät gilt als vermutlich verloren und erscheint auf der Seite Handlungsbedarf.",
+      "stalenessWarning": "Warnung ohne Kontakt nach",
+      "stalenessCritical": "Kritisch ohne Kontakt nach",
+      "stalenessCriticalHint": "Mehr als die Warnung, höchstens {max} Stunden. Ein kritisches Gerät gilt als vermutlich verloren und erscheint auf der Seite Handlungsbedarf.",
       "timeInvalid": "Geben Sie eine Uhrzeit als HH:MM ein.",
       "scheduleInvalid": "Verwenden Sie Wochentage (Mon … Sun, durch Kommas getrennt) und HH:MM, z. B. „Sat 04:00“.",
       "delayInvalid": "Geben Sie eine ganze Zahl von 0 bis 720 ein.",
       "warningInvalid": "Geben Sie eine ganze Zahl von 1 bis 720 ein.",
       "criticalInvalid": "Geben Sie eine ganze Zahl über dem Warnwert und höchstens 2160 ein.",
-      "saved": "Update-Einstellungen gespeichert."
+      "saved": "Update-Einstellungen gespeichert.",
+      "stalenessWarningHint": "{min}–{max} Stunden."
     },
     "holds": {
       "title": "Zurückgehaltene Pakete",

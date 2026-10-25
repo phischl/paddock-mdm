@@ -150,7 +150,8 @@ onMounted(async () => {
           id="dms-period"
           v-model="period"
           :label="t('dms.period')"
-          :hint="t('dms.periodHint')"
+          :suffix="t('common.units.days')"
+          :hint="t('dms.periodHint', { min: dmsMinPeriod, max: dmsMaxPeriod })"
           persistent-hint
           type="number"
           :min="dmsMinPeriod"

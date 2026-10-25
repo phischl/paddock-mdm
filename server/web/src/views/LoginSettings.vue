@@ -25,7 +25,9 @@ const allowlist = ref('')
 const lecture = ref('')
 const localAdmin = ref('')
 const rotationDays = ref('30')
+const rotationRange = { min: 1, max: 365 }
 const revealHours = ref('')
+const revealRange = { min: 1, max: 168 }
 const notice = ref('')
 const bootPinLength = ref('8')
 const unlockMode = ref<DiskUnlockMode>('tpm_pin')
@@ -191,19 +193,25 @@ async function save(): Promise<void> {
           id="settings-rotation-days"
           v-model="rotationDays"
           :label="t('loginSettings.rotationDays')"
+          :suffix="t('common.units.days')"
+          :hint="t('common.ranges.days', rotationRange)"
+          persistent-hint
           type="number"
-          min="1"
-          max="365"
+          :min="rotationRange.min"
+          :max="rotationRange.max"
+          data-testid="settings-rotation-days"
         />
         <v-text-field
           id="settings-reveal-hours"
           v-model="revealHours"
           :label="t('loginSettings.rotateAfterReveal')"
-          :hint="t('loginSettings.rotateAfterRevealHint')"
+          :suffix="t('common.units.hours')"
+          :hint="t('loginSettings.rotateAfterRevealHint', revealRange)"
           persistent-hint
           type="number"
-          min="1"
-          max="168"
+          :min="revealRange.min"
+          :max="revealRange.max"
+          data-testid="settings-reveal-hours"
         />
       </fieldset>
       <fieldset
@@ -230,6 +238,9 @@ async function save(): Promise<void> {
           id="settings-login-history-days"
           v-model="historyDays"
           :label="t('loginSettings.loginHistory.days')"
+          :suffix="t('common.units.days')"
+          :hint="t('common.ranges.days', { min: minLoginHistoryDays, max: maxLoginHistoryDays })"
+          persistent-hint
           type="number"
           :min="minLoginHistoryDays"
           :max="maxLoginHistoryDays"
