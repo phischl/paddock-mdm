@@ -1712,7 +1712,7 @@ Generated code tends to emit audit events on success only. The rule in the appli
   have a 5-minute timeout, and day *D* is sealed at *D*+1 00:15 UTC, so no object of day *D* can be committed
   after its seal. Object retention is `recording day + retention days`.
 
-> **Amendment 2026-10-15 (M8b):** the audit writer verifies its chain every night (ADR 0030, §6.4 of plan M8b) *(planned: M8b, PDK-109)*.
+> **Amendment 2026-10-15 (M8b):** the audit writer verifies its chain every night (ADR 0030, §6.4 of plan M8b).
 
 ---
 

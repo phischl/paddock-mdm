@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/config"
@@ -60,6 +61,14 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 	return &auditDeps{pool: pool, store: store, bao: baoClient, writer: writer}, nil
 }
 
+// verifier checks the hash chain with the audit-chain public keys from OpenBao.
+func (d *auditDeps) verifier() *auditwriter.Verifier {
+	keys := func(ctx context.Context) (map[int][]byte, error) {
+		return d.bao.PublicKeys(ctx, auditwriter.SigningKey)
+	}
+	return auditwriter.NewVerifier(d.pool, d.store, keys)
+}
+
 func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Common) error {
 	amqpCfg := config.LoadAMQP(l)
 	deps, err := loadAuditDeps(ctx, l)
@@ -70,6 +79,11 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	consumer := mq.NewConsumer(mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password},
 		mq.QueueAudit, auditwriter.Prefetch)
 	sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao)
+	recorder := auditwriter.NewRecorder(deps.pool, deps.writer, time.Now)
+	if err := prometheus.Register(recorder.Collector()); err != nil {
+		return err
+	}
+	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
 	slog.InfoContext(ctx, "audit-writer starting", "bucket", deps.store.Bucket())
 
 	return runAll(ctx,
@@ -84,6 +98,7 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 		},
 		func(ctx context.Context) error { return consumer.Run(ctx, deps.writer.Handle) },
 		func(ctx context.Context) error { sealer.RunDaily(ctx); return nil },
+		func(ctx context.Context) error { nightly.RunNightly(ctx); return nil },
 	)
 }
 
@@ -157,20 +172,29 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 			return err
 		}
 		defer deps.pool.Close()
-		keys := func(ctx context.Context) (map[int][]byte, error) {
-			return deps.bao.PublicKeys(ctx, auditwriter.SigningKey)
-		}
-		report, err := auditwriter.NewVerifier(deps.pool, deps.store, keys).Verify(ctx, org, from, to)
+		started := time.Now()
+		report, err := deps.verifier().Verify(ctx, org, from, to)
 		if err != nil {
 			return err
+		}
+		// The run is recorded (plan M8b decision 28) before the result is printed, so its ID can be shown with it.
+		runID, recordErr := auditwriter.NewRecorder(deps.pool, deps.writer, time.Now).
+			Record(ctx, org, auditwriter.TriggerCLI, from, to, started, report)
+		if report.OK() {
+			fmt.Fprintf(os.Stdout, "OK %s %s..%s: %d days, %d objects verified\n", org, *fromFlag, *toFlag, report.Days, report.Objects)
+		}
+		if runID != uuid.Nil {
+			fmt.Fprintln(os.Stdout, "run", runID)
 		}
 		for _, p := range report.Problems {
 			fmt.Fprintln(os.Stdout, "FAIL", p)
 		}
 		if !report.OK() {
-			return fmt.Errorf("audit chain verification failed: %d problems", len(report.Problems))
+			return errors.Join(fmt.Errorf("audit chain verification failed: %d problems", len(report.Problems)), recordErr)
 		}
-		fmt.Fprintf(os.Stdout, "OK %s %s..%s: %d days, %d objects verified\n", org, *fromFlag, *toFlag, report.Days, report.Objects)
+		if recordErr != nil {
+			return fmt.Errorf("audit chain verified, but the run was not recorded: %w", recordErr)
+		}
 		return nil
 	default:
 		return errUsage

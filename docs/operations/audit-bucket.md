@@ -78,7 +78,49 @@ evidence (ADR 0017 then requires Ceph RGW or an external provider) and record th
 
 Repeat the gate after every upgrade of the object store.
 
-## 3. Operation
+## 3. Nightly verification
+
+**What runs when.** Every night at 00:45 UTC, 30 minutes after the seal of the previous day (00:15 UTC), the audit
+writer verifies for every organization with audit data the last seven sealed days (from the organization's first
+audit day at most) and one random older day, if there is one. It checks the same things as
+`paddock-server audit verify`: every manifest exists, is signed with `audit-chain`, links to the previous day and
+lists exactly the indexed objects, and every object's SHA-256 matches. Only one audit-writer replica verifies at a
+time (advisory lock `audit-verify`); an organization whose verification cannot run (for example the object store
+is unreachable) is logged and skipped, and the others are still verified.
+
+**Where the result is visible.** Every run, the nightly window (`trigger: nightly`), the sample day (`sample`) and
+every `paddock-server audit verify` (`cli`), is recorded twice:
+
+- as an audit event in the verified organization's own audit log: `audit.chain_verified`, or
+  `audit.chain_verification_failed` with `problem_count` and the first 50 problems, actor `system` / `audit-writer`,
+  target `audit_chain`; the event is written to the index and the WORM bucket like every other event, under the day
+  of the run;
+- as a row of `audit_verification_run` in the audit index (run ID, trigger, days, objects, result, problems), which
+  `paddock-server audit verify` prints as `run <id>`.
+
+The audit writer's `/metrics` exports `paddock_audit_verify_runs_total{trigger,result}`,
+`paddock_audit_verify_failed_organizations` and `paddock_audit_verify_last_run_timestamp_seconds`
+(`docs/operations/monitoring.md`).
+
+**What to do on `PaddockAuditChainBroken`.** The alert fires as soon as a nightly cycle found a broken or
+unreadable chain of at least one organization.
+
+1. Find the organization and the problems: the newest `audit.chain_verification_failed` events (`problems` names
+   the day and the object), or the audit writer's log.
+2. Run `paddock-server audit verify --org <id> --from <day> --to <day>` in the audit-writer container for the
+   affected days and keep its output.
+3. `no manifest` for the last day usually means the 00:15 UTC seal did not run (for example OpenBao was sealed):
+   unseal OpenBao, run `paddock-server audit seal`, and verify the day again. The alert stays until the next
+   nightly cycle verifies the chain.
+4. An unreadable or modified object, a signature that does not verify or a broken link is a possible integrity
+   incident: check the object store (bucket lock configuration, access logs) and compare the object with the
+   replica outside the primary failure domain; Paddock does not verify the replica (RR-75).
+5. Record the finding, the cause and the outcome in your ISMS as a security event.
+
+`PaddockAuditVerifyStale` warns when no nightly cycle finished for 36 hours: check that the audit writer runs and
+its log for the 00:45 UTC cycle.
+
+## 4. Operation
 
 - Objects, their index rows (`audit_object.day`) and the daily manifests are dated by the **recording day**: the UTC
   date on which the audit writer stored the object (start of its database transaction), not the events'

@@ -25,7 +25,7 @@ commands:
   migrate paddock|audit
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
-  audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD
+  audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD   (recorded as a verification run; prints run <id>)
   osv import <file>
   admin bump-bundle-seq --by N
   admin recompile --all
@@ -41,6 +41,7 @@ commands:
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
   healthcheck
 
+The audit writer also verifies every organization's last 7 sealed days nightly at 00:45 UTC.
 Commands separated by a lone "+" run one after another; the first failure stops the chain.
 `
 

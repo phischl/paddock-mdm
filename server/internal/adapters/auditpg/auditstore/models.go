@@ -44,3 +44,18 @@ type AuditObject struct {
 	Sha256         []byte
 	CreatedAt      time.Time
 }
+
+type AuditVerificationRun struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Trigger        string
+	FromDay        time.Time
+	ToDay          time.Time
+	StartedAt      time.Time
+	FinishedAt     time.Time
+	Days           int32
+	Objects        int32
+	Ok             bool
+	Problems       json.RawMessage
+	EventID        uuid.UUID
+}

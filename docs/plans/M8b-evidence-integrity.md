@@ -877,3 +877,37 @@ healthy device: a false `device.event_seq_reset`, the device's deduplication row
   check-in is no evidence of a hole below it yet. A trailing gap that grows with a later claim opens a row for the
   new numbers only (open rows never overlap). A false gap remains possible only if the event queue lags the
   check-in queue by more than one check-in interval; the late events then close it with `device.event_gap_filled`.
+
+## Amendment 2026-10-25 (PDK-109, main as architect lead)
+
+**Reason.** `paddock-server audit verify` runs as a process of its own (`docker compose exec paddock-audit-writer
+/paddock-server audit verify`), so a promauto counter it increments never reaches the serving writer's `/metrics`
+and gate V3 (`{trigger="cli"}` on the writer) could not pass. The run counts therefore come from the table every
+process records into.
+
+- **Decision 27, metrics:** `paddock_audit_verify_runs_total{trigger,result}` is a custom collector of the serving
+  audit writer (`Recorder.Collector()`, registered in `serveAuditWriter`), not a promauto counter. `ok` and `failed`
+  are read from `audit_verification_run` at every scrape (`CountAuditVerificationRuns`: one aggregate
+  `GROUP BY trigger, ok` over the index `audit_verification_run_trigger_ok_idx`, 5 s timeout) and only grow, because
+  the table has no `UPDATE` or `DELETE` grant. `error` and `record_error` write no row and stay in-process counters
+  merged into the same family; the two label sets are disjoint. A database error at scrape time does not fail the
+  scrape: the in-process series are emitted, the error is logged once until a scrape succeeds again.
+- **Decision 27, last-run gauge:** `paddock_audit_verify_last_run_timestamp_seconds` stays unlabelled and in-process
+  as written (set after every cycle; at start from `LatestNightlyRunFinished`, served by the index
+  `audit_verification_run_trigger_finished_idx`, else the start time). It is not derived from the table: a CLI run
+  must not mask a nightly cycle that stopped running (`PaddockAuditVerifyStale`), and a cycle without any sealable
+  day writes no row but did run.
+- **Decision 27, last-run gauge after a failed read (option A, Review 1):** the start-time fallback applies only when
+  no nightly run exists. If `LatestNightlyRunFinished` fails at start (for example, a writer restarted during an
+  audit database outage), the gauge stays unset. It exports 0, so `PaddockAuditVerifyStale` fires after its 1 h
+  `for`. The writer retries the read every minute until it succeeds or a cycle finishes and sets the gauge, and it
+  logs the failure once. A start-time seed on error would mask a verification that is already stale for up to 37 h.
+  promtool tests cover a restart that re-seeds the old value (fires), a fresh seed (does not fire), and the unset 0
+  after a restart during an outage (fires).
+- **Decision 28, exit code:** `paddock-server audit verify` exits 1 when the chain verified but the run could not be
+  recorded (event or row). The exit code is otherwise unchanged. Decision 28 makes the record mandatory, so a
+  verification that leaves no evidence must not report success. The output still states that the chain is intact
+  and names the run ID if the event was written.
+- **Decision 27, failed organizations:** an organization counts as failed when its nightly window or its sample day
+  failed or errored.
+- V3 stays as written.
