@@ -1,6 +1,6 @@
 import {
-  api, listPage, problemCode, type AgentRelease, type AgentReleaseDetail, type AgentReleaseSort, type AgentReleaseStatus,
-  type ComponentTarget,
+  api, listPage, problemCode, type AgentRelease, type AgentReleaseCheck, type AgentReleaseDetail, type AgentReleaseSort,
+  type AgentReleaseSource, type AgentReleaseStatus, type ComponentTarget,
 } from '../api/client'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
@@ -76,4 +76,49 @@ export async function getComponentTargets(): Promise<ComponentTarget[] | string>
 /** Whether a release completed a rollout: then targets other than Himmelblau's exist. */
 export function releaseTargetsExist(targets: ComponentTarget[]): boolean {
   return targets.some((t) => t.component !== 'himmelblau')
+}
+
+/** The configured release source (ADR 0043 decision 6); the problem code on failure. */
+export async function getAgentReleaseSource(): Promise<AgentReleaseSource | string> {
+  const { data, error } = await api.GET('/api/platform/v1/agent-release-source')
+  return data ?? problemCode(error)
+}
+
+/** Compares the latest release of the source with the newest published one; the problem code on failure. */
+export async function checkAgentReleaseSource(): Promise<AgentReleaseCheck | string> {
+  const { data, error } = await api.POST('/api/platform/v1/agent-release-source/check', {
+    params: { header: { 'X-Paddock-CSRF': '1' } },
+  })
+  return data ?? problemCode(error)
+}
+
+/** Imports and publishes version from the source (step-up required); the problem code on failure. */
+export async function importAgentRelease(version: string): Promise<AgentReleaseDetail | string> {
+  const { data, error } = await api.POST('/api/platform/v1/agent-releases/import', {
+    params: { header: { 'X-Paddock-CSRF': '1' } },
+    body: { version },
+  })
+  return data ?? problemCode(error)
+}
+
+/** What the release source panel shows. */
+export type SourcePanelState =
+  | { kind: 'hidden' }
+  | { kind: 'idle'; repository: string }
+  | { kind: 'checked'; repository: string; check: AgentReleaseCheck }
+
+/** The panel state from the source and the last check (pure; unit-tested). */
+export function sourcePanelState(
+  source: AgentReleaseSource | string | null,
+  check: AgentReleaseCheck | null,
+): SourcePanelState {
+  if (source === null || typeof source === 'string' || !source.enabled || !source.repository) return { kind: 'hidden' }
+  if (!check) return { kind: 'idle', repository: source.repository }
+  return { kind: 'checked', repository: source.repository, check }
+}
+
+/** Whether the checked state offers the import of check.latest. */
+export function importableVersion(state: SourcePanelState): string | null {
+  if (state.kind !== 'checked' || !state.check.importable) return null
+  return state.check.latest
 }
