@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PaddockAuditVerifyStale` (warning), runbook section "Nightly verification" in `docs/operations/audit-bucket.md`.
   Schema: audit migration 00004 adds the verification runs and lets the auditor role read its organization's
   manifests and runs.
+- Evidence integrity for organization administrators and auditors (plan M8b, ISO 27001 A.5.33): the portal page
+  *Evidence integrity* (navigation group *Organization*) shows the last sealed day, the number of signed manifests,
+  the last chain verification with its result and the last failure, every verification run (trigger, days, objects,
+  result, problems) and every sealed day with its manifest hash, key version and the result of the newest run
+  covering it. New read-only admin API routes `GET /api/v1/audit/integrity`, `GET /api/v1/audit/verification-runs`
+  and `GET /api/v1/audit/manifests` (roles org_admin and org_auditor; lists with search, filters and sorting). No
+  platform access is needed to check the evidence.
 
 ### Changed
 

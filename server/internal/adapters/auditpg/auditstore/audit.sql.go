@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countAuditEvents = `-- name: CountAuditEvents :one
@@ -56,6 +57,51 @@ func (q *Queries) CountAuditEvents(ctx context.Context, arg CountAuditEventsPara
 	return count, err
 }
 
+const countAuditManifests = `-- name: CountAuditManifests :one
+SELECT count(*) FROM audit_manifest
+`
+
+func (q *Queries) CountAuditManifests(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditManifests)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countAuditManifestsFiltered = `-- name: CountAuditManifestsFiltered :one
+SELECT count(*) FROM (
+  SELECT 1 FROM audit_manifest m
+  WHERE ($1::date IS NULL OR m.day >= $1::date)
+    AND ($2::date IS NULL OR m.day <= $2::date)
+    AND ($3::boolean IS NULL OR $3::boolean = EXISTS (
+          SELECT 1 FROM audit_verification_run v
+          WHERE v.organization_id = m.organization_id AND v.ok AND v.from_day <= m.day AND v.to_day >= m.day))
+    AND ($4::text IS NULL OR m.object_key ILIKE $4::text ESCAPE '\')
+  LIMIT $5
+) matching
+`
+
+type CountAuditManifestsFilteredParams struct {
+	FromDay    pgtype.Date
+	ToDay      pgtype.Date
+	Verified   *bool
+	QPattern   *string
+	CountLimit int32
+}
+
+func (q *Queries) CountAuditManifestsFiltered(ctx context.Context, arg CountAuditManifestsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditManifestsFiltered,
+		arg.FromDay,
+		arg.ToDay,
+		arg.Verified,
+		arg.QPattern,
+		arg.CountLimit,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countAuditVerificationRuns = `-- name: CountAuditVerificationRuns :many
 SELECT trigger, ok, count(*) AS runs FROM audit_verification_run GROUP BY trigger, ok
 `
@@ -85,6 +131,35 @@ func (q *Queries) CountAuditVerificationRuns(ctx context.Context) ([]CountAuditV
 		return nil, err
 	}
 	return items, nil
+}
+
+const countAuditVerificationRunsFiltered = `-- name: CountAuditVerificationRunsFiltered :one
+SELECT count(*) FROM (
+  SELECT 1 FROM audit_verification_run
+  WHERE ($1::boolean IS NULL OR ok = $1::boolean)
+    AND ($2::text[] IS NULL OR trigger = ANY($2::text[]))
+    AND ($3::text IS NULL OR problems::text ILIKE $3::text ESCAPE '\')
+  LIMIT $4
+) matching
+`
+
+type CountAuditVerificationRunsFilteredParams struct {
+	OkFilter   *bool
+	Triggers   []string
+	QPattern   *string
+	CountLimit int32
+}
+
+func (q *Queries) CountAuditVerificationRunsFiltered(ctx context.Context, arg CountAuditVerificationRunsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditVerificationRunsFiltered,
+		arg.OkFilter,
+		arg.Triggers,
+		arg.QPattern,
+		arg.CountLimit,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const ensureAuditPartition = `-- name: EnsureAuditPartition :exec
@@ -160,6 +235,54 @@ func (q *Queries) GetLatestAuditManifest(ctx context.Context, organizationID uui
 		&i.Signature,
 		&i.KeyVersion,
 		&i.ObjectKey,
+	)
+	return i, err
+}
+
+const getLatestAuditVerificationRun = `-- name: GetLatestAuditVerificationRun :one
+SELECT id, organization_id, trigger, from_day, to_day, started_at, finished_at, days, objects, ok, problems, event_id FROM audit_verification_run ORDER BY started_at DESC, id DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestAuditVerificationRun(ctx context.Context) (AuditVerificationRun, error) {
+	row := q.db.QueryRow(ctx, getLatestAuditVerificationRun)
+	var i AuditVerificationRun
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Trigger,
+		&i.FromDay,
+		&i.ToDay,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.Days,
+		&i.Objects,
+		&i.Ok,
+		&i.Problems,
+		&i.EventID,
+	)
+	return i, err
+}
+
+const getLatestAuditVerificationRunByOK = `-- name: GetLatestAuditVerificationRunByOK :one
+SELECT id, organization_id, trigger, from_day, to_day, started_at, finished_at, days, objects, ok, problems, event_id FROM audit_verification_run WHERE ok = $1 ORDER BY started_at DESC, id DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestAuditVerificationRunByOK(ctx context.Context, ok bool) (AuditVerificationRun, error) {
+	row := q.db.QueryRow(ctx, getLatestAuditVerificationRunByOK, ok)
+	var i AuditVerificationRun
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Trigger,
+		&i.FromDay,
+		&i.ToDay,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.Days,
+		&i.Objects,
+		&i.Ok,
+		&i.Problems,
+		&i.EventID,
 	)
 	return i, err
 }
@@ -300,6 +423,17 @@ func (q *Queries) InsertAuditVerificationRun(ctx context.Context, arg InsertAudi
 	return err
 }
 
+const latestAuditManifestDay = `-- name: LatestAuditManifestDay :one
+SELECT day FROM audit_manifest ORDER BY day DESC LIMIT 1
+`
+
+func (q *Queries) LatestAuditManifestDay(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, latestAuditManifestDay)
+	var day time.Time
+	err := row.Scan(&day)
+	return day, err
+}
+
 const latestNightlyRunFinished = `-- name: LatestNightlyRunFinished :one
 SELECT finished_at FROM audit_verification_run WHERE trigger = 'nightly' ORDER BY finished_at DESC LIMIT 1
 `
@@ -434,6 +568,89 @@ func (q *Queries) ListAuditManifests(ctx context.Context, arg ListAuditManifests
 	return items, nil
 }
 
+const listAuditManifestsWithVerification = `-- name: ListAuditManifestsWithVerification :many
+SELECT m.day, m.sha256, m.prev_sha256, m.key_version, m.object_key,
+       run.finished_at AS last_verified_at, run.ok AS last_verified_ok
+FROM audit_manifest m
+LEFT JOIN LATERAL (
+  SELECT r.id FROM audit_verification_run r
+  WHERE r.organization_id = m.organization_id AND r.from_day <= m.day AND r.to_day >= m.day
+  ORDER BY r.started_at DESC, r.id DESC
+  LIMIT 1
+) newest ON true
+LEFT JOIN audit_verification_run run ON run.id = newest.id
+WHERE ($1::date IS NULL OR m.day >= $1::date)
+  AND ($2::date IS NULL OR m.day <= $2::date)
+  AND ($3::boolean IS NULL OR $3::boolean = EXISTS (
+        SELECT 1 FROM audit_verification_run v
+        WHERE v.organization_id = m.organization_id AND v.ok AND v.from_day <= m.day AND v.to_day >= m.day))
+  AND ($4::text IS NULL OR m.object_key ILIKE $4::text ESCAPE '\')
+ORDER BY
+  CASE WHEN $5::text = 'day' THEN day END ASC,
+  CASE WHEN $5::text = '-day' THEN day END DESC,
+  day
+LIMIT $7 OFFSET $6
+`
+
+type ListAuditManifestsWithVerificationParams struct {
+	FromDay  pgtype.Date
+	ToDay    pgtype.Date
+	Verified *bool
+	QPattern *string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListAuditManifestsWithVerificationRow struct {
+	Day            time.Time
+	Sha256         []byte
+	PrevSha256     []byte
+	KeyVersion     int32
+	ObjectKey      string
+	LastVerifiedAt *time.Time
+	LastVerifiedOk *bool
+}
+
+// The newest run covering a day decides its result: a later failed run over a range that includes the day overrides
+// an earlier successful one (plan M8b gate V4).
+// Joined as a table, not selected in the lateral subquery, so that sqlc types the columns as nullable.
+func (q *Queries) ListAuditManifestsWithVerification(ctx context.Context, arg ListAuditManifestsWithVerificationParams) ([]ListAuditManifestsWithVerificationRow, error) {
+	rows, err := q.db.Query(ctx, listAuditManifestsWithVerification,
+		arg.FromDay,
+		arg.ToDay,
+		arg.Verified,
+		arg.QPattern,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAuditManifestsWithVerificationRow{}
+	for rows.Next() {
+		var i ListAuditManifestsWithVerificationRow
+		if err := rows.Scan(
+			&i.Day,
+			&i.Sha256,
+			&i.PrevSha256,
+			&i.KeyVersion,
+			&i.ObjectKey,
+			&i.LastVerifiedAt,
+			&i.LastVerifiedOk,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditObjectsForDay = `-- name: ListAuditObjectsForDay :many
 SELECT object_key, organization_id, day, event_count, sha256, created_at FROM audit_object WHERE organization_id = $1 AND day = $2 ORDER BY object_key
 `
@@ -529,6 +746,74 @@ func (q *Queries) ListAuditOrganizations(ctx context.Context) ([]uuid.UUID, erro
 			return nil, err
 		}
 		items = append(items, organization_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditVerificationRuns = `-- name: ListAuditVerificationRuns :many
+
+SELECT id, organization_id, trigger, from_day, to_day, started_at, finished_at, days, objects, ok, problems, event_id FROM audit_verification_run
+WHERE ($1::boolean IS NULL OR ok = $1::boolean)
+  AND ($2::text[] IS NULL OR trigger = ANY($2::text[]))
+  AND ($3::text IS NULL OR problems::text ILIKE $3::text ESCAPE '\')
+ORDER BY
+  CASE WHEN $4::text = 'started_at' THEN started_at END ASC,
+  CASE WHEN $4::text = '-started_at' THEN started_at END DESC,
+  CASE WHEN $4::text = 'from_day' THEN from_day END ASC,
+  CASE WHEN $4::text = '-from_day' THEN from_day END DESC,
+  CASE WHEN $4::text = 'ok' THEN ok END ASC,
+  CASE WHEN $4::text = '-ok' THEN ok END DESC,
+  id
+LIMIT $6 OFFSET $5
+`
+
+type ListAuditVerificationRunsParams struct {
+	OkFilter *bool
+	Triggers []string
+	QPattern *string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+// Evidence integrity of the caller's organization (plan M8b decisions 30 and 31). The reader role sees only its
+// organization's rows (RLS); the list queries follow the ADR 0018 pattern of ListAuditEvents.
+func (q *Queries) ListAuditVerificationRuns(ctx context.Context, arg ListAuditVerificationRunsParams) ([]AuditVerificationRun, error) {
+	rows, err := q.db.Query(ctx, listAuditVerificationRuns,
+		arg.OkFilter,
+		arg.Triggers,
+		arg.QPattern,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditVerificationRun{}
+	for rows.Next() {
+		var i AuditVerificationRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Trigger,
+			&i.FromDay,
+			&i.ToDay,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Days,
+			&i.Objects,
+			&i.Ok,
+			&i.Problems,
+			&i.EventID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

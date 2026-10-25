@@ -344,6 +344,101 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/audit/integrity:
+    get:
+      operationId: getAuditIntegrity
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor. The integrity of the organization's audit evidence (plan M8b decision 30): the
+        last sealed day, the number of sealed days, the newest chain verification run and the times of the last
+        successful and the last failed run.
+      responses:
+        "200":
+          description: The evidence integrity summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditIntegrity" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/verification-runs:
+    get:
+      operationId: listAuditVerificationRuns
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor. The chain verification runs of the organization (nightly window, random sample
+        day, paddock-server audit verify). q matches the problems of a run.
+      x-paddock-list:
+        sort: [started_at, from_day, ok]
+        default_sort: -started_at
+        search: [problems]
+        filters: [ok, trigger]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AuditVerificationRunSort"
+        - $ref: "#/components/parameters/Search"
+        - name: ok
+          in: query
+          description: Only runs that found the chain intact (true) or broken (false).
+          schema: { type: boolean }
+        - name: trigger
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AuditVerificationTrigger" }
+      responses:
+        "200":
+          description: One page of verification runs.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditVerificationRunPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/manifests:
+    get:
+      operationId: listAuditManifests
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor. The sealed days of the organization with the result of the newest verification
+        run covering each day. q matches the object key of the manifest.
+      x-paddock-list:
+        sort: [day]
+        default_sort: -day
+        search: [object_key]
+        filters: [from, to, verified]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AuditManifestSort"
+        - $ref: "#/components/parameters/Search"
+        - name: from
+          in: query
+          description: First day (inclusive).
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Last day (inclusive).
+          schema: { type: string, format: date }
+        - name: verified
+          in: query
+          description: Only days with (true) or without (false) at least one successful verification run covering them.
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: One page of manifests.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditManifestPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
   /api/v1/device-groups/{id}/devices:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -3894,6 +3989,22 @@ components:
         type: string
         enum: [occurred_at, -occurred_at, code, -code, outcome, -outcome]
         default: -occurred_at
+    AuditVerificationRunSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [started_at, -started_at, from_day, -from_day, ok, -ok]
+        default: -started_at
+    AuditManifestSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The day is the primary key.
+      schema:
+        type: string
+        enum: [day, -day]
+        default: -day
     IpAllowlistSort:
       name: sort
       in: query
@@ -4666,6 +4777,84 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    AuditVerificationTrigger:
+      type: string
+      enum: [nightly, sample, cli]
+    AuditVerificationRun:
+      type: object
+      required: [id, trigger, from_day, to_day, started_at, finished_at, days, objects, ok, problems, event_id]
+      properties:
+        id: { type: string, format: uuid }
+        trigger: { $ref: "#/components/schemas/AuditVerificationTrigger" }
+        from_day: { type: string, format: date }
+        to_day: { type: string, format: date }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        days: { type: integer }
+        objects: { type: integer }
+        ok: { type: boolean }
+        problems:
+          type: array
+          items: { type: string }
+        event_id:
+          type: string
+          format: uuid
+          description: The audit.chain_verified or audit.chain_verification_failed event of the run.
+    AuditVerificationRunPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditVerificationRun" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    AuditManifest:
+      type: object
+      required: [day, sha256, prev_sha256, key_version, object_key, last_verified_at, last_verified_ok]
+      properties:
+        day: { type: string, format: date }
+        sha256: { type: string, description: "SHA-256 of the canonical manifest, hex." }
+        prev_sha256: { type: string, nullable: true, description: "SHA-256 of the previous day's manifest, hex; null for the first day." }
+        key_version: { type: integer, description: Version of the OpenBao signing key. }
+        object_key: { type: string }
+        last_verified_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: End of the newest verification run covering the day; null when no run covered it.
+        last_verified_ok:
+          type: boolean
+          nullable: true
+          description: Result of the newest verification run covering the day; null when no run covered it.
+    AuditManifestPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditManifest" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    AuditIntegrity:
+      type: object
+      required: [sealed_through, manifests, verification_window_days, last_run, last_success_at, last_failure_at]
+      properties:
+        sealed_through: { type: string, format: date, nullable: true, description: The last sealed day; null before the first seal. }
+        manifests: { type: integer, description: Number of sealed days. }
+        verification_window_days: { type: integer, description: Days the nightly run verifies (ending with the last sealable day). }
+        last_run:
+          allOf:
+            - $ref: "#/components/schemas/AuditVerificationRun"
+          nullable: true
+        last_success_at: { type: string, format: date-time, nullable: true }
+        last_failure_at: { type: string, format: date-time, nullable: true }
     EnrollmentTokenStatus:
       type: string
       enum: [active, revoked, expired, exhausted]

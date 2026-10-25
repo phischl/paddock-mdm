@@ -25,7 +25,8 @@ export async function recentAuditEvents(): Promise<Page<AuditEvent>> {
 export interface KpiCell {
   key: string
   label: string
-  value: number
+  /** A count, or a preformatted text such as a day or a time. */
+  value: number | string
   note: string
   noteValues: Record<string, number>
   status: Status

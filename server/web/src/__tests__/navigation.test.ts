@@ -97,7 +97,7 @@ describe('navigation drawer', () => {
       'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package holds', 'Change sets',
       'Security review', 'Revocations', "Dead man's switch", 'Login & privileges',
       'Software', 'Vulnerabilities',
-      'Users', 'Groups', 'API tokens', 'Updates', 'Audit log',
+      'Users', 'Groups', 'API tokens', 'Updates', 'Audit log', 'Evidence integrity',
     ])
     const security = w.find('[data-testid="nav-group-security"]')
     expect(security.attributes('role')).toBe('group')
@@ -136,6 +136,7 @@ describe('navigation drawer', () => {
     expect(linkLabels(operator.w)).toContain('Enrollment tokens')
     expect(linkLabels(operator.w)).not.toContain('Revocations')
     expect(linkLabels(operator.w)).not.toContain('Audit log')
+    expect(linkLabels(operator.w)).not.toContain('Evidence integrity')
     operator.w.unmount()
 
     const auditor = await mountApp({ ...admin, role: 'org_auditor' }, '/audit')
@@ -143,6 +144,7 @@ describe('navigation drawer', () => {
     expect(linkLabels(auditor.w)).not.toContain('Enrollment tokens')
     expect(linkLabels(auditor.w)).not.toContain('Revocations')
     expect(linkLabels(auditor.w)).toContain('Audit log')
+    expect(linkLabels(auditor.w)).toContain('Evidence integrity')
     auditor.w.unmount()
 
     const platform = await mountApp({ ...admin, role: 'platform_admin', organization: null }, '/platform/organizations')
@@ -161,13 +163,19 @@ describe('navigation drawer', () => {
     expect(current()).toEqual(["Dead man's switch"])
   })
 
+  it('puts the Tab stop on the longest matching entry, not on a prefix of it (PDK-110)', async () => {
+    const { w } = await mountApp(admin, '/audit/integrity')
+    const stops = drawer(w).findAll('a.pd-nav-item').filter((a) => a.attributes('tabindex') === '0')
+    expect(stops.map((a) => a.attributes('href'))).toEqual(['/audit/integrity'])
+  })
+
   it('is one Tab stop with a roving tabindex: Up/Down move, Home/End jump', async () => {
     const { w } = await mountApp(admin, '/managed-files')
     const links = drawer(w).findAll('a.pd-nav-item')
-    expect(links.length).toBe(22)
+    expect(links.length).toBe(23)
     const stops = links.filter((a) => a.attributes('tabindex') === '0')
     expect(stops.map((a) => a.attributes('href'))).toEqual(['/managed-files'])
-    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(21)
+    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(22)
 
     ;(stops[0].element as HTMLElement).focus()
     await stops[0].trigger('keydown', { key: 'ArrowDown' })
@@ -175,11 +183,11 @@ describe('navigation drawer', () => {
     expect(drawer(w).find('a[href="/managed-units"]').attributes('tabindex')).toBe('0')
     expect(drawer(w).find('a[href="/managed-files"]').attributes('tabindex')).toBe('-1')
     await drawer(w).find('a[href="/managed-units"]').trigger('keydown', { key: 'End' })
-    expect(document.activeElement?.getAttribute('href')).toBe('/audit')
-    await drawer(w).find('a[href="/audit"]').trigger('keydown', { key: 'Home' })
+    expect(document.activeElement?.getAttribute('href')).toBe('/audit/integrity')
+    await drawer(w).find('a[href="/audit/integrity"]').trigger('keydown', { key: 'Home' })
     expect(document.activeElement?.getAttribute('href')).toBe('/')
     await drawer(w).find('a[href="/"]').trigger('keydown', { key: 'ArrowUp' })
-    expect(document.activeElement?.getAttribute('href')).toBe('/audit')
+    expect(document.activeElement?.getAttribute('href')).toBe('/audit/integrity')
   })
 
   it('collapses the drawer to a rail on wide screens and remembers it', async () => {

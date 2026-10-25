@@ -58,6 +58,7 @@
   "nav": {
     "deviceGroups": "Device groups",
     "audit": "Audit log",
+    "auditIntegrity": "Evidence integrity",
     "organizations": "Organizations",
     "devices": "Devices",
     "enrollmentTokens": "Enrollment tokens",
@@ -1955,6 +1956,69 @@
   "time": {
     "never": "never",
     "now": "now"
+  },
+  "auditIntegrity": {
+    "title": "Evidence integrity",
+    "intro": "Every day of the audit log is sealed with a signed manifest that chains to the day before. The chain is verified every night; every verification run and its result are listed here.",
+    "forbidden": {
+      "title": "No access to the evidence integrity",
+      "description": "Only organization administrators and auditors can see the evidence integrity."
+    },
+    "kpi": {
+      "sealedThrough": "Sealed through",
+      "sealedNote": "Last day with a signed manifest",
+      "notSealed": "No day sealed yet",
+      "manifests": "Manifests",
+      "windowNote": "The nightly verification run covers the last {days, plural, one {# day} other {# days}}",
+      "lastRun": "Last verification",
+      "neverVerified": "Not verified yet",
+      "lastFailure": "Last failure",
+      "noFailure": "No failed verification run",
+      "failureOpen": "Not verified successfully since",
+      "failureResolved": "Verified successfully since"
+    },
+    "result": {
+      "ok": "Intact",
+      "failed": "Failed",
+      "none": "Not verified"
+    },
+    "verified": {
+      "true": "Verified successfully",
+      "false": "Never verified successfully"
+    },
+    "triggers": {
+      "nightly": "Nightly",
+      "sample": "Random sample",
+      "cli": "Command line"
+    },
+    "runs": {
+      "title": "Verification runs",
+      "startedAt": "Started",
+      "trigger": "Trigger",
+      "range": "Days",
+      "days": "Days verified",
+      "objects": "Objects",
+      "result": "Result",
+      "noProblems": "No problems found.",
+      "empty": {
+        "title": "No verification runs yet",
+        "description": "The audit hash chain is verified every night after the days are sealed."
+      }
+    },
+    "manifests": {
+      "title": "Manifests",
+      "day": "Day",
+      "sha256": "SHA-256",
+      "keyVersion": "Key version",
+      "lastVerified": "Last verified",
+      "from": "From",
+      "to": "To",
+      "verified": "Verification",
+      "empty": {
+        "title": "No sealed days yet",
+        "description": "Each day of the audit log is sealed shortly after midnight (UTC)."
+      }
+    }
   },
   "overview": {
     "title": "Overview",

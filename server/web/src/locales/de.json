@@ -58,6 +58,7 @@
   "nav": {
     "deviceGroups": "Gerätegruppen",
     "audit": "Audit-Protokoll",
+    "auditIntegrity": "Nachweisintegrität",
     "organizations": "Organisationen",
     "devices": "Geräte",
     "enrollmentTokens": "Registrierungstoken",
@@ -1955,6 +1956,69 @@
   "time": {
     "never": "nie",
     "now": "jetzt"
+  },
+  "auditIntegrity": {
+    "title": "Nachweisintegrität",
+    "intro": "Jeder Tag des Audit-Protokolls wird mit einem signierten Manifest versiegelt, das an den Vortag anknüpft. Die Hash-Kette wird jede Nacht geprüft; jeder Prüflauf und sein Ergebnis stehen hier.",
+    "forbidden": {
+      "title": "Kein Zugriff auf die Nachweisintegrität",
+      "description": "Nur Organisationsadministratoren und Auditoren sehen die Nachweisintegrität."
+    },
+    "kpi": {
+      "sealedThrough": "Versiegelt bis",
+      "sealedNote": "Letzter Tag mit signiertem Manifest",
+      "notSealed": "Noch kein Tag versiegelt",
+      "manifests": "Manifeste",
+      "windowNote": "Der nächtliche Prüflauf deckt {days, plural, one {den letzten Tag} other {die letzten # Tage}} ab",
+      "lastRun": "Letzter Prüflauf",
+      "neverVerified": "Noch nicht geprüft",
+      "lastFailure": "Letzter Fehler",
+      "noFailure": "Kein fehlgeschlagener Prüflauf",
+      "failureOpen": "Seitdem nicht erfolgreich geprüft",
+      "failureResolved": "Seitdem erfolgreich geprüft"
+    },
+    "result": {
+      "ok": "Intakt",
+      "failed": "Fehlgeschlagen",
+      "none": "Nicht geprüft"
+    },
+    "verified": {
+      "true": "Erfolgreich geprüft",
+      "false": "Nie erfolgreich geprüft"
+    },
+    "triggers": {
+      "nightly": "Nächtlich",
+      "sample": "Stichprobe",
+      "cli": "Kommandozeile"
+    },
+    "runs": {
+      "title": "Prüfläufe",
+      "startedAt": "Gestartet",
+      "trigger": "Auslöser",
+      "range": "Tage",
+      "days": "Geprüfte Tage",
+      "objects": "Objekte",
+      "result": "Ergebnis",
+      "noProblems": "Keine Probleme gefunden.",
+      "empty": {
+        "title": "Noch keine Prüfläufe",
+        "description": "Die Hash-Kette des Audit-Protokolls wird jede Nacht geprüft, nachdem die Tage versiegelt sind."
+      }
+    },
+    "manifests": {
+      "title": "Manifeste",
+      "day": "Tag",
+      "sha256": "SHA-256",
+      "keyVersion": "Schlüsselversion",
+      "lastVerified": "Zuletzt geprüft",
+      "from": "Von",
+      "to": "Bis",
+      "verified": "Prüfung",
+      "empty": {
+        "title": "Noch keine versiegelten Tage",
+        "description": "Jeder Tag des Audit-Protokolls wird kurz nach Mitternacht (UTC) versiegelt."
+      }
+    }
   },
   "overview": {
     "title": "Übersicht",

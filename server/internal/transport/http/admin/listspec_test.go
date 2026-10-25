@@ -22,9 +22,11 @@ var lists = map[string]struct {
 	queryName  string
 	tieBreaker string
 }{
-	"listDeviceGroups":  {deviceGroupList, "postgres/queries/device_group.sql", "ListDeviceGroups", "id"},
-	"listAuditEvents":   {auditEventList, "auditpg/queries/audit.sql", "ListAuditEvents", "event_id"},
-	"listOrganizations": {organizationList, "postgres/queries/organization.sql", "ListOrganizations", "id"},
+	"listDeviceGroups":          {deviceGroupList, "postgres/queries/device_group.sql", "ListDeviceGroups", "id"},
+	"listAuditEvents":           {auditEventList, "auditpg/queries/audit.sql", "ListAuditEvents", "event_id"},
+	"listAuditVerificationRuns": {auditVerificationRunList, "auditpg/queries/audit.sql", "ListAuditVerificationRuns", "id"},
+	"listAuditManifests":        {auditManifestList, "auditpg/queries/audit.sql", "ListAuditManifestsWithVerification", "day"},
+	"listOrganizations":         {organizationList, "postgres/queries/organization.sql", "ListOrganizations", "id"},
 
 	"listEnrollmentTokens":   {enrollmentTokenList, "postgres/queries/enrollment_token.sql", "ListEnrollmentTokens", "id"},
 	"listApiTokens":          {apiTokenList, "postgres/queries/api_token.sql", "ListApiTokens", "id"},

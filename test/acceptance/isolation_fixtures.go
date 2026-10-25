@@ -11,6 +11,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // isolationWorld holds the sessions and the globex resources of the isolation gate.
@@ -288,6 +289,16 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"GET /api/v1/audit-events": {kind: isoList, ownAttempts: true, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/audit-events?page_size=100", nil
+	}},
+	// Evidence integrity (plan M8b decision 30): a globex manifest's object key holds the globex organization ID.
+	"GET /api/v1/audit/integrity": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/audit/integrity", nil
+	}},
+	"GET /api/v1/audit/verification-runs": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/audit/verification-runs?page_size=100", nil
+	}},
+	"GET /api/v1/audit/manifests": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/audit/manifests?page_size=100", nil
 	}},
 
 	"GET /api/v1/enrollment-tokens": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
@@ -630,6 +641,17 @@ var listIsolationQueries = map[string][]url.Values{
 	// globexUser owns globexDevice (seedGlobexOwnersAndLogins), which reported one session start (seedGlobexLogin).
 	"/api/v1/users/{id}/devices":  {{"q": {"globex-iso"}}, {"sort": {"-last_contact_at"}}},
 	"/api/v1/devices/{id}/logins": {{"q": {"globex-iso"}}, {"sort": {"username"}}},
+	// globex's verification run of a day without manifest (seedGlobexVerificationRun).
+	"/api/v1/audit/verification-runs": {
+		{"q": {isolationVerifyDay + ": no manifest"}, "page_size": {"100"}},
+		{"trigger": {"cli"}, "ok": {"false"}, "sort": {"-started_at"}, "page_size": {"100"}},
+	},
+	// Temporary exception (PDK-422, which removes it): no search here. A fresh stack has no sealed globex day, and
+	// this gate must not seal or write into a seeded organization: sealing globex's current day breaks its chain for
+	// every later event of the day. TestAuditIntegrity seals a fresh organization instead, checks that alice and carol
+	// see none of its manifests and exercises the list contract (q, sort, paging) on its manifest; the leak check of
+	// the fixture above still runs on alice's whole list.
+	"/api/v1/audit/manifests": {},
 }
 
 // currentLoginSettings returns acme's login settings as an update body (unchanged values).
@@ -681,7 +703,32 @@ func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 // listSeeds seed globex data of a collection GET right before the gate checks it: data the development stack's
 // retention purges within minutes.
 var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
-	"/api/v1/devices/{id}/logins": seedGlobexLogin,
+	"/api/v1/devices/{id}/logins":     seedGlobexLogin,
+	"/api/v1/audit/verification-runs": seedGlobexVerificationRun,
+}
+
+// isolationVerifyDay is a day long before any audit data: its verification fails with "no manifest" whatever the
+// stack holds, and leaves no trace on the chain itself.
+const isolationVerifyDay = "2000-01-01"
+
+// seedGlobexVerificationRun records a failed verification run of globex with `paddock-server audit verify` (plan
+// M8b decision 28) and adds its ID to the globex IDs.
+func seedGlobexVerificationRun(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	globex := orgOf(t, w.carol)
+	_, out, err := stack.PaddockServer(testContext(t, 2*time.Minute), "audit", "verify", "--org", globex.String(),
+		"--from", isolationVerifyDay, "--to", isolationVerifyDay)
+	if err != nil {
+		t.Fatalf("audit verify for globex: %v\n%s", err, out)
+	}
+	// printedRun of audit_integrity_test.go is not visible here: this file is also built without the tests.
+	for _, line := range strings.Split(out, "\n") {
+		if id, ok := strings.CutPrefix(strings.TrimSpace(line), "run "); ok {
+			w.globexIDs = append(w.globexIDs, id)
+			return
+		}
+	}
+	t.Fatalf("audit verify for globex printed no run ID:\n%s", out)
 }
 
 // listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c

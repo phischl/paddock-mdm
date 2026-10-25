@@ -25,31 +25,33 @@ type Deps struct {
 	Organizations *app.Organizations
 	Accounts      *app.Accounts
 	AuditLog      *app.AuditLog
-	Tokens        *app.EnrollmentTokens
-	APITokens     *app.APITokens
-	Declarative   *app.Declarative
-	Devices       *app.Devices
-	Managed       *app.ManagedConfig
-	Releases      *app.AgentReleases
-	Users         *app.Users
-	UserGroups    *app.UserGroups
-	Logins        *app.Logins
-	LoginSettings *app.LoginSettings
-	LoginHistory  *app.LoginHistory
-	AgentUpdates  *app.AgentUpdates
-	Uninstalls    *app.Uninstalls
-	Conversions   *app.DiskConversions
-	Privileges    *app.Privileges
-	Commands      *app.DeviceCommands
-	LocalAdmin    *app.LocalAdmin
-	Autoinstall   *app.Autoinstall
-	Disk          *app.Disk
-	Revocations   *app.Revocations
-	DMS           *app.DMS
-	Inventory     *app.Inventory
-	Updates       *app.Updates
-	Attention     *app.Attention
-	Overview      *app.Overview
+	// AuditIntegrity reads the sealed days and the chain verification runs (plan M8b decision 31).
+	AuditIntegrity *app.AuditIntegrity
+	Tokens         *app.EnrollmentTokens
+	APITokens      *app.APITokens
+	Declarative    *app.Declarative
+	Devices        *app.Devices
+	Managed        *app.ManagedConfig
+	Releases       *app.AgentReleases
+	Users          *app.Users
+	UserGroups     *app.UserGroups
+	Logins         *app.Logins
+	LoginSettings  *app.LoginSettings
+	LoginHistory   *app.LoginHistory
+	AgentUpdates   *app.AgentUpdates
+	Uninstalls     *app.Uninstalls
+	Conversions    *app.DiskConversions
+	Privileges     *app.Privileges
+	Commands       *app.DeviceCommands
+	LocalAdmin     *app.LocalAdmin
+	Autoinstall    *app.Autoinstall
+	Disk           *app.Disk
+	Revocations    *app.Revocations
+	DMS            *app.DMS
+	Inventory      *app.Inventory
+	Updates        *app.Updates
+	Attention      *app.Attention
+	Overview       *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
 	// IPAllowlist and IPGuard are the IP allow list of the administrative surfaces (plan M7a decisions 12 and 17);
@@ -198,7 +200,7 @@ func NewHandler(d Deps) http.Handler {
 
 	api := http.NewServeMux()
 	h := &handlers{
-		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
+		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,

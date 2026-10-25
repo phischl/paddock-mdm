@@ -1020,7 +1020,7 @@ offline PASS, unlock FAIL; in the auth phase — unlock refused, fail safe. Henc
 | --- | --- |
 | `org_admin` | Everything in the organization, including reveal, Lock, Destroy approval |
 | `org_operator` | Devices, users, profiles, commands except reveal, Lock, Destroy |
-| `org_auditor` | Read-only: audit log, attention list, evidence integrity *(planned: M8b, PDK-110)*; evidence export *(planned: M10)* |
+| `org_auditor` | Read-only: audit log, attention list, evidence integrity; evidence export *(planned: M10)* |
 | `platform_admin` | Create organizations, manage releases; **no** access to organization data |
 
 **Amended 2026-10-16 (ADR 0034, plan M8s):** the step-up keys on the *effective* class of a permission profile
@@ -1992,7 +1992,7 @@ remote with a deploy key per organization. Import from Git is **not** automatic;
 Key screens: Devices (status, last contact, compliance, commands), Device detail (bundle version,
 effective sudo per user, tamper findings, escrow actions), Users & Groups (source badge, lock),
 Profiles (editor with root-equivalent warning, effective-profile view with derivation), Updates
-(holds, schedules, immediate install), Audit (search; evidence integrity *(planned: M8b, PDK-110)*;
+(holds, schedules, immediate install), Audit (search; evidence integrity;
 export *(planned: M10)*), Settings (staleness, DMS, login options, updates; retention *(planned: M10)*).
 
 ---

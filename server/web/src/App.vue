@@ -108,7 +108,10 @@ const focusedPath = ref<string | null>(null)
 const tabStop = computed(() => {
   const paths = navItems.value.map((i) => i.to)
   if (focusedPath.value && paths.includes(focusedPath.value)) return focusedPath.value
-  const current = paths.find((p) => (p === '/' ? route.path === '/' : route.path === p || route.path.startsWith(p + '/')))
+  // The longest match wins: /audit/integrity is its own entry below the prefix /audit (PDK-110).
+  const current = paths
+    .filter((p) => (p === '/' ? route.path === '/' : route.path === p || route.path.startsWith(p + '/')))
+    .reduce<string | undefined>((best, p) => (!best || p.length > best.length ? p : best), undefined)
   return current ?? paths[0] ?? null
 })
 function navLinks(): HTMLElement[] {

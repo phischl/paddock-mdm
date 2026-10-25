@@ -23,10 +23,12 @@ type handlers struct {
 	orgs     *app.Organizations
 	accounts *app.Accounts
 	audit    *app.AuditLog
-	tokens   *app.EnrollmentTokens
-	devices  *app.Devices
-	managed  *app.ManagedConfig
-	releases *app.AgentReleases
+	// integrity is the evidence integrity of the audit log (plan M8b decision 31).
+	integrity *app.AuditIntegrity
+	tokens    *app.EnrollmentTokens
+	devices   *app.Devices
+	managed   *app.ManagedConfig
+	releases  *app.AgentReleases
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative

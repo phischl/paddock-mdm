@@ -911,3 +911,9 @@ process records into.
 - **Decision 27, failed organizations:** an organization counts as failed when its nightly window or its sample day
   failed or errored.
 - V3 stays as written.
+
+## Amendment 2026-10-25 (PDK-110, main as architect lead)
+
+- **V5 wording:** the seeded user bob is the acme **auditor** (development blueprint), not an operator. V5 means an
+  account with the role org_operator; the gates use a temporary user in the organization's `operators` group.
+  V5 stays otherwise as written.
