@@ -12,7 +12,7 @@ Everything an auditor needs about Paddock in one place (plan M6b decision 5).
 | [glossary-de.md](glossary-de.md) | The German terms of the portal |
 
 Operational evidence lives in the runbooks: audit bucket and verification (`docs/operations/audit-bucket.md`),
-nightly chain verification (`docs/operations/audit-bucket.md` section 3) *(planned: M8b, PDK-109)*,
+nightly chain verification (`docs/operations/audit-bucket.md` section 3),
 production checks (`docs/operations/install.md`, `./paddock check`), backups and the restore drill
 (`docs/operations/restore.md`), monitoring (`docs/operations/monitoring.md`), revocation acceptance
 (`docs/operations/revocation-acceptance.md`) and capacity (`docs/operations/capacity.md`).

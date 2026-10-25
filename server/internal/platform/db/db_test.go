@@ -301,6 +301,7 @@ func TestAuditWriterCannotUpdateOrDelete(t *testing.T) {
 
 	org := uuid.Must(uuid.NewV7())
 	insertAuditEvent(t, writer, org)
+	insertVerificationRun(t, writer, org)
 
 	conn, err := pgx.Connect(ctx, env.Writer)
 	if err != nil {
@@ -312,6 +313,8 @@ func TestAuditWriterCannotUpdateOrDelete(t *testing.T) {
 		"DELETE FROM audit_event",
 		"UPDATE audit_object SET event_count = 0",
 		"DELETE FROM audit_manifest",
+		"UPDATE audit_verification_run SET ok = true",
+		"DELETE FROM audit_verification_run",
 	} {
 		_, err := conn.Exec(ctx, stmt)
 		expectPermissionDenied(t, "paddock_audit_writer: "+stmt, err)
@@ -367,6 +370,91 @@ func TestAuditReaderIsolation(t *testing.T) {
 	expectPermissionDenied(t, "paddock_audit_reader SELECT audit_object", err)
 	if err := reader.InOrg(context.Background(), func(context.Context, *auditstore.Queries) error { return nil }); !errors.Is(err, db.ErrNoOrganization) {
 		t.Fatalf("AuditReader.InOrg without principal: got %v", err)
+	}
+}
+
+// TestAuditReaderSeesOnlyItsChainStatus: the reader policies on audit_verification_run and audit_manifest (plan M8b
+// decision 24) show the reader its own organization's rows only, and nothing without an organization context.
+func TestAuditReaderSeesOnlyItsChainStatus(t *testing.T) {
+	env := sharedAudit(t)
+	ctx := context.Background()
+	writer, err := db.NewAuditWriterPool(ctx, env.Writer, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	orgA, orgB := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, org := range []uuid.UUID{orgA, orgB} {
+		insertVerificationRun(t, writer, org)
+		insertManifest(t, writer, org)
+	}
+
+	conn, err := pgx.Connect(ctx, env.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	for _, table := range []string{"audit_verification_run", "audit_manifest"} {
+		orgs := func(org uuid.UUID) map[uuid.UUID]int {
+			t.Helper()
+			seen := map[uuid.UUID]int{}
+			err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+				if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", org.String()); err != nil {
+					return err
+				}
+				rows, err := tx.Query(ctx, "SELECT organization_id FROM "+table+" WHERE organization_id = ANY($1)", []uuid.UUID{orgA, orgB})
+				if err != nil {
+					return err
+				}
+				ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+				for _, id := range ids {
+					seen[id]++
+				}
+				return err
+			})
+			if err != nil {
+				t.Fatalf("%s as reader of %s: %v", table, org, err)
+			}
+			return seen
+		}
+		if seen := orgs(orgA); seen[orgA] != 1 || seen[orgB] != 0 {
+			t.Errorf("%s: reader of org A sees %v", table, seen)
+		}
+		if seen := orgs(orgB); seen[orgB] != 1 || seen[orgA] != 0 {
+			t.Errorf("%s: reader of org B sees %v", table, seen)
+		}
+		// Without paddock.org_id the policy fails closed instead of showing every row.
+		if _, err := conn.Exec(ctx, "SELECT * FROM "+table); err == nil {
+			t.Errorf("%s: reader without organization context succeeded", table)
+		}
+	}
+}
+
+func insertVerificationRun(t *testing.T, writer *db.AuditWriterPool, org uuid.UUID) {
+	t.Helper()
+	now := time.Now().UTC()
+	err := writer.InWriter(context.Background(), func(ctx context.Context, q *auditstore.Queries) error {
+		return q.InsertAuditVerificationRun(ctx, auditstore.InsertAuditVerificationRunParams{
+			ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Trigger: "cli", FromDay: now, ToDay: now, StartedAt: now,
+			FinishedAt: now, Days: 1, Ok: true, Problems: []byte(`[]`), EventID: uuid.Must(uuid.NewV7()),
+		})
+	})
+	if err != nil {
+		t.Fatalf("insert verification run: %v", err)
+	}
+}
+
+func insertManifest(t *testing.T, writer *db.AuditWriterPool, org uuid.UUID) {
+	t.Helper()
+	now := time.Now().UTC()
+	err := writer.InWriter(context.Background(), func(ctx context.Context, q *auditstore.Queries) error {
+		return q.InsertAuditManifest(ctx, auditstore.InsertAuditManifestParams{
+			OrganizationID: org, Day: now, Sha256: make([]byte, 32), Signature: "vault:v1:test", KeyVersion: 1,
+			ObjectKey: "org/" + org.String() + "/manifests/test.json",
+		})
+	})
+	if err != nil {
+		t.Fatalf("insert manifest: %v", err)
 	}
 }
 

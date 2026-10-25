@@ -59,6 +59,26 @@ groups:
         annotations:
           summary: "Audit writer transaction p95 above 5 s"
           description: "The 95th percentile of the audit writer's transactions is {{ $value | humanizeDuration }}; compare paddock_audit_worm_put_seconds to tell the WORM store from the database."
+      # The nightly verification at 00:45 UTC (plan M8b decision 27) sets the gauge after every cycle; a missing
+      # seal shows up as "no manifest" and fires this until the day is sealed and verified again.
+      - alert: PaddockAuditChainBroken
+        expr: paddock_audit_verify_failed_organizations > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The audit hash chain failed its nightly verification"
+          description: "{{ $value }} organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
+      # 36 h leave one missed night of slack; the writer seeds the gauge at start, so a fresh writer does not fire,
+      # but leaves it unset (0, fires) while the audit index is unreadable (plan M8b amendment 2026-10-25).
+      - alert: PaddockAuditVerifyStale
+        expr: time() - paddock_audit_verify_last_run_timestamp_seconds > 36 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The audit chain was not verified for 36 hours"
+          description: "The audit writer's last nightly chain verification finished {{ $value | humanizeDuration }} ago; check the audit writer's log for the 00:45 UTC cycle."
 
   - name: paddock-control-plane
     rules:

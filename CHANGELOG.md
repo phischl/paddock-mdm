@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of being discarded as duplicates. A check-in is only compared with events the gateway received before it.
   Schema: migration 00069 adds the event gap and dropped-range tables, the receipt time of delivered events and the
   attention kind `event_gap`.
+- Nightly audit chain verification (plan M8b, ISO 27001 A.5.33): every night at 00:45 UTC the audit writer verifies
+  each organization's last seven sealed days and one random older day, and records every run, including
+  `paddock-server audit verify`, as `audit.chain_verified` or `audit.chain_verification_failed` in the organization's
+  own audit log and as a verification run; `audit verify` now prints the run ID (`run <id>`). New metrics
+  `paddock_audit_verify_runs_total`, `paddock_audit_verify_failed_organizations` and
+  `paddock_audit_verify_last_run_timestamp_seconds`, new alerts `PaddockAuditChainBroken` (critical) and
+  `PaddockAuditVerifyStale` (warning), runbook section "Nightly verification" in `docs/operations/audit-bucket.md`.
+  Schema: audit migration 00004 adds the verification runs and lets the auditor role read its organization's
+  manifests and runs.
 
 ### Changed
 

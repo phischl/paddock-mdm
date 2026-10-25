@@ -56,6 +56,37 @@ func (q *Queries) CountAuditEvents(ctx context.Context, arg CountAuditEventsPara
 	return count, err
 }
 
+const countAuditVerificationRuns = `-- name: CountAuditVerificationRuns :many
+SELECT trigger, ok, count(*) AS runs FROM audit_verification_run GROUP BY trigger, ok
+`
+
+type CountAuditVerificationRunsRow struct {
+	Trigger string
+	Ok      bool
+	Runs    int64
+}
+
+// The writer's paddock_audit_verify_runs_total for ok and failed runs of every process, the CLI included.
+func (q *Queries) CountAuditVerificationRuns(ctx context.Context) ([]CountAuditVerificationRunsRow, error) {
+	rows, err := q.db.Query(ctx, countAuditVerificationRuns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountAuditVerificationRunsRow{}
+	for rows.Next() {
+		var i CountAuditVerificationRunsRow
+		if err := rows.Scan(&i.Trigger, &i.Ok, &i.Runs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ensureAuditPartition = `-- name: EnsureAuditPartition :exec
 SELECT audit_ensure_partition($1::date)
 `
@@ -227,6 +258,58 @@ func (q *Queries) InsertAuditObject(ctx context.Context, arg InsertAuditObjectPa
 		arg.Sha256,
 	)
 	return err
+}
+
+const insertAuditVerificationRun = `-- name: InsertAuditVerificationRun :exec
+INSERT INTO audit_verification_run (id, organization_id, trigger, from_day, to_day, started_at, finished_at, days,
+                                    objects, ok, problems, event_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12)
+`
+
+type InsertAuditVerificationRunParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Trigger        string
+	FromDay        time.Time
+	ToDay          time.Time
+	StartedAt      time.Time
+	FinishedAt     time.Time
+	Days           int32
+	Objects        int32
+	Ok             bool
+	Problems       json.RawMessage
+	EventID        uuid.UUID
+}
+
+func (q *Queries) InsertAuditVerificationRun(ctx context.Context, arg InsertAuditVerificationRunParams) error {
+	_, err := q.db.Exec(ctx, insertAuditVerificationRun,
+		arg.ID,
+		arg.OrganizationID,
+		arg.Trigger,
+		arg.FromDay,
+		arg.ToDay,
+		arg.StartedAt,
+		arg.FinishedAt,
+		arg.Days,
+		arg.Objects,
+		arg.Ok,
+		arg.Problems,
+		arg.EventID,
+	)
+	return err
+}
+
+const latestNightlyRunFinished = `-- name: LatestNightlyRunFinished :one
+SELECT finished_at FROM audit_verification_run WHERE trigger = 'nightly' ORDER BY finished_at DESC LIMIT 1
+`
+
+// The end of the newest nightly run of any organization; no row before the first one (plan M8b decision 27).
+func (q *Queries) LatestNightlyRunFinished(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, latestNightlyRunFinished)
+	var finished_at time.Time
+	err := row.Scan(&finished_at)
+	return finished_at, err
 }
 
 const listAuditEvents = `-- name: ListAuditEvents :many
@@ -464,6 +547,17 @@ func (q *Queries) ReleaseAuditSealLock(ctx context.Context) (bool, error) {
 	return unlocked, err
 }
 
+const releaseAuditVerifyLock = `-- name: ReleaseAuditVerifyLock :one
+SELECT pg_advisory_unlock(hashtext('audit-verify')) AS unlocked
+`
+
+func (q *Queries) ReleaseAuditVerifyLock(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, releaseAuditVerifyLock)
+	var unlocked bool
+	err := row.Scan(&unlocked)
+	return unlocked, err
+}
+
 const transactionTime = `-- name: TransactionTime :one
 SELECT transaction_timestamp()::timestamptz AS recorded_at
 `
@@ -482,6 +576,17 @@ SELECT pg_try_advisory_lock(hashtext('audit-seal')) AS locked
 
 func (q *Queries) TryAuditSealLock(ctx context.Context) (bool, error) {
 	row := q.db.QueryRow(ctx, tryAuditSealLock)
+	var locked bool
+	err := row.Scan(&locked)
+	return locked, err
+}
+
+const tryAuditVerifyLock = `-- name: TryAuditVerifyLock :one
+SELECT pg_try_advisory_lock(hashtext('audit-verify')) AS locked
+`
+
+func (q *Queries) TryAuditVerifyLock(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, tryAuditVerifyLock)
 	var locked bool
 	err := row.Scan(&locked)
 	return locked, err

@@ -353,3 +353,97 @@ tests:
       - eval_time: 11m
         alertname: PaddockAutoUnsealWithdrawn
         exp_alerts: []
+
+  - name: a broken audit chain fires at once
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_verify_failed_organizations{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 0 2 2"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PaddockAuditChainBroken
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: PaddockAuditChainBroken
+        exp_alerts:
+          - exp_labels: { severity: critical, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The audit hash chain failed its nightly verification"
+              description: "2 organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
+
+  - name: a chain verification older than 36 hours warns after one more hour
+    interval: 1m
+    input_series:
+      # The last run finished at the start of the test (timestamp 0) and none follows.
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x2300"
+    alert_rule_test:
+      - eval_time: 36h
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 36h59m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 37h2m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The audit chain was not verified for 36 hours"
+              description: "The audit writer's last nightly chain verification finished 1d 13h 2m 0s ago; check the audit writer's log for the 00:45 UTC cycle."
+
+  - name: a stale verification still warns after a writer restart that re-seeds the old last run
+    interval: 1m
+    input_series:
+      # Last run at timestamp 0; the writer restarts at 40h (30 minutes without samples) and seeds the same value.
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x2400 _x30 0x600"
+    alert_rule_test:
+      - eval_time: 40h20m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 41h30m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 41h32m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The audit chain was not verified for 36 hours"
+              description: "The audit writer's last nightly chain verification finished 1d 17h 32m 0s ago; check the audit writer's log for the 00:45 UTC cycle."
+
+  - name: a writer restart that seeds the start time does not warn
+    interval: 1m
+    input_series:
+      # Last run at timestamp 0; the writer restarts at 30h and, without a recorded nightly run, seeds 30h31m.
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x1800 _x30 109860x1200"
+    alert_rule_test:
+      - eval_time: 37h2m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 50h30m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+
+  - name: an unset last run after a restart during a database outage warns after one hour
+    interval: 1m
+    input_series:
+      # Last run at 39h; the writer restarts at 40h while the audit index is unreadable and exports the unset 0.
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "140400x2400 _x30 0x600"
+    alert_rule_test:
+      - eval_time: 40h20m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 41h30m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 41h32m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The audit chain was not verified for 36 hours"
+              description: "The audit writer's last nightly chain verification finished 1d 17h 32m 0s ago; check the audit writer's log for the 00:45 UTC cycle."

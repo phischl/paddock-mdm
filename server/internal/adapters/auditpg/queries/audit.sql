@@ -99,3 +99,23 @@ SELECT count(*) FROM (
          OR target->>'display' ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
   LIMIT @count_limit
 ) matching;
+
+-- name: InsertAuditVerificationRun :exec
+INSERT INTO audit_verification_run (id, organization_id, trigger, from_day, to_day, started_at, finished_at, days,
+                                    objects, ok, problems, event_id)
+VALUES (@id, @organization_id, @trigger, @from_day, @to_day, @started_at, @finished_at, @days, @objects, @ok,
+        @problems, @event_id);
+
+-- name: LatestNightlyRunFinished :one
+-- The end of the newest nightly run of any organization; no row before the first one (plan M8b decision 27).
+SELECT finished_at FROM audit_verification_run WHERE trigger = 'nightly' ORDER BY finished_at DESC LIMIT 1;
+
+-- name: CountAuditVerificationRuns :many
+-- The writer's paddock_audit_verify_runs_total for ok and failed runs of every process, the CLI included.
+SELECT trigger, ok, count(*) AS runs FROM audit_verification_run GROUP BY trigger, ok;
+
+-- name: TryAuditVerifyLock :one
+SELECT pg_try_advisory_lock(hashtext('audit-verify')) AS locked;
+
+-- name: ReleaseAuditVerifyLock :one
+SELECT pg_advisory_unlock(hashtext('audit-verify')) AS unlocked;
