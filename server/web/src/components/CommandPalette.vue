@@ -163,14 +163,15 @@ function onKeydown(e: KeyboardEvent): void {
             >{{ entry.hint }}</kbd>
           </li>
         </template>
-        <li
-          v-if="entries.length === 0"
-          role="presentation"
-          class="pd-palette-empty pd-muted"
-        >
-          {{ t('palette.noMatches') }}
-        </li>
       </ul>
+      <!-- Outside the listbox: a listbox may own only options and groups (axe aria-required-children, PDK-352). -->
+      <p
+        v-if="entries.length === 0"
+        role="status"
+        class="pd-palette-empty pd-muted"
+      >
+        {{ t('palette.noMatches') }}
+      </p>
     </div>
   </v-dialog>
 </template>

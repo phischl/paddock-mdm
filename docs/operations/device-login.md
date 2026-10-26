@@ -13,7 +13,7 @@ At the first bundle with login management (agents report bundle schema 2), the a
    configuration `himmelblaud` fails in a restart loop that keeps sshd down and the installation waiting. No
    Himmelblau package ships the file. It is removed again if the installation fails, but kept after a timeout, which
    may leave the packages half configured. It then installs Himmelblau `PADDOCK_HIMMELBLAU_VERSION` (setting of
-   `paddock-compiler`, default `4.0.6`) from the official repository
+   `paddock-compiler`, default `4.0.7`) from the official repository
    `https://packages.himmelblau-idm.org/stable/<version>/deb/ubuntu<release>/`. The repository signing key is built
    into the agent (fingerprint `E87F D8D4 63A5 E481 4B9C DBA9 0CC0 D400 2C42 5E03`) and written to
    `/etc/apt/keyrings/himmelblau.gpg`; the source is `/etc/apt/sources.list.d/paddock-himmelblau.list`. Only this

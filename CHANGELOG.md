@@ -88,9 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   milestone) or dropped: Authentik event ingestion, event-gap and clock-drift detection, Himmelblau component check
   and log shipper, per-organization retention, evidence export, `collect_status`, `playbook`, Git export, SIEM
   forward (plan M8b, ADR 0030).
+- Updated bundled components (patch releases; most of them distrust the compromised eMudhra/emSign certificate
+  authorities): Authentik 2026.8.5 (was 2026.8.4), RustFS 1.0.4 (was 1.0.3), Fleet and fleetctl v4.93.2 (was v4.93.1;
+  no Fleet database migration) with the Fleet NVD release 202610260056, AWS CLI 2.38.5 (was 2.38.2), Prometheus
+  v3.15.1 (was v3.15.0); build and release tooling BuildKit v0.34.1, cosign v3.1.4 (also used to verify the operator
+  bundle), Trivy 0.76.1. Devices install Himmelblau 4.0.7 by default (`PADDOCK_HIMMELBLAU_VERSION`, was 4.0.6). The
+  portal uses Vuetify 4.2.6 (was 4.2.5). Schema: unchanged.
 
 ### Fixed
 
+- Command palette (PDK-352): with no matching entry, the "No matches" hint is no longer placed inside the result
+  list, which broke the list's accessibility rule; screen readers now get it as a status message.
 - Portal number fields (PDK-429): the unit of a number field no longer disappears when the field is too narrow for its
   label. The fields under *Login & privileges*, *Updates* and *Dead man's switch*, the password timeout of a
   permission profile and the contact thresholds of a device group now have a short label, show their unit (days,
