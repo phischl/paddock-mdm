@@ -76,3 +76,12 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
 - **Service account** `paddock-service` holds `authentik_core.view_authenticatedsession` and
   `authentik_core.delete_authenticatedsession`: *End all sessions* deletes the authenticated sessions of every portal
   user (`core/authenticated_sessions/bulk_delete`).
+
+## Amendment 2026-10-26 (ADR 0045) — one identity may hold the platform role and one organization role
+- `ResolveRole` no longer denies a member of `paddock.platform.admins` who also holds exactly one organization role
+  group: the resolution carries both (`Choices`) and every caller narrows it to one active role. `multiple_organizations`
+  and `multiple_roles` stay denials, also for a platform administrator. The denial reason `platform_and_organization`
+  is removed; `role_not_granted` is added (a switch or MCP login that asks for a role the groups do not grant).
+- The portal sign-in lands in the organization role; `POST /api/auth/switch` starts a new sign-in for the other
+  role that ends the previous session. The step-up callback accepts a step-up token whose groups grant the
+  session's role next to the other one. The organization and platform reconciliation rounds are unchanged.

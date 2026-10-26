@@ -403,7 +403,10 @@ troubleshooting workflows to the assistant.
 - MCP resources, prompts, sampling, elicitation, `tools/list_changed` notifications.
 - Any change under `agent/`, in particular `agent/internal/revoke/` and `agent/cmd/paddock-revoke/`; changes to the
   revocation endpoints, their two-person rule or their step-up.
-- A role switch (PDK-201); `ResolveRole` keeps denying an identity with platform and organization roles.
+- A role switch inside an MCP session. PDK-201 (ADR 0045, alpha.6) ships before this plan: `ResolveRole` then
+  returns both roles of a platform administrator with one organization role, and `POST /api/auth/mcp/session`
+  narrows them with `RoleResolution.Active(role)` (`role` in the request body, default `organization`;
+  `paddockctl mcp login --platform`); ADR 0044 amendment 2026-10-26.
 - Any default other than "MCP off until an administrator saves a policy with `enabled: true`"; any MCP SDK version
   other than v1.8.0 without a new approval.
 

@@ -231,3 +231,13 @@ Decisions:
 Consequences: RR-38 is reworded (the factor now depends on Authentik's login event, not on its stage alone); RR-62
 (WebAuthn-capable browser needed) and RR-66 (end-all scope) are added; `docs/operations/step-up.md` and the upgrade
 runbook change; plan M8f implements (PDK-297, PDK-299, PDK-181, PDK-190).
+
+## Amendment 2026-10-26 (ADR 0045) — role switch: one role per session, a switch is a new session
+- Decision 4: `sessions.Record` is unchanged; the cookie payload (version 2) gains the optional `alt_role` and
+  `alt_slug` (the role the identity may switch to). A switch (`POST /api/auth/switch` → Authentik →
+  `GET /api/auth/callback`) opens a new session with a new `sid`, the other account row and no step-up, and deletes
+  the previous session's record inside the login's transaction; it is recorded as the new session's `admin.login`
+  with `previous_role`. A copy of the previous cookie answers 401 from then on.
+- Decision 5: the step-up callback narrows the step-up token's resolution to the session's role (`Active`) before
+  comparing; a two-role identity steps up in either session. Mismatch handling is unchanged.
+- Decision 3 and the MCP rule of ADR 0044 stand: an MCP session carries the one role chosen at `paddockctl mcp login`.
