@@ -389,3 +389,12 @@ A7. **SDK.** The MCP SDK v1.8.0 carries `golang.org/x/oauth2`, which the CLI use
 - − Hosted MCP clients remain unserved until M14b; the loopback variant is a later convenience.
 - Amended documents: plan M14 (rewritten), tickets PDK-435 … PDK-444, ADR 0007 (third public provider), ADR 0034
   (MCP sessions are decision-4 sessions; decision 3 applies), architecture §3.2, §9.6, §14.2, §17.1, §22.
+
+## Amendment 2026-10-26 (ADR 0045) — the role of an MCP session
+- `POST /api/auth/mcp/session` takes `role: "platform" | "organization"` (default `organization`) and narrows the
+  resolution of the ID token's groups with `RoleResolution.Active` exactly like the portal callback; a role the groups
+  do not grant is refused with 403 `forbidden`, detail `role_not_granted`, one `admin.login` denied event
+  (`denial_reason: role_not_granted`). `paddockctl mcp login --platform` sends `role: platform`; the session file
+  stores the choice and every renewal repeats it. An MCP session has no `alternate_role` and no switch; the human
+  runs `paddockctl mcp login` again to act in the other role. The follow-up "PDK-201 must keep one role per session"
+  is satisfied by ADR 0045 decision 4. PDK-436 and PDK-439 implement this amendment.
