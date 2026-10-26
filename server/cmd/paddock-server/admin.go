@@ -26,15 +26,17 @@ import (
 )
 
 // adminCommand is a parsed paddock-server admin command line (plan M6c decision 20; allowlist: plan M7a decision 21;
-// agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8).
+// agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8; agent-rollout, agent-rollout-halt: ADR 0034
+// amendment 2026-10-26).
 type adminCommand struct {
-	name    string // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | security-review | end-sessions | auto-unseal
-	by      int64  // bump-bundle-seq only
-	sub     string // allowlist: show | disable | add; auto-unseal: show | verify | disable
-	cidr    string // allowlist add
-	label   string // allowlist add
-	version string // agent-release
-	dir     string // agent-release
+	name    string             // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | security-review | end-sessions | auto-unseal
+	by      int64              // bump-bundle-seq only
+	sub     string             // allowlist: show | disable | add; auto-unseal: show | verify | disable
+	cidr    string             // allowlist add
+	label   string             // allowlist add
+	version string             // agent-release, agent-rollout, agent-rollout-halt
+	dir     string             // agent-release
+	rollout app.RolloutOptions // agent-rollout
 }
 
 // parseAdmin parses the arguments after "admin"; every error is a usage error.
@@ -104,6 +106,20 @@ func parseAdmin(args []string) (adminCommand, error) {
 			return adminCommand{}, errUsage
 		}
 		cmd.version, cmd.dir = *version, *dir
+	case "agent-rollout":
+		fs.Func("version", "", onceFlag(&cmd.version))
+		fs.Func("waves", "", func(v string) (err error) { cmd.rollout.Waves, err = parseWaves(v); return err })
+		fs.Func("min-wave-minutes", "", intFlag(&cmd.rollout.MinWaveMinutes))
+		fs.Func("failure-threshold-percent", "", intFlag(&cmd.rollout.FailureThresholdPercent))
+		fs.Func("failure-threshold-min", "", intFlag(&cmd.rollout.FailureThresholdMin))
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || cmd.version == "" {
+			return adminCommand{}, errUsage
+		}
+	case "agent-rollout-halt":
+		fs.Func("version", "", onceFlag(&cmd.version))
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || cmd.version == "" {
+			return adminCommand{}, errUsage
+		}
 	default:
 		return adminCommand{}, errUsage
 	}
@@ -117,8 +133,11 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 	if err != nil {
 		return err
 	}
-	if cmd.name == "agent-release" {
+	switch cmd.name {
+	case "agent-release":
 		return runAgentRelease(ctx, l, cmd, os.Stdout)
+	case "agent-rollout", "agent-rollout-halt":
+		return runAgentRollout(ctx, l, cmd, os.Stdout)
 	}
 	dsn := l.SecretFile("PADDOCK_DB_WORKER_URL_FILE")
 	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")

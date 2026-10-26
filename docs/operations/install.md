@@ -271,6 +271,18 @@ refuses a directory it cannot read and names the files. It verifies every signat
 `.secrets/release-production/` before anything is stored, uploads the files, publishes the release and prints it as JSON; the release then shows on the portal's
 *Agent releases* page, where its staged rollout starts.
 
+**Starting the rollout.** A platform administrator starts the staged rollout on the release page of the portal. The
+host operator can start and halt it on the control plane instead, without a portal account:
+
+```sh
+./paddock agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P] [--failure-threshold-min M]
+./paddock agent-rollout-halt <version>
+```
+
+Both print the rollout as JSON and refuse with the API's problem codes; they skip the portal's second factor, so
+shell access to this host decides who may roll out agents (`docs/operations/agent-releases.md` "From the
+control-plane host", residual risk RR-90).
+
 ## 11. Backups
 
 The control plane's configuration includes `compose.backup.yaml`: pgBackRest for both PostgreSQL databases, OpenBao

@@ -132,3 +132,53 @@ func TestAgentReleasePublishFromHostAuditsRefusedCreation(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentRolloutFromHost: the host commands start and halt a rollout with the API's validation and problem codes and
+// one audit event per attempt of the host actor (ADR 0034 amendment 2026-10-26).
+func TestAgentRolloutFromHost(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	h.haltAll(t)
+	t.Cleanup(func() { h.haltAll(t) })
+	corr := "host-" + uuid.NewString()
+	ctx := httpx.WithRequestID(context.Background(), corr)
+	hostEvents := func(code, outcome string) int {
+		t.Helper()
+		return countRows(t, h.super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = $2 AND outcome = $3
+			AND actor->>'type' = 'system' AND actor->>'display' = 'paddock-server admin'`, corr, code, outcome)
+	}
+
+	draft := uniqueVersion()
+	if _, err := h.releases.Create(platformAdmin(), draft); err != nil {
+		t.Fatal(err)
+	}
+	_, err := h.releases.StartRolloutFromHost(ctx, draft, app.RolloutOptions{})
+	expectProblem(t, err, problem.InvalidState)
+	v := h.published(t)
+	_, err = h.releases.StartRolloutFromHost(ctx, v, app.RolloutOptions{Waves: []int{50, 10}})
+	expectProblem(t, err, problem.InvalidRequest)
+	if n := hostEvents("agent_rollout.started", "failure"); n != 2 {
+		t.Errorf("%d failed agent_rollout.started events of the host actor, want 2", n)
+	}
+
+	r, err := h.releases.StartRolloutFromHost(ctx, v, app.RolloutOptions{})
+	if err != nil || r.Status != agentrelease.RolloutRunning || len(r.Waves) != len(agentrelease.DefaultWaves) ||
+		r.StartedBy != "paddock-server admin" {
+		t.Fatalf("start: %+v, %v", r, err)
+	}
+	if n := hostEvents("agent_rollout.started", "success"); n != 1 {
+		t.Errorf("%d agent_rollout.started events of the host actor, want 1", n)
+	}
+	_, err = h.releases.StartRolloutFromHost(ctx, v, app.RolloutOptions{})
+	expectProblem(t, err, problem.AlreadyExists)
+	_, err = h.releases.StartRolloutFromHost(ctx, h.published(t), app.RolloutOptions{})
+	expectProblem(t, err, problem.InvalidState)
+
+	if r, err := h.releases.HaltFromHost(ctx, v); err != nil || r.Status != agentrelease.RolloutHalted || r.HaltedReason == nil {
+		t.Fatalf("halt: %+v, %v", r, err)
+	}
+	if n := hostEvents("agent_rollout.halted", "success"); n != 1 {
+		t.Errorf("%d agent_rollout.halted events of the host actor, want 1", n)
+	}
+	_, err = h.releases.HaltFromHost(ctx, v)
+	expectProblem(t, err, problem.InvalidState)
+}

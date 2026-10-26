@@ -311,7 +311,8 @@ offline machine with the custodians' backup copy as before: check the inputs aga
 
 ## Rolling out
 
-`POST …/<version>/rollout` (or *Start rollout* on the release page of the portal) starts a staged rollout. Defaults:
+`POST …/<version>/rollout` (or *Start rollout* on the release page of the portal, or `./paddock agent-rollout` on the
+control-plane host, see below) starts a staged rollout. Defaults:
 waves 1 %, 10 %, 50 %, 100 % of the devices, each wave at least 1440 minutes, halt when the failed devices reach
 `max(3, ceil(2 % of the devices in the waves so far))`. Overrides in the request body: `waves`,
 `min_wave_minutes` (at least 60 outside development), `failure_threshold_percent`, `failure_threshold_min`.
@@ -327,6 +328,30 @@ Only one rollout runs at a time.
   devices that enroll later.
 - *Halt* stops the offer within a minute (the next worker round); devices that already updated keep the release. *Resume* continues in the current wave; if
   the failures still reach the threshold, the next round halts it again.
+
+### From the control-plane host
+
+The host operator can start and halt a rollout in the bundle directory of the control plane (or a lab host) without a
+portal account (ADR 0034 amendment 2026-10-26):
+
+```sh
+./paddock agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P] [--failure-threshold-min M]
+./paddock agent-rollout-halt <version>
+```
+
+They run `paddock-server admin agent-rollout` and `admin agent-rollout-halt` in the `paddock-api` service: the same
+use cases, defaults, validation and audit codes (`agent_rollout.started`, `agent_rollout.halted`) as *Start rollout*
+and *Halt*, with the system actor `paddock-server admin`. Without options the defaults above apply. They print the
+rollout as JSON; a refusal exits with status 1 and names the API's problem code on stderr, e.g.
+`agent-rollout 1.2.0: refused: problem invalid_state: only published releases can be rolled out` (`invalid_state`
+also for another running rollout or a halt of a rollout that does not run, `already_exists` for a release that
+already has a rollout, `invalid_request` for invalid waves or bounds, `not_found` for an unknown release). A usage
+error exits with status 2. *Resume* stays in the portal.
+
+The commands skip the portal's sign-in, second factor and step-up: whoever can run commands in the `paddock-api`
+container on the control-plane host can roll any published release out to every device (residual risk RR-90).
+Restrict shell and container access on that host accordingly, and review `agent_rollout.*` events whose actor is
+`paddock-server admin`.
 
 ## On the device
 

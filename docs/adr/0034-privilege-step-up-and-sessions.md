@@ -241,3 +241,30 @@ runbook change; plan M8f implements (PDK-297, PDK-299, PDK-181, PDK-190).
 - Decision 5: the step-up callback narrows the step-up token's resolution to the session's role (`Active`) before
   comparing; a two-role identity steps up in either session. Mismatch handling is unchanged.
 - Decision 3 and the MCP rule of ADR 0044 stand: an MCP session carries the one role chosen at `paddockctl mcp login`.
+
+## Amendment 2026-10-26 (PDK-449) — host commands for the agent rollout
+
+Context: starting, halting and resuming an agent rollout are platform actions (`agent_rollout.*`). They need no
+step-up, but they do need an interactive platform administrator: the platform API refuses API tokens, and the portal
+sign-in requires WebAuthn (amendment 2026-10-18). On the lab (2026-10-25) the host operator had to switch to a
+platform administrator's portal account to start the alpha.5 rollout, although the release upload already has a host
+command (`./paddock agent-release`, system actor `paddock-server admin`, plan M7b decision 31).
+
+Decision: `paddock-server admin agent-rollout` and `paddock-server admin agent-rollout-halt` (bundle entry points
+`./paddock agent-rollout <version> [options]` and `./paddock agent-rollout-halt <version>`) run the rollout use cases
+of the platform API with the system actor `paddock-server admin`. They are a deliberate exception from the
+interactive sign-in, its second factor and any step-up, for the **host operator** only: a shell that can run
+commands in the `paddock-api` container on the control-plane host is root-equivalent there (database and OpenBao
+credentials, the stack's secrets, the images), so a portal factor adds no barrier against that person. The exception
+covers nothing else: the same validation and problem codes as the API, the same audit codes through `ActionRunner`
+with the system actor visible in the event, only published (signed and verified) releases. The waves and the failure
+threshold are the operator's choice, as on the API (`--waves 100` and a threshold that never triggers are accepted),
+so they are no barrier against this actor; the chosen values are recorded in the event's params. The command is not
+reachable over the network; API tokens keep being refused (decision 3).
+Options weighed: a step-up-bound token for the host (rejected — the decision 3 follow-up is a separate feature and
+adds nothing against a host-root operator); keeping the portal as the only path (rejected — it forces shared or
+borrowed platform accounts on small installations, which is worse for the audit trail).
+
+Consequences: residual risk **RR-90** (*a host operator starts a fleet-wide rollout without a second factor*,
+`docs/compliance/residual-risks.md`); `docs/operations/agent-releases.md` and `install.md` §10 name the host
+commands. Further host commands that bypass the portal's factor need their own amendment.

@@ -37,6 +37,9 @@ commands:
   admin allowlist add --cidr <cidr> --label <label>
   admin auto-unseal show|verify|disable
   admin agent-release --version <x.y.z> --dir <dir>
+  admin agent-rollout --version <x.y.z> [--waves 1,10,50,100] [--min-wave-minutes N]
+        [--failure-threshold-percent P] [--failure-threshold-min M]
+  admin agent-rollout-halt --version <x.y.z>
   backup openbao
   backup decrypt <in> <out|->
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json

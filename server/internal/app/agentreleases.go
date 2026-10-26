@@ -537,6 +537,19 @@ func (a *AgentReleases) Halt(ctx context.Context, version string) (pgstore.Agent
 	return a.transition(ctx, SpecAgentRolloutHalt, version, agentrelease.RolloutRunning, agentrelease.RolloutHalted, &reason)
 }
 
+// StartRolloutFromHost is StartRollout with the system actor of the host commands (`paddock-server admin
+// agent-rollout`, ADR 0034 amendment 2026-10-26): the same validation, problem codes and audit code as the API.
+func (a *AgentReleases) StartRolloutFromHost(ctx context.Context, version string, o RolloutOptions) (pgstore.AgentRollout, error) {
+	return a.StartRollout(systemPlatform(ctx), version, o)
+}
+
+// HaltFromHost is Halt with the system actor of the host commands (`paddock-server admin agent-rollout-halt`, ADR
+// 0034 amendment 2026-10-26).
+func (a *AgentReleases) HaltFromHost(ctx context.Context, version string) (pgstore.AgentRollout, error) {
+	reason := "halted on the control-plane host"
+	return a.transition(systemPlatform(ctx), SpecAgentRolloutHalt, version, agentrelease.RolloutRunning, agentrelease.RolloutHalted, &reason)
+}
+
 // Resume continues a halted rollout in the wave where it stopped; a rollout that had completed becomes the current
 // release again. Failures reported before the resume no longer count (plan M2.1 decision 1).
 func (a *AgentReleases) Resume(ctx context.Context, version string) (pgstore.AgentRollout, error) {

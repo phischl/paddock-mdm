@@ -74,6 +74,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listed once per round for both the administrator account check and this record. Schema: migrations 00070 and 00071
   add the role member and per-role snapshot tables of organizations and of the platform.
 
+- Host commands for the agent rollout (PDK-449, ADR 0034 amendment 2026-10-26): `./paddock agent-rollout <version>
+  [--waves …] [--min-wave-minutes N] [--failure-threshold-percent P] [--failure-threshold-min M]` and
+  `./paddock agent-rollout-halt <version>` start and halt a staged rollout on the control-plane host
+  (`paddock-server admin agent-rollout` / `agent-rollout-halt` in `paddock-api`) without a portal account. Same
+  validation, defaults and audit codes as the API, with the system actor `paddock-server admin`; the rollout is
+  printed as JSON, a refusal names the API's problem code. The commands skip the portal's second factor and step-up
+  for the host operator: residual risk RR-90.
+
 ### Changed
 
 - Documentation: the architecture and the compliance pack now mark every unbuilt feature as planned (with its
