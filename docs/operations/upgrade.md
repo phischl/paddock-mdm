@@ -32,6 +32,10 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   the in-place encryption request as unsupported. Its migration 00067 builds an index on the vulnerability findings;
   on large finding tables the migration step takes a little longer (well under a second at 200 000 findings), and
   vulnerability updates from the inventory sync wait for it.
+- From 0.1.0-alpha.6: Fleet moves to v4.93.2. That patch has no database migration, but take the Fleet dump of step 3
+  anyway: a rollback restores it like for every Fleet version change. Authentik moves to 2026.8.5; `./paddock up`
+  recreates its containers, and it applies the blueprints itself at that start. No extra restart and no manual
+  blueprint re-apply is needed.
 
 ## Upgrade (each host)
 

@@ -72,7 +72,7 @@ v=<version>      # for example 1.2.0
 curl -fLO https://github.com/phischl/paddock-mdm/releases/download/v$v/paddock-deploy-$v.tar.gz
 curl -fLO https://github.com/phischl/paddock-mdm/releases/download/v$v/paddock-deploy-$v.tar.gz.sigstore.json
 # COSIGN_IMAGE of versions.env in the repository at the release tag (tag and digest)
-cosign_image=ghcr.io/sigstore/cosign/cosign:v3.1.3@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8
+cosign_image=ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d
 docker run --rm -v "$PWD:/w" -w /w "$cosign_image" verify-blob paddock-deploy-$v.tar.gz \
   --bundle paddock-deploy-$v.tar.gz.sigstore.json \
   --certificate-identity-regexp '^https://github.com/phischl/paddock-mdm/\.github/workflows/release\.yml@refs/tags/v' \

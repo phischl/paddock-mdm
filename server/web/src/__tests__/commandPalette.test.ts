@@ -32,10 +32,10 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function openPalette(): Promise<{ open: ReturnType<typeof ref<boolean>> }> {
+async function openPalette(ctx: PaletteContext = context): Promise<{ open: ReturnType<typeof ref<boolean>> }> {
   const open = ref(false)
   wrapper = mount(() => h(VApp, null, {
-    default: () => h(CommandPalette, { modelValue: open.value, context, 'onUpdate:modelValue': (v: boolean) => (open.value = v) }),
+    default: () => h(CommandPalette, { modelValue: open.value, context: ctx, 'onUpdate:modelValue': (v: boolean) => (open.value = v) }),
   }), { global: { plugins: [i18n, vuetify] }, attachTo: document.body })
   open.value = true
   await flushPromises()
@@ -107,5 +107,19 @@ describe('command palette (plan M7c decision 16)', () => {
     // The danger-zone entry only navigates there.
     options().find((o) => o.textContent?.includes('danger zone'))!.click()
     expect(goDangerZone).toHaveBeenCalled()
+  })
+
+  it('shows "No matches" outside the listbox, which then owns no child at all (PDK-352)', async () => {
+    vi.useFakeTimers()
+    await openPalette({ ...context, fetchDevices: () => Promise.resolve([]), fetchGroups: () => Promise.resolve([]) })
+    input().value = 'zzz-no-such-entry'
+    input().dispatchEvent(new Event('input'))
+    await vi.advanceTimersByTimeAsync(200)
+    await flushPromises()
+    const listbox = document.getElementById(input().getAttribute('aria-controls')!)!
+    expect(listbox.children).toHaveLength(0)
+    const status = document.querySelector('[data-testid="command-palette"] [role="status"]')
+    expect(status?.textContent?.trim()).toBe('No matches')
+    expect(listbox.contains(status)).toBe(false)
   })
 })

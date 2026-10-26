@@ -207,7 +207,7 @@ a.pd-pill:hover { filter: brightness(0.95); }
 .pd-palette-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--pd-radius-sm); cursor: pointer; }
 .pd-palette-option--active { background: var(--pd-surface-3); box-shadow: inset var(--pd-focus-ring); }
 .pd-palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.pd-palette-empty { padding: 12px 8px; }
+.pd-palette-empty { margin: 0; padding: 6px 14px 18px; }
 .pd-shortcuts { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
 .pd-shortcuts th { text-align: left; font-weight: 500; color: var(--pd-text-secondary); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--pd-border); }
 .pd-shortcuts td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--pd-border-subtle); vertical-align: top; }

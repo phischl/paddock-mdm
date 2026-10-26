@@ -181,7 +181,7 @@ func newIdentityWorld(t *testing.T, s *Stack, d *Device) *identityWorld {
 	Until(t, "Himmelblau installed and configured", 15*time.Minute, 10*time.Second, d.Checkin, func() bool {
 		out, _ := d.SSH(context.Background(), nil, "dpkg-query -W -f='${Version}' himmelblau 2>/dev/null; echo; grep -h '^pam_allow_groups' /etc/himmelblau/himmelblau.conf 2>/dev/null; systemctl is-active himmelblaud")
 		lines := strings.Split(strings.TrimSpace(out), "\n")
-		return len(lines) == 3 && strings.HasPrefix(lines[0], "4.0.6-") && lines[1] == "pam_allow_groups = "+allow && lines[2] == "active"
+		return len(lines) == 3 && strings.HasPrefix(lines[0], "4.0.7-") && lines[1] == "pam_allow_groups = "+allow && lines[2] == "active"
 	})
 	d.WaitEvent(t, "device.login_applied", 5*time.Minute, func(p map[string]any) bool {
 		changed, _ := p["changed"].([]any)
