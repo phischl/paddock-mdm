@@ -6,7 +6,7 @@ import { useProblemText } from '../lib/problems'
 import type { AgentUpdatePolicy, DeviceGroupStaleness, DiskUnlockMode } from '../api/client'
 import type { DeviceGroupInput } from '../lib/deviceGroupPage'
 import { laptopStaleness } from '../lib/deviceGroups'
-import { validateStaleness } from '../lib/updates'
+import { maxCriticalH, maxWarningH, validateStaleness } from '../lib/updates'
 
 const props = withDefaults(
   defineProps<{
@@ -115,6 +115,10 @@ function submit(): void {
         type="number"
         :disabled="!override"
         :label="t('deviceGroups.staleness.warning')"
+        :suffix="t('common.units.hours')"
+        :hint="t('deviceGroups.staleness.warningHint', { min: 1, max: maxWarningH })"
+        persistent-hint
+        class="mb-2"
         :error-messages="warningError ? [warningError] : []"
         :aria-invalid="!!warningError"
         data-testid="group-staleness-warning"
@@ -125,6 +129,9 @@ function submit(): void {
         type="number"
         :disabled="!override"
         :label="t('deviceGroups.staleness.critical')"
+        :suffix="t('common.units.hours')"
+        :hint="t('deviceGroups.staleness.criticalHint', { max: maxCriticalH })"
+        persistent-hint
         :error-messages="criticalError ? [criticalError] : []"
         :aria-invalid="!!criticalError"
         data-testid="group-staleness-critical"

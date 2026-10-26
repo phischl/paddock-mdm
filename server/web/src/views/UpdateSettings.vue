@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { UpdateSettings, UpdateSettingsUpdate } from '../api/client'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
-import { getUpdateSettings, saveUpdateSettings, validateSettings } from '../lib/updates'
+import { getUpdateSettings, maxCriticalH, maxWarningH, saveUpdateSettings, validateSettings } from '../lib/updates'
 import { hasErrors } from '../lib/validation'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
@@ -109,6 +109,7 @@ onMounted(async () => {
           v-model.number="form.max_random_delay_min"
           type="number"
           :label="t('updates.settings.maxRandomDelay')"
+          :suffix="t('common.units.minutes')"
           :hint="t('updates.settings.maxRandomDelayHint')"
           persistent-hint
           :error-messages="message('max_random_delay_min')"
@@ -122,6 +123,9 @@ onMounted(async () => {
           v-model.number="form.staleness_warning_h"
           type="number"
           :label="t('updates.settings.stalenessWarning')"
+          :suffix="t('common.units.hours')"
+          :hint="t('updates.settings.stalenessWarningHint', { min: 1, max: maxWarningH })"
+          persistent-hint
           :error-messages="message('staleness_warning_h')"
           data-testid="staleness-warning"
         />
@@ -130,7 +134,8 @@ onMounted(async () => {
           v-model.number="form.staleness_critical_h"
           type="number"
           :label="t('updates.settings.stalenessCritical')"
-          :hint="t('updates.settings.stalenessCriticalHint')"
+          :suffix="t('common.units.hours')"
+          :hint="t('updates.settings.stalenessCriticalHint', { max: maxCriticalH })"
           persistent-hint
           :error-messages="message('staleness_critical_h')"
           data-testid="staleness-critical"

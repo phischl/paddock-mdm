@@ -116,7 +116,17 @@
     "description": "Description",
     "createdAt": "Created",
     "updatedAt": "Updated",
-    "empty": "Nothing here yet."
+    "empty": "Nothing here yet.",
+    "units": {
+      "days": "days",
+      "hours": "hours",
+      "minutes": "minutes"
+    },
+    "ranges": {
+      "days": "{min}–{max} days",
+      "hours": "{min}–{max} hours",
+      "minutes": "{min}–{max} minutes"
+    }
   },
   "list": {
     "search": "Search",
@@ -143,15 +153,17 @@
     "staleness": {
       "title": "Contact thresholds",
       "override": "Override the organization's thresholds for this group",
-      "warning": "Warning after (hours)",
-      "critical": "Critical after (hours)",
+      "warning": "Warning after",
+      "critical": "Critical after",
       "laptopPreset": "Laptop preset (5 days / 35 days)",
       "hint": "A device in several groups takes the most lenient value of its groups. Without an override the organization's thresholds apply.",
       "effective": "Effective: warning after {warning} h, critical after {critical} h ({source})",
       "sources": {
         "organization": "organization",
         "device_group": "device group"
-      }
+      },
+      "warningHint": "{min}–{max} hours without contact.",
+      "criticalHint": "More than the warning, at most {max} hours without contact."
     },
     "title": "Device groups",
     "count": "{count, plural, =0 {No device groups} one {# device group} other {# device groups}}",
@@ -1541,7 +1553,7 @@
     "fullPreview": "Class full grants root for every command. Saving needs an organization administrator with a fresh identity confirmation (step-up).",
     "rootEquivalentPreview": "This profile grants root in effect through {commands}. Saving needs an organization administrator with a fresh identity confirmation (step-up).",
     "rootEquivalentPair": "{writer} together with {command}: the first writes what the second runs.",
-    "timeout": "Password remembered for (minutes)",
+    "timeout": "Password remembered for",
     "timeoutInvalid": "Enter 0 to 60 minutes.",
     "lecture": "Lecture",
     "lectures": {
@@ -1611,7 +1623,7 @@
     "loginHistory": {
       "title": "Login history",
       "enabled": "Record which directory users sign in on each device, and when",
-      "days": "Keep the history for (days)",
+      "days": "History retention",
       "notice": "The login history is personal data of your employees: every session start is stored with user name, device and time for the period above and deleted afterwards. Switch it on only with the agreement of your works council or the equivalent body and inform the users. It is off by default; user locks do not depend on it.",
       "disableConfirm": "Switch the login history off? Every recorded login of this organization is deleted at once.",
       "disableConfirmLabel": "Switch off and delete",
@@ -1640,9 +1652,9 @@
     "localAdmin": "Local administrator",
     "localAdminUsername": "Account name",
     "localAdminUsernameHint": "Paddock creates this account on every device and rotates its password. The name cannot change once a device uses it.",
-    "rotationDays": "Rotate the password every … days",
-    "rotateAfterReveal": "Rotate … hours after a reveal",
-    "rotateAfterRevealHint": "Leave empty to keep a revealed password until the next regular rotation.",
+    "rotationDays": "Password rotation interval",
+    "rotateAfterReveal": "Rotation after a reveal",
+    "rotateAfterRevealHint": "{min}–{max} hours. Leave empty to keep a revealed password until the next regular rotation.",
     "diskEncryption": "Disk encryption",
     "bootPinLength": "Minimum boot PIN length",
     "bootPinLengthHint": "The boot PIN unlocks the disk at every start. Devices installed with the Paddock autoinstall ask for it at their first boot; autoinstalls generated from now on use this length.",
@@ -1736,8 +1748,8 @@
     "title": "Dead man's switch",
     "warning": "If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself. This includes a device whose connection to Paddock is blocked on purpose: an attacker who keeps the device from reaching Paddock can trigger the lock.",
     "enabled": "Turn on the dead man's switch",
-    "period": "Period (days)",
-    "periodHint": "Days of uptime without reaching Paddock after which a device locks itself.",
+    "period": "Period",
+    "periodHint": "{min}–{max} days of uptime without reaching Paddock after which a device locks itself.",
     "periodInvalid": "Enter a whole number of days from {min} to {max}.",
     "shortPeriod": "Periods below {days} days lock devices that are merely offline for a while, for example during a vacation.",
     "warnDays": "Warnings (days before)",
@@ -1813,18 +1825,19 @@
       "regularEnabled": "Run regular updates",
       "regularSchedule": "Schedule",
       "regularScheduleHint": "Weekdays and time, e.g. \"Sat 04:00\", \"Mon,Thu 12:30\", or \"02:00\" for every day.",
-      "maxRandomDelay": "Random delay (minutes)",
+      "maxRandomDelay": "Random delay",
       "maxRandomDelayHint": "Devices start up to this many minutes later, so that they do not all download at once (0–720).",
       "staleness": "Silent devices",
-      "stalenessWarning": "Warning after (hours without contact)",
-      "stalenessCritical": "Critical after (hours without contact)",
-      "stalenessCriticalHint": "A critical device is presumed lost and listed on the attention page.",
+      "stalenessWarning": "Warning after no contact for",
+      "stalenessCritical": "Critical after no contact for",
+      "stalenessCriticalHint": "More than the warning, at most {max} hours. A critical device is presumed lost and listed on the attention page.",
       "timeInvalid": "Enter a time as HH:MM.",
       "scheduleInvalid": "Use weekdays (Mon … Sun, comma-separated) and HH:MM, e.g. \"Sat 04:00\".",
       "delayInvalid": "Enter a whole number from 0 to 720.",
       "warningInvalid": "Enter a whole number from 1 to 720.",
       "criticalInvalid": "Enter a whole number above the warning and at most 2160.",
-      "saved": "Update settings saved."
+      "saved": "Update settings saved.",
+      "stalenessWarningHint": "{min}–{max} hours."
     },
     "holds": {
       "title": "Package holds",
