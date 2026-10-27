@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's role next to the other one. The denial reason `platform_and_organization` is removed; the new denial
   reason `role_not_granted` refuses a switch whose role the identity provider no longer grants. Identities with role
   groups of several organizations stay refused. Residual risks RR-91–RR-93.
+- Role switch in the portal (ADR 0045, PDK-450): an administrator who also holds the other role sees *Switch to …*
+  in the user menu (the platform administrator role, or the organization role with the organization's slug). A
+  confirmation dialog states that the current session ends and privileged actions need a new step-up; a refused
+  switch shows an inline alert in the menu. The sign-in denied page explains the new reason `role_not_granted`; the
+  text for the removed reason `platform_and_organization` is gone.
 - Agent release import from GitHub (ADR 0043, PDK-427): a platform administrator checks the official repository for a
   newer agent release and imports it with one step-up-protected action instead of downloading, renaming and uploading
   the files on the host. Every file is verified with the release public key before anything is stored; the release is

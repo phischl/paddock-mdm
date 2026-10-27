@@ -8,7 +8,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ShortcutHelpDialog from './components/ShortcutHelpDialog.vue'
 import PdIcon from './components/PdIcon'
-import { pendingConfirm, settleConfirm } from './composables/useConfirm'
+import { pendingConfirm, settleConfirm, useConfirm } from './composables/useConfirm'
 import { modifierLabel, useShortcuts } from './composables/useShortcuts'
 import { attentionCount } from './lib/updates'
 import { formatTime } from './lib/format'
@@ -154,6 +154,40 @@ async function chooseLanguage(next: PortalLocale): Promise<void> {
 async function chooseTheme(next: ThemePreference): Promise<void> {
   if (next === session.me?.theme) return
   themeFailed.value = !(await session.setTheme(next))
+}
+// The role switch (ADR 0045 decision 3) is a new sign-in through the identity provider; a refusal reopens the menu so
+// its inline alert is seen.
+const confirm = useConfirm()
+const userMenuOpen = ref(false)
+const switchFailed = ref(false)
+watch(userMenuOpen, (open) => {
+  if (!open) switchFailed.value = false
+})
+const switchRoleLabel = computed(() => {
+  const alternate = session.alternateRole
+  if (!alternate) return ''
+  return t('app.switchRole', {
+    scope: alternate.role === 'platform_admin' ? 'platform' : 'organization',
+    role: t('roles.' + alternate.role),
+    organization: alternate.organization_slug ?? '',
+  })
+})
+async function startRoleSwitch(): Promise<void> {
+  const alternate = session.alternateRole
+  if (!alternate) return
+  const confirmed = await confirm({
+    title: t('app.switchRoleConfirmTitle'),
+    message: t('app.switchRoleConfirmMessage'),
+    confirmLabel: t('app.switchRoleConfirm'),
+  })
+  if (!confirmed) return
+  switchFailed.value = false
+  try {
+    await session.switchRole(alternate.role === 'platform_admin' ? 'platform' : 'organization')
+  } catch {
+    switchFailed.value = true
+    userMenuOpen.value = true
+  }
 }
 const densityKey = 'paddock.density'
 function storedDensity(): Density {
@@ -388,7 +422,7 @@ onBeforeUnmount(() => observer.disconnect())
             data-testid="theme-toggle"
             @click="chooseTheme(isDark ? 'light' : 'dark')"
           />
-          <v-menu>
+          <v-menu v-model="userMenuOpen">
             <template #activator="{ props: menu }">
               <v-btn
                 v-bind="menu"
@@ -425,6 +459,16 @@ onBeforeUnmount(() => observer.disconnect())
                 <v-list-item-subtitle data-testid="user-stepup">
                   {{ stepUpUntil ? t('app.stepUpValidUntil', { time: stepUpUntil }) : t('app.stepUpNone') }}
                 </v-list-item-subtitle>
+                <v-alert
+                  v-if="switchFailed"
+                  type="error"
+                  variant="tonal"
+                  density="compact"
+                  class="mt-2"
+                  data-testid="switch-role-failed"
+                >
+                  {{ t('app.switchRoleFailed') }}
+                </v-alert>
               </v-list-item>
               <v-menu submenu>
                 <template #activator="{ props: languageMenu }">
@@ -512,6 +556,16 @@ onBeforeUnmount(() => observer.disconnect())
                 @click="helpOpen = true"
               >
                 <v-list-item-title>{{ t('app.shortcuts') }}</v-list-item-title>
+              </v-list-item>
+              <v-list-item
+                v-if="session.alternateRole"
+                prepend-icon="pd:log-in"
+                data-testid="switch-role"
+                @click="startRoleSwitch"
+              >
+                <v-list-item-title class="text-wrap">
+                  {{ switchRoleLabel }}
+                </v-list-item-title>
               </v-list-item>
               <v-list-item
                 data-testid="logout"

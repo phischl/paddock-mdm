@@ -21,18 +21,19 @@ export async function loginWithPassword(page: Page, username: string, secret: st
   await follow(page, new URL('/api/auth/login?return_to=%2F', baseURL()).toString(), '/api/auth/callback', username, secret)
 }
 
-/** A temporary Authentik user of tempUser; remove deletes it. */
+/** A temporary Authentik user of tempUser; leave takes it out of one of its groups, remove deletes it. */
 export interface TempUser {
   username: string
   password: string
+  leave: (group: string) => Promise<void>
   remove: () => Promise<void>
 }
 
 /**
- * Creates a temporary Authentik user in one group (e.g. paddock.acme.operators) through Authentik's admin API with
+ * Creates a temporary Authentik user in groups (e.g. paddock.acme.operators) through Authentik's admin API with
  * the bootstrap token, like the acceptance helper tempUser: the development stack seeds no user for every role.
  */
-export async function tempUser(prefix: string, group: string): Promise<TempUser> {
+export async function tempUser(prefix: string, ...groups: string[]): Promise<TempUser> {
   const api = await request.newContext({
     baseURL: (process.env.PADDOCK_E2E_AUTH_URL ?? 'https://auth.paddock.localhost:8443') + '/api/v3/',
     ignoreHTTPSErrors: true,
@@ -45,9 +46,13 @@ export async function tempUser(prefix: string, group: string): Promise<TempUser>
   }
   const username = `${prefix}-${randomBytes(6).toString('hex')}@e2e.test`
   const secret = 'pw-' + randomUUID()
-  const groups = await ok<{ results: { pk: string; name: string }[] }>('group', api.get('core/groups/', { params: { name: group, include_users: 'false' } }))
-  const groupPK = groups.results.find((g) => g.name === group)?.pk
-  if (!groupPK) throw new Error(`authentik group ${group} not found`)
+  const groupPK = async (group: string): Promise<string> => {
+    const found = await ok<{ results: { pk: string; name: string }[] }>('group', api.get('core/groups/', { params: { name: group, include_users: 'false' } }))
+    const pk = found.results.find((g) => g.name === group)?.pk
+    if (!pk) throw new Error(`authentik group ${group} not found`)
+    return pk
+  }
+  const groupPKs = await Promise.all(groups.map(groupPK))
   const user = await ok<{ pk: number }>('create user', api.post('core/users/', {
     data: { username, name: username, email: username, is_active: true, type: 'internal' },
   }))
@@ -57,12 +62,15 @@ export async function tempUser(prefix: string, group: string): Promise<TempUser>
   }
   try {
     await ok('set password', api.post(`core/users/${user.pk}/set_password/`, { data: { password: secret } }))
-    await ok('add to group', api.post(`core/groups/${groupPK}/add_user/`, { data: { pk: user.pk } }))
+    for (const pk of groupPKs) await ok('add to group', api.post(`core/groups/${pk}/add_user/`, { data: { pk: user.pk } }))
   } catch (e) {
     await remove()
     throw e
   }
-  return { username, password: secret, remove }
+  const leave = async (group: string) => {
+    await ok('remove from group', api.post(`core/groups/${await groupPK(group)}/remove_user/`, { data: { pk: user.pk } }))
+  }
+  return { username, password: secret, leave, remove }
 }
 
 /**
@@ -90,6 +98,25 @@ export async function stepUp(page: Page, start: () => Promise<void>, username: s
   const url = await startUrl
   await page.unroute(stepUpStart)
   await follow(page, url, '/api/auth/stepup/callback', username, password(passwordFile), password(totpKeyFile))
+}
+
+/**
+ * Runs start, which makes the portal start a role switch (ADR 0045) and navigate to the identity provider, and
+ * completes the new sign-in like login: the browser's navigation to Authentik's authorization endpoint is held for
+ * the same reason as in stepUp, and the flow is answered through the executor API.
+ */
+export async function switchRole(page: Page, start: () => Promise<void>, username: string, secret: string): Promise<void> {
+  const authorize = /\/application\/o\/authorize\//
+  let held!: (url: string) => void
+  const authorizeUrl = new Promise<string>((resolve) => (held = resolve))
+  await page.route(authorize, async (route) => {
+    held(route.request().url())
+    await route.fulfill({ status: 200, contentType: 'text/html', body: '' })
+  })
+  await start()
+  const url = await authorizeUrl
+  await page.unroute(authorize)
+  await follow(page, url, '/api/auth/callback', username, secret)
 }
 
 async function follow(page: Page, start: string, callback: string, username: string, secret: string, totpKey?: string): Promise<void> {

@@ -52,6 +52,11 @@
     "shortcuts": "Keyboard shortcuts",
     "collapseNavigation": "Collapse the navigation",
     "expandNavigation": "Expand the navigation",
+    "switchRole": "{scope, select, organization {Switch to {role} ({organization})} other {Switch to {role}}}",
+    "switchRoleConfirmTitle": "Switch role",
+    "switchRoleConfirmMessage": "Your current session ends and privileged actions need a new step-up.",
+    "switchRoleConfirm": "Switch",
+    "switchRoleFailed": "The role could not be switched. Please try again.",
     "stepUpValidUntil": "Identity confirmed until {time}",
     "stepUpNone": "No current identity confirmation",
     "stepUpChip": "Confirmed until {time}"
@@ -599,7 +604,7 @@
     "no_role": "Your account is not in any Paddock role group. Ask your administrator to add you to exactly one of the groups paddock.'<organization>'.admins, .operators or .auditors.",
     "multiple_organizations": "Your account holds roles in several organizations. One account belongs to exactly one organization; ask your administrator to remove the other memberships or to create separate accounts.",
     "multiple_roles": "Your account holds several roles in one organization (administrator, operator or auditor). Ask your administrator to keep exactly one of the memberships.",
-    "platform_and_organization": "This account holds platform and organization roles. By design one account is either a platform administrator or a member of one organization: use separate accounts, or ask your administrator to remove one of the memberships.",
+    "role_not_granted": "The role you chose is no longer granted to your account. Your current session is unchanged; sign in again to continue.",
     "organization_inactive": "Your organization is not active. Ask a platform administrator.",
     "retry": "Sign in again"
   },

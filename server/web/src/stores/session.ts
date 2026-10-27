@@ -4,6 +4,9 @@ import { api, type Me } from '../api/client'
 import { applyLocale, type PortalLocale } from '../i18n'
 import { applyTheme, isThemePreference, type ThemePreference } from '../lib/theme'
 
+/** The role a role switch asks for (ADR 0045). */
+export type RoleChoice = 'platform' | 'organization'
+
 export const useSessionStore = defineStore('session', () => {
   const me = ref<Me | null>(null)
   const loading = ref<Promise<Me | null> | null>(null)
@@ -14,6 +17,8 @@ export const useSessionStore = defineStore('session', () => {
   const canDelete = computed(() => role.value === 'org_admin')
   const canReadAudit = computed(() => role.value === 'org_admin' || role.value === 'org_auditor')
   const canReadGroups = computed(() => !!role.value && role.value !== 'platform_admin')
+  /** The role this identity may switch to (ADR 0045 decision 3); null for single-role identities. */
+  const alternateRole = computed(() => me.value?.alternate_role ?? null)
 
   function load(): Promise<Me | null> {
     if (me.value) return Promise.resolve(me.value)
@@ -61,5 +66,21 @@ export const useSessionStore = defineStore('session', () => {
     window.location.assign(data?.end_session_url ?? '/')
   }
 
-  return { me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, load, setLocale, setTheme, logout }
+  /**
+   * Starts the switch to the alternate role (ADR 0045 decision 3): the browser leaves for the identity provider and
+   * returns with a new session. Rejects with the problem, without navigating, when the server refuses.
+   */
+  async function switchRole(choice: RoleChoice): Promise<void> {
+    const { data, error } = await api.POST('/api/auth/switch', {
+      params: { header: { 'X-Paddock-CSRF': '1' } },
+      body: { role: choice },
+    })
+    if (!data) throw error ?? new Error('role switch failed')
+    window.location.assign(data.authorize_url)
+  }
+
+  return {
+    me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, alternateRole,
+    load, setLocale, setTheme, logout, switchRole,
+  }
 })
