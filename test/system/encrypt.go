@@ -220,23 +220,22 @@ func (v *VM) powerCut(t *testing.T, what string) {
 	t.Logf("%s: power cut %s", v.Name, what)
 }
 
-// rebootRequest asks the guest to reboot and waits until SSH is gone; it returns the length of the serial console
-// output before the reboot, for waitSerial.
+// rebootRequest asks the guest to reboot (requestReboot) and waits until SSH is gone; it returns the length of the
+// serial console output before the reboot, for waitSerial. Its callers prove the reboot by what the next boot does
+// (console lines, the disk setup dialogue), so the boot ID is not compared here.
 func (v *VM) rebootRequest(t *testing.T) int {
 	t.Helper()
 	mark := len(v.Serial(t))
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	_, _ = v.SSH(ctx, nil, "sudo systemctl reboot")
-	v.waitSSHDown(t)
+	v.requestReboot(t)
 	return mark
 }
 
-// reboot reboots the guest and waits for SSH.
+// reboot reboots the guest, waits for SSH and checks that a new boot answers.
 func (v *VM) reboot(t *testing.T) {
 	t.Helper()
-	v.rebootRequest(t)
+	before := v.requestReboot(t)
 	Until(t, v.Name+" answers SSH after the reboot", 15*time.Minute, 5*time.Second, nil, v.sshUp)
+	v.requireRebooted(t, before)
 }
 
 // waitSerial waits until the serial console shows line after the offset from and returns when it appeared.

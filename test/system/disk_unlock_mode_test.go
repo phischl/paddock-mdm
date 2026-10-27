@@ -99,9 +99,9 @@ func TestDiskUnlockModeTPMOnly(t *testing.T) {
 	if !vm.Opens(t, d.revealRecoveryKey(t)) {
 		t.Fatal("the recovery key does not open the disk")
 	}
-	_, _ = vm.SSH(t.Context(), nil, "sudo systemctl reboot")
-	vm.waitSSHDown(t)
+	before := vm.requestReboot(t)
 	Until(t, aiVMName+" boots without input", 5*time.Minute, 5*time.Second, nil, vm.sshUp)
+	vm.requireRebooted(t, before)
 }
 
 // TestDiskUnlockModeMismatch is gate S-DU2 of plan M8d (AC11): a D-24 device (tpm2+pin) whose group is set to

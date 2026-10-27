@@ -83,24 +83,22 @@ func (v *VM) sshUp() bool {
 // RebootWithPassphrase reboots and unlocks the disk with the test VMs' passphrase (lib.sh unlock_and_wait_ssh).
 func (v *VM) RebootWithPassphrase(t *testing.T) {
 	t.Helper()
+	before := v.requestReboot(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	_, _ = v.SSH(ctx, nil, "sudo systemctl reboot")
-	v.waitSSHDown(t)
 	if out, err := v.lib(ctx, "ensure_secrets; unlock_and_wait_ssh "+v.Name+" "+v.port); err != nil {
 		t.Fatalf("unlock %s with the passphrase: %v: %s", v.Name, err, out)
 	}
+	v.requireRebooted(t, before)
 }
 
 // RebootWithPIN reboots and types the boot PIN at the TPM2+PIN prompt until SSH answers; it fails if the disk does
 // not unlock.
 func (v *VM) RebootWithPIN(t *testing.T, pin string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	_, _ = v.SSH(ctx, nil, "sudo systemctl reboot")
-	v.waitSSHDown(t)
+	before := v.requestReboot(t)
 	v.unlockAtPrompt(t, []string{pin}, "pin")
+	v.requireRebooted(t, before)
 }
 
 // unlockAtPrompt types each entry in turn at the disk prompt (repeating the last) until SSH answers, at most 6
