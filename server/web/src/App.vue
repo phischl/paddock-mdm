@@ -160,6 +160,9 @@ async function chooseTheme(next: ThemePreference): Promise<void> {
 const confirm = useConfirm()
 const userMenuOpen = ref(false)
 const switchFailed = ref(false)
+watch(userMenuOpen, (open) => {
+  if (!open) switchFailed.value = false
+})
 const switchRoleLabel = computed(() => {
   const alternate = session.alternateRole
   if (!alternate) return ''

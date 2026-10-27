@@ -117,4 +117,17 @@ describe('role switch in the user menu (ADR 0045 decision 3)', () => {
     expect(query('switch-role-failed')?.textContent).toContain('The role could not be switched.')
     expect(query('switch-role-failed')?.closest('[role="alert"], .v-alert')).not.toBeNull()
   })
+
+  it('drops the alert of a refused switch once the menu closes', async () => {
+    const w = await mountApp({ ...admin, alternate_role: { role: 'platform_admin' } })
+    await openMenu(w)
+    switchRole.mockRejectedValue({ code: 'unavailable', status: 503 })
+    await chooseSwitch()
+    query('confirm-accept')!.click()
+    await vi.waitFor(() => expect(query('switch-role-failed')).not.toBeNull())
+    await w.get('[data-testid="user-menu"]').trigger('click')
+    await vi.waitFor(() => expect(query('switch-role-failed')).toBeNull())
+    await openMenu(w)
+    expect(query('switch-role-failed')).toBeNull()
+  })
 })
