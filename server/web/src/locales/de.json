@@ -52,6 +52,11 @@
     "shortcuts": "Tastenkürzel",
     "collapseNavigation": "Navigation einklappen",
     "expandNavigation": "Navigation ausklappen",
+    "switchRole": "{scope, select, organization {Zu {role} ({organization}) wechseln} other {Zu {role} wechseln}}",
+    "switchRoleConfirmTitle": "Rolle wechseln",
+    "switchRoleConfirmMessage": "Ihre aktuelle Sitzung endet, und privilegierte Aktionen brauchen eine neue Step-up-Anmeldung.",
+    "switchRoleConfirm": "Wechseln",
+    "switchRoleFailed": "Die Rolle konnte nicht gewechselt werden. Bitte versuchen Sie es erneut.",
     "stepUpValidUntil": "Identität bestätigt bis {time}",
     "stepUpNone": "Keine aktuelle Identitätsbestätigung",
     "stepUpChip": "Bestätigt bis {time}"
@@ -599,7 +604,7 @@
     "no_role": "Ihr Konto ist in keiner Paddock-Rollengruppe. Bitten Sie Ihren Administrator, Sie genau einer der Gruppen paddock.'<Organisation>'.admins, .operators oder .auditors hinzuzufügen.",
     "multiple_organizations": "Ihr Konto hat Rollen in mehreren Organisationen. Ein Konto gehört zu genau einer Organisation; bitten Sie Ihren Administrator, die übrigen Mitgliedschaften zu entfernen oder getrennte Konten anzulegen.",
     "multiple_roles": "Ihr Konto hat mehrere Rollen in einer Organisation (Administrator, Operator oder Auditor). Bitten Sie Ihren Administrator, genau eine der Mitgliedschaften zu behalten.",
-    "platform_and_organization": "Dieses Konto hat Plattform- und Organisationsrollen. Ein Konto ist entweder Plattformadministrator oder Mitglied einer Organisation: Verwenden Sie getrennte Konten, oder bitten Sie Ihren Administrator, eine der Mitgliedschaften zu entfernen.",
+    "role_not_granted": "Die gewählte Rolle ist Ihrem Konto nicht mehr zugewiesen. Ihre aktuelle Sitzung bleibt unverändert; melden Sie sich erneut an, um fortzufahren.",
     "organization_inactive": "Ihre Organisation ist nicht aktiv. Wenden Sie sich an einen Plattformadministrator.",
     "retry": "Erneut anmelden"
   },

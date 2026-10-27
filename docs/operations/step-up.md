@@ -125,6 +125,7 @@ validate the required authenticator class" with the classes, never the token.
   portal session of it ends and `admin.sessions_revoked` is recorded with reason `step_up_role_mismatch`; the
   administrator signs in again with the current role. A token without `groups`, or a platform session whose groups
   name an organization, is only refused.
+- A role switch (user menu) is a new sign-in: the new session starts without a step-up.
 
 The portal shows how long the last step-up stays valid: a chip *Confirmed until …* in the app bar and the line
 *Identity confirmed until …* in the user menu (*No current identity confirmation* otherwise), from
