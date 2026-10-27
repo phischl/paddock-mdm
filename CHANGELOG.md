@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-10-27
+
+Evidence integrity for ISO 27001 (plan M8b): the server detects device clock drift and gaps in a device's event
+numbering, verifies the audit hash chain every night and records every run, records every grant and revocation of a
+portal role from Authentik, and shows organization administrators and auditors the state of their evidence on the new
+*Evidence integrity* page. Platform administrators import a newer signed agent release from GitHub with one button
+(ADR 0043), and the host operator starts or halts a staged agent rollout with `./paddock agent-rollout` and
+`./paddock agent-rollout-halt`. One identity can hold the platform administrator role and one organization's role and
+switch between them in the user menu (ADR 0045). The portal shows the server version in the navigation. **Upgrade
+order: the server first, then the agents** (`docs/operations/upgrade.md`); this release changes nothing on the device,
+so rolling out its agent release only aligns the version. Coming from 0.1.0-alpha.3 or earlier, follow the notes of
+0.1.0-alpha.4 first (agents before the server). Fleet moves to v4.93.2 (no Fleet database migration): take the Fleet
+dump before the upgrade anyway (`docs/operations/upgrade.md`, step 3). After the upgrade, the first identity sync
+records the current members of every role once as `admin.role_granted` with `baseline: true`, and devices whose clock
+is more than 60 s off appear on the attention list. `paddock-revoke` stays unsigned, and revocation (Lock, Destroy,
+dead man's switch) stays disabled behind `PADDOCK_REVOCATION_ENABLED`. Schema: migrations 00068–00071 (control-plane
+database) and audit migrations 00004–00006 (audit database).
+
 ### Added
 
 - Role switch for one identity (ADR 0045, PDK-201): one central identity may be a member of `paddock.platform.admins`
@@ -87,7 +105,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   superusers, come back empty, nothing is recorded in that organization or on the platform. The role groups are
   listed once per round for both the administrator account check and this record. Schema: migrations 00070 and 00071
   add the role member and per-role snapshot tables of organizations and of the platform.
-
 - Host commands for the agent rollout (PDK-449, ADR 0034 amendment 2026-10-26): `./paddock agent-rollout <version>
   [--waves …] [--min-wave-minutes N] [--failure-threshold-percent P] [--failure-threshold-min M]` and
   `./paddock agent-rollout-halt <version>` start and halt a staged rollout on the control-plane host
@@ -1313,7 +1330,8 @@ acceptance.
   in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
-[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.5...HEAD
+[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.6...HEAD
+[0.1.0-alpha.6]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.3
