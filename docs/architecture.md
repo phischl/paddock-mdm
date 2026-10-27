@@ -1050,6 +1050,15 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > the same audited action as an external call (`ActionRunner.RunExternal`, at most 80 s for the Authentik part); a
 > failure there is recorded after the Paddock sessions ended (ADR 0034 and ADR 0007 amendments 2026-10-18).
 
+> **Amendment 2026-10-26 (ADR 0045):** one identity may hold the platform role and exactly one organization
+> role. A session carries exactly one of them; the sign-in lands in the organization role and `GET /api/v1/me`
+> names the other as `alternate_role`. `POST /api/auth/switch` starts a new sign-in through Authentik for the
+> other role: the callback opens a new session (new record, the other account row, no step-up), deletes the
+> previous session's record inside the login's transaction and records one `admin.login` with `previous_role`.
+> The step-up callback accepts a step-up token whose groups grant the session's role next to the other one.
+> `platform_and_organization` is no longer a denial reason; `role_not_granted` (a switch whose role the fresh
+> `groups` claim does not grant) is. Several organizations per identity stay denied (`multiple_organizations`).
+
 ---
 
 ## 10. Permission profiles and sudo

@@ -78,6 +78,26 @@ type stepUpTiming struct{ window, maxAuthAge time.Duration }
 // stepUpClassesKey carries the session's step-up authenticator classes to GET /api/v1/me (development only).
 type stepUpClassesKey struct{}
 
+// alternateRoleKey carries the session's alternate role (ADR 0045) to GET and PATCH /api/v1/me; only the session
+// middleware sets it, so API tokens and every other principal answer null.
+type alternateRoleKey struct{}
+
+// alternateRole is the value under alternateRoleKey: the role and, for an organization role, the slug.
+type alternateRole struct{ role, slug string }
+
+// alternateRole is the alternate_role of GET and PATCH /api/v1/me; nil without one.
+func (h *handlers) alternateRole(ctx context.Context) *adminapi.MeAlternateRole {
+	alt, ok := ctx.Value(alternateRoleKey{}).(alternateRole)
+	if !ok || alt.role == "" {
+		return nil
+	}
+	out := &adminapi.MeAlternateRole{Role: adminapi.MeAlternateRoleRole(alt.role)}
+	if alt.slug != "" {
+		out.OrganizationSlug = &alt.slug
+	}
+	return out
+}
+
 var _ adminapi.StrictServerInterface = (*handlers)(nil)
 
 func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (adminapi.GetMeResponseObject, error) {
@@ -89,6 +109,7 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	p, _ := principal.From(ctx)
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
+	out.AlternateRole = h.alternateRole(ctx)
 	if h.stepUpTiming != nil {
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
@@ -122,6 +143,7 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	p, _ := principal.From(ctx)
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
+	out.AlternateRole = h.alternateRole(ctx)
 	return adminapi.UpdateMe200JSONResponse(out), nil
 }
 

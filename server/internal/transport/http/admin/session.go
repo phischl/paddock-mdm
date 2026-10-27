@@ -167,6 +167,11 @@ type Session struct {
 	StepUpJTI string `json:"stepup_jti,omitempty"`
 	// StepUpClasses are the authenticator classes the last step-up validated (plan M8f decision 10).
 	StepUpClasses []string `json:"stepup_classes,omitempty"`
+	// AltRole and AltSlug name the role the identity may switch to (ADR 0045 decision 3): platform_admin and "" from
+	// an organization session, the organization role and its slug from a platform session; empty for a single-role
+	// identity.
+	AltRole string `json:"alt_role,omitempty"`
+	AltSlug string `json:"alt_slug,omitempty"`
 }
 
 // sessionVersion is the version of the session cookie payload.

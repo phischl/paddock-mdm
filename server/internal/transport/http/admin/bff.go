@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -124,6 +125,10 @@ type loginState struct {
 	Nonce    string `json:"nonce"`
 	ReturnTo string `json:"return_to"`
 	Exp      int64  `json:"exp"`
+	// Choice is the role the callback activates (ADR 0045): "" for a plain sign-in (organization by default).
+	Choice organization.RoleChoice `json:"choice,omitempty"`
+	// Switch is the session a switch ends; nil for a plain sign-in.
+	Switch *Session `json:"switch,omitempty"`
 }
 
 // discardTimeout bounds the deletion of the session record of a failed login.
@@ -286,6 +291,27 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := organization.ResolveRole(claims.Groups)
+	// A switch state sealed for another user is a plain sign-in: it never ends a session or picks the role.
+	choice := st.Choice
+	switching := st.Switch != nil && st.Switch.Sub == claims.Subject
+	if !switching {
+		choice, st.Switch = "", nil
+	}
+	if choice == "" && len(res.Choices) > 0 {
+		choice = organization.ChoiceOrganization
+	}
+	role := res
+	if !res.Denied {
+		active, ok := res.Active(choice)
+		if !ok {
+			active = organization.RoleResolution{Denied: true, Slugs: res.Slugs, Reason: organization.DenialRoleNotGranted}
+		}
+		role = active
+	}
+	var previousRole principal.Role
+	if switching {
+		previousRole = principal.Role(st.Switch.Role)
+	}
 	now := b.now()
 	sid := sessions.NewID()
 	var opened uuid.UUID // the account whose session record exists, once it does
@@ -295,6 +321,13 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		opened = p.ID
+		// The previous session ends before admin.login commits, so that no request ever runs in both roles
+		// (ADR 0045 decision 3).
+		if switching {
+			if err := b.sessions.Delete(ctx, st.Switch.SID, st.Switch.PID); err != nil {
+				return fmt.Errorf("end the previous session: %w", err)
+			}
+		}
 		return nil
 	}
 	// A record whose cookie never reaches the browser is removed, so that no revocation counts or records it later.
@@ -310,12 +343,13 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	result, err := b.accounts.Login(ctx,
-		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip, OpenSession: openSession},
-		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs,
-			DenialReason: string(res.Reason)})
+		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip, OpenSession: openSession,
+			PreviousRole: previousRole},
+		app.LoginRole{Platform: role.Platform, Slug: role.Slug, Role: role.Role, Denied: role.Denied, Slugs: role.Slugs,
+			DenialReason: string(role.Reason)})
 	if errors.Is(err, problem.Forbidden) {
 		discard()
-		denied(w, r, denialReason(res, err))
+		denied(w, r, denialReason(role, err))
 		return
 	}
 	if err != nil {
@@ -325,7 +359,10 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := result.Principal
-	value, err := b.keys.Seal(SessionCookie, NewSession(p, sid, result.Locale, now))
+	sess := NewSession(p, sid, result.Locale, now)
+	altRole, altSlug := res.Alternate(choice)
+	sess.AltRole, sess.AltSlug = string(altRole), altSlug
+	value, err := b.keys.Seal(SessionCookie, sess)
 	if err != nil {
 		discard()
 		slog.ErrorContext(ctx, "session cookie", "error", err)
@@ -368,6 +405,69 @@ func (b *bff) logout(publicURL string) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": target})
 	}
+}
+
+// switchRequest is the body of POST /api/auth/switch (schema RoleSwitch).
+type switchRequest struct {
+	Role     organization.RoleChoice `json:"role"`
+	ReturnTo string                  `json:"return_to"`
+}
+
+// switchRole starts the switch to the session's alternate role (ADR 0045 decision 3): it seals the current session
+// and the chosen role into the paddock_login cookie and answers the authorization URL. The callback opens the new
+// session and ends this one; nothing changes before it.
+func (b *bff) switchRole(w http.ResponseWriter, r *http.Request) {
+	sess, ok := b.currentSession(r)
+	if !ok {
+		httpx.WriteProblem(w, r, problem.Unauthenticated)
+		return
+	}
+	if !b.sessionLive(w, r, sess) {
+		return
+	}
+	var req switchRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		httpx.WriteProblem(w, r, problem.InvalidRequest.WithDetail("invalid request body"))
+		return
+	}
+	if sess.AltRole == "" || req.Role != alternateChoice(sess) {
+		httpx.WriteProblem(w, r, problem.InvalidRequest.WithDetail("role is not available for this session"))
+		return
+	}
+	returnTo := req.ReturnTo
+	if returnTo == "" {
+		returnTo = "/"
+	}
+	if !ValidReturnTo(returnTo) {
+		httpx.WriteProblem(w, r, problem.InvalidRequest.WithDetail("return_to must be a relative path"))
+		return
+	}
+	oauth, _, _ := b.oidc.snapshot()
+	if oauth == nil {
+		httpx.WriteProblem(w, r, problem.UpstreamUnavailable.WithDetail("identity provider not reachable"))
+		return
+	}
+	st := loginState{
+		State: randomToken(), Verifier: oauth2.GenerateVerifier(), Nonce: randomToken(), ReturnTo: returnTo,
+		Exp: b.now().Add(LoginLifetime).Unix(), Choice: req.Role, Switch: &sess,
+	}
+	value, err := b.keys.Seal(LoginCookie, st)
+	if err != nil {
+		httpx.WriteProblem(w, r, err)
+		return
+	}
+	http.SetCookie(w, loginCookie(value, int(LoginLifetime.Seconds())))
+	writeJSON(w, http.StatusOK, map[string]string{
+		"authorize_url": oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)),
+	})
+}
+
+// alternateChoice is the RoleChoice that leaves the side sess is on.
+func alternateChoice(sess Session) organization.RoleChoice {
+	if principal.Kind(sess.Kind) == principal.KindPlatformAdmin {
+		return organization.ChoiceOrganization
+	}
+	return organization.ChoicePlatform
 }
 
 // sessionLive requires the server-side record of sess, of the current generation and with the cookie's account, role

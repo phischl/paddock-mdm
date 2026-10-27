@@ -187,11 +187,14 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 		stepUpFailed(w, r, st.ReturnTo)
 		return
 	}
-	if err := b.checkStepUpRole(ctx, claims, sess); err != nil {
+	altRole, altSlug, err := b.checkStepUpRole(ctx, claims, sess)
+	if err != nil {
 		slog.WarnContext(ctx, "step-up rejected", "error", err, "account_id", sess.PID)
 		stepUpFailed(w, r, st.ReturnTo)
 		return
 	}
+	// The menu's switch follows the identity provider at every step-up (ADR 0045 decision 5).
+	sess.AltRole, sess.AltSlug = string(altRole), altSlug
 	// Without the stored token the step-up still counts for the api; only decryptions need the escrow-reader's proof.
 	if err := b.tokens.Put(ctx, claims.JTI, raw, b.tokenTTL); err != nil {
 		slog.ErrorContext(ctx, "keeping the step-up token failed; decryptions will ask for a new step-up", "error", err)
@@ -269,36 +272,42 @@ func checkStepUp(c stepUpClaims, sess Session, started int64, now time.Time, max
 // errStepUpRole is a step-up whose groups no longer grant the session's role.
 var errStepUpRole = errors.New("the step-up's groups do not grant the session's role")
 
-// checkStepUpRole resolves the role of the step-up's groups and requires the session's role in the session's
-// organization (plan M8s decision 20). When the groups of an organization session grant another role, or none, the
-// account follows the identity provider and every session of it ends (ADR 0034 decision 5); a platform session and a
-// token without groups are only refused.
-func (b *bff) checkStepUpRole(ctx context.Context, claims stepUpClaims, sess Session) error {
+// checkStepUpRole resolves the role of the step-up's groups, narrowed to the session's side (ADR 0045 decision 6),
+// and requires the session's role in the session's organization (plan M8s decision 20). On a match it returns the
+// role and slug the identity may switch to. When the groups of an organization session grant another role, or none,
+// the account follows the identity provider and every session of it ends (ADR 0034 decision 5); a platform session
+// and a token without groups are only refused.
+func (b *bff) checkStepUpRole(ctx context.Context, claims stepUpClaims, sess Session) (principal.Role, string, error) {
 	if claims.Groups == nil {
-		return errors.New("the step-up's ID token has no groups")
+		return "", "", errors.New("the step-up's ID token has no groups")
 	}
 	res := organization.ResolveRole(claims.Groups)
 	platform := principal.Kind(sess.Kind) == principal.KindPlatformAdmin
-	match := !res.Denied && res.Platform == platform
+	choice := organization.ChoiceOrganization
+	if platform {
+		choice = organization.ChoicePlatform
+	}
+	active, match := res.Active(choice)
 	if match && !platform {
-		match = res.Role == principal.Role(sess.Role)
+		match = active.Role == principal.Role(sess.Role)
 		if match {
-			org, err := b.roles.OrganizationID(ctx, res.Slug)
+			org, err := b.roles.OrganizationID(ctx, active.Slug)
 			if err != nil {
-				return fmt.Errorf("resolve the step-up's organization: %w", err)
+				return "", "", fmt.Errorf("resolve the step-up's organization: %w", err)
 			}
 			match = org == sess.Org
 		}
 	}
 	if match {
-		return nil
+		altRole, altSlug := res.Alternate(choice)
+		return altRole, altSlug, nil
 	}
 	if !platform {
 		if err := b.roles.StepUpMismatch(ctx, sess.PID, sess.Org, res); err != nil {
 			slog.ErrorContext(ctx, "account not updated after a step-up role mismatch", "error", err, "account_id", sess.PID)
 		}
 	}
-	return errStepUpRole
+	return "", "", errStepUpRole
 }
 
 // stepUpFailed returns to returnTo with stepup=failed.

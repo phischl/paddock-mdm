@@ -154,9 +154,10 @@ func change(acc pgstore.AdminAccount, u *directoryUser) (reason string, newRole 
 	case !u.active:
 		return RevokeReasonDeactivated, ""
 	}
-	res := organization.ResolveRole(u.groups)
+	// The platform group never grants an organization account its role (ADR 0045 decision 8).
+	res, ok := organization.ResolveRole(u.groups).Active(organization.ChoiceOrganization)
 	switch {
-	case res.Denied || res.Role == "":
+	case !ok:
 		return RevokeReasonRemoved, ""
 	case string(res.Role) != acc.Role:
 		return RevokeReasonRoleChanged, res.Role

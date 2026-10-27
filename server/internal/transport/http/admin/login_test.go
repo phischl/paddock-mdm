@@ -191,11 +191,10 @@ func TestLoginDeniedNamesTheReason(t *testing.T) {
 	ctx := context.Background()
 	mfa := []string{"pwd", "mfa"}
 	cases := map[string][]string{
-		"no_role":                   {"staff"},
-		"multiple_organizations":    {organization.RoleGroup(w.slug, organization.GroupAdmins), organization.RoleGroup("globex", organization.GroupAdmins)},
-		"multiple_roles":            {organization.RoleGroup(w.slug, organization.GroupAdmins), organization.RoleGroup(w.slug, organization.GroupAuditors)},
-		"platform_and_organization": {organization.PlatformAdminsGroup(), organization.RoleGroup(w.slug, organization.GroupAdmins)},
-		"organization_inactive":     {organization.RoleGroup("gone-"+uuid.NewString()[:8], organization.GroupAdmins)},
+		"no_role":                {"staff"},
+		"multiple_organizations": {organization.RoleGroup(w.slug, organization.GroupAdmins), organization.RoleGroup("globex", organization.GroupAdmins)},
+		"multiple_roles":         {organization.RoleGroup(w.slug, organization.GroupAdmins), organization.RoleGroup(w.slug, organization.GroupAuditors)},
+		"organization_inactive":  {organization.RoleGroup("gone-"+uuid.NewString()[:8], organization.GroupAdmins)},
 	}
 	for reason, groups := range cases {
 		t.Run(reason, func(t *testing.T) {
