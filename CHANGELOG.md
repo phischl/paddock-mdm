@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP tool catalog generated from the admin API contract (ADR 0044, PDK-434): `make gen` derives one tool per admin
+  API operation (outside the login tag) from `api/openapi/admin.yaml`, classified as read or write, with scope,
+  destructive and idempotent hints and a self-contained input schema. The contract gains the extensions
+  `x-paddock-step-up: true` (operations that always need a step-up; never offered as tools) and `x-paddock-mcp`
+  (`expose: false` keeps an operation out of the MCP, `bootstrap: true` marks the operations an MCP session may call
+  before its policy is consulted). API tokens, profile changes and the release source check are never offered; nor
+  are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
+  when an offered write operation is not audited. No runtime behaviour changes yet.
 - Role switch for one identity (ADR 0045, PDK-201): one central identity may be a member of `paddock.platform.admins`
   and of one organization's role group instead of needing a second, local account. It signs in to the organization
   role; `GET /api/v1/me` names the other role as `alternate_role` (null for single-role identities, API tokens and
