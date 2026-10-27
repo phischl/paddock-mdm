@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -80,5 +81,89 @@ func TestLoginEnablesTheAccount(t *testing.T) {
 	if err := super.QueryRow(ctx, `SELECT outcome FROM action WHERE code = 'admin.login' AND target->>'id' = $1
 		ORDER BY started_at DESC, id DESC LIMIT 1`, account.String()).Scan(&outcome); err != nil || outcome != "failure" {
 		t.Fatalf("last admin.login outcome %q %v, want failure", outcome, err)
+	}
+}
+
+// TestLoginRoleSwitch: a LoginRole that still names both roles of a two-role identity is refused before anything is
+// recorded or opened, and a switch records previous_role on the admin.login of either scope (ADR 0045 decisions 2, 3).
+func TestLoginRoleSwitch(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	org, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(org.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	orgID := uuid.Must(uuid.NewV7())
+	slug := "s" + orgID.String()[24:]
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Switch', 'active')", orgID, slug); err != nil {
+		t.Fatal(err)
+	}
+	corr := "corr-" + t.Name()
+	ctx = httpx.WithRequestID(ctx, corr)
+	accounts := app.NewAccounts(app.NewActionRunner(org, platform, httpx.RequestID), org, platform, nil)
+	subject := uuid.NewString()
+	opened := 0
+	id := app.LoginIdentity{Subject: subject, Username: "carol", IP: "192.0.2.1",
+		OpenSession: func(context.Context, principal.Principal) error { opened++; return nil }}
+
+	_, err = accounts.Login(ctx, id, app.LoginRole{Platform: true, Slug: slug, Role: principal.RoleOrgAdmin, Slugs: []string{slug}})
+	if !errors.Is(err, app.ErrAmbiguousRole) {
+		t.Fatalf("login with both roles: %v, want ErrAmbiguousRole", err)
+	}
+	if n := countRows(t, super, "SELECT count(*) FROM action WHERE correlation_id = $1", corr); n != 0 || opened != 0 {
+		t.Fatalf("ambiguous login recorded %d actions and opened %d sessions, want none", n, opened)
+	}
+	if n := countRows(t, super, "SELECT count(*) FROM admin_account WHERE authentik_sub = $1", subject); n != 0 {
+		t.Fatalf("ambiguous login wrote %d accounts", n)
+	}
+
+	previousRole := func(scope uuid.UUID) (string, bool) {
+		t.Helper()
+		var role *string
+		if err := super.QueryRow(ctx, `SELECT params->>'previous_role' FROM action WHERE correlation_id = $1
+			AND code = 'admin.login' AND organization_id = $2 ORDER BY started_at DESC, id DESC LIMIT 1`, corr, scope).Scan(&role); err != nil {
+			t.Fatal(err)
+		}
+		if role == nil {
+			return "", false
+		}
+		return *role, true
+	}
+	if _, err := accounts.Login(ctx, id, app.LoginRole{Slug: slug, Role: principal.RoleOrgAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	if role, ok := previousRole(orgID); ok {
+		t.Fatalf("plain sign-in recorded previous_role %q", role)
+	}
+	switched := id
+	switched.PreviousRole = principal.RoleOrgAdmin
+	res, err := accounts.Login(ctx, switched, app.LoginRole{Platform: true, Role: principal.RolePlatform})
+	if err != nil || res.Principal.Kind != principal.KindPlatformAdmin {
+		t.Fatalf("switch to platform: %+v %v", res, err)
+	}
+	if role, _ := previousRole(audit.PlatformOrganizationID); role != "org_admin" {
+		t.Fatalf("platform admin.login previous_role %q, want org_admin", role)
+	}
+	switched.PreviousRole = principal.RolePlatform
+	res, err = accounts.Login(ctx, switched, app.LoginRole{Slug: slug, Role: principal.RoleOrgAdmin})
+	if err != nil || res.Principal.OrganizationID != orgID {
+		t.Fatalf("switch back: %+v %v", res, err)
+	}
+	if role, _ := previousRole(orgID); role != "platform_admin" {
+		t.Fatalf("organization admin.login previous_role %q, want platform_admin", role)
+	}
+	if opened != 3 {
+		t.Fatalf("opened %d sessions, want 3", opened)
 	}
 }

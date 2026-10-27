@@ -37,7 +37,8 @@ func TestStepUpRoleMismatch(t *testing.T) {
 		e.cookie(p)
 		return p
 	}
-	stepUp := func(p principal.Principal, groups []string) string {
+	// stepUpSession runs the step-up and returns the callback's Location and the re-issued session (zero when none).
+	stepUpSession := func(p principal.Principal, groups []string) (string, admin.Session) {
 		t.Helper()
 		w := newStepUpWorldFor(t, 0, p, e.accounts)
 		res := w.stepUp(map[string]any{"sub": p.Subject, "auth_time": w.clock.Unix(), "amr": []string{"pwd", "mfa"},
@@ -45,7 +46,18 @@ func TestStepUpRoleMismatch(t *testing.T) {
 		if res.Code != http.StatusFound {
 			t.Fatalf("callback: %d", res.Code)
 		}
-		return res.Header().Get("Location")
+		var sess admin.Session
+		if c := cookieOf(res, admin.SessionCookie); c != nil && c.Value != "" {
+			if err := w.keys.Open(admin.SessionCookie, c.Value, &sess); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return res.Header().Get("Location"), sess
+	}
+	stepUp := func(p principal.Principal, groups []string) string {
+		t.Helper()
+		loc, _ := stepUpSession(p, groups)
+		return loc
 	}
 	sessionsOf := func(id uuid.UUID) int {
 		e.sessions.mu.Lock()
@@ -123,6 +135,54 @@ func TestStepUpRoleMismatch(t *testing.T) {
 		}
 		if role, disabled := state(p.ID); role != "org_admin" || disabled || sessionsOf(p.ID) != 1 || len(revoked(p.ID)) != 0 {
 			t.Fatalf("account changed: %s disabled %v", role, disabled)
+		}
+	})
+	// A two-role identity (ADR 0045 decision 6) steps up in either session; the step-up refreshes the alternate role.
+	platformAdmins := organization.PlatformAdminsGroup()
+	t.Run("organization session of a two-role identity", func(t *testing.T) {
+		p := account()
+		loc, sess := stepUpSession(p, []string{platformAdmins, organization.RoleGroup(acme, organization.GroupAdmins)})
+		if loc != "/devices/x" || sess.StepUpAt == 0 || sess.AltRole != "platform_admin" || sess.AltSlug != "" {
+			t.Fatalf("step-up: %s, session %+v", loc, sess)
+		}
+		if role, disabled := state(p.ID); role != "org_admin" || disabled || sessionsOf(p.ID) != 1 || len(revoked(p.ID)) != 0 {
+			t.Fatalf("account changed: %s disabled %v", role, disabled)
+		}
+	})
+	t.Run("platform session of a two-role identity", func(t *testing.T) {
+		p := principal.Principal{Kind: principal.KindPlatformAdmin, ID: uuid.Must(uuid.NewV7()), Subject: uuid.NewString(),
+			Display: "alice@acme.test", Role: principal.RolePlatform}
+		e.cookie(p)
+		loc, sess := stepUpSession(p, []string{platformAdmins, organization.RoleGroup(acme, organization.GroupAdmins)})
+		if loc != "/devices/x" || sess.StepUpAt == 0 || sess.AltRole != "org_admin" || sess.AltSlug != acme {
+			t.Fatalf("step-up: %s, session %+v", loc, sess)
+		}
+		if sessionsOf(p.ID) != 1 || len(revoked(p.ID)) != 0 {
+			t.Fatalf("%d sessions, events %v", sessionsOf(p.ID), revoked(p.ID))
+		}
+	})
+	t.Run("organization session with the platform group only", func(t *testing.T) {
+		p := account()
+		if loc := stepUp(p, []string{platformAdmins}); loc != "/devices/x?stepup=failed" {
+			t.Fatalf("step-up: %s", loc)
+		}
+		if role, disabled := state(p.ID); role != "org_admin" || !disabled || sessionsOf(p.ID) != 0 {
+			t.Fatalf("account %s disabled %v, %d sessions", role, disabled, sessionsOf(p.ID))
+		}
+		if ev := revoked(p.ID); len(ev) != 1 || ev[0] != "success system step_up_role_mismatch 1 [org_admin] []" {
+			t.Fatalf("events %v", ev)
+		}
+	})
+	t.Run("organization session with the platform group and another role", func(t *testing.T) {
+		p := account()
+		if loc := stepUp(p, []string{platformAdmins, organization.RoleGroup(acme, organization.GroupOperators)}); loc != "/devices/x?stepup=failed" {
+			t.Fatalf("step-up: %s", loc)
+		}
+		if role, disabled := state(p.ID); role != "org_operator" || disabled || sessionsOf(p.ID) != 0 {
+			t.Fatalf("account %s disabled %v, %d sessions", role, disabled, sessionsOf(p.ID))
+		}
+		if ev := revoked(p.ID); len(ev) != 1 || ev[0] != "success system step_up_role_mismatch 1 [org_admin] [org_operator]" {
+			t.Fatalf("events %v", ev)
 		}
 	})
 	t.Run("platform session with organization groups", func(t *testing.T) {

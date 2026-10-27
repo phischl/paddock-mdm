@@ -80,7 +80,12 @@ paths:
         - { name: error, in: query, required: false, schema: { type: string } }
       responses:
         "302":
-          description: Redirect to return_to (default /) on success, or to /login-denied?reason=<code>.
+          description: |
+            Redirect to return_to (default /) on success, or to /login-denied?reason=<code>. An identity with the
+            platform role and one organization role signs in to the organization role (ADR 0045). The callback of a
+            role switch (POST /api/auth/switch) opens a new session in the chosen role, ends the previous session and
+            records admin.login with previous_role; a role the fresh groups claim no longer grants is refused with
+            reason role_not_granted and leaves the previous session untouched.
           headers:
             Location: { schema: { type: string } }
   /api/auth/stepup:
@@ -138,6 +143,31 @@ paths:
               schema: { $ref: "#/components/schemas/Logout" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/auth/switch:
+    post:
+      operationId: switchRole
+      tags: [auth]
+      summary: Start the switch to the session's alternate role (ADR 0045).
+      parameters: [ { $ref: "#/components/parameters/Csrf" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoleSwitch" }
+      responses:
+        "200":
+          description: Navigate the browser to authorize_url; the callback opens the new session and ends this one.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorize_url]
+                properties: { authorize_url: { type: string, format: uri } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /api/v1/me:
     get:
@@ -4368,7 +4398,7 @@ components:
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
-        step_up_valid_until, server_version]
+        step_up_valid_until, server_version, alternate_role]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -4411,6 +4441,22 @@ components:
           $ref: "#/components/schemas/MeStepUp"
         api_token:
           $ref: "#/components/schemas/MeApiToken"
+        alternate_role:
+          allOf: [ { $ref: "#/components/schemas/MeAlternateRole" } ]
+          nullable: true
+          description: The role this identity may switch to (ADR 0045); null for a single-role identity, API tokens and MCP sessions.
+    MeAlternateRole:
+      type: object
+      required: [role]
+      properties:
+        role: { type: string, enum: [org_admin, org_operator, org_auditor, platform_admin] }
+        organization_slug: { type: string, description: Set when role is an organization role. }
+    RoleSwitch:
+      type: object
+      required: [role]
+      properties:
+        role: { type: string, enum: [platform, organization] }
+        return_to: { type: string, description: Relative path to return to after the switch; default /. }
     MeApiToken:
       type: object
       description: The API token the request authenticated with; absent for sessions.

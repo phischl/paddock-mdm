@@ -229,12 +229,16 @@ Authentik is down. Run the action again once Authentik is back, so that the iden
    users** (the create dialog takes them; *Domains* in the list changes them). Without a domain the organization's
    devices get no login management and no managed local administrator. Connect its identity source
    (`docs/operations/identity-sources.md`) and make its first administrator a member of `paddock.<slug>.admins`.
-3. Publish the first agent release (section 10).
-4. As the organization administrator, **set the break-glass accounts first** (*Login & privileges*: the existing
+3. One identity may be a member of `paddock.platform.admins` and of one organization's role group: it signs in to
+   the organization and switches to platform administration from the user menu (a new sign-in that ends the
+   current session; privileged actions then need a new step-up). An identity with role groups of several
+   organizations is refused.
+4. Publish the first agent release (section 10).
+5. As the organization administrator, **set the break-glass accounts first** (*Login & privileges*: the existing
    local administrator accounts of the devices, `docs/operations/device-login.md`, *Break-glass accounts and sudo*).
    Then create an enrollment token and install the first device with the autoinstall
    (`docs/operations/autoinstall.md`) or the packages under `https://bundles.<domain>/packages/`.
-5. Set the IP allow list (optional, recommended): as the platform administrator open *Platform* → *IP allow list*,
+6. Set the IP allow list (optional, recommended): as the platform administrator open *Platform* → *IP allow list*,
    add your own address with *Use my address* first (the server refuses a first entry that would lock you out), then
    the office and VPN ranges. From then on the portal and the admin API are reachable from those ranges only, with
    sessions and API tokens alike. The edge list `PADDOCK_ADMIN_ALLOWED_CIDRS` in `.env` is the second, static layer;

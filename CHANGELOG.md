@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Role switch for one identity (ADR 0045, PDK-201): one central identity may be a member of `paddock.platform.admins`
+  and of one organization's role group instead of needing a second, local account. It signs in to the organization
+  role; `GET /api/v1/me` names the other role as `alternate_role` (null for single-role identities, API tokens and
+  MCP sessions). The new endpoint `POST /api/auth/switch` starts a new sign-in through Authentik for the other role:
+  the new session has no step-up, the previous session ends, and the switch is recorded once as the new session's
+  `admin.login` with the new param `previous_role`. The step-up accepts a step-up token whose groups grant the
+  session's role next to the other one. The denial reason `platform_and_organization` is removed; the new denial
+  reason `role_not_granted` refuses a switch whose role the identity provider no longer grants. Identities with role
+  groups of several organizations stay refused. Residual risks RR-91–RR-93.
 - Agent release import from GitHub (ADR 0043, PDK-427): a platform administrator checks the official repository for a
   newer agent release and imports it with one step-up-protected action instead of downloading, renaming and uploading
   the files on the host. Every file is verified with the release public key before anything is stored; the release is

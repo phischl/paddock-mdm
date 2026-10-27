@@ -242,6 +242,7 @@ func NewHandler(d Deps) http.Handler {
 	root.HandleFunc("GET /api/auth/stepup/callback", s.bff.stepUpCallback)
 	// Outside the session middleware: signing out works while the session store is unreachable (plan M8s decision 15).
 	root.Handle("POST /api/auth/logout", noStore(s.csrf(s.bff.logout(d.PublicURL))))
+	root.Handle("POST /api/auth/switch", noStore(s.csrf(http.HandlerFunc(s.bff.switchRole))))
 	root.Handle("/api/", noStore(authenticated))
 	root.Handle("/", d.Static)
 
@@ -301,6 +302,9 @@ func (s *server) session(next http.Handler) http.Handler {
 		ctx := principal.With(r.Context(), sess.Principal(httpx.ClientIP(r)))
 		if s.d.ExposeStepUp {
 			ctx = context.WithValue(ctx, stepUpClassesKey{}, sess.StepUpClasses)
+		}
+		if sess.AltRole != "" {
+			ctx = context.WithValue(ctx, alternateRoleKey{}, alternateRole{role: sess.AltRole, slug: sess.AltSlug})
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

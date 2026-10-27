@@ -47,7 +47,13 @@ type LoginIdentity struct {
 	// before it and the login re-grants the role the groups claim carries now. An error fails the login and records it
 	// as failed.
 	OpenSession func(ctx context.Context, p principal.Principal) error
+	// PreviousRole is the role of the session a switch ends (ADR 0045 decision 3); "" for a plain sign-in. It is
+	// recorded as the admin.login param previous_role.
+	PreviousRole principal.Role
 }
+
+// ErrAmbiguousRole: Login was called with a LoginRole that names the platform role and an organization role.
+var ErrAmbiguousRole = errors.New("app: login role names more than one role")
 
 // LoginRole is the role resolved from the groups claim.
 type LoginRole struct {
@@ -90,6 +96,9 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 	if role.Denied {
 		return LoginResult{}, a.recordDenied(ctx, id, role.Slugs, role.DenialReason)
 	}
+	if role.Platform && role.Slug != "" {
+		return LoginResult{}, ErrAmbiguousRole
+	}
 	if role.Platform {
 		return a.loginPlatform(ctx, id)
 	}
@@ -126,7 +135,7 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 	spec := ActionSpec{
 		Code:   audit.CodeAdminLogin,
 		Target: &audit.Target{Type: "admin_account", ID: p.ID.String(), Display: id.Username},
-		Params: map[string]any{"role": string(role.Role), "organization_slug": role.Slug},
+		Params: id.loginParams(map[string]any{"role": string(role.Role), "organization_slug": role.Slug}),
 	}
 	err = a.runner.RunTx(principal.With(ctx, p), ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 		acc, err := q.UpsertAdminAccount(ctx, pgstore.UpsertAdminAccountParams{
@@ -169,7 +178,7 @@ func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginRe
 	spec := ActionSpec{
 		Code:   audit.CodeAdminLogin,
 		Target: &audit.Target{Type: "platform_admin", ID: p.ID.String(), Display: id.Username},
-		Params: map[string]any{"role": string(principal.RolePlatform)},
+		Params: id.loginParams(map[string]any{"role": string(principal.RolePlatform)}),
 	}
 	err = a.runner.RunTx(principal.With(ctx, p), ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 		acc, err := q.UpsertPlatformAdmin(ctx, pgstore.UpsertPlatformAdminParams{
@@ -185,6 +194,14 @@ func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginRe
 		return LoginResult{}, err
 	}
 	return LoginResult{Principal: p, Locale: locale}, nil
+}
+
+// loginParams adds previous_role to the params of a successful admin.login when the login is a role switch.
+func (id LoginIdentity) loginParams(params map[string]any) map[string]any {
+	if id.PreviousRole != "" {
+		params["previous_role"] = string(id.PreviousRole)
+	}
+	return params
 }
 
 func (id LoginIdentity) openSession(ctx context.Context, p principal.Principal) error {
@@ -428,13 +445,13 @@ var stepUpCheckActor = audit.Actor{Type: audit.ActorSystem, Display: "step-up ro
 // when res grants no role in it, and revokes every session of the account (ADR 0034 decision 5).
 func (a *Accounts) StepUpMismatch(ctx context.Context, accountID, orgID uuid.UUID, res organization.RoleResolution) error {
 	var newRole principal.Role
-	if !res.Denied && !res.Platform && res.Role != "" {
-		resolved, err := a.org.ResolveSlug(ctx, res.Slug)
+	if active, ok := res.Active(organization.ChoiceOrganization); ok {
+		resolved, err := a.org.ResolveSlug(ctx, active.Slug)
 		if err != nil {
 			return err
 		}
 		if resolved == orgID {
-			newRole = res.Role
+			newRole = active.Role
 		}
 	}
 	ctx = principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: stepUpCheckActor.Display, OrganizationID: orgID})

@@ -60,6 +60,17 @@ func TestLoginGate(t *testing.T) {
 		if ev.Params["denial_reason"] != "multiple_organizations" {
 			t.Fatalf("denial_reason %v, want multiple_organizations", ev.Params["denial_reason"])
 		}
+		// The platform role does not make an ambiguous organization part acceptable (ADR 0045 decision 1).
+		user, pw = tempUser(t, "twoorgsplat", "paddock.platform.admins", env.RoleGroup("acme", "admins"), env.RoleGroup("globex", "admins"))
+		p, err = loginAs(t, user, pw)
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=multiple_organizations" {
+			t.Fatalf("login with the platform role = %v (final %q), want /login-denied?reason=multiple_organizations", err, finalOf(p))
+		}
+		expectNoSession(t, p)
+		ev = expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", p.LoginRequestID, "admin.login", "denied", auditPollTimeout)
+		if ev.Params["denial_reason"] != "multiple_organizations" {
+			t.Fatalf("denial_reason %v, want multiple_organizations", ev.Params["denial_reason"])
+		}
 	})
 
 	t.Run("user with two roles in one organization is denied", func(t *testing.T) {
@@ -70,26 +81,27 @@ func TestLoginGate(t *testing.T) {
 		}
 		expectNoSession(t, p)
 		// Exactly one named organization resolves: the denial is recorded in acme.
-		ev := expectOneIndexEvent(t, idx, orgOf(t, login(t, env.Alice)), "correlation_id = $1", p.LoginRequestID, "admin.login",
+		acme := orgOf(t, login(t, env.Alice))
+		ev := expectOneIndexEvent(t, idx, acme, "correlation_id = $1", p.LoginRequestID, "admin.login",
 			"denied", auditPollTimeout)
+		if ev.Params["denial_reason"] != "multiple_roles" {
+			t.Fatalf("denial_reason %v, want multiple_roles", ev.Params["denial_reason"])
+		}
+		// The platform role does not make an ambiguous organization part acceptable (ADR 0045 decision 1).
+		user, pw = tempUser(t, "tworolesplat", "paddock.platform.admins", env.RoleGroup("acme", "admins"), env.RoleGroup("acme", "auditors"))
+		p, err = loginAs(t, user, pw)
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=multiple_roles" {
+			t.Fatalf("login with the platform role = %v (final %q), want /login-denied?reason=multiple_roles", err, finalOf(p))
+		}
+		expectNoSession(t, p)
+		ev = expectOneIndexEvent(t, idx, acme, "correlation_id = $1", p.LoginRequestID, "admin.login", "denied", auditPollTimeout)
 		if ev.Params["denial_reason"] != "multiple_roles" {
 			t.Fatalf("denial_reason %v, want multiple_roles", ev.Params["denial_reason"])
 		}
 	})
 
-	t.Run("platform admin with an organization role is denied", func(t *testing.T) {
-		user, pw := tempUser(t, "platorg", "paddock.platform.admins", env.RoleGroup("acme", "admins"))
-		p, err := loginAs(t, user, pw)
-		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=platform_and_organization" {
-			t.Fatalf("login = %v (final %q), want /login-denied?reason=platform_and_organization", err, finalOf(p))
-		}
-		expectNoSession(t, p)
-		// Exactly one named organization resolves: the denial is recorded in acme.
-		ev := expectOneIndexEvent(t, idx, orgOf(t, login(t, env.Alice)), "correlation_id = $1", p.LoginRequestID, "admin.login",
-			"denied", auditPollTimeout)
-		if ev.Params["denial_reason"] != "platform_and_organization" {
-			t.Fatalf("denial_reason %v, want platform_and_organization", ev.Params["denial_reason"])
-		}
+	t.Run("platform admin with an organization role signs in to the organization and switches", func(t *testing.T) {
+		testRoleSwitch(t, idx)
 	})
 
 	t.Run("platform admin has no organization data", func(t *testing.T) {
@@ -195,6 +207,112 @@ func TestLoginMFAPath(t *testing.T) {
 	}
 	if v.Name != "paddock-default-login-mfa" || v.NotConfiguredAction != "configure" {
 		t.Fatalf("order 31 stage %+v, want paddock-default-login-mfa with not_configured_action configure", v)
+	}
+}
+
+// switchMe is the part of GET /api/v1/me the role switch gate reads (ADR 0045).
+type switchMe struct {
+	Role         string `json:"role"`
+	Organization *struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+	} `json:"organization"`
+	AlternateRole *struct {
+		Role             string `json:"role"`
+		OrganizationSlug string `json:"organization_slug"`
+	} `json:"alternate_role"`
+	StepUpValidUntil *time.Time `json:"step_up_valid_until"`
+}
+
+func switchWhoami(t *testing.T, p *env.Portal) switchMe {
+	t.Helper()
+	res := call(t, p, http.MethodGet, "/api/v1/me", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var m switchMe
+	if err := res.JSON(&m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// switchRole runs POST /api/auth/switch and follows the authorization URL through Authentik back into the portal; it
+// returns the callback's request ID, the correlation ID of the new session's admin.login.
+func switchRole(t *testing.T, u *mfaUser, role string) string {
+	t.Helper()
+	res := call(t, u.Portal, http.MethodPost, "/api/auth/switch", map[string]string{"role": role})
+	expectStatus(t, res, http.StatusOK, "")
+	var body struct {
+		AuthorizeURL string `json:"authorize_url"`
+	}
+	if err := res.JSON(&body); err != nil || body.AuthorizeURL == "" {
+		t.Fatalf("switch answer %s: %v", res.Body, err)
+	}
+	fin, err := authflow.Follow(testContext(t, 3*time.Minute), u.Client, stack.AdminURL(), body.AuthorizeURL, u.username, u.password, u.totp)
+	if err != nil || fin.Final != "/" {
+		t.Fatalf("switch to %s: %v (final %q)", role, err, finalOfResult(fin))
+	}
+	return fin.CallbackRequestID
+}
+
+func finalOfResult(r *authflow.Result) string {
+	if r == nil {
+		return ""
+	}
+	return r.Final
+}
+
+// testRoleSwitch is the two-role case of gate A4 (ADR 0045): the sign-in lands in the organization role, the switch is
+// a new sign-in that ends the previous session and is recorded once with previous_role, in the scope it enters.
+// The temporary user gets a TOTP authenticator (mfaTempUser), which the step-up flow requires.
+func testRoleSwitch(t *testing.T, idx *env.AuditIndex) {
+	u := mfaTempUser(t, "platorg", "paddock.platform.admins", env.RoleGroup("acme", "admins"))
+	acme := orgOf(t, u.Portal)
+	m := switchWhoami(t, u.Portal)
+	if m.Role != "org_admin" || m.Organization == nil || m.AlternateRole == nil || m.AlternateRole.Role != "platform_admin" ||
+		m.AlternateRole.OrganizationSlug != "" {
+		t.Fatalf("after sign-in: %+v alternate %+v", m, m.AlternateRole)
+	}
+	acmeSlug := m.Organization.Slug
+	expectStatus(t, call(t, u.Portal, http.MethodGet, "/api/platform/v1/organizations", nil), http.StatusForbidden, "forbidden")
+	u.stepUp(t)
+	if m := switchWhoami(t, u.Portal); m.StepUpValidUntil == nil {
+		t.Fatal("step_up_valid_until is null after the step-up")
+	}
+	old := cookieCopy(t, u.Portal)
+
+	callback := switchRole(t, u, "platform")
+	m = switchWhoami(t, u.Portal)
+	if m.Role != "platform_admin" || m.Organization != nil || m.AlternateRole == nil || m.AlternateRole.Role != "org_admin" ||
+		m.AlternateRole.OrganizationSlug != acmeSlug || m.StepUpValidUntil != nil {
+		t.Fatalf("after the switch: %+v alternate %+v", m, m.AlternateRole)
+	}
+	expectStatus(t, call(t, u.Portal, http.MethodGet, "/api/v1/device-groups", nil), http.StatusForbidden, "no_organization")
+	expectStatus(t, call(t, old, http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthenticated")
+	ev := expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", callback, "admin.login", "success", auditPollTimeout)
+	if ev.Params["previous_role"] != "org_admin" || ev.Params["role"] != "platform_admin" {
+		t.Fatalf("switch event params %v, want role platform_admin and previous_role org_admin", ev.Params)
+	}
+
+	callback = switchRole(t, u, "organization")
+	m = switchWhoami(t, u.Portal)
+	if m.Role != "org_admin" || m.Organization == nil || m.Organization.ID != acme.String() || m.AlternateRole == nil ||
+		m.AlternateRole.Role != "platform_admin" {
+		t.Fatalf("after the switch back: %+v alternate %+v", m, m.AlternateRole)
+	}
+	ev = expectOneIndexEvent(t, idx, acme, "correlation_id = $1", callback, "admin.login", "success", auditPollTimeout)
+	if ev.Params["previous_role"] != "platform_admin" {
+		t.Fatalf("switch back event params %v, want previous_role platform_admin", ev.Params)
+	}
+	// A switch ends the previous session as a logout does, not as a revocation.
+	ctx := testContext(t, time.Minute)
+	for _, org := range []uuid.UUID{acme, platformOrg} {
+		events, err := idx.Events(ctx, org, "code = 'admin.sessions_revoked' AND target->>'display' = $1", u.username)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("admin.sessions_revoked of %s in %s: %+v", u.username, org, events)
+		}
 	}
 }
 

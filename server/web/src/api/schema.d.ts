@@ -98,6 +98,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start the switch to the session's alternate role (ADR 0045). */
+        post: operations["switchRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -2620,6 +2637,20 @@ export interface components {
             server_version: string;
             step_up?: components["schemas"]["MeStepUp"];
             api_token?: components["schemas"]["MeApiToken"];
+            /** @description The role this identity may switch to (ADR 0045); null for a single-role identity, API tokens and MCP sessions. */
+            alternate_role: components["schemas"]["MeAlternateRole"] | null;
+        };
+        MeAlternateRole: {
+            /** @enum {string} */
+            role: "org_admin" | "org_operator" | "org_auditor" | "platform_admin";
+            /** @description Set when role is an organization role. */
+            organization_slug?: string;
+        };
+        RoleSwitch: {
+            /** @enum {string} */
+            role: "platform" | "organization";
+            /** @description Relative path to return to after the switch; default /. */
+            return_to?: string;
         };
         /** @description The API token the request authenticated with; absent for sessions. */
         MeApiToken: {
@@ -5011,7 +5042,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Redirect to return_to (default /) on success, or to /login-denied?reason=<code>. */
+            /**
+             * @description Redirect to return_to (default /) on success, or to /login-denied?reason=<code>. An identity with the
+             *     platform role and one organization role signs in to the organization role (ADR 0045). The callback of a
+             *     role switch (POST /api/auth/switch) opens a new session in the chosen role, ends the previous session and
+             *     records admin.login with previous_role; a role the fresh groups claim no longer grants is refused with
+             *     reason role_not_granted and leaves the previous session untouched.
+             */
             302: {
                 headers: {
                     Location?: string;
@@ -5090,6 +5127,40 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    switchRole: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleSwitch"];
+            };
+        };
+        responses: {
+            /** @description Navigate the browser to authorize_url; the callback opens the new session and ends this one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uri */
+                        authorize_url: string;
+                    };
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getMe: {
