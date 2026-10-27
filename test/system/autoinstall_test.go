@@ -77,9 +77,9 @@ func TestAutoinstallGate(t *testing.T) {
 		map[string]any{"confirm_hostname": aiVMName}, http.StatusOK).Body, &revealed); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = vm.SSH(t.Context(), nil, "sudo systemctl reboot")
-	vm.waitSSHDown(t)
+	before := vm.requestReboot(t)
 	vm.unlockAtPrompt(t, []string{revealed.RecoveryKey}, "recovery key")
+	vm.requireRebooted(t, before)
 	// The entries before the recovery key counted as TPM authorization failures (throwaway VM, empty lockout auth).
 	_, _ = vm.SSH(t.Context(), nil, "sudo tpm2_dictionarylockout --clear-lockout")
 }
