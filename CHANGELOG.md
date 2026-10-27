@@ -93,7 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no Fleet database migration) with the Fleet NVD release 202610260056, AWS CLI 2.38.5 (was 2.38.2), Prometheus
   v3.15.1 (was v3.15.0); build and release tooling BuildKit v0.34.1, cosign v3.1.4 (also used to verify the operator
   bundle), Trivy 0.76.1. Devices install Himmelblau 4.0.7 by default (`PADDOCK_HIMMELBLAU_VERSION`, was 4.0.6). The
-  portal uses Vuetify 4.2.6 (was 4.2.5). Schema: unchanged.
+  portal uses Vuetify 4.2.6 (was 4.2.5), vue-i18n 11.4.16 (was 11.4.14) and intl-messageformat 12.1.4 (was
+  12.1.3), and is built with Vite 8.3.5 (was 8.3.4). The server talks to the S3 stores (audit WORM store, backups,
+  agent artifacts) with AWS SDK for Go v2 1.47.4, its credentials module 1.20.10 and its S3 client 1.114.5 (were
+  1.47.3, 1.20.9 and 1.114.3). Schema: unchanged.
 
 ### Fixed
 
