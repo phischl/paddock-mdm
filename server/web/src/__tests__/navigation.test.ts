@@ -10,6 +10,7 @@ import { navigationGroups, shortcutOf, shortcutRoutes, visibleNavigation, type N
 import { icons } from '../lib/icons.gen'
 import type { Me } from '../api/client'
 import { settleConfirm, useConfirm } from '../composables/useConfirm'
+import { nameContainsVisibleText } from './labelInName'
 
 vi.mock('../lib/updates', async (original) => ({
   ...(await original<typeof import('../lib/updates')>()),
@@ -395,11 +396,27 @@ describe('app bar', () => {
     expect(w.find('[data-testid="theme-toggle"]').attributes('aria-label')).toBe('Switch to the light theme')
   })
 
+  it('names the user menu button with its visible text first (WCAG 2.5.3, PDK-349)', async () => {
+    const { w } = await mountApp()
+    const button = w.find('[data-testid="user-menu"]')
+    expect(button.attributes('aria-label')).toBe('Alice Admin, Organization administrator — user menu')
+    expect(nameContainsVisibleText(button.element)).toBe(true)
+  })
+
+  it('names the language, theme and density submenus with their visible text (WCAG 2.5.3, PDK-349)', async () => {
+    const { w } = await mountApp()
+    await w.find('[data-testid="user-menu"]').trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="language-menu"]')).not.toBeNull())
+    for (const id of ['language-menu', 'theme-menu', 'density-menu']) {
+      expect(nameContainsVisibleText(document.querySelector(`[data-testid="${id}"]`) as Element)).toBe(true)
+    }
+  })
+
   it('offers theme, density and shortcut help in the user menu', async () => {
     const { w } = await mountApp()
     await w.find('[data-testid="user-menu"]').trigger('click')
     await vi.waitFor(() => expect(document.querySelector('[data-testid="theme-menu"]')).not.toBeNull())
-    expect(document.querySelector('[data-testid="theme-menu"]')?.getAttribute('aria-label')).toBe('Choose the theme (current: System)')
+    expect(document.querySelector('[data-testid="theme-menu"]')?.getAttribute('aria-label')).toBe('Theme: System')
     expect(document.querySelector('[data-testid="density-menu"]')?.textContent).toContain('Compact')
     expect(document.querySelector('[data-testid="shortcuts-help"]')?.textContent).toContain('Keyboard shortcuts')
     expect(document.querySelector('[data-testid="logout"]')).not.toBeNull()

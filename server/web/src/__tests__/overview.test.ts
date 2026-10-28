@@ -10,6 +10,7 @@ import { kpiCells, severitySegments } from '../lib/overview'
 import { vuetify } from '../plugins/vuetify'
 import { useSessionStore } from '../stores/session'
 import OverviewView from '../views/Overview.vue'
+import { nameContainsVisibleText } from './labelInName'
 
 function overviewOf(over: Partial<Overview> = {}): Overview {
   return {
@@ -168,6 +169,13 @@ describe('overview page (plan M7c decision 28)', () => {
     expect(chips).toEqual(['Presumed lost', 'Silent (critical)'])
     expect(rows[0].findAll('a.v-btn').map((b) => b.text())).toEqual(['Retire, lock or keep'])
     expect(rows[0].text()).toContain('never')
+  })
+
+  it('names the attention action with its visible text and the hostname (WCAG 2.5.3, PDK-349)', async () => {
+    const w = await mountOverview()
+    const action = w.find('[data-testid="overview-attention"] tbody tr a.v-btn')
+    expect(action.attributes('aria-label')).toBe('Retire, lock or keep — acme-lt-0142')
+    expect(nameContainsVisibleText(action.element)).toBe(true)
   })
 
   it('collapses more than three conditions into a +n chip', async () => {

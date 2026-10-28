@@ -170,6 +170,8 @@ a.pd-pill:hover { filter: brightness(0.95); }
   display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--pd-surface-3);
   color: var(--pd-text-primary); font-weight: 600; font-size: 11px;
 }
+/* Generated content, not a text node: axe counts visible aria-hidden text, and a leading initial breaks label-in-name. */
+.pd-avatar::before { content: attr(data-initial); }
 .user-button-name { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; margin-left: 8px; }
 .pd-user-name { font-size: 12.5px; }
 .pd-nav.v-navigation-drawer { background: var(--pd-surface-2); color: var(--pd-text-primary); border-right: 1px solid var(--pd-border); overflow-y: auto; }
