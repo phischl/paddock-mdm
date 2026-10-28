@@ -20,6 +20,11 @@ keep_local_admin}`) and `POST /api/v1/devices/{id}/uninstall/cancel`.
   clears anything.
 - On the device the command is refused (`failed`, reason `revocation_pending`) while a Lock or Destroy token was handed
   to `paddock-revoke` within the last 24 hours.
+- A refused command (`failed`, reasons `conversion_pending` and `revocation_pending`, which clear up) leaves the request
+  open: the device page and `uninstall.refused_reason` of `GET /api/v1/devices/{id}` show the reason, and an
+  administrator cancels the request and requests it again once the cause is resolved. Nothing retries on its own. A
+  refusal with `invalid_params` can never succeed: it ends the request with one `device.uninstall_failed` event by the
+  device, and the device stays active.
 - A Lock or Destroy requested while the removal is pending cancels it (recorded on `revocation.requested` as
   `uninstall_cancelled` and `uninstall_command_id`): a command without a result is withdrawn like a cancel; when the device had already received it, the
   device page warns that it may already have removed `paddock-revoke` (`docs/operations/revocation.md`).

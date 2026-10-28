@@ -187,7 +187,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
 		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
-		Commands:       app.NewDeviceCommands(orgPool),
+		Commands:       app.NewDeviceCommands(runner, orgPool),
 		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:    app.NewAutoinstall(runner, orgPool, bundlesURL),
 		Disk:           app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),

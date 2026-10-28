@@ -1298,6 +1298,7 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   copy and the plan after writing `result.json`; a `helper_failed` and a withdrawn request delete them too. Before
   `systemd-run` the agent checks with `statfs` (`ST_NOEXEC`) that the directory is executable and otherwise reports
   `helper_failed` with the reason in its log.
+- Amendment 2026-10-28 (PDK-403): a terminal refusal (invalid_params) ends the uninstall request as failed; transient refusals (conversion_pending, revocation_pending) leave it open with the reason visible; no automatic retry.
 
 ### 15.5 Login history (decisions 14–17)
 

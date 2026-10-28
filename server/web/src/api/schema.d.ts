@@ -3441,6 +3441,8 @@ export interface components {
             local_admin: string | null;
             /** @description From the removal report: cleared, requested_at_next_boot, skipped_in_use, not_requested or failed. */
             tpm: string | null;
+            /** @description Why the device refused the command (command_status failed): conversion_pending or revocation_pending, which clear up, so the request stays open until an administrator cancels it or requests it again. A refusal with invalid_params ends the request. Null when the device did not refuse. */
+            refused_reason: string | null;
         };
         DeviceUninstallRequest: {
             /** @enum {string} */

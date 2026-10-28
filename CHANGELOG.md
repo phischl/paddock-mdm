@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A device that refuses the removal of Paddock because the request itself is invalid no longer leaves the request
+  open: it ends at once, with one audit event by the device, so an administrator can request it again. A refusal that
+  clears up (an in-place encryption or a Lock or Destroy pending) keeps the request open, and the device page and the
+  admin API now show why the device refused (PDK-403).
 - A corrupt or unreadable supervisor-upgrade marker no longer keeps a device out of every agent and supervisor
   rollout (PDK-337): like the removal of Paddock, an agent update and a further supervisor upgrade wait for such a
   marker only until its modification time is older than 30 minutes, then go ahead and log a warning.
