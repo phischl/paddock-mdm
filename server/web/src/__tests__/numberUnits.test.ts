@@ -105,3 +105,15 @@ describe('number fields show their unit as a suffix (PDK-429)', () => {
     expect(field('device-group-staleness-critical').suffix).toBe('Stunden')
   })
 })
+
+// PDK-461: the security-update time label was cut off at 375 px in German. jsdom does no layout, so the width itself is
+// checked in the browser; this pins the full label in every locale.
+describe('security-update time field (PDK-461)', () => {
+  it.each([
+    ['en', 'Time of the security updates'],
+    ['de', 'Uhrzeit der Sicherheitsupdates'],
+  ] as const)('shows the full label in %s', async (locale, label) => {
+    await mountInApp(UpdateSettingsView, locale)
+    expect(field('security-daily-at').label).toBe(label)
+  })
+})

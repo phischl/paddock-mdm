@@ -26,17 +26,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `step_up_required`). New problem codes `mcp_disabled`, `mcp_tool_not_allowed`, `mcp_write_not_enabled`,
   `rate_limited` and `mcp_login_required`. No MCP session can be opened yet.
 
-### Security
+### Changed
 
-- go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
-  could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
+- Portal: when *End all sessions* ends the portal sessions but the identity provider's sessions cannot be ended (502
+  `upstream_unavailable`), the page now says so and asks to run *End all sessions* again (PDK-321).
 
 ### Fixed
+
+- Portal: confirmation dialogs show long names in full on narrow screens (PDK-447). A long target name in the title
+  or the confirm button, such as a pre-release version `0.9.1792783862-alpha.1792944510667`, wraps onto further lines
+  instead of being cut off with an ellipsis or running past the edges of the button.
+
+- Portal overview: on a phone-width screen the attention and recent-audit tables scroll sideways, and keyboard users
+  can now focus them to scroll; screen readers announce each as its own named table region (PDK-460).
+
+- Portal, *Updates*: the label of the security-update time field is no longer cut off ("Uhrzeit der
+  Sicherheitsupd…" in German); the field is as wide as the other text fields on the page and takes the full panel
+  width on phones (PDK-461).
 
 - Portal accessibility (WCAG 2.5.3 *Label in Name*, PDK-349): the accessible names of the user menu button, its
   language, theme and density entries and the action buttons of the attention list and the overview now begin with
   their visible text and still name the target, e.g. "Retire, lock or keep — acme-lt-0142", so speech-input users can
   activate them by saying what they see. The portal's accessibility check runs with axe-core 4.14.
+
+### Security
+
+- go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
+  could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
 
 ## [0.1.0-alpha.6] - 2026-10-27
 
