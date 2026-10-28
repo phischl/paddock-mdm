@@ -36,6 +36,17 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   anyway: a rollback restores it like for every Fleet version change. Authentik moves to 2026.8.5; `./paddock up`
   recreates its containers, and it applies the blueprints itself at that start. No extra restart and no manual
   blueprint re-apply is needed.
+- From 0.1.0-alpha.6: upgrade the server first, then roll out the agent release. The release changes nothing on the
+  device, so the agent rollout only aligns the version; import it with *Check for new release* on the *Agent
+  releases* page (or `./paddock agent-release`) and start it with `./paddock agent-rollout <version>` or in the
+  portal. Devices install Himmelblau 4.0.7 with their current agent at the next login drift pass after the server
+  upgrade. The import needs outbound HTTPS from `paddock-api` to GitHub: set `HTTPS_PROXY` and `NO_PROXY` in `.env`
+  if the host uses a proxy, or `PADDOCK_AGENT_RELEASE_SOURCE_REPO=off` on air-gapped installations
+  (`docs/operations/agent-releases.md`, "Import from GitHub"). After the upgrade, the first identity sync records the
+  current members of every Paddock role once as `admin.role_granted` with `baseline: true`, devices whose clock is
+  more than 60 s off appear on the attention list as `clock_drift`, and the nightly audit chain verification starts
+  (alerts `PaddockAuditChainBroken`, `PaddockAuditVerifyStale`). Schema: migrations 00068–00071 and audit migrations
+  00004–00006 (new tables and columns only; no data rewrite).
 
 ## Upgrade (each host)
 
