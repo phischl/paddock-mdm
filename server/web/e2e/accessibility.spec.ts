@@ -69,3 +69,18 @@ test('the portal is accessible with the navigation as a rail', async ({ page }) 
   }
   expect(csp).toEqual([])
 })
+
+// At phone width the overview tables scroll sideways; their containers must be reachable by keyboard
+// (axe scrollable-region-focusable), which the wider runs above never trigger.
+test('the overview is accessible at phone width', async ({ page }) => {
+  const csp = watchCSP(page)
+  await page.setViewportSize({ width: 375, height: 812 })
+  await login(page, 'alice@acme.test', 'dev_alice_password')
+  await page.goto('/')
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  const audit = page.getByRole('region', { name: 'Recent audit activity table', exact: true })
+  await audit.focus()
+  await expect(audit).toBeFocused()
+  await expectAccessible(page)
+  expect(csp).toEqual([])
+})
