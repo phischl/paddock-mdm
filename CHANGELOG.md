@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reporting the empty run as passed (PDK-339), and pass `T` to `go test -run` verbatim, so a `$` anchor no longer gets
   lost in make's variable expansion (`T='^TestIdentityGates$/.*/^L1_login$'`); `$$` keeps working.
 
+- `make system-test`, `make acceptance` and `make e2e` check up front that the checkout has `deploy/compose/.env` and
+  the development secrets and stop with a clear message, instead of failing minutes into a run with "couldn't find env
+  file" (PDK-353). `make e2e` from a worktree whose `.secrets` is a symlink to another checkout no longer fails every
+  login and every certificate check: the resolved secrets directory is mounted into the Playwright container and also
+  handed to the device simulator and the release helper.
+
 - Clone detection: a device is no longer quarantined as a suspected clone after its check-ins failed on the server
   side, for example while the ingest queue was full or the server was slow to accept the check-in. A failed check-in
   no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
