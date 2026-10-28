@@ -434,16 +434,16 @@ onBeforeUnmount(() => observer.disconnect())
                 v-bind="menu"
                 variant="text"
                 class="user-button"
-                :aria-label="t('app.userMenu', { name: session.me?.display_name ?? '' })"
+                :aria-label="t('app.userMenuButton', { name: session.me?.display_name ?? '', role: roleLabel })"
                 data-testid="user-menu"
               >
                 <span
                   class="pd-avatar"
                   aria-hidden="true"
-                >{{ initial }}</span>
+                  :data-initial="initial"
+                />
                 <span class="user-button-name">
-                  <span class="pd-user-name">{{ session.me?.display_name }}</span>
-                  <span class="pd-user-role pd-type-caption pd-muted">{{ roleLabel }}</span>
+                  <span class="pd-user-name">{{ session.me?.display_name }}</span>{{ ' ' }}<span class="pd-user-role pd-type-caption pd-muted">{{ roleLabel }}</span>
                 </span>
               </v-btn>
             </template>
@@ -483,7 +483,7 @@ onBeforeUnmount(() => observer.disconnect())
                     :aria-label="t('app.languageMenu', { language: t('app.languages.' + locale) })"
                     data-testid="language-menu"
                   >
-                    <v-list-item-title>{{ t('app.language') }}</v-list-item-title>
+                    <v-list-item-title>{{ t('app.language') }}</v-list-item-title>{{ ' ' }}
                     <v-list-item-subtitle>{{ t('app.languages.' + locale) }}</v-list-item-subtitle>
                   </v-list-item>
                 </template>
@@ -510,7 +510,7 @@ onBeforeUnmount(() => observer.disconnect())
                     :aria-label="t('app.themeMenu', { theme: t('app.themes.' + (session.me?.theme ?? 'system')) })"
                     data-testid="theme-menu"
                   >
-                    <v-list-item-title>{{ t('app.theme') }}</v-list-item-title>
+                    <v-list-item-title>{{ t('app.theme') }}</v-list-item-title>{{ ' ' }}
                     <v-list-item-subtitle>{{ t('app.themes.' + (session.me?.theme ?? 'system')) }}</v-list-item-subtitle>
                   </v-list-item>
                 </template>
@@ -537,7 +537,7 @@ onBeforeUnmount(() => observer.disconnect())
                     :aria-label="t('app.densityMenu', { density: t('app.densities.' + density) })"
                     data-testid="density-menu"
                   >
-                    <v-list-item-title>{{ t('app.density') }}</v-list-item-title>
+                    <v-list-item-title>{{ t('app.density') }}</v-list-item-title>{{ ' ' }}
                     <v-list-item-subtitle>{{ t('app.densities.' + density) }}</v-list-item-subtitle>
                   </v-list-item>
                 </template>

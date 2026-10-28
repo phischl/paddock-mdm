@@ -20,19 +20,20 @@
     "mainNavigation": "Main navigation",
     "error": "Something went wrong. Please try again.",
     "language": "Language",
-    "languageMenu": "Choose the language (current: {language})",
+    "languageMenu": "Language: {language}",
     "languages": {
       "en": "English",
       "de": "Deutsch"
     },
     "languageFailed": "The language could not be saved.",
     "userMenu": "User menu of {name}",
+    "userMenuButton": "{name}, {role} — user menu",
     "showNavigation": "Show the navigation",
     "hideNavigation": "Hide the navigation",
     "commandField": "Search or run a command",
     "commandPlaceholder": "Jump to a device, page, CVE or action…",
     "theme": "Theme",
-    "themeMenu": "Choose the theme (current: {theme})",
+    "themeMenu": "Theme: {theme}",
     "themes": {
       "system": "System",
       "light": "Light",
@@ -44,7 +45,7 @@
     },
     "themeFailed": "The theme could not be saved.",
     "density": "Density",
-    "densityMenu": "Choose the density (current: {density})",
+    "densityMenu": "Density: {density}",
     "densities": {
       "compact": "Compact",
       "comfortable": "Comfortable"
@@ -1897,7 +1898,7 @@
     "title": "Attention",
     "summary": "Devices that need an administrator, grouped by device with their open conditions. Open the device to retire, lock or release it.",
     "kind": "Condition",
-    "open": "Open {hostname}",
+    "open": "{action} — {hostname}",
     "kinds": {
       "stale_warning": "Silent (warning)",
       "stale_critical": "Silent (critical)",

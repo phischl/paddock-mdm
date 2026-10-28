@@ -8,6 +8,7 @@ import type { AttentionDevice } from '../api/client'
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import AttentionView from '../views/Attention.vue'
+import { nameContainsVisibleText } from './labelInName'
 
 const queries: unknown[] = []
 const item: AttentionDevice = {
@@ -91,6 +92,13 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
     expect(chip.text()).toBe('Event gap')
     expect(chip.attributes('title')).toBe('3-3')
     expect(row.findAll('a.v-btn').map((b) => b.text())).toEqual(['Open device'])
+  })
+
+  it('names the action with its visible text and the hostname (WCAG 2.5.3, PDK-349)', async () => {
+    const w = await mountAttention()
+    const action = w.find('[data-testid="attention-list"] tbody tr a.v-btn')
+    expect(action.attributes('aria-label')).toBe('Retire, lock or keep — acme-lt-0142')
+    expect(nameContainsVisibleText(action.element)).toBe(true)
   })
 
   it('explains the empty list', async () => {

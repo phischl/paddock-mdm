@@ -51,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sicherheitsupd…" in German); the field is as wide as the other text fields on the page and takes the full panel
   width on phones (PDK-461).
 
+- Portal accessibility (WCAG 2.5.3 *Label in Name*, PDK-349): the accessible names of the user menu button, its
+  language, theme and density entries and the action buttons of the attention list and the overview now begin with
+  their visible text and still name the target, e.g. "Retire, lock or keep — acme-lt-0142", so speech-input users can
+  activate them by saying what they see. The portal's accessibility check runs with axe-core 4.14.
+
 ### Security
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys

@@ -20,19 +20,20 @@
     "mainNavigation": "Hauptnavigation",
     "error": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
     "language": "Sprache",
-    "languageMenu": "Sprache wählen (aktuell: {language})",
+    "languageMenu": "Sprache: {language}",
     "languages": {
       "en": "English",
       "de": "Deutsch"
     },
     "languageFailed": "Die Sprache konnte nicht gespeichert werden.",
     "userMenu": "Benutzermenü von {name}",
+    "userMenuButton": "{name}, {role} — Benutzermenü",
     "showNavigation": "Navigation einblenden",
     "hideNavigation": "Navigation ausblenden",
     "commandField": "Suchen oder Befehl ausführen",
     "commandPlaceholder": "Zu Gerät, Seite, CVE oder Aktion springen …",
     "theme": "Erscheinungsbild",
-    "themeMenu": "Erscheinungsbild wählen (aktuell: {theme})",
+    "themeMenu": "Erscheinungsbild: {theme}",
     "themes": {
       "system": "System",
       "light": "Hell",
@@ -44,7 +45,7 @@
     },
     "themeFailed": "Das Erscheinungsbild konnte nicht gespeichert werden.",
     "density": "Dichte",
-    "densityMenu": "Dichte wählen (aktuell: {density})",
+    "densityMenu": "Dichte: {density}",
     "densities": {
       "compact": "Kompakt",
       "comfortable": "Komfortabel"
@@ -1897,7 +1898,7 @@
     "title": "Handlungsbedarf",
     "summary": "Geräte, die einen Administrator brauchen, nach Gerät gruppiert mit ihren offenen Befunden. Öffnen Sie das Gerät, um es außer Betrieb zu nehmen, zu sperren oder freizugeben.",
     "kind": "Befund",
-    "open": "{hostname} öffnen",
+    "open": "{action} — {hostname}",
     "kinds": {
       "stale_warning": "Ohne Kontakt (Warnung)",
       "stale_critical": "Ohne Kontakt (kritisch)",

@@ -210,7 +210,7 @@ const latestPublished = computed(() => {
                   <td class="pd-cell-actions pd-hide-sm">
                     <v-btn
                       :to="{ name: 'device', params: { id: d.device_id } }"
-                      :aria-label="t('attention.open', { hostname: d.hostname })"
+                      :aria-label="t('attention.open', { action: t('attention.action.' + d.conditions[0].kind), hostname: d.hostname })"
                       size="small"
                     >
                       {{ t('attention.action.' + d.conditions[0].kind) }}
