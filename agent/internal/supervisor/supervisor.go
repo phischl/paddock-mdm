@@ -163,12 +163,14 @@ func (s *Supervisor) stop() {
 		return
 	}
 	_ = s.child.Process.Signal(syscall.SIGTERM)
+	var err error
 	select {
-	case <-s.exited:
+	case err = <-s.exited:
 	case <-time.After(10 * time.Second):
 		_ = s.child.Process.Kill()
-		<-s.exited
+		err = <-s.exited
 	}
+	slog.Info("agent stopped", "error", err)
 	s.child = nil
 }
 
