@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
   behind". The rule itself is unchanged: a device that sends a sequence number older than the one before the last
   issued one is still quarantined.
+- Retiring a device no longer leaves its in-place encryption open on the server (PDK-396): a conversion the device
+  had already prepared, or one whose cancellation was on its way, is now closed as cancelled, and a cancellation the
+  device has not yet received is withdrawn. The retirement's audit event records the closure.
 
 ### Security
 
