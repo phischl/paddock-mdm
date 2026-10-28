@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `make system-test` and `make acceptance` fail with `no test ran` when the test filter `T` matches no test instead of
+  reporting the empty run as passed (PDK-339), and pass `T` to `go test -run` verbatim, so a `$` anchor no longer gets
+  lost in make's variable expansion (`T='^TestIdentityGates$/.*/^L1_login$'`); `$$` keeps working.
+
 - Clone detection: a device is no longer quarantined as a suspected clone after its check-ins failed on the server
   side, for example while the ingest queue was full or the server was slow to accept the check-in. A failed check-in
   no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two

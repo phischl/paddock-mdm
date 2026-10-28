@@ -70,6 +70,7 @@ lint-supervisor-budget:
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
+	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
@@ -171,6 +172,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/ci/assert-hardening_test.sh
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
+	bash test/require-tests_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -368,9 +370,11 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 # SHARD=i/n runs shard i of n: test/acceptance/cmd/acceptanceshard puts every listed test into exactly one shard,
 # balanced by test/acceptance/shard-weights.txt; before the run it checks (-verify n) that the n shard regexes select
 # every test of `go test -list` exactly once, so a new test can never be left out.
+# T is read with $(value T) so a `$` anchor survives make's expansion (`T='^TestX$/sub'` would otherwise lose `$/`);
+# test/require-tests.sh fails a run whose filter matched no test, which go test itself reports as passed (PDK-339).
 acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
-	@set -eo pipefail; run='$(T)'; \
+	@set -eo pipefail; run='$(value T)'; \
 	if [ -n '$(SHARD)' ]; then \
 		[ -z "$$run" ] || { echo "acceptance: T and SHARD are mutually exclusive" >&2; exit 1; }; \
 		list="$$(go test -list '.*' ./test/acceptance/...)"; \
@@ -381,16 +385,18 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 	fi; \
 	set --; [ -z "$$run" ] || set -- -run "$$run"; \
 	set -x; PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
-		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... "$$@" -v
+		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... "$$@" -v | bash test/require-tests.sh
 
 .PHONY: system-test
+# T and the zero-test guard as for acceptance (PDK-339).
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
 	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex>]"; exit 1; }
 	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev REVOKE_TAGS=paddock_revoke_testtarget
 	$(MAKE) --no-print-directory fleetd-deb
 	CGO_ENABLED=0 go build -trimpath -o bin/revoke-release/paddock-revoke ./agent/cmd/paddock-revoke
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
-	PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... $(if $(T),-run '$(T)',) -v
+	set -o pipefail; PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... \
+		$(if $(value T),-run '$(value T)',) -v | bash test/require-tests.sh
 
 # The Playwright image ships the browsers of exactly one @playwright/test version (PDK-290): refuse a mismatch before
 # any test runs instead of failing on missing browsers. Dependabot ignores the package; bump both together.
