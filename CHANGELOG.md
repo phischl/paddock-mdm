@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `step_up_required`). New problem codes `mcp_disabled`, `mcp_tool_not_allowed`, `mcp_write_not_enabled`,
   `rate_limited` and `mcp_login_required`. No MCP session can be opened yet.
 
+### Fixed
+
+- Portal overview: on a phone-width screen the attention and recent-audit tables scroll sideways, and keyboard users
+  can now focus them to scroll; screen readers announce each as its own named table region (PDK-460).
+
 ### Security
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
