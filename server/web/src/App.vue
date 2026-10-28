@@ -143,6 +143,11 @@ watch(
   },
   { immediate: true },
 )
+const attentionLabel = computed(() => t('nav.attentionPill', { count: attention.value }))
+// Below 600 px the full pill ("534 brauchen Aufmerksamkeit") squeezed the organization name to zero width (PDK-338):
+// only the count is shown there, and the link keeps the full text as its name, which contains the visible count
+// (WCAG 2.5.3 label in name). Same number format as the ICU `#` in the message.
+const attentionShort = computed(() => new Intl.NumberFormat(locale.value).format(attention.value))
 
 // The language, theme and density switches of the user menu; language and theme are stored on the account.
 const languageFailed = ref(false)
@@ -399,13 +404,14 @@ onBeforeUnmount(() => observer.disconnect())
             v-if="session.canReadGroups && attention > 0"
             to="/attention"
             class="pd-chip pd-chip--critical pd-pill"
+            :aria-label="mobile ? attentionLabel : undefined"
             data-testid="app-bar-attention"
           >
             <span
               class="pd-chip-dot"
               aria-hidden="true"
             />
-            {{ t('nav.attentionPill', { count: attention }) }}
+            {{ mobile ? attentionShort : attentionLabel }}
           </RouterLink>
           <v-chip
             v-if="stepUpUntil && !mobile"

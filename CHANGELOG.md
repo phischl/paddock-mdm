@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
   when an offered write operation is not audited. No runtime behaviour changes yet.
 
+### Fixed
+
+- Portal: on screens narrower than 600 px the attention pill in the app bar shows only the number of devices that need
+  attention, so the organization name stays visible in every language (in German the full pill text used to squeeze
+  it to zero width). Screen readers still hear the full text (PDK-338).
+
 ### Security
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
