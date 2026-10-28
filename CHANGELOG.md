@@ -44,7 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Portal: when *End all sessions* ends the portal sessions but the identity provider's sessions cannot be ended (502
   `upstream_unavailable`), the page now says so and asks to run *End all sessions* again (PDK-321).
 - Linter pinned to golangci-lint v2.15.0 (PDK-348). The supervisor now logs the agent's exit status
-  (`agent stopped`) when it stops the agent for a switch, a rollback or shutdown.
+  (`agent stopped`, with `killed: true` when the agent ignored SIGTERM for 10 seconds) when it stops the agent for a
+  switch, a rollback or shutdown.
 
 ### Fixed
 
