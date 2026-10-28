@@ -1299,7 +1299,10 @@
     "summary": "Beendet jede Portalsitzung der Installation, auch Ihre eigene, und meldet jeden Portalbenutzer beim Identitätsanbieter (Authentik) ab. Jeder Administrator meldet sich mit Passwort und Authenticator neu an; API-Token und Geräteanmeldungen arbeiten weiter.",
     "endAll": "Alle Sitzungen beenden",
     "confirmTitle": "Alle Sitzungen beenden?",
-    "confirmMessage": "Jeder Administrator, Sie eingeschlossen, wird bei der nächsten Anfrage vom Portal und vom Identitätsanbieter abgemeldet. Geben Sie END ein, um zu bestätigen."
+    "confirmMessage": "Jeder Administrator, Sie eingeschlossen, wird bei der nächsten Anfrage vom Portal und vom Identitätsanbieter abgemeldet. Geben Sie END ein, um zu bestätigen.",
+    "problems": {
+      "upstream_unavailable": "Die Portalsitzungen wurden beendet, die Sitzungen beim Identitätsanbieter aber nicht. Führen Sie „Alle Sitzungen beenden“ erneut aus."
+    }
   },
   "openbao": {
     "title": "OpenBao",

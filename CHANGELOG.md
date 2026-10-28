@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `step_up_required`). New problem codes `mcp_disabled`, `mcp_tool_not_allowed`, `mcp_write_not_enabled`,
   `rate_limited` and `mcp_login_required`. No MCP session can be opened yet.
 
+### Changed
+
+- Portal: when *End all sessions* ends the portal sessions but the identity provider's sessions cannot be ended (502
+  `upstream_unavailable`), the page now says so and asks to run *End all sessions* again (PDK-321).
+
 ### Fixed
 
 - Portal: confirmation dialogs show long names in full on narrow screens (PDK-447). A long target name in the title
