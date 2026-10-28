@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Portal overview: on a phone-width screen the attention and recent-audit tables scroll sideways, and keyboard users
   can now focus them to scroll; screen readers announce each as its own named table region (PDK-460).
 
+- Portal: on screens narrower than 600 px the attention pill in the app bar shows only the number of devices that need
+  attention, so the organization name stays visible in every language (in German the full pill text used to squeeze
+  it to zero width). Screen readers still hear the full text (PDK-338).
+
 - Portal, *Updates*: the label of the security-update time field is no longer cut off ("Uhrzeit der
   Sicherheitsupd…" in German); the field is as wide as the other text fields on the page and takes the full panel
   width on phones (PDK-461).
