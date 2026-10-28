@@ -54,3 +54,12 @@ SELECT * FROM platform_admin ORDER BY id;
 -- name: LockPlatformAdmin :one
 -- The worker's revocation waits for a running login of the platform administrator, whose upsert holds the row.
 SELECT id FROM platform_admin WHERE id = @id FOR UPDATE;
+
+-- name: GetAdminAccountState :one
+-- Read on every MCP request (plan M14 §3.3 item 14): a disabled account or a changed role ends its sessions.
+SELECT role, (disabled_at IS NOT NULL)::boolean AS disabled, (mcp_write_enabled_at IS NOT NULL)::boolean AS mcp_write_enabled
+FROM admin_account WHERE id = @id;
+
+-- name: GetPlatformAdminState :one
+-- Read on every MCP request of a platform administrator (plan M14 §3.3 item 14).
+SELECT (mcp_write_enabled_at IS NOT NULL)::boolean AS mcp_write_enabled FROM platform_admin WHERE id = @id;

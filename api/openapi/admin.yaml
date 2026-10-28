@@ -174,6 +174,73 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
+  /api/auth/mcp/config:
+    get:
+      operationId: getMcpLoginConfig
+      tags: [auth]
+      security: []
+      summary: Login configuration of paddockctl mcp (ADR 0044 amendment 2026-10-25)
+      description: |
+        The Authentik provider paddock-mcp and its endpoints, copied from the discovered provider metadata, so that
+        paddockctl needs only the portal URL for the device authorization grant. 404 not_found when the MCP login is
+        not configured (PADDOCK_OIDC_MCP_ISSUER empty); 502 upstream_unavailable while the provider is not discovered.
+      responses:
+        "200":
+          description: The login configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpLoginConfig" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/auth/mcp/session:
+    post:
+      operationId: openMcpSession
+      tags: [auth]
+      security: []
+      summary: Open or renew the MCP session of an Authentik token pair
+      x-paddock-audit: admin.login
+      description: |
+        Verifies the ID token and the access token of the provider paddock-mcp (signature, issuer, audience
+        paddock-mcp, expiry, the same sub), resolves the role from the ID token's groups like the portal login and
+        opens the MCP session of the access token for its remaining life (at most 35 minutes, otherwise 400). The
+        access token then authenticates admin API requests as a bearer with channel mcp.
+
+        An ID token with amr is a login: it must name the second factor (amr mfa; otherwise 401 with detail
+        mfa_required), and its sub and auth_time are bound for 8 hours, the refresh token's life. An ID token without
+        amr (a refreshed one) is a renewal: it is accepted only for a live binding of its sub and auth_time, otherwise
+        401 mcp_login_required (ADR 0044 amendment 2026-10-28), and is recorded as admin.login with renewal true.
+        Every attempt with verifiable tokens records one admin.login event with channel mcp; a refused role answers
+        403 forbidden with the denial reason as detail (no_role, multiple_organizations, role_not_granted, …).
+      parameters:
+        - $ref: "#/components/parameters/McpClient"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/McpSessionInput" }
+      responses:
+        "204": { description: The MCP session is open. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /api/auth/mcp/logout:
+    post:
+      operationId: closeMcpSession
+      tags: [auth]
+      security: [ { bearer: [] } ]
+      summary: End the MCP session of the bearer's access token
+      description: |
+        Deletes the session of the access token and the login binding of its renewals; a token without a session is
+        already signed out (204). The refresh token is revoked by paddockctl at Authentik's revocation endpoint.
+      responses:
+        "204": { description: The MCP session is ended. }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /api/v1/me:
     get:
@@ -4502,6 +4569,26 @@ components:
       properties:
         role: { type: string, enum: [org_admin, org_operator, org_auditor, platform_admin] }
         organization_slug: { type: string, description: Set when role is an organization role. }
+    McpLoginConfig:
+      type: object
+      required: [issuer, client_id, scopes, device_authorization_endpoint, token_endpoint, revocation_endpoint]
+      properties:
+        issuer: { type: string }
+        client_id: { type: string }
+        scopes: { type: array, items: { type: string } }
+        device_authorization_endpoint: { type: string, format: uri }
+        token_endpoint: { type: string, format: uri }
+        revocation_endpoint: { type: string, format: uri }
+    McpSessionInput:
+      type: object
+      required: [id_token, access_token]
+      properties:
+        id_token: { type: string }
+        access_token: { type: string }
+        role:
+          type: string
+          enum: [platform, organization]
+          description: The role of the session for an identity with both (ADR 0045); default organization.
     RoleSwitch:
       type: object
       required: [role]

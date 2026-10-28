@@ -150,13 +150,18 @@ func (s *Store) Delete(ctx context.Context, sid string, accountID uuid.UUID) err
 	return nil
 }
 
-// revokeScript deletes every session of the set and the set itself, and returns how many sessions still existed.
+// revokeScript deletes every session of the set and the set itself, and every MCP login binding of the account and
+// its set (KEYS[2]), and returns how many sessions still existed.
 var revokeScript = valkey.NewLuaScript(`
 local n = 0
 for _, sid in ipairs(redis.call('SMEMBERS', KEYS[1])) do
   n = n + redis.call('DEL', 'sess:' .. sid)
 end
 redis.call('DEL', KEYS[1])
+for _, key in ipairs(redis.call('SMEMBERS', KEYS[2])) do
+  redis.call('DEL', key)
+end
+redis.call('DEL', KEYS[2])
 return n
 `)
 
@@ -178,9 +183,10 @@ func (s *Store) CountAccount(ctx context.Context, accountID uuid.UUID) (int, err
 	return int(n), nil
 }
 
-// RevokeAccount deletes every session of the account and returns how many existed.
+// RevokeAccount deletes every session and every MCP login binding of the account and returns how many sessions
+// existed.
 func (s *Store) RevokeAccount(ctx context.Context, accountID uuid.UUID) (int, error) {
-	n, err := revokeScript.Exec(ctx, s.c, []string{accountKey(accountID)}, nil).AsInt64()
+	n, err := revokeScript.Exec(ctx, s.c, []string{accountKey(accountID), accountBindingsKey(accountID)}, nil).AsInt64()
 	if err != nil {
 		return 0, unavailable(err)
 	}

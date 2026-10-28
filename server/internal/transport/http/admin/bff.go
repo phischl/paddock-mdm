@@ -46,6 +46,10 @@ type OIDC struct {
 	oauth      *oauth2.Config
 	verifier   *oidc.IDTokenVerifier
 	endSession string
+	// device and revocation are the provider's device authorization and revocation endpoints; only the MCP provider
+	// answers them to a client (GET /api/auth/mcp/config).
+	device     string
+	revocation string
 }
 
 // NewOIDC creates the client; call Discover to connect.
@@ -82,6 +86,8 @@ func (o *OIDC) discoverOnce(ctx context.Context) error {
 	}
 	var claims struct {
 		EndSession string `json:"end_session_endpoint"`
+		Device     string `json:"device_authorization_endpoint"`
+		Revocation string `json:"revocation_endpoint"`
 	}
 	if err := provider.Claims(&claims); err != nil {
 		return err
@@ -95,6 +101,7 @@ func (o *OIDC) discoverOnce(ctx context.Context) error {
 	}
 	o.verifier = provider.Verifier(&oidc.Config{ClientID: o.cfg.ClientID})
 	o.endSession = claims.EndSession
+	o.device, o.revocation = claims.Device, claims.Revocation
 	return nil
 }
 
@@ -261,7 +268,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	token, err := oauth.Exchange(exchangeContext(ctx), q.Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		slog.WarnContext(ctx, "code exchange failed", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", errLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -276,7 +283,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || claims.Subject == "" {
 		slog.WarnContext(ctx, "ID token rejected", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", errLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -286,7 +293,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if !b.loginMFAOptional && !claims.hasMFA() {
 		slog.WarnContext(ctx, "ID token without a second factor refused")
-		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonMFARequired, errMFARequired)
+		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonMFARequired, "", errMFARequired)
 		denied(w, r, app.ReasonMFARequired)
 		return
 	}

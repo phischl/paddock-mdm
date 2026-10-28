@@ -198,7 +198,19 @@ troubleshooting workflows to the assistant.
       `channel: mcp`. Invalid or expired tokens → 401 `unauthenticated`, recorded through
       `Accounts.RecordLoginFailure` like the portal. A renewal (the account already holds an MCP record) records
       `admin.login` with the param `renewal: true`; the first session of a login records it without.
-    - `POST /api/auth/mcp/logout` (bearer required) → deletes the record → 204.
+      *Amendment 2026-10-28 (PDK-436):* Authentik 2026.8.5 omits `amr`/`sid` from refreshed ID tokens; renewals are bound to
+      the MFA-checked first login by (`sub`, `auth_time`) and the account and role context (kind, role, organization);
+      any mismatch ends the binding and all sessions of the account (as a role change does) and answers 401
+      `mcp_login_required`. The binding has an 8-hour TTL; blueprint `grant_types` device_code + refresh_token. An ID
+      token with `amr` is a login (checked as above) and writes the binding (account, role context, client; TTL
+      `auth_time` + 8 h − now; generation as for session records). An ID token without `amr` is a renewal, accepted only
+      for a binding of exactly its `sub` and `auth_time` of the current generation with `auth_time` + 8 h > now; it
+      records `renewal: true`. Otherwise 401 `mcp_login_required`. Login tokens presented to `/api/auth/mcp/session` are
+      single-use (a Valkey marker on the verified token identity (`iss`, `sub`, `jti`; the payload bytes if `jti` is absent) for its remaining lifetime plus 60 s; non-canonical (non-strict base64url) tokens are refused before verification), and an access token is never accepted as
+      the ID token; a replayed token after logout, End all or a role change is refused. Logout deletes the binding,
+      `RevokeAccount` (deactivation, role change) deletes every binding of the account, *End all sessions* makes them
+      stale (ADR 0044 amendment 2026-10-28).
+    - `POST /api/auth/mcp/logout` (bearer required) → deletes the record and the binding → 204.
 14. **Bearer authentication of MCP requests** (`server.bearer`): a bearer that starts with `pdk_` keeps today's
     API-token path; a bearer with the shape of a JWT (three base64url segments) is an **MCP access token**: the api
     verifies it with the MCP provider's verifier (signature via JWKS, issuer, audience `paddock-mcp`, expiry) and
@@ -763,7 +775,7 @@ every `action` row it inserts; the outbox reaper uses the stored value and deriv
 | --- | --- | --- | --- |
 | RR-85 | **Prompt injection through data.** Hostnames, device names, managed-file contents, package names and audit parameters are written by device users or administrators and read by the assistant; whoever controls such a string can address the model. | Authority is bound to the signed-in administrator's session and enforced on the server; step-up actions are not reachable; no raw-request or policy tool; results are wrapped as data with a fixed notice; destructive tools are flagged; per-account rate limit; revocation through logout, role change, deactivation, end-all and the policy switch. | Who may enable write access; whether writes through the MCP are allowed at all. |
 | RR-86 | **Channel bypass with an API token.** An administrator can wire an `api` token into any MCP client; the MCP policy and the opt-in do not apply, the person's own role does. | The audit trail shows `source: api` for such calls; the policy page says so; API tokens are created with a step-up and the role ceiling. | How sparingly API tokens are granted. |
-| RR-87 | **Refresh token on a workstation.** `paddockctl mcp login` stores an Authentik refresh token (valid 8 hours, rotated on use) and a 30-minute access token in a 0600 file; a copy works until the refresh token expires or the user is deactivated or signs out. | Short lifetimes; `paddockctl mcp logout` revokes at Authentik and on the api; deactivation and role change end the session within one reconcile interval, a role mismatch at the next request; *End all sessions* ends MCP sessions too; no API token is involved. | The workstation baseline (disk encryption, screen lock) of administrators who use the MCP; the OS-keyring option when it exists. |
+| RR-87 | **Refresh token on a workstation.** `paddockctl mcp login` stores an Authentik refresh token (valid 8 hours, rotated on use) and a 30-minute access token in a 0600 file; a copy works until the refresh token expires or the user is deactivated or signs out. | Short lifetimes; `paddockctl mcp logout` revokes at Authentik and on the api; deactivation and role change end the session within one reconcile interval, a role mismatch at the next request; *End all sessions* ends MCP sessions too; no API token is involved; a renewal is accepted only for the (`sub`, `auth_time`) binding of an MFA-checked login, which logout, deactivation, role change and *End all sessions* end (amendment 2026-10-28); single-use login tokens (a Valkey marker on the verified token identity (`iss`, `sub`, `jti`; the payload bytes if `jti` is absent) for its remaining lifetime plus 60 s; non-canonical (non-strict base64url) tokens are refused before verification) prevent reopening a session with a captured token after logout. | The workstation baseline (disk encryption, screen lock) of administrators who use the MCP; the OS-keyring option when it exists. |
 | RR-88 | **Step-up actions are only refused, never staged.** The assistant can advise on a Lock, Destroy, reveal or rollout halt but cannot prepare it. | The error names the portal path; the skill tells the assistant to hand over. | None; a future human-in-the-loop design is a separate decision. |
 | RR-89 | **Reads are not audited per call.** An MCP read leaves a metric, not an event. | Same as portal reads today; PDK-139 (M10) adds opt-in recording of sensitive views for every channel. | Whether read logging is required before auditors use the MCP. |
 

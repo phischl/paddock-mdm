@@ -53,6 +53,9 @@ type LoginIdentity struct {
 	// Channel is principal.ChannelMCP when the login opens an MCP session and "" for the portal (ADR 0044 amendment
 	// A2); it is recorded as the admin.login param channel.
 	Channel principal.Channel
+	// Renewal marks an MCP login that renews a session from a refreshed token pair (ADR 0044 amendment 2026-10-28);
+	// it is recorded as the admin.login param renewal.
+	Renewal bool
 }
 
 // ErrAmbiguousRole: Login was called with a LoginRole that names the platform role and an organization role.
@@ -80,6 +83,12 @@ const (
 	ReasonNotAuthorized = "not_authorized"
 	ReasonLoginFailed   = "login_failed"
 	ReasonMFARequired   = "mfa_required" // the ID token carried no second factor (amr without "mfa")
+	// ReasonMCPLoginRequired: an MCP renewal without a live login binding of its sub and auth_time (ADR 0044
+	// amendment 2026-10-28).
+	ReasonMCPLoginRequired = "mcp_login_required"
+	// ReasonTokenReplayed: an MCP session call with an ID token that was presented before (ADR 0044 amendment
+	// 2026-10-28).
+	ReasonTokenReplayed = "token_replayed"
 	// ReasonKeyStoreSealed: the session keys are not loaded because OpenBao was sealed or unreachable at the start.
 	ReasonKeyStoreSealed = "key_store_sealed"
 )
@@ -117,6 +126,7 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 	}
 	p := principal.Principal{
 		Kind: principal.KindAdmin, Subject: id.Subject, Display: id.Username, Role: role.Role, OrganizationID: orgID, IP: id.IP,
+		Channel: id.Channel,
 	}
 	// The account ID must be known before the principal is built: reuse the existing one or generate a new one.
 	err = a.org.InOrg(principal.With(ctx, p), func(ctx context.Context, q *pgstore.Queries) error {
@@ -161,7 +171,8 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 }
 
 func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginResult, error) {
-	p := principal.Principal{Kind: principal.KindPlatformAdmin, Subject: id.Subject, Display: id.Username, Role: principal.RolePlatform, IP: id.IP}
+	p := principal.Principal{Kind: principal.KindPlatformAdmin, Subject: id.Subject, Display: id.Username, Role: principal.RolePlatform, IP: id.IP,
+		Channel: id.Channel}
 	err := a.platform.InPlatform(principal.With(ctx, p), func(ctx context.Context, q *pgstore.Queries) error {
 		acc, err := q.GetPlatformAdminBySubject(ctx, id.Subject)
 		switch {
@@ -199,10 +210,13 @@ func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginRe
 	return LoginResult{Principal: p, Locale: locale}, nil
 }
 
-// loginParams adds the channel to the params of a successful admin.login, and previous_role when the login is a role
-// switch.
+// loginParams adds the channel to the params of a successful admin.login, renewal when it renews an MCP session, and
+// previous_role when the login is a role switch.
 func (id LoginIdentity) loginParams(params map[string]any) map[string]any {
 	params["channel"] = id.channel()
+	if id.Renewal {
+		params["renewal"] = true
+	}
 	if id.PreviousRole != "" {
 		params["previous_role"] = string(id.PreviousRole)
 	}
@@ -240,7 +254,8 @@ func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []s
 			resolved = append(resolved, orgID)
 		}
 	}
-	sys := principal.Principal{Kind: principal.KindSystem, IP: id.IP}
+	// The channel makes a refused MCP login an event of source mcp.
+	sys := principal.Principal{Kind: principal.KindSystem, IP: id.IP, Channel: id.Channel}
 	scope := ScopePlatform
 	if len(resolved) == 1 {
 		sys.OrganizationID = resolved[0]
@@ -261,13 +276,14 @@ func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []s
 }
 
 // RecordLoginFailure audits a login that failed before a role was resolved (state, code exchange, token, missing
-// second factor). A non-empty username becomes the anonymous actor's display.
-func (a *Accounts) RecordLoginFailure(ctx context.Context, ip, username, reason string, cause error) {
-	sys := principal.Principal{Kind: principal.KindSystem, IP: ip}
+// second factor). A non-empty username becomes the anonymous actor's display; channel is the login's channel ("" for
+// the portal).
+func (a *Accounts) RecordLoginFailure(ctx context.Context, ip, username, reason string, channel principal.Channel, cause error) {
+	sys := principal.Principal{Kind: principal.KindSystem, IP: ip, Channel: channel}
 	spec := ActionSpec{
 		Code:   audit.CodeAdminLogin,
 		Actor:  &audit.Actor{Type: audit.ActorAnonymous, Display: username, IP: ip},
-		Params: map[string]any{"reason": reason},
+		Params: map[string]any{"reason": reason, "channel": LoginIdentity{Channel: channel}.channel()},
 	}
 	_ = a.runner.RunTx(principal.With(ctx, sys), ScopePlatform, spec, func(context.Context, *pgstore.Queries, Recorder) error {
 		return cause
@@ -427,6 +443,42 @@ func (a *Accounts) UpdateSettings(ctx context.Context, s AccountSettings) (Me, e
 		return Me{}, unauthenticatedIfGone(err)
 	}
 	return a.GetMe(ctx)
+}
+
+// AccountState is what the api re-reads from the account row of an MCP session on every request (plan M14 §3.3
+// item 14).
+type AccountState struct {
+	Role            principal.Role
+	Disabled        bool
+	MCPWriteEnabled bool
+}
+
+// AccountState reads the role, the deactivation and the MCP write opt-in of p's own account row: admin_account in p's
+// organization, platform_admin in the platform pool, whose role is always platform_admin. A missing row is
+// problem.Unauthenticated.
+func (a *Accounts) AccountState(ctx context.Context, p principal.Principal) (AccountState, error) {
+	ctx = principal.With(ctx, p)
+	var st AccountState
+	if p.Kind == principal.KindPlatformAdmin {
+		err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			write, err := q.GetPlatformAdminState(ctx, p.ID)
+			if err != nil {
+				return notFound(err)
+			}
+			st = AccountState{Role: principal.RolePlatform, MCPWriteEnabled: write}
+			return nil
+		})
+		return st, unauthenticatedIfGone(err)
+	}
+	err := a.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		row, err := q.GetAdminAccountState(ctx, p.ID)
+		if err != nil {
+			return notFound(err)
+		}
+		st = AccountState{Role: principal.Role(row.Role), Disabled: row.Disabled, MCPWriteEnabled: row.McpWriteEnabled}
+		return nil
+	})
+	return st, unauthenticatedIfGone(err)
 }
 
 // unauthenticatedIfGone: a session whose account no longer exists is treated as signed out.

@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets stuck and is finalized as unknown keeps `source: mcp`. An MCP session never satisfies a step-up (403
   `step_up_required`). New problem codes `mcp_disabled`, `mcp_tool_not_allowed`, `mcp_write_not_enabled`,
   `rate_limited` and `mcp_login_required`. No MCP session can be opened yet.
+- MCP login through Authentik (ADR 0044, PDK-436): a new Authentik blueprint `paddock-mcp.yaml` adds the public
+  provider and application `paddock-mcp` (device authorization grant, the portal's login flow, the device providers'
+  MFA authorization flow, 30-minute access and 8-hour refresh tokens; one-minute access tokens in development). The
+  api reads `PADDOCK_OIDC_MCP_ISSUER` (empty turns the MCP login off; `compose.yaml` sets it for `paddock-api`) and
+  `PADDOCK_OIDC_MCP_CLIENT_ID` (default `paddock-mcp`) and serves `GET /api/auth/mcp/config`,
+  `POST /api/auth/mcp/session` and `POST /api/auth/mcp/logout`. A session call verifies the Authentik tokens,
+  resolves the role like a portal sign-in (`role: platform` picks the platform role of a two-role identity) and records
+  `admin.login` with `channel: mcp`; renewals with refreshed tokens are bound to the MFA-checked login and its role for up to
+  8 hours and recorded with `renewal: true`; a renewal whose groups resolve another role ends the account's sessions. A
+  token pair opens one session only; a replayed login token is refused. The access token then authenticates admin API requests as a bearer with
+  channel `mcp`; logout, *End all sessions*, deactivation and a role change end it, the latter two also at the next
+  request. Refused `admin.login` attempts of the portal now carry `channel: portal` as well. New metric
+  `paddock_mcp_auth_total{result}`. The step-up routes refuse an MCP access token (403).
 
 ### Security
 
