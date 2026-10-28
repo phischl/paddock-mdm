@@ -167,3 +167,61 @@ func TestLoginRoleSwitch(t *testing.T) {
 		t.Fatalf("opened %d sessions, want 3", opened)
 	}
 }
+
+// TestLoginChannel: admin.login records the channel param, portal without LoginIdentity.Channel and mcp with it, for
+// organization and platform sign-ins and for a refused sign-in (ADR 0044 amendment A2).
+func TestLoginChannel(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	org, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(org.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	orgID := uuid.Must(uuid.NewV7())
+	slug := "c" + orgID.String()[24:]
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Channel', 'active')", orgID, slug); err != nil {
+		t.Fatal(err)
+	}
+	accounts := app.NewAccounts(app.NewActionRunner(org, platform, httpx.RequestID), org, platform, nil)
+	for _, tc := range []struct {
+		name    string
+		channel principal.Channel
+		role    app.LoginRole
+		want    string
+		outcome string
+	}{
+		{"portal organization", "", app.LoginRole{Slug: slug, Role: principal.RoleOrgAdmin}, "portal", "success"},
+		{"mcp organization", principal.ChannelMCP, app.LoginRole{Slug: slug, Role: principal.RoleOrgOperator}, "mcp", "success"},
+		{"portal platform", "", app.LoginRole{Platform: true, Role: principal.RolePlatform}, "portal", "success"},
+		{"mcp platform", principal.ChannelMCP, app.LoginRole{Platform: true, Role: principal.RolePlatform}, "mcp", "success"},
+		{"mcp denied", principal.ChannelMCP, app.LoginRole{Denied: true, Slugs: []string{slug}, DenialReason: "no_role"}, "mcp", "denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corr := "corr-" + t.Name()
+			id := app.LoginIdentity{Subject: uuid.NewString(), Username: "dave", IP: "192.0.2.1", Channel: tc.channel}
+			_, err := accounts.Login(httpx.WithRequestID(ctx, corr), id, tc.role)
+			if (tc.outcome == "success") != (err == nil) {
+				t.Fatalf("login: %v", err)
+			}
+			var channel, outcome string
+			if err := super.QueryRow(ctx, `SELECT coalesce(params->>'channel', ''), outcome FROM action
+				WHERE correlation_id = $1 AND code = 'admin.login'`, corr).Scan(&channel, &outcome); err != nil {
+				t.Fatal(err)
+			}
+			if channel != tc.want || outcome != tc.outcome {
+				t.Fatalf("admin.login channel %q outcome %q, want %q/%q", channel, outcome, tc.want, tc.outcome)
+			}
+		})
+	}
+}

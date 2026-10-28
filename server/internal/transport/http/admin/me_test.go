@@ -107,3 +107,31 @@ func TestMeNamesTheServerVersion(t *testing.T) {
 		t.Fatalf("without a session: %d %s", r.status, r.body)
 	}
 }
+
+// TestMeNamesTheChannel: GET and PATCH /api/v1/me answer channel portal for a portal session of either kind and api for
+// an API token (ADR 0044); mcp is produced by MCP sessions.
+func TestMeNamesTheChannel(t *testing.T) {
+	e := newEnv(t)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	token := e.createAPIToken("acme", alice, "channel", adminapi.ApiTokenRoleOrgAuditor)
+	for name, c := range map[string]call{
+		"organization session": {method: "GET", path: "/api/v1/me", cookie: alice},
+		"platform session":     {method: "GET", path: "/api/v1/me", cookie: e.platformSession()},
+		"api token":            {method: "GET", path: "/api/v1/me", headers: bearer(token.Secret)},
+		"patch":                {method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "en"}},
+	} {
+		want := adminapi.MeChannel("portal")
+		if name == "api token" {
+			want = "api"
+		}
+		r := e.do(c)
+		if r.status != http.StatusOK {
+			t.Fatalf("%s: %d %s", name, r.status, r.body)
+		}
+		var m adminapi.Me
+		r.decode(t, &m)
+		if m.Channel != want {
+			t.Fatalf("%s: channel %q, want %q", name, m.Channel, want)
+		}
+	}
+}

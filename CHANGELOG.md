@@ -17,11 +17,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before its policy is consulted). API tokens, profile changes and the release source check are never offered; nor
   are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
   when an offered write operation is not audited. No runtime behaviour changes yet.
+- MCP groundwork in the server (ADR 0044, PDK-435): migration `00072_mcp` adds the per-account MCP write opt-in
+  (`mcp_write_enabled_at` on `admin_account` and `platform_admin`) and the MCP policy tables of the organizations and
+  the platform (both off by default). `GET /api/v1/me` answers `channel` (`portal`, `api` or `mcp`); audit events of
+  an MCP session carry `source: mcp` and the client's name in `actor.client`, and `admin.login` records the param
+  `channel` (`portal` for every portal sign-in). The `action` table keeps the source of each action, so an action that
+  gets stuck and is finalized as unknown keeps `source: mcp`. An MCP session never satisfies a step-up (403
+  `step_up_required`). New problem codes `mcp_disabled`, `mcp_tool_not_allowed`, `mcp_write_not_enabled`,
+  `rate_limited` and `mcp_login_required`. No MCP session can be opened yet.
+
+### Changed
+
+- Portal: when *End all sessions* ends the portal sessions but the identity provider's sessions cannot be ended (502
+  `upstream_unavailable`), the page now says so and asks to run *End all sessions* again (PDK-321).
 
 ### Fixed
 
 - Portal: a focused input field (number, text, time, text area) shows a single focus indicator, the field's own
   outline. A second ring inside it no longer crosses the field label.
+
+- Portal: confirmation dialogs show long names in full on narrow screens (PDK-447). A long target name in the title
+  or the confirm button, such as a pre-release version `0.9.1792783862-alpha.1792944510667`, wraps onto further lines
+  instead of being cut off with an ellipsis or running past the edges of the button.
+
+- Portal overview: on a phone-width screen the attention and recent-audit tables scroll sideways, and keyboard users
+  can now focus them to scroll; screen readers announce each as its own named table region (PDK-460).
+
+- Portal, *Updates*: the label of the security-update time field is no longer cut off ("Uhrzeit der
+  Sicherheitsupd…" in German); the field is as wide as the other text fields on the page and takes the full panel
+  width on phones (PDK-461).
 
 ### Security
 

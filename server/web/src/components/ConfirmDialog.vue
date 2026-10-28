@@ -141,6 +141,7 @@ function onConfirm(): void {
             :color="destructive ? 'error' : 'primary'"
             variant="flat"
             :disabled="!canConfirm"
+            class="confirm-accept"
             data-testid="confirm-accept"
             @click="onConfirm"
           >
@@ -151,3 +152,29 @@ function onConfirm(): void {
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+/*
+ * Titles and confirm labels can carry a user-supplied name, e.g. a pre-release version such as
+ * 0.9.1792783862-alpha.1792944510667. Vuetify clips the title with an ellipsis and keeps the button to one line, so at
+ * 375 px the name was cut off or overflowed the button (PDK-447). Both wrap, also inside unbreakable strings, and the
+ * button grows in height instead.
+ */
+.confirm-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.confirm-accept {
+  height: auto;
+  min-height: var(--v-btn-height);
+  padding-block: var(--pd-space-1);
+}
+
+.confirm-accept :deep(.v-btn__content) {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+</style>

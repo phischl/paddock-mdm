@@ -25,19 +25,21 @@ type Action struct {
 	CorrelationID  string
 	StartedAt      time.Time
 	FinishedAt     *time.Time
+	Source         *string
 }
 
 type AdminAccount struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	AuthentikSub   string
-	Username       string
-	DisplayName    string
-	Role           string
-	Locale         string
-	LastLoginAt    *time.Time
-	Theme          string
-	DisabledAt     *time.Time
+	ID                uuid.UUID
+	OrganizationID    uuid.UUID
+	AuthentikSub      string
+	Username          string
+	DisplayName       string
+	Role              string
+	Locale            string
+	LastLoginAt       *time.Time
+	Theme             string
+	DisabledAt        *time.Time
+	McpWriteEnabledAt *time.Time
 }
 
 type AgentArtifact struct {
@@ -529,6 +531,16 @@ type OrganizationManagedFileSetting struct {
 	UpdatedBy                uuid.NullUUID
 }
 
+type OrganizationMcpSetting struct {
+	OrganizationID    uuid.UUID
+	Enabled           bool
+	WriteEnabled      bool
+	Mode              string
+	AllowedOperations []string
+	UpdatedAt         time.Time
+	UpdatedBy         uuid.NullUUID
+}
+
 type OrganizationRoleMember struct {
 	OrganizationID uuid.UUID
 	Role           string
@@ -623,13 +635,24 @@ type PermissionProfile struct {
 }
 
 type PlatformAdmin struct {
-	ID           uuid.UUID
-	AuthentikSub string
-	Username     string
-	DisplayName  string
-	Locale       string
-	LastLoginAt  *time.Time
-	Theme        string
+	ID                uuid.UUID
+	AuthentikSub      string
+	Username          string
+	DisplayName       string
+	Locale            string
+	LastLoginAt       *time.Time
+	Theme             string
+	McpWriteEnabledAt *time.Time
+}
+
+type PlatformMcpSetting struct {
+	Singleton         bool
+	Enabled           bool
+	WriteEnabled      bool
+	Mode              string
+	AllowedOperations []string
+	UpdatedAt         time.Time
+	UpdatedBy         uuid.NullUUID
 }
 
 type PlatformRoleMember struct {
