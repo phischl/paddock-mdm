@@ -148,6 +148,9 @@ const latestPublished = computed(() => {
           <div
             v-else
             class="pd-table-scroll"
+            role="region"
+            :aria-label="t('overview.attention.tableLabel')"
+            tabindex="0"
           >
             <table class="pd-table">
               <thead>
@@ -368,6 +371,9 @@ const latestPublished = computed(() => {
           <div
             v-else
             class="pd-table-scroll"
+            role="region"
+            :aria-label="t('overview.audit.tableLabel')"
+            tabindex="0"
           >
             <table class="pd-table">
               <thead>

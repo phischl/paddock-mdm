@@ -4077,8 +4077,20 @@ components:
     bearer:
       type: http
       scheme: bearer
-      description: An API token secret (pdk_ and 43 characters), plan M6c decision 9.
+      description: |
+        An API token secret (pdk_ and 43 characters), plan M6c decision 9, or the access token of an MCP session
+        (ADR 0044). An MCP client sends its name in the optional header X-Paddock-MCP-Client (parameter McpClient);
+        the server keeps at most 64 printable ASCII characters and records them as actor.client of the audit events
+        of the session.
   parameters:
+    McpClient:
+      name: X-Paddock-MCP-Client
+      in: header
+      required: false
+      description: |
+        Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
+        printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
+      schema: { type: string }
     Csrf:
       name: X-Paddock-CSRF
       in: header
@@ -4431,7 +4443,7 @@ components:
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
-        step_up_valid_until, server_version, alternate_role]
+        step_up_valid_until, server_version, alternate_role, channel]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -4478,6 +4490,12 @@ components:
           allOf: [ { $ref: "#/components/schemas/MeAlternateRole" } ]
           nullable: true
           description: The role this identity may switch to (ADR 0045); null for a single-role identity, API tokens and MCP sessions.
+        channel:
+          type: string
+          enum: [portal, api, mcp]
+          description: |
+            How this request authenticated (ADR 0044): portal for a portal session, api for an API token, mcp for an
+            MCP session opened with paddockctl mcp login.
     MeAlternateRole:
       type: object
       required: [role]
@@ -4900,6 +4918,7 @@ components:
         display: { type: string }
         ip: { type: string }
         step_up: { type: boolean }
+        client: { type: string, description: "The MCP client's name on events of an MCP session (source mcp, ADR 0044)." }
     AuditTarget:
       type: object
       required: [type, id]
