@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retiring a device no longer leaves its in-place encryption open on the server (PDK-396): a conversion the device
   had already prepared, or one whose cancellation was on its way, is now closed as cancelled, and a cancellation the
   device has not yet received is withdrawn. The retirement's audit event records the closure.
+- In-place encryption: when a bootable kernel's initrd in `/boot` was a symbolic link to a temporary initrd left by
+  an interrupted agent run, the initrd regeneration and the cleanup stayed pending with
+  `key_material_shared_bootable` until an administrator stepped in. The agent now rebuilds that kernel's initrd into
+  a regular file first and then overwrites and removes the temporary file; the kernel keeps booting throughout.
 
 ### Security
 
