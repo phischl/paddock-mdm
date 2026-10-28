@@ -130,7 +130,8 @@ troubleshooting workflows to the assistant.
 
 5. Migration `server/migrations/paddock/<next free>_mcp.sql` MUST be §6.5 verbatim (one migration for the whole
    milestone; the number is the next free one at merge time — `00072` may be taken by in-flight work). No token
-   table or token column changes: API tokens are not part of the MCP.
+   table or token column changes: API tokens are not part of the MCP. Amendment 2026-10-28 (PDK-435, ex PDK-466): the
+   migration also adds `action.source` (§6.5), so that the reaper finalizes a stuck MCP action with source `mcp`.
 6. `principal.Principal` gains `Channel principal.Channel` (`ChannelMCP = "mcp"`; `""` for portal sessions, API
    tokens and system), `MCPClient string` and `MCPWriteEnabled bool` (both set only when `Channel == ChannelMCP`).
 7. `sessions.Record` gains `Channel string json:"channel,omitempty"` (`"mcp"` for MCP sessions; absent for portal
@@ -712,6 +713,12 @@ GRANT SELECT, INSERT, UPDATE ON platform_mcp_settings TO paddock_platform;
 ```
 
 The audit database needs no migration (`source` is `text`; the next free audit migration `00007` stays free).
+
+**Amendment 2026-10-28 (PDK-435, ex PDK-466):** `action.source` persisted so the reaper finalizes with the original
+source. The migration additionally runs `ALTER TABLE action ADD COLUMN source text CHECK (source IN ('portal',
+'platform', 'system', 'device', 'api', 'mcp'));`. `ActionRunner` writes the recorded source (including `mcp`) into
+every `action` row it inserts; the outbox reaper uses the stored value and derives the source from the actor type
+(`audit.SourceForActor`) only for rows without one (written before the migration).
 
 ### 6.6 Portal texts (binding English; German complete, wording free)
 

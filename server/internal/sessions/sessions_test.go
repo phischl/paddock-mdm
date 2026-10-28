@@ -3,6 +3,7 @@ package sessions_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,5 +98,54 @@ func TestStore(t *testing.T) {
 	}
 	if _, err := down.EndAll(ctx); !errors.Is(err, sessions.ErrUnavailable) {
 		t.Fatalf("end all on a closed client: %v", err)
+	}
+}
+
+// TestStoreMCPRecord covers the MCP session record (plan M14 §3.2 item 7): its channel, display and subject round-trip,
+// a portal record stays without them, and revoking the account ends MCP and portal sessions alike.
+func TestStoreMCPRecord(t *testing.T) {
+	ctx := context.Background()
+	srv := valkeytest.Start(t)
+	c := srv.Client(t)
+	s := sessions.NewStore(c)
+	account, org := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	portal := sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin", Org: org, CreatedAt: time.Now().Unix()}
+	mcp := portal
+	mcp.Channel, mcp.Display, mcp.Subject = "mcp", "alice", "ak-sub-alice"
+
+	mcpID, portalID := "mcp:"+strings.Repeat("ab", 32), sessions.NewID()
+	if _, err := s.Create(ctx, mcpID, mcp, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(ctx, portalID, portal, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, found, err := s.Get(ctx, mcpID); err != nil || !found || got != mcp {
+		t.Fatalf("mcp record: %+v found %v %v", got, found, err)
+	}
+	if got, _, found, err := s.Get(ctx, portalID); err != nil || !found || got != portal {
+		t.Fatalf("portal record: %+v found %v %v", got, found, err)
+	}
+	raw, err := c.Do(ctx, c.B().Get().Key("sess:"+portalID).Build()).ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"channel"`, `"display"`, `"sub"`} {
+		if strings.Contains(raw, key) {
+			t.Fatalf("portal record carries %s: %s", key, raw)
+		}
+	}
+	raw, err = c.Do(ctx, c.B().Get().Key("sess:"+mcpID).Build()).ToString()
+	if err != nil || !strings.Contains(raw, `"channel":"mcp"`) || !strings.Contains(raw, `"sub":"ak-sub-alice"`) {
+		t.Fatalf("mcp record JSON: %s %v", raw, err)
+	}
+
+	if n, err := s.RevokeAccount(ctx, account); err != nil || n != 2 {
+		t.Fatalf("revoke: %d %v", n, err)
+	}
+	for _, sid := range []string{mcpID, portalID} {
+		if _, _, found, err := s.Get(ctx, sid); err != nil || found {
+			t.Fatalf("%s after revoke: found %v %v", sid, found, err)
+		}
 	}
 }

@@ -285,6 +285,19 @@ func TestRunTxStepUp(t *testing.T) {
 		}
 		expectOne(t, h, audit.OutcomeDenied, "step_up_required")
 	})
+	t.Run("MCP session", func(t *testing.T) {
+		h := newHarness(t)
+		p, _ := principal.From(h.admin(principal.RoleOrgAdmin))
+		p.Channel, p.MCPClient, p.MCPWriteEnabled, p.StepUpAt = principal.ChannelMCP, "claude-code/2.1", true, time.Now()
+		err := h.runner.RunTx(principal.With(context.Background(), p), app.ScopeOrg, spec, createGroup("mcp"))
+		if !errors.Is(err, problem.StepUpRequired) ||
+			problem.From(err).Detail != "this change needs an interactive administrator in the portal: MCP sessions cannot complete a step-up" {
+			t.Fatalf("RunTx = %v, want the MCP detail", err)
+		}
+		if ev := expectOne(t, h, audit.OutcomeDenied, "step_up_required"); ev.Source != audit.SourceMCP || ev.Actor.StepUp {
+			t.Fatalf("denied MCP event %+v", ev)
+		}
+	})
 	t.Run("required inside the action", func(t *testing.T) {
 		h := newHarness(t)
 		err := h.runner.RunTx(withStepUp(h, time.Time{}), app.ScopeOrg, createSpec,
@@ -299,6 +312,61 @@ func TestRunTxStepUp(t *testing.T) {
 		}
 		expectOne(t, h, audit.OutcomeDenied, "step_up_required")
 	})
+}
+
+// TestRunTxSourceAndClient: the event source follows the principal's channel and the MCP client's name is the actor's
+// client; the actor type stays the human's (plan M14 §3.2 item 8).
+func TestRunTxSourceAndClient(t *testing.T) {
+	platformSpec := app.ActionSpec{Code: audit.CodeOrganizationCreated}
+	noop := func(context.Context, *pgstore.Queries, app.Recorder) error { return nil }
+	for _, tc := range []struct {
+		name      string
+		principal func(h harness) principal.Principal
+		scope     app.Scope
+		actor     string
+		source    string
+		client    string
+	}{
+		{"MCP organization administrator", func(h harness) principal.Principal {
+			p, _ := principal.From(h.admin(principal.RoleOrgAdmin))
+			p.Channel, p.MCPClient = principal.ChannelMCP, "claude-code/2.1"
+			return p
+		}, app.ScopeOrg, audit.ActorAdmin, audit.SourceMCP, "claude-code/2.1"},
+		{"MCP platform administrator", func(harness) principal.Principal {
+			return principal.Principal{Kind: principal.KindPlatformAdmin, ID: uuid.Must(uuid.NewV7()), Role: principal.RolePlatform,
+				Channel: principal.ChannelMCP, MCPClient: "claude-desktop/1.0"}
+		}, app.ScopePlatform, audit.ActorPlatformAdmin, audit.SourceMCP, "claude-desktop/1.0"},
+		{"portal", func(h harness) principal.Principal {
+			p, _ := principal.From(h.admin(principal.RoleOrgAdmin))
+			p.MCPClient = "ignored without the MCP channel"
+			return p
+		}, app.ScopeOrg, audit.ActorAdmin, audit.SourcePortal, ""},
+		{"API token", func(h harness) principal.Principal {
+			p, _ := principal.From(h.admin(principal.RoleOrgAdmin))
+			p.APITokenID, p.APITokenName = uuid.Must(uuid.NewV7()), "ci"
+			return p
+		}, app.ScopeOrg, audit.ActorAPIToken, audit.SourceAPI, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			spec, fn := createSpec, createGroup("g-"+uuid.NewString()[:8])
+			if tc.scope == app.ScopePlatform {
+				spec, fn = platformSpec, noop
+			}
+			if err := h.runner.RunTx(principal.With(context.Background(), tc.principal(h)), tc.scope, spec, fn); err != nil {
+				t.Fatal(err)
+			}
+			ev := expectOne(t, h, audit.OutcomeSuccess, "")
+			if ev.Source != tc.source || ev.Actor.Type != tc.actor || ev.Actor.Client != tc.client {
+				t.Fatalf("event source %q actor %+v, want %q/%q/%q", ev.Source, ev.Actor, tc.source, tc.actor, tc.client)
+			}
+			var stored string
+			if err := h.super.QueryRow(context.Background(), "SELECT source FROM action WHERE id = $1", ev.EventID).Scan(&stored); err != nil ||
+				stored != tc.source {
+				t.Fatalf("action.source %q (%v), want %q", stored, err, tc.source)
+			}
+		})
+	}
 }
 
 func TestRunTxNoOrganizationIsRecordedInPlatform(t *testing.T) {
@@ -382,6 +450,29 @@ func TestRunExternalSuccess(t *testing.T) {
 		t.Fatalf("RunExternal = %v, external called %v", err, external)
 	}
 	expectOne(t, h, audit.OutcomeSuccess, "")
+}
+
+// TestRunExternalStoresTheSource: the started row of an external action already carries the source of the principal,
+// so the reaper can finalize a stuck MCP action with source mcp (plan M14 amendment 2026-10-28).
+func TestRunExternalStoresTheSource(t *testing.T) {
+	h := newHarness(t)
+	p := principal.Principal{Kind: principal.KindPlatformAdmin, ID: uuid.Must(uuid.NewV7()), Role: principal.RolePlatform,
+		Channel: principal.ChannelMCP, MCPClient: "claude-code/2.1"}
+	spec := app.ActionSpec{Code: audit.CodeOrganizationCreated, AllowedRoles: []principal.Role{principal.RolePlatform}}
+	var status, source string
+	err := h.runner.RunExternal(principal.With(context.Background(), p), app.ScopePlatform, spec,
+		func(context.Context, *pgstore.Queries, app.Recorder) error { return nil },
+		func(ctx context.Context) error {
+			return h.super.QueryRow(ctx, "SELECT status, source FROM action WHERE correlation_id = $1", "corr-"+t.Name()).
+				Scan(&status, &source)
+		},
+		func(context.Context, *pgstore.Queries, app.Recorder, error) error { return nil })
+	if err != nil || status != "started" || source != audit.SourceMCP {
+		t.Fatalf("RunExternal = %v; started row status %q source %q, want started/mcp", err, status, source)
+	}
+	if ev := expectOne(t, h, audit.OutcomeSuccess, ""); ev.Source != audit.SourceMCP {
+		t.Fatalf("event source %q", ev.Source)
+	}
 }
 
 func TestRunExternalPrepareError(t *testing.T) {

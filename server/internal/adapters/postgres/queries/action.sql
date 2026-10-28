@@ -2,9 +2,9 @@
 
 -- name: InsertAction :exec
 INSERT INTO action (id, organization_id, code, status, outcome, actor, target, params, error_code, correlation_id,
-                    started_at, finished_at)
+                    started_at, finished_at, source)
 VALUES (@id, @organization_id, @code, @status, sqlc.narg(outcome), @actor, sqlc.narg(target), @params,
-        sqlc.narg(error_code), @correlation_id, @started_at, sqlc.narg(finished_at));
+        sqlc.narg(error_code), @correlation_id, @started_at, sqlc.narg(finished_at), sqlc.narg(source));
 
 -- name: FinishAction :execrows
 UPDATE action

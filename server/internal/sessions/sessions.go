@@ -20,7 +20,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
-// Record is the server-side half of a portal session (ADR 0034 decision 4).
+// Record is the server-side half of a portal or MCP session (ADR 0034 decision 4, ADR 0044 amendment A2).
 type Record struct {
 	AccountID uuid.UUID `json:"account_id"`
 	Kind      string    `json:"kind"`
@@ -28,6 +28,11 @@ type Record struct {
 	Org       uuid.UUID `json:"org"`
 	Gen       int64     `json:"gen"`
 	CreatedAt int64     `json:"created_at"`
+	// Channel is "mcp" for an MCP session. An MCP session has no cookie payload, so the record carries the display
+	// name and the Authentik subject itself; portal sessions leave all three empty.
+	Channel string `json:"channel,omitempty"`
+	Display string `json:"display,omitempty"`
+	Subject string `json:"sub,omitempty"`
 }
 
 // ErrUnavailable wraps every Valkey error; the api answers it with 503 session_store_unavailable.

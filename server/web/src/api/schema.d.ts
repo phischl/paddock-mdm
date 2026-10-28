@@ -2639,6 +2639,12 @@ export interface components {
             api_token?: components["schemas"]["MeApiToken"];
             /** @description The role this identity may switch to (ADR 0045); null for a single-role identity, API tokens and MCP sessions. */
             alternate_role: components["schemas"]["MeAlternateRole"] | null;
+            /**
+             * @description How this request authenticated (ADR 0044): portal for a portal session, api for an API token, mcp for an
+             *     MCP session opened with paddockctl mcp login.
+             * @enum {string}
+             */
+            channel: "portal" | "api" | "mcp";
         };
         MeAlternateRole: {
             /** @enum {string} */
@@ -3002,6 +3008,8 @@ export interface components {
             display?: string;
             ip?: string;
             step_up: boolean;
+            /** @description The MCP client's name on events of an MCP session (source mcp, ADR 0044). */
+            client?: string;
         };
         AuditTarget: {
             type: string;
@@ -4917,6 +4925,11 @@ export interface components {
         };
     };
     parameters: {
+        /**
+         * @description Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
+         *     printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
+         */
+        McpClient: string;
         Csrf: "1";
         Id: string;
         /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */

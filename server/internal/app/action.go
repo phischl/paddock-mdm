@@ -130,6 +130,7 @@ type recorder struct {
 	code       audit.Code
 	org        uuid.UUID
 	actor      audit.Actor
+	source     string
 	target     *audit.Target
 	params     map[string]any
 	correlated string
@@ -213,6 +214,7 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 	} else {
 		rec.actor = actorOf(p)
 	}
+	rec.source = audit.SourceOf(rec.actor.Type, string(p.Channel))
 	rec.stepUp = func() error {
 		if err := r.checkStepUp(p); err != nil {
 			return err
@@ -224,13 +226,17 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 }
 
 // checkStepUp reports problem.StepUpRequired unless an administrator's step-up is at most the step-up window old.
-// System principals never step up; an API token never can (ADR 0034 decision 3).
+// System principals never step up; an API token or an MCP session never can (ADR 0034 decision 3, ADR 0044 decision
+// 6).
 func (r *ActionRunner) checkStepUp(p principal.Principal) error {
 	if p.Kind == principal.KindSystem {
 		return nil
 	}
 	if p.APITokenID != uuid.Nil {
 		return problem.StepUpRequired.WithDetail("this change needs an interactive administrator: API tokens cannot complete a step-up")
+	}
+	if p.Channel == principal.ChannelMCP {
+		return problem.StepUpRequired.WithDetail("this change needs an interactive administrator in the portal: MCP sessions cannot complete a step-up")
 	}
 	age := r.now().Sub(p.StepUpAt)
 	if p.StepUpAt.IsZero() || age > r.stepUpWindow || age < -time.Minute {
@@ -256,6 +262,9 @@ func actorOf(p principal.Principal) audit.Actor {
 	}
 	if p.ID != uuid.Nil {
 		a.ID = p.ID.String()
+	}
+	if p.Channel == principal.ChannelMCP {
+		a.Client = p.MCPClient
 	}
 	return a
 }
@@ -295,7 +304,9 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 		errors.Is(err, problem.StepUpRequired) || errors.Is(err, problem.RevocationDisabled) ||
 		errors.Is(err, problem.ReleaseSourceDisabled) ||
 		errors.Is(err, problem.RevocationFrozen) || errors.Is(err, problem.RevocationRejected) ||
-		errors.Is(err, problem.IPNotAllowed) {
+		errors.Is(err, problem.IPNotAllowed) ||
+		errors.Is(err, problem.MCPDisabled) || errors.Is(err, problem.MCPToolNotAllowed) ||
+		errors.Is(err, problem.MCPWriteNotEnabled) || errors.Is(err, problem.RateLimited) {
 		return audit.OutcomeDenied, p.Code
 	}
 	return audit.OutcomeFailure, p.Code
@@ -615,6 +626,7 @@ func (r *ActionRunner) insertStarted(ctx context.Context, q *pgstore.Queries, re
 	if err := q.InsertAction(ctx, pgstore.InsertActionParams{
 		ID: rec.id, OrganizationID: rec.org, Code: string(rec.code), Status: "started",
 		Actor: actor, Target: target, Params: params, CorrelationID: rec.correlated, StartedAt: rec.startedAt,
+		Source: &rec.source,
 	}); err != nil {
 		return err
 	}
@@ -636,7 +648,7 @@ func (r *ActionRunner) insertFinished(ctx context.Context, q *pgstore.Queries, r
 	if err := q.InsertAction(ctx, pgstore.InsertActionParams{
 		ID: rec.id, OrganizationID: rec.org, Code: string(rec.code), Status: "finished", Outcome: &o,
 		Actor: actor, Target: target, Params: params, ErrorCode: nonEmpty(code), CorrelationID: rec.correlated,
-		StartedAt: rec.startedAt, FinishedAt: &finished,
+		StartedAt: rec.startedAt, FinishedAt: &finished, Source: &rec.source,
 	}); err != nil {
 		return err
 	}
@@ -717,7 +729,7 @@ func (r *ActionRunner) finishStarted(ctx context.Context, q *pgstore.Queries, re
 func insertOutbox(ctx context.Context, q *pgstore.Queries, rec *recorder, outcome audit.Outcome, errorCode string, at time.Time) error {
 	ev := audit.Event{
 		Schema: audit.Schema, EventID: rec.id, OrganizationID: rec.org, OccurredAt: at, Code: rec.code,
-		Outcome: outcome, Actor: rec.actor, Target: rec.target, Source: audit.SourceForActor(rec.actor.Type),
+		Outcome: outcome, Actor: rec.actor, Target: rec.target, Source: rec.source,
 		Params: maps.Clone(rec.params), ErrorCode: errorCode, CorrelationID: rec.correlated,
 	}
 	payload, err := json.Marshal(ev)
