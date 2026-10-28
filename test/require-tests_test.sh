@@ -17,7 +17,7 @@ expect() {
     echo "ok   $desc ($got)"
   else
     echo "FAIL $desc: got $got, want $want with '$text'"
-    sed 's/^/       /' <<<"$out"
+    while IFS= read -r line; do echo "       $line"; done <<<"$out"
     failures=$((failures + 1))
   fi
 }
@@ -32,7 +32,7 @@ PASS
 ok  	github.com/phischl/paddock-mdm/test/acceptance	0.020s [no tests to run]"
 
 expect "empty output" fail "no test ran" ""
-    while IFS= read -r line; do echo "       $line"; done <<<"$out"
+
 expect "a mention of === RUN inside a log line does not count" fail "no test ran" "    stack.go:12: printed === RUN TestX
 ok  	github.com/phischl/paddock-mdm/test/system	0.012s [no tests to run]"
 
