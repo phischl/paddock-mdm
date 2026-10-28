@@ -63,6 +63,8 @@ type handlers struct {
 	overview    *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
+	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).
+	mcpSettings *app.MCPSettings
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).
@@ -178,7 +180,7 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 	out := adminapi.Me{
 		Id: me.ID, Username: me.Username, DisplayName: me.DisplayName, Role: adminapi.MeRole(me.Role),
 		Locale: adminapi.MeLocale(me.Locale), Theme: adminapi.MeTheme(me.Theme), RevocationEnabled: h.revocations.Enabled(),
-		ServerVersion: h.serverVersion,
+		ServerVersion: h.serverVersion, McpWriteEnabled: me.MCPWriteEnabled,
 	}
 	if me.Organization != nil {
 		domains := me.Organization.Domains

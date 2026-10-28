@@ -204,6 +204,49 @@ export interface paths {
         patch: operations["updateMe"];
         trace?: never;
     };
+    "/api/v1/me/mcp-write/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator, platform_admin. Enables MCP write access for the caller's own account (ADR 0044
+         *     amendment 2026-10-25): their MCP sessions may change data where the scope's MCP policy allows it. Needs a
+         *     step-up within the last 5 minutes (403 step_up_required); 403 forbidden for org_auditor, for API tokens and
+         *     for MCP sessions. Every attempt is audited.
+         */
+        post: operations["enableMcpWrite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mcp-write/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator, platform_admin. Disables MCP write access for the caller's own account; no
+         *     step-up is needed. 403 forbidden for org_auditor, for API tokens and for MCP sessions. Every attempt is
+         *     audited.
+         */
+        post: operations["disableMcpWrite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/device-groups": {
         parameters: {
             query?: never;
@@ -1343,6 +1386,32 @@ export interface paths {
          *     definitions are not changed; the security review lists files whose tier rose.
          */
         put: operations["updateManagedFileSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The MCP policy of the organization (ADR 0044 decision 5). Without a saved policy the MCP is
+         *     off: enabled false, write_enabled false, mode all, no allowed operations, updated_at and updated_by null.
+         */
+        get: operations["getMcpSettings"];
+        /**
+         * @description Roles: org_admin. Replaces the MCP policy of the organization. mode all requires an empty allowed_operations;
+         *     mode selected requires 1 to 500 distinct operation ids of exposed MCP tools that need no step-up (400
+         *     invalid_request naming the offending id). Needs a step-up within the last 5 minutes (403 step_up_required);
+         *     API tokens and MCP sessions cannot satisfy it. Every attempt is audited.
+         */
+        put: operations["updateMcpSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2625,6 +2694,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/settings/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). Without a saved policy the MCP is
+         *     off: enabled false, write_enabled false, mode all, no allowed operations, updated_at and updated_by null.
+         */
+        get: operations["getPlatformMcpSettings"];
+        /**
+         * @description Roles: platform_admin. Replaces the MCP policy of the platform (platform administrators' MCP sessions). mode all requires an empty allowed_operations;
+         *     mode selected requires 1 to 500 distinct operation ids of exposed MCP tools that need no step-up (400
+         *     invalid_request naming the offending id). Needs a step-up within the last 5 minutes (403 step_up_required);
+         *     API tokens and MCP sessions cannot satisfy it. Every attempt is audited.
+         */
+        put: operations["updatePlatformMcpSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases/{version}/rollout/resume": {
         parameters: {
             query?: never;
@@ -2718,6 +2813,8 @@ export interface components {
              * @enum {string}
              */
             channel: "portal" | "api" | "mcp";
+            /** @description Whether the account opted in to MCP write access (ADR 0044 amendment 2026-10-25); false for API tokens. */
+            mcp_write_enabled: boolean;
         };
         MeAlternateRole: {
             /** @enum {string} */
@@ -3924,6 +4021,29 @@ export interface components {
              */
             period_days: number;
             warn_days: number[];
+        };
+        McpSettings: {
+            /** @description Whether MCP sessions of this scope may call any tool. */
+            enabled: boolean;
+            /** @description Whether MCP sessions of this scope may change data. */
+            write_enabled: boolean;
+            /**
+             * @description all allows every exposed tool of the scope; selected only the tools in allowed_operations.
+             * @enum {string}
+             */
+            mode: "all" | "selected";
+            allowed_operations: string[];
+            /** Format: date-time */
+            updated_at: string | null;
+            /** Format: uuid */
+            updated_by: string | null;
+        };
+        McpSettingsInput: {
+            enabled: boolean;
+            write_enabled: boolean;
+            /** @enum {string} */
+            mode: "all" | "selected";
+            allowed_operations: string[];
         };
         ManagedFileSettings: {
             operator_roots: string[];
@@ -5411,6 +5531,54 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    enableMcpWrite: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The administrator with mcp_write_enabled true. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    disableMcpWrite: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The administrator with mcp_write_enabled false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
         };
@@ -7624,6 +7792,57 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    getMcpSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The MCP policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateMcpSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     getUpdateSettings: {
@@ -9867,6 +10086,57 @@ export interface operations {
                     "application/json": components["schemas"]["AutoUnsealStatus"];
                 };
             };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getPlatformMcpSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The MCP policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updatePlatformMcpSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
         };

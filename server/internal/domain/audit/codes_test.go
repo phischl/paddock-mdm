@@ -129,3 +129,28 @@ func TestM14AdminLoginAndSource(t *testing.T) {
 		}
 	}
 }
+
+// TestM14PolicyCodes: the MCP policy and write opt-in codes of plan M14 §6.3 are registered as emitted with their
+// params in the documented order and the administrator outcomes.
+func TestM14PolicyCodes(t *testing.T) {
+	all := []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
+	policy := []string{"enabled", "write_enabled", "mode", "allowed_count"}
+	for _, tc := range []struct {
+		code   Code
+		params []string
+	}{
+		{"organization.mcp_policy_changed", policy},
+		{"platform.mcp_policy_changed", policy},
+		{"admin.mcp_write_enabled", []string{"role"}},
+		{"admin.mcp_write_disabled", []string{"role"}},
+	} {
+		d, ok := Lookup(tc.code)
+		if !ok || !tc.code.Registered() || !d.Emitted || d.Description == "" {
+			t.Errorf("%s is not registered as emitted with a description", tc.code)
+			continue
+		}
+		if !slices.Equal(d.Params, tc.params) || !slices.Equal(d.Outcomes, all) {
+			t.Errorf("%s: params %v outcomes %v, want %v %v", tc.code, d.Params, d.Outcomes, tc.params, all)
+		}
+	}
+}

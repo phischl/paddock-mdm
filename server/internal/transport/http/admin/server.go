@@ -76,6 +76,8 @@ type Deps struct {
 	// MCPAuth is the MCP login through Authentik (plan M14 §3.3); nil when PADDOCK_OIDC_MCP_ISSUER is empty, so that
 	// /api/auth/mcp/* answers 404 and MCP access tokens are refused.
 	MCPAuth *MCPAuth
+	// MCPSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).
+	MCPSettings *app.MCPSettings
 	// EndSessions ends every portal session of the installation (plan M8s decision 16).
 	EndSessions *app.Sessions
 	// AutoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
@@ -186,6 +188,17 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/ip-allowlist":                                   {app.ScopePlatform, app.SpecIPAllowlistChange},
 	"PATCH /api/platform/v1/ip-allowlist/{id}":                             {app.ScopePlatform, app.SpecIPAllowlistChange},
 	"DELETE /api/platform/v1/ip-allowlist/{id}":                            {app.ScopePlatform, app.SpecIPAllowlistChange},
+	"PUT /api/v1/settings/mcp":                                             {app.ScopeOrg, app.SpecMCPSettingsUpdate},
+	"PUT /api/platform/v1/settings/mcp":                                    {app.ScopePlatform, app.SpecPlatformMCPSettingsUpdate},
+	"POST /api/v1/me/mcp-write/enable":                                     {app.ScopeOrg, app.SpecMCPWriteEnable},
+	"POST /api/v1/me/mcp-write/disable":                                    {app.ScopeOrg, app.SpecMCPWriteDisable},
+}
+
+// ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
+// caller, so a platform administrator's lands in the platform scope instead of the organization scope of the table.
+var ownAccountRoutes = map[string]bool{
+	"POST /api/v1/me/mcp-write/enable":  true,
+	"POST /api/v1/me/mcp-write/disable": true,
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -217,6 +230,7 @@ func NewHandler(d Deps) http.Handler {
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
+		mcpSettings:  d.MCPSettings,
 		imports:      d.ReleaseImports,
 		stepUpWindow: tokenTTL, serverVersion: d.ServerVersion,
 	}
@@ -355,8 +369,12 @@ func (s *server) rejected(w http.ResponseWriter, r *http.Request, err error) {
 		p = problem.InvalidRequest.WithDetail(err.Error())
 	}
 	if op, ok := privileged[r.Pattern]; ok {
-		if _, authenticated := principal.From(r.Context()); authenticated {
-			err := s.d.Runner.RecordRejected(r.Context(), op.scope, op.spec, p)
+		if caller, authenticated := principal.From(r.Context()); authenticated {
+			scope := op.scope
+			if ownAccountRoutes[r.Pattern] {
+				scope = app.AccountScope(caller)
+			}
+			err := s.d.Runner.RecordRejected(r.Context(), scope, op.spec, p)
 			httpx.WriteProblem(w, r, err)
 			return
 		}

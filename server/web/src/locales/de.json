@@ -278,7 +278,9 @@
       "login": "{actor} hat sich angemeldet",
       "sessions_revoked": "{reason, select, step_up_role_mismatch {Die Sitzungen von {target} wurden beendet: die Rolle bei der Identitätsbestätigung stimmte nicht überein} role_changed {Die Sitzungen von {target} wurden beendet: die Rolle hat sich von {old_role} zu {new_role} geändert} deactivated {Die Sitzungen von {target} wurden beendet: das Konto wurde deaktiviert} other {Die Sitzungen von {target} wurden beendet: das Konto hat keine Rolle mehr}}",
       "role_granted": "{username} wurde {role, select, org_admin {Organisationsadministrator} org_operator {Operator} org_auditor {Auditor} platform_admin {Plattformadministrator} authentik_superuser {Authentik-Superuser} other {{role}}}",
-      "role_revoked": "{username} ist nicht mehr {role, select, org_admin {Organisationsadministrator} org_operator {Operator} org_auditor {Auditor} platform_admin {Plattformadministrator} authentik_superuser {Authentik-Superuser} other {{role}}}"
+      "role_revoked": "{username} ist nicht mehr {role, select, org_admin {Organisationsadministrator} org_operator {Operator} org_auditor {Auditor} platform_admin {Plattformadministrator} authentik_superuser {Authentik-Superuser} other {{role}}}",
+      "mcp_write_enabled": "{actor} hat den MCP-Schreibzugriff für das eigene Konto aktiviert",
+      "mcp_write_disabled": "{actor} hat den MCP-Schreibzugriff für das eigene Konto deaktiviert"
     },
     "audit": {
       "chain_verified": "Die Hash-Kette des Audit-Protokolls wurde für {from_day} bis {to_day} geprüft ({days, number} Tage, {objects, number} Objekte, {trigger})",
@@ -288,7 +290,8 @@
       "created": "{actor} hat die Organisation {slug} angelegt",
       "domains_changed": "{actor} hat die Domains von {slug} festgelegt",
       "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)",
-      "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden"
+      "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden",
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Organisation geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
     },
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
@@ -408,7 +411,8 @@
       "sessions_ended": "{actor} hat alle Portal-Sitzungen beendet",
       "auto_unseal_enabled": "{actor} hat das automatische Entsiegeln von OpenBao aktiviert und den Hinweis {disclaimer_version} bestätigt",
       "auto_unseal_disabled": "{method, select, cli {Das automatische Entsiegeln von OpenBao wurde auf dem Host deaktiviert} other {{actor} hat das automatische Entsiegeln von OpenBao deaktiviert}}",
-      "openbao_auto_unsealed": "{failures, plural, =0 {Der Unsealer hat OpenBao automatisch entsiegelt ({unseals, number} Mal seit dem letzten Bericht)} other {Der Unsealer konnte OpenBao nicht entsiegeln ({failures, number} Fehlversuche, letzter Grund {last_failure_reason})}}"
+      "openbao_auto_unsealed": "{failures, plural, =0 {Der Unsealer hat OpenBao automatisch entsiegelt ({unseals, number} Mal seit dem letzten Bericht)} other {Der Unsealer konnte OpenBao nicht entsiegeln ({failures, number} Fehlversuche, letzter Grund {last_failure_reason})}}",
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Plattform geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",

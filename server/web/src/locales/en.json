@@ -278,7 +278,9 @@
       "login": "{actor} signed in",
       "sessions_revoked": "{reason, select, step_up_role_mismatch {The sessions of {target} were ended: the role at the step-up did not match} role_changed {The sessions of {target} were ended: the role changed from {old_role} to {new_role}} deactivated {The sessions of {target} were ended: the account was deactivated} other {The sessions of {target} were ended: the account no longer has a role}}",
       "role_granted": "{username} became {role, select, org_admin {organization administrator} org_operator {operator} org_auditor {auditor} platform_admin {platform administrator} authentik_superuser {Authentik superuser} other {{role}}}",
-      "role_revoked": "{username} is no longer {role, select, org_admin {organization administrator} org_operator {operator} org_auditor {auditor} platform_admin {platform administrator} authentik_superuser {Authentik superuser} other {{role}}}"
+      "role_revoked": "{username} is no longer {role, select, org_admin {organization administrator} org_operator {operator} org_auditor {auditor} platform_admin {platform administrator} authentik_superuser {Authentik superuser} other {{role}}}",
+      "mcp_write_enabled": "{actor} enabled MCP write access for their account",
+      "mcp_write_disabled": "{actor} disabled MCP write access for their account"
     },
     "audit": {
       "chain_verified": "The audit hash chain was verified for {from_day} to {to_day} ({days, number} days, {objects, number} objects, {trigger})",
@@ -288,7 +290,8 @@
       "created": "{actor} created the organization {slug}",
       "domains_changed": "{actor} set the domains of {slug}",
       "recompile_requested": "{actor} requested a new bundle for every device (restore)",
-      "security_review_required": "A security review is required: {root_grant_profiles, number} root grants, {sensitive_files, number} sensitive files and {denied_files, number} files on denied paths"
+      "security_review_required": "A security review is required: {root_grant_profiles, number} root grants, {sensitive_files, number} sensitive files and {denied_files, number} files on denied paths",
+      "mcp_policy_changed": "{actor} changed the MCP policy of the organization: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -408,7 +411,8 @@
       "sessions_ended": "{actor} ended every portal session",
       "auto_unseal_enabled": "{actor} enabled automatic unseal of OpenBao and acknowledged the disclaimer {disclaimer_version}",
       "auto_unseal_disabled": "{method, select, cli {Automatic unseal of OpenBao was disabled on the host} other {{actor} disabled automatic unseal of OpenBao}}",
-      "openbao_auto_unsealed": "{failures, plural, =0 {The unsealer unsealed OpenBao automatically ({unseals, number} times since the last report)} other {The unsealer failed to unseal OpenBao ({failures, number} failures, last reason {last_failure_reason})}}"
+      "openbao_auto_unsealed": "{failures, plural, =0 {The unsealer unsealed OpenBao automatically ({unseals, number} times since the last report)} other {The unsealer failed to unseal OpenBao ({failures, number} failures, last reason {last_failure_reason})}}",
+      "mcp_policy_changed": "{actor} changed the MCP policy of the platform: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
