@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
   when an offered write operation is not audited. No runtime behaviour changes yet.
 
+### Fixed
+
+- Portal, *Updates*: the label of the security-update time field is no longer cut off ("Uhrzeit der
+  Sicherheitsupd…" in German); the field is as wide as the other text fields on the page and takes the full panel
+  width on phones (PDK-461).
+
 ### Security
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
