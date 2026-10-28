@@ -464,19 +464,6 @@ func mcpPolicyBody(mode string, ops ...string) map[string]any {
 	return map[string]any{"enabled": true, "write_enabled": false, "mode": mode, "allowed_operations": ops}
 }
 
-// currentMCPPolicy reads the MCP policy at path as an McpSettingsInput, so that writing it back changes nothing.
-func currentMCPPolicy(t *testing.T, p *env.Portal, path string) map[string]any {
-	t.Helper()
-	res := call(t, p, http.MethodGet, path, nil)
-	expectStatus(t, res, http.StatusOK, "")
-	var cur map[string]any
-	if err := res.JSON(&cur); err != nil {
-		t.Fatal(err)
-	}
-	return map[string]any{"enabled": cur["enabled"], "write_enabled": cur["write_enabled"], "mode": cur["mode"],
-		"allowed_operations": cur["allowed_operations"]}
-}
-
 // mcpAuditor signs in a temporary acme auditor, whom the MCP write opt-in refuses.
 func mcpAuditor(t *testing.T) *env.Portal {
 	t.Helper()

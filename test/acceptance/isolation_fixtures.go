@@ -777,3 +777,16 @@ var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Value
 		},
 	},
 }
+
+// currentMCPPolicy reads the MCP policy at path as an McpSettingsInput, so that writing it back changes nothing.
+func currentMCPPolicy(t *testing.T, p *env.Portal, path string) map[string]any {
+	t.Helper()
+	res := call(t, p, http.MethodGet, path, nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var cur map[string]any
+	if err := res.JSON(&cur); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{"enabled": cur["enabled"], "write_enabled": cur["write_enabled"], "mode": cur["mode"],
+		"allowed_operations": cur["allowed_operations"]}
+}
