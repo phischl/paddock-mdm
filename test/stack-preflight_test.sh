@@ -32,7 +32,7 @@ expect() {
     echo "ok   $desc ($got)"
   else
     echo "FAIL $desc: got $got, want $want with '$text'"
-    sed 's/^/       /' <<<"$out"
+    while IFS= read -r line; do echo "       $line"; done <<<"$out"
     failures=$((failures + 1))
   fi
 }
