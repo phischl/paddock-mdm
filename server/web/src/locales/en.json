@@ -1299,7 +1299,10 @@
     "summary": "Ends every portal session of the installation, including your own, and signs every portal user out of the identity provider (Authentik). Every administrator signs in again with password and authenticator; API tokens and device logins keep working.",
     "endAll": "End all sessions",
     "confirmTitle": "End all sessions?",
-    "confirmMessage": "Every administrator, you included, is signed out of the portal and of the identity provider at the next request. Type END to confirm."
+    "confirmMessage": "Every administrator, you included, is signed out of the portal and of the identity provider at the next request. Type END to confirm.",
+    "problems": {
+      "upstream_unavailable": "The portal sessions were ended, but the identity provider's sessions could not be ended. Run End all sessions again."
+    }
   },
   "openbao": {
     "title": "OpenBao",
