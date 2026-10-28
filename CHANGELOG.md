@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
   behind". The rule itself is unchanged: a device that sends a sequence number older than the one before the last
   issued one is still quarantined.
+- In-place encryption: when a bootable kernel's initrd in `/boot` was a symbolic link to a temporary initrd left by
+  an interrupted agent run, the initrd regeneration and the cleanup stayed pending with
+  `key_material_shared_bootable` until an administrator stepped in. The agent now rebuilds that kernel's initrd into
+  a regular file first and then overwrites and removes the temporary file; the kernel keeps booting throughout.
 
 ### Security
 
