@@ -18,7 +18,7 @@ const admin: Me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice Admin',
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: ['acme.test'] },
   locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
-  server_version: '0.1.0-alpha.6', alternate_role: null,
+  server_version: '0.1.0-alpha.6', alternate_role: null, channel: 'portal',
 }
 const platform: Me = { ...admin, role: 'platform_admin', organization: null }
 

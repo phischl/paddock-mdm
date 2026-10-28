@@ -33,6 +33,8 @@ func TestRLSLint(t *testing.T) {
 		"component_target": true,
 		// Platform administrators and Authentik superusers as last seen (plan M8b decision 34), role paddock_platform only.
 		"platform_role_member": true, "platform_role_snapshot": true,
+		// MCP policy of the platform (plan M14 §6.5), role paddock_platform only.
+		"platform_mcp_settings": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,

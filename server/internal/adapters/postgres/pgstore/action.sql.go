@@ -47,7 +47,7 @@ func (q *Queries) FinishAction(ctx context.Context, arg FinishActionParams) (int
 }
 
 const getAction = `-- name: GetAction :one
-SELECT id, organization_id, code, status, outcome, actor, target, params, error_code, correlation_id, started_at, finished_at FROM action WHERE id = $1
+SELECT id, organization_id, code, status, outcome, actor, target, params, error_code, correlation_id, started_at, finished_at, source FROM action WHERE id = $1
 `
 
 func (q *Queries) GetAction(ctx context.Context, id uuid.UUID) (Action, error) {
@@ -66,6 +66,7 @@ func (q *Queries) GetAction(ctx context.Context, id uuid.UUID) (Action, error) {
 		&i.CorrelationID,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.Source,
 	)
 	return i, err
 }
@@ -73,9 +74,9 @@ func (q *Queries) GetAction(ctx context.Context, id uuid.UUID) (Action, error) {
 const insertAction = `-- name: InsertAction :exec
 
 INSERT INTO action (id, organization_id, code, status, outcome, actor, target, params, error_code, correlation_id,
-                    started_at, finished_at)
+                    started_at, finished_at, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11, $12)
+        $9, $10, $11, $12, $13)
 `
 
 type InsertActionParams struct {
@@ -91,6 +92,7 @@ type InsertActionParams struct {
 	CorrelationID  string
 	StartedAt      time.Time
 	FinishedAt     *time.Time
+	Source         *string
 }
 
 // Only app.ActionRunner (server/internal/app/action.go) and the outbox package may call these queries.
@@ -108,6 +110,7 @@ func (q *Queries) InsertAction(ctx context.Context, arg InsertActionParams) erro
 		arg.CorrelationID,
 		arg.StartedAt,
 		arg.FinishedAt,
+		arg.Source,
 	)
 	return err
 }
@@ -135,7 +138,7 @@ func (q *Queries) InsertOutbox(ctx context.Context, arg InsertOutboxParams) erro
 }
 
 const listStaleActions = `-- name: ListStaleActions :many
-SELECT id, organization_id, code, status, outcome, actor, target, params, error_code, correlation_id, started_at, finished_at FROM action
+SELECT id, organization_id, code, status, outcome, actor, target, params, error_code, correlation_id, started_at, finished_at, source FROM action
 WHERE status = 'started' AND started_at < $1
 ORDER BY started_at
 LIMIT $2
@@ -169,6 +172,7 @@ func (q *Queries) ListStaleActions(ctx context.Context, arg ListStaleActionsPara
 			&i.CorrelationID,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}

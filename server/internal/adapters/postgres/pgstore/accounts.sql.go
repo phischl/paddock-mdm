@@ -22,7 +22,7 @@ func (q *Queries) DisableAdminAccount(ctx context.Context, id uuid.UUID) error {
 }
 
 const getAdminAccount = `-- name: GetAdminAccount :one
-SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at FROM admin_account WHERE id = $1
+SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at, mcp_write_enabled_at FROM admin_account WHERE id = $1
 `
 
 func (q *Queries) GetAdminAccount(ctx context.Context, id uuid.UUID) (AdminAccount, error) {
@@ -39,12 +39,13 @@ func (q *Queries) GetAdminAccount(ctx context.Context, id uuid.UUID) (AdminAccou
 		&i.LastLoginAt,
 		&i.Theme,
 		&i.DisabledAt,
+		&i.McpWriteEnabledAt,
 	)
 	return i, err
 }
 
 const getAdminAccountBySubject = `-- name: GetAdminAccountBySubject :one
-SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at FROM admin_account WHERE authentik_sub = $1
+SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at, mcp_write_enabled_at FROM admin_account WHERE authentik_sub = $1
 `
 
 func (q *Queries) GetAdminAccountBySubject(ctx context.Context, authentikSub string) (AdminAccount, error) {
@@ -61,12 +62,13 @@ func (q *Queries) GetAdminAccountBySubject(ctx context.Context, authentikSub str
 		&i.LastLoginAt,
 		&i.Theme,
 		&i.DisabledAt,
+		&i.McpWriteEnabledAt,
 	)
 	return i, err
 }
 
 const getPlatformAdmin = `-- name: GetPlatformAdmin :one
-SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme FROM platform_admin WHERE id = $1
+SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme, mcp_write_enabled_at FROM platform_admin WHERE id = $1
 `
 
 func (q *Queries) GetPlatformAdmin(ctx context.Context, id uuid.UUID) (PlatformAdmin, error) {
@@ -80,12 +82,13 @@ func (q *Queries) GetPlatformAdmin(ctx context.Context, id uuid.UUID) (PlatformA
 		&i.Locale,
 		&i.LastLoginAt,
 		&i.Theme,
+		&i.McpWriteEnabledAt,
 	)
 	return i, err
 }
 
 const getPlatformAdminBySubject = `-- name: GetPlatformAdminBySubject :one
-SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme FROM platform_admin WHERE authentik_sub = $1
+SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme, mcp_write_enabled_at FROM platform_admin WHERE authentik_sub = $1
 `
 
 func (q *Queries) GetPlatformAdminBySubject(ctx context.Context, authentikSub string) (PlatformAdmin, error) {
@@ -99,12 +102,13 @@ func (q *Queries) GetPlatformAdminBySubject(ctx context.Context, authentikSub st
 		&i.Locale,
 		&i.LastLoginAt,
 		&i.Theme,
+		&i.McpWriteEnabledAt,
 	)
 	return i, err
 }
 
 const listAdminAccounts = `-- name: ListAdminAccounts :many
-SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at FROM admin_account WHERE disabled_at IS NULL ORDER BY id
+SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at, mcp_write_enabled_at FROM admin_account WHERE disabled_at IS NULL ORDER BY id
 `
 
 // The accounts of the organization that are not disabled, for the worker round admin-accounts (plan M8s decision 22).
@@ -128,6 +132,7 @@ func (q *Queries) ListAdminAccounts(ctx context.Context) ([]AdminAccount, error)
 			&i.LastLoginAt,
 			&i.Theme,
 			&i.DisabledAt,
+			&i.McpWriteEnabledAt,
 		); err != nil {
 			return nil, err
 		}
@@ -140,7 +145,7 @@ func (q *Queries) ListAdminAccounts(ctx context.Context) ([]AdminAccount, error)
 }
 
 const listPlatformAdmins = `-- name: ListPlatformAdmins :many
-SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme FROM platform_admin ORDER BY id
+SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme, mcp_write_enabled_at FROM platform_admin ORDER BY id
 `
 
 // Every platform administrator that ever signed in, for the worker round admin-accounts (PDK-185).
@@ -161,6 +166,7 @@ func (q *Queries) ListPlatformAdmins(ctx context.Context) ([]PlatformAdmin, erro
 			&i.Locale,
 			&i.LastLoginAt,
 			&i.Theme,
+			&i.McpWriteEnabledAt,
 		); err != nil {
 			return nil, err
 		}
@@ -202,7 +208,7 @@ func (q *Queries) SetAdminAccountRole(ctx context.Context, arg SetAdminAccountRo
 const updateAdminAccountSettings = `-- name: UpdateAdminAccountSettings :one
 UPDATE admin_account
 SET locale = coalesce($1, locale), theme = coalesce($2, theme)
-WHERE id = $3 RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at
+WHERE id = $3 RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at, mcp_write_enabled_at
 `
 
 type UpdateAdminAccountSettingsParams struct {
@@ -225,6 +231,7 @@ func (q *Queries) UpdateAdminAccountSettings(ctx context.Context, arg UpdateAdmi
 		&i.LastLoginAt,
 		&i.Theme,
 		&i.DisabledAt,
+		&i.McpWriteEnabledAt,
 	)
 	return i, err
 }
@@ -232,7 +239,7 @@ func (q *Queries) UpdateAdminAccountSettings(ctx context.Context, arg UpdateAdmi
 const updatePlatformAdminSettings = `-- name: UpdatePlatformAdminSettings :one
 UPDATE platform_admin
 SET locale = coalesce($1, locale), theme = coalesce($2, theme)
-WHERE id = $3 RETURNING id, authentik_sub, username, display_name, locale, last_login_at, theme
+WHERE id = $3 RETURNING id, authentik_sub, username, display_name, locale, last_login_at, theme, mcp_write_enabled_at
 `
 
 type UpdatePlatformAdminSettingsParams struct {
@@ -252,6 +259,7 @@ func (q *Queries) UpdatePlatformAdminSettings(ctx context.Context, arg UpdatePla
 		&i.Locale,
 		&i.LastLoginAt,
 		&i.Theme,
+		&i.McpWriteEnabledAt,
 	)
 	return i, err
 }
@@ -262,7 +270,7 @@ VALUES ($1, $2, $3, $4, $5, $6, now())
 ON CONFLICT (authentik_sub) DO UPDATE
 SET username = EXCLUDED.username, display_name = EXCLUDED.display_name, role = EXCLUDED.role, last_login_at = now(),
     disabled_at = NULL
-RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at
+RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at, mcp_write_enabled_at
 `
 
 type UpsertAdminAccountParams struct {
@@ -295,6 +303,7 @@ func (q *Queries) UpsertAdminAccount(ctx context.Context, arg UpsertAdminAccount
 		&i.LastLoginAt,
 		&i.Theme,
 		&i.DisabledAt,
+		&i.McpWriteEnabledAt,
 	)
 	return i, err
 }
@@ -304,7 +313,7 @@ INSERT INTO platform_admin (id, authentik_sub, username, display_name, last_logi
 VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (authentik_sub) DO UPDATE
 SET username = EXCLUDED.username, display_name = EXCLUDED.display_name, last_login_at = now()
-RETURNING id, authentik_sub, username, display_name, locale, last_login_at, theme
+RETURNING id, authentik_sub, username, display_name, locale, last_login_at, theme, mcp_write_enabled_at
 `
 
 type UpsertPlatformAdminParams struct {
@@ -330,6 +339,7 @@ func (q *Queries) UpsertPlatformAdmin(ctx context.Context, arg UpsertPlatformAdm
 		&i.Locale,
 		&i.LastLoginAt,
 		&i.Theme,
+		&i.McpWriteEnabledAt,
 	)
 	return i, err
 }

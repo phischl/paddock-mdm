@@ -411,6 +411,46 @@ func TestReaperFinalizesStuckAction(t *testing.T) {
 	}
 }
 
+// TestReaperKeepsTheStoredSource: a stuck action that carries its source (written since migration 00072) is finalized
+// with it, so an MCP session's action stays source mcp although its actor type is admin; a row without a source (written
+// before 00072) keeps the source of its actor type, as TestReaperFinalizesStuckAction shows (plan M14 amendment
+// 2026-10-28). The column accepts only audit sources.
+func TestReaperKeepsTheStoredSource(t *testing.T) {
+	h := newRelayHarness(t, nil)
+	ctx := context.Background()
+	org, stuck := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	insert := func(id uuid.UUID, source string) error {
+		_, err := h.super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, actor, target, params, correlation_id,
+			started_at, source)
+			VALUES ($1, $2, 'device_group.created', 'started', '{"type":"admin","id":"a1","step_up":false,"client":"claude-code/2.1"}',
+			        NULL, '{"name":"g"}', $3, now() - interval '11 minutes', $4)`, id, org, "corr-"+id.String(), source)
+		return err
+	}
+	if err := insert(stuck, audit.SourceMCP); err != nil {
+		t.Fatal(err)
+	}
+	if err := insert(uuid.Must(uuid.NewV7()), "chat"); err == nil {
+		t.Fatal("action.source accepted a value outside the audit sources")
+	}
+
+	if n, err := outbox.NewReaper(h.pool, outbox.DefaultReaperThreshold).RunOnce(ctx); err != nil || n != 1 {
+		t.Fatalf("reaper finalized %d actions (%v), want 1", n, err)
+	}
+	var subject string
+	var payload []byte
+	if err := h.super.QueryRow(ctx, "SELECT subject, payload FROM outbox WHERE msg_id = $1", stuck.String()).Scan(&subject, &payload); err != nil {
+		t.Fatal(err)
+	}
+	var ev audit.Event
+	if err := json.Unmarshal(payload, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Source != audit.SourceMCP || subject != audit.Subject(org, audit.SourceMCP) || ev.Actor.Type != audit.ActorAdmin ||
+		ev.Actor.Client != "claude-code/2.1" || ev.Outcome != audit.OutcomeUnknown {
+		t.Fatalf("reaped MCP action: subject %q event %+v", subject, ev)
+	}
+}
+
 // TestRelayRoutesStateChanges: state.<org> rows go to paddock.state on the organization's partition queue, priority
 // rows to state.priority, command.<org> rows to command.issued (plan M4a decision 2), audit rows of the same batch
 // still reach audit.writer.

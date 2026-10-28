@@ -101,6 +101,11 @@ func (r *Reaper) finalize(ctx context.Context, q *pgstore.Queries, a pgstore.Act
 		return err
 	}
 	source := audit.SourceForActor(actor.Type)
+	// Rows written before migration 00072 carry no source; newer rows keep the one the action started with, which
+	// for an MCP session is mcp rather than the actor's (plan M14 amendment 2026-10-28).
+	if a.Source != nil {
+		source = *a.Source
+	}
 	payload, err := json.Marshal(audit.Event{
 		Schema: audit.Schema, EventID: a.ID, OrganizationID: a.OrganizationID, OccurredAt: finished,
 		Code: audit.Code(a.Code), Outcome: audit.OutcomeUnknown, Actor: actor, Target: target, Source: source,
