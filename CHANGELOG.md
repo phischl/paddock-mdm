@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
   when an offered write operation is not audited. No runtime behaviour changes yet.
 
+### Fixed
+
+- Agent updates (PDK-372): a supervisor stopped or restarted while a new agent release runs its self-test no longer
+  can report that release as `self_test_failed`. The interrupted update stays pending and the restarted supervisor
+  runs the self-test again, so a host shutdown or a supervisor restart during an update no longer counts as a failure
+  against the rollout.
+
 ### Security
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
