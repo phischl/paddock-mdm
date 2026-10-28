@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `step_up_required`). New problem codes `mcp_disabled`, `mcp_tool_not_allowed`, `mcp_write_not_enabled`,
   `rate_limited` and `mcp_login_required`. No MCP session can be opened yet.
 
+### Security
+
+- go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
+  could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
+
 ## [0.1.0-alpha.6] - 2026-10-27
 
 Evidence integrity for ISO 27001 (plan M8b): the server detects device clock drift and gaps in a device's event
