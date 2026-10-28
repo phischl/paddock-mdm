@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
   when an offered write operation is not audited. No runtime behaviour changes yet.
 
+### Fixed
+
+- Clone detection: a device is no longer quarantined as a suspected clone after its check-ins failed on the server
+  side, for example while the ingest queue was full or the server was slow to accept the check-in. A failed check-in
+  no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
+  behind". The rule itself is unchanged: a device that sends a sequence number older than the one before the last
+  issued one is still quarantined.
+
 ### Security
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
