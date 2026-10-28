@@ -10,6 +10,9 @@ body, .v-application {
 a { color: var(--pd-link); }
 a:hover, a:focus-visible { color: var(--pd-link-hover); }
 :focus-visible { outline: none; box-shadow: var(--pd-focus-ring); border-radius: var(--pd-radius-xs); }
+/* A Vuetify field already marks its focus with the thicker, opaque field outline; the global ring on the native
+   control inside it drew a second ring that crossed the floating label. Icon buttons in the field keep the ring. */
+.v-field input:focus-visible, .v-field textarea:focus-visible { box-shadow: none; }
 h1 { font-size: 18px; line-height: 24px; font-weight: 600; margin: 0 0 0.75rem; }
 h2 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }

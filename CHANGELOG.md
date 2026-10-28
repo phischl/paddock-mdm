@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Portal: a focused input field (number, text, time, text area) shows a single focus indicator, the field's own
+  outline. A second ring inside it no longer crosses the field label.
+
 - Portal: confirmation dialogs show long names in full on narrow screens (PDK-447). A long target name in the title
   or the confirm button, such as a pre-release version `0.9.1792783862-alpha.1792944510667`, wraps onto further lines
   instead of being cut off with an ellipsis or running past the edges of the button.
