@@ -102,6 +102,8 @@ troubleshooting workflows to the assistant.
      `getAuditEventFeed` (the cursor feed). The generator additionally sets `expose: false` without an annotation for
      operations with a request body that is not `application/json` and for operations whose success response has no
      `application/json` content (uploads and downloads).
+     Amendment 2026-10-27 (PDK-434): `checkAgentReleaseSource`, `expose: false`. Unaudited POST without its own
+     effect; it only prepares the step-up import.
    - `x-paddock-mcp: { bootstrap: true }` on `getMe`, `getMcpAccess` and `getMcpCatalog`: the guard (§3.4) lets an
      MCP session call them without consulting the policy.
 2. Generator `server/cmd/mcpgen/main.go` (package `main`, uses `github.com/getkin/kin-openapi/openapi3`, already a

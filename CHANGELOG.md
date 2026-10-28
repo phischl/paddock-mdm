@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MCP tool catalog generated from the admin API contract (ADR 0044, PDK-434): `make gen` derives one tool per admin
+  API operation (outside the login tag) from `api/openapi/admin.yaml`, classified as read or write, with scope,
+  destructive and idempotent hints and a self-contained input schema. The contract gains the extensions
+  `x-paddock-step-up: true` (operations that always need a step-up; never offered as tools) and `x-paddock-mcp`
+  (`expose: false` keeps an operation out of the MCP, `bootstrap: true` marks the operations an MCP session may call
+  before its policy is consulted). API tokens, profile changes and the release source check are never offered; nor
+  are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
+  when an offered write operation is not audited. No runtime behaviour changes yet.
+
 ## [0.1.0-alpha.6] - 2026-10-27
 
 Evidence integrity for ISO 27001 (plan M8b): the server detects device clock drift and gaps in a device's event

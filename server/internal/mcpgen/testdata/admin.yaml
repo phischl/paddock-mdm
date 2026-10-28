@@ -1,0 +1,194 @@
+openapi: 3.0.3
+info:
+  title: mcpgen fixture
+  version: 0.0.0
+paths:
+  /api/auth/login:
+    get:
+      operationId: login
+      tags: [auth]
+      responses:
+        "302": { description: Redirect. }
+  /api/v1/me:
+    get:
+      operationId: getMe
+      tags: [me]
+      x-paddock-mcp: { bootstrap: true }
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+    patch:
+      operationId: updateMe
+      tags: [me]
+      x-paddock-mcp: { expose: false }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ThingInput" }
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+  /api/v1/me/settings:
+    get:
+      operationId: getMySettings
+      tags: [me]
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+  /api/v1/mcp/catalog:
+    get:
+      operationId: getMcpCatalog
+      tags: [mcp]
+      x-paddock-mcp: { bootstrap: true, expose: false }
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+  /api/v1/things:
+    get:
+      operationId: listThings
+      tags: [things]
+      summary: List things
+      description: |
+        Roles: everyone. Lists the things
+        of the organization.
+
+        Second paragraph that is not part of the tool description.
+      x-paddock-list:
+        sort: [name, created_at]
+        default_sort: name
+        search: [name]
+        filters: [state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - name: state
+          in: query
+          description: Repeatable state filter.
+          schema: { type: array, items: { type: string, enum: [a, b] } }
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+    post:
+      operationId: createThing
+      tags: [things]
+      summary: Create a thing
+      x-paddock-audit: thing.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ThingInput" }
+      responses:
+        "201": { $ref: "#/components/responses/Thing" }
+  /api/v1/things/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: replaceThing
+      tags: [things]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ThingInput" }
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+    delete:
+      operationId: deleteThing
+      tags: [things]
+      responses:
+        "204": { description: Deleted. }
+  /api/v1/things/{id}/lock:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: lockThing
+      tags: [things]
+      x-paddock-step-up: true
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+  /api/v1/things/{id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: approveThing
+      tags: [things]
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+  /api/v1/things/{id}/suspend-logins:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: suspendThingLogins
+      tags: [things]
+      responses:
+        "200": { $ref: "#/components/responses/Thing" }
+  /api/v1/things/{id}/export:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: exportThing
+      tags: [things]
+      responses:
+        "200":
+          description: A YAML export.
+          content:
+            text/yaml:
+              schema: { type: string }
+  /api/platform/v1/blobs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: uploadBlob
+      tags: [platform]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "204": { description: Stored. }
+components:
+  parameters:
+    Csrf:
+      name: X-Paddock-CSRF
+      in: header
+      required: true
+      schema: { type: string, enum: ["1"] }
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+  responses:
+    Thing:
+      description: A thing.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Thing" }
+  schemas:
+    Thing:
+      type: object
+      properties:
+        id: { type: string }
+    Mode:
+      type: string
+      description: The mode.
+      enum: [fast, slow]
+    ThingInput:
+      type: object
+      required: [id, name]
+      additionalProperties: false
+      properties:
+        id: { type: string, readOnly: true }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        note: { type: string, nullable: true }
+        level: { type: string, nullable: true, enum: [low, high] }
+        mode:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Mode"
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/Mode" }
