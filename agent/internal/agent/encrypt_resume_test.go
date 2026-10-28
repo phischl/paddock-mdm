@@ -1434,10 +1434,10 @@ func TestKeyMaterialHardlinkedInHealth(t *testing.T) {
 	}
 }
 
-// TestKeySharedBootableInHealth: amendment item 19, rule B — a bootable kernel's initrd that is a symlink to a
-// temporary initrd keeps it: the regeneration stays pending and the health shows key_material_shared_bootable with
-// the kernel.
-func TestKeySharedBootableInHealth(t *testing.T) {
+// TestBootableLinkedToTempRegenerated: PDK-386, rule B (0) — a bootable kernel's initrd that is a symlink to a
+// temporary initrd does not keep the regeneration pending: the kernel's rebuild renames over the link, the temporary
+// file goes and no initrd issue is shown.
+func TestBootableLinkedToTempRegenerated(t *testing.T) {
 	a, d, _ := convertedAgent(t)
 	a.startConversion(context.Background())
 	d.set(func(d *convDevice) { d.slots = []string{"password", "tpm2+pin", "reencrypt"} })
@@ -1447,8 +1447,32 @@ func TestKeySharedBootableInHealth(t *testing.T) {
 		t.Fatal(err)
 	}
 	runWorker(t, a)
+	info, err := os.Lstat(d.Path("/boot/initrd.img-" + testKernel))
+	if h := a.conversionHealth(); h.InitrdIssue != "" || !a.st.Conversion.InitrdRegenerated ||
+		d.Exists("/boot/.initrd.img-6.5.0-9-generic.paddock") || err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("health %+v, initrd %v", h, err)
+	}
+}
+
+// TestKeySharedBootableInHealth: amendment item 19, rule B — a bootable kernel's initrd that is a symlink to a
+// temporary initrd whose file is also at the path its own rebuild would take next to it keeps it: the regeneration
+// stays pending and the health shows key_material_shared_bootable with the kernel.
+func TestKeySharedBootableInHealth(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	a.startConversion(context.Background())
+	d.set(func(d *convDevice) { d.slots = []string{"password", "tpm2+pin", "reencrypt"} })
+	temp := "/boot/.initrd.img-" + testKernel + ".paddock"
+	d.Write(temp, "a key-carrying temporary initrd")
+	if err := os.Link(d.Path(temp), d.Path("/boot/.initrd.img-"+testKernel+".next.paddock")); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(d.Path("/boot/initrd.img-" + testKernel))
+	if err := os.Symlink(d.Path(temp), d.Path("/boot/initrd.img-"+testKernel)); err != nil {
+		t.Fatal(err)
+	}
+	runWorker(t, a)
 	if h := a.conversionHealth(); h.InitrdIssue != encrypt.IssueKeyMaterialSharedBootable || h.InitrdIssueKernel != testKernel ||
-		a.st.Conversion.InitrdRegenerated || !d.Exists("/boot/.initrd.img-6.5.0-9-generic.paddock") {
+		a.st.Conversion.InitrdRegenerated || !d.Exists(temp) {
 		t.Fatalf("health %+v", h)
 	}
 }
