@@ -95,7 +95,7 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 }
 .settings-form legend { font-size: 13px; line-height: 18px; font-weight: 600; padding: 0 4px; margin-left: -4px; }
 .settings-form .v-input { max-width: 24rem; width: 100%; }
-.settings-form .v-input:has(input[type="time"]), .settings-form .v-input.pd-field-short { max-width: 12rem; }
+.settings-form .v-input:has(input[type="time"]) { max-width: 12rem; }
 /* Number fields hold a label and a unit suffix (PDK-429): at 12rem Vuetify cut the label off. */
 .settings-form .v-input:has(input[type="number"]) { max-width: 18rem; }
 .settings-form .v-switch, .settings-form .v-input:has(textarea) { max-width: none; }
