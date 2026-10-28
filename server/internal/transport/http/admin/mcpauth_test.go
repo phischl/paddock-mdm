@@ -263,7 +263,7 @@ func TestMCPSessionLifecycle(t *testing.T) {
 	r = m.me(first)
 	var me adminapi.Me
 	r.decode(t, &me)
-	if r.status != http.StatusOK || me.Channel != adminapi.Mcp || me.Role != adminapi.MeRoleOrgAdmin || me.Id != rec.AccountID ||
+	if r.status != http.StatusOK || me.Channel != adminapi.MeChannelMcp || me.Role != adminapi.MeRoleOrgAdmin || me.Id != rec.AccountID ||
 		me.AlternateRole != nil {
 		t.Fatalf("me: %d %s", r.status, r.body)
 	}
@@ -393,7 +393,7 @@ func TestMCPRoleChoice(t *testing.T) {
 	}
 	me = adminapi.Me{}
 	m.me(token).decode(t, &me)
-	if me.Role != adminapi.MeRolePlatformAdmin || me.Channel != adminapi.Mcp || me.AlternateRole != nil {
+	if me.Role != adminapi.MeRolePlatformAdmin || me.Channel != adminapi.MeChannelMcp || me.AlternateRole != nil {
 		t.Fatalf("platform role: %+v", me)
 	}
 

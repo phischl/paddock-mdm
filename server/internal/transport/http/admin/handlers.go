@@ -65,6 +65,7 @@ type handlers struct {
 	securityReview *app.SecurityReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).
 	mcpSettings *app.MCPSettings
+	mcpAccess   *app.MCPAccessService
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).

@@ -287,3 +287,94 @@ func TestAccountState(t *testing.T) {
 		t.Fatalf("missing platform admin: %v", err)
 	}
 }
+
+// TestMCPWriteOptInRefusesMCPChannel: the use case itself refuses an MCP session (organization and platform scope)
+// as defence in depth behind the MCP tool guard (plan M14 §3.4 item 18): forbidden, one denied event, row unchanged.
+func TestMCPWriteOptInRefusesMCPChannel(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	org, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(org.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	orgID := uuid.Must(uuid.NewV7())
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'McpWrite', 'active')",
+		orgID, "w"+orgID.String()[24:]); err != nil {
+		t.Fatal(err)
+	}
+	accounts := app.NewAccounts(app.NewActionRunner(org, platform, httpx.RequestID), org, platform, nil)
+
+	admin := principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Role: principal.RoleOrgAdmin,
+		OrganizationID: orgID, Channel: principal.ChannelMCP}
+	if _, err := super.Exec(ctx, `INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role)
+		VALUES ($1, $2, $3, 'mia', 'mia', 'org_admin')`, admin.ID, orgID, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	root := principal.Principal{Kind: principal.KindPlatformAdmin, ID: uuid.Must(uuid.NewV7()), Role: principal.RolePlatform,
+		Channel: principal.ChannelMCP}
+	if _, err := super.Exec(ctx, `INSERT INTO platform_admin (id, authentik_sub, username, display_name)
+		VALUES ($1, $2, 'mroot', 'mroot')`, root.ID, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		p     principal.Principal
+		table string
+	}{
+		{"organization", admin, "admin_account"},
+		{"platform", root, "platform_admin"},
+	} {
+		for _, op := range []struct {
+			name string
+			code audit.Code
+			run  func(context.Context) (app.Me, error)
+		}{
+			{"enable", audit.CodeAdminMCPWriteEnabled, accounts.EnableMCPWrite},
+			{"disable", audit.CodeAdminMCPWriteDisabled, accounts.DisableMCPWrite},
+		} {
+			t.Run(tc.name+" "+op.name, func(t *testing.T) {
+				corr := "corr-" + t.Name()
+				_, err := op.run(httpx.WithRequestID(principal.With(ctx, tc.p), corr))
+				var pe *problem.Error
+				if !errors.As(err, &pe) || pe.Code != "forbidden" || pe.Status != 403 {
+					t.Fatalf("error %v, want forbidden (403)", err)
+				}
+				rows, err := super.Query(ctx, "SELECT code, outcome, coalesce(error_code, '') FROM action WHERE correlation_id = $1", corr)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				n := 0
+				for rows.Next() {
+					var code, outcome, errCode string
+					if err := rows.Scan(&code, &outcome, &errCode); err != nil {
+						t.Fatal(err)
+					}
+					if code != string(op.code) || outcome != "denied" || errCode != "forbidden" {
+						t.Fatalf("event %s/%s/%s, want %s/denied/forbidden", code, outcome, errCode, op.code)
+					}
+					n++
+				}
+				if err := rows.Err(); err != nil || n != 1 {
+					t.Fatalf("%d events (%v), want exactly one", n, err)
+				}
+				var enabled bool
+				if err := super.QueryRow(ctx, "SELECT mcp_write_enabled_at IS NOT NULL FROM "+tc.table+" WHERE id = $1", tc.p.ID).Scan(&enabled); err != nil || enabled {
+					t.Fatalf("mcp_write_enabled_at set %v (%v), want unchanged (null)", enabled, err)
+				}
+			})
+		}
+	}
+}

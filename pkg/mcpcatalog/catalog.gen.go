@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "487fcfc4f364c90cfd6a0e24d6708485e4ce76021023de4b0a5ab84ce45e1872"
+const Version = "979d01ac97333301b05d064fe203f9c5574afeafa48616d2b2c494641fa59097"
 
 var tools = []Tool{
 	{
@@ -1123,6 +1123,42 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getMcpAccess",
+		Method:      "GET",
+		Path:        "/api/v1/mcp/access",
+		Pattern:     "GET /api/v1/mcp/access",
+		Tag:         "mcp",
+		Scope:       ScopeAny,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      false,
+		Bootstrap:   true,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: every administrator. What the caller's MCP sessions may do under the MCP policy of its scope (the organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and write_enabled, and the account opted in) and the caller's role may perform them. Without a saved policy enabled is false and allowed_operations empty. An MCP session may call it whatever the policy says.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getMcpCatalog",
+		Method:      "GET",
+		Path:        "/api/v1/mcp/catalog",
+		Pattern:     "GET /api/v1/mcp/catalog",
+		Tag:         "mcp",
+		Scope:       ScopeAny,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      false,
+		Bootstrap:   true,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: every administrator. The MCP tool catalog shared by paddockctl mcp and the server's MCP guard: one entry per admin API operation outside the tag auth, with its class, scope and whether the MCP offers it at all (ADR 0044 decision 5). An MCP session may call it whatever its scope's MCP policy says.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "getMcpSettings",
