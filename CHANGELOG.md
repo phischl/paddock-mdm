@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can report that release as `self_test_failed`. The interrupted update stays pending and the restarted supervisor
   runs the self-test again, so a host shutdown or a supervisor restart during an update no longer counts as a failure
   against the rollout.
+- Agent updates (PDK-469): the supervisor removes a finished release's staged files before its update request, so the
+  agent can no longer stage a new release into the moment between the two and lose its files to the old cleanup.
 
 ### Security
 
