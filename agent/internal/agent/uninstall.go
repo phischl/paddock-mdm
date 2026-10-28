@@ -92,13 +92,10 @@ func (a *Agent) withdrawUninstall(ctx context.Context) {
 	a.st.PendingUninstall = nil
 }
 
-// removeUninstallPreparation removes the plan and the binary copy of a removal that will not run.
+// removeUninstallPreparation removes the plan, the binary copy and the then empty directory of a removal that will
+// not run.
 func (a *Agent) removeUninstallPreparation(ctx context.Context) {
-	for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary()} {
-		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
-			slog.WarnContext(ctx, "removing the uninstall preparation failed", "file", f, "error", err)
-		}
-	}
+	uninstall.Discard(ctx, a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary())
 }
 
 // launchUninstall starts the accepted removal once the server accepted its command result (2xx), exactly once.

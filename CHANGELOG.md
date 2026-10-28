@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
   behind". The rule itself is unchanged: a device that sends a sequence number older than the one before the last
   issued one is still quarantined.
+- Device removal: a removal that does not run (withdrawn, failed to start, or given up on an unreadable plan) no
+  longer leaves its plan, its program copy or an empty `/root/paddock-uninstall/` directory on the device. The
+  uninstall runbook lists what may remain there.
 
 ### Security
 
