@@ -1827,6 +1827,9 @@ Found while implementing PDK-245. The binding text of decisions 3, 18, 21, 22 an
     - The cleanup's reason is kept in the conversion's state (`cleanup_error`) and cleared whenever `CleanupPending`
       is set or cleared, so the health never shows the reason of an earlier cleanup.
     - The start takes dpkg's locks only when a temporary initrd is left over.
+    - Amendment 2026-10-28 (PDK-378): the deferral while supervisor-upgrade.json exists applies to the conversion
+      worker's background passes only; an explicit abort cleans up synchronously, building into temporary initrds as
+      above, and leaves CleanupPending for the worker if it is killed or fails.
 19. **Room in /boot and stuck initrd work** (review 8 of PDK-245, decided by the orchestrator as architect). This
     amends items 16 to 18.
     - Every rebuild (decision 20, the cleanup, the reinstall) works through the kernels strictly one at a time:
