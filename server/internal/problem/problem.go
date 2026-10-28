@@ -115,6 +115,13 @@ var (
 	// DisclaimerOutdated: the acknowledged disclaimer of the automatic unseal is not the current version (plan M8u
 	// decision 6); recorded as failure.
 	DisclaimerOutdated = &Error{Code: "disclaimer_outdated", Status: http.StatusConflict}
+	// MCP channel (ADR 0044, plan M14 §3.2 item 10): the guard's refusals (recorded as denied on privileged routes) and
+	// the answer to a valid Authentik token without an MCP session record.
+	MCPDisabled        = &Error{Code: "mcp_disabled", Status: http.StatusForbidden}
+	MCPToolNotAllowed  = &Error{Code: "mcp_tool_not_allowed", Status: http.StatusForbidden}
+	MCPWriteNotEnabled = &Error{Code: "mcp_write_not_enabled", Status: http.StatusForbidden}
+	RateLimited        = &Error{Code: "rate_limited", Status: http.StatusTooManyRequests}
+	MCPLoginRequired   = &Error{Code: "mcp_login_required", Status: http.StatusUnauthorized}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}

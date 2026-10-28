@@ -50,6 +50,9 @@ type LoginIdentity struct {
 	// PreviousRole is the role of the session a switch ends (ADR 0045 decision 3); "" for a plain sign-in. It is
 	// recorded as the admin.login param previous_role.
 	PreviousRole principal.Role
+	// Channel is principal.ChannelMCP when the login opens an MCP session and "" for the portal (ADR 0044 amendment
+	// A2); it is recorded as the admin.login param channel.
+	Channel principal.Channel
 }
 
 // ErrAmbiguousRole: Login was called with a LoginRole that names the platform role and an organization role.
@@ -196,12 +199,22 @@ func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginRe
 	return LoginResult{Principal: p, Locale: locale}, nil
 }
 
-// loginParams adds previous_role to the params of a successful admin.login when the login is a role switch.
+// loginParams adds the channel to the params of a successful admin.login, and previous_role when the login is a role
+// switch.
 func (id LoginIdentity) loginParams(params map[string]any) map[string]any {
+	params["channel"] = id.channel()
 	if id.PreviousRole != "" {
 		params["previous_role"] = string(id.PreviousRole)
 	}
 	return params
+}
+
+// channel is the admin.login param channel: portal unless the login opens an MCP session.
+func (id LoginIdentity) channel() string {
+	if id.Channel == "" {
+		return "portal"
+	}
+	return string(id.Channel)
 }
 
 func (id LoginIdentity) openSession(ctx context.Context, p principal.Principal) error {
@@ -236,7 +249,7 @@ func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []s
 	spec := ActionSpec{
 		Code:   audit.CodeAdminLogin,
 		Actor:  &audit.Actor{Type: audit.ActorAnonymous, Display: id.Username, IP: id.IP},
-		Params: map[string]any{"reason": ReasonNotAuthorized, "denial_reason": denialReason},
+		Params: map[string]any{"reason": ReasonNotAuthorized, "denial_reason": denialReason, "channel": id.channel()},
 	}
 	err := a.runner.RunTx(principal.With(ctx, sys), scope, spec, func(context.Context, *pgstore.Queries, Recorder) error {
 		return ErrLoginDenied
