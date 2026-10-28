@@ -23,12 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `make system-test` and `make acceptance` fail with `no test ran` when the test filter `T` matches no test instead of
   reporting the empty run as passed (PDK-339), and pass `T` to `go test -run` verbatim, so a `$` anchor no longer gets
   lost in make's variable expansion (`T='^TestIdentityGates$/.*/^L1_login$'`); `$$` keeps working.
-
+- A corrupt or unreadable supervisor-upgrade marker no longer keeps a device out of every agent and supervisor
+  rollout (PDK-337): like the removal of Paddock, an agent update and a further supervisor upgrade wait for such a
+  marker only until its modification time is older than 30 minutes, then go ahead and log a warning.
 - Clone detection: a device is no longer quarantined as a suspected clone after its check-ins failed on the server
   side, for example while the ingest queue was full or the server was slow to accept the check-in. A failed check-in
   no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
   behind". The rule itself is unchanged: a device that sends a sequence number older than the one before the last
   issued one is still quarantined.
+- In-place encryption: when a bootable kernel's initrd in `/boot` was a symbolic link to a temporary initrd left by
+  an interrupted agent run, the initrd regeneration and the cleanup stayed pending with
+  `key_material_shared_bootable` until an administrator stepped in. The agent now rebuilds that kernel's initrd into
+  a regular file first and then overwrites and removes the temporary file; the kernel keeps booting throughout.
 
 ### Security
 
