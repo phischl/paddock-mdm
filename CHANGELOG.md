@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
   when an offered write operation is not audited. No runtime behaviour changes yet.
 
+### Fixed
+
+- Portal: confirmation dialogs show long names in full on narrow screens (PDK-447). A long target name in the title
+  or the confirm button, such as a pre-release version `0.9.1792783862-alpha.1792944510667`, wraps onto further lines
+  instead of being cut off with an ellipsis or running past the edges of the button.
+
 ### Security
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
