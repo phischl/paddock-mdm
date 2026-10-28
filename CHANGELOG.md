@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Portal: confirmation dialogs show long names in full on narrow screens (PDK-447). A long target name in the title
+  or the confirm button, such as a pre-release version `0.9.1792783862-alpha.1792944510667`, wraps onto further lines
+  instead of being cut off with an ellipsis or running past the edges of the button.
+
 - Portal overview: on a phone-width screen the attention and recent-audit tables scroll sideways, and keyboard users
   can now focus them to scroll; screen readers announce each as its own named table region (PDK-460).
 
