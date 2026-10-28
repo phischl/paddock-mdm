@@ -82,11 +82,19 @@ func (e *TokenError) Error() string {
 // DeviceScopes are the scopes Himmelblau requests (PoC M1).
 const DeviceScopes = "openid profile email offline_access"
 
-// StartDevice requests a device code for the public client clientID at authURL.
+// MCPScopes are the scopes `paddockctl mcp login` requests (ADR 0044): the api resolves the role from the groups.
+const MCPScopes = "openid profile email groups offline_access"
+
+// StartDevice requests a device code for the public client clientID at authURL with DeviceScopes.
 func StartDevice(ctx context.Context, client *http.Client, authURL, clientID string) (DeviceAuthorization, error) {
+	return StartDeviceScopes(ctx, client, authURL, clientID, DeviceScopes)
+}
+
+// StartDeviceScopes requests a device code for the public client clientID at authURL with the given scopes.
+func StartDeviceScopes(ctx context.Context, client *http.Client, authURL, clientID, scopes string) (DeviceAuthorization, error) {
 	var out DeviceAuthorization
 	_, err := postForm(ctx, client, strings.TrimRight(authURL, "/")+"/application/o/device/",
-		url.Values{"client_id": {clientID}, "scope": {DeviceScopes}}, &out)
+		url.Values{"client_id": {clientID}, "scope": {scopes}}, &out)
 	if err == nil && (out.DeviceCode == "" || out.VerificationURIComplete == "") {
 		err = errors.New("authflow: no device code or no verification_uri_complete")
 	}

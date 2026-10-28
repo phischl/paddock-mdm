@@ -149,3 +149,96 @@ func TestStoreMCPRecord(t *testing.T) {
 		}
 	}
 }
+
+// TestStoreMCPBinding covers the login binding of MCP renewals (ADR 0044 amendment 2026-10-28): it is found only for
+// its own subject and auth_time, carries the generation it was written in, expires with its lifetime, and logout
+// (Unbind) and RevokeAccount remove it without counting it as a session.
+func TestStoreMCPBinding(t *testing.T) {
+	ctx := context.Background()
+	srv := valkeytest.Start(t)
+	c := srv.Client(t)
+	s := sessions.NewStore(c)
+	account := uuid.Must(uuid.NewV7())
+	b := sessions.Binding{AccountID: account, Kind: "admin", Role: "org_admin", Org: uuid.Must(uuid.NewV7()), Client: "Claude Code"}
+
+	if _, err := s.Bind(ctx, "sub-a", 100, b, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	got, gen, found, err := s.Binding(ctx, "sub-a", 100)
+	if err != nil || !found || gen != 0 || got != b {
+		t.Fatalf("binding: %+v gen %d found %v %v", got, gen, found, err)
+	}
+	for name, key := range map[string]struct {
+		sub  string
+		auth int64
+	}{"another auth_time": {"sub-a", 101}, "another subject": {"sub-b", 100}} {
+		if _, _, found, err := s.Binding(ctx, key.sub, key.auth); err != nil || found {
+			t.Errorf("%s: found %v %v", name, found, err)
+		}
+	}
+	if _, err := s.Bind(ctx, "sub-a", 1, b, 0); err == nil {
+		t.Fatal("a binding without lifetime was written")
+	}
+
+	if _, err := s.EndAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, gen, _, err := s.Binding(ctx, "sub-a", 100); err != nil || got.Gen >= gen {
+		t.Fatalf("binding after end all: gen %d, current %d %v", got.Gen, gen, err)
+	}
+
+	if err := s.Unbind(ctx, "sub-a", 100, account); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, found, err := s.Binding(ctx, "sub-a", 100); err != nil || found {
+		t.Fatalf("after unbind: found %v %v", found, err)
+	}
+
+	if _, err := s.Bind(ctx, "sub-a", 200, b, 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if _, _, found, err := s.Binding(ctx, "sub-a", 200); err != nil || found {
+		t.Fatalf("expired binding: found %v %v", found, err)
+	}
+
+	if _, err := s.Bind(ctx, "sub-a", 300, b, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(ctx, "mcp:"+strings.Repeat("cd", 32), sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin",
+		Channel: "mcp"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.RevokeAccount(ctx, account); err != nil || n != 1 {
+		t.Fatalf("revoke: %d %v", n, err)
+	}
+	if _, _, found, err := s.Binding(ctx, "sub-a", 300); err != nil || found {
+		t.Fatalf("binding after revoke: found %v %v", found, err)
+	}
+}
+
+// TestStoreUseLoginToken: a login token is accepted once while its marker lives (at least a second), and again only
+// after it expired.
+func TestStoreUseLoginToken(t *testing.T) {
+	ctx := context.Background()
+	srv := valkeytest.Start(t)
+	s := sessions.NewStore(srv.Client(t))
+	for i, want := range []bool{true, false} {
+		if first, err := s.UseLoginToken(ctx, "id-token-a", time.Hour); err != nil || first != want {
+			t.Fatalf("use %d: %v %v, want %v", i, first, err, want)
+		}
+	}
+	if first, err := s.UseLoginToken(ctx, "id-token-b", 0); err != nil || !first {
+		t.Fatalf("another token: %v %v", first, err)
+	}
+	if first, err := s.UseLoginToken(ctx, "id-token-b", time.Hour); err != nil || first {
+		t.Fatalf("a token without lifetime is still marked for the minimum second: %v %v", first, err)
+	}
+	if _, err := s.UseLoginToken(ctx, "id-token-c", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if first, err := s.UseLoginToken(ctx, "id-token-c", time.Hour); err != nil || !first {
+		t.Fatalf("after expiry: %v %v", first, err)
+	}
+}

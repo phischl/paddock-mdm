@@ -67,6 +67,25 @@ func (q *Queries) GetAdminAccountBySubject(ctx context.Context, authentikSub str
 	return i, err
 }
 
+const getAdminAccountState = `-- name: GetAdminAccountState :one
+SELECT role, (disabled_at IS NOT NULL)::boolean AS disabled, (mcp_write_enabled_at IS NOT NULL)::boolean AS mcp_write_enabled
+FROM admin_account WHERE id = $1
+`
+
+type GetAdminAccountStateRow struct {
+	Role            string
+	Disabled        bool
+	McpWriteEnabled bool
+}
+
+// Read on every MCP request (plan M14 §3.3 item 14): a disabled account or a changed role ends its sessions.
+func (q *Queries) GetAdminAccountState(ctx context.Context, id uuid.UUID) (GetAdminAccountStateRow, error) {
+	row := q.db.QueryRow(ctx, getAdminAccountState, id)
+	var i GetAdminAccountStateRow
+	err := row.Scan(&i.Role, &i.Disabled, &i.McpWriteEnabled)
+	return i, err
+}
+
 const getPlatformAdmin = `-- name: GetPlatformAdmin :one
 SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme, mcp_write_enabled_at FROM platform_admin WHERE id = $1
 `
@@ -105,6 +124,18 @@ func (q *Queries) GetPlatformAdminBySubject(ctx context.Context, authentikSub st
 		&i.McpWriteEnabledAt,
 	)
 	return i, err
+}
+
+const getPlatformAdminState = `-- name: GetPlatformAdminState :one
+SELECT (mcp_write_enabled_at IS NOT NULL)::boolean AS mcp_write_enabled FROM platform_admin WHERE id = $1
+`
+
+// Read on every MCP request of a platform administrator (plan M14 §3.3 item 14).
+func (q *Queries) GetPlatformAdminState(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, getPlatformAdminState, id)
+	var mcp_write_enabled bool
+	err := row.Scan(&mcp_write_enabled)
+	return mcp_write_enabled, err
 }
 
 const listAdminAccounts = `-- name: ListAdminAccounts :many

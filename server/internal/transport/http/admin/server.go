@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/apitoken"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -72,6 +73,9 @@ type Deps struct {
 	StepUpAccounts StepUpAccounts
 	// Sessions holds the server-side record of every portal session (plan M8s decision 12).
 	Sessions SessionStore
+	// MCPAuth is the MCP login through Authentik (plan M14 §3.3); nil when PADDOCK_OIDC_MCP_ISSUER is empty, so that
+	// /api/auth/mcp/* answers 404 and MCP access tokens are refused.
+	MCPAuth *MCPAuth
 	// EndSessions ends every portal session of the installation (plan M8s decision 16).
 	EndSessions *app.Sessions
 	// AutoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
@@ -238,8 +242,12 @@ func NewHandler(d Deps) http.Handler {
 	root := http.NewServeMux()
 	root.HandleFunc("GET /api/auth/login", s.bff.login)
 	root.HandleFunc("GET /api/auth/callback", s.bff.callback)
-	root.HandleFunc("GET /api/auth/stepup", s.bff.stepUpStart)
-	root.HandleFunc("GET /api/auth/stepup/callback", s.bff.stepUpCallback)
+	root.HandleFunc("GET /api/auth/stepup", refuseMCPBearer(s.bff.stepUpStart))
+	root.HandleFunc("GET /api/auth/stepup/callback", refuseMCPBearer(s.bff.stepUpCallback))
+	// Outside the session middleware: the MCP routes authenticate with the Authentik tokens themselves.
+	root.Handle("GET /api/auth/mcp/config", noStore(http.HandlerFunc(d.MCPAuth.serveConfig)))
+	root.Handle("POST /api/auth/mcp/session", noStore(http.HandlerFunc(d.MCPAuth.OpenSession)))
+	root.Handle("POST /api/auth/mcp/logout", noStore(http.HandlerFunc(d.MCPAuth.CloseSession)))
 	// Outside the session middleware: signing out works while the session store is unreachable (plan M8s decision 15).
 	root.Handle("POST /api/auth/logout", noStore(s.csrf(s.bff.logout(d.PublicURL))))
 	root.Handle("POST /api/auth/switch", noStore(s.csrf(http.HandlerFunc(s.bff.switchRole))))
@@ -260,12 +268,21 @@ type server struct {
 	bff *bff
 }
 
-// session turns the session cookie, or the API token of an Authorization: Bearer header (bearer.go), into the request
-// principal; requests without a valid session or token get 401.
+// session turns the session cookie, or the API token or MCP access token of an Authorization: Bearer header (bearer.go,
+// mcpauth.go), into the request principal; requests without a valid session or token get 401.
 func (s *server) session(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if secret, ok := bearerSecret(r); ok {
-			s.bearer(next, w, r, secret)
+			switch {
+			case strings.HasPrefix(secret, apitoken.Prefix):
+				s.bearer(next, w, r, secret)
+			case isJWT(secret) && s.d.MCPAuth != nil:
+				s.mcpBearer(next, w, r, secret)
+			default:
+				// Counted like an unknown API token (docs/operations/api-tokens.md, RR-25).
+				metricAPITokenAuth.WithLabelValues(string(app.APITokenUnknown)).Inc()
+				httpx.WriteProblem(w, r, problem.Unauthenticated)
+			}
 			return
 		}
 		c, err := r.Cookie(SessionCookie)
