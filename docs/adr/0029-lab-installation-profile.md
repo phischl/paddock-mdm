@@ -114,3 +114,43 @@ configuration is tested in CI against the lab bundle.
   identity synchronization; devices keep working (fail safe, design contract 8).
 - − One more tooling image (`nginx`) and one more CI smoke job.
 - Follow-ups: none required for production; the two-host documentation gains a pointer to the lab guide.
+
+## Amendment 2026-10-28 — nginx line of the smoke-test image
+
+**Context.** Plan M8a decision 17 pinned `NGINX_IMAGE` to the newest 1.28 patch, the stable line of that day. The
+image runs the lab smoke test only (`deploy/bundle/ci/smoke-lab.sh`, `make bundle-smoke-lab`): it is never shipped
+and never pulled on a host; its job is to prove that the shipped `nginx/paddock.conf.example` works in front of the
+lab bundle. The upstream version watch (ADR 0037 amendment 2026-10-17) opened issue #105: `nginx 1.28.3 → 1.31.8`,
+classified `minor` (the first numeric field is unchanged). nginx publishes two lines: **stable** (even minor, a new
+branch once a year, critical and security fixes backported) and **mainline** (odd minor, every one to two months,
+all fixes and features). nginx's installation guide recommends mainline "for production unless your organization has
+strict requirements for stability". On 2026-10-28 stable is 1.30.6 (2026-10-14) and mainline 1.31.8 (2026-10-21);
+Docker Hub carries both. The watch takes the highest tag of the pin's shape (`x.y.z`), which is always the mainline
+release, so a stable pin is reported as outdated for as long as it exists. Operators run their distribution's nginx
+(Ubuntu 24.04: 1.24, Debian 13: 1.26); the smoke test reproduces neither line's operator reality, it tests the
+configuration against a current nginx.
+
+**Options.**
+- **Stable line with an nginx-specific filter in `tools/upstreamwatch` (skip odd minors).** + Two fewer bumps a year
+  (2026: seven stable, nine mainline releases). − A per-pin rule in a generic tool (code, fixture, test) for one
+  tooling image; the odd/even convention is nginx's alone. − Deprecations that will reach operators with their next
+  distribution release appear in the smoke test a year later.
+- **Stable line without a filter.** − A permanently open issue `nginx 1.30.x → 1.31.y`, a false positive that trains
+  everyone to ignore the label. Rejected.
+- **Mainline line (chosen).** + The line nginx recommends; the watch works unchanged; deprecations and behaviour
+  changes reach the smoke test first, while the configuration can still be corrected before an operator meets them.
+  − About two more bumps a year of an image that never ships. − A bump can fail the smoke test for a change an
+  operator on a stable distribution package would not see yet; that is a finding about the configuration operators
+  paste, not a reason to pin back.
+
+**Decision.** `NGINX_IMAGE` follows nginx **mainline**: the highest `x.y.z` tag on Docker Hub, exactly what the
+watch proposes. `tools/upstreamwatch` gets no line filter. The pin's comment in `versions.env` names the line. The
+gate of a bump stays the lab smoke test; a mainline change that breaks the reference configuration is fixed in
+`deploy/compose/nginx/paddock.conf.example` (and, if operators are affected, noted in `docs/operations/lab-install.md`),
+never by returning to the stable line. The 1.31 line is adopted in v0.1.0-alpha.7 (ticket PDK-347). Reassess when
+the reference configuration gains a directive whose behaviour differs between the two lines, or when two consecutive
+mainline bumps break the smoke test.
+
+**Consequences.** + No tool change; the watch stays generic. + The reference configuration is proven against the
+line nginx recommends. − About nine bumps a year instead of seven, each a one-line change gated by
+`make bundle-smoke-lab`. − Plan M8a decision 17's "1.28" is superseded by this amendment.
