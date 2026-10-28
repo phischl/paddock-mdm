@@ -103,3 +103,29 @@ func TestM8bCodes(t *testing.T) {
 		}
 	}
 }
+
+// TestM14AdminLoginAndSource: admin.login documents the channel and the renewal of an MCP session, and SourceOf says
+// mcp for the MCP channel while every other request keeps the source of its actor type (plan M14 §3.2 item 8).
+func TestM14AdminLoginAndSource(t *testing.T) {
+	d, ok := Lookup(CodeAdminLogin)
+	if !ok || !slices.Contains(d.Params, "channel") || !slices.Contains(d.Params, "renewal") {
+		t.Fatalf("admin.login params: %v", d.Params)
+	}
+	if d.Description != "An administrator signed in to the portal or opened an MCP session, or a sign-in was rejected." {
+		t.Fatalf("admin.login description: %q", d.Description)
+	}
+	for _, tc := range []struct{ actor, channel, want string }{
+		{ActorAdmin, "mcp", SourceMCP},
+		{ActorPlatformAdmin, "mcp", SourceMCP},
+		{ActorAdmin, "", SourcePortal},
+		{ActorPlatformAdmin, "", SourcePlatform},
+		{ActorAPIToken, "", SourceAPI},
+		{ActorAnonymous, "", SourcePortal},
+		{ActorSystem, "", SourceSystem},
+		{ActorAdmin, "portal", SourcePortal},
+	} {
+		if got := SourceOf(tc.actor, tc.channel); got != tc.want {
+			t.Errorf("SourceOf(%q, %q) = %q, want %q", tc.actor, tc.channel, got, tc.want)
+		}
+	}
+}

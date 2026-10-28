@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -34,6 +35,11 @@ func TestOutcomeOf(t *testing.T) {
 		{"canceled", context.Canceled, audit.OutcomeFailure, "canceled"},
 		{"wrapped canceled", fmt.Errorf("db: %w", context.Canceled), audit.OutcomeFailure, "canceled"},
 		{"anything else", errors.New("boom"), audit.OutcomeFailure, "internal"},
+		{"mcp disabled", problem.MCPDisabled, audit.OutcomeDenied, "mcp_disabled"},
+		{"mcp tool not allowed", problem.MCPToolNotAllowed.WithDetail("portal only"), audit.OutcomeDenied, "mcp_tool_not_allowed"},
+		{"mcp write not enabled", problem.MCPWriteNotEnabled, audit.OutcomeDenied, "mcp_write_not_enabled"},
+		{"rate limited", problem.RateLimited, audit.OutcomeDenied, "rate_limited"},
+		{"mcp login required", problem.MCPLoginRequired, audit.OutcomeFailure, "mcp_login_required"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -115,6 +121,65 @@ func TestAuthorize(t *testing.T) {
 				t.Fatalf("authorize = %v, want %v", err, c.want)
 			}
 		})
+	}
+}
+
+// TestCheckStepUpChannels: an MCP session never satisfies a step-up, even with a fresh one on the principal, and says
+// so in its own detail; the API-token refusal and the portal step-up are unchanged (plan M14 §3.2 item 9).
+func TestCheckStepUpChannels(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	r := NewActionRunner(nil, nil, func(context.Context) string { return "" }, WithClock(func() time.Time { return now }))
+	org := uuid.Must(uuid.NewV7())
+	portal := principal.Principal{Kind: principal.KindAdmin, Role: principal.RoleOrgAdmin, OrganizationID: org, StepUpAt: now}
+	mcp := portal
+	mcp.Channel, mcp.MCPClient, mcp.MCPWriteEnabled = principal.ChannelMCP, "claude-code/2.1", true
+	token := portal
+	token.APITokenID = uuid.Must(uuid.NewV7())
+	platformMCP := principal.Principal{Kind: principal.KindPlatformAdmin, Role: principal.RolePlatform, StepUpAt: now, Channel: principal.ChannelMCP}
+	for _, c := range []struct {
+		name   string
+		p      principal.Principal
+		detail string
+	}{
+		{"mcp", mcp, "this change needs an interactive administrator in the portal: MCP sessions cannot complete a step-up"},
+		{"mcp platform administrator", platformMCP, "this change needs an interactive administrator in the portal: MCP sessions cannot complete a step-up"},
+		{"api token", token, "this change needs an interactive administrator: API tokens cannot complete a step-up"},
+		{"portal", portal, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := r.checkStepUp(c.p)
+			if c.detail == "" {
+				if err != nil {
+					t.Fatalf("checkStepUp = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, problem.StepUpRequired) || problem.From(err).Detail != c.detail {
+				t.Fatalf("checkStepUp = %v, want step_up_required %q", err, c.detail)
+			}
+		})
+	}
+}
+
+// TestRecorderSourceAndClient: the recorder takes the source from the principal's channel at creation and copies the
+// MCP client into the actor only on the MCP channel.
+func TestRecorderSourceAndClient(t *testing.T) {
+	r := testRunner()
+	org := uuid.Must(uuid.NewV7())
+	spec := ActionSpec{Code: audit.CodeDeviceGroupCreated}
+	mcp := principal.Principal{Kind: principal.KindAdmin, OrganizationID: org, Channel: principal.ChannelMCP, MCPClient: "claude-code/2.1"}
+	if rec := r.newRecorder(context.Background(), mcp, ScopeOrg, spec); rec.source != audit.SourceMCP ||
+		rec.actor.Type != audit.ActorAdmin || rec.actor.Client != "claude-code/2.1" {
+		t.Fatalf("mcp recorder: source %q actor %+v", rec.source, rec.actor)
+	}
+	portal := principal.Principal{Kind: principal.KindAdmin, OrganizationID: org, MCPClient: "stray"}
+	if rec := r.newRecorder(context.Background(), portal, ScopeOrg, spec); rec.source != audit.SourcePortal || rec.actor.Client != "" {
+		t.Fatalf("portal recorder: source %q actor %+v", rec.source, rec.actor)
+	}
+	anonymous := spec
+	anonymous.Actor = &audit.Actor{Type: audit.ActorAnonymous}
+	if rec := r.newRecorder(context.Background(), principal.Principal{Kind: principal.KindSystem}, ScopePlatform, anonymous); rec.source != audit.SourcePortal {
+		t.Fatalf("explicit anonymous actor: source %q", rec.source)
 	}
 }
 

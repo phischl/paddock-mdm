@@ -2090,7 +2090,8 @@
       "open": "Liste öffnen",
       "device": "Gerät",
       "conditions": "Befunde",
-      "os": "Ubuntu {release}"
+      "os": "Ubuntu {release}",
+      "tableLabel": "Tabelle Handlungsbedarf"
     },
     "vulnerabilities": {
       "title": "Schwachstellen",
@@ -2125,7 +2126,8 @@
       "title": "Letzte Audit-Ereignisse",
       "open": "Audit-Protokoll",
       "code": "Code",
-      "empty": "Keine Ereignisse in den letzten Tagen."
+      "empty": "Keine Ereignisse in den letzten Tagen.",
+      "tableLabel": "Tabelle Letzte Audit-Ereignisse"
     },
     "keyboardHint": "Tastatur: {mod} K Befehlspalette · j / k bewegen · Enter öffnen · g d Geräte. Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog.",
     "securityReview": {
