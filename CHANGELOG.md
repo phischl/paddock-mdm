@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are uploads and downloads. The contract lint fails when the step-up flag and the server's route table disagree or
   when an offered write operation is not audited. No runtime behaviour changes yet.
 
+### Fixed
+
+- A corrupt or unreadable supervisor-upgrade marker no longer keeps a device out of every agent and supervisor
+  rollout (PDK-337): like the removal of Paddock, an agent update and a further supervisor upgrade wait for such a
+  marker only until its modification time is older than 30 minutes, then go ahead and log a warning.
+
 ### Security
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
