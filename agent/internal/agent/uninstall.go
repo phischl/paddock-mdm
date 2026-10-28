@@ -15,7 +15,6 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
-	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/uninstall"
 	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -185,27 +184,17 @@ func (a *Agent) helperExecutable() error {
 	return nil
 }
 
-// supervisorUpgradeRuns reports whether a supervisor upgrade holds back the removal. An unreadable marker holds it
-// back only until its mtime is older than supervisorpkg.StaleAfter: staleSupervisorUpgrade cannot clear a marker it
-// cannot read, and the removal must not wait longer than the 30 minutes of the ADR 0037 amendment.
+// supervisorUpgradeRuns reports whether a supervisor upgrade holds back the removal (see supervisorUpgradeHolds); the
+// removal must not wait longer than the 30 minutes of the ADR 0037 amendment.
 func (a *Agent) supervisorUpgradeRuns(ctx context.Context, commandID string) bool {
-	marker, err := supervisorpkg.ReadMarker(a.d.Layout)
-	if marker != nil {
-		slog.InfoContext(ctx, "removal of Paddock waits for the running supervisor upgrade", "command_id", commandID)
+	holds, err := a.supervisorUpgradeHolds()
+	if holds {
+		slog.InfoContext(ctx, "removal of Paddock waits for the running supervisor upgrade", "command_id", commandID, "error", err)
 		return true
 	}
-	if err == nil {
-		return false
-	}
-	info, statErr := os.Stat(a.d.Layout.SupervisorUpgrade())
-	if errors.Is(statErr, os.ErrNotExist) {
-		return false
-	}
-	if statErr == nil && a.d.Now().Sub(info.ModTime()) >= supervisorpkg.StaleAfter {
+	if err != nil {
 		slog.WarnContext(ctx, "unreadable supervisor upgrade marker is stale; starting the removal of Paddock",
 			"command_id", commandID, "error", err)
-		return false
 	}
-	slog.InfoContext(ctx, "removal of Paddock waits for the running supervisor upgrade", "command_id", commandID, "error", err)
-	return true
+	return false
 }
