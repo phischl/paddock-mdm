@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Portal: when *End all sessions* ends the portal sessions but the identity provider's sessions cannot be ended (502
   `upstream_unavailable`), the page now says so and asks to run *End all sessions* again (PDK-321).
+- The portal is built and tested with Node 26 (image `node:26.12.1-trixie-slim`, was `24.21.0`); Node 26 is the Active
+  LTS line since 2026-10-28 (ADR 0015 amendment 2026-10-28). No operator step: Node is a build and tooling image and is
+  not part of the operator bundle. `engines.node` stays `>=24` because the Playwright image runs the end-to-end tests
+  on Node 24 (PDK-346).
 
 ### Fixed
 
