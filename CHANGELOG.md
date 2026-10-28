@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A corrupt or unreadable supervisor-upgrade marker no longer keeps a device out of every agent and supervisor
+  rollout (PDK-337): like the removal of Paddock, an agent update and a further supervisor upgrade wait for such a
+  marker only until its modification time is older than 30 minutes, then go ahead and log a warning.
 - Clone detection: a device is no longer quarantined as a suspected clone after its check-ins failed on the server
   side, for example while the ingest queue was full or the server was slow to accept the check-in. A failed check-in
   no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
