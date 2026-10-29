@@ -358,12 +358,17 @@ func TestRevocationLimits(t *testing.T) {
 	forge := func(token, jti string, approvedAt time.Time) string {
 		dev := activeDevice(t, a1.portal, "", "rv-"+uniqueSuffix())
 		id := uuid.Must(uuid.NewV7()).String()
-		if _, err := db.Exec(ctx, `INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by, approved_at)
-			VALUES ($1, $2, $3, 'lock', 'approved', $4, $5)`, id, org, dev.DeviceID, a1ID, approvedAt); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(ctx, `INSERT INTO revocation_approval (request_id, organization_id, role, admin_id, subject, stepup_jti,
-			stepup_id_token, approved_at) VALUES ($1, $2, 'requester', $3, $4, $5, $6, $7)`, id, org, a1ID, realSubject, jti, token, approvedAt); err != nil {
+		// One transaction: an issuer round between the two inserts would see an approved request without approvals and
+		// reject it as approvals_invalid instead of judging the forged step-up token.
+		if err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by, approved_at)
+				VALUES ($1, $2, $3, 'lock', 'approved', $4, $5)`, id, org, dev.DeviceID, a1ID, approvedAt); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO revocation_approval (request_id, organization_id, role, admin_id, subject, stepup_jti,
+				stepup_id_token, approved_at) VALUES ($1, $2, 'requester', $3, $4, $5, $6, $7)`, id, org, a1ID, realSubject, jti, token, approvedAt)
+			return err
+		}); err != nil {
 			t.Fatal(err)
 		}
 		return id
