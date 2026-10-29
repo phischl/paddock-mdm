@@ -85,8 +85,9 @@ writer verifies for every organization with audit data the last seven sealed day
 audit day at most) and one random older day, if there is one. It checks the same things as
 `paddock-server audit verify`: every manifest exists, is signed with `audit-chain`, links to the previous day and
 lists exactly the indexed objects, and every object's SHA-256 matches. Only one audit-writer replica verifies at a
-time (advisory lock `audit-verify`); an organization whose verification cannot run (for example the object store
-is unreachable) is logged and skipped, and the others are still verified.
+time (advisory lock `audit-verify`); the other replicas take the last-run and failed-organizations metrics from the
+runs it records. An organization whose verification cannot run (for example the object store is unreachable) is
+logged and skipped, and the others are still verified.
 
 **Where the result is visible.** Every run, the nightly window (`trigger: nightly`), the sample day (`sample`) and
 every `paddock-server audit verify` (`cli`), is recorded twice:

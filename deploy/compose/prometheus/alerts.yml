@@ -70,7 +70,9 @@ groups:
           summary: "The audit hash chain failed its nightly verification"
           description: "{{ $value }} organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
       # 36 h leave one missed night of slack; the writer seeds the gauge at start, so a fresh writer does not fire,
-      # but leaves it unset (0, fires) while the audit index is unreadable (plan M8b amendment 2026-10-25).
+      # but leaves it unset (0, fires) while the audit index is unreadable (plan M8b amendment 2026-10-25). A replica
+      # that loses the audit-verify lock takes the gauge from the recorded run, so the rule stays per instance
+      # (amendment 2026-10-29, PDK-421).
       - alert: PaddockAuditVerifyStale
         expr: time() - paddock_audit_verify_last_run_timestamp_seconds > 36 * 3600
         for: 1h

@@ -1029,3 +1029,36 @@ although the chain was still broken.
   amendment 2026-10-25 prescribes for the last-run gauge; the unset 0 of the last-run gauge lets
   `PaddockAuditVerifyStale` fire.
 - The alert rules and their promtool tests stay unchanged.
+
+## Amendment 2026-10-29 (PDK-421, main as architect lead)
+
+**Reason.** `Nightly.Cycle` returns `ErrVerifyLocked` before it sets the gauges, so an audit-writer replica that loses
+the `audit-verify` lock kept its start-up values. `PaddockAuditVerifyStale` (decision 29) evaluates per instance:
+with two or more replicas, one that lost the lock two nights in a row fired a false warning although the chain was
+verified, and since PDK-420 it also kept its start-up value of `paddock_audit_verify_failed_organizations`.
+
+- **Decision 27, gauges on a locked replica (option B):** after `ErrVerifyLocked` the replica reads
+  `LatestNightlyRunFinished` and `ListLatestNightlyFailedOrganizations` and sets both gauges as at start (amendments
+  2026-10-25 and 2026-10-29, PDK-420: neither unless both reads succeed). It re-reads every minute until the next
+  cycle is due, then runs that cycle as usual. The lock holder records organization by organization (nightly window,
+  then sample day) and writes no end-of-cycle marker, so no single read proves its cycle complete: the first nightly
+  row of the night appears while the failures of the other organizations are still those of the previous night.
+  Re-reading until the next cycle reaches the holder's complete result within one minute of its last record, as long
+  as its cycle ends before the next one is due. A failed read is logged once per locked cycle and retried; the gauges
+  stay as they are.
+- **No recorded nightly run on a locked replica:** while no `nightly` row exists and some organization has a day up to
+  `LastSealableDay`, the locked replica leaves both gauges as they are, so a holder that records nothing does not
+  keep `PaddockAuditVerifyStale` silent on the locked instance. When no organization has such a day (no audit data
+  yet, or only today's), the holder's cycle records no run by design and sets its gauge to its end; the locked
+  replica then sets the last-run gauge to the read time and the failed gauge from the recorded failures, as at start,
+  so it does not warn while the holder is healthy.
+- **Retry at the due time:** a re-read (at start or after a locked cycle) that ends at or after the due time, through a
+  slow read or a late timer, runs that night's cycle at once instead of scheduling the next day's.
+- **Limit:** the locked replica sees only recorded rows. An organization whose verification errored (no row) or whose
+  run could not be recorded counts in the holder's `paddock_audit_verify_failed_organizations`, but not in the locked
+  replica's; a cycle in which every organization errors writes no row, so the locked replica's last-run gauge does not
+  advance and it warns after 36 h while the holder does not. In both cases the holder's own gauge raises the critical
+  `PaddockAuditChainBroken`.
+- **Decision 29:** the rule stays per instance (`time() - paddock_audit_verify_last_run_timestamp_seconds > 36 * 3600`);
+  no aggregation over replicas and no per-replica scrape targets. promtool cases: two replicas, the locked one
+  following 5 minutes later, do not warn; a replica that does not advance warns on its own.

@@ -3,6 +3,7 @@ package auditwriter_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -293,12 +294,177 @@ func TestNightlyCycleEndsLastRunRetry(t *testing.T) {
 	}
 }
 
+// gauges returns the last-run and failed-organizations gauges.
+func gauges(t *testing.T) (lastRun, failed float64) {
+	t.Helper()
+	return gaugeValue(t, "paddock_audit_verify_last_run_timestamp_seconds"), gaugeValue(t, "paddock_audit_verify_failed_organizations")
+}
+
+// TestNightlyLockedFollowsRecordedRun: a replica that loses the verification lock re-reads both gauges every minute
+// until the next cycle is due, so it reaches the lock holder's complete result although the holder records
+// organization by organization and the newest nightly run appears before the last failure (PDK-421).
+func TestNightlyLockedFollowsRecordedRun(t *testing.T) {
+	clock := time.Date(2026, 10, 20, 0, 44, 30, 0, time.UTC)
+	previous := time.Date(2026, 10, 19, 0, 47, 0, 0, time.UTC)
+	broken := []uuid.UUID{uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())}
+	index := &auditwriter.FakeIndex{Latest: previous, Locked: true}
+	timer := runNightly(t, index, func() time.Time { return clock })
+
+	if d := <-timer.waits; d != 30*time.Second {
+		t.Fatalf("wait before the cycle = %s, want 30s", d)
+	}
+	for i, step := range []struct {
+		latest     time.Time
+		failed     []uuid.UUID
+		wantFailed float64
+	}{
+		{previous, nil, 0},
+		{time.Date(2026, 10, 20, 0, 46, 0, 0, time.UTC), nil, 0},
+		{time.Date(2026, 10, 20, 0, 47, 0, 0, time.UTC), broken[:1], 1},
+		{time.Date(2026, 10, 20, 0, 48, 0, 0, time.UTC), broken, 2},
+		{time.Date(2026, 10, 20, 0, 48, 0, 0, time.UTC), broken, 2},
+	} {
+		index.Latest, index.Failed = step.latest, step.failed
+		clock = clock.Add(time.Minute)
+		timer.fire <- clock
+		if d := <-timer.waits; d != time.Minute {
+			t.Fatalf("step %d: wait after a locked cycle = %s, want 1m until the next cycle", i, d)
+		}
+		lastRun, failed := gauges(t)
+		if lastRun != float64(step.latest.Unix()) || failed != step.wantFailed {
+			t.Fatalf("step %d: gauges = %v, %v, want %d, %v", i, lastRun, failed, step.latest.Unix(), step.wantFailed)
+		}
+	}
+
+	index.Locked, index.Failed = false, nil
+	clock = time.Date(2026, 10, 21, 0, 44, 30, 0, time.UTC)
+	timer.fire <- clock
+	if d := <-timer.waits; d != 30*time.Second {
+		t.Fatalf("wait before the next cycle = %s, want 30s", d)
+	}
+	clock = clock.Add(30 * time.Second)
+	timer.fire <- clock
+	if d := <-timer.waits; d != 24*time.Hour {
+		t.Fatalf("wait after the replica's own cycle = %s, want the next cycle", d)
+	}
+	if lastRun, failed := gauges(t); lastRun != float64(clock.Unix()) || failed != 0 {
+		t.Errorf("gauges after the replica's own cycle = %v, %v, want %d, 0", lastRun, failed, clock.Unix())
+	}
+}
+
+// TestNightlyLockedWithoutRecordedRun: without any recorded nightly run, a locked replica keeps both gauges instead of
+// the start-time fallback while an organization has a sealable day, so PaddockAuditVerifyStale is not masked when the
+// holder records nothing; when no organization has one, the holder had nothing to record and the replica takes the
+// current time, as the holder does after its cycle.
+func TestNightlyLockedWithoutRecordedRun(t *testing.T) {
+	start := time.Date(2026, 10, 20, 0, 44, 30, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		orgs    []auditwriter.AuditOrganization
+		follows bool
+	}{
+		{"organization with a sealable day", []auditwriter.AuditOrganization{{ID: uuid.Must(uuid.NewV7()), FirstDay: day("2026-10-19")}}, false},
+		{"no organization", nil, true},
+		{"organization without a sealable day", []auditwriter.AuditOrganization{{ID: uuid.Must(uuid.NewV7()), FirstDay: day("2026-10-20")}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := start
+			timer := runNightly(t, &auditwriter.FakeIndex{Orgs: tc.orgs, Locked: true}, func() time.Time { return clock })
+
+			<-timer.waits
+			for range 3 {
+				clock = clock.Add(time.Minute)
+				timer.fire <- clock
+				if d := <-timer.waits; d != time.Minute {
+					t.Fatalf("wait after a locked cycle = %s, want 1m", d)
+				}
+				want := start
+				if tc.follows {
+					want = clock
+				}
+				if lastRun, failed := gauges(t); lastRun != float64(want.Unix()) || failed != 0 {
+					t.Fatalf("gauges without a recorded run = %v, %v, want %d, 0", lastRun, failed, want.Unix())
+				}
+			}
+		})
+	}
+}
+
+// TestNightlyRetryPastDueTime: a re-read that ends after the cycle's due time, through a slow read or a late timer,
+// runs that night's cycle instead of scheduling the next day's.
+func TestNightlyRetryPastDueTime(t *testing.T) {
+	clock := time.Date(2026, 10, 20, 0, 43, 30, 0, time.UTC)
+	timer := runNightly(t, &auditwriter.FakeIndex{LastErr: errors.New("down")}, func() time.Time { return clock })
+
+	if d := <-timer.waits; d != time.Minute {
+		t.Fatalf("wait while the read fails = %s, want 1m", d)
+	}
+	clock = time.Date(2026, 10, 20, 0, 45, 5, 0, time.UTC)
+	timer.fire <- clock
+	if d := <-timer.waits; d != 24*time.Hour-5*time.Second {
+		t.Fatalf("wait after the late retry = %s, want the next day's cycle after this night's", d)
+	}
+	if lastRun, _ := gauges(t); lastRun != float64(clock.Unix()) {
+		t.Errorf("last run = %v, want this night's cycle at %d", lastRun, clock.Unix())
+	}
+}
+
+// TestNightlyLockedAfterRecordedRun: a run the lock holder recorded before the locked attempt is read at once; while
+// either read fails after the locked attempt, both gauges keep their values and the read is retried every minute.
+func TestNightlyLockedAfterRecordedRun(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		lastErr   error
+		failedErr error
+		retries   int
+	}{
+		{"run already recorded", nil, nil, 0},
+		{"last run unreadable", errors.New("down"), nil, 2},
+		{"failed organizations unreadable", nil, errors.New("down"), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := time.Date(2026, 10, 20, 0, 44, 30, 0, time.UTC)
+			previous := time.Date(2026, 10, 19, 0, 47, 0, 0, time.UTC)
+			finished := time.Date(2026, 10, 20, 0, 45, 0, 0, time.UTC)
+			first, second := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+			index := &auditwriter.FakeIndex{Latest: previous, Failed: []uuid.UUID{first}, Locked: true}
+			timer := runNightly(t, index, func() time.Time { return clock })
+
+			<-timer.waits
+			index.Latest, index.Failed = finished, []uuid.UUID{first, second}
+			index.LastErr, index.FailedErr = tc.lastErr, tc.failedErr
+			clock = clock.Add(30 * time.Second)
+			timer.fire <- clock
+			for i := range tc.retries {
+				if d := <-timer.waits; d != time.Minute {
+					t.Fatalf("wait while the read fails = %s, want 1m", d)
+				}
+				if lastRun, failed := gauges(t); lastRun != float64(previous.Unix()) || failed != 1 {
+					t.Fatalf("gauges while the read fails = %v, %v, want the seeded %d, 1", lastRun, failed, previous.Unix())
+				}
+				if i == tc.retries-1 {
+					index.LastErr, index.FailedErr = nil, nil
+				}
+				clock = clock.Add(time.Minute)
+				timer.fire <- clock
+			}
+			if d := <-timer.waits; d != time.Minute {
+				t.Fatalf("wait after the read = %s, want 1m until the next cycle", d)
+			}
+			if lastRun, failed := gauges(t); lastRun != float64(finished.Unix()) || failed != 2 {
+				t.Errorf("gauges = %v, %v, want the lock holder's %d, 2", lastRun, failed, finished.Unix())
+			}
+		})
+	}
+}
+
 // TestNightlyPoolIndex: the cycle lists every organization with its first audit day under the audit-verify lock,
-// refuses to run while another session holds it, and finds the newest nightly run.
+// refuses to run while another session holds it, lists the same organizations without the lock, and finds the newest
+// nightly run.
 func TestNightlyPoolIndex(t *testing.T) {
 	e := newRecorderEnv(t)
 	ctx := context.Background()
-	locked, latest, _ := auditwriter.PoolIndex(e.pool)
+	locked, latest, _, list := auditwriter.PoolIndex(e.pool)
 	org := uuid.Must(uuid.NewV7())
 	if _, err := e.recorder.Record(ctx, org, auditwriter.TriggerNightly, day("2026-10-01"), day("2026-10-07"), e.now, &auditwriter.Report{Days: 7}); err != nil {
 		t.Fatal(err)
@@ -327,6 +493,15 @@ func TestNightlyPoolIndex(t *testing.T) {
 		t.Fatalf("lock not released: %v", err)
 	}
 
+	listed, err := list(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(listed, func(o auditwriter.AuditOrganization) bool { return o.ID == org }); i < 0 ||
+		!listed[i].FirstDay.Equal(utcDay(e.now)) {
+		t.Fatalf("organizations without the lock = %+v, want %s with first day %s", listed, org, utcDay(e.now))
+	}
+
 	finished, ok, err := latest(ctx)
 	if err != nil || !ok || finished.Before(e.now) {
 		t.Fatalf("latest nightly run = %s, %v, %v; want at least %s", finished, ok, err, e.now)
@@ -338,7 +513,7 @@ func TestNightlyPoolIndex(t *testing.T) {
 func TestNightlyPoolIndexFailedOrganizations(t *testing.T) {
 	e := newRecorderEnv(t)
 	ctx := context.Background()
-	_, _, failed := auditwriter.PoolIndex(e.pool)
+	_, _, failed, _ := auditwriter.PoolIndex(e.pool)
 	broken := &auditwriter.Report{Days: 1, Problems: []string{"2026-10-07: broken link"}}
 	intact := &auditwriter.Report{Days: 1}
 	repaired, brokenWindow, brokenSample, cliOnly := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()),
