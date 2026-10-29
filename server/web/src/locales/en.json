@@ -2170,8 +2170,8 @@
   },
   "mcp": {
     "title": "AI assistants (MCP)",
-    "intro": "Administrators sign in to the MCP with their Paddock account (`paddockctl mcp login`) and act with their own role. This policy limits what every MCP session of this {scope} may do. Changes additionally need the administrator's own write access.",
-    "connectHint": "To connect an assistant, run `paddockctl mcp login` and add `paddockctl mcp` to your MCP client. See the operations guide.",
+    "intro": "Administrators sign in to the MCP with their Paddock account (paddockctl mcp login) and act with their own role. This policy limits what every MCP session of this {scope} may do. Changes additionally need the administrator's own write access.",
+    "connectHint": "To connect an assistant, run paddockctl mcp login and add paddockctl mcp to your MCP client. See the operations guide.",
     "enabled": "MCP enabled",
     "writeEnabled": "Allow changes through the MCP",
     "mode": {
