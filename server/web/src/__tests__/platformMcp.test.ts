@@ -159,7 +159,7 @@ describe('PlatformMcp page (plan M14 §3.6 item 31)', () => {
     expect(stepUp.find('input').attributes('disabled')).toBeDefined()
     expect(w.find('[data-testid="mcp-tool-createOrganization"]').text()).toContain('write')
     expect(w.find('[data-testid="mcp-select-hint"]').text()).toBe('Select at least one tool.')
-    expect(w.find('[data-testid="mcp-save"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="save-mcp"]').attributes('disabled')).toBeDefined()
 
     const field = document.querySelector('#mcp-filter') as HTMLInputElement
     field.value = 'sessions'

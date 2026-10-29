@@ -253,7 +253,7 @@ onMounted(async () => {
           :loading="pending"
           :disabled="pending || !selectionValid"
           color="primary"
-          data-testid="mcp-save"
+          data-testid="save-mcp"
         >
           {{ t('mcp.save') }}
         </v-btn>
