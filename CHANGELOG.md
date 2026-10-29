@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel `mcp`; logout, *End all sessions*, deactivation and a role change end it, the latter two also at the next
   request. Refused `admin.login` attempts of the portal now carry `channel: portal` as well. New metric
   `paddock_mcp_auth_total{result}`. The step-up routes refuse an MCP access token (403).
+- MCP policies and the personal MCP write opt-in (ADR 0044, PDK-437): `GET`/`PUT /api/v1/settings/mcp` (organization)
+  and `GET`/`PUT /api/platform/v1/settings/mcp` (platform) hold whether the MCP is enabled, whether it may change
+  data, and whether all or only selected tools are allowed. Without a saved policy the MCP is off. Changing a policy
+  needs an organization or platform administrator with a step-up and is audited as `organization.mcp_policy_changed`
+  or `platform.mcp_policy_changed`; selected tools must be offered MCP tools that need no step-up (at most 500).
+  `POST /api/v1/me/mcp-write/enable` (step-up) and `…/disable` let administrators and operators opt their own account
+  in to or out of MCP write access, audited as `admin.mcp_write_enabled` and `admin.mcp_write_disabled`; auditors, API
+  tokens and MCP sessions are refused (403 `forbidden`). `GET /api/v1/me` answers `mcp_write_enabled`. The policies
+  are not enforced yet.
 
 ### Changed
 
@@ -56,6 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- MCP login (`paddockctl mcp login`, PDK-489): the device code of the Authentik provider `paddock-mcp` now lives ten
+  minutes, as the device logins' do. With Authentik's default of one minute, a sign-in with password and second factor
+  could expire before it was confirmed.
 - Portal: a focused input field (number, text, time, text area) shows a single focus indicator, the field's own
   outline. A second ring inside it no longer crosses the field label.
 
