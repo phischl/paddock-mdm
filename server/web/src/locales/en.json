@@ -2200,6 +2200,34 @@
     },
     "guide": "Operations guide: MCP",
     "legend": "MCP policy",
-    "selectAtLeastOne": "Select at least one tool, or allow all tools."
+    "selectAtLeastOne": "Select at least one tool, or allow all tools.",
+    "write": {
+      "menu": "AI assistant (MCP)",
+      "menuOn": "Write access enabled",
+      "menuOff": "Read only",
+      "title": "AI assistant write access",
+      "explain": "Your MCP sessions can read what your role reads. To let them change data as well, enable write access here. The MCP policy of your {scope} must allow changes too. You can switch it off at any time without a step-up.",
+      "connect": "To connect an assistant, run paddockctl mcp login and add paddockctl mcp to your MCP client.",
+      "state": {
+        "on": "Write access is enabled since {time}.",
+        "onUnknown": "Write access is enabled.",
+        "off": "Write access is disabled."
+      },
+      "enable": "Enable write access",
+      "disable": "Disable write access",
+      "close": "Close",
+      "confirmEnable": {
+        "title": "Enable write access for AI assistants?",
+        "message": "Your MCP sessions may then change data within your role and the MCP policy. A step-up follows."
+      },
+      "confirmDisable": {
+        "title": "Disable write access for AI assistants?",
+        "message": "Your MCP sessions can then only read data; the change applies to their next request."
+      },
+      "scope": {
+        "organization": "organization",
+        "platform": "platform"
+      }
+    }
   }
 }

@@ -2200,6 +2200,34 @@
     },
     "guide": "Betriebshandbuch: MCP",
     "legend": "MCP-Richtlinie",
-    "selectAtLeastOne": "Wählen Sie mindestens ein Werkzeug aus oder erlauben Sie alle Werkzeuge."
+    "selectAtLeastOne": "Wählen Sie mindestens ein Werkzeug aus oder erlauben Sie alle Werkzeuge.",
+    "write": {
+      "menu": "KI-Assistent (MCP)",
+      "menuOn": "Schreibzugriff aktiviert",
+      "menuOff": "Nur lesen",
+      "title": "Schreibzugriff für KI-Assistenten",
+      "explain": "Ihre MCP-Sitzungen können lesen, was Ihre Rolle lesen darf. Damit sie auch Daten ändern dürfen, aktivieren Sie hier den Schreibzugriff. Zusätzlich muss die MCP-Richtlinie Ihrer {scope} Änderungen erlauben. Sie können ihn jederzeit ohne Identitätsbestätigung wieder abschalten.",
+      "connect": "Um einen Assistenten zu verbinden, führen Sie paddockctl mcp login aus und tragen paddockctl mcp in Ihrem MCP-Client ein.",
+      "state": {
+        "on": "Schreibzugriff ist aktiviert seit {time}.",
+        "onUnknown": "Schreibzugriff ist aktiviert.",
+        "off": "Schreibzugriff ist deaktiviert."
+      },
+      "enable": "Schreibzugriff aktivieren",
+      "disable": "Schreibzugriff deaktivieren",
+      "close": "Schließen",
+      "confirmEnable": {
+        "title": "Schreibzugriff für KI-Assistenten aktivieren?",
+        "message": "Ihre MCP-Sitzungen dürfen dann Daten ändern, im Rahmen Ihrer Rolle und der MCP-Richtlinie. Anschließend folgt eine Identitätsbestätigung."
+      },
+      "confirmDisable": {
+        "title": "Schreibzugriff für KI-Assistenten deaktivieren?",
+        "message": "Ihre MCP-Sitzungen können dann nur noch Daten lesen; das gilt ab ihrer nächsten Anfrage."
+      },
+      "scope": {
+        "organization": "Organisation",
+        "platform": "Plattform"
+      }
+    }
   }
 }

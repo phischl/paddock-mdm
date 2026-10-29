@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { api, type Me } from '../api/client'
+import { api, problemCode, type Me } from '../api/client'
 import { applyLocale, type PortalLocale } from '../i18n'
 import { applyTheme, isThemePreference, type ThemePreference } from '../lib/theme'
 
@@ -19,6 +19,8 @@ export const useSessionStore = defineStore('session', () => {
   const canReadGroups = computed(() => !!role.value && role.value !== 'platform_admin')
   /** The role this identity may switch to (ADR 0045 decision 3); null for single-role identities. */
   const alternateRole = computed(() => me.value?.alternate_role ?? null)
+  /** Whether the account opted in to MCP write access (ADR 0044 decision 5, third layer). */
+  const mcpWriteEnabled = computed(() => me.value?.mcp_write_enabled ?? false)
 
   function load(): Promise<Me | null> {
     if (me.value) return Promise.resolve(me.value)
@@ -60,6 +62,20 @@ export const useSessionStore = defineStore('session', () => {
     return true
   }
 
+  /**
+   * Enables or disables the account's MCP write access and replaces me with the answer; the problem code on refusal
+   * (enabling answers step_up_required without a fresh step-up), else null.
+   */
+  async function setMcpWrite(enabled: boolean): Promise<string | null> {
+    const params = { header: { 'X-Paddock-CSRF': '1' as const } }
+    const { data, error } = enabled
+      ? await api.POST('/api/v1/me/mcp-write/enable', { params })
+      : await api.POST('/api/v1/me/mcp-write/disable', { params })
+    if (!data) return problemCode(error)
+    me.value = { ...data, step_up: me.value?.step_up }
+    return null
+  }
+
   async function logout(): Promise<void> {
     const { data } = await api.POST('/api/auth/logout', { params: { header: { 'X-Paddock-CSRF': '1' } } })
     me.value = null
@@ -80,7 +96,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   return {
-    me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, alternateRole,
-    load, setLocale, setTheme, logout, switchRole,
+    me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, alternateRole, mcpWriteEnabled,
+    load, setLocale, setTheme, setMcpWrite, logout, switchRole,
   }
 })

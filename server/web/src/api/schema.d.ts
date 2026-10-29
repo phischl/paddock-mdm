@@ -2859,6 +2859,12 @@ export interface components {
             channel: "portal" | "api" | "mcp";
             /** @description Whether the account opted in to MCP write access (ADR 0044 amendment 2026-10-25); false for API tokens. */
             mcp_write_enabled: boolean;
+            /**
+             * Format: date-time
+             * @description Since when the account's MCP write access is enabled (plan M14 §6.6 amendment 2026-10-29); null while it is
+             *     disabled and for API tokens. The portal shows it in the account menu's MCP dialog.
+             */
+            mcp_write_enabled_at: string | null;
         };
         MeAlternateRole: {
             /** @enum {string} */

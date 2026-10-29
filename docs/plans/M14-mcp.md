@@ -769,6 +769,9 @@ every `action` row it inserts; the outbox reaper uses the stored value and deriv
 | `problems.mcp_login_required` | Sign in again with paddockctl mcp login. |
 | `problems.rate_limited` | Too many requests. Try again shortly. |
 
+Amendment 2026-10-29 (PDK-442): Me gains nullable mcp_write_enabled_at so the portal can show since when write access is
+enabled.
+
 ### 6.7 Residual risks (`docs/compliance/residual-risks.md`, new section "AI assistants (M14)"; RR-85 to RR-89)
 
 | ID | Risk | Mitigation in Paddock | Record in the ISMS |
