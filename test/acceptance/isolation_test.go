@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -27,6 +28,7 @@ func TestOrganizationIsolation(t *testing.T) {
 		t.Fatal("alice and carol are in the same organization; run `make dev-seed`")
 	}
 	w.globexIDs = append(w.globexIDs, globex.String(), whoami(t, w.carol).ID)
+	w.ownActors = append(w.ownActors, whoami(t, w.alice).ID)
 	// Managed files below operator roots need no step-up (ADR 0034 amendment 2026-10-16).
 	acmeOperatorRoots(t)
 	ensureOperatorRoots(t, w.carol, func() { stepUp(t, w.carol, env.Carol, true) }, gateOperatorRoots...)
@@ -95,7 +97,7 @@ func TestOrganizationIsolation(t *testing.T) {
 			checked := res.Body
 			if fx.ownAttempts {
 				var err error
-				if checked, err = withoutOwnFailedAttempts(res.Body, env.Alice); err != nil {
+				if checked, err = withoutOwnFailedAttempts(res.Body, w.ownActors); err != nil {
 					t.Fatalf("%v: %s", err, res.Body)
 				}
 			}
@@ -116,6 +118,7 @@ func TestOrganizationIsolation(t *testing.T) {
 		if err := res.JSON(&tok); err != nil {
 			t.Fatal(err)
 		}
+		w.ownActors = append(w.ownActors, tok.Token.ID)
 		token := tokenPortal(t, tok.Secret)
 		for _, r := range []struct{ method, path string }{
 			{http.MethodGet, "/api/v1/api-tokens/" + w.globexAPIToken},
@@ -308,7 +311,7 @@ func mcpIsolationSweep(t *testing.T, w *isolationWorld, acme uuid.UUID, ops []st
 			checked := res.Body
 			if ownAttempts && res.Status < 300 {
 				var err error
-				if checked, err = withoutOwnFailedAttempts(res.Body, env.Alice); err != nil {
+				if checked, err = withoutOwnFailedAttempts(res.Body, w.ownActors); err != nil {
 					t.Fatalf("%v: %s", err, res.Body)
 				}
 			}
@@ -320,12 +323,13 @@ func mcpIsolationSweep(t *testing.T, w *isolationWorld, acme uuid.UUID, ops []st
 }
 
 // withoutOwnFailedAttempts returns the items of an audit-event list page without the failed or denied attempts of the
-// administrator caller. Such an event is acme's own record of a request the caller made with a globex ID it supplied
+// gate's own acme actors (administrator accounts and API tokens, by actor id: alice in the portal and MCP sweeps, the
+// isolation API token). Such an event is acme's own record of a request the gate made with a globex ID it supplied
 // itself (exactly one audit event per attempt, also for the 404 of an item check); the ID in its target is not a
 // leak, and whether it lands on the first page depends only on ordering. Everything else stays in the leak check:
-// events of any other actor (a globex event is never the caller's) and successful events of the caller (a success
+// events of any other actor (a globex event is never the gate's) and successful events of the gate's actors (a success
 // naming a globex object means acme acted on it). TestWithoutOwnFailedAttempts proves both.
-func withoutOwnFailedAttempts(body []byte, caller string) ([]byte, error) {
+func withoutOwnFailedAttempts(body []byte, ownActors []string) ([]byte, error) {
 	var page struct {
 		Items []json.RawMessage `json:"items"`
 	}
@@ -341,7 +345,7 @@ func withoutOwnFailedAttempts(body []byte, caller string) ([]byte, error) {
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return nil, fmt.Errorf("audit event: %w", err)
 		}
-		own := e.Actor.Type == "admin" && e.Actor.Display == caller
+		own := (e.Actor.Type == "admin" || e.Actor.Type == "api_token") && e.Actor.ID != "" && slices.Contains(ownActors, e.Actor.ID)
 		if own && (e.Outcome == "failure" || e.Outcome == "denied") {
 			continue
 		}
@@ -354,12 +358,19 @@ func withoutOwnFailedAttempts(body []byte, caller string) ([]byte, error) {
 	return out, nil
 }
 
-// TestWithoutOwnFailedAttempts shows that the audit-log leak check still catches a real leak: only the caller's own
-// failed or denied attempts are left out, never a globex event or a successful acme event naming a globex object.
+// TestWithoutOwnFailedAttempts shows that the audit-log leak check still catches a real leak: only the failed or denied
+// attempts of the gate's own actors (by id) are left out, never a globex event or a successful acme event naming a globex object.
 func TestWithoutOwnFailedAttempts(t *testing.T) {
-	const globexID = "01a12aac-2a8f-71b9-a11b-ca3a8c07bf67"
-	event := func(actorType, display, outcome string) string {
-		return `{"actor":{"type":"` + actorType + `","display":"` + display + `"},"code":"managed_file.deleted",` +
+	const (
+		globexID = "01a12aac-2a8f-71b9-a11b-ca3a8c07bf67"
+		alice    = "0b1e7d6c-1a2b-4c3d-8e9f-a0b1c2d3e4f5"
+		token    = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a"
+		dave     = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
+		other    = "7e6d5c4b-3a29-4180-9f8e-7d6c5b4a3928"
+	)
+	own := []string{alice, token}
+	event := func(actorType, id, outcome string) string {
+		return `{"actor":{"type":"` + actorType + `","id":"` + id + `","display":"x"},"code":"managed_file.deleted",` +
 			`"outcome":"` + outcome + `","params":{},"target":{"type":"managed_file","id":"` + globexID + `"}}`
 	}
 	for _, tc := range []struct {
@@ -367,17 +378,22 @@ func TestWithoutOwnFailedAttempts(t *testing.T) {
 		event string
 		leak  bool
 	}{
-		{"own failed attempt", event("admin", env.Alice, "failure"), false},
-		{"own denied attempt", event("admin", env.Alice, "denied"), false},
-		{"own successful action on a globex object", event("admin", env.Alice, "success"), true},
-		{"own attempt of unknown outcome", event("admin", env.Alice, "unknown"), true},
-		{"globex event", event("admin", env.Carol, "success"), true},
-		{"failed globex event", event("admin", env.Carol, "failure"), true},
-		{"other acme admin's failed attempt", event("admin", env.Dave, "failure"), true},
-		{"device event", event("device", env.Alice, "failure"), true},
+		{"own failed attempt", event("admin", alice, "failure"), false},
+		{"own denied attempt", event("admin", alice, "denied"), false},
+		{"own API token's failed attempt", event("api_token", token, "failure"), false},
+		{"own API token's denied attempt", event("api_token", token, "denied"), false},
+		{"own successful action on a globex object", event("admin", alice, "success"), true},
+		{"own API token's successful action on a globex object", event("api_token", token, "success"), true},
+		{"own attempt of unknown outcome", event("admin", alice, "unknown"), true},
+		{"globex event", event("admin", other, "success"), true},
+		{"failed globex event", event("admin", other, "failure"), true},
+		{"other acme admin's failed attempt", event("admin", dave, "failure"), true},
+		{"other API token's failed attempt", event("api_token", other, "failure"), true},
+		{"actor without id", event("admin", "", "failure"), true},
+		{"device event", event("device", alice, "failure"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			checked, err := withoutOwnFailedAttempts([]byte(`{"items":[`+tc.event+`],"total":1}`), env.Alice)
+			checked, err := withoutOwnFailedAttempts([]byte(`{"items":[`+tc.event+`],"total":1}`), own)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -386,7 +402,7 @@ func TestWithoutOwnFailedAttempts(t *testing.T) {
 			}
 		})
 	}
-	if _, err := withoutOwnFailedAttempts([]byte(`{"title":"not a list"}`), env.Alice); err == nil {
+	if _, err := withoutOwnFailedAttempts([]byte(`{"title":"not a list"}`), own); err == nil {
 		t.Fatal("a response without items passed the check unseen")
 	}
 }
