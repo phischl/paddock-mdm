@@ -26,6 +26,48 @@ func (q *Queries) CloseOpenDeviceEventGaps(ctx context.Context, arg CloseOpenDev
 	return err
 }
 
+const countDeviceEventSeenInRanges = `-- name: CountDeviceEventSeenInRanges :many
+SELECT i::bigint AS idx,
+       (SELECT count(*) FROM device_event_seen e
+        WHERE e.device_id = $1
+          AND e.event_seq BETWEEN ($2::bigint[])[i] AND ($3::bigint[])[i])::bigint AS seen
+FROM generate_subscripts($2::bigint[], 1) AS i
+ORDER BY i
+`
+
+type CountDeviceEventSeenInRangesParams struct {
+	DeviceID uuid.UUID
+	FromSeqs []int64
+	ToSeqs   []int64
+}
+
+type CountDeviceEventSeenInRangesRow struct {
+	Idx  int64
+	Seen int64
+}
+
+// The number of delivered events of a device in each closed range @from_seqs[i]..@to_seqs[i], in one statement for all
+// parts of the open gap rows one round checks (PDK-419): a part is covered when its count equals its length.
+func (q *Queries) CountDeviceEventSeenInRanges(ctx context.Context, arg CountDeviceEventSeenInRangesParams) ([]CountDeviceEventSeenInRangesRow, error) {
+	rows, err := q.db.Query(ctx, countDeviceEventSeenInRanges, arg.DeviceID, arg.FromSeqs, arg.ToSeqs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountDeviceEventSeenInRangesRow{}
+	for rows.Next() {
+		var i CountDeviceEventSeenInRangesRow
+		if err := rows.Scan(&i.Idx, &i.Seen); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteDeviceEventDropped = `-- name: DeleteDeviceEventDropped :exec
 DELETE FROM device_event_dropped WHERE device_id = $1
 `
@@ -247,11 +289,12 @@ func (q *Queries) ListOpenDeviceEventGaps(ctx context.Context, deviceID uuid.UUI
 }
 
 const lockDeviceEventSeq = `-- name: LockDeviceEventSeq :one
-SELECT event_seq_contiguous, event_seq_high, last_seq, last_contact_at FROM device_status WHERE device_id = $1 FOR UPDATE
+SELECT event_seq_contiguous, event_seq_scanned, event_seq_high, last_seq, last_contact_at FROM device_status WHERE device_id = $1 FOR UPDATE
 `
 
 type LockDeviceEventSeqRow struct {
 	EventSeqContiguous int64
+	EventSeqScanned    int64
 	EventSeqHigh       int64
 	LastSeq            int64
 	LastContactAt      *time.Time
@@ -264,6 +307,7 @@ func (q *Queries) LockDeviceEventSeq(ctx context.Context, deviceID uuid.UUID) (L
 	var i LockDeviceEventSeqRow
 	err := row.Scan(
 		&i.EventSeqContiguous,
+		&i.EventSeqScanned,
 		&i.EventSeqHigh,
 		&i.LastSeq,
 		&i.LastContactAt,
@@ -311,7 +355,7 @@ func (q *Queries) ReportDeviceEventGap(ctx context.Context, arg ReportDeviceEven
 }
 
 const resetEventSeq = `-- name: ResetEventSeq :exec
-UPDATE device_status SET event_seq_contiguous = 0, event_seq_high = $1 WHERE device_id = $2
+UPDATE device_status SET event_seq_contiguous = 0, event_seq_scanned = 0, event_seq_high = $1 WHERE device_id = $2
 `
 
 type ResetEventSeqParams struct {
@@ -335,5 +379,19 @@ type SetEventSeqContiguousParams struct {
 
 func (q *Queries) SetEventSeqContiguous(ctx context.Context, arg SetEventSeqContiguousParams) error {
 	_, err := q.db.Exec(ctx, setEventSeqContiguous, arg.Value, arg.DeviceID)
+	return err
+}
+
+const setEventSeqScanned = `-- name: SetEventSeqScanned :exec
+UPDATE device_status SET event_seq_scanned = $1 WHERE device_id = $2 AND event_seq_scanned < $1
+`
+
+type SetEventSeqScannedParams struct {
+	Value    int64
+	DeviceID uuid.UUID
+}
+
+func (q *Queries) SetEventSeqScanned(ctx context.Context, arg SetEventSeqScannedParams) error {
+	_, err := q.db.Exec(ctx, setEventSeqScanned, arg.Value, arg.DeviceID)
 	return err
 }

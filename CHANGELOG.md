@@ -77,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
+  Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
+  window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
+  device (migration `00073_event_seq_scanned`) and reads one bounded window above it, moving on every round.
 - Production and lab installations (PDK-492): the api now finds the MCP login provider at
   `https://auth.<domain>/application/o/paddock-mcp/`. Before, it looked for it at the development port, never became
   ready and the installation or upgrade stopped at `./paddock start`. The bundle test refuses an OIDC issuer with an
