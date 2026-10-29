@@ -59,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
+  weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
+  tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the
+  cluster branch goes to main. The required check `acceptance` still fails on a pull request to main unless every
+  gate passed (PDK-526).
 - Portal: while a new organization is being created, the *New organization* dialog says that the identity provider
   is being set up and that this can take up to a minute (the create waits for that setup, bounded at 60 s); the
   *Create* button stays disabled meanwhile (PDK-407).
