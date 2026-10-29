@@ -25,10 +25,14 @@ type AuditEvent struct {
 	ErrorCode     string         `json:"error_code"`
 	CorrelationID string         `json:"correlation_id"`
 	Params        map[string]any `json:"params"`
+	Source        string         `json:"source"`
 	Actor         struct {
 		Type    string `json:"type"`
+		ID      string `json:"id"`
 		Display string `json:"display"`
 		StepUp  bool   `json:"step_up"`
+		// Client is the MCP client's name on events of an MCP session (ADR 0044).
+		Client string `json:"client"`
 	} `json:"actor"`
 	Target *struct {
 		Type string `json:"type"`

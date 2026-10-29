@@ -29,6 +29,14 @@ The agent binaries (`paddockd`, `paddock-supervisor`, `paddock-revoke`) link onl
 `github.com/godbus/dbus/v5` (BSD-2-Clause), `github.com/gowebpki/jcs` (Apache-2.0) and the Go extended libraries
 `golang.org/x/crypto` and `golang.org/x/sys` (BSD-3-Clause), besides the Go standard library (BSD-3-Clause).
 
+Direct dependencies of `paddockctl` beyond the Go standard library and the shared `pkg` module:
+
+| Module | Version | License | Use |
+| --- | --- | --- | --- |
+| `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | MIT / Apache-2.0 (the repository's documentation: CC-BY-4.0, not linked) | stdio MCP server of `paddockctl mcp` (ADR 0044) |
+| `github.com/google/jsonschema-go` | v0.4.3 | MIT | input schemas of the MCP tools (part of the SDK's tree) |
+| `golang.org/x/oauth2` | v0.35.0 (v0.37.0 in the workspace build) | BSD-3-Clause | device authorization grant and token refresh of `paddockctl mcp login` |
+
 ## Bundled services: separate processes, not linked
 
 The Compose stack runs these images as their own containers. Paddock talks to them over the network (HTTP, AMQP,

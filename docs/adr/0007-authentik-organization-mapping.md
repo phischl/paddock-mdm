@@ -85,3 +85,9 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
 - The portal sign-in lands in the organization role; `POST /api/auth/switch` starts a new sign-in for the other
   role that ends the previous session. The step-up callback accepts a step-up token whose groups grant the
   session's role next to the other one. The organization and platform reconciliation rounds are unchanged.
+
+## Amendment 2026-10-25 (ADR 0044)
+
+A third public OAuth2 provider `paddock-mcp` (device grant, `paddock-admin-login` authentication flow, the
+MFA-enforcing authorization flow of the device providers, Paddock groups mapping, 30-minute access and 8-hour refresh
+tokens) for `paddockctl mcp login`.
