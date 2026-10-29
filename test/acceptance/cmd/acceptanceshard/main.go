@@ -90,26 +90,34 @@ func parseShard(s string) (index, total int, err error) {
 	return index, total, nil
 }
 
-// isTestName reports whether a `go test -list` line names a test that -run selects.
+// isTestLine reports whether a `go test -list` line lists a test, fuzz target or example, the entries -run selects.
+func isTestLine(line string) bool {
+	return strings.HasPrefix(line, "Test") || strings.HasPrefix(line, "Fuzz") || strings.HasPrefix(line, "Example")
+}
+
+// isTestName reports whether a listed test name consists only of the characters runRegex and the shard regexes are
+// known to handle.
 func isTestName(line string) bool {
-	if !strings.HasPrefix(line, "Test") && !strings.HasPrefix(line, "Fuzz") && !strings.HasPrefix(line, "Example") {
-		return false
-	}
 	return !strings.ContainsFunc(line, func(r rune) bool {
 		return r != '_' && (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z')
 	})
 }
 
 // parseList returns the sorted, unique test names of `go test -list` output; package summary lines are skipped.
-// A name that occurs in several packages is one entry, and -run then selects it in each of them.
+// A name that occurs in several packages is one entry, and -run then selects it in each of them. A listed test whose
+// name it cannot parse is an error: dropping it would leave the test out of every shard.
 func parseList(r io.Reader) ([]string, error) {
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		if isTestName(line) {
-			seen[line] = true
+		if !isTestLine(line) {
+			continue
 		}
+		if !isTestName(line) {
+			return nil, fmt.Errorf("test list: cannot parse test name %q", line)
+		}
+		seen[line] = true
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("read test list: %w", err)
