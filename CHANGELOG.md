@@ -86,6 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   administrators, operators and auditors of every organization). End users approve with password and TOTP; the
   portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml` gains the policy
   `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
+- Nightly audit verification (PDK-420): a restart of the audit writer no longer clears an active
+  `PaddockAuditChainBroken`. At start the writer now sets `paddock_audit_verify_failed_organizations` from the newest
+  recorded nightly window and sample day of every organization, instead of 0 until the next 00:45 UTC cycle.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per

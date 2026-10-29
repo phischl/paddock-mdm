@@ -32,10 +32,12 @@ type AuditOrganization = auditOrganization
 
 // FakeIndex is an in-memory verifyIndex.
 type FakeIndex struct {
-	Orgs    []AuditOrganization
-	Latest  time.Time
-	Locked  bool
-	LastErr error
+	Orgs      []AuditOrganization
+	Latest    time.Time
+	Locked    bool
+	LastErr   error
+	Failed    []uuid.UUID
+	FailedErr error
 }
 
 func (f *FakeIndex) lockedOrganizations(ctx context.Context, fn func(ctx context.Context, orgs []auditOrganization) error) error {
@@ -47,6 +49,10 @@ func (f *FakeIndex) lockedOrganizations(ctx context.Context, fn func(ctx context
 
 func (f *FakeIndex) latestNightlyRun(context.Context) (time.Time, bool, error) {
 	return f.Latest, !f.Latest.IsZero(), f.LastErr
+}
+
+func (f *FakeIndex) latestFailedOrganizations(context.Context) ([]uuid.UUID, error) {
+	return f.Failed, f.FailedErr
 }
 
 // VerifyFunc and RecordFunc stand in for the verifier and the recorder.
@@ -74,8 +80,11 @@ func InitLastRun(n *Nightly, ctx context.Context) error { return n.initLastRun(c
 // SetAfter replaces the timer RunNightly waits on.
 func SetAfter(n *Nightly, after func(time.Duration) <-chan time.Time) { n.after = after }
 
-// ResetLastRun sets the last-run gauge back to its unset value.
-func ResetLastRun() { metricVerifyLastRun.Set(0) }
+// ResetLastRun sets the last-run and failed-organizations gauges back to their unset value.
+func ResetLastRun() {
+	metricVerifyLastRun.Set(0)
+	metricVerifyFailedOrganizations.Set(0)
+}
 
 // NewTestVerifyMetrics returns a collector without database counts.
 func NewTestVerifyMetrics() *VerifyMetrics { return newVerifyMetrics(nil) }
@@ -95,7 +104,8 @@ func SetVerifyCounts(m *VerifyMetrics, counts func(ctx context.Context) ([]audit
 func PoolIndex(pool *db.AuditWriterPool) (
 	locked func(ctx context.Context, fn func(ctx context.Context, orgs []AuditOrganization) error) error,
 	latest func(ctx context.Context) (time.Time, bool, error),
+	failed func(ctx context.Context) ([]uuid.UUID, error),
 ) {
 	p := poolIndex{pool}
-	return p.lockedOrganizations, p.latestNightlyRun
+	return p.lockedOrganizations, p.latestNightlyRun, p.latestFailedOrganizations
 }

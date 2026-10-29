@@ -173,19 +173,25 @@ func TestNightlyCycleLocked(t *testing.T) {
 }
 
 // TestNightlyInitLastRun: at start the last-run gauge is the newest recorded nightly run or, without any, the start
-// time; a read error leaves it unset so PaddockAuditVerifyStale is not masked.
+// time, and the failed-organizations gauge counts the organizations whose newest nightly or sample run failed, so a
+// restart keeps PaddockAuditChainBroken firing; a read error leaves both unset so PaddockAuditVerifyStale is not
+// masked.
 func TestNightlyInitLastRun(t *testing.T) {
 	start := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	latest := time.Date(2026, 10, 19, 0, 46, 0, 0, time.UTC)
+	broken := []uuid.UUID{uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())}
 	for _, tc := range []struct {
-		name    string
-		index   *auditwriter.FakeIndex
-		want    float64
-		wantErr bool
+		name       string
+		index      *auditwriter.FakeIndex
+		want       float64
+		wantFailed float64
+		wantErr    bool
 	}{
-		{"recorded run", &auditwriter.FakeIndex{Latest: latest}, float64(latest.Unix()), false},
-		{"no run yet", &auditwriter.FakeIndex{}, float64(start.Unix()), false},
-		{"database error", &auditwriter.FakeIndex{LastErr: errors.New("down")}, 0, true},
+		{"recorded run", &auditwriter.FakeIndex{Latest: latest}, float64(latest.Unix()), 0, false},
+		{"recorded failed runs", &auditwriter.FakeIndex{Latest: latest, Failed: broken}, float64(latest.Unix()), 2, false},
+		{"no run yet", &auditwriter.FakeIndex{}, float64(start.Unix()), 0, false},
+		{"database error", &auditwriter.FakeIndex{LastErr: errors.New("down"), Failed: broken}, 0, 0, true},
+		{"failed organizations unreadable", &auditwriter.FakeIndex{Latest: latest, FailedErr: errors.New("down")}, 0, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			auditwriter.ResetLastRun()
@@ -196,6 +202,9 @@ func TestNightlyInitLastRun(t *testing.T) {
 			}
 			if got := gaugeValue(t, "paddock_audit_verify_last_run_timestamp_seconds"); got != tc.want {
 				t.Errorf("last run = %v, want %v", got, tc.want)
+			}
+			if got := gaugeValue(t, "paddock_audit_verify_failed_organizations"); got != tc.wantFailed {
+				t.Errorf("failed organizations = %v, want %v", got, tc.wantFailed)
 			}
 		})
 	}
@@ -289,7 +298,7 @@ func TestNightlyCycleEndsLastRunRetry(t *testing.T) {
 func TestNightlyPoolIndex(t *testing.T) {
 	e := newRecorderEnv(t)
 	ctx := context.Background()
-	locked, latest := auditwriter.PoolIndex(e.pool)
+	locked, latest, _ := auditwriter.PoolIndex(e.pool)
 	org := uuid.Must(uuid.NewV7())
 	if _, err := e.recorder.Record(ctx, org, auditwriter.TriggerNightly, day("2026-10-01"), day("2026-10-07"), e.now, &auditwriter.Report{Days: 7}); err != nil {
 		t.Fatal(err)
@@ -321,5 +330,51 @@ func TestNightlyPoolIndex(t *testing.T) {
 	finished, ok, err := latest(ctx)
 	if err != nil || !ok || finished.Before(e.now) {
 		t.Fatalf("latest nightly run = %s, %v, %v; want at least %s", finished, ok, err, e.now)
+	}
+}
+
+// TestNightlyPoolIndexFailedOrganizations: an organization counts as failed when its newest nightly window or its
+// newest sample day failed; an older failure that a later run superseded and a failed CLI run do not count.
+func TestNightlyPoolIndexFailedOrganizations(t *testing.T) {
+	e := newRecorderEnv(t)
+	ctx := context.Background()
+	_, _, failed := auditwriter.PoolIndex(e.pool)
+	broken := &auditwriter.Report{Days: 1, Problems: []string{"2026-10-07: broken link"}}
+	intact := &auditwriter.Report{Days: 1}
+	repaired, brokenWindow, brokenSample, cliOnly := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()),
+		uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, r := range []struct {
+		org     uuid.UUID
+		trigger string
+		report  *auditwriter.Report
+	}{
+		{repaired, auditwriter.TriggerNightly, broken},
+		{repaired, auditwriter.TriggerSample, broken},
+		{repaired, auditwriter.TriggerNightly, intact},
+		{repaired, auditwriter.TriggerSample, intact},
+		{brokenWindow, auditwriter.TriggerNightly, intact},
+		{brokenWindow, auditwriter.TriggerNightly, broken},
+		{brokenSample, auditwriter.TriggerNightly, intact},
+		{brokenSample, auditwriter.TriggerSample, broken},
+		{cliOnly, auditwriter.TriggerNightly, intact},
+		{cliOnly, auditwriter.TriggerCLI, broken},
+	} {
+		if _, err := e.recorder.Record(ctx, r.org, r.trigger, day("2026-10-07"), day("2026-10-07"), e.now, r.report); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	orgs, err := failed(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]bool{}
+	for _, org := range orgs {
+		got[org] = true
+	}
+	for org, want := range map[uuid.UUID]bool{repaired: false, brokenWindow: true, brokenSample: true, cliOnly: false} {
+		if got[org] != want {
+			t.Errorf("organization %s failed = %v, want %v", org, got[org], want)
+		}
 	}
 }
