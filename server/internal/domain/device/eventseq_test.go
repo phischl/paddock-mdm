@@ -49,22 +49,73 @@ func TestHoles(t *testing.T) {
 	}
 }
 
-func TestCovered(t *testing.T) {
-	seen := []int64{1, 2, 4}
-	dropped := []SeqRange{{5, 6}}
-	for _, tt := range []struct {
-		r    SeqRange
-		want bool
+func TestScan(t *testing.T) {
+	tests := []struct {
+		name        string
+		scanned     int64
+		high        int64
+		seen        []int64
+		dropped     []SeqRange
+		wantScanned int64
+		wantHoles   []SeqRange
 	}{
-		{SeqRange{1, 2}, true},
-		{SeqRange{3, 3}, false},
-		{SeqRange{4, 6}, true},
-		{SeqRange{4, 7}, false},
-		{SeqRange{2, 4}, false},
+		{"nothing new", 4, 4, nil, nil, 4, nil},
+		{"hole: position moves past it up to high", 0, 4, []int64{1, 2, 4}, nil, 4, []SeqRange{{3, 3}}},
+		{"trailing hole up to high", 2, 6, []int64{3}, nil, 6, []SeqRange{{4, 6}}},
+		{"delivered above high: position follows the delivered run", 0, 2, []int64{1, 2, 3}, nil, 3, nil},
+		{"delivered above high after a gap: position stops at high", 0, 2, []int64{1, 2, 5}, nil, 2, nil},
+		{"high below the position: nothing new", 6, 3, nil, nil, 6, nil},
+		{"dropped range bridges", 2, 8, []int64{7, 8}, []SeqRange{{3, 6}}, 8, nil},
+		{"cap: position stops at the last number read", 3, 50000, window(4, SeenLimit), nil, SeenLimit + 3, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scanned, holes := Scan(tt.scanned, tt.high, tt.seen, tt.dropped)
+			if scanned != tt.wantScanned || !reflect.DeepEqual(holes, tt.wantHoles) {
+				t.Fatalf("Scan = %d %v, want %d %v", scanned, holes, tt.wantScanned, tt.wantHoles)
+			}
+		})
+	}
+}
+
+// TestScanPastPermanentHole (PDK-419): a hole at 3 that never fills (the position is past it already) does not keep
+// later scans inside the same window.
+func TestScanPastPermanentHole(t *testing.T) {
+	first, holes := Scan(3, 40000, window(4, SeenLimit), nil)
+	if first != SeenLimit+3 || holes != nil {
+		t.Fatalf("first scan = %d %v", first, holes)
+	}
+	above := append(window(first+1, 100), window(first+102, 10)...)
+	second, holes := Scan(first, first+111, above, nil)
+	if want := []SeqRange{{first + 101, first + 101}}; second != first+111 || !reflect.DeepEqual(holes, want) {
+		t.Fatalf("second scan = %d %v, want %d %v", second, holes, first+111, want)
+	}
+}
+
+func window(from int64, n int) []int64 {
+	out := make([]int64, n)
+	for i := range out {
+		out[i] = from + int64(i)
+	}
+	return out
+}
+
+func TestContiguous(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		scanned int64
+		open    []SeqRange
+		want    int64
+	}{
+		{"no open range", 9, nil, 9},
+		{"below the lowest open range", 9, []SeqRange{{6, 7}, {3, 3}}, 2},
+		{"open range starts right after zero", 9, []SeqRange{{1, 4}}, 0},
 	} {
-		if got := Covered(tt.r, seen, dropped); got != tt.want {
-			t.Errorf("Covered(%v) = %v, want %v", tt.r, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Contiguous(tt.scanned, tt.open); got != tt.want {
+				t.Fatalf("Contiguous = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 

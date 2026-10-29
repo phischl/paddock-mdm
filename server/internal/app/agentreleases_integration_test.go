@@ -33,14 +33,18 @@ import (
 )
 
 type fakeArtifactStore struct {
-	mu   sync.Mutex
-	puts map[string][]byte
-	fail error
+	mu    sync.Mutex
+	puts  map[string][]byte
+	fail  error
+	onPut func()
 }
 
 func (f *fakeArtifactStore) Put(_ context.Context, key, _, _ string, body []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onPut != nil {
+		f.onPut()
+	}
 	if f.fail != nil {
 		return f.fail
 	}
@@ -828,6 +832,102 @@ func TestSupervisorFailureHaltsTheRollout(t *testing.T) {
 	d, _ := h.releases.Get(platformAdmin(), v)
 	if d.Rollout.Status != agentrelease.RolloutHalted || d.Stats.Failed != 1 {
 		t.Fatalf("rollout %+v stats %+v", d.Rollout, d.Stats)
+	}
+}
+
+// TestPublishedBetweenCheckAndUpsert publishes the release while an upload stores its file, after the upload's draft
+// check (PDK-432): the guarded upsert refuses with invalid_state and the published rows stay as they were.
+func TestPublishedBetweenCheckAndUpsert(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := uniqueVersion()
+	if _, err := h.releases.Create(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	bin := []byte("paddockd " + v)
+	first, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deb := []byte("supervisor " + v)
+	firstPkg, err := h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", deb,
+		base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	h.store.onPut = func() {
+		once.Do(func() {
+			if _, err := h.super.Exec(context.Background(),
+				"UPDATE agent_release SET status = 'published', published_at = now() WHERE version = $1", v); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	other := []byte("paddockd rebuilt " + v)
+	_, err = h.releases.UploadArtifact(ctx, v, "amd64", other, h.signBinary(other, v, "amd64"))
+	expectProblem(t, err, problem.InvalidState)
+	newArch := []byte("paddockd arm64 " + v)
+	once = sync.Once{}
+	if _, err := h.super.Exec(context.Background(), "UPDATE agent_release SET status = 'draft' WHERE version = $1", v); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.releases.UploadArtifact(ctx, v, "arm64", newArch, h.signBinary(newArch, v, "arm64"))
+	expectProblem(t, err, problem.InvalidState)
+	once = sync.Once{}
+	if _, err := h.super.Exec(context.Background(), "UPDATE agent_release SET status = 'draft' WHERE version = $1", v); err != nil {
+		t.Fatal(err)
+	}
+	otherDeb := []byte("supervisor rebuilt " + v)
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", otherDeb,
+		base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, otherDeb)))
+	expectProblem(t, err, problem.InvalidState)
+
+	d, err := h.releases.Get(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Artifacts) != 1 || d.Artifacts[0].Sha256 != first.Sha256 || !d.Artifacts[0].CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("artifacts of the published release changed: %+v", d.Artifacts)
+	}
+	if len(d.Packages) != 1 || d.Packages[0].Sha256 != firstPkg.Sha256 || !d.Packages[0].CreatedAt.Equal(firstPkg.CreatedAt) {
+		t.Fatalf("packages of the published release changed: %+v", d.Packages)
+	}
+	var failures int
+	if err := h.super.QueryRow(context.Background(),
+		"SELECT count(*) FROM action WHERE code = $1 AND outcome = 'failure' AND error_code = 'invalid_state' AND params->>'version' = $2",
+		app.SpecAgentReleaseUpload.Code, v).Scan(&failures); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 3 {
+		t.Fatalf("failed upload actions = %d, want 3", failures)
+	}
+}
+
+// TestPublishAgentReleaseOnlyFromDraft runs the publish query on a published release (PDK-432): no row, so a
+// concurrent second publish cannot move published_at.
+func TestPublishAgentReleaseOnlyFromDraft(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := h.published(t)
+	before, err := h.releases.Get(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = h.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		_, err := q.PublishAgentRelease(ctx, v)
+		return err
+	})
+	if !db.IsNoRows(err) {
+		t.Fatalf("publishing a published release: %v, want no rows", err)
+	}
+	after, err := h.releases.Get(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Release.PublishedAt == nil || !after.Release.PublishedAt.Equal(*before.Release.PublishedAt) {
+		t.Fatalf("published_at moved: %v -> %v", before.Release.PublishedAt, after.Release.PublishedAt)
 	}
 }
 
