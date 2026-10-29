@@ -78,6 +78,12 @@ func TestUpdateNow(t *testing.T) {
 	if out.AgentUpdate != nil {
 		t.Fatalf("offered outside its wave: %+v", out.AgentUpdate)
 	}
+	// The request reads from_version from device_status, which the worker materializes asynchronously from the
+	// check-in's heartbeat; until then the server does not know the device's version (PDK-459).
+	checkinUntil(t, d, 3*time.Minute, func(protocol.CheckinResponse) bool {
+		s := requestOf(t, alice, d.DeviceID)
+		return s.AgentVersion != nil && *s.AgentVersion == "0.0.0-devicesim"
+	})
 
 	expectStatus(t, call(t, bob, http.MethodPost, path, nil), http.StatusForbidden, "forbidden")
 	res = call(t, operator.Portal, http.MethodPost, path, nil)
