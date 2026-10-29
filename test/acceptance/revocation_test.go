@@ -290,7 +290,7 @@ func escrowVersions(t *testing.T, prefix string) int {
 	creds := mustSecret(t, "rustfs_root_user") + "\n" + mustSecret(t, "rustfs_root_password") + "\n"
 	script := `read -r AWS_ACCESS_KEY_ID; read -r AWS_SECRET_ACCESS_KEY; export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; ` +
 		`aws --endpoint-url http://rustfs:9000 s3api list-object-versions --bucket paddock-escrow --prefix "$1" --output json`
-	out, err := stack.Docker(testContext(t, 2*time.Minute), strings.NewReader(creds), "run", "--rm", "-i", "--network", "paddock_cp",
+	out, err := stack.Docker(testContext(t, 2*time.Minute), strings.NewReader(creds), "run", "--rm", "-i", "--network", stack.Network("cp"),
 		"-e", "AWS_DEFAULT_REGION=us-east-1", "-e", "AWS_PAGER=", "--entrypoint", "sh", image, "-c", script, "sh", prefix)
 	if err != nil {
 		t.Fatalf("list object versions: %v %s", err, out)

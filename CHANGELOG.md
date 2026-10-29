@@ -11,6 +11,14 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 
 ### Added
 
+- A second development stack on the same host (PDK-519): `PADDOCK_INSTANCE=2 make dev-secrets` in a second checkout
+  writes a `.env` with its own Compose project (`paddock2`), image tags and host ports (every port 100 higher: HTTPS
+  `8543`), and every `make` target and acceptance and end-to-end gate of that checkout then reaches that stack. The
+  loopback ports of the development stack are settings (`PADDOCK_DEV_*_PORT`); unset, nothing changes. A command with
+  a `PADDOCK_INSTANCE` other than the checkout's is refused. See "Running a second dev stack" in
+  `docs/operations/local-dev.md`.
+- The system gates on the test VMs run against the stack of their checkout (PDK-525): from a second development
+  stack's checkout they use its Compose project and HTTPS port, e.g. when they cut a device off from the server.
 - MCP tool catalog generated from the admin API contract (ADR 0044, PDK-434): `make gen` derives one tool per admin
   API operation (outside the login tag) from `api/openapi/admin.yaml`, classified as read or write, with scope,
   destructive and idempotent hints and a self-contained input schema. The contract gains the extensions
@@ -61,6 +69,10 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 
 ### Changed
 
+- CI: the acceptance gates run in four parallel shards (was three), balanced by the median durations of eight recent
+  CI runs, so a pull request waits about 41 instead of up to 75 minutes for its slowest acceptance job. The gates
+  themselves are unchanged. The shard check now fails on a listed test it cannot parse instead of leaving it out, and
+  a failed disruptive/e2e job prints Fleet's full log again (PDK-361). No operator step.
 - CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
   weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
   tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the

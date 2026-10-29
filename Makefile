@@ -13,6 +13,7 @@ SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
 GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
 UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... \
+	./test/acceptance/internal/stack/... \
 	./test/acceptance/cmd/acceptanceshard/...
 WEB_DIR       := server/web
 IMAGE         ?= paddock-server:dev
@@ -37,9 +38,22 @@ endif
 # the BuildKit layer cache of the image builds; unset, as locally, the Compose files are unchanged.
 CI_CACHE_FILES := $(if $(PADDOCK_CI_BUILD_CACHE),compose.ci-cache.yaml $(if $(PADDOCK_CI_BUILD_CACHE_EXPORT),compose.ci-cache-export.yaml),)
 
-COMPOSE := docker compose --project-directory $(COMPOSE_DIR) -p paddock \
+# The stack of this checkout: deploy/compose/.env names its Compose project and host ports, so a second development
+# stack runs from a second checkout (docs/operations/local-dev.md, "Running a second dev stack"). The process
+# environment wins, as it does for Compose and lib.sh. Recursive, because `make up` creates .env (dev-secrets) first.
+dotenv      = $(shell sed -n 's/^$(1)=//p' $(COMPOSE_DIR)/.env 2>/dev/null | tail -1)
+dev_setting = $(or $($(1)),$(call dotenv,$(1)),$(2))
+# A PADDOCK_INSTANCE that is not the one of this checkout stops make: the other stack may be in use.
+dev_instance_guard = $(if $(and $(PADDOCK_INSTANCE),$(filter-out $(or $(call dotenv,PADDOCK_INSTANCE),1),$(PADDOCK_INSTANCE))),\
+	$(error PADDOCK_INSTANCE is $(PADDOCK_INSTANCE), but $(COMPOSE_DIR)/.env belongs to instance $(or $(call dotenv,PADDOCK_INSTANCE),1)))
+DEV_PROJECT = $(dev_instance_guard)$(call dev_setting,PADDOCK_PROJECT,paddock)
+DEV_HTTPS   = https://%.$(call dev_setting,PADDOCK_DOMAIN,paddock.localhost):$(call dev_setting,PADDOCK_HTTPS_PORT,8443)
+
+COMPOSE = docker compose --project-directory $(COMPOSE_DIR) -p $(DEV_PROJECT) \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
 	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES) $(CI_CACHE_FILES),-f $(COMPOSE_DIR)/$(f))
+# Expanded only where a recipe uses them, so that the guard stops the stack's targets and no other one.
+unexport dotenv dev_setting dev_instance_guard DEV_PROJECT DEV_HTTPS COMPOSE LOAD_GUARD
 
 NODE_RUN := docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 	-v $(CURDIR):/src -w /src/$(WEB_DIR) $(NODE_IMAGE)
@@ -188,6 +202,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
+	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
@@ -371,8 +386,8 @@ dev-seed: ## Create organizations acme and globex and assign the dev users
 
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards
-# (SHARD=i/n, PDK-359), each against its own stack: with three shards ~27-29 min of measured gate time each, about
-# 35 min per `make acceptance` step on a runner. Keep at least 20 % headroom when gates are added.
+# (SHARD=i/n, PDK-359), each against its own stack: with four shards ~32 min of measured gate time each (PDK-361,
+# 2026-10-29). Keep at least 20 % headroom when gates are added.
 ACCEPTANCE_TIMEOUT ?= 120m
 
 # paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.
@@ -404,7 +419,7 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 		echo "acceptance shard $(SHARD): -run '$$run'"; \
 	fi; \
 	set --; [ -z "$$run" ] || set -- -run "$$run"; \
-	set -x; PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
+	set -x; PADDOCK_PROJECT=$(DEV_PROJECT) PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
 		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... "$$@" -v
 
 .PHONY: system-test
@@ -428,28 +443,30 @@ e2e-check-playwright:
 	fi
 
 .PHONY: e2e
-e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
+e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (optional SPEC=<spec file or filter>; PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
-		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
+		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim -e PADDOCK_PROJECT=$(DEV_PROJECT) \
+		-e PADDOCK_E2E_BASE_URL=$(or $(PADDOCK_E2E_BASE_URL),$(subst %,admin,$(DEV_HTTPS))) \
+		-e PADDOCK_E2E_AUTH_URL=$(or $(PADDOCK_E2E_AUTH_URL),$(subst %,auth,$(DEV_HTTPS))) \
 		-e PADDOCK_E2E_AGENTRELEASE=/src/bin/agentrelease -e PADDOCK_E2E_SCREENSHOTS \
 		-v $(CURDIR):/src -w /src/$(WEB_DIR) \
-		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test'
+		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test $(SPEC)'
 
-# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network paddock_cp and talk to
+# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network <project>_cp and talk to
 # one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Paddock-Client-IP address.
 LOAD_DIR := bin/load
 COUNT    ?= 10000
 SCENARIO ?= checkin
-# Never against production (PDK-006 review 1): load-guard.sh refuses unless the running gateway of the project paddock
+# Never against production (PDK-006 review 1): load-guard.sh refuses unless the running gateway of the checkout's project
 # is not PADDOCK_ENV=production and the checkout is a development one.
-LOAD_GUARD = gw=$$(docker ps -q --filter label=com.docker.compose.project=paddock \
+LOAD_GUARD = gw=$$(docker ps -q --filter label=com.docker.compose.project=$(DEV_PROJECT) \
 		--filter label=com.docker.compose.service=paddock-gateway | head -1); \
 	gw_env=$$([ -n "$$gw" ] && docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $$gw | \
 		sed -n 's/^PADDOCK_ENV=//p' | tail -1); \
 	bash $(COMPOSE_DIR)/scripts/load-guard.sh $(COMPOSE_DIR) "$$gw_env" $$(docker ps -a \
-		--filter label=com.docker.compose.project=paddock --format '{{.Label "com.docker.compose.project.config_files"}}' | \
+		--filter label=com.docker.compose.project=$(DEV_PROJECT) --format '{{.Label "com.docker.compose.project.config_files"}}' | \
 		tr ',' '\n' | sort -u)
 
 .PHONY: load-identities
@@ -457,7 +474,7 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 	@test -n "$(CONFIGS)" || { echo "usage: make load-identities CONFIGS='token-1.json token-2.json …' [COUNT=10000]"; exit 2; }
 	@$(LOAD_GUARD)
 	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/identities ./test/load/cmd/identities
-	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
+	docker run --rm --network $(DEV_PROJECT)_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
 		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
 		--server http://paddock-gateway:8081 --client-ip --out $(LOAD_DIR)/identities.json
 
@@ -465,7 +482,7 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 load-test: ## Run the k6 scenario SCENARIO=checkin|ingest against the running stack (RATE, VUS, WARMUP, DURATION, EVENTS_PER_S, BATCH, DRAIN, SCRAPE_INTERVAL_S)
 	@test -s $(LOAD_DIR)/identities.json || { echo "missing $(LOAD_DIR)/identities.json: run make load-identities"; exit 2; }
 	@$(LOAD_GUARD)
-	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
+	docker run --rm --network $(DEV_PROJECT)_cp -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
 		-e IDENTITIES=/data/identities.json \
 		$(foreach v,RATE VUS WARMUP DURATION EVENTS_PER_S BATCH DRAIN GATEWAY_URL PROMETHEUS_URL SCRAPE_INTERVAL_S,$(if $($(v)),-e $(v)='$($(v))',)) \
 		$(K6_IMAGE) run --summary-export /data/$(SCENARIO)-summary.json /scripts/$(SCENARIO).js

@@ -72,7 +72,7 @@ func gateF1(t *testing.T, d *Device, fleetd string) {
 		t.Errorf("fleetd files: %q", out)
 	}
 	if env := d.Must("sudo cat /etc/paddock/orbit.env"); !strings.Contains(env, "ORBIT_DISABLE_UPDATES=true") ||
-		!strings.Contains(env, "ORBIT_ENABLE_SCRIPTS=false") || !strings.Contains(env, "ORBIT_FLEET_URL=https://fleet.paddock.localhost:8443") {
+		!strings.Contains(env, "ORBIT_ENABLE_SCRIPTS=false") || !strings.Contains(env, "ORBIT_FLEET_URL=https://fleet.paddock.localhost:"+portal.HTTPSPort()) {
 		t.Errorf("orbit.env:\n%s", env)
 	}
 	uuid := d.Must("sudo cat /sys/class/dmi/id/product_uuid")

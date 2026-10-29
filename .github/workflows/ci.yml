@@ -88,7 +88,9 @@ jobs:
 
   # The acceptance gates run in shards, each job against its own stack (PDK-359): the whole suite took 101 min on one
   # runner (2026-10-21) against a budget of 96 min (plan M8f S11). Every gate runs in exactly one shard
-  # (test/acceptance/cmd/acceptanceshard); adding a shard number is enough, the total comes from the matrix.
+  # (test/acceptance/cmd/acceptanceshard); adding a shard number is enough, the total comes from the matrix. Four
+  # shards of ~32 min of measured gate time each (PDK-361, 2026-10-29): a fifth would save only ~3 min because
+  # TestAuditExactlyOnce alone takes ~29 min.
   # Only towards main (PDK-526): per-ticket pull requests go into a cluster branch with the fast jobs above, and the
   # gates run once on the cluster's pull request to main, on main itself and on the schedule; the queue of 20 runners
   # of a public repository cannot run them for every pull request.
@@ -97,13 +99,13 @@ jobs:
     needs: [lint, test, web, secrets, trivy]
     if: github.event_name != 'pull_request' || github.base_ref == 'main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 135 # make up 8 min + acceptance 120 min + logs
+    timeout-minutes: 135 # make up 8 min + acceptance 120 min + logs; a shard job takes ~41 min
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     env:
-      ACCEPTANCE_TIMEOUT: 120m # ~35 min per shard on a runner (estimate from the 2026-10-21 durations)
+      ACCEPTANCE_TIMEOUT: 120m # ~32 min per shard on a runner (median durations of 2026-10-29)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -222,6 +224,12 @@ jobs:
       - name: compose logs
         if: failure()
         run: make logs
+      # As in the shard jobs: make logs loses Fleet's first minutes (PDK-054).
+      - name: Fleet log
+        if: failure()
+        run: |
+          docker ps -aq --filter label=com.docker.compose.project=paddock --filter label=com.docker.compose.service=fleet \
+            | xargs -r -n1 docker logs 2>&1
 
   # The required status check "acceptance" of the default branch ruleset: green only if every shard and the e2e job
   # are; a skipped job (failed prerequisites) fails it too. On pull requests into other branches it is skipped together
