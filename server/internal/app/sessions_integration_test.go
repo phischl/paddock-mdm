@@ -249,22 +249,27 @@ func TestEndAllSessionsCallsOutsideTheTransaction(t *testing.T) {
 	}
 }
 
-// roleDirectory answers RoleGroupUsers from groups; a group it does not know does not exist.
+// roleDirectory answers RoleGroupsUsers from groups and records the names of every call; a group it does not know
+// does not exist and is skipped.
 type roleDirectory struct {
-	ports.UserDirectory
 	groups map[string][]ports.IdentityUser
+	calls  *[][]string
 }
 
-func (d roleDirectory) RoleGroupUsers(_ context.Context, name string) ([]ports.IdentityUser, error) {
-	if users, ok := d.groups[name]; ok {
-		return users, nil
+func (d roleDirectory) RoleGroupsUsers(_ context.Context, names []string) ([]ports.IdentityUser, error) {
+	if d.calls != nil {
+		*d.calls = append(*d.calls, names)
 	}
-	return nil, ports.ErrGroupNotFound
+	var out []ports.IdentityUser
+	for _, name := range names {
+		out = append(out, d.groups[name]...)
+	}
+	return out, nil
 }
 
 // TestPortalUsers (plan M8f decision 16): the portal users are the platform administrators and the members of the
 // three role groups of every organization, each once; a group that does not exist yet is skipped, any other error
-// fails the listing.
+// fails the listing. Every role group is asked for in one call to the directory, not one call per group (PDK-501).
 func TestPortalUsers(t *testing.T) {
 	_, super, org := adminHarness(t)
 	var slug string
@@ -277,7 +282,8 @@ func TestPortalUsers(t *testing.T) {
 	}
 	t.Cleanup(platform.Close)
 	root, alice, bob := ports.IdentityUser{PK: "1"}, ports.IdentityUser{PK: "2"}, ports.IdentityUser{PK: "3"}
-	dir := roleDirectory{groups: map[string][]ports.IdentityUser{
+	var calls [][]string
+	dir := roleDirectory{calls: &calls, groups: map[string][]ports.IdentityUser{
 		organization.PlatformAdminsGroup():                        {root},
 		organization.RoleGroup(slug, organization.GroupAdmins):    {alice},
 		organization.RoleGroup(slug, organization.GroupOperators): {alice, bob},
@@ -290,6 +296,12 @@ func TestPortalUsers(t *testing.T) {
 	if fmt.Sprint(users) != fmt.Sprint([]ports.IdentityUser{root, alice, bob}) {
 		t.Fatalf("portal users %v, want root, alice and bob once", users)
 	}
+	if len(calls) != 1 || calls[0][0] != organization.PlatformAdminsGroup() ||
+		!slices.Contains(calls[0], organization.RoleGroup(slug, organization.GroupAdmins)) ||
+		!slices.Contains(calls[0], organization.RoleGroup(slug, organization.GroupOperators)) ||
+		!slices.Contains(calls[0], organization.RoleGroup(slug, organization.GroupAuditors)) {
+		t.Fatalf("directory calls %v, want one call with every role group", calls)
+	}
 	failing := failingDirectory{roleDirectory: dir}
 	if _, err := app.NewPortalUsers(platform, failing).PortalUsers(ctx); err == nil {
 		t.Fatal("a failing role group listing was ignored")
@@ -299,6 +311,6 @@ func TestPortalUsers(t *testing.T) {
 // failingDirectory fails every listing.
 type failingDirectory struct{ roleDirectory }
 
-func (failingDirectory) RoleGroupUsers(context.Context, string) ([]ports.IdentityUser, error) {
+func (failingDirectory) RoleGroupsUsers(context.Context, []string) ([]ports.IdentityUser, error) {
 	return nil, problem.UpstreamUnavailable
 }

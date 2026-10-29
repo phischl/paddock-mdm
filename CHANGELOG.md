@@ -155,6 +155,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every minute and sets `paddock_audit_verify_last_run_timestamp_seconds` and
   `paddock_audit_verify_failed_organizations` from them. Organizations whose verification errored without a recorded
   run count only on the verifying replica. The alert rules are unchanged.
+- End all sessions with many organizations (PDK-501): Paddock now looks up the portal users of all role groups in a
+  few batched Authentik requests instead of one request per role group. Before, with about 90 organizations the
+  lookup exceeded the request's time budget and *End all sessions* failed with `upstream_unavailable`, so an
+  installation of that size could not end all sessions in an incident.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
