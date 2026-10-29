@@ -364,6 +364,23 @@ binding is identified by the policy. Mode *all* keeps the development skip effec
 own devices, recovery codes included, not necessarily after a WebAuthn or TOTP validation; the consequence above that
 "no session from a weaker factor can enrol a passkey" holds only for e-mail, SMS and Duo. RR-62 names the risk.
 
+**Amendment 2026-10-29 (PDK-325): the device login follows the 2026-10-18 decision; recovery codes count as second
+factor.** The stage `paddock-device-mfa` (`deploy/compose/authentik/blueprints/paddock-device.yaml`) accepts one
+recovery code in place of the TOTP code at each prompt; no deny stage is added. RR-62 names the device login; lab case in
+`docs/operations/device-login.md` (*Checking the device login factor (lab)*).
+
+**Amendment 2026-10-29 (PDK-521): one device prompt per approval.** The device-code entry flow `paddock-device-code`
+binds no stage; the blueprint removes its former binding of `paddock-device-mfa` (order 10, `state: absent`) on upgrade,
+under a `!Find` condition on that binding, because Authentik fails the whole import on an absent entry whose object is
+missing. The stage stays bound at order 10 of the provider's authorization flow `paddock-device-authorization`, which
+runs for every approval whatever the entry path, so the approval keeps a fresh second factor. Every path asks for the
+device factor once, after the brand's sign-in `paddock-admin-login` when the user is not signed in to Authentik (the
+stage's existing `last_auth_threshold` of 5 minutes still skips it after a TOTP code or passkey at the same stage in the
+same browser; a recovery code never does): a user who answers with recovery codes spends two codes when not signed in,
+one when signed in. Skipping the device prompt after an MFA of another stage in the same browser session is not part of
+this amendment. RR-62 and `docs/operations/device-login.md` carry the counts; `server/internal/prodcheck` checks the
+blueprint.
+
 ### 3.4 End all sessions ends the administrators' Authentik sessions too (PDK-190) — ADR 0034 amendment 2026-10-18, ADR 0007 amendment
 
 16. `app.Sessions` MUST gain two dependencies and end the Authentik sessions inside the same action:
