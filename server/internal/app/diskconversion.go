@@ -56,6 +56,10 @@ const (
 // undelivered encrypt_disk command (plan M8e §14.5 decisions 38 and 39).
 const ConversionCancelledBeforeDelivery = "before_delivery"
 
+// ConversionCancelledAfterDelivery is the param conversion_cancelled of a Retire that closed a prepared conversion or
+// one with an abort on its way (plan M8e §14.5 decision 38, amendment 2026-10-28).
+const ConversionCancelledAfterDelivery = "after_delivery"
+
 // DiskConversionInput is an in-place encryption request.
 type DiskConversionInput struct {
 	ConfirmHostname string
@@ -350,11 +354,13 @@ func lockConversion(ctx context.Context, q *pgstore.Queries, row pgstore.DeviceD
 
 // withdrawConversion is the in-place encryption part of a Retire, Lock or Destroy (plan M8e §14.5 decisions 38 and
 // 39): they are never refused for a conversion. A requested conversion whose command has not reached the device is
-// cancelled with it (params conversion_cancelled before_delivery and conversion_id on the action's one event); any
-// other open conversion is left alone and recorded as conversion_id and conversion_phase. It returns the command to
-// drop from cmd:<device_id> after the commit.
+// cancelled with it (params conversion_cancelled before_delivery and conversion_id on the action's one event). With
+// closeOpen (Retire, amendment 2026-10-28) a prepared conversion or one with an abort on its way is closed as
+// cancelled and a pending encrypt_disk_abort withdrawn (conversion_cancelled after_delivery). Any other open
+// conversion is left alone and recorded as conversion_id and conversion_phase. It returns the command to drop from
+// cmd:<device_id> after the commit.
 func withdrawConversion(ctx context.Context, q *pgstore.Queries, claims *resultClaims, rec Recorder, deviceID uuid.UUID,
-	now time.Time) (uuid.UUID, error) {
+	now time.Time, closeOpen bool) (uuid.UUID, error) {
 	conv, err := loadDiskConversion(ctx, q, deviceID, nil)
 	if err != nil || conv == nil || !disk.Open(conv.DeviceDiskConversion.Phase) {
 		return uuid.Nil, err
@@ -362,7 +368,21 @@ func withdrawConversion(ctx context.Context, q *pgstore.Queries, claims *resultC
 	row := conv.DeviceDiskConversion
 	rec.SetParam("conversion_id", row.ID.String())
 	phase := row.Phase
-	if row.Phase == disk.PhaseRequested && undelivered(conv.CommandStatus) {
+	switch {
+	// An abort is issued only for a delivered encrypt_disk, which may have expired since (ExpireDeviceCommands also
+	// expires delivered commands): the abort decides, so the conversion is closed after delivery and the abort
+	// withdrawn rather than cancelled before delivery (PDK-396 review 1 finding 1).
+	case closeOpen && (row.Phase == disk.PhasePrepared || abortOnItsWay(conv.AbortCommandStatus)):
+		drop, closed, locked, err := closeDeliveredConversion(ctx, q, claims, deviceID, row, now)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if closed {
+			rec.SetParam("conversion_cancelled", ConversionCancelledAfterDelivery)
+			return drop, nil
+		}
+		phase = locked
+	case row.Phase == disk.PhaseRequested && undelivered(conv.CommandStatus):
 		drop, _, locked, err := cancelUndeliveredConversion(ctx, q, claims, deviceID, row, now)
 		if err != nil {
 			return uuid.Nil, err
@@ -375,6 +395,48 @@ func withdrawConversion(ctx context.Context, q *pgstore.Queries, claims *resultC
 	}
 	rec.SetParam("conversion_phase", phase)
 	return uuid.Nil, nil
+}
+
+// closeDeliveredConversion closes a requested or prepared conversion of a retired device as cancelled and withdraws
+// its pending encrypt_disk_abort through the result claim (plan M8e §14.5 decision 38, amendment 2026-10-28). The
+// abort command is locked before the conversion (the lock order of lockConversion); the encrypt_disk command is
+// not locked, since a second command row lock could deadlock against the bulk ExpireDeviceCommands (PDK-396 review 1
+// finding 2). It returns the abort command to drop from cmd:<device_id> after the commit (uuid.Nil when none was
+// withdrawn), whether the row was closed, and its phase under the row lock: an event that moved it meanwhile wins.
+func closeDeliveredConversion(ctx context.Context, q *pgstore.Queries, claims *resultClaims, deviceID uuid.UUID,
+	row pgstore.DeviceDiskConversion, now time.Time) (uuid.UUID, bool, string, error) {
+	var abort *pgstore.DeviceCommand
+	if row.AbortCommandID.Valid {
+		cmd, err := q.LockDeviceCommand(ctx, row.AbortCommandID.UUID)
+		if err != nil {
+			return uuid.Nil, false, "", err
+		}
+		abort = &cmd
+	}
+	phase, err := q.LockDiskConversionPhase(ctx, row.ID)
+	if err != nil || (phase != disk.PhaseRequested && phase != disk.PhasePrepared) {
+		return uuid.Nil, false, phase, err
+	}
+	drop := uuid.Nil
+	if abort != nil && abort.Status == devicecommand.StatusPending {
+		// A result the device claimed first leaves the command alone; the conversion is closed all the same, and
+		// the abort's later result no longer matches an open row (AbortDiskConversion).
+		_, withdrawn, err := withdrawUninstallCommand(ctx, q, claims.cache, claims, deviceID, *abort, now)
+		if err != nil {
+			return uuid.Nil, false, phase, err
+		}
+		if withdrawn {
+			drop = abort.ID
+		}
+	}
+	n, err := q.CloseDiskConversion(ctx, pgstore.CloseDiskConversionParams{ID: row.ID, At: now.UTC()})
+	if err != nil {
+		return uuid.Nil, false, phase, err
+	}
+	if n != 1 {
+		return uuid.Nil, false, phase, fmt.Errorf("close conversion %s: %d rows under its lock", row.ID, n)
+	}
+	return drop, true, disk.PhaseCancelled, nil
 }
 
 // refuseActiveConversion refuses an uninstall while the device's in-place encryption is active (plan M8e §14.5

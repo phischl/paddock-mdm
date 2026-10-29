@@ -62,9 +62,11 @@ make system-test VM=paddock-ie-2404 T='^TestInPlaceEncryptionCleanupAdopt$$'
 ```
 
 The ISOs default to `~/Downloads/ubuntu-26.04.1-desktop-amd64.iso` and `~/Downloads/ubuntu-24.04.5.1-desktop-amd64.iso`.
-`$$` is make's escape for `$`: a bare `$` at the end of `T` is dropped, the pattern becomes a prefix match and also
-runs every test whose name starts the same; a run whose log lacks `--- PASS:` for its gate is not green, whatever its
-exit code (a filter that matches nothing passes). Never name a throwaway VM together with a base VM in `VM`: the base
+`T` reaches `go test -run` verbatim: anchors work as written, also inside subtest patterns
+(`T='^TestIdentityGates$/.*/^L1_login$'`), and the `$$` above is equivalent (`$$` in a Go pattern is a doubled `$`
+anchor). Leave out the `$` and the pattern becomes a prefix match that also runs every test whose name starts the same.
+A run whose filter matches no test fails with `no test ran` (`go test` itself would report it as passed); a run whose
+log lacks `--- PASS:` for its gate is still not green, whatever its exit code. Never name a throwaway VM together with a base VM in `VM`: the base
 gates would run on the throwaway name. The in-place encryption gates (plan M8e §9) install their VM without disk
 encryption from `test/vms/virtualbox/autoinstall/unencrypted-lvm.yaml.tmpl` (26.04, guided LVM) or
 `unencrypted-plain.yaml.tmpl` (24.04, ext4 on a partition), with GDM logging the test user in, and then install the

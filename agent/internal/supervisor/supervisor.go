@@ -240,7 +240,12 @@ func (s *Supervisor) onRequest(ctx context.Context) {
 	}
 	s.testing = true
 	go func() {
-		s.tested <- selfTest{version: req.Version, slot: slot, err: s.runSelfTest(ctx, slot, req.Version)}
+		err := s.runSelfTest(ctx, slot, req.Version)
+		// The shutdown kills the self-test, and Run's select may pick the error over ctx.Done: that error is no verdict
+		// on the release, so it is dropped and the request stays for the restart (PDK-061, PDK-372).
+		if ctx.Err() == nil {
+			s.tested <- selfTest{version: req.Version, slot: slot, err: err}
+		}
 	}()
 }
 
