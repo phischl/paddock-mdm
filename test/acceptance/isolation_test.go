@@ -227,7 +227,7 @@ func TestOrganizationIsolation(t *testing.T) {
 		}
 	}
 	// And the acme audit log as a whole holds no globex event.
-	acmeEvents, err := w.alice.AuditEvents(ctx, "")
+	acmeEvents, err := w.alice.AuditEvents(testContext(t, time.Minute), "")
 	if err != nil {
 		t.Fatal(err)
 	}
