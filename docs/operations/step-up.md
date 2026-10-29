@@ -90,7 +90,10 @@ The portal sign-in makes sure that every administrator has a WebAuthn authentica
   counts one of the account's recovery codes as the TOTP factor and accepts it here as well. Only an account with no
   WebAuthn or TOTP authenticator enrols a WebAuthn authenticator here, after the password (residual risk RR-62).
 - Order 31, `paddock-admin-login-webauthn`: runs only for an account without a WebAuthn device (policy
-  `paddock-admin-login-webauthn-missing`). An administrator with TOTP only has just proven the TOTP code or entered a
+  `paddock-admin-login-webauthn-missing`) that is a direct member of a portal role group, `paddock.platform.admins`
+  or an organization's `admins`, `operators` or `auditors` group (policy
+  `paddock-admin-login-webauthn-administrator`, ADR 0034 amendment 2026-10-29): the flow is also the brand's
+  sign-in of the device-code page, where end users are not asked to enrol a passkey. An administrator with TOTP only has just proven the TOTP code or entered a
   recovery code and enrols a WebAuthn authenticator now; the password alone never enrols a key for an account with
   TOTP or WebAuthn, but the password and one recovery code do (RR-62: keep administrators' recovery codes in custody).
 
