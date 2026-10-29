@@ -135,16 +135,3 @@ entries:
       email: carol@globex.test
       type: internal
       password: !Env DEV_CAROL_PASSWORD
-
-  # MCP login (plan M14 §3.3 item 11): one-minute access tokens, so that the expiry gate need not wait 30 minutes.
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-mcp.yaml
-      required: true
-
-  - model: authentik_providers_oauth2.oauth2provider
-    identifiers:
-      name: paddock-mcp
-    attrs:
-      access_token_validity: minutes=1

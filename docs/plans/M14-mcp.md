@@ -174,11 +174,17 @@ troubleshooting workflows to the assistant.
       `paddock/paddock-mcp.yaml` and `access_token_validity: minutes=1` for the provider (the gate for an expired
       token needs it; production keeps 30 minutes). No TOTP swap is needed: the login flow's dev bindings already
       apply.
+      *Amendment 2026-10-29 (PDK-467):* the dev access-token validity comes from `PADDOCK_MCP_ACCESS_TOKEN_VALIDITY`
+      (`compose.dev.yaml`, `minutes=1`); production keeps `minutes=30`; the overlay override is removed.
 12. **api configuration**: `PADDOCK_OIDC_MCP_ISSUER` (required when MCP is to be offered; empty = MCP login
     disabled and `/api/auth/mcp/*` answers 404) and `PADDOCK_OIDC_MCP_CLIENT_ID` (default `paddock-mcp`);
     `compose.yaml` sets the issuer to `https://auth.${PADDOCK_DOMAIN}:${PADDOCK_HTTPS_PORT}/application/o/paddock-mcp/`
     for `paddock-api`; `deploy/bundle` carries no new secret (public client). `admin.OIDCConfig` for the MCP
     provider has no client secret; `admin.OIDC.Discover` loads its JWKS like the other two.
+    *Amendment 2026-10-29 (PDK-492):* `compose.yaml` keeps the development form with the HTTPS port;
+    `compose.prod.yaml` overrides `PADDOCK_OIDC_MCP_ISSUER` without a port
+    (`https://auth.<domain>/application/o/paddock-mcp/`), like the portal and step-up issuers; `bundle_test` refuses
+    issuers with an explicit port in every production/lab render.
 13. **Endpoints** (BFF, hand-written, tag `auth`, `security: []`, excluded from code generation like the other
     `/api/auth/*` routes), §6.1:
     - `GET /api/auth/mcp/config` → `{issuer, client_id, scopes: ["openid","profile","email","groups","offline_access"],

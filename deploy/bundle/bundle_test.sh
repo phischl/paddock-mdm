@@ -109,6 +109,12 @@ for host in controlplane audit lab lab-backup controlplane-auto-unseal lab-auto-
   else
     pass "(a) every OIDC issuer of the $host configuration has no explicit port"
   fi
+  # The one-minute MCP access tokens are a development setting (paddock-mcp.yaml, PDK-467).
+  if grep -q 'PADDOCK_MCP_ACCESS_TOKEN_VALIDITY' "$work/repo.yaml"; then
+    fail "(a) the $host configuration sets PADDOCK_MCP_ACCESS_TOKEN_VALIDITY, a development setting"
+  else
+    pass "(a) the $host configuration keeps the production MCP access token lifetime"
+  fi
 done
 
 # (b) Every mounted file is shipped; a removed one is named.
