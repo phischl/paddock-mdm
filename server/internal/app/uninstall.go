@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"slices"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/domain/devicecommand"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -357,4 +359,62 @@ func dropWithdrawnCommand(ctx context.Context, cache UninstallCache, deviceID, i
 		slog.WarnContext(ctx, "removing the withdrawn uninstall from the device cache failed", "device_id", deviceID,
 			"command_id", id, "error", err)
 	}
+}
+
+// uninstallRefusedForGood is the refusal reason of the command uninstall that can never succeed: the device rejected
+// the params themselves. conversion_pending and revocation_pending clear up, so those requests stay open for the
+// administrator to cancel or request again; there is no automatic retry (plan M8d amendment 2026-10-28, PDK-403).
+const uninstallRefusedForGood = "invalid_params"
+
+// terminalUninstallRefusal reports the reason of a failed command result that refuses an uninstall for good; ok is
+// false for any other result.
+func terminalUninstallRefusal(status string, result json.RawMessage) (string, bool) {
+	if status != protocol.CommandFailed {
+		return "", false
+	}
+	var res command.UninstallAccepted
+	if json.Unmarshal(result, &res) != nil || res.Accepted || res.Reason != uninstallRefusedForGood {
+		return "", false
+	}
+	return res.Reason, true
+}
+
+// endRefusedUninstall records the refused uninstall command and ends its open request in one transaction (audited
+// once: device.uninstall_failed, actor the device). A duplicate result, or a refusal of a command that is no longer
+// the device's open request (cancelled, requested again), only records the command result as usual.
+func endRefusedUninstall(ctx context.Context, runner *ActionRunner, r ingest.CommandResult, result json.RawMessage,
+	reason string) error {
+	spec := ActionSpec{
+		Code:   audit.CodeDeviceUninstallFailed,
+		Actor:  &audit.Actor{Type: audit.ActorDevice, ID: r.DeviceID.String()},
+		Target: &audit.Target{Type: "device", ID: r.DeviceID.String()},
+		Params: map[string]any{"command_id": r.CommandID.String(), "reason": reason},
+	}
+	_, err := runner.RecordOnceWith(ctx, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
+		// The lock order of Request and Cancel: the device first, then its command.
+		dev, err := q.LockDevice(ctx, r.DeviceID)
+		if db.IsNoRows(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		n, err := q.FinishDeviceCommand(ctx, pgstore.FinishDeviceCommandParams{
+			ID: r.CommandID, DeviceID: r.DeviceID, Status: r.Status, Result: result, FinishedAt: r.ReceivedAt,
+		})
+		if err != nil || n != 1 {
+			return false, err
+		}
+		ended, err := q.EndFailedUninstall(ctx, pgstore.EndFailedUninstallParams{ID: r.DeviceID, CommandID: r.CommandID})
+		if err != nil || ended != 1 {
+			return false, err
+		}
+		rec.SetTarget(audit.Target{Type: "device", ID: r.DeviceID.String(), Display: dev.Hostname})
+		rec.SetParam("hostname", dev.Hostname)
+		if dev.UninstallMode != nil {
+			rec.SetParam("mode", *dev.UninstallMode)
+		}
+		return true, nil
+	})
+	return err
 }

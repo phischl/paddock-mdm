@@ -41,7 +41,7 @@ func newConversionWorld(t *testing.T) conversionWorld {
 	}
 	t.Cleanup(worker.Close)
 	w.conversions = app.NewDiskConversions(w.runner, w.api, w.cache)
-	w.commands = app.NewDeviceCommands(worker)
+	w.commands = app.NewDeviceCommands(app.NewActionRunner(worker, nil, httpx.RequestID), worker)
 	w.health(t, w.device, eligibleHealth)
 	return w
 }

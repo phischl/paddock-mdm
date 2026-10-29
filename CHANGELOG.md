@@ -74,6 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A device that refuses the removal of Paddock because the request itself is invalid no longer leaves the request
+  open: it ends at once, with one audit event by the device, so an administrator can request it again. A refusal that
+  clears up (an in-place encryption or a Lock or Destroy pending) keeps the request open, and the device page and the
+  admin API now show why the device refused (PDK-403).
 - `make system-test` and `make acceptance` fail with `no test ran` when the test filter `T` matches no test instead of
   reporting the empty run as passed (PDK-339), and pass `T` to `go test -run` verbatim, so a `$` anchor no longer gets
   lost in make's variable expansion (`T='^TestIdentityGates$/.*/^L1_login$'`); `$$` keeps working.

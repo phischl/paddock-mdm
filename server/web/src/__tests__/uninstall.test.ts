@@ -85,7 +85,7 @@ async function type(testid: string, value: string): Promise<void> {
 
 const pending: DeviceUninstall = {
   mode: 'leave', requested_at: '2026-10-18T09:00:00Z', command_id: 'c1', command_status: 'pending', uninstalled_at: null,
-  local_admin: null, tpm: null, report_overdue: false,
+  local_admin: null, tpm: null, report_overdue: false, refused_reason: null,
 }
 
 describe('remove Paddock (plan M8d decision 42)', () => {
@@ -171,6 +171,22 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     await flushPromises()
     expect(text('revocation-uninstall-cancelled')).toContain('It may already have removed the revocation module')
     expect(onChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows why the device refused the removal and offers the cancel (PDK-403)', async () => {
+    await mountZone({ uninstall: { ...pending, command_status: 'failed', refused_reason: 'conversion_pending' } })
+    expect(text('uninstall-refused')).toContain('The device refused the removal: an in-place encryption of its disk is pending.')
+    expect(el('uninstall-cancel-request')).not.toBeNull()
+  })
+
+  it('shows a refusal reason the catalog does not know as the device reported it', async () => {
+    await mountZone({ uninstall: { ...pending, command_status: 'failed', refused_reason: 'helper_failed' } })
+    expect(text('uninstall-refused')).toContain('The device refused the removal: helper_failed.')
+  })
+
+  it('shows no refusal while the device has not refused', async () => {
+    await mountZone({ uninstall: { ...pending, command_status: 'delivered' } })
+    expect(el('uninstall-refused')).toBeNull()
   })
 
   it('offers the cancel again once the removal report is overdue', async () => {
