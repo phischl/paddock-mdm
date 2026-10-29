@@ -684,7 +684,7 @@ func renderSkill(tools []Tool) []byte {
 		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", t.Name, t.Tag, cell(skillSummary(t)))
 	}
 	b.WriteString("\n## Other operations the MCP does not offer\n\n")
-	b.WriteString("API tokens, the MCP settings, uploads and downloads that are not JSON.\n\n" +
+	b.WriteString("Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are not JSON.\n\n" +
 		"| Operation | Tag | Summary |\n| --- | --- | --- |\n")
 	for _, t := range hidden {
 		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", t.Name, t.Tag, cell(skillSummary(t)))

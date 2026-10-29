@@ -241,7 +241,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 
 ## Other operations the MCP does not offer
 
-API tokens, the MCP settings, uploads and downloads that are not JSON.
+Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are not JSON.
 
 | Operation | Tag | Summary |
 | --- | --- | --- |
