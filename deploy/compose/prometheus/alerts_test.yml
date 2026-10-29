@@ -427,6 +427,46 @@ tests:
         alertname: PaddockAuditVerifyStale
         exp_alerts: []
 
+  - name: with two audit writers, the replica that loses the verification lock follows the recorded run and does not warn
+    interval: 1m
+    input_series:
+      # Replica a verifies every 24 h; replica b loses the lock and takes the same end from the recorded run 5 minutes
+      # later (PDK-421).
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer-a:9090"}'
+        values: "0x1440 86400x1440 172800x1440 259200x600"
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer-b:9090"}'
+        values: "0x1445 86400x1440 172800x1440 259200x595"
+    alert_rule_test:
+      - eval_time: 37h2m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 61h2m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 82h
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+
+  - name: with two audit writers, a replica whose last run does not advance warns on its own
+    interval: 1m
+    input_series:
+      # Replica a verifies every 24 h; replica b keeps its start-up value, as before PDK-421 when it lost the lock.
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer-a:9090"}'
+        values: "0x1440 86400x1440"
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer-b:9090"}'
+        values: "0x2880"
+    alert_rule_test:
+      - eval_time: 36h59m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 37h2m
+        alertname: PaddockAuditVerifyStale
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer-b:9090" }
+            exp_annotations:
+              summary: "The audit chain was not verified for 36 hours"
+              description: "The audit writer's last nightly chain verification finished 1d 13h 2m 0s ago; check the audit writer's log for the 00:45 UTC cycle."
+
   - name: an unset last run after a restart during a database outage warns after one hour
     interval: 1m
     input_series:

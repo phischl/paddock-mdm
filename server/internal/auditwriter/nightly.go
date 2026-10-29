@@ -60,6 +60,8 @@ type verifyIndex interface {
 	latestNightlyRun(ctx context.Context) (finished time.Time, ok bool, err error)
 	// latestFailedOrganizations returns the organizations whose newest recorded nightly window or sample day failed.
 	latestFailedOrganizations(ctx context.Context) ([]uuid.UUID, error)
+	// organizations returns every organization of the index, without the verification lock.
+	organizations(ctx context.Context) ([]auditOrganization, error)
 }
 
 // Nightly verifies, every night, the last VerifyWindowDays sealed days of every organization plus one random older
@@ -83,9 +85,12 @@ func NewNightly(pool *db.AuditWriterPool, verifier *Verifier, recorder *Recorder
 const lastRunRetry = time.Minute
 
 // RunNightly seeds the gauges, then runs Cycle every day at 00:45 UTC (VerifyDelay) until ctx ends. While the
-// last nightly runs cannot be read, it retries every lastRunRetry until the read succeeds or a cycle sets the gauge.
+// last nightly runs cannot be read, it retries every lastRunRetry until the read succeeds or a cycle sets the gauges.
+// When another replica holds the verification lock, it takes both gauges from that replica's recorded runs instead,
+// re-reading every lastRunRetry until the next cycle is due (plan M8b amendment 2026-10-29, PDK-421).
 func (n *Nightly) RunNightly(ctx context.Context) {
-	seeded := n.seedLastRun(ctx, false)
+	pending := !n.seedLastRun(ctx, false, false)
+	following := false
 	for {
 		now := n.now().UTC()
 		next := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Add(VerifyDelay)
@@ -93,7 +98,7 @@ func (n *Nightly) RunNightly(ctx context.Context) {
 			next = next.AddDate(0, 0, 1)
 		}
 		wait := next.Sub(now)
-		retry := !seeded && wait > lastRunRetry
+		retry := (pending || following) && wait > lastRunRetry
 		if retry {
 			wait = lastRunRetry
 		}
@@ -103,27 +108,41 @@ func (n *Nightly) RunNightly(ctx context.Context) {
 		case <-n.after(wait):
 		}
 		if retry {
-			seeded = n.seedLastRun(ctx, true)
-			continue
+			if n.seedLastRun(ctx, following, true) {
+				pending = false
+			}
+			// A slow read or a late timer can pass the due time; the next loop would then schedule tomorrow.
+			if n.now().Before(next) {
+				continue
+			}
 		}
+		following = false
 		switch err := n.Cycle(ctx); {
 		case errors.Is(err, ErrVerifyLocked):
 			slog.InfoContext(ctx, "nightly verification skipped: another replica is verifying")
+			// The lock holder records organization by organization and writes no end-of-cycle marker, so no single
+			// read proves its cycle complete; re-reading until the next cycle reaches the complete set within
+			// lastRunRetry of the holder's last record.
+			following = true
+			if n.seedLastRun(ctx, true, false) {
+				pending = false
+			}
 		case err != nil:
 			slog.ErrorContext(ctx, "nightly verification failed", "error", err)
 		default:
-			seeded = true
+			pending = false
 		}
 	}
 }
 
-// seedLastRun logs a failed initLastRun unless retried is set, so a long outage logs once, and reports success.
-func (n *Nightly) seedLastRun(ctx context.Context, retried bool) bool {
-	err := n.initLastRun(ctx)
+// seedLastRun logs a failed initLastRun unless retried is set, so a long outage logs once, and reports whether it
+// set the gauges.
+func (n *Nightly) seedLastRun(ctx context.Context, locked, retried bool) bool {
+	set, err := n.initLastRun(ctx, locked)
 	if err != nil && !retried {
 		slog.WarnContext(ctx, "reading the last nightly verification failed; retrying every minute", "error", err)
 	}
-	return err == nil
+	return set
 }
 
 // initLastRun sets the last-run gauge to the end of the newest recorded nightly run or, without any, to now, so that
@@ -131,22 +150,47 @@ func (n *Nightly) seedLastRun(ctx context.Context, retried bool) bool {
 // gauge unset: the exported 0 lets PaddockAuditVerifyStale fire, because a start-time seed would mask a stale
 // verification for up to 37 h (plan M8b decision 27, amendment 2026-10-25). It also sets the failed-organizations
 // gauge from the newest recorded nightly and sample runs, so a restart does not clear an active
-// PaddockAuditChainBroken (amendment 2026-10-29); it sets neither gauge unless both reads succeed.
-func (n *Nightly) initLastRun(ctx context.Context) error {
+// PaddockAuditChainBroken (amendment 2026-10-29); it sets neither gauge unless both reads succeed. locked marks a
+// read after a cycle another replica holds the lock for: without any recorded nightly run it leaves both gauges as
+// they are, because the start-time fallback would then mask a holder that records nothing, unless no organization
+// has a sealable day, so the holder had nothing to record (amendment 2026-10-29, PDK-421). It reports whether it set
+// the gauges.
+func (n *Nightly) initLastRun(ctx context.Context, locked bool) (bool, error) {
 	finished, ok, err := n.index.latestNightlyRun(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	failed, err := n.index.latestFailedOrganizations(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !ok {
+		if locked {
+			idle, err := n.nothingToVerify(ctx)
+			if err != nil || !idle {
+				return false, err
+			}
+		}
 		finished = n.now()
 	}
 	metricVerifyFailedOrganizations.Set(float64(len(failed)))
 	metricVerifyLastRun.Set(float64(finished.Unix()))
-	return nil
+	return true, nil
+}
+
+// nothingToVerify reports whether no organization has a day up to LastSealableDay, so a cycle records no run.
+func (n *Nightly) nothingToVerify(ctx context.Context) (bool, error) {
+	orgs, err := n.index.organizations(ctx)
+	if err != nil {
+		return false, err
+	}
+	to := LastSealableDay(n.now())
+	for _, org := range orgs {
+		if !dayOf(org.FirstDay).After(to) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // Cycle verifies every organization once: its nightly window up to LastSealableDay and, if older days exist, one
@@ -223,20 +267,39 @@ func (p poolIndex) lockedOrganizations(ctx context.Context, fn func(ctx context.
 			return ErrVerifyLocked
 		}
 		defer func() { _, _ = q.ReleaseAuditVerifyLock(context.WithoutCancel(ctx)) }()
-		ids, err := q.ListAuditOrganizations(ctx)
+		orgs, err := listOrganizations(ctx, q)
 		if err != nil {
 			return err
 		}
-		orgs := make([]auditOrganization, len(ids))
-		for i, id := range ids {
-			first, err := q.FirstAuditDay(ctx, id)
-			if err != nil {
-				return err
-			}
-			orgs[i] = auditOrganization{ID: id, FirstDay: first}
-		}
 		return fn(ctx, orgs)
 	})
+}
+
+func (p poolIndex) organizations(ctx context.Context) ([]auditOrganization, error) {
+	var orgs []auditOrganization
+	err := p.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		orgs, err = listOrganizations(ctx, q)
+		return err
+	})
+	return orgs, err
+}
+
+// listOrganizations returns every organization of the index with its first audit day.
+func listOrganizations(ctx context.Context, q *auditstore.Queries) ([]auditOrganization, error) {
+	ids, err := q.ListAuditOrganizations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	orgs := make([]auditOrganization, len(ids))
+	for i, id := range ids {
+		first, err := q.FirstAuditDay(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		orgs[i] = auditOrganization{ID: id, FirstDay: first}
+	}
+	return orgs, nil
 }
 
 func (p poolIndex) latestNightlyRun(ctx context.Context) (time.Time, bool, error) {

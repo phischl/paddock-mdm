@@ -89,6 +89,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nightly audit verification (PDK-420): a restart of the audit writer no longer clears an active
   `PaddockAuditChainBroken`. At start the writer now sets `paddock_audit_verify_failed_organizations` from the newest
   recorded nightly window and sample day of every organization, instead of 0 until the next 00:45 UTC cycle.
+- Nightly audit verification (PDK-421): with more than one audit-writer replica, a replica that loses the
+  `audit-verify` lock no longer raises a false `PaddockAuditVerifyStale` after two nights, and no longer keeps a stale
+  `PaddockAuditChainBroken` value. Until the next cycle is due, it re-reads the runs the verifying replica records
+  every minute and sets `paddock_audit_verify_last_run_timestamp_seconds` and
+  `paddock_audit_verify_failed_organizations` from them. Organizations whose verification errored without a recorded
+  run count only on the verifying replica. The alert rules are unchanged.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per

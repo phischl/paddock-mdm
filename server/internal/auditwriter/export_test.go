@@ -55,6 +55,8 @@ func (f *FakeIndex) latestFailedOrganizations(context.Context) ([]uuid.UUID, err
 	return f.Failed, f.FailedErr
 }
 
+func (f *FakeIndex) organizations(context.Context) ([]auditOrganization, error) { return f.Orgs, nil }
+
 // VerifyFunc and RecordFunc stand in for the verifier and the recorder.
 type (
 	VerifyFunc func(ctx context.Context, org uuid.UUID, from, to time.Time) (*Report, error)
@@ -75,7 +77,10 @@ func NewTestNightly(index *FakeIndex, verify VerifyFunc, record RecordFunc, metr
 }
 
 // InitLastRun runs the start-up part of RunNightly.
-func InitLastRun(n *Nightly, ctx context.Context) error { return n.initLastRun(ctx) }
+func InitLastRun(n *Nightly, ctx context.Context) error {
+	_, err := n.initLastRun(ctx, false)
+	return err
+}
 
 // SetAfter replaces the timer RunNightly waits on.
 func SetAfter(n *Nightly, after func(time.Duration) <-chan time.Time) { n.after = after }
@@ -105,7 +110,8 @@ func PoolIndex(pool *db.AuditWriterPool) (
 	locked func(ctx context.Context, fn func(ctx context.Context, orgs []AuditOrganization) error) error,
 	latest func(ctx context.Context) (time.Time, bool, error),
 	failed func(ctx context.Context) ([]uuid.UUID, error),
+	orgs func(ctx context.Context) ([]AuditOrganization, error),
 ) {
 	p := poolIndex{pool}
-	return p.lockedOrganizations, p.latestNightlyRun, p.latestFailedOrganizations
+	return p.lockedOrganizations, p.latestNightlyRun, p.latestFailedOrganizations, p.organizations
 }
