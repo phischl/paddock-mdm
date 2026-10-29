@@ -993,3 +993,14 @@ PDK-160 once PDK-150 is merged; PDK-163 and PDK-164 MAY run in parallel after PD
   minutes). Default: 15.
 - **Open question:** whether profile changes should be staged in a later milestone (ADR option B2). Default: not in
   M11.
+
+## Amendment 2026-10-29 (plan M10 refresh)
+
+Plan M10 decision 15a (the worker's purge of `change_set.before` after 90 days, store `change_set_before`) is
+implemented by **PDK-154**, the ticket that creates the column with migration `00046_change_set_before.sql` of
+decision 17 — not by M10: at M10's start the column does not exist. PDK-154 adds the pass `PurgeChangeSetBefore`
+to `worker.Retention` (plan M10 amendment A3: after pass 4, batches of 1 000, one `retention.purged` per
+organization and round when > 0, `paddock_retention_stores` + 1) and keeps the `GRANT UPDATE (before,
+before_purged_at)` of decision 17 in its own migration. The non-goal "no retention or purge of `change_set.before`"
+in §4 is narrowed accordingly; the matrix row stays with ADR 0032. The migration number `00046` of decision 17 is
+historical: PDK-154 takes the number main's registry assigns at ticket start.
