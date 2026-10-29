@@ -221,8 +221,9 @@ Authentik is down. Run the action again once Authentik is back, so that the iden
 **AI assistants (MCP).** Authentik applies the blueprint `paddock-mcp.yaml` at its start, like the portal and step-up
 blueprints: the public OIDC provider and application `paddock-mcp` (device authorization grant, the portal's login
 flow, the device providers' MFA authorization flow, 30-minute access and 8-hour refresh tokens) for
-`paddockctl mcp login`. `compose.yaml` sets `PADDOCK_OIDC_MCP_ISSUER` of `paddock-api` to
-`https://auth.<domain>:<https port>/application/o/paddock-mcp/` (`PADDOCK_DOMAIN`, `PADDOCK_HTTPS_PORT`); set it to an empty value to switch the MCP login off
+`paddockctl mcp login`. `compose.prod.yaml` sets `PADDOCK_OIDC_MCP_ISSUER` of `paddock-api` to
+`https://auth.<domain>/application/o/paddock-mcp/`, like the portal's issuer (no port); set it to an empty value to
+switch the MCP login off
 (`/api/auth/mcp/*` then answers 404). `PADDOCK_OIDC_MCP_CLIENT_ID` defaults to `paddock-mcp`. The provider is a public
 client, so there is no new secret. The MCP stays off in every organization and on the platform until an administrator
 saves a policy: `docs/operations/mcp.md`.
