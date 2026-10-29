@@ -43,6 +43,9 @@ entries:
       # The portal's sub, so that an MCP login reaches the same admin_account row.
       sub_mode: hashed_user_id
       issuer_mode: per_provider
+      # The device code lives ten minutes like the device logins' (adapters/authentik/devicelogin.go): Authentik's
+      # default access_code_validity of one minute expires before a person finishes password and MFA.
+      access_code_validity: minutes=10
       access_token_validity: minutes=30
       # The portal's absolute session lifetime.
       refresh_token_validity: hours=8
