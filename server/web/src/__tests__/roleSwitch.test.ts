@@ -46,7 +46,11 @@ async function mountApp(me: Me, locale: PortalLocale = 'en'): Promise<VueWrapper
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:path(.*)*', component: { render: () => null } }] })
   await router.push('/')
   await router.isReady()
-  wrapper = mount(App, { global: { plugins: [createPortalI18n(locale), vuetify, router, pinia] }, attachTo: document.body })
+  wrapper = mount(App, {
+    // Vuetify 4.3 wraps VAlert in a transition; the default stub would carry the alert's attributes instead of the alert.
+    global: { plugins: [createPortalI18n(locale), vuetify, router, pinia], stubs: { transition: false } },
+    attachTo: document.body,
+  })
   await flushPromises()
   return wrapper
 }
