@@ -509,10 +509,15 @@ func (a *AgentReleases) StartRollout(ctx context.Context, version string, o Roll
 		if r.Status != agentrelease.StatusPublished {
 			return problem.InvalidState.WithDetail("only published releases can be rolled out")
 		}
+		exists := problem.AlreadyExists.WithDetail("this release already has a rollout; resume it instead")
 		if _, err := q.GetAgentRollout(ctx, version); err == nil {
-			return problem.AlreadyExists.WithDetail("this release already has a rollout; resume it instead")
+			return exists
 		}
 		out, err = q.InsertAgentRollout(ctx, p)
+		// A concurrent start of the same release passed the check above and committed first (PDK-452).
+		if db.IsUniqueViolation(err, "agent_rollout_pkey") {
+			return exists
+		}
 		if db.IsUniqueViolation(err, "agent_rollout_one_running_idx") {
 			return problem.InvalidState.WithDetail("another rollout is running; halt it first")
 		}
@@ -565,6 +570,12 @@ func (a *AgentReleases) Resume(ctx context.Context, version string) (pgstore.Age
 	return a.transition(ctx, SpecAgentRolloutResume, version, agentrelease.RolloutHalted, "", nil)
 }
 
+// ResumeFromHost is Resume with the system actor of the host commands (`paddock-server admin agent-rollout-resume`,
+// ADR 0034 amendment 2026-10-26, PDK-452): it only continues a rollout that was started and halted.
+func (a *AgentReleases) ResumeFromHost(ctx context.Context, version string) (pgstore.AgentRollout, error) {
+	return a.Resume(systemPlatform(ctx), version)
+}
+
 // transition moves a rollout from status from to status to; an empty to resumes (running, or completed when the
 // rollout had completed).
 func (a *AgentReleases) transition(ctx context.Context, spec ActionSpec, version, from, to string, reason *string) (pgstore.AgentRollout, error) {
@@ -576,7 +587,7 @@ func (a *AgentReleases) transition(ctx context.Context, spec ActionSpec, version
 	spec.Target = &t
 	var out pgstore.AgentRollout
 	err := a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		r, err := q.GetAgentRollout(ctx, version)
+		r, err := q.LockAgentRollout(ctx, version)
 		if err != nil {
 			return notFound(err)
 		}

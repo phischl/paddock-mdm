@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limited. `GET /api/v1/me`, `GET /api/v1/mcp/access` (what the caller's MCP sessions may do) and
   `GET /api/v1/mcp/catalog` (the tool catalog) always answer. New metric `paddock_mcp_requests_total{class, result}`.
   An MCP session calling `POST /api/v1/me/mcp-write/enable` or `…/disable` now gets 403 `mcp_tool_not_allowed`.
+- Resume an agent rollout from the control-plane host (PDK-452, ADR 0034 addendum 2026-10-29):
+  `./paddock agent-rollout-resume <version>` (`paddock-server admin agent-rollout-resume` in `paddock-api`) continues a
+  halted rollout like *Resume* in the portal, with the system actor `paddock-server admin` and audit code
+  `agent_rollout.resumed`; it covers no other rollout (residual risk RR-90). `docs/operations/agent-releases.md` now
+  explains that small fleets, such as a one-device lab, start their rollout with `--waves 100` or a short wave list.
 
 ### Changed
 
@@ -91,6 +96,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   threshold.
 - Portal, attention page (PDK-417): the kind filter now offers "In-place encryption failed", so failed in-place
   encryptions can be listed on their own.
+- Agent rollouts (PDK-452): two concurrent starts of the same release now refuse the second with `already_exists`
+  (409) instead of an internal error, and concurrent halts or resumes of one rollout change it once, record one
+  successful audit event and refuse the others with `invalid_state`. Before, every concurrent halt succeeded and each
+  recorded its own `agent_rollout.halted` event.
 - Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
   every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
   enrolment now applies only to members of Paddock's administrator groups (platform administrators and the

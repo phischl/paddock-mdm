@@ -269,6 +269,11 @@ Consequences: residual risk **RR-90** (*a host operator starts a fleet-wide roll
 `docs/compliance/residual-risks.md`); `docs/operations/agent-releases.md` and `install.md` §10 name the host
 commands. Further host commands that bypass the portal's factor need their own amendment.
 
+Addendum 2026-10-29 (PDK-452): resume joins start and halt on the host path (`paddock-server admin
+agent-rollout-resume`, bundle entry point `./paddock agent-rollout-resume <version>`), with the same host-root
+rationale; it only continues an already started rollout (audit code `agent_rollout.resumed`, the rollout's waves and
+thresholds unchanged); RR-90 applies.
+
 ## Amendment 2026-10-29 (PDK-498) — passkey enrolment of the brand sign-in for administrators only
 The forced passkey enrolment of the brand sign-in (stage B) applies only to members of Paddock administrator groups;
 end users approving a device sign-in are not asked to enrol a passkey.
