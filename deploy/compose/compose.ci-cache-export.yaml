@@ -1,0 +1,10 @@
+# CI only (PDK-510): writes the BuildKit layer cache for the next run, together with compose.ci-cache.yaml, when the
+# workflow's cache restore missed its exact key. The compiler target alone covers every stage worth caching (web, build
+# and compiler; the server image adds only its distroless base and the binary), and a single export avoids two targets
+# writing one directory. mode=max keeps the intermediate stages with the Go modules and npm packages. The export goes
+# into a fresh directory that replaces the old one afterwards, so the cache never accumulates stale layers.
+services:
+  paddock-compiler:
+    build:
+      cache_to:
+        - type=local,dest=${PADDOCK_CI_BUILD_CACHE:?}/layers.new,mode=max

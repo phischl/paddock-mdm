@@ -59,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI: the acceptance jobs build the server images from a BuildKit layer cache kept in the GitHub Actions cache
+  (PDK-510), so Go modules, npm packages and apt packages are no longer downloaded on every run while their inputs are
+  unchanged. The server image now downloads its Go modules into an image layer instead of a BuildKit cache mount; after
+  a `go.sum` change a local build downloads all modules once instead of only the new ones. The edge job no longer
+  passes a GitHub Actions cache to its release build: it never took effect, and release images are built without a
+  layer cache. A local `make up` is unchanged.
 - Lab smoke test: runs against nginx 1.31.8 (was 1.28.3) and from now on follows the nginx mainline line (ADR 0029
   amendment 2026-10-28). No operator step: the image is a tooling image, is not part of the operator bundle, and the
   shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).

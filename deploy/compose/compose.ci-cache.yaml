@@ -1,0 +1,19 @@
+# CI only (PDK-510): the image builds of `make up` read the BuildKit layer cache that the workflow restores with
+# actions/cache into $PADDOCK_CI_BUILD_CACHE, so that unchanged Go module, npm and apt layers are not downloaded again.
+# The Makefile adds this file only when PADDOCK_CI_BUILD_CACHE is set; a local `make up` never sees it.
+x-ci-cache-from: &ci-cache-from
+  cache_from:
+    - type=local,src=${PADDOCK_CI_BUILD_CACHE:?}/layers
+
+services:
+  paddock-migrate: { build: *ci-cache-from }
+  paddock-api: { build: *ci-cache-from }
+  paddock-revocation-issuer: { build: *ci-cache-from }
+  paddock-escrow-reader: { build: *ci-cache-from }
+  paddock-outbox-relay: { build: *ci-cache-from }
+  paddock-worker: { build: *ci-cache-from }
+  paddock-gateway: { build: *ci-cache-from }
+  paddock-compiler: { build: *ci-cache-from }
+  paddock-audit-migrate: { build: *ci-cache-from }
+  paddock-audit-writer: { build: *ci-cache-from }
+  paddock-unsealer: { build: *ci-cache-from }

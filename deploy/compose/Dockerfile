@@ -28,14 +28,16 @@ COPY test/acceptance/go.mod test/acceptance/go.sum test/acceptance/
 COPY test/load/go.mod test/load/
 COPY test/system/go.mod test/system/go.sum test/system/
 COPY tools/upstreamwatch/go.mod tools/upstreamwatch/
-RUN --mount=type=cache,target=/go/pkg/mod cd server && go mod download
+# A plain layer, not a cache mount: CI restores the build cache from an export, and BuildKit never exports cache mounts,
+# so the modules would be downloaded again on every CI run (PDK-510).
+RUN cd server && go mod download
 COPY pkg/ pkg/
 COPY server/ server/
 COPY --from=web /src/server/web/dist/ server/web/dist/
 # The release tag without the leading v; GET /api/v1/me answers it as server_version (PDK-430). Declared here so a
 # new version does not invalidate the cached module download above.
 ARG PADDOCK_VERSION=0.0.0-dev
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build \
     GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -ldflags="-s -w -X github.com/phischl/paddock-mdm/server/internal/buildinfo.Version=${PADDOCK_VERSION}" -o /out/paddock-server ./server/cmd/paddock-server
 

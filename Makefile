@@ -33,9 +33,13 @@ ifneq ($(BACKUP),)
 export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
 endif
 
+# CI only (PDK-510): the workflow sets PADDOCK_CI_BUILD_CACHE (and PADDOCK_CI_BUILD_CACHE_EXPORT on a cache miss) for
+# the BuildKit layer cache of the image builds; unset, as locally, the Compose files are unchanged.
+CI_CACHE_FILES := $(if $(PADDOCK_CI_BUILD_CACHE),compose.ci-cache.yaml $(if $(PADDOCK_CI_BUILD_CACHE_EXPORT),compose.ci-cache-export.yaml),)
+
 COMPOSE := docker compose --project-directory $(COMPOSE_DIR) -p paddock \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
-	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES),-f $(COMPOSE_DIR)/$(f))
+	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES) $(CI_CACHE_FILES),-f $(COMPOSE_DIR)/$(f))
 
 NODE_RUN := docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 	-v $(CURDIR):/src -w /src/$(WEB_DIR) $(NODE_IMAGE)
@@ -471,7 +475,7 @@ RELEASE_PGBACKREST_REPO ?= $(RELEASE_REGISTRY)/paddock-pgbackrest
 RELEASE_DIR             ?= dist/release/$(RELEASE_VERSION)
 RELEASE_SOURCE          ?= https://github.com/phischl/paddock-mdm
 DOCKER_CONFIG_DIR       ?= $(HOME)/.docker
-# Extra flags of every docker buildx build, e.g. the workflow's layer cache (--cache-from/--cache-to type=gha).
+# Extra flags of every docker buildx build.
 RELEASE_BUILDX_FLAGS    ?=
 RELEASE_IMAGES           = server=$(RELEASE_SERVER_REPO):$(RELEASE_VERSION) compiler=$(RELEASE_COMPILER_REPO):$(RELEASE_VERSION) \
 	pgbackrest=$(RELEASE_PGBACKREST_REPO):$(RELEASE_VERSION)

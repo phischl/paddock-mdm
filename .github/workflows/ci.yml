@@ -109,7 +109,36 @@ jobs:
           go-version: "1.27.3"
           cache-dependency-path: "**/go.sum"
       - run: make dev-secrets
+      # BuildKit layer cache of the image builds in make up (PDK-510): Go modules, npm packages and apt layers come from
+      # the cache instead of the network while their inputs are unchanged. The key changes only with those inputs; an
+      # exact hit is not saved again, a miss (restored from an older key or nothing) exports and saves a fresh cache.
+      # Pull requests save into their own branch scope, so they never change what main restores.
+      - name: Pinned BuildKit image (deploy/compose/versions.env)
+        id: pins
+        run: |
+          ref="$(sed -n 's/^BUILDKIT_IMAGE=//p' deploy/compose/versions.env)"
+          [[ "$ref" =~ ^[a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] || { echo "BUILDKIT_IMAGE in versions.env is not tag@sha256:<digest>"; exit 1; }
+          echo "BUILDKIT_IMAGE=$ref" >> "$GITHUB_OUTPUT"
+      # use: false keeps every other docker build of the job on the default builder; only make up selects this one.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        id: buildx
+        with:
+          driver-opts: image=${{ steps.pins.outputs.BUILDKIT_IMAGE }}
+          use: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: image-cache
+        with:
+          path: ${{ runner.temp }}/image-cache
+          key: image-layers-${{ hashFiles('deploy/compose/Dockerfile', 'deploy/compose/versions.env', 'go.work.sum', '**/go.sum', 'server/web/package-lock.json') }}
+          restore-keys: image-layers-
       - run: make up
+        env:
+          BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+          PADDOCK_CI_BUILD_CACHE: ${{ runner.temp }}/image-cache
+          PADDOCK_CI_BUILD_CACHE_EXPORT: ${{ steps.image-cache.outputs.cache-hit != 'true' && '1' || '' }}
+      - name: Replace the image layer cache with this run's export
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        run: rm -rf "$RUNNER_TEMP/image-cache/layers" && mv "$RUNNER_TEMP/image-cache/layers.new" "$RUNNER_TEMP/image-cache/layers"
       - run: make dev-seed
       - run: make acceptance SHARD=${{ matrix.shard }}/${{ strategy.job-total }}
       - name: compose logs
@@ -138,7 +167,36 @@ jobs:
           go-version: "1.27.3"
           cache-dependency-path: "**/go.sum"
       - run: make dev-secrets
+      # BuildKit layer cache of the image builds in make up (PDK-510): Go modules, npm packages and apt layers come from
+      # the cache instead of the network while their inputs are unchanged. The key changes only with those inputs; an
+      # exact hit is not saved again, a miss (restored from an older key or nothing) exports and saves a fresh cache.
+      # Pull requests save into their own branch scope, so they never change what main restores.
+      - name: Pinned BuildKit image (deploy/compose/versions.env)
+        id: pins
+        run: |
+          ref="$(sed -n 's/^BUILDKIT_IMAGE=//p' deploy/compose/versions.env)"
+          [[ "$ref" =~ ^[a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] || { echo "BUILDKIT_IMAGE in versions.env is not tag@sha256:<digest>"; exit 1; }
+          echo "BUILDKIT_IMAGE=$ref" >> "$GITHUB_OUTPUT"
+      # use: false keeps every other docker build of the job on the default builder; only make up selects this one.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        id: buildx
+        with:
+          driver-opts: image=${{ steps.pins.outputs.BUILDKIT_IMAGE }}
+          use: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: image-cache
+        with:
+          path: ${{ runner.temp }}/image-cache
+          key: image-layers-${{ hashFiles('deploy/compose/Dockerfile', 'deploy/compose/versions.env', 'go.work.sum', '**/go.sum', 'server/web/package-lock.json') }}
+          restore-keys: image-layers-
       - run: make up
+        env:
+          BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+          PADDOCK_CI_BUILD_CACHE: ${{ runner.temp }}/image-cache
+          PADDOCK_CI_BUILD_CACHE_EXPORT: ${{ steps.image-cache.outputs.cache-hit != 'true' && '1' || '' }}
+      - name: Replace the image layer cache with this run's export
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        run: rm -rf "$RUNNER_TEMP/image-cache/layers" && mv "$RUNNER_TEMP/image-cache/layers.new" "$RUNNER_TEMP/image-cache/layers"
       - run: make dev-seed
       # End every portal session and restart OpenBao, so they run alone (plan M8s gate S13, plan M8u gate U4).
       - name: Disruptive acceptance gates
@@ -211,10 +269,11 @@ jobs:
         run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Edge version
         run: echo "EDGE_VERSION=edge-$(date -u +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      # Built without a layer cache (PDK-510): a release image must not reuse a cached apt-get upgrade layer (security
+      # fixes after the base digest) or layers a cache could carry over from another build.
       - name: Edge images, SBOMs, bundle, checksums and signatures
         run: |
-          make release-images RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge PUSH=1 \
-            RELEASE_BUILDX_FLAGS="--cache-from type=gha,scope=edge --cache-to type=gha,mode=max,scope=edge"
+          make release-images RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge PUSH=1
           make release-sbom RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
           make release-bundle RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
           make release-sums RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
