@@ -77,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Clock drift (PDK-418): a check-in that arrives while the worker records a clock drift episode can no longer open
+  the episode (`device.clock_drift`) on an offset already back within 60 s or close it (`device.clock_drift_cleared`)
+  on an offset that is again beyond 30 s; the episode is changed only when the offset at that moment still meets the
+  threshold.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
