@@ -12,7 +12,9 @@ import (
 )
 
 // prometheusURL is the development Prometheus (compose.dev.yaml publishes it on 127.0.0.1:9091).
-func prometheusURL() string { return stack.Env("PADDOCK_TEST_PROMETHEUS_URL", "http://127.0.0.1:9091") }
+func prometheusURL() string {
+	return stack.Env("PADDOCK_TEST_PROMETHEUS_URL", stack.LoopbackURL("PADDOCK_DEV_PROMETHEUS_PORT", "9091"))
+}
 
 func prometheusGet(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, prometheusURL()+path, nil)
