@@ -58,6 +58,7 @@
     "switchRoleConfirmMessage": "Ihre aktuelle Sitzung endet, und privilegierte Aktionen brauchen eine neue Step-up-Anmeldung.",
     "switchRoleConfirm": "Wechseln",
     "switchRoleFailed": "Die Rolle konnte nicht gewechselt werden. Bitte versuchen Sie es erneut.",
+    "roleFallbackOrganizationInactive": "Ihre Organisation ist nicht aktiv; Sie sind als Plattformadministrator angemeldet.",
     "stepUpValidUntil": "Identität bestätigt bis {time}",
     "stepUpNone": "Keine aktuelle Identitätsbestätigung",
     "stepUpChip": "Bestätigt bis {time}"

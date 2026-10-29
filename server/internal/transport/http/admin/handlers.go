@@ -102,6 +102,19 @@ func (h *handlers) alternateRole(ctx context.Context) *adminapi.MeAlternateRole 
 	return out
 }
 
+// roleFallbackKey carries the session's sign-in fallback (ADR 0045 amendment 2026-10-29) to GET and PATCH /api/v1/me.
+type roleFallbackKey struct{}
+
+// roleFallback is the role_fallback of GET and PATCH /api/v1/me; nil without one.
+func roleFallback(ctx context.Context) *adminapi.MeRoleFallback {
+	f, ok := ctx.Value(roleFallbackKey{}).(string)
+	if !ok || f == "" {
+		return nil
+	}
+	out := adminapi.MeRoleFallback(f)
+	return &out
+}
+
 var _ adminapi.StrictServerInterface = (*handlers)(nil)
 
 func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (adminapi.GetMeResponseObject, error) {
@@ -115,6 +128,7 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
+	out.RoleFallback = roleFallback(ctx)
 	if h.stepUpTiming != nil {
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
@@ -150,6 +164,7 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
+	out.RoleFallback = roleFallback(ctx)
 	return adminapi.UpdateMe200JSONResponse(out), nil
 }
 

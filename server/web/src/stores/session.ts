@@ -19,6 +19,8 @@ export const useSessionStore = defineStore('session', () => {
   const canReadGroups = computed(() => !!role.value && role.value !== 'platform_admin')
   /** The role this identity may switch to (ADR 0045 decision 3); null for single-role identities. */
   const alternateRole = computed(() => me.value?.alternate_role ?? null)
+  /** Why a plain sign-in entered the platform role instead of the organization role (ADR 0045 amendment 2026-10-29). */
+  const roleFallback = computed(() => me.value?.role_fallback ?? null)
 
   function load(): Promise<Me | null> {
     if (me.value) return Promise.resolve(me.value)
@@ -80,7 +82,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   return {
-    me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, alternateRole,
+    me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, alternateRole, roleFallback,
     load, setLocale, setTheme, logout, switchRole,
   }
 })

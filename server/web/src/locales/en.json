@@ -58,6 +58,7 @@
     "switchRoleConfirmMessage": "Your current session ends and privileged actions need a new step-up.",
     "switchRoleConfirm": "Switch",
     "switchRoleFailed": "The role could not be switched. Please try again.",
+    "roleFallbackOrganizationInactive": "Your organization is not active; you are signed in as platform administrator.",
     "stepUpValidUntil": "Identity confirmed until {time}",
     "stepUpNone": "No current identity confirmation",
     "stepUpChip": "Confirmed until {time}"
