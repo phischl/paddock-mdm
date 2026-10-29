@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest'
+import type { AttentionKind } from '../api/client'
 import {
   attentionFilter, attentionKinds, parsePackages, validateHold, validateSettings, validateStaleness, validPackage, validSchedule,
 } from '../lib/updates'
 import en from '../locales/en.json'
+
+// A Record over the enum fails to compile when the API adds a kind, so the filter check below cannot miss one.
+const everyKind: Record<AttentionKind, true> = {
+  stale_warning: true, stale_critical: true, presumed_lost: true, quarantined: true, disk_not_compliant: true, agent_outdated: true,
+  login_apply_failed: true, sudo_apply_failed: true, revocation_pending: true, revocation_expired: true, agent_rollback_pending: true,
+  agent_not_running: true, uninstall_pending: true, config_behind: true, disk_conversion_failed: true, clock_drift: true, event_gap: true,
+}
 
 const settings = {
   security_daily_at: '03:00', regular_schedule: 'Sat 04:00', regular_updates_enabled: true, max_random_delay_min: 60,
@@ -61,5 +69,10 @@ describe('updates', () => {
       expect(en.attention.action[k]).toBeTruthy()
     }
     expect(attentionKinds).toContain('agent_rollback_pending')
+  })
+
+  it('offers every attention kind exactly once in the filter', () => {
+    expect([...attentionKinds].sort()).toEqual(Object.keys(everyKind).sort())
+    expect(attentionKinds).toContain('disk_conversion_failed')
   })
 })
