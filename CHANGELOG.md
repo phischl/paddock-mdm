@@ -85,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Clock drift (PDK-418): a check-in that arrives while the worker records a clock drift episode can no longer open
+  the episode (`device.clock_drift`) on an offset already back within 60 s or close it (`device.clock_drift_cleared`)
+  on an offset that is again beyond 30 s; the episode is changed only when the offset at that moment still meets the
+  threshold.
 - Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
   every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
   enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
