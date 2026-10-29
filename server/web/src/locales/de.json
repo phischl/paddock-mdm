@@ -75,6 +75,7 @@
     "ipAllowlist": "IP-Freigabeliste",
     "sessions": "Sitzungen",
     "openbao": "OpenBao",
+    "platformMcp": "MCP-Richtlinie",
     "users": "Benutzer",
     "userGroups": "Gruppen",
     "permissionProfiles": "Berechtigungsprofile",
@@ -2159,5 +2160,35 @@
     "confirmFile": "Bestätigen, dass {name} auf einem sensiblen Pfad verwaltet bleiben darf? Anschließend bestätigen Sie Ihre Identität.",
     "deniedIntro": "Paddock verwaltet diese Pfade nicht mehr. Agents dieses Releases oder neuer lassen die Dateien auf den Geräten unverändert; ein älterer Agent löscht eine unveränderte Datei, sobald sie nicht mehr verteilt wird. Löschen Sie die Definitionen, die Sie nicht mehr brauchen.",
     "deleteDefinition": "Definition löschen"
+  },
+  "mcp": {
+    "title": "KI-Assistenten (MCP)",
+    "intro": "Administratoren melden sich mit ihrem Paddock-Konto am MCP an (`paddockctl mcp login`) und handeln mit ihrer eigenen Rolle. Diese Richtlinie begrenzt, was jede MCP-Sitzung dieser {scope} tun darf. Änderungen brauchen zusätzlich den eigenen Schreibzugriff des Administrators.",
+    "connectHint": "Um einen Assistenten anzubinden, führen Sie `paddockctl mcp login` aus und tragen `paddockctl mcp` in Ihrem MCP-Client ein. Details stehen im Betriebshandbuch.",
+    "enabled": "MCP aktiviert",
+    "writeEnabled": "Änderungen über das MCP erlauben",
+    "mode": {
+      "all": "Alle Werkzeuge, die die API anbietet",
+      "selected": "Nur ausgewählte Werkzeuge"
+    },
+    "tools": "Werkzeuge",
+    "filter": "Werkzeuge filtern",
+    "selectHint": "Wählen Sie mindestens ein Werkzeug aus.",
+    "class": {
+      "read": "lesen",
+      "write": "schreiben"
+    },
+    "portalOnly": "nur im Portal (Step-up)",
+    "defaultsHint": "Noch keine Richtlinie gespeichert: Das MCP ist für diese {scope} ausgeschaltet. Aktivieren Sie es und speichern Sie die Richtlinie, um MCP-Sitzungen zuzulassen.",
+    "disabledHint": "Das MCP ist ausgeschaltet: Jede MCP-Sitzung dieser {scope} wird abgewiesen.",
+    "save": "Richtlinie speichern",
+    "saved": "MCP-Richtlinie gespeichert.",
+    "confirm": {
+      "title": "MCP-Richtlinie speichern?",
+      "message": "{count} Werkzeuge stehen MCP-Sitzungen dieser {scope} zur Verfügung; Änderungen {writes, select, allowed {bleiben möglich} other {werden abgewiesen}}."
+    },
+    "scope": {
+      "platform": "Plattform"
+    }
   }
 }

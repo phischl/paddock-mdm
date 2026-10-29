@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an API token. paddockctl now depends on the MCP Go SDK `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
   `golang.org/x/oauth2`. The license gate allows `MIT-0` and exempts `github.com/segmentio/asm` (MIT-0, a dependency of
   the SDK that go-licenses cannot classify).
+- Portal page *Platform › MCP policy* (ADR 0044, PDK-441): platform administrators switch the MCP on or off for their
+  own MCP sessions, allow or refuse changes through the MCP, and choose between all tools and a selection of the
+  platform tools (grouped by area, filterable; step-up operations are shown as portal only). Without a saved policy
+  the page says that the MCP is switched off. Saving is confirmed and needs a step-up. There is no token page:
+  administrators connect with `paddockctl mcp login`.
 
 ### Changed
 

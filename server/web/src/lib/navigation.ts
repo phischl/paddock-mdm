@@ -101,6 +101,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/platform/ip-allowlist', label: 'nav.ipAllowlist', icon: 'globe-lock', visible: (a) => a.isPlatform },
       { to: '/platform/sessions', label: 'nav.sessions', icon: 'log-in', visible: (a) => a.isPlatform },
       { to: '/platform/openbao', label: 'nav.openbao', icon: 'shield-check', visible: (a) => a.isPlatform },
+      { to: '/platform/mcp', label: 'nav.platformMcp', icon: 'cog', visible: (a) => a.isPlatform },
     ],
   },
 ]
