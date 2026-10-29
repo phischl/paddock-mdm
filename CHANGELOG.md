@@ -58,20 +58,9 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
   limited. `GET /api/v1/me`, `GET /api/v1/mcp/access` (what the caller's MCP sessions may do) and
   `GET /api/v1/mcp/catalog` (the tool catalog) always answer. New metric `paddock_mcp_requests_total{class, result}`.
   An MCP session calling `POST /api/v1/me/mcp-write/enable` or `…/disable` now gets 403 `mcp_tool_not_allowed`.
-- Resume an agent rollout from the control-plane host (PDK-452, ADR 0034 addendum 2026-10-29):
-  `./paddock agent-rollout-resume <version>` (`paddock-server admin agent-rollout-resume` in `paddock-api`) continues a
-  halted rollout like *Resume* in the portal, with the system actor `paddock-server admin` and audit code
-  `agent_rollout.resumed`; it covers no other rollout (residual risk RR-90). `docs/operations/agent-releases.md` now
-  explains that small fleets, such as a one-device lab, start their rollout with `--waves 100` or a short wave list.
 
 ### Changed
 
-- Sign-in of an identity with the platform role and an organization role (ADR 0045 amendment 2026-10-29, PDK-458):
-  when the organization is unknown or not active, a plain sign-in now enters the platform role instead of
-  being refused, so a stale organization group no longer locks a platform administrator out. The `admin.login` event
-  carries the new param `fallback: organization_inactive`, `GET /api/v1/me` answers the new optional field
-  `role_fallback`, and the portal shows a notice for the whole session. A switch to the organization role stays
-  refused with `organization_inactive`.
 - CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
   weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
   tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the
@@ -95,72 +84,15 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 - Linter pinned to golangci-lint v2.15.0 (PDK-348). The supervisor now logs the agent's exit status
   (`agent stopped`, with `killed: true` when the agent ignored SIGTERM for 10 seconds) when it stops the agent for a
   switch, a rollback or shutdown.
-- Documentation: the device login counts one of the user's recovery codes as the second factor, like the portal and
-  Authentik's own sign-in (decided 2026-10-18 for the portal, 2026-10-29 for the device login), as long as the user's
-  TOTP authenticator is still registered. Residual risk RR-62 now names the device login, whose device-code sign-in
-  runs the portal sign-in first; `docs/operations/device-login.md` describes the lost-authenticator sign-in (one
-  recovery code per prompt, no passkey enrolment) and a lab check that a used recovery code is refused at the device
-  approval. No behaviour change (PDK-325).
-
-- Role membership audit and administrator accounts (PDK-424, ISO 27001 A.5.18): when all role groups of an
-  organization come back empty while role holders are recorded or administrator accounts are enabled, the worker now
-  checks whether its Authentik service token can still see the directory: each role group must be readable by name and
-  a user listing must return at least one user who is not a service account. If both hold, the organization really
-  lost its last role holders: each one is recorded as `admin.role_revoked` after two consecutive rounds, and the
-  administrator accounts are disabled and their sessions ended. Otherwise the round is refused as before, and nothing
-  is recorded or changed. New metric `paddock_identity_directory_refusals_total` counts refused organization rounds;
-  from three refusals in a row the worker logs a warning naming the organization, and the new alert
-  `PaddockRoleDirectoryRefused` (warning) fires when refusals continue for 15 minutes.
 
 ### Fixed
 
-- Clock drift (PDK-418): a check-in that arrives while the worker records a clock drift episode can no longer open
-  the episode (`device.clock_drift`) on an offset already back within 60 s or close it (`device.clock_drift_cleared`)
-  on an offset that is again beyond 30 s; the episode is changed only when the offset at that moment still meets the
-  threshold.
-- Portal, attention page (PDK-417): the kind filter now offers "In-place encryption failed", so failed in-place
-  encryptions can be listed on their own.
-- Agent rollouts (PDK-452): two concurrent starts of the same release now refuse the second with `already_exists`
-  (409) instead of an internal error, and concurrent halts or resumes of one rollout change it once, record one
-  successful audit event and refuse the others with `invalid_state`. Before, every concurrent halt succeeded and each
-  recorded its own `agent_rollout.halted` event.
-- End all sessions (PDK-342): the `platform.sessions_ended` audit event reports the identity-provider sessions that
-  actually ended. Before, when Authentik answered the session deletion slowly and Paddock repeated it, the event could
-  report 0 ended sessions although every session had ended.
-- Device login (PDK-521, plan M8f amendment 2026-10-29): approving a device sign-in on a second device asks for the
-  second factor of the device approval once, whether the code is typed on the `/device` page or opened with the QR
-  code. Before, typing the code asked twice when the first prompt was answered with a recovery code, so such a user
-  spent three recovery codes instead of two. Now a user who answers with recovery codes spends two codes when not
-  signed in on the second device and one when signed in. The Authentik blueprint `paddock-device.yaml` removes the prompt from the device-code page's flow
-  `paddock-device-code` on upgrade; the device approval keeps it.
-- Nightly audit verification (PDK-420): a restart of the audit writer no longer clears an active
-  `PaddockAuditChainBroken`. At start the writer now sets `paddock_audit_verify_failed_organizations` from the newest
-  recorded nightly window and sample day of every organization, instead of 0 until the next 00:45 UTC cycle.
-- Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
-  every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
-  enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
-  administrators, operators and auditors of every organization). End users approve with password and TOTP or a
-  recovery code; the portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml`
-  gains the policy `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
 - Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
   every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
   enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
   administrators, operators and auditors of every organization). End users approve with password and TOTP; the
   portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml` gains the policy
   `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
-- Nightly audit verification (PDK-420): a restart of the audit writer no longer clears an active
-  `PaddockAuditChainBroken`. At start the writer now sets `paddock_audit_verify_failed_organizations` from the newest
-  recorded nightly window and sample day of every organization, instead of 0 until the next 00:45 UTC cycle.
-- Nightly audit verification (PDK-421): with more than one audit-writer replica, a replica that loses the
-  `audit-verify` lock no longer raises a false `PaddockAuditVerifyStale` after two nights, and no longer keeps a stale
-  `PaddockAuditChainBroken` value. Until the next cycle is due, it re-reads the runs the verifying replica records
-  every minute and sets `paddock_audit_verify_last_run_timestamp_seconds` and
-  `paddock_audit_verify_failed_organizations` from them. Organizations whose verification errored without a recorded
-  run count only on the verifying replica. The alert rules are unchanged.
-- End all sessions with many organizations (PDK-501): Paddock now looks up the portal users of all role groups in a
-  few batched Authentik requests instead of one request per role group. Before, with about 90 organizations the
-  lookup exceeded the request's time budget and *End all sessions* failed with `upstream_unavailable`, so an
-  installation of that size could not end all sessions in an incident.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
@@ -201,16 +133,6 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 
 ### Security
 
-- Portal sign-in requires a passkey for every role (PDK-500, ADR 0034 amendment 2026-10-29): an existing Authentik
-  session from a sign-in with TOTP only (Authentik's own sign-in or the device-code page) no longer opens the portal
-  for a platform administrator, organization administrator, operator or auditor. Such a sign-in, and a role switch
-  from it, is refused with `/login-denied?reason=passkey_required` and one denied `admin.login` event; the page
-  explains the passkey and offers to sign out of the identity provider. The portal provider gains the mapping
-  `io.paddock/scope-login-mfa` (scope `paddock_mfa`), and `paddock-admin-login` gains the stage
-  `paddock-admin-login-webauthn-confirm` (order 32), where an administrator confirms a passkey just enrolled. Upgrade
-  note: Authentik must have applied the updated `paddock-portal.yaml` blueprint (it does at start) before the api
-  runs the new version, or every portal sign-in is refused. `PADDOCK_LOGIN_MFA_OPTIONAL` (development only) also
-  lifts the passkey requirement.
 - Agent releases (PDK-432): the database now enforces that a published release cannot change. An upload, host
   command or import that stores a file of a release which another administrator published in the meantime is refused
   with 409 `invalid_state` and keeps the recorded checksums of the release; a second concurrent publish is refused
