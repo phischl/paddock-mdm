@@ -40,6 +40,7 @@ const admin: Me = {
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: ['acme.test'] },
   locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
   server_version: '0.1.0-alpha.5', alternate_role: null, channel: 'portal', mcp_write_enabled: false,
+  mcp_write_enabled_at: null,
 }
 
 let wrapper: VueWrapper | null = null

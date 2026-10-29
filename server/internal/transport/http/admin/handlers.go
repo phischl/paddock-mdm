@@ -191,6 +191,10 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name,
 			Domains: domains}
 	}
+	if me.MCPWriteEnabledAt != nil {
+		at := me.MCPWriteEnabledAt.UTC()
+		out.McpWriteEnabledAt = &at
+	}
 	if me.APIToken != nil {
 		out.ApiToken = &adminapi.MeApiToken{Id: me.APIToken.ID, Name: me.APIToken.Name, ExpiresAt: me.APIToken.ExpiresAt.UTC()}
 	}

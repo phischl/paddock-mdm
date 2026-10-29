@@ -77,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Saving asks for confirmation and a step-up. The page names `paddockctl mcp login` as the way to connect; operators
   and auditors see the policy read-only. The audit log shows an *MCP* chip and the MCP client's name on events of an
   MCP session.
+- MCP write access in the portal's account menu (ADR 0044, PDK-442): the entry *AI assistant (MCP)* shows whether the
+  administrator's MCP sessions may change data and opens a dialog that explains the three layers (role, MCP policy,
+  own write access). *Enable write access* is confirmed and needs a step-up; *Disable write access* is confirmed and
+  takes effect at once. Auditors have no entry. `GET /api/v1/me` additionally answers `mcp_write_enabled_at`, since
+  when write access is enabled (null while it is disabled).
 
 ### Changed
 
