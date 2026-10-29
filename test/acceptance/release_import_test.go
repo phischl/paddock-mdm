@@ -35,7 +35,8 @@ func startGitHubFixture(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const label = "paddock.github-fixture"
+	// Per Compose project: the fixtures of a second development stack on the host are not this run's to remove.
+	label := "paddock.github-fixture=" + stack.Project()
 	if old, err := stack.Docker(ctx, nil, "ps", "-aq", "--filter", "label="+label); err == nil && strings.TrimSpace(old) != "" {
 		_, _ = stack.Docker(ctx, nil, append([]string{"rm", "-f"}, strings.Fields(old)...)...)
 	}
@@ -43,7 +44,7 @@ func startGitHubFixture(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	name := "paddock-github-fixture-" + uniqueSuffix()
-	if out, err := stack.Docker(ctx, nil, "run", "-d", "--rm", "--name", name, "--label", label, "--network", "paddock_cp",
+	if out, err := stack.Docker(ctx, nil, "run", "-d", "--rm", "--name", name, "--label", label, "--network", stack.Network("cp"),
 		"--network-alias", githubFixtureAlias, "-v", dir+":/srv:ro", image, "caddy", "file-server", "--root", "/srv",
 		"--listen", ":8080"); err != nil {
 		t.Fatalf("start the GitHub fixture server: %v: %s", err, out)
