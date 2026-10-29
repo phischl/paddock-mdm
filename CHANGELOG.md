@@ -109,6 +109,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Agent releases (PDK-432): the database now enforces that a published release cannot change. An upload, host
+  command or import that stores a file of a release which another administrator published in the meantime is refused
+  with 409 `invalid_state` and keeps the recorded checksums of the release; a second concurrent publish is refused
+  the same way. A release import refuses a release with more than one fleetd package for the same architecture
+  (`invalid_request`), and `PADDOCK_AGENT_RELEASE_SOURCE_REPO` no longer accepts an owner or repository of only dots
+  such as `..`.
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
   could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
 - undici 6.29.1 in the portal's build tooling (was 6.29.0; CVE-2026-109383, CVE-2026-87018 and CVE-2026-109869, high;
