@@ -779,13 +779,17 @@ gitleaks_strip_default = awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
 		"without global paths; its layout changed and must be looked at (ADR 0026)" >&2; exit 1; }
 # gitleaks_canary,<config dir>,<its path in the container>: the configuration in <config dir> must report a fake
 # GitHub token under node_modules/, vendor/github.com/ and an ordinary path chosen per run, so that an allowlist built
-# around the fixed canary paths (^[^nv./]) still fails it.
+# around the fixed canary paths (^[^nv./]) still fails it. The token never contains an l (PDK-388): the value-based
+# global allowlist of the default drops any secret containing "false", ending in "null" (both case-insensitive) or
+# containing the stopword "abcdefghijklmnopqrstuvwxyz", and each of them needs an l, so a random token from the full
+# alphabet was dropped about twice in a million and the canary then failed a configuration that was fine.
 GITLEAKS_CANARY = node_modules/canary.txt vendor/github.com/canary/canary.txt
+GITLEAKS_CANARY_ALPHABET = A-KM-Za-km-z0-9
 gitleaks_canary = rnd=$$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8); \
 	canaries="$(GITLEAKS_CANARY) src/$$rnd/canary.txt"; \
 	for f in $$canaries; do \
 		mkdir -p -- "$$tmp/canary/$${f%/*}" || exit 1; \
-		printf 'GITHUB_TOKEN=ghp_%s\n' "$$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)" \
+		printf 'GITHUB_TOKEN=ghp_%s\n' "$$(LC_ALL=C tr -dc '$(GITLEAKS_CANARY_ALPHABET)' </dev/urandom | head -c 36)" \
 			>"$$tmp/canary/$$f" || exit 1; done; \
 	mkdir -p "$$tmp/canary-out" || exit 1; \
 	docker run --rm --user "$$(id -u):$$(id -g)" -v $(1):$(2):ro -v "$$tmp/canary:/canary:ro" \
