@@ -268,3 +268,7 @@ borrowed platform accounts on small installations, which is worse for the audit 
 Consequences: residual risk **RR-90** (*a host operator starts a fleet-wide rollout without a second factor*,
 `docs/compliance/residual-risks.md`); `docs/operations/agent-releases.md` and `install.md` §10 name the host
 commands. Further host commands that bypass the portal's factor need their own amendment.
+
+## Amendment 2026-10-29 (PDK-498) — passkey enrolment of the brand sign-in for administrators only
+The forced passkey enrolment of the brand sign-in (stage B) applies only to members of Paddock administrator groups;
+end users approving a device sign-in are not asked to enrol a passkey.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -73,11 +74,17 @@ type RoleMembership struct {
 	org      *db.OrgPool
 	platform *db.PlatformPool
 	dir      ports.UserDirectory
+
+	mu sync.Mutex
+	// unmarked holds the roles ("scope/role") whose last mark transaction failed: a member that reappeared may still be
+	// marked missing, so the next miss is not a confirmed one (PDK-423). It lives in this process only; a restart or
+	// another worker replica taking the next round does not know it.
+	unmarked map[string]bool
 }
 
 // NewRoleMembership creates the use case.
 func NewRoleMembership(runner *ActionRunner, org *db.OrgPool, platform *db.PlatformPool, dir ports.UserDirectory) *RoleMembership {
-	return &RoleMembership{runner: runner, org: org, platform: platform, dir: dir}
+	return &RoleMembership{runner: runner, org: org, platform: platform, dir: dir, unmarked: map[string]bool{}}
 }
 
 // OrganizationRoleGroups lists the three role groups of the caller's organization; nil when the organization is not
@@ -127,6 +134,7 @@ func (r *RoleMembership) SyncOrganization(ctx context.Context, groups *RoleGroup
 	}
 	scope := roleScope{
 		scope: ScopeOrg,
+		key:   o.ID.String(),
 		tx:    r.org.InOrg,
 		write: func(ctx context.Context, q *pgstore.Queries, role string, m roleMember, granted bool) error {
 			if granted {
@@ -216,6 +224,7 @@ func (r *RoleMembership) SyncPlatform(ctx context.Context, groups *RoleGroups) e
 	}
 	scope := roleScope{
 		scope: ScopePlatform,
+		key:   "platform",
 		tx:    r.platform.InPlatform,
 		write: func(ctx context.Context, q *pgstore.Queries, role string, m roleMember, granted bool) error {
 			if granted {
@@ -262,7 +271,9 @@ type roleMember struct {
 // through the platform pool.
 type roleScope struct {
 	scope Scope
-	tx    func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error
+	// key names the scope's roles in RoleMembership.unmarked.
+	key string
+	tx  func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error
 	// write inserts (granted) or deletes the row of m.
 	write    func(ctx context.Context, q *pgstore.Queries, role string, m roleMember, granted bool) error
 	mark     func(ctx context.Context, q *pgstore.Queries, role, pk string, missing bool) error
@@ -274,7 +285,8 @@ type roleScope struct {
 // admin.role_revoked follows only when the next successful listing misses it again. Users are identified by their pk;
 // a renamed user keeps its role and its stored username. A missing group is skipped with a warning; a failing listing
 // changes nothing and is returned as error. After a comparison without error the role's snapshot is taken, which ends
-// its baseline.
+// its baseline. When the role's previous mark transaction failed, a stored mark may be stale (the member reappeared
+// but its mark was not cleared), so no member is revoked this round; members missed again stay marked.
 func (r *RoleMembership) compare(ctx context.Context, s roleScope, l roleListing) error {
 	role, group, listed, stored, baseline := l.role, l.group, l.members, l.stored, l.baseline
 	switch {
@@ -317,28 +329,33 @@ func (r *RoleMembership) compare(ctx context.Context, s roleScope, l roleListing
 		}
 		change(roleMember{pk: u.PK, username: u.Username}, true)
 	}
+	key := s.key + "/" + role
+	stale := r.unmarkedRole(key)
 	var marks []roleMember
 	var revoke []roleMember
 	for _, m := range stored {
 		switch {
 		case upstream[m.pk] && m.missing, !upstream[m.pk] && !m.missing:
 			marks = append(marks, m)
-		case !upstream[m.pk]:
+		case !upstream[m.pk] && !stale:
 			revoke = append(revoke, m)
 		}
 	}
+	var markErr error
 	if len(marks) > 0 {
-		if err := s.tx(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		markErr = s.tx(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 			for _, m := range marks {
 				if err := s.mark(ctx, q, role, m.pk, !m.missing); err != nil {
 					return err
 				}
 			}
 			return nil
-		}); err != nil {
-			errs = append(errs, fmt.Errorf("role %s: mark missing members: %w", role, err))
+		})
+		if markErr != nil {
+			errs = append(errs, fmt.Errorf("role %s: mark missing members: %w", role, markErr))
 		}
 	}
+	r.setUnmarkedRole(key, markErr != nil)
 	for _, m := range revoke {
 		if ctx.Err() != nil {
 			return errors.Join(append(errs, ctx.Err())...)
@@ -349,4 +366,20 @@ func (r *RoleMembership) compare(ctx context.Context, s roleScope, l roleListing
 		return err
 	}
 	return s.tx(ctx, func(ctx context.Context, q *pgstore.Queries) error { return s.snapshot(ctx, q, role) })
+}
+
+func (r *RoleMembership) unmarkedRole(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.unmarked[key]
+}
+
+func (r *RoleMembership) setUnmarkedRole(key string, failed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if failed {
+		r.unmarked[key] = true
+	} else {
+		delete(r.unmarked, key)
+	}
 }

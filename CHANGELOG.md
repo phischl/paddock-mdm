@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Entries of merged changes that are not released yet are in `changelog.d/`.
+
 ### Added
 
 - MCP tool catalog generated from the admin API contract (ADR 0044, PDK-434): `make gen` derives one tool per admin
@@ -59,6 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
+  weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
+  tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the
+  cluster branch goes to main. The required check `acceptance` still fails on a pull request to main unless every
+  gate passed (PDK-526).
+- Portal: while a new organization is being created, the *New organization* dialog says that the identity provider
+  is being set up and that this can take up to a minute (the create waits for that setup, bounded at 60 s); the
+  *Create* button stays disabled meanwhile (PDK-407).
 - Lab smoke test: runs against nginx 1.31.8 (was 1.28.3) and from now on follows the nginx mainline line (ADR 0029
   amendment 2026-10-28). No operator step: the image is a tooling image, is not part of the operator bundle, and the
   shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).
@@ -77,10 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `make acceptance` without `SHARD` or `T` no longer hits its timeout before the suite ends (PDK-463): a serial run
-  now defaults to `ACCEPTANCE_TIMEOUT=180m` (the gates take ~131 min in a row); a shard or a single gate keeps 120m,
-  and an explicit value still wins. `docs/operations/local-dev.md` describes running the suite serially or shard by
-  shard (`SHARD=i/N`) against one stack.
+- Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
+  every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
+  enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
+  administrators, operators and auditors of every organization). End users approve with password and TOTP; the
+  portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml` gains the policy
+  `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
@@ -114,6 +126,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   language, theme and density entries and the action buttons of the attention list and the overview now begin with
   their visible text and still name the target, e.g. "Retire, lock or keep — acme-lt-0142", so speech-input users can
   activate them by saying what they see. The portal's accessibility check runs with axe-core 4.14.
+- Role membership audit (PDK-423): when the worker fails to clear the "missing" mark of a role holder who reappeared
+  in the identity provider, the next listing that misses that holder no longer records `admin.role_revoked`; the
+  revocation needs two consecutive misses after a successful mark. The worker process remembers the failure until its
+  next successful round for that role.
 
 ### Security
 
