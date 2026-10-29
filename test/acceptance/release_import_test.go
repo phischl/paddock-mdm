@@ -146,7 +146,9 @@ func newImportBase(t *testing.T, root *env.Portal) importBase {
 		t.Fatal(err)
 	}
 	if len(page.Items) == 0 {
-		return importBase{}
+		// On a stack where no gate has published yet, the base must still be above the fixture's older release
+		// 0.0.1-alpha.1, or the check rightly picks that one (PDK-361: the gate ran first in its shard).
+		return importBase{patch: 2}
 	}
 	core, _, _ := strings.Cut(page.Items[0].Version, "+")
 	core, _, _ = strings.Cut(core, "-")
