@@ -419,7 +419,9 @@ func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 // TestPortalBlueprintLoginWebAuthnOnly (plan M8f decision 13 as amended on 2026-10-18): stage A at order 30 validates
 // any existing authenticator and enrols WebAuthn only for an account without one; stage B at order 31 enrols WebAuthn
 // after a TOTP validation (Authentik counts a recovery code as TOTP) and runs only for an account without a WebAuthn
-// device. The default flow's stage, which serves every Authentik user, keeps accepting TOTP.
+// device that is a direct member of a portal role group (ADR 0034 amendment 2026-10-29, PDK-498): the flow is also the
+// default brand's, which the device-code page runs for every device user. An expression error keeps the enrolment.
+// The default flow's stage, which serves every Authentik user, keeps accepting TOTP.
 func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-portal.yaml"))
 	if err != nil {
@@ -460,10 +462,19 @@ func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 		{"stage: !KeyOf mfa-webauthn\n", "policy_engine_mode: all"},
 		{"name: paddock-admin-login-webauthn-missing\n", `return not ak_user_has_authenticator(request.user, "webauthn")`},
 		{"policy: !KeyOf webauthn-missing\n", "target: !KeyOf mfa-webauthn-binding"},
+		{"name: paddock-admin-login-webauthn-administrator\n",
+			`len(p) == 3 and p[0] == "paddock" and p[2] in ("admins", "operators", "auditors")`},
+		{"name: paddock-admin-login-webauthn-administrator\n",
+			`for p in (g.name.split(".") for g in request.user.groups.all())`},
+		{"policy: !KeyOf webauthn-administrator\n", "target: !KeyOf mfa-webauthn-binding"},
+		{"policy: !KeyOf webauthn-administrator\n", "failure_result: true"},
 	} {
 		if !strings.Contains(block(c.marker), c.want) {
 			t.Errorf("the entry with %q lacks %q", strings.TrimSpace(c.marker), c.want)
 		}
+	}
+	if b := block("policy: !KeyOf webauthn-administrator\n"); strings.Contains(b, "order: 0") {
+		t.Errorf("the administrator policy shares order 0 with the WebAuthn-missing policy:\n%s", b)
 	}
 	if !strings.Contains(block("name: paddock-default-login-mfa\n"), "\n      device_classes: [webauthn, totp]\n") {
 		t.Error("paddock-default-login-mfa no longer accepts WebAuthn and TOTP")
