@@ -504,6 +504,7 @@
     "editDomains": "Domains",
     "editDomainsTitle": "Domains von {name}",
     "createdWithoutDomains": "Die Organisation wurde angelegt, ihre Domains wurden aber nicht gespeichert. Speichern Sie sie über „Domains“ in der Liste.",
+    "provisioning": "Der Identitätsanbieter wird eingerichtet … Das kann bis zu einer Minute dauern.",
     "statuses": {
       "provisioning": "Wird eingerichtet",
       "active": "Aktiv",

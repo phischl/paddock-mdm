@@ -987,3 +987,27 @@ raised `PaddockAuditChainBroken`.
 - **Gates:** V1–V5 and A5 stay as written; their verification events now land in the following day, so the
   organizations they leave behind verify in the next nightly run. The isolation gate searches the manifests list
   again: it seals globex's current day before the search (the PDK-110 exception is removed).
+
+## Amendment 2026-10-29 (PDK-419)
+
+**Reason.** Decision 20.2 reads the delivered numbers above `event_seq_contiguous` with `LIMIT 10000` and caps the
+hole bound at the last number read. A gap that never fills pins the pointer below it, so once such a device delivered
+more than 10 000 further events, every round re-read the same window: a later hole above it was never opened or
+reported, and the device cost a 10 000-row read each round without progress.
+
+- **Decision 17/18:** migration `00073_event_seq_scanned.sql` adds `device_status.event_seq_scanned bigint NOT NULL
+  DEFAULT 0` (existing rows start at their `event_seq_contiguous`). Invariant: every number up to it was delivered,
+  declared dropped or lies in an open gap row.
+- **Decision 20.2/20.3:** the round reads `ListDeviceEventSeenAbove` above `max(event_seq_scanned,
+  event_seq_contiguous)` and looks for holes there (`device.Scan`: `Holes` from the scan position; the new position
+  is the advanced pointer or the hole bound, whichever is higher). `SetEventSeqScanned` only raises it. The window
+  advances every round, so the read stays bounded and moves on.
+- **Decision 20.4:** the contiguous pointer is derived, not read: the scan position, or one below the lowest gap row
+  still open after this round (`device.Contiguous`); it still only rises. It no longer advances partly into an open
+  row; it follows once the whole row is covered.
+- **Decision 20.6/20.7:** an open row is covered when, outside `1..c` and the dropped ranges, the count of delivered
+  numbers in each remaining part equals the part's length; one statement counts all parts of the rows a round checks
+  (`CountDeviceEventSeenInRanges`). A round checks at most `app.GapCheckLimit` (500) open rows, unreported ones first,
+  then by `from_seq`; a row not checked counts as still open and is neither filled nor reported in that round. The
+  counts do not depend on the scan position, so rows opened before migration 00073 above it are checked the same way.
+- **Decision 22:** `ResetEventSeq` sets `event_seq_scanned = 0` together with the pointer.

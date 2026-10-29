@@ -16,7 +16,9 @@ test('platform admin creates an organization with a domain and edits its domains
   await create.getByLabel('Domains (one per line)').fill(`${slug.toUpperCase()}.test`)
   await expectAccessible(page)
   await create.getByRole('button', { name: 'Create' }).click()
-  await expect(create).toBeHidden()
+  // The create waits for the identity provider setup, bounded at 60 s (app.ProvisioningBudget); the dialog shows a
+  // progress hint meanwhile. This step follows that product bound plus a margin for the domains PATCH (PDK-407).
+  await expect(create).toBeHidden({ timeout: 65_000 })
 
   await page.getByTestId('list-search').getByRole('searchbox').fill(slug)
   await expect(page).toHaveURL(new RegExp(`q=${slug}`))

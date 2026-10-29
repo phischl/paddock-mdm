@@ -151,7 +151,7 @@ as above.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PADDOCK_AGENT_RELEASE_SOURCE_REPO` | `phischl/paddock-mdm` | `<owner>/<repo>`; `off` switches the import off (air-gapped installations): the portal hides it, check and import answer 403 `release_source_disabled`. |
+| `PADDOCK_AGENT_RELEASE_SOURCE_REPO` | `phischl/paddock-mdm` | `<owner>/<repo>` (letters, digits, `_`, `.`, `-`; neither part only dots); `off` switches the import off (air-gapped installations): the portal hides it, check and import answer 403 `release_source_disabled`. |
 | `PADDOCK_AGENT_RELEASE_SOURCE_URL` | `https://api.github.com` | The API base; GitHub Enterprise Server: `https://<host>/api/v3`. `https` only (plain `http` is refused outside `PADDOCK_ENV=development`). |
 | `PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE` | unset | Optional file with a token that can read the repository's releases; never logged, audited or shown. |
 

@@ -65,6 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries the new param `fallback: organization_inactive`, `GET /api/v1/me` answers the new optional field
   `role_fallback`, and the portal shows a notice for the whole session. A switch to the organization role stays
   refused with `organization_inactive`.
+- Portal: while a new organization is being created, the *New organization* dialog says that the identity provider
+  is being set up and that this can take up to a minute (the create waits for that setup, bounded at 60 s); the
+  *Create* button stays disabled meanwhile (PDK-407).
 - Lab smoke test: runs against nginx 1.31.8 (was 1.28.3) and from now on follows the nginx mainline line (ADR 0029
   amendment 2026-10-28). No operator step: the image is a tooling image, is not part of the operator bundle, and the
   shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).
@@ -83,6 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
+  Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
+  window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
+  device (migration `00073_event_seq_scanned`) and reads one bounded window above it, moving on every round.
 - Production and lab installations (PDK-492): the api now finds the MCP login provider at
   `https://auth.<domain>/application/o/paddock-mcp/`. Before, it looked for it at the development port, never became
   ready and the installation or upgrade stopped at `./paddock start`. The bundle test refuses an OIDC issuer with an
@@ -112,9 +119,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   language, theme and density entries and the action buttons of the attention list and the overview now begin with
   their visible text and still name the target, e.g. "Retire, lock or keep — acme-lt-0142", so speech-input users can
   activate them by saying what they see. The portal's accessibility check runs with axe-core 4.14.
+- Role membership audit (PDK-423): when the worker fails to clear the "missing" mark of a role holder who reappeared
+  in the identity provider, the next listing that misses that holder no longer records `admin.role_revoked`; the
+  revocation needs two consecutive misses after a successful mark. The worker process remembers the failure until its
+  next successful round for that role.
 
 ### Security
 
+- Agent releases (PDK-432): the database now enforces that a published release cannot change. An upload, host
+  command or import that stores a file of a release which another administrator published in the meantime is refused
+  with 409 `invalid_state` and keeps the recorded checksums of the release; a second concurrent publish is refused
+  the same way. A release import refuses a release with more than one fleetd package for the same architecture
+  (`invalid_request`), and `PADDOCK_AGENT_RELEASE_SOURCE_REPO` no longer accepts an owner or repository of only dots
+  such as `..`.
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
   could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
 - undici 6.29.1 in the portal's build tooling (was 6.29.0; CVE-2026-109383, CVE-2026-87018 and CVE-2026-109869, high;
