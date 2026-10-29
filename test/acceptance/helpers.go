@@ -32,6 +32,11 @@ import (
 const (
 	auditPollTimeout = 10 * time.Second
 	auditSettleDelay = 5 * time.Second
+	// auditLookback bounds the audit list expectOneEvent pages through. Unbounded, one poll pages through every event
+	// of the last 7 days (about 90 pages on a busy stack) and takes most of the 10 s window, so an event indexed just
+	// after the first poll began is never seen (PDK-445). It is far longer than any case waits between its request and
+	// the check, so the request's event is always inside it.
+	auditLookback = 15 * time.Minute
 )
 
 // parallelCases returns a semaphore that bounds the parallel cases of a gate: PADDOCK_ACCEPTANCE_PARALLEL, default 8
@@ -94,10 +99,11 @@ func expectStatus(t *testing.T, res env.Response, status int, code string) {
 func expectOneEvent(t *testing.T, viewer *env.Portal, requestID, code, outcome string) env.AuditEvent {
 	t.Helper()
 	ctx := testContext(t, 2*time.Minute)
+	from := time.Now().Add(-auditLookback)
 	var found []env.AuditEvent
 	deadline := time.Now().Add(auditPollTimeout)
 	for {
-		events, err := viewer.AuditEvents(ctx, "")
+		events, err := viewer.AuditEventsSince(ctx, "", from)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +123,7 @@ func expectOneEvent(t *testing.T, viewer *env.Portal, requestID, code, outcome s
 	}
 	check("after polling")
 	time.Sleep(auditSettleDelay)
-	events, err := viewer.AuditEvents(ctx, "")
+	events, err := viewer.AuditEventsSince(ctx, "", from)
 	if err != nil {
 		t.Fatal(err)
 	}
