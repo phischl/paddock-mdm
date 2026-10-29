@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+# Paddock MCP login (ADR 0044 amendment 2026-10-25, A5; plan M14 §3.3 item 11): `paddockctl mcp login` signs the
+# administrator in with the device authorization grant on a public provider of its own. No client secret: the CLI is a
+# public client. The login runs the portal's flow paddock-admin-login; the authorization flow is the device providers'
+# flow with the mandatory MFA stage, never default-provider-authorization-implicit-consent, so that the /device path
+# cannot skip the second factor (ADR 0007 amendment 2026-10-04). The api verifies ID and access tokens with this
+# provider's JWKS, so both are signed with the shared key and the access token's audience is the client id.
+version: 1
+metadata:
+  name: Paddock - MCP
+  labels:
+    blueprints.goauthentik.io/description: Public OIDC application of paddockctl mcp (device authorization grant)
+entries:
+  # The login flow and the groups mapping.
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        path: paddock/paddock-portal.yaml
+      required: true
+  # The authorization flow with the MFA stage.
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        path: paddock/paddock-device.yaml
+      required: true
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider
+    identifiers:
+      name: paddock-mcp
+    attrs:
+      client_type: public
+      # Authentik refuses every grant a provider does not list; the authorization code grant stays off.
+      grant_types: ["urn:ietf:params:oauth:grant-type:device_code", refresh_token]
+      client_id: paddock-mcp
+      authentication_flow: !Find [authentik_flows.flow, [slug, paddock-admin-login]]
+      authorization_flow: !Find [authentik_flows.flow, [slug, paddock-device-authorization]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      # The device grant needs no redirect URI.
+      redirect_uris: []
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      include_claims_in_id_token: true
+      # The portal's sub, so that an MCP login reaches the same admin_account row.
+      sub_mode: hashed_user_id
+      issuer_mode: per_provider
+      access_token_validity: minutes=30
+      # The portal's absolute session lifetime.
+      refresh_token_validity: hours=8
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-offline_access]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, io.paddock/scope-groups]]
+
+  # No policy binding (plan M14 §3.3 item 11): the Paddock groups decide when the api resolves the role, so that an
+  # identity without a role reaches the api and its refusal is audited as admin.login denied.
+  - model: authentik_core.application
+    identifiers:
+      slug: paddock-mcp
+    attrs:
+      name: Paddock MCP (paddockctl)
+      provider: !KeyOf provider
+      policy_engine_mode: any

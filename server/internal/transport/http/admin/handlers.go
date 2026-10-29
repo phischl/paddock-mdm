@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
@@ -107,6 +108,7 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	}
 	out := h.toMe(me)
 	p, _ := principal.From(ctx)
+	out.Channel = meChannel(p)
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
@@ -141,10 +143,23 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	out := h.toMe(me)
 	// The portal replaces its session with this answer; without the address the IP allow list page would lose it.
 	p, _ := principal.From(ctx)
+	out.Channel = meChannel(p)
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
 	return adminapi.UpdateMe200JSONResponse(out), nil
+}
+
+// meChannel is Me.channel: how the request authenticated (ADR 0044).
+func meChannel(p principal.Principal) adminapi.MeChannel {
+	switch {
+	case p.Channel == principal.ChannelMCP:
+		return adminapi.MeChannel(principal.ChannelMCP)
+	case p.APITokenID != uuid.Nil:
+		return "api"
+	default:
+		return "portal"
+	}
 }
 
 // stepUpValidUntil is the end of the principal's step-up window, nil without a step-up or once the window has passed.

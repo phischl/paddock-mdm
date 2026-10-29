@@ -148,6 +148,9 @@ const latestPublished = computed(() => {
           <div
             v-else
             class="pd-table-scroll"
+            role="region"
+            :aria-label="t('overview.attention.tableLabel')"
+            tabindex="0"
           >
             <table class="pd-table">
               <thead>
@@ -207,7 +210,7 @@ const latestPublished = computed(() => {
                   <td class="pd-cell-actions pd-hide-sm">
                     <v-btn
                       :to="{ name: 'device', params: { id: d.device_id } }"
-                      :aria-label="t('attention.open', { hostname: d.hostname })"
+                      :aria-label="t('attention.open', { action: t('attention.action.' + d.conditions[0].kind), hostname: d.hostname })"
                       size="small"
                     >
                       {{ t('attention.action.' + d.conditions[0].kind) }}
@@ -368,6 +371,9 @@ const latestPublished = computed(() => {
           <div
             v-else
             class="pd-table-scroll"
+            role="region"
+            :aria-label="t('overview.audit.tableLabel')"
+            tabindex="0"
           >
             <table class="pd-table">
               <thead>

@@ -10,6 +10,9 @@ body, .v-application {
 a { color: var(--pd-link); }
 a:hover, a:focus-visible { color: var(--pd-link-hover); }
 :focus-visible { outline: none; box-shadow: var(--pd-focus-ring); border-radius: var(--pd-radius-xs); }
+/* A Vuetify field already marks its focus with the thicker, opaque field outline; the global ring on the native
+   control inside it drew a second ring that crossed the floating label. Icon buttons in the field keep the ring. */
+.v-field input:focus-visible, .v-field textarea:focus-visible { box-shadow: none; }
 h1 { font-size: 18px; line-height: 24px; font-weight: 600; margin: 0 0 0.75rem; }
 h2 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
@@ -95,7 +98,7 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 }
 .settings-form legend { font-size: 13px; line-height: 18px; font-weight: 600; padding: 0 4px; margin-left: -4px; }
 .settings-form .v-input { max-width: 24rem; width: 100%; }
-.settings-form .v-input:has(input[type="time"]), .settings-form .v-input.pd-field-short { max-width: 12rem; }
+.settings-form .v-input:has(input[type="time"]) { max-width: 12rem; }
 /* Number fields hold a label and a unit suffix (PDK-429): at 12rem Vuetify cut the label off. */
 .settings-form .v-input:has(input[type="number"]) { max-width: 18rem; }
 .settings-form .v-switch, .settings-form .v-input:has(textarea) { max-width: none; }
@@ -170,6 +173,8 @@ a.pd-pill:hover { filter: brightness(0.95); }
   display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--pd-surface-3);
   color: var(--pd-text-primary); font-weight: 600; font-size: 11px;
 }
+/* Generated content, not a text node: axe counts visible aria-hidden text, and a leading initial breaks label-in-name. */
+.pd-avatar::before { content: attr(data-initial); }
 .user-button-name { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; margin-left: 8px; }
 .pd-user-name { font-size: 12.5px; }
 .pd-nav.v-navigation-drawer { background: var(--pd-surface-2); color: var(--pd-text-primary); border-right: 1px solid var(--pd-border); overflow-y: auto; }

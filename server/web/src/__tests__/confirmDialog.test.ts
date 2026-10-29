@@ -7,6 +7,7 @@ import { pendingConfirm, settleConfirm, useConfirm } from '../composables/useCon
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import styles from '../styles.css?raw'
+import confirmDialogSource from '../components/ConfirmDialog.vue?raw'
 
 let wrapper: VueWrapper | null = null
 
@@ -77,6 +78,38 @@ describe('ConfirmDialog', () => {
     expect(row?.classList.contains('form-actions')).toBe(true)
     expect(el('confirm-accept')?.parentElement).toBe(row)
     expect(styles).toMatch(/\.form-actions\s*\{[^}]*flex-wrap:\s*wrap/)
+  })
+
+  it('shows a long unbreakable name in the title and the confirm label in full and lets both wrap (PDK-447)', async () => {
+    const version = '0.9.1792783862-alpha.1792944510667'
+    mountDialog({
+      title: `Import agent release ${version}`,
+      confirmLabel: `Import ${version}`,
+      requireTypedText: version,
+    })
+    await flushPromises()
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
+    const heading = document.getElementById(dialog?.getAttribute('aria-labelledby') ?? '')
+    expect(heading?.tagName).toBe('H2')
+    expect(heading?.textContent?.trim()).toBe(`Import agent release ${version}`)
+    const accept = el('confirm-accept')
+    expect(accept?.tagName).toBe('BUTTON')
+    expect(accept?.textContent?.trim()).toBe(`Import ${version}`)
+    expect((accept as HTMLButtonElement).disabled).toBe(true)
+    const input = el('confirm-typed')?.querySelector('input') as HTMLInputElement
+    input.value = version
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect((accept as HTMLButtonElement).disabled).toBe(false)
+    // jsdom does no layout, so the wrapping itself is pinned on the component's style rules; the browser check covers
+    // the rendered result.
+    expect(confirmDialogSource).toMatch(/\.confirm-title\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/)
+    expect(confirmDialogSource).toMatch(/\.confirm-accept\s*\{[^}]*height:\s*auto/)
+    expect(confirmDialogSource).toMatch(
+      /\.confirm-accept :deep\(\.v-btn__content\)\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/,
+    )
+    expect(accept?.classList.contains('confirm-accept')).toBe(true)
+    expect(heading?.classList.contains('confirm-title')).toBe(true)
   })
 
   it('cancels on Esc', async () => {

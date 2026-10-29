@@ -41,6 +41,7 @@ const (
 	SourceSystem   = "system"
 	SourceDevice   = "device"
 	SourceAPI      = "api"
+	SourceMCP      = "mcp"
 )
 
 // Actor is who performed the action.
@@ -50,6 +51,8 @@ type Actor struct {
 	Display string `json:"display,omitempty"`
 	IP      string `json:"ip,omitempty"`
 	StepUp  bool   `json:"step_up"`
+	// Client is the MCP client's name of an action taken through an MCP session (ADR 0044 decision 7).
+	Client string `json:"client,omitempty"`
 }
 
 // Target is what the action was performed on.
@@ -90,6 +93,15 @@ func SourceForActor(actorType string) string {
 	default:
 		return SourceSystem
 	}
+}
+
+// SourceOf derives the event source from the actor type and the principal's channel: an administrator acting
+// through an MCP session keeps the actor type admin or platform_admin, the source says mcp (plan M14 §3.2 item 8).
+func SourceOf(actorType, channel string) string {
+	if channel == SourceMCP {
+		return SourceMCP
+	}
+	return SourceForActor(actorType)
 }
 
 // Subject is the outbox subject audit.<organization_id>.<source>.

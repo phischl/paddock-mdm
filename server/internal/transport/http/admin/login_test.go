@@ -137,14 +137,15 @@ func TestLoginStartsWithoutPrompt(t *testing.T) {
 func TestLoginRefusesATokenWithoutMFA(t *testing.T) {
 	w := newLoginWorld(t, nil)
 	ctx := context.Background()
-	events := func(username string) (n int, outcome, errCode, reason string) {
+	events := func(username string) (n int, outcome, errCode, reason, channel string) {
 		t.Helper()
 		if err := w.e.super.QueryRow(ctx, `SELECT count(*), coalesce(max(outcome), ''), coalesce(max(error_code), ''),
-			coalesce(max(params->>'reason'), '') FROM action WHERE code = 'admin.login' AND actor->>'display' = $1`,
-			username).Scan(&n, &outcome, &errCode, &reason); err != nil {
+			coalesce(max(params->>'reason'), ''), coalesce(max(params->>'channel'), '') FROM action
+			WHERE code = 'admin.login' AND actor->>'display' = $1`,
+			username).Scan(&n, &outcome, &errCode, &reason, &channel); err != nil {
 			t.Fatal(err)
 		}
-		return n, outcome, errCode, reason
+		return n, outcome, errCode, reason, channel
 	}
 
 	for name, amr := range map[string][]string{"no amr": nil, "password only": {"pwd"}} {
@@ -161,9 +162,9 @@ func TestLoginRefusesATokenWithoutMFA(t *testing.T) {
 			if after := len(w.e.sessions.records); after != before {
 				t.Fatalf("%d session records, want %d", after, before)
 			}
-			if n, outcome, errCode, reason := events(username); n != 1 || outcome != "denied" || errCode != "mfa_required" ||
-				reason != "mfa_required" {
-				t.Fatalf("audit: %d events, outcome %q, error code %q, reason %q", n, outcome, errCode, reason)
+			if n, outcome, errCode, reason, channel := events(username); n != 1 || outcome != "denied" || errCode != "mfa_required" ||
+				reason != "mfa_required" || channel != "portal" {
+				t.Fatalf("audit: %d events, outcome %q, error code %q, reason %q, channel %q", n, outcome, errCode, reason, channel)
 			}
 		})
 	}
