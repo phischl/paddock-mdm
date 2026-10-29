@@ -106,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   language, theme and density entries and the action buttons of the attention list and the overview now begin with
   their visible text and still name the target, e.g. "Retire, lock or keep — acme-lt-0142", so speech-input users can
   activate them by saying what they see. The portal's accessibility check runs with axe-core 4.14.
+- Role membership audit (PDK-423): when the worker fails to clear the "missing" mark of a role holder who reappeared
+  in the identity provider, the next listing that misses that holder no longer records `admin.role_revoked`; the
+  revocation needs two consecutive misses after a successful mark. The worker process remembers the failure until its
+  next successful round for that role.
 
 ### Security
 
