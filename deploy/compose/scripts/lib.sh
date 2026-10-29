@@ -127,6 +127,18 @@ rc_user_absent() {
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-$(env_value PADDOCK_PROJECT)}"
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-paddock}"
 
+# A second development stack of the host runs from its own checkout, whose .env names its PADDOCK_INSTANCE
+# (docs/operations/local-dev.md, "Running a second dev stack"): a command meant for one instance must never reach the
+# stack of another checkout, which other people may be using.
+if [[ -n "${PADDOCK_INSTANCE:-}" && -f "$COMPOSE_DIR/.env" ]]; then
+  _instance="$(sed -n 's/^PADDOCK_INSTANCE=//p' "$COMPOSE_DIR/.env" | tail -1)"
+  if [[ "$PADDOCK_INSTANCE" != "${_instance:-1}" ]]; then
+    echo "refusing to run: PADDOCK_INSTANCE is $PADDOCK_INSTANCE, but $COMPOSE_DIR/.env belongs to instance ${_instance:-1}" >&2
+    exit 1
+  fi
+  unset _instance
+fi
+
 # shellcheck disable=SC1091
 set -a; . "$COMPOSE_DIR/versions.env"; set +a
 
