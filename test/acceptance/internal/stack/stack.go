@@ -93,6 +93,9 @@ func Setting(name, def string) string {
 // Project is the Compose project of the development stack (PADDOCK_PROJECT, default paddock).
 func Project() string { return Setting("PADDOCK_PROJECT", "paddock") }
 
+// HTTPSPort is the host port of Caddy (PADDOCK_HTTPS_PORT, default 8443).
+func HTTPSPort() string { return Setting("PADDOCK_HTTPS_PORT", "8443") }
+
 // Network is the Compose network name of the development stack, e.g. Network("cp").
 func Network(name string) string { return Project() + "_" + name }
 

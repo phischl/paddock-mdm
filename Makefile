@@ -13,6 +13,7 @@ SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
 GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
 UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... \
+	./test/acceptance/internal/stack/... \
 	./test/acceptance/cmd/acceptanceshard/...
 WEB_DIR       := server/web
 IMAGE         ?= paddock-server:dev
