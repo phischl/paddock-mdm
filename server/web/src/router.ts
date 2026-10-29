@@ -56,6 +56,7 @@ export const router = createRouter({
     { path: '/platform/ip-allowlist', name: 'ip-allowlist', component: () => import('./views/IpAllowlist.vue') },
     { path: '/platform/sessions', name: 'platform-sessions', component: () => import('./views/PlatformSessions.vue') },
     { path: '/platform/openbao', name: 'platform-openbao', component: () => import('./views/PlatformOpenBao.vue') },
+    { path: '/platform/mcp', name: 'platform-mcp', component: () => import('./views/PlatformMcp.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFound.vue') },
   ],
 })

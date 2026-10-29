@@ -75,6 +75,7 @@
     "ipAllowlist": "IP allow list",
     "sessions": "Sessions",
     "openbao": "OpenBao",
+    "platformMcp": "MCP policy",
     "users": "Users",
     "userGroups": "Groups",
     "permissionProfiles": "Permission profiles",
@@ -2159,5 +2160,35 @@
     "confirmFile": "Confirm that {name} may stay managed on a sensitive path? You confirm your identity next.",
     "deniedIntro": "Paddock no longer manages these paths. Agents of this release or newer keep the files on the devices unchanged; an older agent deletes an unchanged file once it is no longer shipped. Delete the definitions you no longer need.",
     "deleteDefinition": "Delete definition"
+  },
+  "mcp": {
+    "title": "AI assistants (MCP)",
+    "intro": "Administrators sign in to the MCP with their Paddock account (`paddockctl mcp login`) and act with their own role. This policy limits what every MCP session of this {scope} may do. Changes additionally need the administrator's own write access.",
+    "connectHint": "To connect an assistant, run `paddockctl mcp login` and add `paddockctl mcp` to your MCP client. See the operations guide.",
+    "enabled": "MCP enabled",
+    "writeEnabled": "Allow changes through the MCP",
+    "mode": {
+      "all": "All tools the API offers",
+      "selected": "Selected tools only"
+    },
+    "tools": "Tools",
+    "filter": "Filter tools",
+    "selectHint": "Select at least one tool.",
+    "class": {
+      "read": "read",
+      "write": "write"
+    },
+    "portalOnly": "portal only (step-up)",
+    "defaultsHint": "No policy saved yet: the MCP is switched off for this {scope}. Enable it and save the policy to let MCP sessions in.",
+    "disabledHint": "The MCP is switched off: every MCP session of this {scope} is refused.",
+    "save": "Save policy",
+    "saved": "MCP policy saved.",
+    "confirm": {
+      "title": "Save MCP policy?",
+      "message": "{count} tools will be available to MCP sessions of this {scope}; changes {writes, select, allowed {stay possible} other {are refused}}."
+    },
+    "scope": {
+      "platform": "platform"
+    }
   }
 }
