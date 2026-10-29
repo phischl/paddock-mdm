@@ -25,6 +25,8 @@ const touched = ref(false)
 const problem = ref('')
 // Set when the organization exists but the PATCH of its domains failed (plan M8x decision 21).
 const domainsNotSaved = ref(false)
+// The create waits for the identity provider setup, bounded at 60 s (app.ProvisioningBudget, PDK-407).
+const provisioning = ref(false)
 const errors = computed(() => validateOrganization(slug.value, name.value))
 const slugError = computed(() => (touched.value && errors.value.slug ? t(errors.value.slug) : ''))
 const nameError = computed(() => (touched.value && errors.value.name ? t(errors.value.name) : ''))
@@ -67,7 +69,10 @@ async function submit(): Promise<void> {
   if (hasErrors(errors.value) || validateDomains(domains.value)) return
   problem.value = ''
   domainsNotSaved.value = false
-  const res = await createOrganization(slug.value, name.value)
+  provisioning.value = true
+  const res = await createOrganization(slug.value, name.value).finally(() => {
+    provisioning.value = false
+  })
   if (typeof res === 'string') {
     problem.value = res
   } else if (parseDomains(domains.value).length > 0) {
@@ -200,6 +205,13 @@ async function saveDomains(): Promise<void> {
               :error-messages="domainsError ? [domainsError] : []"
               :aria-invalid="!!domainsError"
             />
+            <p
+              v-if="provisioning"
+              role="status"
+              data-testid="org-provisioning"
+            >
+              {{ t('organizations.provisioning') }}
+            </p>
             <div
               v-if="problem"
               class="form-error"

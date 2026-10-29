@@ -266,6 +266,56 @@ func TestRoleMembershipPageShift(t *testing.T) {
 	}
 }
 
+// TestRoleMembershipFailedClear (PDK-423): when the transaction that clears the mark of a reappeared member fails, the
+// stale mark must not turn the next miss into a revocation; only two consecutive misses after it revoke the member.
+func TestRoleMembershipFailedClear(t *testing.T) {
+	w := newRoleWorld(t)
+	// Injected failure: clearing the mark of a member named fail-clear raises.
+	if _, err := w.super.Exec(context.Background(), `
+		CREATE OR REPLACE FUNCTION fail_role_member_clear() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+		  IF NEW.username = 'fail-clear' AND OLD.missing_since IS NOT NULL AND NEW.missing_since IS NULL THEN
+		    RAISE EXCEPTION 'injected clear failure';
+		  END IF;
+		  RETURN NEW;
+		END $$;
+		CREATE OR REPLACE TRIGGER fail_role_member_clear BEFORE UPDATE ON organization_role_member
+		  FOR EACH ROW EXECUTE FUNCTION fail_role_member_clear();`); err != nil {
+		t.Fatal(err)
+	}
+	org, slug, ctx := w.organization(t, "rf")
+	pk := org.String()[:8] + "-"
+	e := orgEvents{pk: pk}
+	admins := organization.RoleGroup(slug, organization.GroupAdmins)
+	zoe := ports.IdentityUser{PK: pk + "fail-clear", Username: "fail-clear", UID: "uid-fail-clear"}
+	w.dir.roleGroups[admins] = []ports.IdentityUser{{PK: pk + "amy", Username: "amy", UID: "uid-amy"}, zoe}
+	round := func(name string, unlisted bool, wantErr bool, want ...string) {
+		t.Helper()
+		w.dir.unlisted = nil
+		if unlisted {
+			w.dir.unlisted = map[string]bool{"uid-fail-clear": true}
+		}
+		if err := w.syncOrganization(ctx); (err != nil) != wantErr {
+			t.Fatalf("%s: round error %v, want error %v", name, err, wantErr)
+		}
+		if got := w.members(t, "organization_role_member", "organization_id = $1", org); !slices.Equal(got, want) {
+			t.Fatalf("%s: rows %v, want %v", name, got, want)
+		}
+	}
+	round("baseline", false, false, "org_admin:amy", "org_admin:fail-clear")
+	round("first miss", true, false, "org_admin:amy", "org_admin:fail-clear?")
+	round("shown, clear fails", false, true, "org_admin:amy", "org_admin:fail-clear?")
+	round("miss after the failed clear", true, false, "org_admin:amy", "org_admin:fail-clear?")
+	baseline := []string{e.granted("org_admin", "amy", admins, "true"), e.granted("org_admin", "fail-clear", admins, "true")}
+	if got := w.roleEvents(t, org, pk); !slices.Equal(got, baseline) {
+		t.Fatalf("events %v, want only the baseline %v", got, baseline)
+	}
+	round("second consecutive miss", true, false, "org_admin:amy")
+	if got := w.roleEvents(t, org, pk); !slices.Equal(got, append(baseline, e.revoked("org_admin", "fail-clear", admins))) {
+		t.Fatalf("events %v, want the baseline and one revocation", got)
+	}
+}
+
 // TestRoleMembershipEmptyListings (reviews 1 and 2): when every role listing of an organization comes back empty
 // without an error while members are recorded (a service token that may no longer see users), nothing is recorded,
 // the rows stay unmarked, and the round fails with ErrDirectoryEmpty, however often it repeats.

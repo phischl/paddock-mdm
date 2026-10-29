@@ -54,7 +54,9 @@ entries:
   # Stage B: the step-up accepts WebAuthn only, so an administrator who has just proven TOTP (or entered a recovery
   # code) in stage A and has no WebAuthn device enrols one now. The policy on its binding skips it for an account with
   # a WebAuthn device, because the MFA cookie is bound to the stage that set it and a last_auth_threshold would ask a
-  # WebAuthn user twice.
+  # WebAuthn user twice. This flow is also the default brand's authentication flow, which the device-code page runs
+  # for every device user; a second policy limits the enrolment to members of Paddock administrator groups (ADR 0034
+  # amendment 2026-10-29, PDK-498).
   - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
     id: mfa-webauthn
     identifiers:
@@ -72,6 +74,20 @@ entries:
     attrs:
       expression: |
         return not ak_user_has_authenticator(request.user, "webauthn")
+
+  # The administrator groups are the portal's role groups: paddock.platform.admins and paddock.<slug>.admins,
+  # .operators and .auditors. Operators step up too (API tokens), and every portal role keeps the passkey enrolment it
+  # had before (ADR 0034 decision F2, decision 4). Direct memberships only, as in the portal's groups claim.
+  - model: authentik_policies_expression.expressionpolicy
+    id: webauthn-administrator
+    identifiers:
+      name: paddock-admin-login-webauthn-administrator
+    attrs:
+      expression: |
+        return any(
+            len(p) == 3 and p[0] == "paddock" and p[2] in ("admins", "operators", "auditors")
+            for p in (g.name.split(".") for g in request.user.groups.all())
+        )
 
   - model: authentik_stages_user_login.userloginstage
     id: login
@@ -119,6 +135,15 @@ entries:
       order: 0
     attrs:
       target: !KeyOf mfa-webauthn-binding
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-administrator
+      order: 1
+    attrs:
+      target: !KeyOf mfa-webauthn-binding
+      # Authentik's default failure result (false) would skip the enrolment for an administrator if the expression
+      # raised; true fails closed.
+      failure_result: true
   # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17, plan M8x decision 5):
   # every sign-in validates a WebAuthn or TOTP device; a user without one enrols one here. The policy below skips this
   # stage only when Authentik's own stage at order 30 has just validated a WebAuthn or TOTP device in this flow
