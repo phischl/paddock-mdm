@@ -16,6 +16,23 @@ release without rollout. Every test starts from the snapshot `base-installed`
 and restores it, powered off, when it ends; with `PADDOCK_SYSTEM_KEEP=1` a failed test leaves its VM running for
 inspection. Screenshots are kept in `bin/system-evidence/<vm>/`.
 
+## Worktrees
+
+`make system-test`, `make acceptance` and `make e2e` need the checkout's `deploy/compose/.env` and
+`deploy/compose/.secrets` (git-ignored, so a fresh worktree has neither) and stop up front without them
+(`test/stack-preflight.sh`). A worktree that runs the gates against a stack started from another checkout links both
+to that checkout:
+
+```sh
+stack=/path/to/the/checkout/the/stack/runs/from
+ln -s "$stack/deploy/compose/.env" deploy/compose/.env
+ln -s "$stack/deploy/compose/.secrets" deploy/compose/.secrets
+```
+
+The check never reads the secrets; it wants `.env`, `.secrets/dev_alice_password` (`make dev-secrets`) and a non-empty
+`.secrets/caddy-root.crt` (filled by `make up`). `make e2e` mounts the resolved secrets directory into the Playwright
+container at `/secrets`, so the symlink works there too.
+
 ## Both VMs in parallel
 
 The per-VM subtests of every gate (`TestAgentGates`, `TestIdentityGates`, `TestLocalAdminGates`, `TestDiskGates`,

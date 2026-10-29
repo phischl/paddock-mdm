@@ -9,7 +9,7 @@ import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '.
 
 const stepUpAction = 'sessions-end-all'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const problemText = useProblemText()
 const confirm = useConfirm()
 const router = useRouter()
@@ -44,6 +44,12 @@ async function run(stepUp: boolean): Promise<void> {
   problem.value = res
 }
 
+/** The problem text; a failed identity-provider sign-out gets a text saying the portal sessions are ended already. */
+function sessionsProblemText(code: string): string {
+  const key = 'sessions.problems.' + code
+  return te(key) ? t(key) : problemText(code)
+}
+
 async function onEndAll(): Promise<void> {
   const confirmed = await confirm({
     title: t('sessions.confirmTitle'),
@@ -70,7 +76,7 @@ async function onEndAll(): Promise<void> {
       class="form-error"
       role="alert"
     >
-      {{ problemText(problem) }}
+      {{ sessionsProblemText(problem) }}
     </p>
     <v-btn
       color="error"

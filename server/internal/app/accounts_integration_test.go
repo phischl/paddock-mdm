@@ -13,6 +13,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -165,5 +166,124 @@ func TestLoginRoleSwitch(t *testing.T) {
 	}
 	if opened != 3 {
 		t.Fatalf("opened %d sessions, want 3", opened)
+	}
+}
+
+// TestLoginChannel: admin.login records the channel param, portal without LoginIdentity.Channel and mcp with it, for
+// organization and platform sign-ins and for a refused sign-in (ADR 0044 amendment A2).
+func TestLoginChannel(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	org, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(org.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	orgID := uuid.Must(uuid.NewV7())
+	slug := "c" + orgID.String()[24:]
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Channel', 'active')", orgID, slug); err != nil {
+		t.Fatal(err)
+	}
+	accounts := app.NewAccounts(app.NewActionRunner(org, platform, httpx.RequestID), org, platform, nil)
+	for _, tc := range []struct {
+		name    string
+		channel principal.Channel
+		role    app.LoginRole
+		want    string
+		outcome string
+	}{
+		{"portal organization", "", app.LoginRole{Slug: slug, Role: principal.RoleOrgAdmin}, "portal", "success"},
+		{"mcp organization", principal.ChannelMCP, app.LoginRole{Slug: slug, Role: principal.RoleOrgOperator}, "mcp", "success"},
+		{"portal platform", "", app.LoginRole{Platform: true, Role: principal.RolePlatform}, "portal", "success"},
+		{"mcp platform", principal.ChannelMCP, app.LoginRole{Platform: true, Role: principal.RolePlatform}, "mcp", "success"},
+		{"mcp denied", principal.ChannelMCP, app.LoginRole{Denied: true, Slugs: []string{slug}, DenialReason: "no_role"}, "mcp", "denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corr := "corr-" + t.Name()
+			id := app.LoginIdentity{Subject: uuid.NewString(), Username: "dave", IP: "192.0.2.1", Channel: tc.channel}
+			_, err := accounts.Login(httpx.WithRequestID(ctx, corr), id, tc.role)
+			if (tc.outcome == "success") != (err == nil) {
+				t.Fatalf("login: %v", err)
+			}
+			var channel, outcome string
+			if err := super.QueryRow(ctx, `SELECT coalesce(params->>'channel', ''), outcome FROM action
+				WHERE correlation_id = $1 AND code = 'admin.login'`, corr).Scan(&channel, &outcome); err != nil {
+				t.Fatal(err)
+			}
+			if channel != tc.want || outcome != tc.outcome {
+				t.Fatalf("admin.login channel %q outcome %q, want %q/%q", channel, outcome, tc.want, tc.outcome)
+			}
+		})
+	}
+}
+
+// TestAccountState covers the per-request account check of MCP sessions (plan M14 §3.3 item 14) for both account
+// kinds: role, deactivation and write opt-in of the principal's own row; a missing row is unauthenticated.
+func TestAccountState(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	org, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(org.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	orgID := uuid.Must(uuid.NewV7())
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'State', 'active')",
+		orgID, "s"+orgID.String()[24:]); err != nil {
+		t.Fatal(err)
+	}
+	accounts := app.NewAccounts(app.NewActionRunner(org, platform, httpx.RequestID), org, platform, nil)
+
+	admin := principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Role: principal.RoleOrgAdmin, OrganizationID: orgID}
+	if _, err := super.Exec(ctx, `INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role)
+		VALUES ($1, $2, $3, 'erin', 'erin', 'org_operator')`, admin.ID, orgID, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := accounts.AccountState(ctx, admin); err != nil || st != (app.AccountState{Role: principal.RoleOrgOperator}) {
+		t.Fatalf("admin: %+v %v", st, err)
+	}
+	if _, err := super.Exec(ctx, "UPDATE admin_account SET disabled_at = now(), mcp_write_enabled_at = now() WHERE id = $1", admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := accounts.AccountState(ctx, admin); err != nil || !st.Disabled || !st.MCPWriteEnabled {
+		t.Fatalf("disabled admin: %+v %v", st, err)
+	}
+	other := admin
+	other.OrganizationID = uuid.Must(uuid.NewV7())
+	if _, err := accounts.AccountState(ctx, other); !errors.Is(err, problem.Unauthenticated) {
+		t.Fatalf("the row seen from another organization: %v", err)
+	}
+
+	root := principal.Principal{Kind: principal.KindPlatformAdmin, ID: uuid.Must(uuid.NewV7()), Role: principal.RolePlatform}
+	if _, err := super.Exec(ctx, `INSERT INTO platform_admin (id, authentik_sub, username, display_name, mcp_write_enabled_at)
+		VALUES ($1, $2, 'root', 'root', now())`, root.ID, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := accounts.AccountState(ctx, root); err != nil || st != (app.AccountState{Role: principal.RolePlatform, MCPWriteEnabled: true}) {
+		t.Fatalf("platform admin: %+v %v", st, err)
+	}
+	root.ID = uuid.Must(uuid.NewV7())
+	if _, err := accounts.AccountState(ctx, root); !errors.Is(err, problem.Unauthenticated) {
+		t.Fatalf("missing platform admin: %v", err)
 	}
 }

@@ -115,6 +115,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/mcp/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login configuration of paddockctl mcp (ADR 0044 amendment 2026-10-25)
+         * @description The Authentik provider paddock-mcp and its endpoints, copied from the discovered provider metadata, so that
+         *     paddockctl needs only the portal URL for the device authorization grant. 404 not_found when the MCP login is
+         *     not configured (PADDOCK_OIDC_MCP_ISSUER empty); 502 upstream_unavailable while the provider is not discovered.
+         */
+        get: operations["getMcpLoginConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/mcp/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open or renew the MCP session of an Authentik token pair
+         * @description Verifies the ID token and the access token of the provider paddock-mcp (signature, issuer, audience
+         *     paddock-mcp, expiry, the same sub), resolves the role from the ID token's groups like the portal login and
+         *     opens the MCP session of the access token for its remaining life (at most 35 minutes, otherwise 400). The
+         *     access token then authenticates admin API requests as a bearer with channel mcp.
+         *
+         *     An ID token with amr is a login: it must name the second factor (amr mfa; otherwise 401 with detail
+         *     mfa_required), and its sub and auth_time are bound for 8 hours, the refresh token's life. An ID token without
+         *     amr (a refreshed one) is a renewal: it is accepted only for a live binding of its sub and auth_time, otherwise
+         *     401 mcp_login_required (ADR 0044 amendment 2026-10-28), and is recorded as admin.login with renewal true.
+         *     Every attempt with verifiable tokens records one admin.login event with channel mcp; a refused role answers
+         *     403 forbidden with the denial reason as detail (no_role, multiple_organizations, role_not_granted, …).
+         */
+        post: operations["openMcpSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/mcp/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * End the MCP session of the bearer's access token
+         * @description Deletes the session of the access token and the login binding of its renewals; a token without a session is
+         *     already signed out (204). The refresh token is revoked by paddockctl at Authentik's revocation endpoint.
+         */
+        post: operations["closeMcpSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -2639,12 +2712,38 @@ export interface components {
             api_token?: components["schemas"]["MeApiToken"];
             /** @description The role this identity may switch to (ADR 0045); null for a single-role identity, API tokens and MCP sessions. */
             alternate_role: components["schemas"]["MeAlternateRole"] | null;
+            /**
+             * @description How this request authenticated (ADR 0044): portal for a portal session, api for an API token, mcp for an
+             *     MCP session opened with paddockctl mcp login.
+             * @enum {string}
+             */
+            channel: "portal" | "api" | "mcp";
         };
         MeAlternateRole: {
             /** @enum {string} */
             role: "org_admin" | "org_operator" | "org_auditor" | "platform_admin";
             /** @description Set when role is an organization role. */
             organization_slug?: string;
+        };
+        McpLoginConfig: {
+            issuer: string;
+            client_id: string;
+            scopes: string[];
+            /** Format: uri */
+            device_authorization_endpoint: string;
+            /** Format: uri */
+            token_endpoint: string;
+            /** Format: uri */
+            revocation_endpoint: string;
+        };
+        McpSessionInput: {
+            id_token: string;
+            access_token: string;
+            /**
+             * @description The role of the session for an identity with both (ADR 0045); default organization.
+             * @enum {string}
+             */
+            role?: "platform" | "organization";
         };
         RoleSwitch: {
             /** @enum {string} */
@@ -3002,6 +3101,8 @@ export interface components {
             display?: string;
             ip?: string;
             step_up: boolean;
+            /** @description The MCP client's name on events of an MCP session (source mcp, ADR 0044). */
+            client?: string;
         };
         AuditTarget: {
             type: string;
@@ -4919,6 +5020,11 @@ export interface components {
         };
     };
     parameters: {
+        /**
+         * @description Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
+         *     printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
+         */
+        McpClient: string;
         Csrf: "1";
         Id: string;
         /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
@@ -5161,6 +5267,84 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getMcpLoginConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The login configuration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpLoginConfig"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    openMcpSession: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
+                 *     printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
+                 */
+                "X-Paddock-MCP-Client"?: components["parameters"]["McpClient"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpSessionInput"];
+            };
+        };
+        responses: {
+            /** @description The MCP session is open. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    closeMcpSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The MCP session is ended. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
         };

@@ -3,17 +3,19 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import App from '../App.vue'
-import { createPortalI18n } from '../i18n'
+import { createPortalI18n, type PortalLocale } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import { useSessionStore } from '../stores/session'
 import { navigationGroups, shortcutOf, shortcutRoutes, visibleNavigation, type NavigationAccess, type NavigationGroup } from '../lib/navigation'
 import { icons } from '../lib/icons.gen'
 import type { Me } from '../api/client'
 import { settleConfirm, useConfirm } from '../composables/useConfirm'
+import { nameContainsVisibleText } from './labelInName'
 
+const attentionTotal = vi.hoisted(() => ({ value: 3 }))
 vi.mock('../lib/updates', async (original) => ({
   ...(await original<typeof import('../lib/updates')>()),
-  attentionCount: () => Promise.resolve(3),
+  attentionCount: () => Promise.resolve(attentionTotal.value),
 }))
 
 // PATCH /api/v1/me answers with the patched settings; the bodies sent are recorded.
@@ -37,7 +39,7 @@ const admin: Me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice Admin',
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: ['acme.test'] },
   locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
-  server_version: '0.1.0-alpha.5', alternate_role: null,
+  server_version: '0.1.0-alpha.5', alternate_role: null, channel: 'portal',
 }
 
 let wrapper: VueWrapper | null = null
@@ -45,6 +47,7 @@ let wrapper: VueWrapper | null = null
 beforeEach(() => {
   localStorage.clear()
   patched.length = 0
+  attentionTotal.value = 3
   delete document.documentElement.dataset.theme
   resize(1920)
 })
@@ -70,14 +73,14 @@ function testRouter(): Router {
   })
 }
 
-async function mountApp(me: Me = admin, path = '/devices'): Promise<{ w: VueWrapper; router: Router }> {
+async function mountApp(me: Me = admin, path = '/devices', language: PortalLocale = 'en'): Promise<{ w: VueWrapper; router: Router }> {
   const pinia = createPinia()
   setActivePinia(pinia)
   useSessionStore().me = me
   const router = testRouter()
   await router.push(path)
   await router.isReady()
-  wrapper = mount(App, { global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body })
+  wrapper = mount(App, { global: { plugins: [createPortalI18n(language), vuetify, router, pinia] }, attachTo: document.body })
   await flushPromises()
   return { w: wrapper, router }
 }
@@ -130,6 +133,25 @@ describe('navigation drawer', () => {
     expect(pill.find('.pd-chip-dot').attributes('aria-hidden')).toBe('true')
     expect(w.find('.v-badge').exists()).toBe(false)
     expect(w.find('[data-testid="org-name"]').text()).toBe('Acme')
+  })
+
+  // jsdom has no layout: that the organization name keeps its width at 375 px is checked in the browser. This test
+  // pins what makes room for it, the short pill text on a small screen, and that the link's name keeps the full text.
+  it('shows only the count in the attention pill below 600 px, named with the full text (PDK-338)', async () => {
+    resize(375)
+    attentionTotal.value = 1534
+    const { w } = await mountApp({ ...admin, locale: 'de' }, '/devices', 'de')
+    const pill = w.find('[data-testid="app-bar-attention"]')
+    expect(pill.text()).toBe('1.534')
+    expect(pill.attributes('aria-label')).toBe('1.534 brauchen Aufmerksamkeit')
+    expect(pill.attributes('aria-label')).toContain(pill.text())
+    expect(pill.attributes('href')).toBe('/attention')
+    expect(w.find('[data-testid="org-name"]').text()).toBe('Acme')
+
+    resize(1280)
+    await flushPromises()
+    expect(pill.text()).toBe('1.534 brauchen Aufmerksamkeit')
+    expect(pill.attributes('aria-label')).toBeUndefined()
   })
 
   it('hides entries by role exactly as the app bar did', async () => {
@@ -395,11 +417,27 @@ describe('app bar', () => {
     expect(w.find('[data-testid="theme-toggle"]').attributes('aria-label')).toBe('Switch to the light theme')
   })
 
+  it('names the user menu button with its visible text first (WCAG 2.5.3, PDK-349)', async () => {
+    const { w } = await mountApp()
+    const button = w.find('[data-testid="user-menu"]')
+    expect(button.attributes('aria-label')).toBe('Alice Admin, Organization administrator — user menu')
+    expect(nameContainsVisibleText(button.element)).toBe(true)
+  })
+
+  it('names the language, theme and density submenus with their visible text (WCAG 2.5.3, PDK-349)', async () => {
+    const { w } = await mountApp()
+    await w.find('[data-testid="user-menu"]').trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="language-menu"]')).not.toBeNull())
+    for (const id of ['language-menu', 'theme-menu', 'density-menu']) {
+      expect(nameContainsVisibleText(document.querySelector(`[data-testid="${id}"]`) as Element)).toBe(true)
+    }
+  })
+
   it('offers theme, density and shortcut help in the user menu', async () => {
     const { w } = await mountApp()
     await w.find('[data-testid="user-menu"]').trigger('click')
     await vi.waitFor(() => expect(document.querySelector('[data-testid="theme-menu"]')).not.toBeNull())
-    expect(document.querySelector('[data-testid="theme-menu"]')?.getAttribute('aria-label')).toBe('Choose the theme (current: System)')
+    expect(document.querySelector('[data-testid="theme-menu"]')?.getAttribute('aria-label')).toBe('Theme: System')
     expect(document.querySelector('[data-testid="density-menu"]')?.textContent).toContain('Compact')
     expect(document.querySelector('[data-testid="shortcuts-help"]')?.textContent).toContain('Keyboard shortcuts')
     expect(document.querySelector('[data-testid="logout"]')).not.toBeNull()

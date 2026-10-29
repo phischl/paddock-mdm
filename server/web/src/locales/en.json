@@ -20,19 +20,20 @@
     "mainNavigation": "Main navigation",
     "error": "Something went wrong. Please try again.",
     "language": "Language",
-    "languageMenu": "Choose the language (current: {language})",
+    "languageMenu": "Language: {language}",
     "languages": {
       "en": "English",
       "de": "Deutsch"
     },
     "languageFailed": "The language could not be saved.",
     "userMenu": "User menu of {name}",
+    "userMenuButton": "{name}, {role} — user menu",
     "showNavigation": "Show the navigation",
     "hideNavigation": "Hide the navigation",
     "commandField": "Search or run a command",
     "commandPlaceholder": "Jump to a device, page, CVE or action…",
     "theme": "Theme",
-    "themeMenu": "Choose the theme (current: {theme})",
+    "themeMenu": "Theme: {theme}",
     "themes": {
       "system": "System",
       "light": "Light",
@@ -44,7 +45,7 @@
     },
     "themeFailed": "The theme could not be saved.",
     "density": "Density",
-    "densityMenu": "Choose the density (current: {density})",
+    "densityMenu": "Density: {density}",
     "densities": {
       "compact": "Compact",
       "comfortable": "Comfortable"
@@ -1305,7 +1306,10 @@
     "summary": "Ends every portal session of the installation, including your own, and signs every portal user out of the identity provider (Authentik). Every administrator signs in again with password and authenticator; API tokens and device logins keep working.",
     "endAll": "End all sessions",
     "confirmTitle": "End all sessions?",
-    "confirmMessage": "Every administrator, you included, is signed out of the portal and of the identity provider at the next request. Type END to confirm."
+    "confirmMessage": "Every administrator, you included, is signed out of the portal and of the identity provider at the next request. Type END to confirm.",
+    "problems": {
+      "upstream_unavailable": "The portal sessions were ended, but the identity provider's sessions could not be ended. Run End all sessions again."
+    }
   },
   "openbao": {
     "title": "OpenBao",
@@ -1900,7 +1904,7 @@
     "title": "Attention",
     "summary": "Devices that need an administrator, grouped by device with their open conditions. Open the device to retire, lock or release it.",
     "kind": "Condition",
-    "open": "Open {hostname}",
+    "open": "{action} — {hostname}",
     "kinds": {
       "stale_warning": "Silent (warning)",
       "stale_critical": "Silent (critical)",
@@ -2096,7 +2100,8 @@
       "open": "Open list",
       "device": "Device",
       "conditions": "Conditions",
-      "os": "Ubuntu {release}"
+      "os": "Ubuntu {release}",
+      "tableLabel": "Attention table"
     },
     "vulnerabilities": {
       "title": "Vulnerabilities",
@@ -2131,7 +2136,8 @@
       "title": "Recent audit activity",
       "open": "Audit log",
       "code": "Code",
-      "empty": "No events in the last days."
+      "empty": "No events in the last days.",
+      "tableLabel": "Recent audit activity table"
     },
     "keyboardHint": "Keyboard: {mod} K palette · j / k move · Enter open · g d devices. Destructive actions never have a shortcut; they always open the confirm dialog.",
     "securityReview": {

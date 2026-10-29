@@ -68,7 +68,7 @@ const columns: ListColumn[] = [
       <template #[`item.actions`]="{ item }: { item: AttentionDevice }">
         <v-btn
           :to="{ name: 'device', params: { id: item.device_id } }"
-          :aria-label="t('attention.open', { hostname: item.hostname })"
+          :aria-label="t('attention.open', { action: t('attention.action.' + item.conditions[0].kind), hostname: item.hostname })"
           size="small"
         >
           {{ t('attention.action.' + item.conditions[0].kind) }}

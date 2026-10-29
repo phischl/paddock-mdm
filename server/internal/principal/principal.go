@@ -27,6 +27,12 @@ const (
 	RolePlatform    Role = "platform_admin"
 )
 
+// Channel is the channel a request of an administrator came through when it is not the portal or an API token.
+type Channel string
+
+// ChannelMCP marks a request of an MCP session (ADR 0044, plan M14 §3.2 item 6).
+const ChannelMCP Channel = "mcp"
+
 // Principal is the authenticated caller. The organization is only ever taken from here, never from a request.
 type Principal struct {
 	Kind           Kind
@@ -46,6 +52,12 @@ type Principal struct {
 	APITokenName string
 	// SessionID is the server-side session of a portal request (plan M8s decision 13); "" for tokens and system.
 	SessionID string
+	// Channel is ChannelMCP for a request of an MCP session; "" for portal sessions, API tokens and system. MCPClient
+	// (the sanitised X-Paddock-MCP-Client header) and MCPWriteEnabled (the account's write opt-in) are set only on
+	// the MCP channel.
+	Channel         Channel
+	MCPClient       string
+	MCPWriteEnabled bool
 }
 
 type ctxKey struct{}

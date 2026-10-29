@@ -20,7 +20,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
-// Record is the server-side half of a portal session (ADR 0034 decision 4).
+// Record is the server-side half of a portal or MCP session (ADR 0034 decision 4, ADR 0044 amendment A2).
 type Record struct {
 	AccountID uuid.UUID `json:"account_id"`
 	Kind      string    `json:"kind"`
@@ -28,6 +28,11 @@ type Record struct {
 	Org       uuid.UUID `json:"org"`
 	Gen       int64     `json:"gen"`
 	CreatedAt int64     `json:"created_at"`
+	// Channel is "mcp" for an MCP session. An MCP session has no cookie payload, so the record carries the display
+	// name and the Authentik subject itself; portal sessions leave all three empty.
+	Channel string `json:"channel,omitempty"`
+	Display string `json:"display,omitempty"`
+	Subject string `json:"sub,omitempty"`
 }
 
 // ErrUnavailable wraps every Valkey error; the api answers it with 503 session_store_unavailable.
@@ -145,13 +150,18 @@ func (s *Store) Delete(ctx context.Context, sid string, accountID uuid.UUID) err
 	return nil
 }
 
-// revokeScript deletes every session of the set and the set itself, and returns how many sessions still existed.
+// revokeScript deletes every session of the set and the set itself, and every MCP login binding of the account and
+// its set (KEYS[2]), and returns how many sessions still existed.
 var revokeScript = valkey.NewLuaScript(`
 local n = 0
 for _, sid in ipairs(redis.call('SMEMBERS', KEYS[1])) do
   n = n + redis.call('DEL', 'sess:' .. sid)
 end
 redis.call('DEL', KEYS[1])
+for _, key in ipairs(redis.call('SMEMBERS', KEYS[2])) do
+  redis.call('DEL', key)
+end
+redis.call('DEL', KEYS[2])
 return n
 `)
 
@@ -173,9 +183,10 @@ func (s *Store) CountAccount(ctx context.Context, accountID uuid.UUID) (int, err
 	return int(n), nil
 }
 
-// RevokeAccount deletes every session of the account and returns how many existed.
+// RevokeAccount deletes every session and every MCP login binding of the account and returns how many sessions
+// existed.
 func (s *Store) RevokeAccount(ctx context.Context, accountID uuid.UUID) (int, error) {
-	n, err := revokeScript.Exec(ctx, s.c, []string{accountKey(accountID)}, nil).AsInt64()
+	n, err := revokeScript.Exec(ctx, s.c, []string{accountKey(accountID), accountBindingsKey(accountID)}, nil).AsInt64()
 	if err != nil {
 		return 0, unavailable(err)
 	}

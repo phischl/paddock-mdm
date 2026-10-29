@@ -85,4 +85,30 @@ describe('end all sessions (plan M8s decision 16)', () => {
     expect(w.find('[role="alert"]').text()).toBe('The portal cannot reach its session store. Try again in a moment.')
     expect(assigned).toEqual([])
   })
+
+  it('says the portal sessions are ended when the identity provider could not end its sessions', async () => {
+    answer = 'upstream_unavailable'
+    const w = await mountView()
+    await w.find('[data-testid="end-all-sessions"]').trigger('click')
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(w.find('[role="alert"]').text()).toBe(
+      "The portal sessions were ended, but the identity provider's sessions could not be ended. Run End all sessions again.")
+    expect(assigned).toEqual([])
+  })
+
+  it('keeps the generic text for other failures', async () => {
+    answer = 'forbidden'
+    const w = await mountView()
+    await w.find('[data-testid="end-all-sessions"]').trigger('click')
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(w.find('[role="alert"]').text()).toBe('You are not allowed to do this.')
+    answer = 'internal'
+    await w.find('[data-testid="end-all-sessions"]').trigger('click')
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(w.find('[role="alert"]').text()).toBe('Something went wrong. Please try again.')
+    expect(assigned).toEqual([])
+  })
 })

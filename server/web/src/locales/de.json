@@ -20,19 +20,20 @@
     "mainNavigation": "Hauptnavigation",
     "error": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
     "language": "Sprache",
-    "languageMenu": "Sprache wählen (aktuell: {language})",
+    "languageMenu": "Sprache: {language}",
     "languages": {
       "en": "English",
       "de": "Deutsch"
     },
     "languageFailed": "Die Sprache konnte nicht gespeichert werden.",
     "userMenu": "Benutzermenü von {name}",
+    "userMenuButton": "{name}, {role} — Benutzermenü",
     "showNavigation": "Navigation einblenden",
     "hideNavigation": "Navigation ausblenden",
     "commandField": "Suchen oder Befehl ausführen",
     "commandPlaceholder": "Zu Gerät, Seite, CVE oder Aktion springen …",
     "theme": "Erscheinungsbild",
-    "themeMenu": "Erscheinungsbild wählen (aktuell: {theme})",
+    "themeMenu": "Erscheinungsbild: {theme}",
     "themes": {
       "system": "System",
       "light": "Hell",
@@ -44,7 +45,7 @@
     },
     "themeFailed": "Das Erscheinungsbild konnte nicht gespeichert werden.",
     "density": "Dichte",
-    "densityMenu": "Dichte wählen (aktuell: {density})",
+    "densityMenu": "Dichte: {density}",
     "densities": {
       "compact": "Kompakt",
       "comfortable": "Komfortabel"
@@ -1305,7 +1306,10 @@
     "summary": "Beendet jede Portalsitzung der Installation, auch Ihre eigene, und meldet jeden Portalbenutzer beim Identitätsanbieter (Authentik) ab. Jeder Administrator meldet sich mit Passwort und Authenticator neu an; API-Token und Geräteanmeldungen arbeiten weiter.",
     "endAll": "Alle Sitzungen beenden",
     "confirmTitle": "Alle Sitzungen beenden?",
-    "confirmMessage": "Jeder Administrator, Sie eingeschlossen, wird bei der nächsten Anfrage vom Portal und vom Identitätsanbieter abgemeldet. Geben Sie END ein, um zu bestätigen."
+    "confirmMessage": "Jeder Administrator, Sie eingeschlossen, wird bei der nächsten Anfrage vom Portal und vom Identitätsanbieter abgemeldet. Geben Sie END ein, um zu bestätigen.",
+    "problems": {
+      "upstream_unavailable": "Die Portalsitzungen wurden beendet, die Sitzungen beim Identitätsanbieter aber nicht. Führen Sie „Alle Sitzungen beenden“ erneut aus."
+    }
   },
   "openbao": {
     "title": "OpenBao",
@@ -1900,7 +1904,7 @@
     "title": "Handlungsbedarf",
     "summary": "Geräte, die einen Administrator brauchen, nach Gerät gruppiert mit ihren offenen Befunden. Öffnen Sie das Gerät, um es außer Betrieb zu nehmen, zu sperren oder freizugeben.",
     "kind": "Befund",
-    "open": "{hostname} öffnen",
+    "open": "{action} — {hostname}",
     "kinds": {
       "stale_warning": "Ohne Kontakt (Warnung)",
       "stale_critical": "Ohne Kontakt (kritisch)",
@@ -2096,7 +2100,8 @@
       "open": "Liste öffnen",
       "device": "Gerät",
       "conditions": "Befunde",
-      "os": "Ubuntu {release}"
+      "os": "Ubuntu {release}",
+      "tableLabel": "Tabelle Handlungsbedarf"
     },
     "vulnerabilities": {
       "title": "Schwachstellen",
@@ -2131,7 +2136,8 @@
       "title": "Letzte Audit-Ereignisse",
       "open": "Audit-Protokoll",
       "code": "Code",
-      "empty": "Keine Ereignisse in den letzten Tagen."
+      "empty": "Keine Ereignisse in den letzten Tagen.",
+      "tableLabel": "Tabelle Letzte Audit-Ereignisse"
     },
     "keyboardHint": "Tastatur: {mod} K Befehlspalette · j / k bewegen · Enter öffnen · g d Geräte. Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog.",
     "securityReview": {

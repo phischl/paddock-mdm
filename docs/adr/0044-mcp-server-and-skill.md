@@ -398,3 +398,32 @@ A7. **SDK.** The MCP SDK v1.8.0 carries `golang.org/x/oauth2`, which the CLI use
   stores the choice and every renewal repeats it. An MCP session has no `alternate_role` and no switch; the human
   runs `paddockctl mcp login` again to act in the other role. The follow-up "PDK-201 must keep one role per session"
   is satisfied by ADR 0045 decision 4. PDK-436 and PDK-439 implement this amendment.
+
+## Amendment 2026-10-28 (PDK-436) — renewals without `amr`
+Verified against the development stack (Authentik 2026.8.5): the device grant on `paddock-mcp` issues access, refresh
+and ID tokens; the access token is an RS256 JWT verifiable with the provider's JWKS, `aud` is the client id (stop
+conditions S4 and S5 do not hold). A refresh also issues an ID token, but Authentik omits `amr` and `sid` from it;
+`auth_time` is carried over unchanged from the authentication. The `amr` check of A2 would therefore refuse every
+renewal.
+
+- Renewals are bound to the MFA-checked first login by (`sub`, `auth_time`) and the account and role context (kind,
+  role, organization); any mismatch ends the binding and all sessions of the account (as a role change does) and answers
+  401 `mcp_login_required`. An ID token with `amr` is a login and is checked as in A2; it writes a login binding keyed
+  by (`sub`, `auth_time`) in the session store (account, role context, client; TTL `auth_time` + 8 h − now, the refresh
+  token's validity, so a binding never outlives its refresh chain; the generation of *End all sessions* as for session
+  records). An ID token without `amr` is a renewal: it is accepted only when a binding of exactly its `sub` and
+  `auth_time` of the current generation exists, `auth_time` + 8 h is ahead, the access token verifies as before and the
+  role the refreshed groups resolve is the binding's account and role context; it is recorded as `admin.login` with
+  `renewal: true`. Without a binding the api answers 401 `mcp_login_required` and the CLI runs a full login. The binding
+  is not part of the idle-expiring session record, so a client idle for more than 30 minutes can still renew.
+- Access and ID tokens of `paddock-mcp` share issuer, audience and signature (both `typ: JWT`); only access tokens
+  carry `azp` and `scope`. The api accepts as access token (session call and bearer) only a token with `azp` equal to
+  the client id and a `scope` claim, so an ID token never serves as a bearer.
+- Login tokens presented to `/api/auth/mcp/session` are single-use (a Valkey marker on the verified token identity (`iss`, `sub`, `jti`; the payload bytes if `jti` is absent) for its remaining lifetime plus 60 s; non-canonical (non-strict base64url) tokens are refused before verification), and an access token is never accepted as the ID token; a replayed token after logout, End all or a role
+  change is refused.
+- Logout deletes the binding; `RevokeAccount` (deactivation, role change) deletes every binding of the account;
+  *End all sessions* makes every older binding stale.
+- The blueprint sets `grant_types: [urn:ietf:params:oauth:grant-type:device_code, refresh_token]`: Authentik refuses
+  every grant a provider does not list (the device authorization endpoint answers `invalid_client` otherwise).
+- RR-87: a renewal proves the refresh chain of one MFA-checked login (its `auth_time`); a stolen refresh token gives
+  no more than before, and logout, deactivation, role change and *End all sessions* end its renewals. Single-use login tokens (a Valkey marker on the verified token identity (`iss`, `sub`, `jti`; the payload bytes if `jti` is absent) for its remaining lifetime plus 60 s; non-canonical (non-strict base64url) tokens are refused before verification) prevent reopening a session with a captured token after logout.

@@ -79,6 +79,29 @@ func itemCases(method, collection, suffix, code string, okStatus int, create fun
 
 // identityAuditCases are the A3 cases of the M3a operations (plan M3a §6: the existing gates cover all new endpoints).
 var identityAuditCases = map[string][]auditCase{
+	"POST /api/auth/mcp/session": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			tokens := mcpDeviceTokens(t, env.Alice)
+			res := mcpSession(t, tokens.IDToken, tokens.AccessToken)
+			expectStatus(t, res, http.StatusNoContent, "")
+			mcpLogout(t, tokens.AccessToken)
+			expectOneEvent(t, w.alice, res.RequestID, "admin.login", "success")
+		}},
+		{"failure", func(t *testing.T, w *auditWorld) {
+			res := mcpSession(t, forgedJWT(), forgedJWT())
+			expectStatus(t, res, http.StatusUnauthorized, "unauthenticated")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "admin.login", "failure", auditPollTimeout)
+		}},
+		{"replay", func(t *testing.T, w *auditWorld) {
+			tokens := mcpDeviceTokens(t, env.Alice)
+			first := mcpSession(t, tokens.IDToken, tokens.AccessToken)
+			expectStatus(t, first, http.StatusNoContent, "")
+			mcpLogout(t, tokens.AccessToken)
+			res := mcpSession(t, tokens.IDToken, tokens.AccessToken)
+			expectStatus(t, res, http.StatusUnauthorized, "mcp_login_required")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "admin.login", "denied", auditPollTimeout)
+		}},
+	},
 	"PATCH /api/platform/v1/organizations/{id}": {
 		{"success", func(t *testing.T, w *auditWorld) {
 			res := call(t, w.root, http.MethodPatch, "/api/platform/v1/organizations/"+w.acme.String(), map[string]any{"domains": []string{"acme.test"}})

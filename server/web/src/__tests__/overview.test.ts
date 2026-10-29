@@ -10,6 +10,7 @@ import { kpiCells, severitySegments } from '../lib/overview'
 import { vuetify } from '../plugins/vuetify'
 import { useSessionStore } from '../stores/session'
 import OverviewView from '../views/Overview.vue'
+import { nameContainsVisibleText } from './labelInName'
 
 function overviewOf(over: Partial<Overview> = {}): Overview {
   return {
@@ -170,6 +171,13 @@ describe('overview page (plan M7c decision 28)', () => {
     expect(rows[0].text()).toContain('never')
   })
 
+  it('names the attention action with its visible text and the hostname (WCAG 2.5.3, PDK-349)', async () => {
+    const w = await mountOverview()
+    const action = w.find('[data-testid="overview-attention"] tbody tr a.v-btn')
+    expect(action.attributes('aria-label')).toBe('Retire, lock or keep — acme-lt-0142')
+    expect(nameContainsVisibleText(action.element)).toBe(true)
+  })
+
   it('collapses more than three conditions into a +n chip', async () => {
     attentionItems = [{
       ...twoConditions, conditions: [
@@ -261,6 +269,23 @@ describe('overview page (plan M7c decision 28)', () => {
     const operator = await mountOverview('org_operator')
     expect(operator.find('[data-testid="overview-audit"]').exists()).toBe(false)
     expect(auditCalls).toHaveLength(0)
+  })
+
+  it('makes both sideways-scrolling tables keyboard-focusable regions with their own names (PDK-460)', async () => {
+    const w = await mountOverview()
+    const regions = w.findAll('[role="region"]').map((r) => r.element as HTMLElement)
+    const headings = w.findAll('h2').map((h) => h.text().trim())
+    for (const [name, heading] of [['Attention table', 'Attention'], ['Recent audit activity table', 'Recent audit activity']]) {
+      expect(headings).toContain(heading)
+      const region = regions.find((r) => r.getAttribute('aria-label') === name)
+      expect(region, name).toBeDefined()
+      expect(region!.hasAttribute('aria-labelledby')).toBe(false)
+      expect(name).not.toBe(heading)
+      expect(region!.tabIndex).toBe(0)
+      expect(region!.querySelector('table')).not.toBeNull()
+      region!.focus()
+      expect(document.activeElement).toBe(region)
+    }
   })
 
   it('shows the problem when the overview cannot be read', async () => {

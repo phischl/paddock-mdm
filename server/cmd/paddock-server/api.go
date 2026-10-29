@@ -66,6 +66,13 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	stepUpCfg.RedirectPath = "/api/auth/stepup/callback"
 	// The scope paddock_stepup carries the validated authenticator classes (plan M8f decision 7).
 	stepUpCfg.Scopes = []string{"openid", "profile", "groups", "paddock_stepup"}
+	// MCP login (plan M14 §3.3 item 12): the public provider paddock-mcp has no client secret; an empty issuer turns
+	// the MCP login off.
+	mcpCfg := admin.OIDCConfig{
+		Issuer:   l.String("PADDOCK_OIDC_MCP_ISSUER", ""),
+		ClientID: l.String("PADDOCK_OIDC_MCP_CLIENT_ID", "paddock-mcp"),
+		Scopes:   admin.MCPScopes,
+	}
 	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
 	authentikToken := l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")
 	releaseKey := l.SecretFile("PADDOCK_RELEASE_PUBLIC_KEY_FILE")
@@ -153,6 +160,12 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
 	stepUp := admin.NewOIDC(stepUpCfg)
+	var mcpOIDC *admin.OIDC
+	var mcpAuth *admin.MCPAuth
+	if mcpCfg.Issuer != "" {
+		mcpOIDC = admin.NewOIDC(mcpCfg)
+		mcpAuth = admin.NewMCPAuth(mcpOIDC, sessionStore, accounts, loginMFAOptional, nil)
+	}
 	bundleKeys := func(ctx context.Context) ([]protocol.BundleKey, error) { return bundlesign.PublicKeys(ctx, baoClient) }
 	revocationKeys := func(ctx context.Context) ([]protocol.BundleKey, error) {
 		keys, err := revocationsign.PublicKeys(ctx, baoClient)
@@ -215,6 +228,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		StepUp:         stepUp,
 		StepUpTokens:   stepUpTokens,
 		Sessions:       sessionStore,
+		MCPAuth:        mcpAuth,
 		StepUpAccounts: accounts,
 		EndSessions:    app.NewSessions(runner, sessionStore, app.NewPortalUsers(platformPool, ak), ak),
 		AutoUnseal:     app.NewAutoUnseal(runner, platformPool, baoClient),
@@ -244,7 +258,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 				if !keys.Ready() {
 					notReady = errors.New("session keys not loaded: OpenBao is sealed or unreachable (docs/operations/openbao.md section 2)")
 				}
-				if !oidc.Ready() || !stepUp.Ready() {
+				if !oidc.Ready() || !stepUp.Ready() || (mcpOIDC != nil && !mcpOIDC.Ready()) {
 					notReady = errors.Join(notReady, errors.New("oidc providers not discovered"))
 				}
 				if !ipGuard.Ready() {
@@ -261,6 +275,13 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		},
 		func(ctx context.Context) error { oidc.Discover(ctx); <-ctx.Done(); return nil },
 		func(ctx context.Context) error { stepUp.Discover(ctx); <-ctx.Done(); return nil },
+		func(ctx context.Context) error {
+			if mcpOIDC != nil {
+				mcpOIDC.Discover(ctx)
+			}
+			<-ctx.Done()
+			return nil
+		},
 		func(ctx context.Context) error {
 			if allowlistBypass {
 				// The bypass is often set while PostgreSQL is still starting or unreachable; its audit event must

@@ -143,6 +143,11 @@ watch(
   },
   { immediate: true },
 )
+const attentionLabel = computed(() => t('nav.attentionPill', { count: attention.value }))
+// Below 600 px the full pill ("534 brauchen Aufmerksamkeit") squeezed the organization name to zero width (PDK-338):
+// only the count is shown there, and the link keeps the full text as its name, which contains the visible count
+// (WCAG 2.5.3 label in name). Same number format as the ICU `#` in the message.
+const attentionShort = computed(() => new Intl.NumberFormat(locale.value).format(attention.value))
 
 // The language, theme and density switches of the user menu; language and theme are stored on the account.
 const languageFailed = ref(false)
@@ -399,13 +404,14 @@ onBeforeUnmount(() => observer.disconnect())
             v-if="session.canReadGroups && attention > 0"
             to="/attention"
             class="pd-chip pd-chip--critical pd-pill"
+            :aria-label="mobile ? attentionLabel : undefined"
             data-testid="app-bar-attention"
           >
             <span
               class="pd-chip-dot"
               aria-hidden="true"
             />
-            {{ t('nav.attentionPill', { count: attention }) }}
+            {{ mobile ? attentionShort : attentionLabel }}
           </RouterLink>
           <v-chip
             v-if="stepUpUntil && !mobile"
@@ -428,16 +434,16 @@ onBeforeUnmount(() => observer.disconnect())
                 v-bind="menu"
                 variant="text"
                 class="user-button"
-                :aria-label="t('app.userMenu', { name: session.me?.display_name ?? '' })"
+                :aria-label="t('app.userMenuButton', { name: session.me?.display_name ?? '', role: roleLabel })"
                 data-testid="user-menu"
               >
                 <span
                   class="pd-avatar"
                   aria-hidden="true"
-                >{{ initial }}</span>
+                  :data-initial="initial"
+                />
                 <span class="user-button-name">
-                  <span class="pd-user-name">{{ session.me?.display_name }}</span>
-                  <span class="pd-user-role pd-type-caption pd-muted">{{ roleLabel }}</span>
+                  <span class="pd-user-name">{{ session.me?.display_name }}</span>{{ ' ' }}<span class="pd-user-role pd-type-caption pd-muted">{{ roleLabel }}</span>
                 </span>
               </v-btn>
             </template>
@@ -477,7 +483,7 @@ onBeforeUnmount(() => observer.disconnect())
                     :aria-label="t('app.languageMenu', { language: t('app.languages.' + locale) })"
                     data-testid="language-menu"
                   >
-                    <v-list-item-title>{{ t('app.language') }}</v-list-item-title>
+                    <v-list-item-title>{{ t('app.language') }}</v-list-item-title>{{ ' ' }}
                     <v-list-item-subtitle>{{ t('app.languages.' + locale) }}</v-list-item-subtitle>
                   </v-list-item>
                 </template>
@@ -504,7 +510,7 @@ onBeforeUnmount(() => observer.disconnect())
                     :aria-label="t('app.themeMenu', { theme: t('app.themes.' + (session.me?.theme ?? 'system')) })"
                     data-testid="theme-menu"
                   >
-                    <v-list-item-title>{{ t('app.theme') }}</v-list-item-title>
+                    <v-list-item-title>{{ t('app.theme') }}</v-list-item-title>{{ ' ' }}
                     <v-list-item-subtitle>{{ t('app.themes.' + (session.me?.theme ?? 'system')) }}</v-list-item-subtitle>
                   </v-list-item>
                 </template>
@@ -531,7 +537,7 @@ onBeforeUnmount(() => observer.disconnect())
                     :aria-label="t('app.densityMenu', { density: t('app.densities.' + density) })"
                     data-testid="density-menu"
                   >
-                    <v-list-item-title>{{ t('app.density') }}</v-list-item-title>
+                    <v-list-item-title>{{ t('app.density') }}</v-list-item-title>{{ ' ' }}
                     <v-list-item-subtitle>{{ t('app.densities.' + density) }}</v-list-item-subtitle>
                   </v-list-item>
                 </template>
