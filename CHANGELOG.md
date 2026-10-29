@@ -83,6 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   administrators, operators and auditors of every organization). End users approve with password and TOTP; the
   portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml` gains the policy
   `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
+- Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
+  Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
+  window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
+  device (migration `00073_event_seq_scanned`) and reads one bounded window above it, moving on every round.
 - Production and lab installations (PDK-492): the api now finds the MCP login provider at
   `https://auth.<domain>/application/o/paddock-mcp/`. Before, it looked for it at the development port, never became
   ready and the installation or upgrade stopped at `./paddock start`. The bundle test refuses an OIDC issuer with an
@@ -115,6 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Agent releases (PDK-432): the database now enforces that a published release cannot change. An upload, host
+  command or import that stores a file of a release which another administrator published in the meantime is refused
+  with 409 `invalid_state` and keeps the recorded checksums of the release; a second concurrent publish is refused
+  the same way. A release import refuses a release with more than one fleetd package for the same architecture
+  (`invalid_request`), and `PADDOCK_AGENT_RELEASE_SOURCE_REPO` no longer accepts an owner or repository of only dots
+  such as `..`.
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
   could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
 - undici 6.29.1 in the portal's build tooling (was 6.29.0; CVE-2026-109383, CVE-2026-87018 and CVE-2026-109869, high;

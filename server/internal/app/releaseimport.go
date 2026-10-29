@@ -226,8 +226,16 @@ func (r *ReleaseImports) fetch(ctx context.Context, version string) ([]HostArtif
 		}
 	}
 	fleetdVersion := map[string]string{}
+	fleetdArch := map[string]string{}
 	for _, a := range rel.Assets {
 		if pv, arch, ok := agentrelease.ParseFleetdAsset(a.Name); ok {
+			// One row per (version, name, arch): a second fleetd of the arch would replace the first and orphan its
+			// object (PDK-432).
+			if other, dup := fleetdArch[arch]; dup {
+				return nil, nil, problem.InvalidRequest.WithDetail("more than one fleetd package for " + arch + ": " + other +
+					", " + a.Name)
+			}
+			fleetdArch[arch] = a.Name
 			fleetdVersion[a.Name] = pv
 			wanted = append(wanted, agentrelease.SourceAsset{Name: a.Name, Arch: arch, Package: agentrelease.PackageFleetd})
 		}

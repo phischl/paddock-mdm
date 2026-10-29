@@ -368,6 +368,7 @@ type DeviceStatus struct {
 	ClockDriftSince      *time.Time
 	EventSeqHigh         int64
 	EventSeqContiguous   int64
+	EventSeqScanned      int64
 }
 
 type DeviceUserSeen struct {

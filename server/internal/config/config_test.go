@@ -251,6 +251,18 @@ func TestLoadReleaseSource(t *testing.T) {
 	if LoadReleaseSource(l, prod); l.Err() == nil || !strings.Contains(l.Err().Error(), repo) {
 		t.Fatalf("owner without repo: %v", l.Err())
 	}
+	for _, bad := range []string{"../paddock-mdm", "phischl/..", "./x", "x/.", ".../x"} {
+		l = NewLoaderFrom(map[string]string{repo: bad})
+		if LoadReleaseSource(l, prod); l.Err() == nil || !strings.Contains(l.Err().Error(), repo) {
+			t.Fatalf("dot-only segment %q accepted", bad)
+		}
+	}
+	for _, ok := range []string{"my.org/paddock.mdm", ".github/x", "o/.dotfiles"} {
+		l = NewLoaderFrom(map[string]string{repo: ok})
+		if got := LoadReleaseSource(l, prod); got.Repository != ok || l.Err() != nil {
+			t.Fatalf("%q = %+v, err %v", ok, got, l.Err())
+		}
+	}
 
 	l = NewLoaderFrom(map[string]string{src: "http://github-fixture:8080"})
 	if LoadReleaseSource(l, prod); l.Err() == nil ||

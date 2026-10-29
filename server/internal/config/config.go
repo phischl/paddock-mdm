@@ -371,7 +371,7 @@ const (
 var releaseSourceRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 // LoadReleaseSource reads PADDOCK_AGENT_RELEASE_SOURCE_REPO (default phischl/paddock-mdm; "off" disables; otherwise
-// ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$), PADDOCK_AGENT_RELEASE_SOURCE_URL (default https://api.github.com; scheme https,
+// ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ without a segment of only dots), PADDOCK_AGENT_RELEASE_SOURCE_URL (default https://api.github.com; scheme https,
 // http only with PADDOCK_ENV=development; no query, fragment or userinfo; a trailing slash is trimmed) and the
 // optional PADDOCK_AGENT_RELEASE_SOURCE_TOKEN_FILE (read like SecretFile when the variable is set).
 func LoadReleaseSource(l *Loader, c Common) ReleaseSource {
@@ -381,7 +381,7 @@ func LoadReleaseSource(l *Loader, c Common) ReleaseSource {
 	if repo == "off" {
 		return ReleaseSource{}
 	}
-	if !releaseSourceRepo.MatchString(repo) {
+	if !releaseSourceRepo.MatchString(repo) || dotOnlySegment(repo) {
 		l.Invalid(repoName, fmt.Sprintf("not <owner>/<repo> or off: %q", repo))
 	}
 	s := ReleaseSource{Repository: repo, URL: strings.TrimRight(l.String(urlName, DefaultReleaseSourceURL), "/")}
@@ -400,4 +400,15 @@ func LoadReleaseSource(l *Loader, c Common) ReleaseSource {
 		s.Token = l.SecretFile(tokenName)
 	}
 	return s
+}
+
+// dotOnlySegment reports an owner or repo of only dots: "." and ".." would walk the list path on the source host
+// (PDK-432).
+func dotOnlySegment(repo string) bool {
+	for seg := range strings.SplitSeq(repo, "/") {
+		if strings.Trim(seg, ".") == "" {
+			return true
+		}
+	}
+	return false
 }

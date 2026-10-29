@@ -260,6 +260,13 @@ func TestReleaseImportRefusals(t *testing.T) {
 			src.files["paddockd_"+v+"_linux_amd64"] = []byte("tampered")
 			return v
 		}, problem.InvalidRequest, "failure"},
+		"two fleetd packages of one arch": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), "fleet-osquery 1.48.0 amd64")
+			h.addSigned(src, v, "fleet-osquery_1.49.0_amd64.deb", []byte("fleetd 1.49.0"), "fleet-osquery 1.49.0 amd64")
+			return v
+		}, problem.InvalidRequest, "failure"},
 		"signed for another version": {func() string {
 			v := sourceVersion()
 			h.addRelease(src, v)
