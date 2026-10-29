@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- MCP login (`paddockctl mcp login`, PDK-489): the device code of the Authentik provider `paddock-mcp` now lives ten
+  minutes, as the device logins' do. With Authentik's default of one minute, a sign-in with password and second factor
+  could expire before it was confirmed.
 - Portal: a focused input field (number, text, time, text area) shows a single focus indicator, the field's own
   outline. A second ring inside it no longer crosses the field label.
 
