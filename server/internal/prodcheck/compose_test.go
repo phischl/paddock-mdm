@@ -597,3 +597,60 @@ func TestStepUpBlueprintEmitsMFAClasses(t *testing.T) {
 		t.Error("the mapping scope-stepup-mfa must precede the provider that references it")
 	}
 }
+
+// TestDeviceBlueprintOneDevicePrompt (plan M8f amendment 2026-10-29, PDK-521): the device-code entry flow
+// paddock-device-code binds no MFA stage, and the blueprint removes the binding an earlier version created, so a code
+// typed at /device is not asked for the second factor twice; the provider's authorization flow
+// paddock-device-authorization keeps the stage paddock-device-mfa as the one device prompt of every approval. The
+// removal is conditional on the binding existing, because Authentik fails the whole import on an absent entry for a
+// missing binding (review 1 of PDK-521).
+func TestDeviceBlueprintOneDevicePrompt(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-device.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := strings.Split(string(b), "\n  - model: ")
+	idLine := regexp.MustCompile(`(?m)^    id: (\S+)$`)
+	var entryFlowID, authorizationFlowID, mfaID string
+	for _, e := range entries {
+		id := idLine.FindStringSubmatch(e)
+		switch {
+		case id == nil:
+		case strings.Contains(e, "\n      slug: paddock-device-code\n"):
+			entryFlowID = id[1]
+		case strings.Contains(e, "\n      slug: paddock-device-authorization\n"):
+			authorizationFlowID = id[1]
+		case strings.Contains(e, "\n      name: paddock-device-mfa\n"):
+			mfaID = id[1]
+		}
+	}
+	if entryFlowID == "" || authorizationFlowID == "" || mfaID == "" {
+		t.Fatalf("paddock-device.yaml lacks a flow or the MFA stage: entry %q, authorization %q, mfa %q",
+			entryFlowID, authorizationFlowID, mfaID)
+	}
+	authorizationMFA := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e, "authentik_flows.flowstagebinding\n") {
+			continue
+		}
+		absent := strings.Contains(e, "\n    state: absent\n")
+		switch {
+		case strings.Contains(e, "target: !KeyOf "+entryFlowID+"\n") && !absent:
+			t.Errorf("the entry flow paddock-device-code binds a stage:\n%s", e)
+		case strings.Contains(e, "target: !KeyOf "+entryFlowID+"\n") && !strings.Contains(e, "stage: !KeyOf "+mfaID+"\n"):
+			t.Errorf("the removed binding of paddock-device-code does not name the stage paddock-device-mfa:\n%s", e)
+		case strings.Contains(e, "target: !KeyOf "+authorizationFlowID+"\n") && strings.Contains(e, "stage: !KeyOf "+mfaID+"\n") && !absent:
+			authorizationMFA++
+		}
+	}
+	if authorizationMFA != 1 {
+		t.Errorf("paddock-device-authorization binds paddock-device-mfa %d times, want once", authorizationMFA)
+	}
+	if !strings.Contains(string(b), "    state: absent\n    conditions:\n      - !Find [authentik_flows.flowstagebinding, [target, !KeyOf "+
+		entryFlowID+"], [stage, !KeyOf "+mfaID+"], [order, 10]]\n    identifiers:\n      target: !KeyOf "+entryFlowID+
+		"\n      stage: !KeyOf "+mfaID+"\n      order: 10\n") {
+		t.Error("paddock-device.yaml does not remove the MFA binding at order 10 of paddock-device-code from earlier " +
+			"installations, or removes it without the condition that the binding exists (an absent entry for a missing " +
+			"binding fails the whole blueprint import)")
+	}
+}
