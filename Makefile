@@ -55,7 +55,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
@@ -137,6 +137,12 @@ lint-go:
 		$(GOLANGCI_LINT_IMAGE) golangci-lint run $(GO_PACKAGES)
 	go vet $(GO_PACKAGES)
 	go test -count=1 -run '^TestOpenAPISpec$$' ./server/internal/transport/http/admin/
+
+# Every workspace module must be tidy (PDK-457): an untidy go.mod otherwise drifts unnoticed and resurfaces in every
+# dependency update. go mod tidy -diff prints the change and fails without writing go.mod or go.sum.
+.PHONY: lint-tidy
+lint-tidy:
+	@set -e; for m in $(GO_MODULES); do echo "go mod tidy -diff $$m"; (cd $$m && go mod tidy -diff); done
 
 # govulncheck checks every workspace module, including its tests, in the pinned Go image (plan M2.1 decision 2); a
 # vulnerability in reachable code fails.
