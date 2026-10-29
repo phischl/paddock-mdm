@@ -8,7 +8,8 @@ are managed on the portal page *API tokens* or through `/api/v1/api-tokens`.
 
 - **One organization, one role.** A token belongs to the organization of the administrator who created it and carries
   exactly one organization role: `org_admin`, `org_operator` or `org_auditor`. It is authorized everywhere exactly like
-  a portal session with that role. There are no platform tokens. Restore commands run on the host as
+  a portal session with that role. There are no platform tokens. API tokens are not used for the MCP: AI assistants sign in with
+  `paddockctl mcp login` through Authentik ([mcp.md](mcp.md)). Restore commands run on the host as
   `paddock-server admin …` (see [paddockctl.md](paddockctl.md#restore-commands)).
 - **Role ceiling.** An organization administrator creates tokens of every organization role; an operator creates
   operator and auditor tokens; an auditor creates none. An organization administrator creates auditor tokens for

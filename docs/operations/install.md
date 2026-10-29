@@ -218,6 +218,16 @@ affected. When Authentik cannot be reached, or does not answer within 80 seconds
 `upstream_unavailable` after the portal sessions have ended (the CLI command exits with an error); this is expected while
 Authentik is down. Run the action again once Authentik is back, so that the identity provider's sessions end too.
 
+**AI assistants (MCP).** Authentik applies the blueprint `paddock-mcp.yaml` at its start, like the portal and step-up
+blueprints: the public OIDC provider and application `paddock-mcp` (device authorization grant, the portal's login
+flow, the device providers' MFA authorization flow, 30-minute access and 8-hour refresh tokens) for
+`paddockctl mcp login`. `compose.prod.yaml` sets `PADDOCK_OIDC_MCP_ISSUER` of `paddock-api` to
+`https://auth.<domain>/application/o/paddock-mcp/`, like the portal's issuer (no port); set it to an empty value to
+switch the MCP login off
+(`/api/auth/mcp/*` then answers 404). `PADDOCK_OIDC_MCP_CLIENT_ID` defaults to `paddock-mcp`. The provider is a public
+client, so there is no new secret. The MCP stays off in every organization and on the platform until an administrator
+saves a policy: `docs/operations/mcp.md`.
+
 ## 9. First platform administrator, first organization, first device
 
 1. Sign in to `https://auth.<domain>/if/admin/` as `akadmin` with the password of
@@ -339,6 +349,10 @@ in this order:
    shipped; they stay on the devices unchanged only on agents of this release or newer (step 2). Operators manage
    files without a step-up only below the organization's operator roots, which are empty after the upgrade; an
    organization administrator sets them in the portal under *Configuration* → *Operator roots* (residual risk RR-37).
+
+**Release with the MCP (ADR 0044).** Nothing to do before the upgrade: Authentik applies the new blueprint
+`paddock-mcp.yaml` at its first start after the upgrade, and the MCP stays off until an administrator saves an MCP
+policy (`docs/operations/mcp.md`). Record RR-85 to RR-89 before you enable it.
 
 ## 13. Residual risks you must record in your ISMS
 

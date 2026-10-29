@@ -20,6 +20,9 @@ type isolationWorld struct {
 	top          *testing.T
 	alice, carol *env.Portal
 	globexIDs    []string // every ID of globex the acme session must never see
+	// ownActors are the actor ids of the acme administrators and API tokens this gate sends globex IDs with; their
+	// failed or denied attempts are acme's own records of those requests (withoutOwnFailedAttempts).
+	ownActors    []string
 	globexGroups []string
 	// Globex device control plane resources (seedGlobexDevices).
 	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
@@ -238,8 +241,8 @@ type isolationFixture struct {
 	kind isolationKind
 	// request returns the concrete path and body for alice; item fixtures create the globex resource first.
 	request func(t *testing.T, w *isolationWorld) (path string, body any)
-	// ownAttempts marks the audit-event list: alice's own failed or denied attempts are left out of the leak check
-	// (withoutOwnFailedAttempts), because the item checks record them with the globex ID alice sent.
+	// ownAttempts marks the audit-event list: the failed or denied attempts of the gate's own actors are left out of the
+	// leak check (withoutOwnFailedAttempts), because the item checks record them with the globex ID the gate sent.
 	ownAttempts bool
 }
 
