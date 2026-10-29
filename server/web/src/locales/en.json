@@ -503,6 +503,7 @@
     "editDomains": "Domains",
     "editDomainsTitle": "Domains of {name}",
     "createdWithoutDomains": "The organization was created, but its domains were not saved. Save them with \"Domains\" in the list.",
+    "provisioning": "Setting up the identity provider… This can take up to a minute.",
     "statuses": {
       "provisioning": "Provisioning",
       "active": "Active",

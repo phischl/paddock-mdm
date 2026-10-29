@@ -59,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Portal: while a new organization is being created, the *New organization* dialog says that the identity provider
+  is being set up and that this can take up to a minute (the create waits for that setup, bounded at 60 s); the
+  *Create* button stays disabled meanwhile (PDK-407).
 - Lab smoke test: runs against nginx 1.31.8 (was 1.28.3) and from now on follows the nginx mainline line (ADR 0029
   amendment 2026-10-28). No operator step: the image is a tooling image, is not part of the operator bundle, and the
   shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).
@@ -116,6 +119,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   language, theme and density entries and the action buttons of the attention list and the overview now begin with
   their visible text and still name the target, e.g. "Retire, lock or keep — acme-lt-0142", so speech-input users can
   activate them by saying what they see. The portal's accessibility check runs with axe-core 4.14.
+- Role membership audit (PDK-423): when the worker fails to clear the "missing" mark of a role holder who reappeared
+  in the identity provider, the next listing that misses that holder no longer records `admin.role_revoked`; the
+  revocation needs two consecutive misses after a successful mark. The worker process remembers the failure until its
+  next successful round for that role.
 
 ### Security
 
