@@ -273,3 +273,7 @@ Addendum 2026-10-29 (PDK-452): resume joins start and halt on the host path (`pa
 agent-rollout-resume`, bundle entry point `./paddock agent-rollout-resume <version>`), with the same host-root
 rationale; it only continues an already started rollout (audit code `agent_rollout.resumed`, the rollout's waves and
 thresholds unchanged); RR-90 applies.
+
+## Amendment 2026-10-29 (PDK-498) — passkey enrolment of the brand sign-in for administrators only
+The forced passkey enrolment of the brand sign-in (stage B) applies only to members of Paddock administrator groups;
+end users approving a device sign-in are not asked to enrol a passkey.
