@@ -6,8 +6,9 @@
 # the brand is evaluated once and races with the creation of the default brand.
 #
 # The authorization flow carries the MFA stage too: a device code opened with ?code= (the QR code at the greeter)
-# signs the user in with the brand's authentication flow, which is not Paddock's and may skip MFA, and then runs only
-# the provider's authorization flow (verified against Authentik 2026.8.3).
+# signs the user in with the brand's authentication flow, paddock-admin-login (set by paddock-worker; it asks only
+# members of Paddock administrator groups to enrol a passkey, ADR 0034 amendment 2026-10-29), or accepts an existing
+# Authentik session, and then runs only the provider's authorization flow (verified against Authentik 2026.8.3).
 version: 1
 metadata:
   name: Paddock - Device login
@@ -85,8 +86,9 @@ entries:
       order: 100
 
   # Device-code verification. The brand's /device entry signs unauthenticated users in with the brand's
-  # authentication flow, which is not Paddock's; the MFA stage here therefore enforces MFA for every device approval
-  # (skipped only when the user passed MFA within the last 5 minutes).
+  # authentication flow (paddock-admin-login) and accepts an existing Authentik session from any flow; the MFA stage
+  # here therefore enforces MFA for every device approval, whatever sign-in preceded it (skipped only when the user
+  # passed MFA within the last 5 minutes).
   - model: authentik_flows.flow
     id: device-code-flow
     identifiers:

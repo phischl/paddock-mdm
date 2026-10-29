@@ -65,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries the new param `fallback: organization_inactive`, `GET /api/v1/me` answers the new optional field
   `role_fallback`, and the portal shows a notice for the whole session. A switch to the organization role stays
   refused with `organization_inactive`.
+- CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
+  weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
+  tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the
+  cluster branch goes to main. The required check `acceptance` still fails on a pull request to main unless every
+  gate passed (PDK-526).
 - Portal: while a new organization is being created, the *New organization* dialog says that the identity provider
   is being set up and that this can take up to a minute (the create waits for that setup, bounded at 60 s); the
   *Create* button stays disabled meanwhile (PDK-407).
@@ -86,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
+  every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
+  enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
+  administrators, operators and auditors of every organization). End users approve with password and TOTP; the
+  portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml` gains the policy
+  `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
