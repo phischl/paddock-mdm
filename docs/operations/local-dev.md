@@ -10,8 +10,9 @@ It is driven by `make`; every command below runs from the repository root.
   host Go downloads that toolchain automatically on first use (`GOTOOLCHAIN=auto`, the Go default, set by the
   Makefile; for `go` commands outside make, unset a `GOTOOLCHAIN=local` from your environment). Container builds
   use the pinned `GO_BUILD_IMAGE` from `deploy/compose/versions.env`.
-- Free host ports: `8443` (Caddy, configurable through `PADDOCK_HTTPS_PORT` in `deploy/compose/.env`),
-  `127.0.0.1:5432`, `5433`, `5672`, `6379`, `15672`, `8200`, `9001` (development port mappings).
+- Free host ports: `8443` and `8444` (Caddy, configurable through `PADDOCK_HTTPS_PORT` and
+  `PADDOCK_HTTPS_UNTRUSTED_PORT` in `deploy/compose/.env`), `127.0.0.1:5432`, `5433`, `5672`, `6379`, `15672`, `8200`,
+  `9001`, `8412`, `9091` (development port mappings, `PADDOCK_DEV_*_PORT`; see "Running a second dev stack").
 - Node is not needed on the host; the portal is built in a container.
 
 ## Start
@@ -133,6 +134,46 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
 - A TOTP step-up: the shipped step-up flow accepts WebAuthn only; the development blueprint skips that stage and adds
   `paddock-dev-stepup-mfa` (WebAuthn or TOTP), so the test users complete step-ups with their seeded TOTP keys
   (`docs/operations/step-up.md`, "Development stack").
+
+## Running a second dev stack
+
+Two development stacks can run side by side on one host, for example so that two work streams run `make acceptance`
+and `make e2e` at the same time. Each stack runs from its own checkout (a second `git worktree`); its
+`deploy/compose/.env` and `deploy/compose/.secrets/` belong to that stack alone. Create the second one with
+`PADDOCK_INSTANCE`, once, in the new checkout:
+
+```sh
+git worktree add ../paddock-2 origin/main && cd ../paddock-2
+PADDOCK_INSTANCE=2 make dev-secrets   # new .env for instance 2 and the stack's own secrets
+make up BACKUP=1                      # BACKUP=1 is optional, as for the first stack
+make dev-seed
+make acceptance T='^TestLoginGate$'   # every make target of this checkout reaches instance 2
+make e2e SPEC=e2e/devices.spec.ts  # one spec; without SPEC all of them
+```
+
+`PADDOCK_INSTANCE=<n>` (2 to 9) only takes effect while `make dev-secrets` creates `.env`; it writes these settings
+into it, every port 100·(n−1) above the first stack's (instance 2 below). All of them are ordinary `.env` settings
+and can also be set one by one; unset, they keep the first stack's values.
+
+| Setting | First stack | Instance 2 |
+| --- | --- | --- |
+| `PADDOCK_PROJECT` (Compose project: containers, volumes, networks) | `paddock` | `paddock2` |
+| `PADDOCK_IMAGE`, `PADDOCK_COMPILER_IMAGE`, `PADDOCK_PGBACKREST_IMAGE` (built tags) | `paddock-*:dev` | `paddock-*:dev-2` |
+| `PADDOCK_HTTPS_PORT`, `PADDOCK_HTTPS_UNTRUSTED_PORT` (Caddy) | `8443`, `8444` | `8543`, `8544` |
+| `PADDOCK_PUBLIC_ADMIN_URL`, `PADDOCK_PUBLIC_DEVICE_URL` | `https://admin.paddock.localhost:8443`, … | `…:8543` |
+| `PADDOCK_DEV_POSTGRES_PORT`, `PADDOCK_DEV_AUDIT_POSTGRES_PORT` | `5432`, `5433` | `5532`, `5533` |
+| `PADDOCK_DEV_RABBITMQ_PORT`, `PADDOCK_DEV_RABBITMQ_MANAGEMENT_PORT` | `5672`, `15672` | `5772`, `15772` |
+| `PADDOCK_DEV_VALKEY_PORT`, `PADDOCK_DEV_OPENBAO_PORT` | `6379`, `8200` | `6479`, `8300` |
+| `PADDOCK_DEV_AUDIT_S3_PORT`, `PADDOCK_DEV_FLEET_PORT`, `PADDOCK_DEV_PROMETHEUS_PORT` | `9001`, `8412`, `9091` | `9101`, `8512`, `9191` |
+
+The `make` targets (`up`, `down`, `logs`, `bao-unseal`, the bootstraps, `dev-seed`, `acceptance`, `e2e`, the load
+test) and the acceptance gates read the project and the ports from the checkout's `.env`, so they need no extra
+variables; a variable set in the environment wins over `.env`, as it does for Compose. A command run with a
+`PADDOCK_INSTANCE` that is not the one of the checkout's `.env` stops before it touches a stack, so
+`PADDOCK_INSTANCE=2 make down` in the first stack's checkout does nothing. The hostnames stay `*.paddock.localhost`
+and only the port differs; browsers share cookies across ports, so use a separate browser profile per stack.
+`docker compose -p paddock2 …` addresses the second stack directly. The system gates on the VMs (`make system-test`)
+still expect the first stack.
 
 ## Useful commands
 

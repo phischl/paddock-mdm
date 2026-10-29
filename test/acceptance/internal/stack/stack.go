@@ -67,34 +67,88 @@ func Env(name, def string) string {
 	return def
 }
 
-// AuditS3Endpoint is the host-reachable endpoint of audit-rustfs (compose.dev.yaml maps 127.0.0.1:9001).
-func AuditS3Endpoint() string { return Env("PADDOCK_TEST_AUDIT_S3_ENDPOINT", "http://127.0.0.1:9001") }
+// Setting returns a setting of this checkout's stack: the environment variable, else its value in deploy/compose/.env,
+// else def. A second development stack of the host runs from its own checkout, whose .env names its Compose project
+// and host ports (docs/operations/local-dev.md, "Running a second dev stack"); the environment wins, as for Compose.
+func Setting(name, def string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	if root, err := RepoRoot(); err == nil {
+		if b, err := os.ReadFile(filepath.Join(root, "deploy", "compose", ".env")); err == nil { //nolint:gosec // dev settings
+			v := ""
+			for _, line := range strings.Split(string(b), "\n") {
+				if after, ok := strings.CutPrefix(line, name+"="); ok {
+					v = strings.TrimSpace(after)
+				}
+			}
+			if v != "" {
+				return v
+			}
+		}
+	}
+	return def
+}
+
+// Project is the Compose project of the development stack (PADDOCK_PROJECT, default paddock).
+func Project() string { return Setting("PADDOCK_PROJECT", "paddock") }
+
+// HTTPSPort is the host port of Caddy (PADDOCK_HTTPS_PORT, default 8443).
+func HTTPSPort() string { return Setting("PADDOCK_HTTPS_PORT", "8443") }
+
+// Network is the Compose network name of the development stack, e.g. Network("cp").
+func Network(name string) string { return Project() + "_" + name }
+
+// publicURL is https://<host>.<PADDOCK_DOMAIN>:<port of the setting portVar>.
+func publicURL(host, portVar, defPort string) string {
+	return "https://" + host + "." + Setting("PADDOCK_DOMAIN", "paddock.localhost") + ":" + Setting(portVar, defPort)
+}
+
+// LoopbackURL is http://127.0.0.1:<port of the setting portVar>, a development port mapping of compose.dev.yaml.
+func LoopbackURL(portVar, defPort string) string { return "http://" + loopback(portVar, defPort) }
+
+func loopback(portVar, defPort string) string { return "127.0.0.1:" + Setting(portVar, defPort) }
+
+// AuditS3Endpoint is the host-reachable endpoint of audit-rustfs (compose.dev.yaml maps 127.0.0.1:PADDOCK_DEV_AUDIT_S3_PORT,
+// default 9001).
+func AuditS3Endpoint() string {
+	return Env("PADDOCK_TEST_AUDIT_S3_ENDPOINT", LoopbackURL("PADDOCK_DEV_AUDIT_S3_PORT", "9001"))
+}
 
 // AuditBucket is the WORM audit bucket.
 func AuditBucket() string { return Env("PADDOCK_TEST_AUDIT_S3_BUCKET", "paddock-audit") }
 
 // AdminURL is the portal URL (PADDOCK_TEST_ADMIN_URL overrides).
-func AdminURL() string { return Env("PADDOCK_TEST_ADMIN_URL", "https://admin.paddock.localhost:8443") }
+func AdminURL() string {
+	return Env("PADDOCK_TEST_ADMIN_URL", publicURL("admin", "PADDOCK_HTTPS_PORT", "8443"))
+}
 
 // AdminUntrustedURL is the portal on the development stack's untrusted listener, where Caddy ignores every client
 // address header (plan M7a decision 9; PADDOCK_TEST_ADMIN_UNTRUSTED_URL overrides).
 func AdminUntrustedURL() string {
-	return Env("PADDOCK_TEST_ADMIN_UNTRUSTED_URL", "https://admin.paddock.localhost:8444")
+	return Env("PADDOCK_TEST_ADMIN_UNTRUSTED_URL", publicURL("admin", "PADDOCK_HTTPS_UNTRUSTED_PORT", "8444"))
 }
 
 // BundlesURL is the public bundles host (PADDOCK_TEST_BUNDLES_URL overrides).
 func BundlesURL() string {
-	return Env("PADDOCK_TEST_BUNDLES_URL", "https://bundles.paddock.localhost:8443")
+	return Env("PADDOCK_TEST_BUNDLES_URL", publicURL("bundles", "PADDOCK_HTTPS_PORT", "8443"))
 }
 
 // FleetURL is Fleet's public device host (PADDOCK_TEST_FLEET_URL overrides).
-func FleetURL() string { return Env("PADDOCK_TEST_FLEET_URL", "https://fleet.paddock.localhost:8443") }
+func FleetURL() string {
+	return Env("PADDOCK_TEST_FLEET_URL", publicURL("fleet", "PADDOCK_HTTPS_PORT", "8443"))
+}
 
-// FleetAdminURL is Fleet's API on the development host (compose.dev.yaml maps 127.0.0.1:8412).
-func FleetAdminURL() string { return Env("PADDOCK_TEST_FLEET_ADMIN_URL", "http://127.0.0.1:8412") }
+// FleetAdminURL is Fleet's API on the development host (compose.dev.yaml maps 127.0.0.1:PADDOCK_DEV_FLEET_PORT,
+// default 8412).
+func FleetAdminURL() string {
+	return Env("PADDOCK_TEST_FLEET_ADMIN_URL", LoopbackURL("PADDOCK_DEV_FLEET_PORT", "8412"))
+}
 
 // AuthURL is the Authentik URL (PADDOCK_TEST_AUTH_URL overrides).
-func AuthURL() string { return Env("PADDOCK_TEST_AUTH_URL", "https://auth.paddock.localhost:8443") }
+func AuthURL() string {
+	return Env("PADDOCK_TEST_AUTH_URL", publicURL("auth", "PADDOCK_HTTPS_PORT", "8443"))
+}
 
 // Compose runs `docker compose` for the development stack (all three files) and returns the combined output.
 func Compose(ctx context.Context, env []string, args ...string) (string, error) {
@@ -109,11 +163,11 @@ func ComposeInput(ctx context.Context, stdin io.Reader, args ...string) (string,
 // ComposeProduction runs `docker compose` over the production files only (without compose.dev.yaml), e.g. to check
 // the configuration a production deployment gets.
 func ComposeProduction(ctx context.Context, env []string, args ...string) (string, error) {
-	return composeFiles(ctx, env, nil, ".env", []string{"compose.yaml", "compose.audit.yaml"}, args)
+	return composeFiles(ctx, env, nil, "paddock", ".env", []string{"compose.yaml", "compose.audit.yaml"}, args)
 }
 
 func compose(ctx context.Context, env []string, stdin io.Reader, args []string) (string, error) {
-	return composeFiles(ctx, env, stdin, ".env", []string{"compose.yaml", "compose.audit.yaml", "compose.auto-unseal.yaml", "compose.dev.yaml"}, args)
+	return composeFiles(ctx, env, stdin, Project(), ".env", []string{"compose.yaml", "compose.audit.yaml", "compose.auto-unseal.yaml", "compose.dev.yaml"}, args)
 }
 
 // ProdFiles returns the Compose files of a production host from deploy/compose/scripts/lib.sh (PROD_FILES_<host>,
@@ -141,22 +195,24 @@ func ComposeProductionHost(ctx context.Context, env []string, host string, args 
 	if err != nil {
 		return "", err
 	}
-	return composeFiles(ctx, env, nil, "prod.env.example", files, args)
+	return composeFiles(ctx, env, nil, "paddock", "prod.env.example", files, args)
 }
 
 // ComposeProductionFiles runs `docker compose` over the given files of deploy/compose with the settings template
 // envFile (prod.env.example or lab.env.example), e.g. a host's files plus an overlay (plan M8u gate U5).
 func ComposeProductionFiles(ctx context.Context, env []string, envFile string, files []string, args ...string) (string, error) {
-	return composeFiles(ctx, env, nil, envFile, files, args)
+	return composeFiles(ctx, env, nil, "paddock", envFile, files, args)
 }
 
-func composeFiles(ctx context.Context, env []string, stdin io.Reader, envFile string, files, args []string) (string, error) {
+// composeFiles runs `docker compose` for project; the production helpers only render configuration and keep the
+// production project name paddock.
+func composeFiles(ctx context.Context, env []string, stdin io.Reader, project, envFile string, files, args []string) (string, error) {
 	root, err := RepoRoot()
 	if err != nil {
 		return "", err
 	}
 	dir := filepath.Join(root, "deploy", "compose")
-	base := []string{"compose", "--project-directory", dir, "-p", "paddock",
+	base := []string{"compose", "--project-directory", dir, "-p", project,
 		"--env-file", filepath.Join(dir, "versions.env"), "--env-file", filepath.Join(dir, envFile)}
 	for _, f := range files {
 		base = append(base, "-f", filepath.Join(dir, f))
@@ -210,7 +266,7 @@ func AuditIndexDSN() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	u.Host = Env("PADDOCK_TEST_AUDIT_DB_HOST", "127.0.0.1:5433")
+	u.Host = Env("PADDOCK_TEST_AUDIT_DB_HOST", loopback("PADDOCK_DEV_AUDIT_POSTGRES_PORT", "5433"))
 	return u.String(), nil
 }
 
@@ -225,7 +281,7 @@ func PaddockOwnerDSN() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	u.Host = Env("PADDOCK_TEST_DB_HOST", "127.0.0.1:5432")
+	u.Host = Env("PADDOCK_TEST_DB_HOST", loopback("PADDOCK_DEV_POSTGRES_PORT", "5432"))
 	return u.String(), nil
 }
 
