@@ -23,18 +23,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `make system-test` and `make acceptance` fail with `no test ran` when the test filter `T` matches no test instead of
   reporting the empty run as passed (PDK-339), and pass `T` to `go test -run` verbatim, so a `$` anchor no longer gets
   lost in make's variable expansion (`T='^TestIdentityGates$/.*/^L1_login$'`); `$$` keeps working.
-
 - `make system-test`, `make acceptance` and `make e2e` check up front that the checkout has `deploy/compose/.env` and
   the development secrets and stop with a clear message, instead of failing minutes into a run with "couldn't find env
   file" (PDK-353). `make e2e` from a worktree whose `.secrets` is a symlink to another checkout no longer fails every
   login and every certificate check: the resolved secrets directory is mounted into the Playwright container and also
   handed to the device simulator and the release helper.
-
+- Uninstall (PDK-357): when cancelling an uninstall, or requesting a new one over an overdue request, fails after the
+  server had already reserved the device's command result, the reservation is now released. Before, the device's
+  later result was refused as a conflict although the command was still open, so the removal never started and the
+  request only ended when it expired.
+- A corrupt or unreadable supervisor-upgrade marker no longer keeps a device out of every agent and supervisor
+  rollout (PDK-337): like the removal of Paddock, an agent update and a further supervisor upgrade wait for such a
+  marker only until its modification time is older than 30 minutes, then go ahead and log a warning.
+- Agent updates (PDK-372): a supervisor stopped or restarted while a new agent release runs its self-test no longer
+  can report that release as `self_test_failed`. The interrupted update stays pending and the restarted supervisor
+  runs the self-test again, so a host shutdown or a supervisor restart during an update no longer counts as a failure
+  against the rollout.
 - Clone detection: a device is no longer quarantined as a suspected clone after its check-ins failed on the server
   side, for example while the ingest queue was full or the server was slow to accept the check-in. A failed check-in
   no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
   behind". The rule itself is unchanged: a device that sends a sequence number older than the one before the last
   issued one is still quarantined.
+- Retiring a device no longer leaves its in-place encryption open on the server (PDK-396): a conversion the device
+  had already prepared, or one whose cancellation was on its way, is now closed as cancelled, and a cancellation the
+  device has not yet received is withdrawn. The retirement's audit event records the closure.
+- In-place encryption: when a bootable kernel's initrd in `/boot` was a symbolic link to a temporary initrd left by
+  an interrupted agent run, the initrd regeneration and the cleanup stayed pending with
+  `key_material_shared_bootable` until an administrator stepped in. The agent now rebuilds that kernel's initrd into
+  a regular file first and then overwrites and removes the temporary file; the kernel keeps booting throughout.
+- Device removal: a removal that does not run (withdrawn, failed to start, or given up on an unreadable plan) no
+  longer leaves its plan, its program copy or an empty `/root/paddock-uninstall/` directory on the device. The
+  uninstall runbook lists what may remain there.
 
 ### Security
 

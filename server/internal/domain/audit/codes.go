@@ -296,7 +296,7 @@ var registry = map[Code]Definition{
 		Description: "An administrator retired a device; its identity keys are revoked.",
 		Params:      []string{"hostname", "from_state", "reason", "conversion_cancelled", "conversion_id", "conversion_phase"},
 		Outcomes:    adminOutcomes,
-		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
+		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_cancelled (after_delivery) and conversion_id when it closed a prepared conversion or one with an abort on its way as cancelled, withdrawing a pending encrypt_disk_abort; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
 	},
 	CodeDeviceUninstallRequested: {
 		Code: CodeDeviceUninstallRequested, Emitted: true,
