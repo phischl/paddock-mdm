@@ -247,6 +247,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: every administrator. The MCP tool catalog shared by paddockctl mcp and the server's MCP guard: one
+         *     entry per admin API operation outside the tag auth, with its class, scope and whether the MCP offers it at all
+         *     (ADR 0044 decision 5). An MCP session may call it whatever its scope's MCP policy says.
+         */
+        get: operations["getMcpCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: every administrator. What the caller's MCP sessions may do under the MCP policy of its scope (the
+         *     organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools
+         *     without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and
+         *     write_enabled, and the account opted in) and the caller's role may perform them. Without a saved policy enabled
+         *     is false and allowed_operations empty. An MCP session may call it whatever the policy says.
+         */
+        get: operations["getMcpAccess"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/device-groups": {
         parameters: {
             query?: never;
@@ -4045,6 +4089,40 @@ export interface components {
             mode: "all" | "selected";
             allowed_operations: string[];
         };
+        McpCatalog: {
+            /** @description SHA-256 of the generated catalog; changes with every contract change. */
+            version: string;
+            tools: components["schemas"]["McpTool"][];
+        };
+        McpTool: {
+            operation_id: string;
+            method: string;
+            path: string;
+            tag: string;
+            /** @enum {string} */
+            scope: "organization" | "platform" | "any";
+            /** @enum {string} */
+            class: "read" | "write";
+            step_up: boolean;
+            destructive: boolean;
+            /** @description Whether the MCP offers the operation as a tool at all. */
+            exposed: boolean;
+            summary: string;
+        };
+        McpAccess: {
+            /** @enum {string} */
+            scope: "organization" | "platform";
+            /** @enum {string} */
+            channel: "portal" | "api" | "mcp";
+            enabled: boolean;
+            write_enabled: boolean;
+            /** @description Whether the caller's account opted in to MCP write access. */
+            write_opted_in: boolean;
+            /** @description enabled and write_enabled and write_opted_in. */
+            write_effective: boolean;
+            allowed_operations: string[];
+            catalog_version: string;
+        };
         ManagedFileSettings: {
             operator_roots: string[];
             /** Format: date-time */
@@ -5581,6 +5659,52 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    getMcpCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpCatalog"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+        };
+    };
+    getMcpAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's MCP access. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpAccess"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
         };
     };
     listDeviceGroups: {

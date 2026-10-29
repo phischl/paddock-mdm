@@ -3,8 +3,10 @@ package admin
 import (
 	"context"
 
+	"github.com/phischl/paddock-mdm/pkg/mcpcatalog"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
@@ -72,6 +74,37 @@ func (h *handlers) requestMe(ctx context.Context, me app.Me) adminapi.Me {
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
 	return out
+}
+
+// GetMcpCatalog answers the shared MCP tool catalog.
+func (h *handlers) GetMcpCatalog(_ context.Context, _ adminapi.GetMcpCatalogRequestObject) (adminapi.GetMcpCatalogResponseObject, error) {
+	tools := mcpcatalog.Tools()
+	out := adminapi.McpCatalog{Version: mcpcatalog.Version, Tools: make([]adminapi.McpTool, len(tools))}
+	for i, t := range tools {
+		out.Tools[i] = adminapi.McpTool{
+			OperationId: t.Name, Method: t.Method, Path: t.Path, Tag: t.Tag, Scope: adminapi.McpToolScope(t.Scope),
+			Class: adminapi.McpToolClass(t.Class), StepUp: t.StepUp, Destructive: t.Destructive, Exposed: t.Expose,
+			Summary: t.Summary,
+		}
+	}
+	return adminapi.GetMcpCatalog200JSONResponse(out), nil
+}
+
+// GetMcpAccess answers what the caller's MCP sessions may do under the MCP policy of its scope.
+func (h *handlers) GetMcpAccess(ctx context.Context, _ adminapi.GetMcpAccessRequestObject) (adminapi.GetMcpAccessResponseObject, error) {
+	p, ok := principal.From(ctx)
+	if !ok {
+		return nil, problem.Unauthenticated
+	}
+	a, err := h.mcpAccess.Access(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.GetMcpAccess200JSONResponse(adminapi.McpAccess{
+		Scope: adminapi.McpAccessScope(a.Scope), Channel: adminapi.McpAccessChannel(a.Channel),
+		Enabled: a.Enabled, WriteEnabled: a.WriteEnabled, WriteOptedIn: a.WriteOptedIn, WriteEffective: a.WriteEffective,
+		AllowedOperations: a.AllowedOperations, CatalogVersion: a.CatalogVersion,
+	}), nil
 }
 
 func toMCPPolicyInput(in adminapi.McpSettingsInput) app.MCPPolicyInput {

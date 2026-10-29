@@ -290,10 +290,11 @@ func TestMCPWriteOptIn(t *testing.T) {
 	if r.status != http.StatusNoContent {
 		t.Fatalf("MCP login: %d %s", r.status, r.body)
 	}
+	// The MCP guard refuses both before the use case, which would refuse the MCP session itself (forbidden).
 	for _, path := range []string{enablePath, disablePath} {
 		r := e.do(call{method: "POST", path: path, headers: bearer(access)})
-		expectProblem(t, "MCP session "+path, r, http.StatusForbidden, "forbidden")
-		e.expectEvent(r, map[string]string{enablePath: "admin.mcp_write_enabled", disablePath: "admin.mcp_write_disabled"}[path]+":denied:forbidden")
+		expectProblem(t, "MCP session "+path, r, http.StatusForbidden, "mcp_tool_not_allowed")
+		e.expectEvent(r, map[string]string{enablePath: "admin.mcp_write_enabled", disablePath: "admin.mcp_write_disabled"}[path]+":denied:mcp_tool_not_allowed")
 	}
 	var got adminapi.Me
 	m.me(access).decode(t, &got)

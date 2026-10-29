@@ -467,6 +467,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/me/mcp-write/disable": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/me/mcp-write/disable", nil
 	}},
+	"GET /api/v1/mcp/catalog": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/mcp/catalog", nil
+	}},
+	"GET /api/v1/mcp/access": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/mcp/access", nil
+	}},
 
 	"POST /api/v1/devices/{id}/lock": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/lock" },
 		map[string]any{"confirm_hostname": "x"}),

@@ -24,6 +24,9 @@ info:
       `auth`, named by its `operationId`. `x-paddock-mcp: { expose: false }` keeps an operation from being offered as
       a tool; `x-paddock-mcp: { bootstrap: true }` lets an MCP session call it without consulting the MCP policy.
       Step-up operations, non-JSON request bodies and success responses without JSON content are never exposed.
+      Any operation may refuse a request of an MCP session before its use case runs: 403 `mcp_disabled`,
+      `mcp_tool_not_allowed` or `mcp_write_not_enabled`, or 429 `rate_limited` with `Retry-After` (120 reads and 30
+      writes per account and minute); a refused audited operation records one denied event.
     - Every collection `GET` implements the list contract (ADR 0018): `page`, `page_size` (10, 25, 50, 100),
       `sort` (allow list, `-` prefix = descending, the primary key is appended as tie-breaker), `q`
       (case-insensitive substring search, 2–100 characters) and the documented filters; enum filters are
@@ -328,6 +331,44 @@ paths:
               schema: { $ref: "#/components/schemas/Me" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/mcp/catalog:
+    get:
+      operationId: getMcpCatalog
+      x-paddock-mcp: { bootstrap: true, expose: false }
+      tags: [mcp]
+      description: |
+        Roles: every administrator. The MCP tool catalog shared by paddockctl mcp and the server's MCP guard: one
+        entry per admin API operation outside the tag auth, with its class, scope and whether the MCP offers it at all
+        (ADR 0044 decision 5). An MCP session may call it whatever its scope's MCP policy says.
+      responses:
+        "200":
+          description: The catalog.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpCatalog" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /api/v1/mcp/access:
+    get:
+      operationId: getMcpAccess
+      x-paddock-mcp: { bootstrap: true, expose: false }
+      tags: [mcp]
+      description: |
+        Roles: every administrator. What the caller's MCP sessions may do under the MCP policy of its scope (the
+        organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools
+        without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and
+        write_enabled, and the account opted in) and the caller's role may perform them. Without a saved policy enabled
+        is false and allowed_operations empty. An MCP session may call it whatever the policy says.
+      responses:
+        "200":
+          description: The caller's MCP access.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpAccess" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
 
   /api/v1/device-groups:
     get:
@@ -6063,6 +6104,42 @@ components:
           maxItems: 500
           uniqueItems: true
           items: { type: string, maxLength: 100 }
+    McpCatalog:
+      type: object
+      required: [version, tools]
+      properties:
+        version: { type: string, description: SHA-256 of the generated catalog; changes with every contract change. }
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/McpTool" }
+    McpTool:
+      type: object
+      required: [operation_id, method, path, tag, scope, class, step_up, destructive, exposed, summary]
+      properties:
+        operation_id: { type: string }
+        method: { type: string }
+        path: { type: string }
+        tag: { type: string }
+        scope: { type: string, enum: [organization, platform, any] }
+        class: { type: string, enum: [read, write] }
+        step_up: { type: boolean }
+        destructive: { type: boolean }
+        exposed: { type: boolean, description: Whether the MCP offers the operation as a tool at all. }
+        summary: { type: string }
+    McpAccess:
+      type: object
+      required: [scope, channel, enabled, write_enabled, write_opted_in, write_effective, allowed_operations, catalog_version]
+      properties:
+        scope: { type: string, enum: [organization, platform] }
+        channel: { type: string, enum: [portal, api, mcp] }
+        enabled: { type: boolean }
+        write_enabled: { type: boolean }
+        write_opted_in: { type: boolean, description: Whether the caller's account opted in to MCP write access. }
+        write_effective: { type: boolean, description: enabled and write_enabled and write_opted_in. }
+        allowed_operations:
+          type: array
+          items: { type: string }
+        catalog_version: { type: string }
     ManagedFileSettings:
       type: object
       required: [operator_roots]

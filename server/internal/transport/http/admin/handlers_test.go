@@ -403,6 +403,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),
 		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),
+		MCPAccess:      app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
 		Runner:         runner,
 		Keys:           keys,
 		OIDC:           admin.NewOIDC(admin.OIDCConfig{}),

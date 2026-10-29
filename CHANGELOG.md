@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in to or out of MCP write access, audited as `admin.mcp_write_enabled` and `admin.mcp_write_disabled`; auditors, API
   tokens and MCP sessions are refused (403 `forbidden`). `GET /api/v1/me` answers `mcp_write_enabled`. The policies
   are not enforced yet.
+- MCP policies are enforced (ADR 0044, PDK-438): every admin API request of an MCP session is checked before it runs
+  against the shared tool catalog, the policy of its scope and the account's write opt-in, and refused with 403
+  `mcp_disabled`, `mcp_tool_not_allowed` (also for every operation the MCP never offers, such as step-up actions and
+  the MCP settings themselves) or `mcp_write_not_enabled`; a refused change is audited once as denied with
+  `source: mcp`, a refused read is not. MCP sessions are limited to 120 reads and 30 changes per account and minute
+  per api replica (429 `rate_limited` with `Retry-After`); portal sessions and API tokens are neither checked nor
+  limited. `GET /api/v1/me`, `GET /api/v1/mcp/access` (what the caller's MCP sessions may do) and
+  `GET /api/v1/mcp/catalog` (the tool catalog) always answer. New metric `paddock_mcp_requests_total{class, result}`.
+  An MCP session calling `POST /api/v1/me/mcp-write/enable` or `…/disable` now gets 403 `mcp_tool_not_allowed`.
 
 ### Changed
 
