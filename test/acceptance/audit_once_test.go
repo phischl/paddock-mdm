@@ -360,6 +360,120 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "platform.auto_unseal_disabled", "denied")
 		}},
 	},
+	// The MCP policies are one value per scope that the MCP gates rely on: the success cases write the current
+	// policy back.
+	"PUT /api/v1/settings/mcp": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			a := adminUser(t, "a3-mcp")
+			res := call(t, a.Portal, http.MethodPut, "/api/v1/settings/mcp", currentMCPPolicy(t, a.Portal, "/api/v1/settings/mcp"))
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "organization.mcp_policy_changed", "success")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			a := adminUser(t, "a3-mcp")
+			res := call(t, a.Portal, http.MethodPut, "/api/v1/settings/mcp", mcpPolicyBody("selected", "lockDevice"))
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "organization.mcp_policy_changed", "failure")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodPut, "/api/v1/settings/mcp", mcpPolicyBody("all"))
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "organization.mcp_policy_changed", "denied")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPut, "/api/v1/settings/mcp", mcpPolicyBody("all"))
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "organization.mcp_policy_changed", "denied")
+		}},
+	},
+	"PUT /api/platform/v1/settings/mcp": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			freshStepUp(t, w.root, env.PlatformAdmin)
+			res := call(t, w.root, http.MethodPut, "/api/platform/v1/settings/mcp", currentMCPPolicy(t, w.root, "/api/platform/v1/settings/mcp"))
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.mcp_policy_changed", "success", auditPollTimeout)
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			freshStepUp(t, w.root, env.PlatformAdmin)
+			res := call(t, w.root, http.MethodPut, "/api/platform/v1/settings/mcp", mcpPolicyBody("all", "listOrganizations"))
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.mcp_policy_changed", "failure", auditPollTimeout)
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.PlatformAdmin), http.MethodPut, "/api/platform/v1/settings/mcp", mcpPolicyBody("all"))
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.mcp_policy_changed", "denied", auditPollTimeout)
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPut, "/api/platform/v1/settings/mcp", mcpPolicyBody("all"))
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "platform.mcp_policy_changed", "denied")
+		}},
+	},
+	"POST /api/v1/me/mcp-write/enable": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			a := adminUser(t, "a3-mcpw")
+			res := call(t, a.Portal, http.MethodPost, "/api/v1/me/mcp-write/enable", nil)
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_enabled", "success")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodPost, "/api/v1/me/mcp-write/enable", nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_enabled", "denied")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, mcpAuditor(t), http.MethodPost, "/api/v1/me/mcp-write/enable", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_enabled", "denied")
+		}},
+		{"api token", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			token := tokenPortal(t, createAPIToken(t, alice, env.Alice, "org_admin").Secret)
+			res := call(t, token, http.MethodPost, "/api/v1/me/mcp-write/enable", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_enabled", "denied")
+		}},
+	},
+	"POST /api/v1/me/mcp-write/disable": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			// A session without step-up: disabling the opt-in needs none.
+			res := call(t, withoutStepUp(t, adminUser(t, "a3-mcpw-off")), http.MethodPost, "/api/v1/me/mcp-write/disable", nil)
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_disabled", "success")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, mcpAuditor(t), http.MethodPost, "/api/v1/me/mcp-write/disable", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_disabled", "denied")
+		}},
+		{"api token", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			token := tokenPortal(t, createAPIToken(t, alice, env.Alice, "org_operator").Secret)
+			res := call(t, token, http.MethodPost, "/api/v1/me/mcp-write/disable", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_disabled", "denied")
+		}},
+	},
+}
+
+// mcpPolicyBody is an MCP policy (McpSettingsInput) with the MCP enabled and writes off.
+func mcpPolicyBody(mode string, ops ...string) map[string]any {
+	if ops == nil {
+		ops = []string{}
+	}
+	return map[string]any{"enabled": true, "write_enabled": false, "mode": mode, "allowed_operations": ops}
+}
+
+// mcpAuditor signs in a temporary acme auditor, whom the MCP write opt-in refuses.
+func mcpAuditor(t *testing.T) *env.Portal {
+	t.Helper()
+	user, pw := tempUser(t, "a3-mcp-auditor", env.RoleGroup("acme", "auditors"))
+	p, err := loginAs(t, user, pw)
+	if err != nil {
+		t.Fatalf("login %s: %v", user, err)
+	}
+	return p
 }
 
 type group struct{ id, name string }

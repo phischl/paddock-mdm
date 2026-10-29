@@ -63,3 +63,15 @@ FROM admin_account WHERE id = @id;
 -- name: GetPlatformAdminState :one
 -- Read on every MCP request of a platform administrator (plan M14 §3.3 item 14).
 SELECT (mcp_write_enabled_at IS NOT NULL)::boolean AS mcp_write_enabled FROM platform_admin WHERE id = @id;
+
+-- name: SetAdminAccountMcpWrite :one
+-- The caller's own MCP write opt-in (plan M14 §3.4 item 18): enabled sets the time once, disabled clears it.
+UPDATE admin_account
+SET mcp_write_enabled_at = CASE WHEN @enabled::boolean THEN coalesce(mcp_write_enabled_at, now()) END
+WHERE id = @id RETURNING *;
+
+-- name: SetPlatformAdminMcpWrite :one
+-- The caller's own MCP write opt-in of a platform administrator (plan M14 §3.4 item 18).
+UPDATE platform_admin
+SET mcp_write_enabled_at = CASE WHEN @enabled::boolean THEN coalesce(mcp_write_enabled_at, now()) END
+WHERE id = @id RETURNING *;

@@ -309,6 +309,8 @@ type Me struct {
 	Theme string
 	// APIToken is the token of a request made with an API token (nil for sessions, plan M6c decision 10).
 	APIToken *MeAPIToken
+	// MCPWriteEnabled is the account's MCP write opt-in (ADR 0044 amendment 2026-10-25); false for API tokens.
+	MCPWriteEnabled bool
 }
 
 // MeAPIToken is the API token a request authenticated with.
@@ -335,6 +337,7 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 				return notFound(err)
 			}
 			me.Username, me.DisplayName, me.Locale, me.Theme = acc.Username, acc.DisplayName, acc.Locale, acc.Theme
+			me.MCPWriteEnabled = acc.McpWriteEnabledAt != nil
 			return nil
 		})
 		return me, unauthenticatedIfGone(err)
@@ -349,6 +352,7 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 			return notFound(err)
 		}
 		me.Username, me.DisplayName, me.Locale, me.Theme, me.Organization = acc.Username, acc.DisplayName, acc.Locale, acc.Theme, &org
+		me.MCPWriteEnabled = acc.McpWriteEnabledAt != nil
 		return nil
 	})
 	return me, unauthenticatedIfGone(err)
@@ -479,6 +483,68 @@ func (a *Accounts) AccountState(ctx context.Context, p principal.Principal) (Acc
 		return nil
 	})
 	return st, unauthenticatedIfGone(err)
+}
+
+// RolesMCPWrite may opt in to MCP write access for their own account; an auditor never changes data (plan M14 §3.4
+// item 18).
+var RolesMCPWrite = []principal.Role{principal.RoleOrgAdmin, principal.RoleOrgOperator, principal.RolePlatform}
+
+// Privileged actions of the MCP write opt-in (plan M14 §3.4 item 18).
+var (
+	SpecMCPWriteEnable  = ActionSpec{Code: audit.CodeAdminMCPWriteEnabled, AllowedRoles: RolesMCPWrite, RequiresStepUp: true}
+	SpecMCPWriteDisable = ActionSpec{Code: audit.CodeAdminMCPWriteDisabled, AllowedRoles: RolesMCPWrite}
+)
+
+// AccountScope is the scope of an action on the caller's own account row: the platform for platform administrators,
+// the organization otherwise.
+func AccountScope(p principal.Principal) Scope {
+	if p.Kind == principal.KindPlatformAdmin {
+		return ScopePlatform
+	}
+	return ScopeOrg
+}
+
+// errMCPWriteChannel: the opt-in belongs to the person, so neither an API token nor an MCP session may change it.
+var errMCPWriteChannel = problem.Forbidden.WithDetail("MCP write access can only be changed in the portal")
+
+// EnableMCPWrite opts the caller's own account in to MCP write access (audited: admin.mcp_write_enabled, step-up).
+func (a *Accounts) EnableMCPWrite(ctx context.Context) (Me, error) {
+	return a.setMCPWrite(ctx, SpecMCPWriteEnable, true)
+}
+
+// DisableMCPWrite withdraws the caller's own MCP write opt-in (audited: admin.mcp_write_disabled, no step-up).
+func (a *Accounts) DisableMCPWrite(ctx context.Context) (Me, error) {
+	return a.setMCPWrite(ctx, SpecMCPWriteDisable, false)
+}
+
+// setMCPWrite sets or clears mcp_write_enabled_at on the caller's own row and answers the fresh Me.
+func (a *Accounts) setMCPWrite(ctx context.Context, spec ActionSpec, enabled bool) (Me, error) {
+	p, ok := principal.From(ctx)
+	if !ok {
+		return Me{}, problem.Unauthenticated
+	}
+	scope := AccountScope(p)
+	spec.Params = map[string]any{"role": string(p.Role)}
+	if p.APITokenID != uuid.Nil || p.Channel == principal.ChannelMCP {
+		// Checked before the step-up, which an API token or an MCP session can never complete: the answer is
+		// forbidden, not a step-up the caller cannot give.
+		spec.RequiresStepUp = false
+		return Me{}, a.runner.RunTx(ctx, scope, spec, func(context.Context, *pgstore.Queries, Recorder) error {
+			return errMCPWriteChannel
+		})
+	}
+	err := a.runner.RunTx(ctx, scope, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
+		if scope == ScopePlatform {
+			_, err := q.SetPlatformAdminMcpWrite(ctx, pgstore.SetPlatformAdminMcpWriteParams{ID: p.ID, Enabled: enabled})
+			return notFound(err)
+		}
+		_, err := q.SetAdminAccountMcpWrite(ctx, pgstore.SetAdminAccountMcpWriteParams{ID: p.ID, Enabled: enabled})
+		return notFound(err)
+	})
+	if err != nil {
+		return Me{}, unauthenticatedIfGone(err)
+	}
+	return a.GetMe(ctx)
 }
 
 // unauthenticatedIfGone: a session whose account no longer exists is treated as signed out.

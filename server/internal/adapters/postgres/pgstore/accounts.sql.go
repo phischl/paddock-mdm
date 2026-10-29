@@ -221,6 +221,37 @@ func (q *Queries) LockPlatformAdmin(ctx context.Context, id uuid.UUID) (uuid.UUI
 	return id_2, err
 }
 
+const setAdminAccountMcpWrite = `-- name: SetAdminAccountMcpWrite :one
+UPDATE admin_account
+SET mcp_write_enabled_at = CASE WHEN $1::boolean THEN coalesce(mcp_write_enabled_at, now()) END
+WHERE id = $2 RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at, mcp_write_enabled_at
+`
+
+type SetAdminAccountMcpWriteParams struct {
+	Enabled bool
+	ID      uuid.UUID
+}
+
+// The caller's own MCP write opt-in (plan M14 §3.4 item 18): enabled sets the time once, disabled clears it.
+func (q *Queries) SetAdminAccountMcpWrite(ctx context.Context, arg SetAdminAccountMcpWriteParams) (AdminAccount, error) {
+	row := q.db.QueryRow(ctx, setAdminAccountMcpWrite, arg.Enabled, arg.ID)
+	var i AdminAccount
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.AuthentikSub,
+		&i.Username,
+		&i.DisplayName,
+		&i.Role,
+		&i.Locale,
+		&i.LastLoginAt,
+		&i.Theme,
+		&i.DisabledAt,
+		&i.McpWriteEnabledAt,
+	)
+	return i, err
+}
+
 const setAdminAccountRole = `-- name: SetAdminAccountRole :exec
 UPDATE admin_account SET role = $1 WHERE id = $2
 `
@@ -234,6 +265,34 @@ type SetAdminAccountRoleParams struct {
 func (q *Queries) SetAdminAccountRole(ctx context.Context, arg SetAdminAccountRoleParams) error {
 	_, err := q.db.Exec(ctx, setAdminAccountRole, arg.Role, arg.ID)
 	return err
+}
+
+const setPlatformAdminMcpWrite = `-- name: SetPlatformAdminMcpWrite :one
+UPDATE platform_admin
+SET mcp_write_enabled_at = CASE WHEN $1::boolean THEN coalesce(mcp_write_enabled_at, now()) END
+WHERE id = $2 RETURNING id, authentik_sub, username, display_name, locale, last_login_at, theme, mcp_write_enabled_at
+`
+
+type SetPlatformAdminMcpWriteParams struct {
+	Enabled bool
+	ID      uuid.UUID
+}
+
+// The caller's own MCP write opt-in of a platform administrator (plan M14 §3.4 item 18).
+func (q *Queries) SetPlatformAdminMcpWrite(ctx context.Context, arg SetPlatformAdminMcpWriteParams) (PlatformAdmin, error) {
+	row := q.db.QueryRow(ctx, setPlatformAdminMcpWrite, arg.Enabled, arg.ID)
+	var i PlatformAdmin
+	err := row.Scan(
+		&i.ID,
+		&i.AuthentikSub,
+		&i.Username,
+		&i.DisplayName,
+		&i.Locale,
+		&i.LastLoginAt,
+		&i.Theme,
+		&i.McpWriteEnabledAt,
+	)
+	return i, err
 }
 
 const updateAdminAccountSettings = `-- name: UpdateAdminAccountSettings :one
