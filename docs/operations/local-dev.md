@@ -1,7 +1,9 @@
 # Local development stack
 
 The Compose stack in `deploy/compose/` runs the Paddock control plane and the audit domain on one machine.
-It is driven by `make`; every command below runs from the repository root.
+It is driven by `make`; every command below runs from the repository root. Which tests and gates run where (pull
+request, cluster, release), the flake policy and how to read the acceptance shard timing are described in
+`docs/operations/testing-strategy.md`.
 
 ## Prerequisites
 
