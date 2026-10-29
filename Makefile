@@ -349,7 +349,9 @@ dev-seed: ## Create organizations acme and globex and assign the dev users
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards
 # (SHARD=i/n, PDK-359), each against its own stack: with three shards ~27-29 min of measured gate time each, about
 # 35 min per `make acceptance` step on a runner. Keep at least 20 % headroom when gates are added.
-ACCEPTANCE_TIMEOUT ?= 120m
+# A serial run (neither SHARD nor T) needs more: on 2026-10-29 the gates summed to ~131 min on a GitHub runner
+# (PDK-463), so with 20 % headroom it defaults to 180m; a shard or a single gate keeps 120m. An explicit value wins.
+ACCEPTANCE_TIMEOUT ?= $(if $(SHARD)$(T),120m,180m)
 
 # paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.
 PADDOCKCTL_LDFLAGS = -s -w -X main.version=$(VERSION)

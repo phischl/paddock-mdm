@@ -77,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `make acceptance` without `SHARD` or `T` no longer hits its timeout before the suite ends (PDK-463): a serial run
+  now defaults to `ACCEPTANCE_TIMEOUT=180m` (the gates take ~131 min in a row); a shard or a single gate keeps 120m,
+  and an explicit value still wins. `docs/operations/local-dev.md` describes running the suite serially or shard by
+  shard (`SHARD=i/N`) against one stack.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
