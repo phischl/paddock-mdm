@@ -465,6 +465,11 @@ func TestRevocationDisabled(t *testing.T) {
 	if r := waitRevocation(t, a1.portal, id, 3*time.Minute, "rejected", "issued"); r.Status != "rejected" || r.Rejection != "revocation_disabled" {
 		t.Fatalf("issuer with the flag off: %+v", r)
 	}
+	// The restarted compiler's first reconcile recompiles every organization oldest first (UUIDv7), so this newest
+	// one comes last and the wait would grow with the stack's fleet; a change of the device has its organization
+	// compiled at once. TestReconcileDeliversRevocationFlag covers the reconcile itself.
+	expectStatus(t, call(t, a1.portal, http.MethodPut, "/api/v1/devices/"+d.DeviceID+"/name", map[string]any{"name": "rv-" + uniqueSuffix()}),
+		http.StatusOK, "")
 	if b := latestBundle(t, d, 3*time.Minute, func(b *bundle.Bundle) bool { return b.Revocation != nil && !b.Revocation.Enabled }); b == nil {
 		t.Fatal("no bundle with revocation.enabled=false")
 	}
