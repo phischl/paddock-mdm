@@ -608,6 +608,51 @@ func TestSuperusers(t *testing.T) {
 	}
 }
 
+// TestDirectoryProbe (PDK-424): a role group is readable when the token reads it by name; users are visible when a
+// listing returns an internal or external user, never only service accounts; a blind token, whose role group listings
+// come back empty without an error, fails both; a failed read is an error, never a verdict.
+func TestDirectoryProbe(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	f.users[700] = &fakeUser{pk: 700, username: "paddock-service", typ: "service_account"}
+	if ok, err := c.GroupReadable(ctx, "paddock.acme.admins"); err != nil || !ok {
+		t.Fatalf("readable group: %v %v", ok, err)
+	}
+	if ok, err := c.GroupReadable(ctx, "paddock.globex.admins"); err != nil || ok {
+		t.Fatalf("missing group: %v %v", ok, err)
+	}
+	if ok, err := c.UsersVisible(ctx); err != nil || ok {
+		t.Fatalf("only the service account: %v %v", ok, err)
+	}
+	f.users[701] = &fakeUser{pk: 701, username: "carol@acme.test", typ: "external"}
+	if ok, err := c.UsersVisible(ctx); err != nil || !ok {
+		t.Fatalf("an external user: %v %v", ok, err)
+	}
+	f.blind = true
+	if users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins"); err != nil || len(users) != 0 {
+		t.Fatalf("blind listing: %+v %v, want empty without an error", users, err)
+	}
+	if ok, err := c.GroupReadable(ctx, "paddock.acme.admins"); err != nil || ok {
+		t.Fatalf("blind group read: %v %v", ok, err)
+	}
+	if ok, err := c.UsersVisible(ctx); err != nil || ok {
+		t.Fatalf("blind user listing: %v %v", ok, err)
+	}
+	f.blind = false
+	f.failNext, f.failStatus = 10, http.StatusServiceUnavailable
+	if _, err := c.UsersVisible(ctx); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("Authentik down, users: %v", err)
+	}
+	f.failNext = 10
+	if _, err := c.GroupReadable(ctx, "paddock.acme.admins"); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("Authentik down, group: %v", err)
+	}
+}
+
 // TestLockRevokesTokensAndSessions: a lock is the group membership AND the revocation (PoC M1 C2).
 func TestLockRevokesTokensAndSessions(t *testing.T) {
 	f, srv := newFake(t)

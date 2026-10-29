@@ -52,6 +52,55 @@ tests:
               summary: "Messages in dlq.ingest.heartbeat"
               description: "1 messages were dead-lettered to dlq.ingest.heartbeat."
 
+  - name: a refusal in every admin-accounts round warns after 15 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_identity_directory_refusals_total{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x4 1x4 2x4 3x4 4x4 5x4 6x4"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PaddockRoleDirectoryRefused
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: PaddockRoleDirectoryRefused
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: PaddockRoleDirectoryRefused
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Role changes of one or more organizations are not recorded"
+              description: "The admin-accounts round has refused one or more organizations in every round for 15 minutes: every role group listing is empty and the directory probe does not show that the Authentik service token sees the directory. Role changes are not recorded and administrator accounts are not followed until the paddock-service role can read users and groups again; the worker log names the organizations (docs/operations/monitoring.md)."
+
+  - name: two directory refusals five minutes apart do not warn
+    interval: 1m
+    input_series:
+      - series: 'paddock_identity_directory_refusals_total{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x4 1x4 2x40"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PaddockRoleDirectoryRefused
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PaddockRoleDirectoryRefused
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: PaddockRoleDirectoryRefused
+        exp_alerts: []
+
+  - name: a single directory refusal does not warn
+    interval: 1m
+    input_series:
+      - series: 'paddock_identity_directory_refusals_total{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x4 1x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PaddockRoleDirectoryRefused
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: PaddockRoleDirectoryRefused
+        exp_alerts: []
+
   - name: a bypassed ip allow list warns after 15 minutes
     interval: 1m
     input_series:

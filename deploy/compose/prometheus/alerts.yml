@@ -148,6 +148,18 @@ groups:
         annotations:
           summary: "IP allow list bypassed on the api"
           description: "paddock-api runs with PADDOCK_IP_ALLOWLIST_BYPASS=true (break-glass): the application IP allow list is not enforced. Remove the variable once access is restored (docs/operations/ip-allowlist.md)."
+      # The admin-accounts round runs every 5 minutes; the 6-minute window sees each refused round with a minute of
+      # slack, so the expression stays true only while every round is refused. A refusal in every round for 15 minutes
+      # fires it; two refusals five minutes apart keep it true for about 10 minutes and do not (PDK-424). The counter
+      # has no organization label: the worker log names the organizations.
+      - alert: PaddockRoleDirectoryRefused
+        expr: sum(increase(paddock_identity_directory_refusals_total[6m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Role changes of one or more organizations are not recorded"
+          description: "The admin-accounts round has refused one or more organizations in every round for 15 minutes: every role group listing is empty and the directory probe does not show that the Authentik service token sees the directory. Role changes are not recorded and administrator accounts are not followed until the paddock-service role can read users and groups again; the worker log names the organizations (docs/operations/monitoring.md)."
       - alert: PaddockBackupStale
         expr: time() - max by (kind) (paddock_backup_last_success_timestamp_seconds) > 26 * 3600
         labels:

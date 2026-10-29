@@ -1,6 +1,7 @@
 package authentik_test
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -60,6 +61,9 @@ type fakeAuthentik struct {
 	// response is lost or the client times out after Authentik committed; lostCreates records the paths done.
 	loseCreateAnswers bool
 	lostCreates       map[string]bool
+	// blind answers as to a token that lost its view permissions: user and group listings are empty, while the
+	// groups_by_name filter is still validated against every group (PDK-424).
+	blind bool
 }
 
 type fakeGroup struct {
@@ -75,6 +79,8 @@ type fakeUser struct {
 	inactive              bool
 	// superuser makes the user a member of a group with superuser rights (filter is_superuser).
 	superuser bool
+	// typ is the user's type; empty is the fixture's internal.
+	typ string
 }
 
 func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
@@ -168,6 +174,9 @@ func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any
 	j["is_active"] = !u.inactive
 	j["uid"] = "uid-" + strconv.Itoa(u.pk)
 	j["groups_obj"] = nil
+	if u.typ != "" {
+		j["type"] = u.typ
+	}
 	if includeGroups {
 		objs := []map[string]any{}
 		for _, pk := range u.groups {
@@ -267,6 +276,9 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 	case p == "/api/v3/core/groups/" && r.Method == http.MethodGet:
 		var items []map[string]any
 		for _, g := range f.sortedGroups() {
+			if f.blind {
+				break
+			}
 			if name := q.Get("name"); name == "" || g.name == name {
 				items = append(items, f.groupJSON(g))
 			}
@@ -531,6 +543,12 @@ func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
 	}
 	var match []*fakeUser
 	for _, u := range f.users {
+		if f.blind {
+			break
+		}
+		if types := q["type"]; len(types) > 0 && !slices.Contains(types, cmp.Or(u.typ, "internal")) {
+			continue
+		}
 		if name := first(q["groups_by_name"]); name != "" && !slices.ContainsFunc(u.groups, func(pk string) bool { return f.groups[pk] != nil && f.groups[pk].name == name }) {
 			continue
 		}
