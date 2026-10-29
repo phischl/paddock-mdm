@@ -71,6 +71,7 @@ lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
+	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 
 # Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
 # [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them
@@ -191,6 +192,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
 	bash scripts/changelog-assemble_test.sh
+	bash scripts/acceptance-scope_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi

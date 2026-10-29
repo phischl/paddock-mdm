@@ -94,10 +94,40 @@ jobs:
   # Only towards main (PDK-526): per-ticket pull requests go into a cluster branch with the fast jobs above, and the
   # gates run once on the cluster's pull request to main, on main itself and on the schedule; the queue of 20 runners
   # of a public repository cannot run them for every pull request.
+  # A pull request to main that changes documentation only skips them (PDK-537): docs_only is true only when
+  # scripts/acceptance-scope.sh says so. The script (not this workflow, which pull_request always takes from the
+  # pull request; edits to it are left to code-owner review) is taken from the base commit, so a pull request cannot
+  # change the script that judges it; any error, a missing script included, leaves docs_only false. Push and schedule
+  # never skip.
+  acceptance-scope:
+    if: github.event_name != 'pull_request' || github.base_ref == 'main'
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0 # the merge base of the pull request's base and head commits
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          docs_only=false
+          if [ "$EVENT" = pull_request ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ] \
+            && git show "$BASE_SHA:scripts/acceptance-scope.sh" >"$RUNNER_TEMP/acceptance-scope.sh" \
+            && result="$(bash "$RUNNER_TEMP/acceptance-scope.sh" "$BASE_SHA" "$HEAD_SHA")" \
+            && [ "$result" = true ]; then
+            docs_only=true
+          fi
+          echo "docs_only=$docs_only" | tee -a "$GITHUB_OUTPUT"
+
   acceptance-shard:
     name: acceptance (shard ${{ matrix.shard }})
-    needs: [lint, test, web, secrets, trivy]
-    if: github.event_name != 'pull_request' || github.base_ref == 'main'
+    needs: [acceptance-scope, lint, test, web, secrets, trivy]
+    if: (github.event_name != 'pull_request' || github.base_ref == 'main') && needs.acceptance-scope.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 135 # make up 8 min + acceptance 120 min + logs; a shard job takes ~41 min
     strategy:
@@ -132,8 +162,8 @@ jobs:
   # The disruptive gates and the Playwright suite on a stack of their own, in parallel with the shards.
   acceptance-e2e:
     name: acceptance (disruptive, e2e)
-    needs: [lint, test, web, secrets, trivy]
-    if: github.event_name != 'pull_request' || github.base_ref == 'main'
+    needs: [acceptance-scope, lint, test, web, secrets, trivy]
+    if: (github.event_name != 'pull_request' || github.base_ref == 'main') && needs.acceptance-scope.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40 # make up 8 min + disruptive 2 min + e2e 10 min + logs
     steps:
@@ -176,13 +206,28 @@ jobs:
   # The required status check "acceptance" of the default branch ruleset: green only if every shard and the e2e job
   # are; a skipped job (failed prerequisites) fails it too. On pull requests into other branches it is skipped together
   # with the gates; on a pull request to main it always runs, so it never reports gates that did not run as passed.
+  # The only exception is a documentation-only pull request to main (PDK-537): green only if the scope job succeeded
+  # and said so, every prerequisite of the gates succeeded and the gates were skipped. A failed or skipped scope job
+  # leaves the gates skipped and this check red.
   acceptance:
-    needs: [acceptance-shard, acceptance-e2e]
+    needs: [acceptance-scope, lint, test, web, secrets, trivy, acceptance-shard, acceptance-e2e]
     if: always() && (github.event_name != 'pull_request' || github.base_ref == 'main')
     runs-on: ubuntu-24.04
     steps:
-      - run: test "$SHARDS" = success && test "$E2E" = success
+      - run: |
+          if [ "$EVENT" = pull_request ] && [ "$SCOPE" = success ] && [ "$DOCS_ONLY" = true ]; then
+            test "$PREREQUISITES" = "success success success success success" \
+              && test "$SHARDS" = skipped && test "$E2E" = skipped
+          else
+            test "$SHARDS" = success && test "$E2E" = success
+          fi
         env:
+          EVENT: ${{ github.event_name }}
+          SCOPE: ${{ needs.acceptance-scope.result }}
+          DOCS_ONLY: ${{ needs.acceptance-scope.outputs.docs_only }}
+          PREREQUISITES: >-
+            ${{ needs.lint.result }} ${{ needs.test.result }} ${{ needs.web.result }} ${{ needs.secrets.result }}
+            ${{ needs.trivy.result }}
           SHARDS: ${{ needs.acceptance-shard.result }}
           E2E: ${{ needs.acceptance-e2e.result }}
 
