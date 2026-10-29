@@ -250,7 +250,8 @@ func (c *Client) listSettled(ctx context.Context, filter url.Values, what string
 
 // EndUserSessions deletes every Authentik authenticated session of the users userPKs in one bulk delete and returns
 // how many it deleted; Authentik deletes the browser's Django session with each, which signs the browser out (plan
-// M8f decision 17). The caller chunks the users.
+// M8f decision 17). The caller chunks the users. A bulk delete repeated after a timeout or a 5xx reports only what its
+// last attempt found left, so the caller counts the sessions first (CountUserSessions, PDK-342).
 func (c *Client) EndUserSessions(ctx context.Context, userPKs []string) (int, error) {
 	if len(userPKs) == 0 {
 		return 0, nil
@@ -269,6 +270,34 @@ func (c *Client) EndUserSessions(ctx context.Context, userPKs []string) (int, er
 		return 0, upstream(err)
 	}
 	return res.Deleted, nil
+}
+
+// CountUserSessions counts the Authentik authenticated sessions of the users userPKs in one listing of every session;
+// the listing has no filter by user pk.
+func (c *Client) CountUserSessions(ctx context.Context, userPKs []string) (int, error) {
+	users := make(map[int]bool, len(userPKs))
+	for _, pk := range userPKs {
+		n, err := strconv.Atoi(pk)
+		if err != nil {
+			return 0, fmt.Errorf("authentik: user pk %q is not an integer", pk)
+		}
+		users[n] = true
+	}
+	if len(users) == 0 {
+		return 0, nil
+	}
+	n := 0
+	err := pages(ctx, c, "/api/v3/core/authenticated_sessions/", url.Values{}, func(s struct {
+		User int `json:"user"`
+	}) {
+		if users[s.User] {
+			n++
+		}
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func userPath(pk string) string { return "/api/v3/core/users/" + url.PathEscape(pk) + "/" }

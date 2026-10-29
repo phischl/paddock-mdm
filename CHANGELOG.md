@@ -77,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- End all sessions (PDK-342): the `platform.sessions_ended` audit event reports the identity-provider sessions that
+  actually ended. Before, when Authentik answered the session deletion slowly and Paddock repeated it, the event could
+  report 0 ended sessions although every session had ended.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
