@@ -121,6 +121,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spent three recovery codes instead of two. Now a user who answers with recovery codes spends two codes when not
   signed in on the second device and one when signed in. The Authentik blueprint `paddock-device.yaml` removes the prompt from the device-code page's flow
   `paddock-device-code` on upgrade; the device approval keeps it.
+- Nightly audit verification (PDK-420): a restart of the audit writer no longer clears an active
+  `PaddockAuditChainBroken`. At start the writer now sets `paddock_audit_verify_failed_organizations` from the newest
+  recorded nightly window and sample day of every organization, instead of 0 until the next 00:45 UTC cycle.
 - Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
   every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
   enrolment now applies only to members of Paddock's administrator groups (platform administrators and the

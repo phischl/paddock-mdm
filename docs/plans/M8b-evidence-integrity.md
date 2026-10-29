@@ -1011,3 +1011,21 @@ reported, and the device cost a 10 000-row read each round without progress.
   then by `from_seq`; a row not checked counts as still open and is neither filled nor reported in that round. The
   counts do not depend on the scan position, so rows opened before migration 00073 above it are checked the same way.
 - **Decision 22:** `ResetEventSeq` sets `event_seq_scanned = 0` together with the pointer.
+
+## Amendment 2026-10-29 (PDK-420, main as architect lead)
+
+**Reason.** Decision 27 seeds only `paddock_audit_verify_last_run_timestamp_seconds` at start (amendment
+2026-10-25). `paddock_audit_verify_failed_organizations` started at 0 in every new process, so a restart of the audit
+writer (deploy, OOM kill) cleared an active critical `PaddockAuditChainBroken` until the next 00:45 UTC cycle,
+although the chain was still broken.
+
+- **Decision 27, failed-organizations gauge at start (option A):** together with the last-run gauge, the writer sets
+  `paddock_audit_verify_failed_organizations` from `audit_verification_run` (`ListLatestNightlyFailedOrganizations`):
+  an organization counts as failed when its newest `nightly` row or its newest `sample` row has `ok = false`
+  (newest by `finished_at`, then by the UUIDv7 run ID). `cli` rows do not count, as they do not feed the gauge after a
+  cycle either. A verification that errored writes no row, so the seed counts only recorded failures; the next cycle
+  sets the exact value.
+- **Read error:** the writer sets neither gauge unless both reads succeed and retries both every minute, as the
+  amendment 2026-10-25 prescribes for the last-run gauge; the unset 0 of the last-run gauge lets
+  `PaddockAuditVerifyStale` fire.
+- The alert rules and their promtool tests stay unchanged.

@@ -109,7 +109,8 @@ The audit writer's `/metrics` exports `paddock_audit_verify_runs_total{trigger,r
 (`docs/operations/monitoring.md`).
 
 **What to do on `PaddockAuditChainBroken`.** The alert fires as soon as a nightly cycle found a broken or
-unreadable chain of at least one organization.
+unreadable chain of at least one organization. A restart of the audit writer does not clear it: at start the writer
+counts the organizations whose newest recorded nightly window or sample day failed.
 
 1. Find the organization and the problems: the newest `audit.chain_verification_failed` events (`problems` names
    the day and the object), or the audit writer's log.

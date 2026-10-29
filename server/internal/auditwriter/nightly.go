@@ -58,6 +58,8 @@ type verifyIndex interface {
 	lockedOrganizations(ctx context.Context, fn func(ctx context.Context, orgs []auditOrganization) error) error
 	// latestNightlyRun returns the end of the newest recorded nightly run; ok is false before the first one.
 	latestNightlyRun(ctx context.Context) (finished time.Time, ok bool, err error)
+	// latestFailedOrganizations returns the organizations whose newest recorded nightly window or sample day failed.
+	latestFailedOrganizations(ctx context.Context) ([]uuid.UUID, error)
 }
 
 // Nightly verifies, every night, the last VerifyWindowDays sealed days of every organization plus one random older
@@ -80,8 +82,8 @@ func NewNightly(pool *db.AuditWriterPool, verifier *Verifier, recorder *Recorder
 // lastRunRetry is how often RunNightly retries reading the last nightly run while the audit index is unreadable.
 const lastRunRetry = time.Minute
 
-// RunNightly sets the last-run gauge, then runs Cycle every day at 00:45 UTC (VerifyDelay) until ctx ends. While the
-// last nightly run cannot be read, it retries every lastRunRetry until the read succeeds or a cycle sets the gauge.
+// RunNightly seeds the gauges, then runs Cycle every day at 00:45 UTC (VerifyDelay) until ctx ends. While the
+// last nightly runs cannot be read, it retries every lastRunRetry until the read succeeds or a cycle sets the gauge.
 func (n *Nightly) RunNightly(ctx context.Context) {
 	seeded := n.seedLastRun(ctx, false)
 	for {
@@ -127,15 +129,22 @@ func (n *Nightly) seedLastRun(ctx context.Context, retried bool) bool {
 // initLastRun sets the last-run gauge to the end of the newest recorded nightly run or, without any, to now, so that
 // PaddockAuditVerifyStale measures from the writer's start instead of firing at once. On a read error it leaves the
 // gauge unset: the exported 0 lets PaddockAuditVerifyStale fire, because a start-time seed would mask a stale
-// verification for up to 37 h (plan M8b decision 27, amendment 2026-10-25).
+// verification for up to 37 h (plan M8b decision 27, amendment 2026-10-25). It also sets the failed-organizations
+// gauge from the newest recorded nightly and sample runs, so a restart does not clear an active
+// PaddockAuditChainBroken (amendment 2026-10-29); it sets neither gauge unless both reads succeed.
 func (n *Nightly) initLastRun(ctx context.Context) error {
 	finished, ok, err := n.index.latestNightlyRun(ctx)
+	if err != nil {
+		return err
+	}
+	failed, err := n.index.latestFailedOrganizations(ctx)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		finished = n.now()
 	}
+	metricVerifyFailedOrganizations.Set(float64(len(failed)))
 	metricVerifyLastRun.Set(float64(finished.Unix()))
 	return nil
 }
@@ -241,4 +250,14 @@ func (p poolIndex) latestNightlyRun(ctx context.Context) (time.Time, bool, error
 		return time.Time{}, false, nil
 	}
 	return finished, err == nil, err
+}
+
+func (p poolIndex) latestFailedOrganizations(ctx context.Context) ([]uuid.UUID, error) {
+	var failed []uuid.UUID
+	err := p.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		failed, err = q.ListLatestNightlyFailedOrganizations(ctx)
+		return err
+	})
+	return failed, err
 }
