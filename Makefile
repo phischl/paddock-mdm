@@ -347,8 +347,8 @@ dev-seed: ## Create organizations acme and globex and assign the dev users
 
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards
-# (SHARD=i/n, PDK-359), each against its own stack: with three shards ~27-29 min of measured gate time each, about
-# 35 min per `make acceptance` step on a runner. Keep at least 20 % headroom when gates are added.
+# (SHARD=i/n, PDK-359), each against its own stack: with four shards ~32 min of measured gate time each (PDK-361,
+# 2026-10-29). Keep at least 20 % headroom when gates are added.
 ACCEPTANCE_TIMEOUT ?= 120m
 
 # paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.

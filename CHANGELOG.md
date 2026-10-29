@@ -59,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI: the acceptance gates run in four parallel shards (was three), balanced by the median durations of eight recent
+  CI runs, so a pull request waits about 41 instead of up to 75 minutes for its slowest acceptance job. The gates
+  themselves are unchanged. The shard check now fails on a listed test it cannot parse instead of leaving it out, and
+  a failed disruptive/e2e job prints Fleet's full log again (PDK-361). No operator step.
 - Lab smoke test: runs against nginx 1.31.8 (was 1.28.3) and from now on follows the nginx mainline line (ADR 0029
   amendment 2026-10-28). No operator step: the image is a tooling image, is not part of the operator bundle, and the
   shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).
