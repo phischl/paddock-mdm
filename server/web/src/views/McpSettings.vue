@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import McpToolPicker from '../components/McpToolPicker.vue'
@@ -35,13 +35,6 @@ const saved = ref(false)
 const scope = computed(() => t('mcp.scope.organization'))
 const readOnly = computed(() => !session.canDelete)
 const neverSaved = computed(() => settings.value !== null && settings.value.updated_at === null)
-
-// A policy that was never saved starts with changes allowed once the MCP is switched on (ticket PDK-440); the
-// administrator may still switch them off before saving. Synchronous, so a payload applied with enabled before
-// write_enabled (a resumed step-up) keeps its own write choice.
-watch(() => form.enabled, (on, was) => {
-  if (on && !was && neverSaved.value) form.writeEnabled = true
-}, { flush: 'sync' })
 
 function apply(s: McpSettings): void {
   settings.value = s

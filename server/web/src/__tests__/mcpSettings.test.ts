@@ -91,7 +91,7 @@ async function submit(): Promise<void> {
 }
 
 describe('McpSettings (plan M14 §3.6 item 29)', () => {
-  it('shows the defaults hint without a saved policy and starts with changes allowed once the MCP is switched on', async () => {
+  it('shows the defaults hint without a saved policy and never allows changes on its own (ADR 0044)', async () => {
     const w = await mountPage()
     expect(w.find('h1').text()).toBe('AI assistants (MCP)')
     expect(w.find('[data-testid="mcp-defaults-hint"]').text()).toContain('the MCP is switched off for this organization')
@@ -103,9 +103,9 @@ describe('McpSettings (plan M14 §3.6 item 29)', () => {
     expect(w.find('[data-testid="mcp-tool-picker"]').exists()).toBe(false)
 
     await check('mcp-enabled')
-    expect(input('mcp-write-enabled').checked).toBe(true)
-    await check('mcp-write-enabled', false)
     expect(input('mcp-write-enabled').checked).toBe(false)
+    await check('mcp-write-enabled')
+    expect(input('mcp-write-enabled').checked).toBe(true)
     expect(input('mcp-enabled').checked).toBe(true)
   })
 
@@ -149,6 +149,7 @@ describe('McpSettings (plan M14 §3.6 item 29)', () => {
     saveMcpSettings.mockResolvedValueOnce({ code: 'step_up_required' })
     const w = await mountPage()
     await check('mcp-enabled')
+    await check('mcp-write-enabled')
     await chooseSelected(w)
     await check('mcp-tool-listDevices')
     await submit()
@@ -174,11 +175,10 @@ describe('McpSettings (plan M14 §3.6 item 29)', () => {
     expect(input('mcp-tool-listDevices').checked).toBe(true)
   })
 
-  it('counts every selectable tool for all tools and says changes are refused', async () => {
+  it('saves a first policy with changes refused unless the administrator allows them', async () => {
     saveMcpSettings.mockResolvedValueOnce({ ...defaults, enabled: true, updated_at: '2026-10-29T10:00:00Z' })
     await mountPage()
     await check('mcp-enabled')
-    await check('mcp-write-enabled', false)
     await submit()
     expect(pendingConfirm.value?.options.message)
       .toBe('2 tools will be available to MCP sessions of this organization; changes are refused.')
@@ -188,14 +188,14 @@ describe('McpSettings (plan M14 §3.6 item 29)', () => {
   })
 
   it('keeps the resumed choice for changes when the repeated save fails', async () => {
-    const payload = { enabled: true, write_enabled: false, mode: 'all', allowed_operations: [] }
+    const payload = { enabled: true, write_enabled: true, mode: 'all', allowed_operations: [] }
     sessionStorage.setItem('paddock.stepup', JSON.stringify({ action: 'mcp-settings', target: 'organization', payload, at: Date.now() }))
     saveMcpSettings.mockResolvedValueOnce({ code: 'invalid_request' })
     const w = await mountPage()
     expect(saveMcpSettings).toHaveBeenCalledWith(payload)
     expect(w.find('[data-testid="mcp-problem"]').exists()).toBe(true)
     expect(input('mcp-enabled').checked).toBe(true)
-    expect(input('mcp-write-enabled').checked).toBe(false)
+    expect(input('mcp-write-enabled').checked).toBe(true)
   })
 
   it('shows the problem and its detail inline when the server refuses the policy', async () => {
