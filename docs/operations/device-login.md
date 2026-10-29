@@ -148,8 +148,10 @@ docker compose up -d authentik-server authentik-worker
 flow (`paddock-device-code`, the `/device` page with mandatory MFA) and the authentication flow (`paddock-admin-login`,
 password and second factor) of Authentik's default brand at start and every 10 minutes, and resets them if they were
 changed in Authentik. Authentik's own `default-authentication-flow` also asks for a second factor (stage
-`paddock-default-login-mfa` at order 31, from the portal blueprint), and every portal sign-in runs
-`paddock-admin-login` again even when an Authentik session exists. The device-code page signs a user without an
+`paddock-default-login-mfa` at order 31, from the portal blueprint). The portal sign-in does not force a new login:
+an existing Authentik session satisfies it, but only if that session's login validated a passkey (WebAuthn); otherwise
+the portal refuses the sign-in with `passkey_required` and the administrator signs out of Authentik and signs in again
+(ADR 0034 amendment 2026-10-29, `docs/operations/step-up.md`). The device-code page signs a user without an
 Authentik session in with `paddock-admin-login` as well; its passkey enrolment (stage `paddock-admin-login-webauthn`,
 for an account without a WebAuthn authenticator) runs only for members of Paddock's administrator groups
 (`paddock.platform.admins` and the `admins`, `operators` and `auditors` groups of every organization), so end users

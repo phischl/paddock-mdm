@@ -605,13 +605,15 @@
     "not_authorized": "Ihr Konto ist für das Paddock-Portal nicht berechtigt. Bitten Sie Ihren Administrator, Sie genau einer Paddock-Administratorgruppe hinzuzufügen.",
     "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
     "mfa_required": "Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.",
+    "passkey_required": "Ihre Anmeldung wurde nicht mit einem Passkey bestätigt, und jede Rolle im Paddock-Portal erfordert einen (einen Sicherheitsschlüssel oder den eingebauten Authenticator Ihres Geräts). Melden Sie sich beim Identitätsanbieter ab, melden Sie sich dann erneut an und bestätigen Sie mit Ihrem Passkey. Haben Sie noch keinen Passkey, richtet die Anmeldung einen ein.",
     "key_store_sealed": "Der Schlüsselspeicher des Servers ist versiegelt, deshalb kann das Portal keine Sitzungen starten. Ein Operator muss OpenBao entsiegeln (docs/operations/openbao.md, Abschnitt 2). Geräte arbeiten weiter.",
     "no_role": "Ihr Konto ist in keiner Paddock-Rollengruppe. Bitten Sie Ihren Administrator, Sie genau einer der Gruppen paddock.'<Organisation>'.admins, .operators oder .auditors hinzuzufügen.",
     "multiple_organizations": "Ihr Konto hat Rollen in mehreren Organisationen. Ein Konto gehört zu genau einer Organisation; bitten Sie Ihren Administrator, die übrigen Mitgliedschaften zu entfernen oder getrennte Konten anzulegen.",
     "multiple_roles": "Ihr Konto hat mehrere Rollen in einer Organisation (Administrator, Operator oder Auditor). Bitten Sie Ihren Administrator, genau eine der Mitgliedschaften zu behalten.",
     "role_not_granted": "Die gewählte Rolle ist Ihrem Konto nicht mehr zugewiesen. Ihre aktuelle Sitzung bleibt unverändert; melden Sie sich erneut an, um fortzufahren.",
     "organization_inactive": "Ihre Organisation ist nicht aktiv. Wenden Sie sich an einen Plattformadministrator.",
-    "retry": "Erneut anmelden"
+    "retry": "Erneut anmelden",
+    "signOutIdentityProvider": "Beim Identitätsanbieter abmelden"
   },
   "notFound": {
     "title": "Seite nicht gefunden",

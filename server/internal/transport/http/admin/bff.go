@@ -34,7 +34,7 @@ type OIDCConfig struct {
 	PublicURL    string // https://admin.<domain>[:port]
 	// RedirectPath is the path of the redirect URI below PublicURL; default /api/auth/callback.
 	RedirectPath string
-	// Scopes are the requested scopes; default openid profile email groups.
+	// Scopes are the requested scopes; default openid profile email groups paddock_mfa.
 	Scopes []string
 }
 
@@ -107,7 +107,9 @@ func (o *OIDC) discoverOnce(ctx context.Context) error {
 
 func (o *OIDC) scopes() []string {
 	if len(o.cfg.Scopes) == 0 {
-		return []string{oidc.ScopeOpenID, "profile", "email", "groups"}
+		// paddock_mfa carries paddock_mfa_classes, which the callback checks for a passkey (ADR 0034 amendment
+		// 2026-10-29).
+		return []string{oidc.ScopeOpenID, "profile", "email", "groups", "paddock_mfa"}
 	}
 	return o.cfg.Scopes
 }
@@ -157,7 +159,8 @@ type bff struct {
 	tokenTTL time.Duration
 	sessions SessionStore
 	roles    StepUpAccounts
-	// loginMFAOptional accepts a portal ID token without "mfa" in amr (development only, PADDOCK_LOGIN_MFA_OPTIONAL).
+	// loginMFAOptional accepts a portal ID token without "mfa" in amr and without a validated WebAuthn authenticator
+	// (development only, PADDOCK_LOGIN_MFA_OPTIONAL).
 	loginMFAOptional bool
 }
 
@@ -199,7 +202,8 @@ func (b *bff) login(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, loginCookie(value, int(LoginLifetime.Seconds())))
 	w.Header().Set("Cache-Control", "no-store")
 	// No prompt=login: Authentik would remember the login it forced away and then skip the next step-up's flow
-	// (checkStepUp). An existing Authentik session may satisfy the sign-in; the callback still requires MFA in amr.
+	// (checkStepUp). An existing Authentik session may satisfy the sign-in; the callback still requires a validated
+	// WebAuthn authenticator (passkeyRequired).
 	http.Redirect(w, r, oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
 }
 
@@ -215,11 +219,20 @@ type idClaims struct {
 	Email             string   `json:"email"`
 	Groups            []string `json:"groups"`
 	AMR               []string `json:"amr"`
+	// MFAClasses are the classes of the authenticators the session's login validated (mapping
+	// io.paddock/scope-login-mfa, ADR 0034 amendment 2026-10-29); nil when the provider sent none.
+	MFAClasses []string `json:"paddock_mfa_classes"`
 }
 
 // hasMFA reports whether the authentication methods name a second factor.
 func (c idClaims) hasMFA() bool {
 	return slices.Contains(c.AMR, "mfa")
+}
+
+// hasPasskey reports whether the login validated a WebAuthn authenticator. Authentik's amr says "mfa" for WebAuthn and
+// TOTP alike, so an Authentik session from a TOTP sign-in would otherwise satisfy the portal sign-in (PDK-500).
+func (c idClaims) hasPasskey() bool {
+	return slices.Contains(c.MFAClasses, StepUpWebAuthnClass)
 }
 
 // errLoginFailed is the audit error code of logins that fail after the state check (code exchange, ID token).
@@ -229,6 +242,11 @@ var errLoginFailed = &problem.Error{Code: app.ReasonLoginFailed, Status: http.St
 // problem.Forbidden, so that the runner records the refusal as denied rather than failed.
 var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFARequired, Status: http.StatusForbidden},
 	problem.Forbidden)
+
+// errPasskeyRequired is the audit error code of a login that validated no WebAuthn authenticator; denied like
+// errMFARequired.
+var errPasskeyRequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonPasskeyRequired,
+	Status: http.StatusForbidden}, problem.Forbidden)
 
 // callback completes the login: state check, code exchange with PKCE, ID token verification (issuer, audience,
 // nonce, expiry), role resolution from the groups claim, admin.login audit event and session cookie.
@@ -298,6 +316,16 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := organization.ResolveRole(claims.Groups)
+	// Every portal role requires a passkey (ADR 0034 amendment 2026-10-29). The check precedes the choice of the active
+	// role, so it holds for a role switch (which runs this callback with a new ID token) and for any later fallback
+	// between the roles; a token without the claim (mapping missing) fails closed. Groups that grant no role keep
+	// their own denial reason.
+	if !b.loginMFAOptional && !res.Denied && !claims.hasPasskey() {
+		slog.WarnContext(ctx, "ID token without a validated WebAuthn authenticator refused", "mfa_classes", claims.MFAClasses)
+		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonPasskeyRequired, "", errPasskeyRequired)
+		denied(w, r, app.ReasonPasskeyRequired)
+		return
+	}
 	// A switch state sealed for another user is a plain sign-in: it never ends a session or picks the role.
 	choice := st.Choice
 	switching := st.Switch != nil && st.Switch.Sub == claims.Subject

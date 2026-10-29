@@ -476,20 +476,57 @@ func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 	if b := block("policy: !KeyOf webauthn-administrator\n"); strings.Contains(b, "order: 0") {
 		t.Errorf("the administrator policy shares order 0 with the WebAuthn-missing policy:\n%s", b)
 	}
+	// Stage C (ADR 0034 amendment 2026-10-29): the passkey confirmation after an enrolment, for administrators only.
+	confirm := block("name: paddock-admin-login-webauthn-confirm\n")
+	if !strings.Contains(confirm, "\n      device_classes: [webauthn]\n") || !strings.Contains(confirm, "\n      not_configured_action: deny\n") ||
+		strings.Contains(confirm, "configuration_stages") {
+		t.Errorf("stage C does not validate WebAuthn only with deny:\n%s", confirm)
+	}
+	binding := block("id: mfa-webauthn-confirm-binding\n")
+	for _, want := range []string{"stage: !KeyOf mfa-webauthn-confirm\n", "order: 32", "evaluate_on_plan: false",
+		"re_evaluate_policies: true", "policy_engine_mode: all"} {
+		if !strings.Contains(binding, want) {
+			t.Errorf("the stage binding of stage C lacks %q", want)
+		}
+	}
+	if !strings.Contains(block("name: paddock-admin-login-webauthn-unconfirmed\n"),
+		`return not any(d.__class__.__name__ == "WebAuthnDevice" for d in method_args.get("mfa_devices") or [])`) {
+		t.Error("paddock-admin-login-webauthn-unconfirmed does not check the WebAuthn devices validated in the flow")
+	}
+	for _, policy := range []string{"webauthn-administrator", "webauthn-unconfirmed"} {
+		found := false
+		for rest := portal; ; {
+			i := strings.Index(rest, "policy: !KeyOf "+policy+"\n")
+			if i < 0 {
+				break
+			}
+			entry := rest[i:]
+			if end := strings.Index(entry, "\n  - model:"); end >= 0 {
+				entry = entry[:end]
+			}
+			found = found || (strings.Contains(entry, "target: !KeyOf mfa-webauthn-confirm-binding") &&
+				strings.Contains(entry, "failure_result: true"))
+			rest = rest[i+1:]
+		}
+		if !found {
+			t.Errorf("stage C is not bound to %s with failure_result true", policy)
+		}
+	}
 	if !strings.Contains(block("name: paddock-default-login-mfa\n"), "\n      device_classes: [webauthn, totp]\n") {
 		t.Error("paddock-default-login-mfa no longer accepts WebAuthn and TOTP")
 	}
 }
 
 // TestDevBlueprintSkipsPortalLoginMFA: the development users have TOTP only, so the development blueprint must skip
-// both portal login stages; a missing skip of stage B sends every development sign-in to the WebAuthn enrolment.
+// the portal login stages A, B and C; a missing skip of stage B sends every development sign-in to the WebAuthn
+// enrolment, one of stage C denies it.
 func TestDevBlueprintSkipsPortalLoginMFA(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "dev", "paddock-dev.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	dev := string(b)
-	for _, order := range []string{"30", "31"} {
+	for _, order := range []string{"30", "31", "32"} {
 		target := "[slug, paddock-admin-login]]], [order, " + order + "]]"
 		i := strings.Index(dev, target)
 		if i < 0 {
@@ -520,6 +557,25 @@ func TestStepUpBlueprintWebAuthnOnly(t *testing.T) {
 	}
 	if !strings.Contains(read(filepath.Join("dev", "paddock-dev.yaml")), "paddock-dev-stepup-mfa") {
 		t.Error("the development blueprint has no stage paddock-dev-stepup-mfa")
+	}
+}
+
+// TestPortalBlueprintEmitsMFAClasses (ADR 0034 amendment 2026-10-29): the portal provider carries the mapping that
+// names the validated authenticator classes under the scope the api requests, which every portal sign-in requires.
+func TestPortalBlueprintEmitsMFAClasses(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-portal.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	portal := string(b)
+	for _, want := range []string{"managed: io.paddock/scope-login-mfa", "scope_name: paddock_mfa\n",
+		"return {\"paddock_mfa_classes\": classes}", "        - !KeyOf scope-mfa\n", "get_login_event(token.session)"} {
+		if !strings.Contains(portal, want) {
+			t.Errorf("paddock-portal.yaml lacks %q", want)
+		}
+	}
+	if mapping, provider := strings.Index(portal, "id: scope-mfa\n"), strings.Index(portal, "\n    id: provider\n"); mapping < 0 || mapping > provider {
+		t.Error("the mapping scope-mfa must precede the provider that references it")
 	}
 }
 
