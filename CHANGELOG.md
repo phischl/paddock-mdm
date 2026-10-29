@@ -59,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI: a pull request that changes the deployment (`deploy/`, the `Makefile` or the new workflow) now builds the
+  operator bundle from its own code and runs both bundle smoke tests (default profile and lab profile behind Nginx)
+  before the merge, in the new workflow `bundle-smoke`. It pushes and signs nothing; the `edge` job on `main` is
+  unchanged. No operator step (PDK-389).
 - Lab smoke test: runs against nginx 1.31.8 (was 1.28.3) and from now on follows the nginx mainline line (ADR 0029
   amendment 2026-10-28). No operator step: the image is a tooling image, is not part of the operator bundle, and the
   shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).
