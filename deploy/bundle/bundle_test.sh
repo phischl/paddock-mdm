@@ -101,6 +101,14 @@ for host in controlplane audit lab lab-backup controlplane-auto-unseal lab-auto-
     fail "(a) the $host configuration of the bundle differs from deploy/compose/:"
     cat "$work/diff" >&2
   fi
+  # Production and lab serve Authentik on 443 and its issuers carry no port: an issuer with an explicit port (the
+  # development default 8443, or 443 from PADDOCK_HTTPS_PORT) never matches discovery, and the api never becomes ready
+  # (PDK-492).
+  if port_issuers="$(grep -E 'PADDOCK_OIDC_[A-Z_]*ISSUER: https://[^/]*:[0-9]+/' "$work/repo.yaml")"; then
+    fail "(a) the $host configuration has an OIDC issuer with an explicit port: $port_issuers"
+  else
+    pass "(a) every OIDC issuer of the $host configuration has no explicit port"
+  fi
 done
 
 # (b) Every mounted file is shipped; a removed one is named.
