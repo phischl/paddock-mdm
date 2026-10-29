@@ -246,7 +246,7 @@ flowchart TB
 
 | Role | Responsibility | Scales by | Keys it may use |
 | --- | --- | --- | --- |
-| `api` | Portal BFF (OIDC session), admin REST API, `paddockctl` API; writes configuration and commands in one DB transaction with an outbox record; imports agent releases from the configured GitHub release source after verifying them with the release public key (ADR 0043, the api's only outbound request to a third party) | replicas behind proxy | none (escrow reveal is delegated to the `escrow-reader` role) |
+| `api` | Portal BFF (OIDC session), admin REST API, `paddockctl` API; writes configuration and commands in one DB transaction with an outbox record; imports agent releases from the configured GitHub release source after verifying them with the release public key (ADR 0043, the api's only outbound request to a third party); MCP login (device grant against Authentik) and MCP guard for MCP sessions (ADR 0044) | replicas behind proxy | none (escrow reveal is delegated to the `escrow-reader` role) |
 | `gateway` | Device endpoints: enroll, check-in, events, results, escrow upload; verifies device signatures; reads only from Valkey; writes only to RabbitMQ (and nonces to Valkey) | replicas | none |
 | `worker` | Consumes ingest queues, materializes device status and the Valkey cache, inventory sync with Fleet, staleness evaluation, Authentik sync | competing consumers on quorum queues | `command-signing` |
 | `compiler` | Recomputes effective state on input change, renders and signs bundles | consumer replicas, partitioned by organization | `bundle-signing`, `time-ticket` |
@@ -1059,6 +1059,13 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > `platform_and_organization` is no longer a denial reason; `role_not_granted` (a switch whose role the fresh
 > `groups` claim does not grant) is. Several organizations per identity stay denied (`multiple_organizations`).
 
+> **Amendment (M14, ADR 0044):** `paddockctl mcp login` signs an administrator in through Authentik's device
+> authorization grant on the public provider `paddock-mcp` (same login flow and MFA as the portal); the api verifies
+> the ID and access tokens, resolves the role as at login and keeps an MCP session record in Valkey next to the portal
+> sessions, so logout, role change, deactivation and end-all end it; MCP sessions are restricted by the scope's MCP
+> policy and the administrator's write opt-in and never satisfy a step-up (ADR 0034 decision 3 applies to API tokens
+> and MCP sessions alike).
+
 ---
 
 ## 10. Permission profiles and sudo
@@ -1687,6 +1694,9 @@ flowchart LR
 - Events are never translated or rewritten; the portal localizes the display via message key
   `audit.<code>` with `params`.
 
+> **Amendment (M14, ADR 0044):** `source` gains `mcp` (actions of an MCP session); `actor` gains `client`, the MCP
+> client's name and version on events of an MCP session.
+
 ### 14.3 Exactly one event per privileged action
 
 Generated code tends to emit audit events on success only. The rule in the application layer:
@@ -1970,6 +1980,16 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > carries `name` and `name_state`; `q` of the device lists also matches `name`. ADR
 > [0041](adr/0041-device-hostname.md).
 
+> **Amendment (M14, ADR 0044):** the MCP adds the BFF routes `GET /api/auth/mcp/config`, `POST /api/auth/mcp/session`
+> (audited as `admin.login` with `channel: mcp`) and `POST /api/auth/mcp/logout` (MCP access token as bearer);
+> `GET /api/v1/mcp/catalog` and `GET /api/v1/mcp/access` (bootstrap: callable by an MCP session before its policy is
+> consulted); `GET`/`PUT /api/v1/settings/mcp` and `GET`/`PUT /api/platform/v1/settings/mcp` (the MCP policies; `PUT`
+> with a step-up, audited as `organization.mcp_policy_changed` and `platform.mcp_policy_changed`);
+> `POST /api/v1/me/mcp-write/enable` (step-up, `admin.mcp_write_enabled`) and `POST /api/v1/me/mcp-write/disable`
+> (`admin.mcp_write_disabled`). `GET /api/v1/me` answers `mcp_write_enabled` and `channel` (`portal`, `api`, `mcp`).
+> New problem codes `mcp_disabled`, `mcp_tool_not_allowed`, `mcp_write_not_enabled` (403), `rate_limited` (429) and
+> `mcp_login_required` (401). Plan: `docs/plans/M14-mcp.md`.
+
 ### 17.2 Device API
 
 See §6.8; contract in `api/openapi/device.yaml`; Go types shared with the agent in `pkg/protocol`.
@@ -2071,6 +2091,7 @@ reject new bundles as downgrades. The restore runbook therefore runs `paddock-se
 | Frontend | Vitest + Vue Test Utils; Playwright e2e against Compose stack incl. axe | UI flows, i18n completeness, step-up flows |
 | Load | k6 scripts against `gateway` | N1, N2, check-in jitter (no spikes after simulated outage) |
 | Acceptance | `test/acceptance/` Go test suite that orchestrates Compose stack + VMs; one test file per gate of the concept | Definition of done for each milestone |
+| MCP | `paddockctl mcp` driven over stdio by the acceptance gate after a headless device login (`TestMCP`); SDK in-memory transports as unit tests | MCP login, policies, write opt-in, step-up refusal, isolation and audit of MCP sessions (ADR 0044) |
 
 CI: GitHub Actions (or Forgejo Actions), `golangci-lint`, `govulncheck`, `gosec`, SBOM (`syft`), container
 image signing with `cosign` keyless via GitHub OIDC (no long-lived signing key; M6b decision 4); agent binaries and

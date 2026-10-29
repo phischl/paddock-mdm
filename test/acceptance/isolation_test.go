@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/mcpcatalog"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -134,6 +135,18 @@ func TestOrganizationIsolation(t *testing.T) {
 		}
 	})
 
+	// Plan M14 §3.7 item 34: the sweep again as an acme MCP session (bearer = alice's MCP access token, the MCP
+	// enabled with changes and alice opted in), and a platform MCP session has no organization.
+	t.Run("mcp session", func(t *testing.T) { mcpIsolationSweep(t, w, acme, ops) })
+	t.Run("platform mcp session", func(t *testing.T) {
+		root := login(t, env.PlatformAdmin)
+		restoreMCPState(t, acme)
+		putMCPPolicy(t, root, env.PlatformAdmin, "/api/platform/v1/settings/mcp", mcpPolicy(true, true))
+		c := newMCPCLI(t)
+		c.signIn(t, mcpDevIdentity(t, env.PlatformAdmin, true))
+		expectStatus(t, call(t, c.portal(t), http.MethodGet, "/api/v1/devices", nil), http.StatusForbidden, "no_organization")
+	})
+
 	// Searches and filters of every list find globex data as carol but never as alice.
 	for path := range collectionGETs(doc) {
 		if !strings.HasPrefix(path, "/api/v1/") {
@@ -219,6 +232,90 @@ func TestOrganizationIsolation(t *testing.T) {
 		if leaked := containsAny([]byte(e.EventID+" "+e.CorrelationID), w.globexIDs); leaked != "" {
 			t.Fatalf("acme audit log contains globex event %s", leaked)
 		}
+	}
+}
+
+// mcpIsolationSweep runs every /api/v1 operation as alice's MCP session with globex IDs. An operation the session is
+// offered (GET /api/v1/mcp/access) runs with the portal sweep's fixture and must answer like it: 404 for a globex item,
+// success for acme's own data; a refused step-up (403 step_up_required) also passes, since an MCP session never has
+// one. Every other operation must be refused (any non-2xx) except the bootstrap operations, which answer. No answer
+// may contain a globex ID.
+func mcpIsolationSweep(t *testing.T, w *isolationWorld, acme uuid.UUID, ops []string) {
+	restoreMCPState(t, acme, whoami(t, w.alice).ID)
+	putMCPPolicy(t, w.alice, env.Alice, "/api/v1/settings/mcp", mcpPolicy(true, true))
+	freshStepUp(t, w.alice, env.Alice)
+	expectStatus(t, call(t, w.alice, http.MethodPost, "/api/v1/me/mcp-write/enable", nil), http.StatusOK, "")
+	c := newMCPCLI(t)
+	c.signIn(t, mcpDevIdentity(t, env.Alice, false))
+	mp := c.portal(t)
+
+	res := call(t, mp, http.MethodGet, "/api/v1/mcp/access", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var access struct {
+		Channel           string   `json:"channel"`
+		WriteEffective    bool     `json:"write_effective"`
+		AllowedOperations []string `json:"allowed_operations"`
+	}
+	if err := res.JSON(&access); err != nil || access.Channel != "mcp" || !access.WriteEffective {
+		t.Fatalf("MCP access of alice's session: %s (%v)", res.Body, err)
+	}
+	offered := map[string]bool{}
+	for _, name := range access.AllowedOperations {
+		if tool, ok := mcpcatalog.ByName(name); ok {
+			offered[tool.Pattern] = true
+		}
+	}
+	if len(offered) == 0 {
+		t.Fatal("alice's MCP session is offered no tool; the sweep would be vacuous")
+	}
+
+	for _, op := range ops {
+		t.Run(op, func(t *testing.T) {
+			method, path, _ := strings.Cut(op, " ")
+			var res env.Response
+			ownAttempts := false
+			if offered[op] {
+				fx, ok := isolationFixtures[op]
+				if !ok {
+					t.Fatalf("operation %s has no fixture mapping in isolation_fixtures.go", op)
+				}
+				target, body := fx.request(t, w)
+				res = mcpCallRetrying(t, mp, method, target, body)
+				if method == http.MethodPost && res.Status == http.StatusCreated {
+					removeCreated(t, w.alice, target, res)
+				}
+				stepUpRefused := res.Status == http.StatusForbidden && res.ProblemCode() == "step_up_required"
+				switch {
+				case stepUpRefused:
+				case fx.kind == isoItem:
+					expectStatus(t, res, http.StatusNotFound, "not_found")
+				case res.Status >= 300:
+					t.Fatalf("HTTP %d: %s", res.Status, res.Body)
+				}
+				ownAttempts = fx.ownAttempts
+			} else {
+				var body any
+				if method != http.MethodGet {
+					body = map[string]any{}
+				}
+				res = mcpCallRetrying(t, mp, method, pathParam.ReplaceAllString(path, w.globexDevice), body)
+				if tool, ok := mcpcatalog.ByPattern(op); ok && tool.Bootstrap {
+					expectStatus(t, res, http.StatusOK, "")
+				} else if res.Status < 300 {
+					t.Fatalf("an operation the MCP session is not offered answered HTTP %d: %s", res.Status, res.Body)
+				}
+			}
+			checked := res.Body
+			if ownAttempts && res.Status < 300 {
+				var err error
+				if checked, err = withoutOwnFailedAttempts(res.Body, env.Alice); err != nil {
+					t.Fatalf("%v: %s", err, res.Body)
+				}
+			}
+			if leaked := containsAny(checked, w.globexIDs); leaked != "" {
+				t.Fatalf("response contains globex ID %s: %s", leaked, checked)
+			}
+		})
 	}
 }
 

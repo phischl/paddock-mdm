@@ -136,6 +136,8 @@ changes). They are decided here, once, and implemented by plan M8s.
 - Amended documents: architecture §9.6; plan M4a decision 7; plan M2a decision 8; ADR 0003 (Valkey holds session
   records); ADR 0007 (step-up provider emits the Paddock groups claim; WebAuthn-only step-up); ADR 0013 (agent-side
   policy tightening during a rollout).
+- MCP sessions (ADR 0044) are revocable sessions of decision 4 with a server-side record, and decision 3 applies to
+  them: an MCP session never satisfies a step-up; the MCP exposes no always-step-up operation.
 
 ## Amendment 2026-10-16 — operator roots instead of an ordinary tier by default
 
