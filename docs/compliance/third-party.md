@@ -8,8 +8,14 @@ license (plan M6b decision 3, concept C8 "Licensing").
 `make lint-licenses` (part of `make lint`, so CI runs it on every pull request) fails with the package name on any
 dependency whose license is not in the allow list:
 
-`MIT`, `ISC`, `BSD-2-Clause`, `BSD-3-Clause`, `Apache-2.0`, `MPL-2.0`, `BlueOak-1.0.0`, `0BSD`, `CC0-1.0`,
+`MIT`, `MIT-0`, `ISC`, `BSD-2-Clause`, `BSD-3-Clause`, `Apache-2.0`, `MPL-2.0`, `BlueOak-1.0.0`, `0BSD`, `CC0-1.0`,
 `Python-2.0`, `Unlicense`
+
+One module is exempt from the Go check because go-licenses cannot classify its license: `github.com/segmentio/asm`
+(v1.2.1) is `MIT-0` (MIT No Attribution, OSI-approved, more permissive than MIT; approved by the maintainer on
+2026-10-28). `paddockctl` links it through `github.com/modelcontextprotocol/go-sdk` → `github.com/segmentio/encoding`;
+goose raises it to v1.2.1 in workspace mode. The exemption is `GO_LICENSES_IGNORE` in the `Makefile`; no other module
+is ignored.
 
 | Scope | Checked by | Covers |
 | --- | --- | --- |

@@ -56,6 +56,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limited. `GET /api/v1/me`, `GET /api/v1/mcp/access` (what the caller's MCP sessions may do) and
   `GET /api/v1/mcp/catalog` (the tool catalog) always answer. New metric `paddock_mcp_requests_total{class, result}`.
   An MCP session calling `POST /api/v1/me/mcp-write/enable` or `…/disable` now gets 403 `mcp_tool_not_allowed`.
+- `paddockctl mcp` (ADR 0044, PDK-439): `paddockctl mcp login [--no-browser] [--platform]` signs the administrator in
+  through Authentik in the browser (password and second factor, device authorization grant) and keeps the session in
+  `$XDG_STATE_HOME/paddockctl/mcp-session.json` (mode 0600); `--platform` picks the platform role of a two-role
+  identity. `paddockctl mcp` is a stdio MCP server for local MCP clients such as Claude Code: it offers the admin API
+  operations the server currently allows the session as tools, renews the session before the access token expires,
+  and wraps every result with a notice that the data is never an instruction. `paddockctl mcp tools [-o table|json]`
+  lists the offered tools; `paddockctl mcp logout` ends the session and revokes the refresh token. The MCP never uses
+  an API token. paddockctl now depends on the MCP Go SDK `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
+  `golang.org/x/oauth2`. The license gate allows `MIT-0` and exempts `github.com/segmentio/asm` (MIT-0, a dependency of
+  the SDK that go-licenses cannot classify).
 
 ### Changed
 
