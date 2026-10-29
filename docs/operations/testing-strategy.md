@@ -26,10 +26,6 @@ public repository has a queue of 20 GitHub runners, which cannot run the accepta
 | `bundle-smoke` | builds the images and the operator bundle from the pull request's code and installs it with the smoke scripts (default profile, then the lab profile behind Nginx); nothing is pushed or signed | only pull requests that change `deploy/**`, the `Makefile`, `.dockerignore` or the workflow itself (path filter) |
 | `edge` | release images (pushed to ghcr.io and signed keylessly), SBOMs, operator bundle, checksums, then the smoke test of the edge bundle and of its lab profile | pushes to `main` only, after `acceptance` |
 
-The shard jobs and the disruptive/e2e job keep a BuildKit layer cache of the images that `make up` builds (Go
-modules, npm packages, apt layers), keyed by the Dockerfile, `versions.env` and the lock files. The `edge` job and
-the release build use no layer cache: a release image must not reuse a cached `apt-get upgrade` layer.
-
 CodeQL (GitHub's default setup) scans pull requests to `main` and `main` itself.
 
 **Required checks.** The ruleset of `main` requires the `acceptance` summary job, not the shard jobs. The number of
