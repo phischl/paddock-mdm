@@ -135,6 +135,26 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
   `paddock-dev-stepup-mfa` (WebAuthn or TOTP), so the test users complete step-ups with their seeded TOTP keys
   (`docs/operations/step-up.md`, "Development stack").
 
+## Running the acceptance gates locally
+
+The acceptance gates in `test/acceptance/` run against the running stack. There are two ways to run the whole suite:
+
+- **Serially in one run:** `make acceptance`. The gates take more than two hours in a row (~131 min on a GitHub
+  runner, measured 2026-10-29), so without `SHARD` and `T` the run gets a 180-minute timeout; with `SHARD` or `T` it
+  is 120 minutes. `ACCEPTANCE_TIMEOUT=<duration>` overrides both. The overall verdict comes only at the end.
+- **Shard by shard:** `make acceptance SHARD=i/N` for i = 1 … N, one after another against the same stack, for
+  example with N = 4:
+
+  ```sh
+  for i in 1 2 3 4; do make acceptance SHARD=$i/4 || break; done
+  ```
+
+  This is the partition CI uses: every gate lands in exactly one shard, and the target checks that before each run,
+  so running every shard once covers the whole suite. Prefer it when you want an early verdict: a failing gate shows
+  up after about 30 minutes instead of at the end, and only the failed shard needs to run again.
+
+`make acceptance T=<regex>` runs selected gates only.
+
 ## Running a second dev stack
 
 Two development stacks can run side by side on one host, for example so that two work streams run `make acceptance`
