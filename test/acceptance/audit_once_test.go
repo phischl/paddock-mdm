@@ -271,8 +271,8 @@ var auditCases = map[string][]auditCase{
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "denied", auditPollTimeout)
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
-			freshStepUp(t, w.root, env.PlatformAdmin)
-			res := call(t, w.root, http.MethodPost, ipAllowlistPath, map[string]string{"cidr": "10.0.0.1/8", "label": "x"})
+			root := steppedUpRoot(t)
+			res := call(t, root, http.MethodPost, ipAllowlistPath, map[string]string{"cidr": "10.0.0.1/8", "label": "x"})
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
 		}},
@@ -284,14 +284,14 @@ var auditCases = map[string][]auditCase{
 	},
 	"PATCH /api/platform/v1/ip-allowlist/{id}": {
 		{"not found", func(t *testing.T, w *auditWorld) {
-			freshStepUp(t, w.root, env.PlatformAdmin)
-			res := call(t, w.root, http.MethodPatch, ipAllowlistPath+"/"+uuid.NewString(), map[string]string{"label": "x"})
+			root := steppedUpRoot(t)
+			res := call(t, root, http.MethodPatch, ipAllowlistPath+"/"+uuid.NewString(), map[string]string{"label": "x"})
 			expectStatus(t, res, http.StatusNotFound, "not_found")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
-			freshStepUp(t, w.root, env.PlatformAdmin)
-			res := call(t, w.root, http.MethodPatch, ipAllowlistPath+"/not-a-uuid", map[string]string{"label": "x"})
+			root := steppedUpRoot(t)
+			res := call(t, root, http.MethodPatch, ipAllowlistPath+"/not-a-uuid", map[string]string{"label": "x"})
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
 		}},
@@ -303,8 +303,8 @@ var auditCases = map[string][]auditCase{
 	},
 	"DELETE /api/platform/v1/ip-allowlist/{id}": {
 		{"not found", func(t *testing.T, w *auditWorld) {
-			freshStepUp(t, w.root, env.PlatformAdmin)
-			res := call(t, w.root, http.MethodDelete, ipAllowlistPath+"/"+uuid.NewString(), nil)
+			root := steppedUpRoot(t)
+			res := call(t, root, http.MethodDelete, ipAllowlistPath+"/"+uuid.NewString(), nil)
 			expectStatus(t, res, http.StatusNotFound, "not_found")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
 		}},
@@ -330,14 +330,14 @@ var auditCases = map[string][]auditCase{
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.auto_unseal_enabled", "denied", auditPollTimeout)
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
-			freshStepUp(t, w.root, env.PlatformAdmin)
-			res := enableAutoUnseal(t, w.root, disclaimerVersion, "I accept")
+			root := steppedUpRoot(t)
+			res := enableAutoUnseal(t, root, disclaimerVersion, "I accept")
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.auto_unseal_enabled", "failure", auditPollTimeout)
 		}},
 		{"conflict", func(t *testing.T, w *auditWorld) {
-			freshStepUp(t, w.root, env.PlatformAdmin)
-			res := enableAutoUnseal(t, w.root, "2000-01-01", acknowledgementEN)
+			root := steppedUpRoot(t)
+			res := enableAutoUnseal(t, root, "2000-01-01", acknowledgementEN)
 			expectStatus(t, res, http.StatusConflict, "disclaimer_outdated")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.auto_unseal_enabled", "failure", auditPollTimeout)
 		}},
@@ -388,14 +388,14 @@ var auditCases = map[string][]auditCase{
 	},
 	"PUT /api/platform/v1/settings/mcp": {
 		{"success", func(t *testing.T, w *auditWorld) {
-			freshStepUp(t, w.root, env.PlatformAdmin)
-			res := call(t, w.root, http.MethodPut, "/api/platform/v1/settings/mcp", currentMCPPolicy(t, w.root, "/api/platform/v1/settings/mcp"))
+			root := steppedUpRoot(t)
+			res := call(t, root, http.MethodPut, "/api/platform/v1/settings/mcp", currentMCPPolicy(t, root, "/api/platform/v1/settings/mcp"))
 			expectStatus(t, res, http.StatusOK, "")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.mcp_policy_changed", "success", auditPollTimeout)
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
-			freshStepUp(t, w.root, env.PlatformAdmin)
-			res := call(t, w.root, http.MethodPut, "/api/platform/v1/settings/mcp", mcpPolicyBody("all", "listOrganizations"))
+			root := steppedUpRoot(t)
+			res := call(t, root, http.MethodPut, "/api/platform/v1/settings/mcp", mcpPolicyBody("all", "listOrganizations"))
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.mcp_policy_changed", "failure", auditPollTimeout)
 		}},
@@ -474,6 +474,17 @@ func mcpAuditor(t *testing.T) *env.Portal {
 		t.Fatalf("login %s: %v", user, err)
 	}
 	return p
+}
+
+// steppedUpRoot signs in a platform administrator of its own and steps up. The parallel cases must not step up the
+// shared w.root (PDK-445): a concurrent request on it, sent with the cookie from before the step-up, re-issues that
+// older session once its idle mark is due and overwrites the stepped-up cookie; the next step-up then no longer waits
+// for Authentik's max_age and Authentik answers it with the login it has just seen (stepup=failed).
+func steppedUpRoot(t *testing.T) *env.Portal {
+	t.Helper()
+	root := login(t, env.PlatformAdmin)
+	stepUp(t, root, env.PlatformAdmin, true)
+	return root
 }
 
 type group struct{ id, name string }

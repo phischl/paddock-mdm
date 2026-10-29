@@ -149,7 +149,11 @@ flow (`paddock-device-code`, the `/device` page with mandatory MFA) and the auth
 password and second factor) of Authentik's default brand at start and every 10 minutes, and resets them if they were
 changed in Authentik. Authentik's own `default-authentication-flow` also asks for a second factor (stage
 `paddock-default-login-mfa` at order 31, from the portal blueprint), and every portal sign-in runs
-`paddock-admin-login` again even when an Authentik session exists. Until the flows are set — on a fresh installation until
+`paddock-admin-login` again even when an Authentik session exists. The device-code page signs a user without an
+Authentik session in with `paddock-admin-login` as well; its passkey enrolment (stage `paddock-admin-login-webauthn`,
+for an account without a WebAuthn authenticator) runs only for members of Paddock's administrator groups
+(`paddock.platform.admins` and the `admins`, `operators` and `auditors` groups of every organization), so end users
+approve with password and TOTP and are not asked to enrol a passkey (ADR 0034 amendment 2026-10-29). Until the flows are set — on a fresh installation until
 Authentik has applied the Paddock blueprints — creating a local user fails with 502 `upstream_unavailable`.
 
 ## Locks

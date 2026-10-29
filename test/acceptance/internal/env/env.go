@@ -428,6 +428,17 @@ func (a *Authentik) UserPK(ctx context.Context, username string) (int, error) {
 	return 0, nil
 }
 
+// TestPolicy evaluates a policy for a user through Authentik's policy test endpoint (the policy as stored, with an
+// empty request context) and returns whether it passes.
+func (a *Authentik) TestPolicy(ctx context.Context, policyPK string, userPK int) (bool, error) {
+	var res struct {
+		Passing bool `json:"passing"`
+	}
+	err := a.do(ctx, http.MethodPost, "/policies/all/"+url.PathEscape(policyPK)+"/test/",
+		map[string]any{"user": userPK, "context": map[string]any{}}, &res)
+	return res.Passing, err
+}
+
 // GroupPK returns the pk of a group ("" if missing).
 func (a *Authentik) GroupPK(ctx context.Context, name string) (string, error) {
 	var page struct {
