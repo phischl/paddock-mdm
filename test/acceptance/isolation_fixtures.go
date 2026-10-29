@@ -450,6 +450,23 @@ var isolationFixtures = map[string]isolationFixture{
 	"PUT /api/v1/settings/dms": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/settings/dms", map[string]any{"enabled": false, "period_days": 30, "warn_days": []int{3, 1}}
 	}},
+	"GET /api/v1/settings/mcp": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/mcp", nil
+	}},
+	// The MCP gates rely on acme's policy: the PUT writes the current one back.
+	"PUT /api/v1/settings/mcp": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/mcp", currentMCPPolicy(t, w.alice, "/api/v1/settings/mcp")
+	}},
+	// alice's MCP write opt-in is withdrawn again when the enable sub-test ends.
+	"POST /api/v1/me/mcp-write/enable": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		t.Cleanup(func() {
+			expectStatus(t, call(t, w.alice, http.MethodPost, "/api/v1/me/mcp-write/disable", nil), http.StatusOK, "")
+		})
+		return "/api/v1/me/mcp-write/enable", nil
+	}},
+	"POST /api/v1/me/mcp-write/disable": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/me/mcp-write/disable", nil
+	}},
 
 	"POST /api/v1/devices/{id}/lock": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/lock" },
 		map[string]any{"confirm_hostname": "x"}),
@@ -759,4 +776,17 @@ var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Value
 			return url.Values{"target_id": {w.globexDevice}, "outcome": {"success"}, "page_size": {"100"}}
 		},
 	},
+}
+
+// currentMCPPolicy reads the MCP policy at path as an McpSettingsInput, so that writing it back changes nothing.
+func currentMCPPolicy(t *testing.T, p *env.Portal, path string) map[string]any {
+	t.Helper()
+	res := call(t, p, http.MethodGet, path, nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var cur map[string]any
+	if err := res.JSON(&cur); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{"enabled": cur["enabled"], "write_enabled": cur["write_enabled"], "mode": cur["mode"],
+		"allowed_operations": cur["allowed_operations"]}
 }

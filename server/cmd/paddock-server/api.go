@@ -210,6 +210,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Attention:      app.NewAttention(orgPool),
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),
+		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),
 		Inventory:      app.NewInventory(orgPool),
 		Accounts:       accounts,
 		Releases:       releases,

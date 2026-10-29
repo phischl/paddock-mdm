@@ -194,6 +194,12 @@ const (
 	CodeAuditChainVerificationFailed Code = "audit.chain_verification_failed"
 	CodeAdminRoleGranted             Code = "admin.role_granted"
 	CodeAdminRoleRevoked             Code = "admin.role_revoked"
+
+	// MCP policies per organization and platform and the per-user write opt-in (ADR 0044, plan M14 §6.3).
+	CodeOrganizationMCPPolicyChanged Code = "organization.mcp_policy_changed"
+	CodePlatformMCPPolicyChanged     Code = "platform.mcp_policy_changed"
+	CodeAdminMCPWriteEnabled         Code = "admin.mcp_write_enabled"  //nolint:gosec // an audit code, not a credential
+	CodeAdminMCPWriteDisabled        Code = "admin.mcp_write_disabled" //nolint:gosec // an audit code, not a credential
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -208,6 +214,9 @@ type Definition struct {
 
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
+
+// mcpPolicyParams are the parameters of organization.mcp_policy_changed and platform.mcp_policy_changed.
+var mcpPolicyParams = []string{"enabled", "write_enabled", "mode", "allowed_count"}
 
 // deviceEventParams are the parameters of audit events reported by devices (plan M2a decision 14, M2b decisions 9,
 // 11, 12 and 16, M3b decision 5); each event carries the subset its type defines.
@@ -1222,6 +1231,34 @@ var registry = map[Code]Definition{
 		Description: "A user left a Paddock role group in Authentik, or lost Authentik superuser status, as seen by the worker's snapshot (actor: system).",
 		Params:      []string{"role", "username", "authentik_pk", "group"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeOrganizationMCPPolicyChanged: {
+		Code: CodeOrganizationMCPPolicyChanged, Emitted: true,
+		Description: "An organization administrator changed the organization's MCP policy after a step-up: whether the MCP is enabled, whether it may change data, and which tools are allowed.",
+		Params:      mcpPolicyParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens and MCP sessions never have one) and with forbidden below org_admin.",
+	},
+	CodePlatformMCPPolicyChanged: {
+		Code: CodePlatformMCPPolicyChanged, Emitted: true,
+		Description: "A platform administrator changed the platform's MCP policy after a step-up (platform pseudo-organization).",
+		Params:      mcpPolicyParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens and MCP sessions never have one) and with forbidden for a non-platform principal.",
+	},
+	CodeAdminMCPWriteEnabled: {
+		Code: CodeAdminMCPWriteEnabled, Emitted: true,
+		Description: "An administrator enabled MCP write access for their own account after a step-up; from now on their MCP sessions may change data where the scope policy allows it.",
+		Params:      []string{"role"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for auditors and for requests made with an API token or through the MCP.",
+	},
+	CodeAdminMCPWriteDisabled: {
+		Code: CodeAdminMCPWriteDisabled, Emitted: true,
+		Description: "An administrator disabled MCP write access for their own account; their MCP sessions are refused for changes from the next request on.",
+		Params:      []string{"role"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for auditors and for requests made with an API token or through the MCP.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,
