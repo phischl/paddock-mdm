@@ -77,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `make system-test` and `make acceptance` fail with `no test ran` when the test filter `T` matches no test instead of
   reporting the empty run as passed (PDK-339), and pass `T` to `go test -run` verbatim, so a `$` anchor no longer gets
   lost in make's variable expansion (`T='^TestIdentityGates$/.*/^L1_login$'`); `$$` keeps working.
+- `make system-test`, `make acceptance` and `make e2e` check up front that the checkout has `deploy/compose/.env` and
+  the development secrets and stop with a clear message, instead of failing minutes into a run with "couldn't find env
+  file" (PDK-353). `make e2e` from a worktree whose `.secrets` is a symlink to another checkout no longer fails every
+  login and every certificate check: the resolved secrets directory is mounted into the Playwright container and also
+  handed to the device simulator and the release helper.
 - Uninstall (PDK-357): when cancelling an uninstall, or requesting a new one over an overdue request, fails after the
   server had already reserved the device's command result, the reservation is now released. Before, the device's
   later result was refused as a conflict although the command was still open, so the removal never started and the

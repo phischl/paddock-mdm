@@ -71,6 +71,7 @@ lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
+	shellcheck -s bash test/stack-preflight.sh test/stack-preflight_test.sh
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
@@ -173,6 +174,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
 	bash test/require-tests_test.sh
+	bash test/stack-preflight_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -372,7 +374,11 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 # every test of `go test -list` exactly once, so a new test can never be left out.
 # T is read with $(value T) so a `$` anchor survives make's expansion (`T='^TestX$/sub'` would otherwise lose `$/`);
 # test/require-tests.sh fails a run whose filter matched no test, which go test itself reports as passed (PDK-339).
+# STACK_PREFLIGHT stops acceptance, system-test and e2e up front when the checkout lacks deploy/compose/.env or the
+# secrets, instead of minutes in (PDK-353).
+STACK_PREFLIGHT = @bash test/stack-preflight.sh $(COMPOSE_DIR) $(SECRETS_DIR)
 acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
+	$(STACK_PREFLIGHT)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
 	@set -eo pipefail; run='$(value T)'; \
 	if [ -n '$(SHARD)' ]; then \
@@ -391,6 +397,7 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 # T and the zero-test guard as for acceptance (PDK-339).
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
 	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex>]"; exit 1; }
+	$(STACK_PREFLIGHT)
 	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev REVOKE_TAGS=paddock_revoke_testtarget
 	$(MAKE) --no-print-directory fleetd-deb
 	CGO_ENABLED=0 go build -trimpath -o bin/revoke-release/paddock-revoke ./agent/cmd/paddock-revoke
@@ -409,14 +416,18 @@ e2e-check-playwright:
 		exit 1; \
 	fi
 
+# Only the checkout is mounted at /src, so a .secrets symlink to another worktree would dangle in the container
+# (ENOENT on every login); its resolved path is mounted at /secrets instead, for the specs (PADDOCK_E2E_SECRETS) and
+# the Go helpers they run, bin/devicesim and bin/agentrelease (PADDOCK_SECRETS_DIR, stack.SecretsDir) (PDK-353).
 .PHONY: e2e
 e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
+	$(STACK_PREFLIGHT)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
-		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
+		-e PADDOCK_E2E_SECRETS=/secrets -e PADDOCK_SECRETS_DIR=/secrets -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
 		-e PADDOCK_E2E_AGENTRELEASE=/src/bin/agentrelease -e PADDOCK_E2E_SCREENSHOTS \
-		-v $(CURDIR):/src -w /src/$(WEB_DIR) \
+		-v $(CURDIR):/src -v "$$(realpath -e $(SECRETS_DIR))":/secrets -w /src/$(WEB_DIR) \
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test'
 
 # Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network paddock_cp and talk to
