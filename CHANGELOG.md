@@ -64,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).
 - Portal: when *End all sessions* ends the portal sessions but the identity provider's sessions cannot be ended (502
   `upstream_unavailable`), the page now says so and asks to run *End all sessions* again (PDK-321).
+- The portal is built and tested with Node 26 (image `node:26.12.1-trixie-slim`, was `24.21.0`); Node 26 is the Active
+  LTS line since 2026-10-28 (ADR 0015 amendment 2026-10-28). No operator step: Node is a build and tooling image and is
+  not part of the operator bundle. `engines.node` stays `>=24` because the Playwright image runs the end-to-end tests
+  on Node 24 (PDK-346).
 - Minor and patch updates of libraries: the portal uses Vuetify 4.3.0 (was 4.2.6) and is linted with ESLint 10.13.0
   and typescript-eslint 8.72.0 (were 10.12.0 and 8.71.2); the server validates requests against the API contract with
   kin-openapi 0.152.0 (was 0.151.0) and uses the oapi-codegen runtime 1.8.0 (was 1.7.0). Schema: unchanged.
