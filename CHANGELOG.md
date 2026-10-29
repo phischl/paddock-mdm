@@ -77,6 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Portal, attention page (PDK-417): the kind filter now offers "In-place encryption failed", so failed in-place
+  encryptions can be listed on their own.
 - Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
   Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
   window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
