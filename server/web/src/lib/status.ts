@@ -226,6 +226,16 @@ export function actorStatus(type: AuditActorType | string): StatusView {
   }
 }
 
+/** The channel chip of an audit event (ADR 0044): only MCP sessions get one; other sources show none. */
+export function sourceStatus(source: string): StatusView | null {
+  return source === 'mcp' ? { status: 'info', label: 'audit.sourceMcp' } : null
+}
+
+/** The class chip of an MCP tool (plan M14 §3.6 item 29): changes stand out from reads. */
+export function mcpClassStatus(cls: 'read' | 'write'): StatusView {
+  return cls === 'write' ? { status: 'warn', label: 'mcp.class.write' } : { status: 'neutral', label: 'mcp.class.read' }
+}
+
 /** The status of a component of a device (plan M8d decision 56). */
 export function componentStatus(s: DeviceComponent['status']): StatusView {
   const label = 'devices.components.status.' + s
