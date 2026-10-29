@@ -364,6 +364,11 @@ binding is identified by the policy. Mode *all* keeps the development skip effec
 own devices, recovery codes included, not necessarily after a WebAuthn or TOTP validation; the consequence above that
 "no session from a weaker factor can enrol a passkey" holds only for e-mail, SMS and Duo. RR-62 names the risk.
 
+**Amendment 2026-10-29 (PDK-325): the device login follows the 2026-10-18 decision; recovery codes count as second
+factor.** The stage `paddock-device-mfa` (`deploy/compose/authentik/blueprints/paddock-device.yaml`) accepts one
+recovery code in place of the TOTP code at each prompt; no deny stage is added. RR-62 names the device login; lab case in
+`docs/operations/device-login.md` (*Checking the device login factor (lab)*).
+
 ### 3.4 End all sessions ends the administrators' Authentik sessions too (PDK-190) — ADR 0034 amendment 2026-10-18, ADR 0007 amendment
 
 16. `app.Sessions` MUST gain two dependencies and end the Authentik sessions inside the same action:

@@ -78,6 +78,40 @@ lecture as the place for the usage policy on devices whose sudo is sudo-rs, whic
   takes effect at once.
 - Users not in the device's login assignment (or not in the organization) are refused: Authentik refuses users of
   other organizations, the device refuses users outside its allow list.
+- **Lost authenticator:** the device-code sign-in on the second device runs the brand's sign-in
+  (`paddock-admin-login`, the portal sign-in: password plus TOTP code, passkey or a recovery code) first and then the
+  prompt *Approve the sign-in on your device* (`paddock-device-mfa`: TOTP code, passkey or a recovery code). With the
+  QR code (or `https://auth.<domain>/device?code=<code>`) that prompt appears once; when the user types the code on
+  `https://auth.<domain>/device` it appears twice. Authentik counts one of the user's recovery codes as the TOTP
+  factor at every prompt, but only while the user's TOTP authenticator is still registered in Authentik: a user who
+  lost the phone with the authenticator signs in with two recovery codes using the QR code (three when typing the
+  code), one per prompt, without enrolling a passkey. Recovery codes do not help a user with passkeys only, and a
+  user whose TOTP authenticator was deleted is asked to enrol a new authenticator. Each code works once; the user
+  regenerates the recovery codes in Authentik's user settings afterwards (RR-62). An account with TOTP but no passkey
+  is asked to enrol one only if it is in one of Paddock's administrator groups.
+
+### Checking the device login factor (lab)
+
+The device login needs a real device, so this case is checked on a lab installation with an enrolled device. The
+device-code page signs the user in with the brand's sign-in (`paddock-admin-login`, the portal sign-in) first and asks
+for the second factor again at *Approve the sign-in on your device* (stage `paddock-device-mfa`); the recovery code is
+checked at that prompt. Open the device code with the **QR code** (or `https://auth.<domain>/device?code=<code>`), not
+by typing it: then the device prompt appears exactly once. Use a test user outside Paddock's administrator groups who
+already has a WebAuthn authenticator, a TOTP authenticator and recovery codes (Authentik user settings → *MFA
+Devices*). Use a private browser window on the second device for each sign-in, so no earlier MFA of the last 5
+minutes is reused:
+
+1. At the device's login screen choose *Not listed?*, type the test user's name and open the QR code on the second
+   device. Pass the portal sign-in with the password and the TOTP code (or the passkey). At *Approve the sign-in on
+   your device* choose the TOTP code and type an unused recovery code: Authentik accepts it, approves the device
+   code, and the device asks for the Hello PIN.
+2. Start a second device-code login of the test user: on a second enrolled device, or on the same device after
+   locking and unlocking the user (*Locks*; the next login needs the device code again). Open the QR code, pass the
+   portal sign-in with the password and the TOTP code (or the passkey). At *Approve the sign-in on your device* type
+   the same recovery code: Authentik refuses it, because a used code is spent, and does not approve the device code.
+   A fresh TOTP code in the same prompt is accepted (wait for the next TOTP period if the portal sign-in used a TOTP
+   code: Authentik refuses a code it has just accepted).
+3. Regenerate the test user's recovery codes afterwards.
 
 ## Tokens of the device login
 
@@ -153,7 +187,8 @@ changed in Authentik. Authentik's own `default-authentication-flow` also asks fo
 Authentik session in with `paddock-admin-login` as well; its passkey enrolment (stage `paddock-admin-login-webauthn`,
 for an account without a WebAuthn authenticator) runs only for members of Paddock's administrator groups
 (`paddock.platform.admins` and the `admins`, `operators` and `auditors` groups of every organization), so end users
-approve with password and TOTP and are not asked to enrol a passkey (ADR 0034 amendment 2026-10-29). Until the flows are set — on a fresh installation until
+approve with password and TOTP or a recovery code and are not asked to enrol a passkey (ADR 0034 amendment
+2026-10-29). Until the flows are set — on a fresh installation until
 Authentik has applied the Paddock blueprints — creating a local user fails with 502 `upstream_unavailable`.
 
 ## Locks

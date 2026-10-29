@@ -74,15 +74,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linter pinned to golangci-lint v2.15.0 (PDK-348). The supervisor now logs the agent's exit status
   (`agent stopped`, with `killed: true` when the agent ignored SIGTERM for 10 seconds) when it stops the agent for a
   switch, a rollback or shutdown.
+- Documentation: the device login counts one of the user's recovery codes as the second factor, like the portal and
+  Authentik's own sign-in (decided 2026-10-18 for the portal, 2026-10-29 for the device login), as long as the user's
+  TOTP authenticator is still registered. Residual risk RR-62 now names the device login, whose device-code sign-in
+  runs the portal sign-in first; `docs/operations/device-login.md` describes the lost-authenticator sign-in (two
+  recovery codes with the QR code, three when the code is typed, no passkey enrolment) and a lab check that a used
+  recovery code is refused at the device approval. No behaviour change (PDK-325).
 
 ### Fixed
 
 - Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
   every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
   enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
-  administrators, operators and auditors of every organization). End users approve with password and TOTP; the
-  portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml` gains the policy
-  `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
+  administrators, operators and auditors of every organization). End users approve with password and TOTP or a
+  recovery code; the portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml`
+  gains the policy `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
 - Production and lab installations (PDK-492): the api now finds the MCP login provider at
   `https://auth.<domain>/application/o/paddock-mcp/`. Before, it looked for it at the development port, never became
   ready and the installation or upgrade stopped at `./paddock start`. The bundle test refuses an OIDC issuer with an
