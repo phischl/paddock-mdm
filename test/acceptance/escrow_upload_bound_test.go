@@ -96,7 +96,7 @@ func escrowPutRoot(t *testing.T, key string, size int) {
 	script := `read -r AWS_ACCESS_KEY_ID; read -r AWS_SECRET_ACCESS_KEY; export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; ` +
 		`head -c "$2" /dev/zero >/tmp/object && ` +
 		`aws --endpoint-url http://rustfs:9000 s3api put-object --bucket paddock-escrow --key "$1" --body /tmp/object --output json`
-	out, err := stack.Docker(testContext(t, 2*time.Minute), strings.NewReader(creds), "run", "--rm", "-i", "--network", "paddock_cp",
+	out, err := stack.Docker(testContext(t, 2*time.Minute), strings.NewReader(creds), "run", "--rm", "-i", "--network", stack.Network("cp"),
 		"-e", "AWS_DEFAULT_REGION=us-east-1", "-e", "AWS_PAGER=", "--entrypoint", "sh", image, "-c", script, "sh", key, strconv.Itoa(size))
 	if err != nil {
 		t.Fatalf("put object: %v %s", err, out)

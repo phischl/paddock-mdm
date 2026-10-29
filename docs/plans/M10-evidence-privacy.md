@@ -1319,3 +1319,208 @@ PDK-149 MAY run at any time. PDK-148 MAY run in parallel with PDK-144. Everythin
   switches default to off.
 - **Risk — doc conflicts with M8b:** both touch `privacy.md`, `iso27001-mapping.md`, `residual-risks.md`. Mitigation:
   M10 adds rows and sections; it does not rewrite existing rows except the cells named in decisions 2–4.
+
+## Amendment 2026-10-29 (refresh against main for alpha.7)
+
+Checked against `origin/main` at `dbdebe9b` and the open cluster branches `origin/cluster/server-security` and
+`origin/cluster/mcp` (both reach main before this plan's tickets start; neither adds a migration, an audit code
+this plan uses, or a residual-risk number). Decided text above is not rewritten; where this amendment and a
+decision above differ, this amendment wins. Numbers refer to the decisions of §3.
+
+### A1. What main already has (do not build twice)
+
+- **M8b is merged** (ADR 0030; `audit_verification_run` in `server/migrations/audit/00004_verification.sql`,
+  `auditwriter.Recorder` in `server/internal/auditwriter/verification.go`, `auditwriter.Nightly` in `nightly.go`,
+  `GET /api/v1/audit/integrity`, `/audit/verification-runs`, `/audit/manifests`, portal `views/AuditIntegrity.vue`
+  at `/audit/integrity`, nav item `nav.auditIntegrity`). The preamble's "PDK-109 must be merged" and the first stop
+  condition of §12 are satisfied; decision 32 step (2a) is **unconditional** (`runs` is never `[]` for lack of the
+  table). Open point 4 is resolved as its default: separate pages, the exports item follows `nav.auditIntegrity`.
+- **`auditwriter.Recorder` is verification-specific.** Its only method is `Record(ctx, org, trigger, from, to,
+  started, report)`; it builds one `audit.Event` and hands it to `Writer.WriteBatch`. Decisions 22, 24, 32 and 34
+  therefore read: `RecordSelf(ctx context.Context, w *Writer, ev audit.Event) error` (file
+  `server/internal/auditwriter/selfevent.go`) fills `Schema`, `EventID` (`uuid.NewV7`), `OccurredAt` (now),
+  `Source: audit.SourceSystem`, `Actor{Type: audit.ActorSystem, ID: "audit-writer", Display: "audit-writer"}` when
+  empty, validates with `Validate` and calls `w.WriteBatch(ctx, []audit.Event{ev})` — exactly the path
+  `Recorder.Record` uses (index row, WORM object, partition ensured, sealed-day guard). This is the "one mechanism"
+  of the preamble; `verificationEvent` in `verification.go` is the pattern to copy. `RecordSelf` MUST NOT be called
+  inside an `InWriter` transaction (unchanged).
+- **Decision 14 is done** (M8d): `config.RetentionUnit(l, common)` in `server/internal/config/config.go` reads
+  `PADDOCK_RETENTION_UNIT` (`days` | `seconds`, seconds only in development); `prodcheck.go` lists it in `devOnly`
+  (now line 134, not 124); `compose.dev.yaml` sets `PADDOCK_RETENTION_UNIT: ${PADDOCK_RETENTION_UNIT:-seconds}` on
+  `paddock-worker`. PDK-137 adds only `PADDOCK_RETENTION_INTERVAL` and the `local-dev.md` rows.
+- **`retention.purged` is registered** (`codes.go` `CodeRetentionPurged`, store `device_login_event` from M8d) and
+  localized (`audit.retention.purged` in `en.json`/`de.json`). PDK-137 adds no registry entry for it; PDK-180
+  extends its `Description` with its store names.
+- **A retention round exists** for the login history: `server/internal/worker/loginhistory.go` (`LoginHistory`,
+  `LoginHistoryInterval = 6h`, lock key `0x70616464206c6f67`, 15 s interval when the unit is seconds) calling
+  `app.LoginHistory.Purge(ctx, now)` per organization. ADR 0032 amendment 2026-10-17 made it provisional "until
+  M10's retention round exists". See A3.
+- **Sealed days are final** (ADR 0010 amendment 2026-10-25, PDK-422, audit migrations `00005`/`00006`): the writer
+  files an object under the first unsealed day, a sealed day receives no further objects. Consequence for the export:
+  the manifests of `[from_day, to_day]` list every object the package will ever hold; events recorded after the
+  seal of `to_day` (including the `audit.export_requested` of the request itself) are filed under a later day and are
+  **not** in the package. Gate E2 is adjusted in A7.
+- **M9 and M11 are not implemented** (plans only; no `commit_seq`, no `change_set.before`). The stop condition on
+  `commit_seq` is moot; decision 15a is removed from this milestone (A3).
+- **ADR 0044 (MCP) is merged** on `cluster/mcp` and reaches main first: the principal carries `Channel`
+  (`principal.ChannelMCP`), the runner records source `mcp`, and ADR 0044 §G states that once PDK-139 lands, MCP
+  reads of sensitive views are recorded by the same handler calls. See A5.
+- **ADR 0045 (role switch) is merged**: one principal per session, `principal.ID` is the account ID for every
+  organization role; nothing in this plan changes. The actor key of decision 19 stays `principal.ID`.
+- **PDK-518**: `CHANGELOG.md` is no longer edited by tickets. Every operator-, user- or integrator-visible change adds
+  `changelog.d/<ticket-id>.<section>.md` (`added` | `changed` | `fixed` | …; Keep a Changelog bullets, English);
+  `make changelog-check` (part of `make lint`) validates it. Every row "`CHANGELOG.md`" in §5 and §8 reads
+  `changelog.d/<ticket>.<section>.md`. PDK-147 does not consolidate entries (the release assembles fragments).
+- **PDK-526**: ticket pull requests go into a cluster branch (`cluster/evidence-privacy`, A9) and run only lint,
+  test, web, secrets and trivy in CI; the acceptance stage runs on the cluster's pull request to main. Every
+  acceptance gate a ticket names is therefore run by the implementer locally (`make acceptance T=<gate>` on the
+  development stack assigned to the cluster) before the ticket's review — **only the ticket's own named gates,
+  never a full local acceptance run**; the full run happens once in CI on the cluster's pull request to main.
+- **`cli/go.mod` on `cluster/mcp`** already requires `github.com/phischl/paddock-mdm/pkg v0.0.0` with
+  `replace … => ../pkg`. PDK-146 adds only `github.com/klauspost/compress` at **the version `server/go.mod` pins at
+  ticket start** (today v1.20.3, not v1.20.1); the stop condition of §12 reads "cannot be added at the server's
+  version".
+
+### A2. Migration numbers (reserved by main's registry)
+
+| Migration (plan name) | Ticket | File |
+| --- | --- | --- |
+| `privacy_settings` (§6.1) | PDK-136 | `server/migrations/paddock/00074_privacy_settings.sql` |
+| `retention_grants` (decision 11) | PDK-137 | `server/migrations/paddock/00075_retention_grants.sql` |
+| `read_audit_window` (§6.1) | PDK-139 | `server/migrations/paddock/00076_read_audit_window.sql` |
+| `index_purge` (§6.2) | PDK-140 | `server/migrations/audit/00007_index_purge.sql` |
+| `audit_exports` (§6.2) | PDK-142 | `server/migrations/audit/00008_audit_exports.sql` |
+
+Reserved: paddock `00074`–`00076`, audit `00007`–`00008`. `change_set_before_purge` is **not** created (A3). The
+"next free number" rule of §3.0 is replaced by these fixed numbers; a ticket that finds its number taken stops
+(§12). In `00008_audit_exports.sql` the `DO` block stays as written: `audit_manifest` already has the `reader`
+policy from `00004`, `audit_object` has none and gets it here together with its `SELECT` grant.
+
+### A3. Retention round: one round, four passes (decisions 11–16, 21, 15a)
+
+- `worker.Retention` (`server/internal/worker/retention.go`, §6.6) **replaces** `worker.LoginHistory`:
+  `server/internal/worker/loginhistory.go` is deleted in PDK-137, `app.LoginHistory` and its `Purge` are unchanged.
+  `Round` iterates `pool.OrganizationIDs` under `WithLeaderLock(sys, retentionLockKey, …)` with
+  `retentionLockKey = 0x7061646420726574` and calls per organization, in this order, each in its own `RunTx`:
+  1. `app.LoginHistory.Purge(ctx, now)` (existing; store `device_login_event`) — PDK-137
+  2. `app.Retention.PurgeUserSeen(ctx, now)` (store `device_user_seen`) — PDK-137
+  3. `app.Retention.PurgeRetiredInventory(ctx, now)` (per device, `device.inventory_purged`) — PDK-138
+  4. `app.Retention.PurgeReadWindows(ctx, now)` (store `read_audit_window`) — PDK-139
+  PDK-180 appends its stores after pass 4. A pass that does not exist yet is not called (no stubs). The constructor
+  is `NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool, platform *db.PlatformPool,
+  interval time.Duration) *Retention`; `app.Retention` is constructed with `unit = config.RetentionUnit(l, common)`
+  (type `time.Duration`; the `RetentionUnit` type of §6.6 is dropped, `app.Retention.unit time.Duration`, as
+  `app.LoginHistory.day`).
+- Interval: `PADDOCK_RETENTION_INTERVAL` (`config.Loader.Duration`, default `worker.RetentionInterval = 6h`). When the
+  unit is seconds and the variable is unset, the interval is 15 s (today's development behaviour of the login
+  history round, which gate `TestLoginHistory` relies on). `compose.dev.yaml` sets
+  `PADDOCK_RETENTION_INTERVAL: ${PADDOCK_RETENTION_INTERVAL:-15s}` on `paddock-worker`.
+- Metrics (decision 15): `paddock_retention_last_success_timestamp_seconds{store}` and
+  `paddock_retention_deleted_total{store}` for the stores `device_login_event`, `device_user_seen` (PDK-137),
+  `retired_inventory` (PDK-138), `read_audit_window` (PDK-139); `paddock_retention_stores` is 2 after PDK-137, 3
+  after PDK-138, 4 after PDK-139; PDK-180 adds its stores to the constant.
+- Decision 15a (`change_set.before`) leaves this milestone: the column does not exist and is introduced by plan M11.
+  The M11 ticket that creates `change_set.before` adds pass `PurgeChangeSetBefore` to this round (same shape as pass
+  2, store `change_set_before`, 90 days) and the `UPDATE` grant in its own migration. PDK-137 and PDK-147 do not
+  check for the column any more.
+- `PurgeUserSeen` runs its batches inside one `RunTx` per organization as decision 13 finally states (the "every
+  batch its own RunTx?" aside is not a choice).
+
+### A4. Residual-risk numbers (decision 4)
+
+`docs/compliance/residual-risks.md` on main ends at **RR-93**. The three risks of decision 4 are **RR-94** (deletion
+lag in backups), **RR-95** (evidence export is an egress of personal data), **RR-96** (index purge equals WORM
+expiry), appended to section "Control plane and audit domain". Every "RR-35", "RR-36", "RR-37" of decisions 1, 4, 26
+and §13 of this plan reads RR-94, RR-95, RR-96. ADR 0032 §1 ("residual risk RR-35") needs a one-line amendment by the
+architect (reported; not part of a ticket). The DPIA input of decision 26 lists RR-01, RR-06, RR-15, RR-20, RR-94,
+RR-95.
+
+### A5. Read-access recording and MCP (decisions 18–20)
+
+- The actor key of the window is `principal.ID` for portal **and MCP sessions** (same account, ADR 0044) and
+  `principal.APITokenID` for API-token principals (`principal.APITokenID != uuid.Nil`).
+- An MCP-session read with the switch on records `audit.searched` / `device.inventory_viewed` with source `mcp`
+  and actor `client` through the unchanged runner; no MCP-specific code in `ReadAudit`. Unit test in
+  `server/internal/app`: a principal with `Channel: principal.ChannelMCP` records once per window like a portal
+  principal and shares the window with the same account's portal session.
+- `ListAuditEvents` is `func (h *handlers) ListAuditEvents` in `server/internal/transport/http/admin/handlers.go`
+  (receiver `handlers`, lower case; the same for `handlers_inventory.go`). `GET /api/v1/devices/{id}/audit` does not
+  exist (confirmed); the device audit tab filters by `target_id`.
+
+### A6. Export builder details (decisions 29, 31–36)
+
+- `ListAuditVerificationRunsOverlapping :many` in `server/internal/adapters/auditpg/queries/audit.sql`:
+  `SELECT * FROM audit_verification_run WHERE organization_id = @organization_id AND from_day <= @to_day AND
+  to_day >= @from_day ORDER BY started_at DESC LIMIT 100`.
+- `Verifier.Verify` returns `*Report{Days, Objects, Problems}`; `verification.ok = report.OK()`.
+- The generated strict-server response type of the download is whatever `make gen` names for
+  `application/x-tar` (pattern: `DownloadDeviceHeader200ApplicationoctetStreamResponse{Body, ContentLength}` in
+  `handlers_disk.go`); the stop condition on buffering stands.
+- `requested_by` is the principal as `audit.Actor` without `IP`; the `Client` field (MCP) is kept when set.
+- Export requests from an MCP session are refused by the runner's step-up rule (`checkStepUp` refuses
+  `Channel == mcp`) with 403 `step_up_required` and a denied event — no exception for exports.
+
+### A7. Gates (§8–§10)
+
+- **E2** reads: let `n0` be `total` of `GET /api/v1/audit-events?from=<today 00:00Z>&page_size=10` for the fresh
+  organization after `waitForEvents` settled and **before** `audit seal`; the export of `[today, today]` becomes
+  `ready` within 60 s with `event_count == n0` and `verify_ok == true`. Events recorded after the seal (the request's
+  own `audit.export_requested`, the `audit.export_completed`) are filed under the next unsealed day and are not in
+  the package; the gate MUST NOT "wait for them".
+- **R1** keeps `TestLoginHistory` green (same round, same 15 s development interval).
+- **E1–E4** use `tempUser(t, "export-auditor", env.RoleGroup(slug, "auditors"))` and `stepUp(t, portal, user,
+  true)` of `test/acceptance/helpers.go` (works for temporary users; `TestAuditIntegrity` is the pattern). The §12
+  stop condition "step-up helper cannot act for an auditor" is void.
+- Playwright (decision 37): `web/e2e/auditIntegrity.spec.ts` (temporary auditor, `loginWithPassword`) and
+  `auth.ts::stepUp(page, start, username, passwordFile, totpKeyFile)` are the patterns; when the temporary user of
+  `auth.ts::tempUser` carries no TOTP key, the spec asserts the dialog and the redirect start only (fallback of
+  decision 37 unchanged).
+- Every ticket runs only its own named acceptance gates locally (`make acceptance T=…`, on the cluster's assigned
+  stack) because CI does not run them on cluster pull requests; the full acceptance run is the cluster PR's CI
+  (A1, PDK-526).
+
+### A8. Documents (decisions 1–6, 26, 39, 40)
+
+- `docs/compliance/retention.md` carries ADR 0032 §1 **plus** the rows of its amendments 2026-10-17 (login history,
+  hardware facts) and 2026-10-18 (PDK-180 periods) as one table; "What is not purged yet" lists only the rows whose
+  purge still reads "None in this milestone" after both amendments (device record, escrow of retired devices,
+  `device_bundle_report`/`device_resource_status`, `admin_account`/`api_token`, chain metadata) and names PDK-180
+  for the rows the amendment decided.
+- `docs/architecture.md` amendment blocks (decision 6) are dated `> **Amendment 2026-10-29 (M10, ADR 0032):**`
+  and appended after the existing `Amendment 2026-10-15 (M8b)` block at the end of §14.4 and after the
+  `Amendment 2026-10-18 (M8h)` block at the end of §16.1. The plan is the architect decision CLAUDE.md requires.
+- `docs/operations/local-dev.md`: PDK-137 adds `PADDOCK_RETENTION_UNIT` and `PADDOCK_RETENTION_INTERVAL`, PDK-143
+  adds `PADDOCK_AUDIT_EXPORT_POLL_INTERVAL`, each as a row of the development-only list (section "Only active with
+  `PADDOCK_ENV=development`").
+- `docs/operations/paddockctl.md`: the command row joins the table under "## Commands"; the section "Verifying an
+  evidence package" follows "## Restore commands".
+
+### A9. Cluster cut and order
+
+One cluster branch `cluster/evidence-privacy` from main (after `cluster/server-security` and `cluster/mcp` merged).
+Three lanes; a lane is serial, lanes run in parallel in separate worktrees:
+
+| Lane | Tickets (serial) | Starts |
+| --- | --- | --- |
+| Docs | PDK-135 → PDK-141 | at once |
+| Worker | PDK-136 → PDK-137 → PDK-138 → PDK-139 → PDK-180 | at once |
+| Audit writer and export | PDK-140 → PDK-142 → PDK-143 → {PDK-144 ∥ PDK-148 ∥ PDK-146} → PDK-145 → PDK-147 | at once |
+| Deploy | PDK-149 | at once, independent |
+
+Shared append-only files (`codes.go`, `en.json`/`de.json`, `admin.yaml`, `isolation_fixtures.go`,
+`monitoring.md`, `alerts.yml`, `alerts_test.yml`) collide between the worker and the export lane; the second
+ticket to merge rebases onto the cluster head. PDK-145 needs PDK-144 and PDK-148 merged (download link, keys card);
+PDK-146 needs PDK-143 (`pkg/auditevidence`); PDK-147 is last. The heavy local gate at the cluster's end, on the
+long-lived development stack, covers only what CI does not: `make e2e` (whole suite incl. `auditExports.spec.ts`
+and `accessibility.spec.ts`), skill `frontend-verify` for `/settings/privacy` and `/audit/exports` as admin and
+auditor, and one targeted rerun `make acceptance T='TestRetention|TestReadAccessAudit|TestAuditIndexPurge|
+TestAuditEvidenceExport|TestLoginHistory'`. No VM system test (nothing on the agent changes), no disruptive gate.
+
+### A10. Stop conditions added
+
+- A migration number of A2 is already taken on the cluster head or main.
+- `worker.LoginHistory` is referenced by code outside `server/cmd/paddock-server/worker.go` and
+  `server/internal/worker/` (PDK-137 deletes it).
+- A residual-risk number RR-94 to RR-96 exists on main when PDK-135 starts.
+- `audit.Actor` or `audit.Event` gained a field that changes the stored event JSON of existing objects
+  (`events.jsonl` must stay byte-identical to the WORM objects).

@@ -1,5 +1,5 @@
 # 0016 — Operations: backup (A11), observability (A12), deployment
-Status: Proposed
+Status: Accepted (architect, 2026-10-29; implemented by plans M6a and M6d)
 
 ## Context
 A11: tested restore, stated RPO/RTO, audit store excluded from routine restore. A12: metrics, health, tracing separate
@@ -18,3 +18,14 @@ with two hosts (control plane, audit domain); no Compose-only behaviour that wou
 
 ## Consequences
 + Clear recovery objectives. − Two-host minimum for production to satisfy separation of duties.
+
+## Amendment 2026-10-29 (plan M6d, decision 6)
+The backup design above is implemented as plan M6a describes (pgBackRest with WAL archive and daily verified full
+backups per stanza, OpenBao snapshots, Fleet dumps, quarterly restore drill) and the status moves to Accepted. One
+rule is added: a pgBackRest stanza follows the cluster it backs up. When the stanza already exists in the repository
+for another cluster (a different PostgreSQL major or system identifier — a fresh installation into a kept backup
+bucket), the backup service runs `stanza-upgrade` instead of failing; the older backup sets stay in the repository
+until retention expires them and are not restorable into the new cluster. A PostgreSQL major upgrade is a fresh
+installation without a product upgrade path (maintainer decision 2026-10-29); pgBackRest's own PostgreSQL support
+is verified against the sources before each major (`PG_CONTROL_VERSION`, `XLOG_PAGE_MAGIC`), not assumed from the
+package's label.
