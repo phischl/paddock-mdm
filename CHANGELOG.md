@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Uninstall (PDK-357): when cancelling an uninstall, or requesting a new one over an overdue request, fails after the
+  server had already reserved the device's command result, the reservation is now released. Before, the device's
+  later result was refused as a conflict although the command was still open, so the removal never started and the
+  request only ended when it expired.
 - A corrupt or unreadable supervisor-upgrade marker no longer keeps a device out of every agent and supervisor
   rollout (PDK-337): like the removal of Paddock, an agent update and a further supervisor upgrade wait for such a
   marker only until its modification time is older than 30 minutes, then go ahead and log a warning.
