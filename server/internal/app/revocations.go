@@ -127,7 +127,7 @@ func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.
 		if cancelled, withdrawn, err = r.cancelUninstall(ctx, q, rec, claims, dev, now); err != nil {
 			return err
 		}
-		conversion, err = withdrawConversion(ctx, q, claims, rec, dev.ID, now)
+		conversion, err = withdrawConversion(ctx, q, claims, rec, dev.ID, now, false)
 		return err
 	})
 	claims.releaseOn(ctx, err)

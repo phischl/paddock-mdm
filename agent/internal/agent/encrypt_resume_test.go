@@ -1736,3 +1736,23 @@ func TestCompletedNoticeUnreadableHeader(t *testing.T) {
 		t.Fatalf("after 4 hours: notified %q, header dumps %d", *runs, dumps)
 	}
 }
+
+// TestRevocationStopEmptyUnitState: review 5 of PDK-245 (amendment item 14) — a systemctl is-active that prints nothing
+// (no bus) is no stopped helper: the hand-over keeps polling until helperStopWait ends and the helper stays marked
+// running, because it may still run.
+func TestRevocationStopEmptyUnitState(t *testing.T) {
+	a, d, _ := convertedAgent(t)
+	d.set(func(d *convDevice) { d.unit, d.stopStuck = "", true })
+	a.helperRunning = true
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	a.d.Now = func() time.Time { return now }
+	slept := time.Duration(0)
+	a.d.Sleep = func(_ context.Context, dur time.Duration) error {
+		now, slept = now.Add(dur), slept+dur
+		return nil
+	}
+	a.stopResumeHelper(context.Background())
+	if slept < helperStopWait || !a.helperRunning {
+		t.Fatalf("waited %v, helperRunning %v", slept, a.helperRunning)
+	}
+}

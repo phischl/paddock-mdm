@@ -92,6 +92,7 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 	spec.Params = map[string]any{"mode": in.Mode, "clear_tpm": in.ClearTPM, "keep_local_admin": in.KeepLocalAdmin, "reason": in.Reason}
 	var out pgstore.Device
 	var withdrawn uuid.UUID
+	claims := newResultClaims(u.cache, deviceID)
 	err := u.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		// overdue is the delivered command of an overdue request, withdrawn only after every check passed: the result
 		// claim lives in Valkey and survives a rollback (review 3 finding G).
@@ -158,7 +159,7 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 		}
 		now := u.now()
 		if overdue.ID != uuid.Nil {
-			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, nil, deviceID, overdue, now)
+			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, claims, deviceID, overdue, now)
 			if err != nil {
 				return err
 			}
@@ -179,6 +180,7 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 			Mode: &in.Mode, CommandID: uuid.NullUUID{UUID: cmd.ID, Valid: true}})
 		return err
 	})
+	claims.releaseOn(ctx, err)
 	if err == nil {
 		dropWithdrawnCommand(ctx, u.cache, deviceID, withdrawn)
 	}
@@ -215,6 +217,7 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
 	var out pgstore.Device
 	var withdrawn uuid.UUID
+	claims := newResultClaims(u.cache, deviceID)
 	err := u.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		dev, err := q.LockDevice(ctx, deviceID)
 		if err != nil {
@@ -244,7 +247,7 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 		switch {
 		case cmd.Status == devicecommand.StatusSucceeded && overdue:
 		case cmd.Status == devicecommand.StatusPending || (cmd.Status == devicecommand.StatusDelivered && overdue):
-			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, nil, deviceID, cmd, now)
+			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, claims, deviceID, cmd, now)
 			if err != nil {
 				return err
 			}
@@ -275,6 +278,7 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 		out, err = q.ClearDeviceUninstall(ctx, deviceID)
 		return err
 	})
+	claims.releaseOn(ctx, err)
 	if err == nil {
 		dropWithdrawnCommand(ctx, u.cache, deviceID, withdrawn)
 	}
