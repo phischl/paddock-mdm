@@ -61,6 +61,10 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 
 ### Changed
 
+- CI: the acceptance gates run in four parallel shards (was three), balanced by the median durations of eight recent
+  CI runs, so a pull request waits about 41 instead of up to 75 minutes for its slowest acceptance job. The gates
+  themselves are unchanged. The shard check now fails on a listed test it cannot parse instead of leaving it out, and
+  a failed disruptive/e2e job prints Fleet's full log again (PDK-361). No operator step.
 - CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
   weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
   tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the
