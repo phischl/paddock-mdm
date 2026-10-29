@@ -142,6 +142,9 @@ jobs:
           BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
           PADDOCK_CI_BUILD_CACHE: ${{ runner.temp }}/image-cache
           PADDOCK_CI_BUILD_CACHE_EXPORT: ${{ steps.image-cache.outputs.cache-hit != 'true' && '1' || '' }}
+          # Compose builds through Bake, which refuses a local cache outside the working directory without an fs
+          # entitlement that Compose cannot pass; the cache directory is this job's own (PDK-510).
+          BUILDX_BAKE_ENTITLEMENTS_FS: "0"
       - name: Replace the image layer cache with this run's export
         if: steps.image-cache.outputs.cache-hit != 'true'
         run: rm -rf "$RUNNER_TEMP/image-cache/layers" && mv "$RUNNER_TEMP/image-cache/layers.new" "$RUNNER_TEMP/image-cache/layers"
@@ -201,6 +204,9 @@ jobs:
           BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
           PADDOCK_CI_BUILD_CACHE: ${{ runner.temp }}/image-cache
           PADDOCK_CI_BUILD_CACHE_EXPORT: ${{ steps.image-cache.outputs.cache-hit != 'true' && '1' || '' }}
+          # Compose builds through Bake, which refuses a local cache outside the working directory without an fs
+          # entitlement that Compose cannot pass; the cache directory is this job's own (PDK-510).
+          BUILDX_BAKE_ENTITLEMENTS_FS: "0"
       - name: Replace the image layer cache with this run's export
         if: steps.image-cache.outputs.cache-hit != 'true'
         run: rm -rf "$RUNNER_TEMP/image-cache/layers" && mv "$RUNNER_TEMP/image-cache/layers.new" "$RUNNER_TEMP/image-cache/layers"
