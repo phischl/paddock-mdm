@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Portal: when *End all sessions* ends the portal sessions but the identity provider's sessions cannot be ended (502
   `upstream_unavailable`), the page now says so and asks to run *End all sessions* again (PDK-321).
+- Minor and patch updates of libraries: the portal uses Vuetify 4.3.0 (was 4.2.6) and is linted with ESLint 10.13.0
+  and typescript-eslint 8.72.0 (were 10.12.0 and 8.71.2); the server validates requests against the API contract with
+  kin-openapi 0.152.0 (was 0.151.0) and uses the oapi-codegen runtime 1.8.0 (was 1.7.0). Schema: unchanged.
 - Linter pinned to golangci-lint v2.15.0 (PDK-348). The supervisor now logs the agent's exit status
   (`agent stopped`, with `killed: true` when the agent ignored SIGTERM for 10 seconds) when it stops the agent for a
   switch, a rollback or shutdown.
@@ -76,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
   could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
+- undici 6.29.1 in the portal's build tooling (was 6.29.0; CVE-2026-109383, CVE-2026-87018 and CVE-2026-109869, high;
+  CVE-2026-109932, medium). undici is only used while the portal is built and never ships with the server.
 
 ## [0.1.0-alpha.6] - 2026-10-27
 
