@@ -59,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Portal: while a new organization is being created, the *New organization* dialog says that the identity provider
+  is being set up and that this can take up to a minute (the create waits for that setup, bounded at 60 s); the
+  *Create* button stays disabled meanwhile (PDK-407).
 - Lab smoke test: runs against nginx 1.31.8 (was 1.28.3) and from now on follows the nginx mainline line (ADR 0029
   amendment 2026-10-28). No operator step: the image is a tooling image, is not part of the operator bundle, and the
   shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).
