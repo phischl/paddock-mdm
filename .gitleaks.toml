@@ -44,6 +44,14 @@ regexTarget = "secret"
 regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
 
 [[allowlists]]
+description = "Isolation gate unit test (PDK-443): the actor id of the fictional API token is a UUID, not a credential"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^(b/)?test/acceptance/isolation_test\.go$''']
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
+
+[[allowlists]]
 description = "Admin device test: the fake bundle key source returns a fixed Ed25519 public key"
 condition = "AND"
 targetRules = ["generic-api-key"]
