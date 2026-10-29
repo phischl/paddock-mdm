@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -190,10 +191,83 @@ const roleGroupAttempts = 3
 // the listing shifts the next page and another member could be skipped: the listing is ordered by pk and repeated when
 // the total changed between pages or does not match what was read, and fails if it never settles.
 func (c *Client) RoleGroupUsers(ctx context.Context, groupName string) ([]ports.IdentityUser, error) {
-	out, err := c.settledUsers(ctx, url.Values{"groups_by_name": {groupName}}, groupName)
+	return c.groupMembers(ctx, []string{groupName}, groupName)
+}
+
+// roleGroupsQueryBytes bounds the encoded group names of one listing of RoleGroupsUsers, so the request line stays
+// far below the limits of proxies and of Authentik's HTTP server (16 KiB for the request head).
+const roleGroupsQueryBytes = 4096
+
+// RoleGroupsUsers lists the direct members of the groups groupNames with one settled listing per batch of names
+// instead of one per group, so ending all sessions does not grow by a call per role group (PDK-501). Authentik
+// filters by several names at once and refuses the whole batch when it does not know one of them; the groups that do
+// not exist are skipped (existingGroupsMembers). A user in groups of several batches is listed once per batch.
+func (c *Client) RoleGroupsUsers(ctx context.Context, groupNames []string) ([]ports.IdentityUser, error) {
+	var out []ports.IdentityUser
+	for len(groupNames) > 0 {
+		n, size := 0, 0
+		for n < len(groupNames) {
+			param := len("&groups_by_name=") + len(url.QueryEscape(groupNames[n]))
+			if n > 0 && size+param > roleGroupsQueryBytes {
+				break
+			}
+			size += param
+			n++
+		}
+		users, err := c.existingGroupsMembers(ctx, groupNames[:n])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, users...)
+		groupNames = groupNames[n:]
+	}
+	return out, nil
+}
+
+// existingGroupsMembers lists the direct members of the groups names, skipping the groups that do not exist. Authentik
+// names the first unknown group in its refusal: that group is dropped and the rest listed again, so each missing group
+// costs one listing. A refusal that names none of them (a changed message) halves the batch instead.
+func (c *Client) existingGroupsMembers(ctx context.Context, names []string) ([]ports.IdentityUser, error) {
+	for len(names) > 0 {
+		users, err := c.groupMembers(ctx, names, fmt.Sprintf("%d role groups from %s", len(names), names[0]))
+		var missing *missingGroup
+		if !errors.As(err, &missing) {
+			return users, err
+		}
+		if len(names) == 1 {
+			return nil, nil
+		}
+		if i := slices.IndexFunc(names, func(n string) bool { return strings.Contains(missing.body, " "+n+" ") }); i >= 0 {
+			names = slices.Delete(slices.Clone(names), i, i+1)
+			continue
+		}
+		first, err := c.existingGroupsMembers(ctx, names[:len(names)/2])
+		if err != nil {
+			return nil, err
+		}
+		second, err := c.existingGroupsMembers(ctx, names[len(names)/2:])
+		if err != nil {
+			return nil, err
+		}
+		return append(first, second...), nil
+	}
+	return nil, nil
+}
+
+// missingGroup is Authentik's refusal of a group name it does not know; body is the refusal, which names the group.
+type missingGroup struct{ what, body string }
+
+func (e *missingGroup) Error() string { return e.what + ": " + ports.ErrGroupNotFound.Error() }
+
+func (e *missingGroup) Unwrap() error { return ports.ErrGroupNotFound }
+
+// groupMembers lists the direct members of any of the groups names in one settled listing; what names them in an
+// error. Authentik refuses a filter on a group name it does not know with 400 on groups_by_name: ErrGroupNotFound.
+func (c *Client) groupMembers(ctx context.Context, names []string, what string) ([]ports.IdentityUser, error) {
+	out, err := c.settledUsers(ctx, url.Values{"groups_by_name": names}, what)
 	var st *errStatus
 	if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
-		return nil, fmt.Errorf("%s: %w", groupName, ports.ErrGroupNotFound)
+		return nil, &missingGroup{what: what, body: st.body}
 	}
 	return out, err
 }

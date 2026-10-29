@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -28,7 +27,7 @@ type IdentitySessionEnder interface {
 }
 
 // PortalUserLister lists the identity provider's users who hold a portal role: the platform admins group and the
-// three role groups of every organization (ports.UserDirectory.RoleGroupUsers for each).
+// three role groups of every organization.
 type PortalUserLister interface {
 	PortalUsers(ctx context.Context) ([]ports.IdentityUser, error)
 }
@@ -86,7 +85,7 @@ func (s *Sessions) endAll(ctx context.Context, spec ActionSpec) (int64, error) {
 	)
 	// The calls to Valkey and Authentik run outside any transaction (RunExternal): the started action is committed
 	// first, so a crash in between leaves an action the reaper records as unknown, and no transaction stays open for
-	// 1 + 3 × organizations directory calls (plan M8f decision 16, amended 2026-10-18).
+	// the directory calls (plan M8f decision 16, amended 2026-10-18).
 	err := s.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(context.Context, *pgstore.Queries, Recorder) error { return nil },
 		func(ctx context.Context) error {
@@ -169,20 +168,28 @@ func (s *Sessions) countIdentitySessions(ctx context.Context, pks []string) int 
 	return n
 }
 
+// RoleGroupsDirectory lists the members of many role groups at once (authentik.Client).
+type RoleGroupsDirectory interface {
+	// RoleGroupsUsers lists the direct members of the groups names in a number of calls that does not grow with each
+	// group (PDK-501); a group that does not exist is skipped, and a user may be listed more than once.
+	RoleGroupsUsers(ctx context.Context, names []string) ([]ports.IdentityUser, error)
+}
+
 // PortalUsers lists the identity provider's portal users: the members of the platform admins group and of the role
 // groups of every organization, each user once.
 type PortalUsers struct {
 	platform *db.PlatformPool
-	dir      ports.UserDirectory
+	dir      RoleGroupsDirectory
 }
 
 // NewPortalUsers creates the lister.
-func NewPortalUsers(platform *db.PlatformPool, dir ports.UserDirectory) *PortalUsers {
+func NewPortalUsers(platform *db.PlatformPool, dir RoleGroupsDirectory) *PortalUsers {
 	return &PortalUsers{platform: platform, dir: dir}
 }
 
 // PortalUsers implements PortalUserLister. A role group that does not exist (an organization whose groups are not
-// provisioned yet) is skipped.
+// provisioned yet) is skipped. The groups are listed together, not one call after another: with one call per group,
+// about 90 organizations exceeded the request's budget (PDK-501).
 func (p *PortalUsers) PortalUsers(ctx context.Context) ([]ports.IdentityUser, error) {
 	var slugs []string
 	err := p.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -197,28 +204,23 @@ func (p *PortalUsers) PortalUsers(ctx context.Context) ([]ports.IdentityUser, er
 }
 
 // portalUsers lists the members of the platform admins group and of the role groups of the organizations slugs.
-func portalUsers(ctx context.Context, dir ports.UserDirectory, slugs []string) ([]ports.IdentityUser, error) {
+func portalUsers(ctx context.Context, dir RoleGroupsDirectory, slugs []string) ([]ports.IdentityUser, error) {
 	groups := []string{organization.PlatformAdminsGroup()}
 	for _, slug := range slugs {
 		for _, g := range []organization.GroupRole{organization.GroupAdmins, organization.GroupOperators, organization.GroupAuditors} {
 			groups = append(groups, organization.RoleGroup(slug, g))
 		}
 	}
+	members, err := dir.RoleGroupsUsers(ctx, groups)
+	if err != nil {
+		return nil, fmt.Errorf("role groups: %w", err)
+	}
 	seen := map[string]bool{}
 	var out []ports.IdentityUser
-	for _, g := range groups {
-		members, err := dir.RoleGroupUsers(ctx, g)
-		if errors.Is(err, ports.ErrGroupNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("role group %s: %w", g, err)
-		}
-		for _, m := range members {
-			if !seen[m.PK] {
-				seen[m.PK] = true
-				out = append(out, m)
-			}
+	for _, m := range members {
+		if !seen[m.PK] {
+			seen[m.PK] = true
+			out = append(out, m)
 		}
 	}
 	return out, nil

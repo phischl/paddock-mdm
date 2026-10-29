@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -542,6 +543,78 @@ func TestRoleGroupUsers(t *testing.T) {
 	}
 	if _, _, found, err := c.UserMembership(ctx, "dave@acme.test", "uid-910"); err != nil || found {
 		t.Fatalf("membership with another UID: %v %v", found, err)
+	}
+}
+
+// TestRoleGroupsUsersManyOrganizations (PDK-501): the members of the role groups of 150 organizations come from a
+// handful of listings, not one per group, with request targets far below the limit of a request head; the groups of
+// organizations not provisioned yet are skipped, and any other error fails the listing.
+func TestRoleGroupsUsersManyOrganizations(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	group := func(name string) string {
+		pk := uuid.NewString()
+		f.groups[pk] = &fakeGroup{pk: pk, name: name}
+		return pk
+	}
+	everywhere := &fakeUser{pk: 100, username: "root"}
+	f.users[100] = everywhere
+	everywhere.groups = append(everywhere.groups, group("paddock.platform.admins"))
+	names := []string{"paddock.platform.admins"}
+	want := map[string]bool{"100": true}
+	for i := range 150 {
+		slug := fmt.Sprintf("organization-with-a-long-slug-%03d", i)
+		for j, role := range []string{"admins", "operators", "auditors"} {
+			name := "paddock." + slug + "." + role
+			names = append(names, name)
+			if i%50 == 7 {
+				continue
+			}
+			pk := group(name)
+			member := 1000 + 3*i + j
+			f.users[member] = &fakeUser{pk: member, username: name, groups: []string{pk}}
+			want[strconv.Itoa(member)] = true
+			if j == 0 {
+				everywhere.groups = append(everywhere.groups, pk)
+			}
+		}
+	}
+	f.users[99] = &fakeUser{pk: 99, username: "no-role", groups: []string{group("paddock.organization-with-a-long-slug-000")}}
+	f.requests = nil
+	users, err := c.RoleGroupsUsers(ctx, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	distinct := func(users []ports.IdentityUser) map[string]bool {
+		out := map[string]bool{}
+		for _, u := range users {
+			out[u.PK] = true
+		}
+		return out
+	}
+	if got := distinct(users); !maps.Equal(got, want) {
+		t.Fatalf("%d distinct members, want %d", len(got), len(want))
+	}
+	// About 60 names fit one listing; each of the 9 missing groups costs one listing more.
+	if n := f.count("GET /api/v3/core/users/"); n > 20 {
+		t.Fatalf("%d listings for %d role groups, want a handful", n, len(names))
+	}
+	if f.longestURI > 8192 {
+		t.Fatalf("a request target of %d bytes", f.longestURI)
+	}
+	// A refusal that does not name the missing group halves the batch until the group is found.
+	f.unnamedGroupRefusal, f.requests = true, nil
+	if users, err = c.RoleGroupsUsers(ctx, names); err != nil || !maps.Equal(distinct(users), want) {
+		t.Fatalf("%d distinct members, %v", len(distinct(users)), err)
+	}
+	if n := f.count("GET /api/v3/core/users/"); n >= len(names) {
+		t.Fatalf("%d listings for %d role groups when the refusal names no group", n, len(names))
+	}
+	f.unnamedGroupRefusal = false
+	f.failOnce = map[string]int{"GET /api/v3/core/users/": http.StatusForbidden}
+	if _, err := c.RoleGroupsUsers(ctx, names); err == nil || errors.Is(err, ports.ErrGroupNotFound) {
+		t.Fatalf("a refused listing: %v", err)
 	}
 }
 
