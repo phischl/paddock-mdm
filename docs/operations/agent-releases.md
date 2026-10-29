@@ -221,6 +221,19 @@ supervisors order the versions by SemVer precedence (`0.1.0-alpha.1 < 0.1.0-alph
 NNNNN–NNNNN` (the migrations of both databases since the previous release). The release manager checks it before
 tagging; `docs/operations/upgrade.md` decides the rollback by it.
 
+**Changelog.** Merged changes keep their entries as fragment files in `changelog.d/` (`changelog.d/README.md`), not in
+`CHANGELOG.md`. Before tagging, the release manager assembles them in a release commit:
+
+1. `make changelog-preview` prints the section the release would get; `make changelog-check` (part of `make lint`)
+   validates the fragments.
+2. `make changelog RELEASE_VERSION=<version> SCHEMA="<text>"`, with `<text>` `unchanged` or
+   `migrations NNNNN–NNNNN …`: merges the fragments and the entries already under `[Unreleased]` into the
+   sections `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`, renames the heading to
+   `## [<version>] - <today>` with the line `Schema: <text>.`, adds a new empty `## [Unreleased]` and removes the
+   fragments with `git rm`. It refuses a missing `RELEASE_VERSION` or `SCHEMA` and a version that already has a section.
+3. Write the release summary under the new heading (upgrade order, Fleet version, the schema details), review the
+   section and commit it together with the removed fragments; then tag the commit.
+
 The images are pushed before `release-sign` runs, so a run that fails between the two leaves unsigned images under the
 release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and consumers verify the
 signature (`cosign verify`, below) instead of trusting the tag, so an unsigned image fails verification. Re-run the
