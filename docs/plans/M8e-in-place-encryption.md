@@ -1252,6 +1252,8 @@ blocker. What changes:
     conversion (a presumed-lost device must stay retirable). The registry entries of `device.retired` and
     `revocation.requested` (`codes.go`) gain the params `conversion_cancelled`, `conversion_id`, `conversion_phase`
     (closed values: `before_delivery`; `requested | prepared | encrypting`).
+
+    Amendment 2026-10-28 (PDK-396): Retire also closes a conversion in phase prepared or with a pending abort as cancelled and withdraws a pending encrypt_disk_abort; one audit event.
 39. **Lock and Destroy precedence** (plan M8d §15.4 decision 37, mirrored). Lock and Destroy are never blocked by
     a conversion. `Revocations.Request` (`app/revocations.go`), in its transaction and under the device's row lock:
     an undelivered `encrypt_disk` command is withdrawn as in decision 8 (`ClaimResult(cancelled)`,

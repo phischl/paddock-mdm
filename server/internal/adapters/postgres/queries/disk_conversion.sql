@@ -34,6 +34,12 @@ SELECT phase FROM device_disk_conversion WHERE id = @id FOR UPDATE;
 UPDATE device_disk_conversion SET phase = 'cancelled', phase_at = @at::timestamptz, finished_at = @at::timestamptz
 WHERE id = @id AND phase = 'requested';
 
+-- name: CloseDiskConversion :execrows
+-- A Retire closes a prepared conversion or one with an abort on its way (plan M8e §14.5 decision 38, amendment
+-- 2026-10-28).
+UPDATE device_disk_conversion SET phase = 'cancelled', phase_at = @at::timestamptz, finished_at = @at::timestamptz
+WHERE id = @id AND phase IN ('requested','prepared');
+
 -- name: SetDiskConversionAbort :execrows
 UPDATE device_disk_conversion SET abort_command_id = @abort_command_id, abort_refused_reason = NULL
 WHERE id = @id AND phase IN ('requested','prepared');
