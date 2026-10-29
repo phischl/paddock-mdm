@@ -307,6 +307,21 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	if choice == "" && len(res.Choices) > 0 {
 		choice = organization.ChoiceOrganization
 	}
+	// A stale organization group must not lock a platform administrator out: a plain sign-in of a two-role identity
+	// whose organization is not active enters the platform role and says so (ADR 0045 amendment 2026-10-29). A switch
+	// keeps the role it asked for and is refused instead.
+	var fallback string
+	if !switching && !res.Denied && len(res.Choices) > 0 {
+		orgID, err := b.accounts.OrganizationID(ctx, res.Slug)
+		if err != nil {
+			slog.ErrorContext(ctx, "login failed", "error", err)
+			denied(w, r, app.ReasonLoginFailed)
+			return
+		}
+		if orgID == uuid.Nil {
+			choice, fallback = organization.ChoicePlatform, app.FallbackOrganizationInactive
+		}
+	}
 	role := res
 	if !res.Denied {
 		active, ok := res.Active(choice)
@@ -351,7 +366,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := b.accounts.Login(ctx,
 		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip, OpenSession: openSession,
-			PreviousRole: previousRole},
+			PreviousRole: previousRole, Fallback: fallback},
 		app.LoginRole{Platform: role.Platform, Slug: role.Slug, Role: role.Role, Denied: role.Denied, Slugs: role.Slugs,
 			DenialReason: string(role.Reason)})
 	if errors.Is(err, problem.Forbidden) {
@@ -369,6 +384,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	sess := NewSession(p, sid, result.Locale, now)
 	altRole, altSlug := res.Alternate(choice)
 	sess.AltRole, sess.AltSlug = string(altRole), altSlug
+	sess.Fallback = fallback
 	value, err := b.keys.Seal(SessionCookie, sess)
 	if err != nil {
 		discard()

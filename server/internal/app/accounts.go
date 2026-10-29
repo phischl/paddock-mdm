@@ -56,7 +56,15 @@ type LoginIdentity struct {
 	// Renewal marks an MCP login that renews a session from a refreshed token pair (ADR 0044 amendment 2026-10-28);
 	// it is recorded as the admin.login param renewal.
 	Renewal bool
+	// Fallback names why a plain sign-in of a two-role identity entered the platform role instead of its organization
+	// role (ADR 0045 amendment 2026-10-29): FallbackOrganizationInactive or "". It is recorded as the admin.login param
+	// fallback.
+	Fallback string
 }
+
+// FallbackOrganizationInactive is the admin.login param fallback of a plain sign-in that entered the platform role
+// because the identity's organization is unknown or not active (ADR 0045 amendment 2026-10-29).
+const FallbackOrganizationInactive = "organization_inactive"
 
 // ErrAmbiguousRole: Login was called with a LoginRole that names the platform role and an organization role.
 var ErrAmbiguousRole = errors.New("app: login role names more than one role")
@@ -211,9 +219,12 @@ func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginRe
 }
 
 // loginParams adds the channel to the params of a successful admin.login, renewal when it renews an MCP session, and
-// previous_role when the login is a role switch.
+// previous_role when the login is a role switch, and fallback when a plain sign-in fell back to the platform role.
 func (id LoginIdentity) loginParams(params map[string]any) map[string]any {
 	params["channel"] = id.channel()
+	if id.Fallback != "" {
+		params["fallback"] = id.Fallback
+	}
 	if id.Renewal {
 		params["renewal"] = true
 	}

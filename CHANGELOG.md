@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Sign-in of an identity with the platform role and an organization role (ADR 0045 amendment 2026-10-29, PDK-458):
+  when the organization is unknown or not active, a plain sign-in now enters the platform role instead of
+  being refused, so a stale organization group no longer locks a platform administrator out. The `admin.login` event
+  carries the new param `fallback: organization_inactive`, `GET /api/v1/me` answers the new optional field
+  `role_fallback`, and the portal shows a notice for the whole session. A switch to the organization role stays
+  refused with `organization_inactive`.
 - CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
   weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
   tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the
