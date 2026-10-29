@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   platform tools (grouped by area, filterable; step-up operations are shown as portal only). Without a saved policy
   the page says that the MCP is switched off. Saving is confirmed and needs a step-up. There is no token page:
   administrators connect with `paddockctl mcp login`.
+- Portal page *Settings › MCP* (ADR 0044, PDK-440) at `/settings/mcp` in the organization group: organization
+  administrators switch the MCP on or off, allow or refuse changes through the MCP and choose between all tools and
+  a selection from the tool catalog (grouped by area, with a filter; step-up actions are listed as *portal only*).
+  Saving asks for confirmation and a step-up. The page names `paddockctl mcp login` as the way to connect; operators
+  and auditors see the policy read-only. The audit log shows an *MCP* chip and the MCP client's name on events of an
+  MCP session.
 
 ### Changed
 

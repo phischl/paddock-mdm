@@ -104,7 +104,8 @@
     "attentionPill": "{count, plural, one {# braucht Aufmerksamkeit} other {# brauchen Aufmerksamkeit}}",
     "shortcut": "Tastenkürzel: {keys}",
     "securityReview": "Sicherheitsprüfung",
-    "operatorRoots": "Freigegebene Verzeichnisse"
+    "operatorRoots": "Freigegebene Verzeichnisse",
+    "mcpSettings": "MCP"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -246,7 +247,12 @@
     "release_source_unavailable": "Die Release-Quelle hat nicht geantwortet. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
     "release_not_newer": "Diese Version ist nicht neuer als das neueste veröffentlichte Release.",
     "release_incomplete": "Dem Release in der Quelle fehlt eine erforderliche Datei oder Signatur.",
-    "release_signature_mismatch": "Eine Datei des Releases passt nicht zum öffentlichen Release-Schlüssel; nichts wurde gespeichert."
+    "release_signature_mismatch": "Eine Datei des Releases passt nicht zum öffentlichen Release-Schlüssel; nichts wurde gespeichert.",
+    "mcp_disabled": "Der MCP ist für diesen Bereich ausgeschaltet.",
+    "mcp_tool_not_allowed": "Diese Operation ist über den MCP nicht erlaubt.",
+    "mcp_write_not_enabled": "Änderungen über den MCP sind nicht freigegeben.",
+    "mcp_login_required": "Melde dich erneut mit paddockctl mcp login an.",
+    "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal."
   },
   "audit": {
     "retention": {
@@ -491,7 +497,8 @@
       "actor_ip": "IP-Adresse",
       "step_up": "Identitätsbestätigung",
       "error_code": "Fehlercode"
-    }
+    },
+    "sourceMcp": "MCP"
   },
   "organizations": {
     "title": "Organisationen",
@@ -2163,10 +2170,10 @@
   },
   "mcp": {
     "title": "KI-Assistenten (MCP)",
-    "intro": "Administratoren melden sich mit ihrem Paddock-Konto am MCP an (`paddockctl mcp login`) und handeln mit ihrer eigenen Rolle. Diese Richtlinie begrenzt, was jede MCP-Sitzung dieser {scope} tun darf. Änderungen brauchen zusätzlich den eigenen Schreibzugriff des Administrators.",
+    "intro": "Administratoren melden sich mit ihrem Paddock-Konto beim MCP an (`paddockctl mcp login`) und handeln mit ihrer eigenen Rolle. Diese Richtlinie begrenzt, was jede MCP-Sitzung dieser {scope} tun darf. Änderungen brauchen zusätzlich den eigenen Schreibzugriff des Administrators.",
     "connectHint": "Um einen Assistenten anzubinden, führen Sie `paddockctl mcp login` aus und tragen `paddockctl mcp` in Ihrem MCP-Client ein. Details stehen im Betriebshandbuch.",
-    "enabled": "MCP aktiviert",
-    "writeEnabled": "Änderungen über das MCP erlauben",
+    "enabled": "MCP eingeschaltet",
+    "writeEnabled": "Änderungen über den MCP erlauben",
     "mode": {
       "all": "Alle Werkzeuge, die die API anbietet",
       "selected": "Nur ausgewählte Werkzeuge"
@@ -2179,8 +2186,8 @@
       "write": "schreiben"
     },
     "portalOnly": "nur im Portal (Step-up)",
-    "defaultsHint": "Noch keine Richtlinie gespeichert: Das MCP ist für diese {scope} ausgeschaltet. Aktivieren Sie es und speichern Sie die Richtlinie, um MCP-Sitzungen zuzulassen.",
-    "disabledHint": "Das MCP ist ausgeschaltet: Jede MCP-Sitzung dieser {scope} wird abgewiesen.",
+    "defaultsHint": "Noch keine Richtlinie gespeichert: Der MCP ist für diese {scope} ausgeschaltet. Schalten Sie ihn ein und speichern Sie die Richtlinie, um MCP-Sitzungen zuzulassen.",
+    "disabledHint": "Der MCP ist ausgeschaltet: Jede MCP-Sitzung dieser {scope} wird abgewiesen.",
     "save": "Richtlinie speichern",
     "saved": "MCP-Richtlinie gespeichert.",
     "confirm": {
@@ -2188,7 +2195,11 @@
       "message": "{count} Werkzeuge stehen MCP-Sitzungen dieser {scope} zur Verfügung; Änderungen {writes, select, allowed {bleiben möglich} other {werden abgewiesen}}."
     },
     "scope": {
-      "platform": "Plattform"
-    }
+      "platform": "Plattform",
+      "organization": "Organisation"
+    },
+    "guide": "Betriebshandbuch: MCP",
+    "legend": "MCP-Richtlinie",
+    "selectAtLeastOne": "Wählen Sie mindestens ein Werkzeug aus oder erlauben Sie alle Werkzeuge."
   }
 }

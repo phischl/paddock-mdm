@@ -104,7 +104,8 @@
     "attentionPill": "{count, plural, one {# needs attention} other {# need attention}}",
     "shortcut": "Shortcut: {keys}",
     "securityReview": "Security review",
-    "operatorRoots": "Operator roots"
+    "operatorRoots": "Operator roots",
+    "mcpSettings": "MCP"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -246,7 +247,12 @@
     "release_source_unavailable": "The release source did not answer. Check the connection and try again.",
     "release_not_newer": "This version is not newer than the newest published release.",
     "release_incomplete": "The release on the source lacks a required file or signature.",
-    "release_signature_mismatch": "A file of the release does not match the release public key; nothing was stored."
+    "release_signature_mismatch": "A file of the release does not match the release public key; nothing was stored.",
+    "mcp_disabled": "The MCP is disabled for this scope.",
+    "mcp_tool_not_allowed": "This operation is not allowed through the MCP.",
+    "mcp_write_not_enabled": "Changes through the MCP are not enabled.",
+    "mcp_login_required": "Sign in again with paddockctl mcp login.",
+    "rate_limited": "Too many requests. Try again shortly."
   },
   "audit": {
     "retention": {
@@ -491,7 +497,8 @@
       "actor_ip": "IP address",
       "step_up": "Step-up",
       "error_code": "Error code"
-    }
+    },
+    "sourceMcp": "MCP"
   },
   "organizations": {
     "title": "Organizations",
@@ -2188,7 +2195,11 @@
       "message": "{count} tools will be available to MCP sessions of this {scope}; changes {writes, select, allowed {stay possible} other {are refused}}."
     },
     "scope": {
-      "platform": "platform"
-    }
+      "platform": "platform",
+      "organization": "organization"
+    },
+    "guide": "Operations guide: MCP",
+    "legend": "MCP policy",
+    "selectAtLeastOne": "Select at least one tool, or allow all tools."
   }
 }
