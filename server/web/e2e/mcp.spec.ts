@@ -6,12 +6,24 @@ import { test } from './cleanup'
 const alice = ['alice@acme.test', 'dev_alice_password', 'dev_alice_totp_key'] as const
 const root = ['platform-admin@paddock.test', 'dev_platform_admin_password', 'dev_platform_admin_totp_key'] as const
 
+/**
+ * Runs start, which triggers an action that needs a step-up. When the session's last step-up is still valid for a
+ * while (GET /api/v1/me step_up_valid_until), the portal does not start a new one and the action runs at once;
+ * otherwise the step-up is completed as user (stepUp would wait forever for a step-up the portal never starts).
+ */
+async function withStepUp(page: Page, start: () => Promise<void>, user: readonly [string, string, string]): Promise<void> {
+  const me = await (await page.request.get('/api/v1/me')).json() as { step_up_valid_until: string | null }
+  const validFor = me.step_up_valid_until ? Date.parse(me.step_up_valid_until) - Date.now() : 0
+  if (validFor > 10_000) await start()
+  else await stepUp(page, start, ...user)
+}
+
 /** Saves the policy form shown on page: confirmation, then the step-up the save needs, then the success message. */
 async function savePolicy(page: Page, user: readonly [string, string, string]): Promise<void> {
   await page.getByTestId('save-mcp').click()
   const confirm = page.getByRole('dialog', { name: 'Save MCP policy?' })
   await expectAccessible(page)
-  await stepUp(page, () => confirm.getByRole('button', { name: 'Save policy' }).click(), ...user)
+  await withStepUp(page, () => confirm.getByRole('button', { name: 'Save policy' }).click(), user)
   await expect(page.getByTestId('mcp-saved')).toBeVisible()
 }
 
@@ -67,7 +79,7 @@ test('organization admin sets the MCP policy and their own write access', async 
     await dialog.getByTestId('mcp-write-enable').click()
     const confirm = page.getByRole('dialog', { name: 'Enable write access for AI assistants?' })
     await expectAccessible(page)
-    await stepUp(page, () => confirm.getByRole('button', { name: 'Enable write access' }).click(), ...alice)
+    await withStepUp(page, () => confirm.getByRole('button', { name: 'Enable write access' }).click(), alice)
   }
   await expect(page.getByTestId('mcp-write-dialog').getByTestId('mcp-write-state')).toContainText('Write access is enabled since')
   await expectAccessible(page)
