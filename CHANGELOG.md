@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   LTS line since 2026-10-28 (ADR 0015 amendment 2026-10-28). No operator step: Node is a build and tooling image and is
   not part of the operator bundle. `engines.node` stays `>=24` because the Playwright image runs the end-to-end tests
   on Node 24 (PDK-346).
+- Linter pinned to golangci-lint v2.15.0 (PDK-348). The supervisor now logs the agent's exit status
+  (`agent stopped`, with `killed: true` when the agent ignored SIGTERM for 10 seconds) when it stops the agent for a
+  switch, a rollback or shutdown.
 
 ### Fixed
 

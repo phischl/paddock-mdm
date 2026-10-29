@@ -77,7 +77,7 @@ func startUnsealer(t *testing.T, dsn string) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- serveUnsealer(ctx, l, config.Common{OpsAddr: ops}) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() { cancel(); t.Logf("unsealer stopped: %v", <-done) })
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get("http://" + ops + "/readyz") //nolint:noctx // test

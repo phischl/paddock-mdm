@@ -388,7 +388,8 @@ func TestRevocationLockGate(t *testing.T) {
 			return confirmed.Status == "confirmed"
 		})
 		select {
-		case <-ended:
+		case err := <-ended:
+			t.Logf("%s: the user session ended: %v", vm.Name, err)
 		case <-time.After(time.Minute):
 			t.Fatal("the user session survived the Lock")
 		}
