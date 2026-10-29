@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minor and patch updates of libraries: the portal uses Vuetify 4.3.0 (was 4.2.6) and is linted with ESLint 10.13.0
   and typescript-eslint 8.72.0 (were 10.12.0 and 8.71.2); the server validates requests against the API contract with
   kin-openapi 0.152.0 (was 0.151.0) and uses the oapi-codegen runtime 1.8.0 (was 1.7.0). Schema: unchanged.
+- Linter pinned to golangci-lint v2.15.0 (PDK-348). The supervisor now logs the agent's exit status
+  (`agent stopped`, with `killed: true` when the agent ignored SIGTERM for 10 seconds) when it stops the agent for a
+  switch, a rollback or shutdown.
 
 ### Fixed
 
