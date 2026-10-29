@@ -73,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Production and lab installations (PDK-492): the api now finds the MCP login provider at
+  `https://auth.<domain>/application/o/paddock-mcp/`. Before, it looked for it at the development port, never became
+  ready and the installation or upgrade stopped at `./paddock start`. The bundle test refuses an OIDC issuer with an
+  explicit port.
 - MCP login (`paddockctl mcp login`, PDK-489): the device code of the Authentik provider `paddock-mcp` now lives ten
   minutes, as the device logins' do. With Authentik's default of one minute, a sign-in with password and second factor
   could expire before it was confirmed.

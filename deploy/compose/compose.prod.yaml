@@ -76,6 +76,7 @@ services:
       PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN}
       PADDOCK_OIDC_ISSUER: https://auth.${PADDOCK_DOMAIN}/application/o/paddock-portal/
       PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN}/application/o/paddock-portal-stepup/
+      PADDOCK_OIDC_MCP_ISSUER: https://auth.${PADDOCK_DOMAIN}/application/o/paddock-mcp/
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN}
       PADDOCK_OPENBAO_ADDR: https://openbao:8200
       BAO_CACERT: /run/secrets/internal_ca_bundle
