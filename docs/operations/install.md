@@ -276,14 +276,16 @@ refuses a directory it cannot read and names the files. It verifies every signat
 *Agent releases* page, where its staged rollout starts.
 
 **Starting the rollout.** A platform administrator starts the staged rollout on the release page of the portal. The
-host operator can start and halt it on the control plane instead, without a portal account:
+host operator can start, halt and resume it on the control plane instead, without a portal account:
 
 ```sh
 ./paddock agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P] [--failure-threshold-min M]
 ./paddock agent-rollout-halt <version>
+./paddock agent-rollout-resume <version>
 ```
 
-Both print the rollout as JSON and refuse with the API's problem codes; they skip the portal's second factor, so
+A small fleet, such as a one-device lab, starts with `--waves 100` or a short list: the first waves of the default
+list may contain none of its devices. All three print the rollout as JSON and refuse with the API's problem codes; they skip the portal's second factor, so
 shell access to this host decides who may roll out agents (`docs/operations/agent-releases.md` "From the
 control-plane host", residual risk RR-90).
 

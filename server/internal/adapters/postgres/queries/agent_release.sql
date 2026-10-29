@@ -65,6 +65,10 @@ RETURNING *;
 -- name: GetAgentRollout :one
 SELECT * FROM agent_rollout WHERE version = @version;
 
+-- name: LockAgentRollout :one
+-- A rollout under its row lock, so that concurrent halts and resumes see each other's status change (PDK-452).
+SELECT * FROM agent_rollout WHERE version = @version FOR UPDATE;
+
 -- name: SetAgentRolloutStatus :one
 UPDATE agent_rollout SET status = @status, halted_reason = sqlc.narg(halted_reason), updated_at = now()
 WHERE version = @version

@@ -268,3 +268,8 @@ borrowed platform accounts on small installations, which is worse for the audit 
 Consequences: residual risk **RR-90** (*a host operator starts a fleet-wide rollout without a second factor*,
 `docs/compliance/residual-risks.md`); `docs/operations/agent-releases.md` and `install.md` §10 name the host
 commands. Further host commands that bypass the portal's factor need their own amendment.
+
+Addendum 2026-10-29 (PDK-452): resume joins start and halt on the host path (`paddock-server admin
+agent-rollout-resume`, bundle entry point `./paddock agent-rollout-resume <version>`), with the same host-root
+rationale; it only continues an already started rollout (audit code `agent_rollout.resumed`, the rollout's waves and
+thresholds unchanged); RR-90 applies.

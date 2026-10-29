@@ -551,6 +551,33 @@ func (q *Queries) ListRunningAgentRollouts(ctx context.Context) ([]AgentRollout,
 	return items, nil
 }
 
+const lockAgentRollout = `-- name: LockAgentRollout :one
+SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since FROM agent_rollout WHERE version = $1 FOR UPDATE
+`
+
+// A rollout under its row lock, so that concurrent halts and resumes see each other's status change (PDK-452).
+func (q *Queries) LockAgentRollout(ctx context.Context, version string) (AgentRollout, error) {
+	row := q.db.QueryRow(ctx, lockAgentRollout, version)
+	var i AgentRollout
+	err := row.Scan(
+		&i.Version,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.Status,
+		&i.HaltedReason,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+		&i.EvaluationSince,
+	)
+	return i, err
+}
+
 const newestPublishedAgentRelease = `-- name: NewestPublishedAgentRelease :one
 SELECT version, status, created_by, created_at, published_at, version_key FROM agent_release WHERE status = 'published' ORDER BY version_key DESC LIMIT 1
 `

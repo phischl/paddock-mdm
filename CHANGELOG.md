@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limited. `GET /api/v1/me`, `GET /api/v1/mcp/access` (what the caller's MCP sessions may do) and
   `GET /api/v1/mcp/catalog` (the tool catalog) always answer. New metric `paddock_mcp_requests_total{class, result}`.
   An MCP session calling `POST /api/v1/me/mcp-write/enable` or `…/disable` now gets 403 `mcp_tool_not_allowed`.
+- Resume an agent rollout from the control-plane host (PDK-452, ADR 0034 addendum 2026-10-29):
+  `./paddock agent-rollout-resume <version>` (`paddock-server admin agent-rollout-resume` in `paddock-api`) continues a
+  halted rollout like *Resume* in the portal, with the system actor `paddock-server admin` and audit code
+  `agent_rollout.resumed`; it covers no other rollout (residual risk RR-90). `docs/operations/agent-releases.md` now
+  explains that small fleets, such as a one-device lab, start their rollout with `--waves 100` or a short wave list.
 
 ### Changed
 
@@ -77,6 +82,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Agent rollouts (PDK-452): two concurrent starts of the same release now refuse the second with `already_exists`
+  (409) instead of an internal error, and concurrent halts or resumes of one rollout change it once, record one
+  successful audit event and refuse the others with `invalid_state`. Before, every concurrent halt succeeded and each
+  recorded its own `agent_rollout.halted` event.
 - Production and lab installations (PDK-492): the api now finds the MCP login provider at
   `https://auth.<domain>/application/o/paddock-mcp/`. Before, it looked for it at the development port, never became
   ready and the installation or upgrade stopped at `./paddock start`. The bundle test refuses an OIDC issuer with an
