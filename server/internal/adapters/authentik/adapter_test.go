@@ -3,6 +3,7 @@ package authentik_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -855,5 +856,94 @@ func TestEndUserSessions(t *testing.T) {
 	status = http.StatusForbidden
 	if _, err := client(srv).EndUserSessions(ctx, []string{"7"}); !errors.Is(err, problem.UpstreamUnavailable) || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("403: %v", err)
+	}
+}
+
+// TestCountUserSessions (PDK-342): the sessions of the users are counted over every page of the session listing; a
+// pk that is not an integer is refused before any request, a failing listing is upstream_unavailable.
+func TestCountUserSessions(t *testing.T) {
+	var requests []string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		w.WriteHeader(status)
+		switch {
+		case status != http.StatusOK:
+		case r.URL.Query().Get("page") == "1":
+			_, _ = w.Write([]byte(`{"pagination": {"next": 2}, "results": [{"user": 7}, {"user": 8}, {"user": 12}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"pagination": {"next": 0}, "results": [{"user": 12}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	n, err := client(srv).CountUserSessions(ctx, []string{"7", "12"})
+	if err != nil || n != 3 {
+		t.Fatalf("CountUserSessions: %d %v, want 3", n, err)
+	}
+	want := []string{
+		"GET /api/v3/core/authenticated_sessions/?page=1&page_size=500",
+		"GET /api/v3/core/authenticated_sessions/?page=2&page_size=500",
+	}
+	if !slices.Equal(requests, want) {
+		t.Fatalf("requests %v, want %v", requests, want)
+	}
+	requests = nil
+	if n, err := client(srv).CountUserSessions(ctx, nil); err != nil || n != 0 || len(requests) != 0 {
+		t.Fatalf("no users: %d %v after %d requests", n, err, len(requests))
+	}
+	if _, err := client(srv).CountUserSessions(ctx, []string{"7", "x"}); err == nil || len(requests) != 0 {
+		t.Fatalf("a pk that is not an integer: %v after %d requests", err, len(requests))
+	}
+	status = http.StatusForbidden
+	if _, err := client(srv).CountUserSessions(ctx, []string{"7"}); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("403: %v", err)
+	}
+}
+
+// TestEndUserSessionsAfterRetryReportsWhatWasLeft documents the Authentik behaviour behind PDK-342: the first bulk
+// delete ends the sessions but its response is lost (a 5xx, like a client timeout), and the retry reports 0 deleted;
+// only the count before the delete has the sessions that ended.
+func TestEndUserSessionsAfterRetryReportsWhatWasLeft(t *testing.T) {
+	sessions := []int{7, 12, 12, 9}
+	deletes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			var b strings.Builder
+			for i, u := range sessions {
+				if i > 0 {
+					b.WriteString(",")
+				}
+				fmt.Fprintf(&b, `{"user": %d}`, u)
+			}
+			_, _ = fmt.Fprintf(w, `{"pagination": {"next": 0}, "results": [%s]}`, b.String())
+			return
+		}
+		deletes++
+		deleted := 0
+		kept := sessions[:0]
+		for _, u := range sessions {
+			if u == 7 || u == 12 {
+				deleted++
+				continue
+			}
+			kept = append(kept, u)
+		}
+		sessions = kept
+		if deletes == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"deleted": %d}`, deleted)
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	counted, err := client(srv).CountUserSessions(ctx, []string{"7", "12"})
+	if err != nil || counted != 3 {
+		t.Fatalf("CountUserSessions: %d %v, want 3", counted, err)
+	}
+	n, err := client(srv).EndUserSessions(ctx, []string{"7", "12"})
+	if err != nil || n != 0 || deletes != 2 {
+		t.Fatalf("EndUserSessions: %d %v after %d deletes, want 0 after 2", n, err, deletes)
 	}
 }

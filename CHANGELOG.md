@@ -106,6 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (409) instead of an internal error, and concurrent halts or resumes of one rollout change it once, record one
   successful audit event and refuse the others with `invalid_state`. Before, every concurrent halt succeeded and each
   recorded its own `agent_rollout.halted` event.
+- End all sessions (PDK-342): the `platform.sessions_ended` audit event reports the identity-provider sessions that
+  actually ended. Before, when Authentik answered the session deletion slowly and Paddock repeated it, the event could
+  report 0 ended sessions although every session had ended.
 - Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
   every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
   enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
