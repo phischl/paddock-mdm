@@ -437,7 +437,8 @@ var auditCases = map[string][]auditCase{
 	},
 	"POST /api/v1/me/mcp-write/disable": {
 		{"success", func(t *testing.T, w *auditWorld) {
-			res := call(t, login(t, env.Bob), http.MethodPost, "/api/v1/me/mcp-write/disable", nil)
+			// A session without step-up: disabling the opt-in needs none.
+			res := call(t, withoutStepUp(t, adminUser(t, "a3-mcpw-off")), http.MethodPost, "/api/v1/me/mcp-write/disable", nil)
 			expectStatus(t, res, http.StatusOK, "")
 			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_disabled", "success")
 		}},
