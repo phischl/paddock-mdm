@@ -84,6 +84,30 @@ describe('organization domains (plan M8x decisions 21–24)', () => {
     expect(document.querySelector('.v-overlay--active #org-domains')).toBeNull()
   })
 
+  it('shows the identity provider progress hint while the create runs (PDK-407)', async () => {
+    let resolve: (org: Organization) => void = () => {}
+    createOrganization.mockReturnValue(new Promise((r) => { resolve = r }))
+    const w = await mountView()
+    await openCreate(w, '')
+    await submit('#org-domains')
+    expect(document.body.textContent).toContain('Setting up the identity provider… This can take up to a minute.')
+    const button = Array.from(document.querySelectorAll('.v-overlay--active button[type="submit"]'))[0] as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    resolve({ ...acme, id: 'new', slug: 'example', domains: [] })
+    await flushPromises()
+    expect(document.body.textContent).not.toContain('Setting up the identity provider')
+    expect(document.querySelector('.v-overlay--active #org-domains')).toBeNull()
+  })
+
+  it('removes the progress hint when the create fails', async () => {
+    createOrganization.mockResolvedValue('upstream_unavailable')
+    const w = await mountView()
+    await openCreate(w, '')
+    await submit('#org-domains')
+    expect(document.body.textContent).not.toContain('Setting up the identity provider')
+    expect(document.querySelector('.form-error[role="alert"]')?.textContent).toContain('The identity provider is not reachable.')
+  })
+
   it('creates an organization without domains without a PATCH', async () => {
     createOrganization.mockResolvedValue({ ...acme, id: 'new', slug: 'example', domains: [] })
     const w = await mountView()

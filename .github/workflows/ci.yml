@@ -91,9 +91,13 @@ jobs:
   # (test/acceptance/cmd/acceptanceshard); adding a shard number is enough, the total comes from the matrix. Four
   # shards of ~32 min of measured gate time each (PDK-361, 2026-10-29): a fifth would save only ~3 min because
   # TestAuditExactlyOnce alone takes ~29 min.
+  # Only towards main (PDK-526): per-ticket pull requests go into a cluster branch with the fast jobs above, and the
+  # gates run once on the cluster's pull request to main, on main itself and on the schedule; the queue of 20 runners
+  # of a public repository cannot run them for every pull request.
   acceptance-shard:
     name: acceptance (shard ${{ matrix.shard }})
     needs: [lint, test, web, secrets, trivy]
+    if: github.event_name != 'pull_request' || github.base_ref == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 135 # make up 8 min + acceptance 120 min + logs; a shard job takes ~41 min
     strategy:
@@ -129,6 +133,7 @@ jobs:
   acceptance-e2e:
     name: acceptance (disruptive, e2e)
     needs: [lint, test, web, secrets, trivy]
+    if: github.event_name != 'pull_request' || github.base_ref == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40 # make up 8 min + disruptive 2 min + e2e 10 min + logs
     steps:
@@ -169,10 +174,11 @@ jobs:
             | xargs -r -n1 docker logs 2>&1
 
   # The required status check "acceptance" of the default branch ruleset: green only if every shard and the e2e job
-  # are; a skipped job (failed prerequisites) fails it too.
+  # are; a skipped job (failed prerequisites) fails it too. On pull requests into other branches it is skipped together
+  # with the gates; on a pull request to main it always runs, so it never reports gates that did not run as passed.
   acceptance:
     needs: [acceptance-shard, acceptance-e2e]
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || github.base_ref == 'main')
     runs-on: ubuntu-24.04
     steps:
       - run: test "$SHARDS" = success && test "$E2E" = success
