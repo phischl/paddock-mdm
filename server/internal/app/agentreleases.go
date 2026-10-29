@@ -198,7 +198,7 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 			}
 			var err error
 			out, err = q.UpsertAgentArtifact(ctx, art)
-			return err
+			return publishedRace(err, "artifacts of a published release cannot change")
 		})
 	if err != nil && problem.From(err) == problem.Internal {
 		slog.ErrorContext(ctx, "storing an agent artifact failed", "version", version, "arch", arch, "error", err)
@@ -240,7 +240,7 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 			}
 			var err error
 			out, err = q.UpsertAgentPackage(ctx, pkg)
-			return err
+			return publishedRace(err, "artifacts of a published release cannot change")
 		})
 	if err != nil && problem.From(err) == problem.Internal {
 		slog.ErrorContext(ctx, "storing an agent package failed", "version", version, "name", name, "arch", arch, "error", err)
@@ -351,9 +351,18 @@ func (a *AgentReleases) Publish(ctx context.Context, version string) (pgstore.Ag
 		}
 		rec.SetParam("arches", arches)
 		out, err = q.PublishAgentRelease(ctx, version)
-		return err
+		return publishedRace(err, "the release is already published")
 	})
 	return out, err
+}
+
+// publishedRace maps the missing row of a draft-guarded write to invalid_state: the release was published after the
+// draft check of the use case, by a concurrent upload, publish or import (PDK-432).
+func publishedRace(err error, detail string) error {
+	if db.IsNoRows(err) {
+		return problem.InvalidState.WithDetail(detail)
+	}
+	return err
 }
 
 // HostArtifact is an agent binary of a release with its minisign signature file.
