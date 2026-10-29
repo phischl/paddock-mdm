@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Entries of merged changes that are not released yet are in `changelog.d/`.
+
 ### Added
 
 - MCP tool catalog generated from the admin API contract (ADR 0044, PDK-434): `make gen` derives one tool per admin

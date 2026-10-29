@@ -55,7 +55,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
@@ -70,6 +70,25 @@ lint-supervisor-budget:
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
+	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
+
+# Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
+# [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them
+# into the release section (docs/operations/agent-releases.md, Server release). SCHEMA is the text after "Schema: "
+# (`unchanged` or `migrations NNNNN–NNNNN …`).
+.PHONY: changelog
+changelog: ## Assemble changelog.d/ into CHANGELOG.md: make changelog RELEASE_VERSION=<version> SCHEMA="<text>"
+	@if [ -z "$(RELEASE_VERSION)" ] || [ -z "$(SCHEMA)" ]; then \
+		echo 'usage: make changelog RELEASE_VERSION=x.y.z[-alpha.N] SCHEMA="unchanged | migrations NNNNN–NNNNN ..."' >&2; exit 2; fi
+	bash scripts/changelog-assemble.sh --version '$(RELEASE_VERSION)' --schema '$(subst ','\'',$(SCHEMA))'
+
+.PHONY: changelog-preview
+changelog-preview: ## Print the CHANGELOG.md section the next release would get (changes nothing)
+	@bash scripts/changelog-assemble.sh --preview $(if $(RELEASE_VERSION),--version '$(RELEASE_VERSION)')
+
+.PHONY: changelog-check
+changelog-check: ## Validate the changelog fragments in changelog.d/
+	@bash scripts/changelog-assemble.sh --check
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
@@ -171,6 +190,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/ci/assert-hardening_test.sh
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
+	bash scripts/changelog-assemble_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
