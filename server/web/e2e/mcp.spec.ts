@@ -18,12 +18,23 @@ async function withStepUp(page: Page, start: () => Promise<void>, user: readonly
   else await stepUp(page, start, ...user)
 }
 
-/** Saves the policy form shown on page: confirmation, then the step-up the save needs, then the success message. */
-async function savePolicy(page: Page, user: readonly [string, string, string]): Promise<void> {
+/**
+ * Saves the policy form shown on page: confirmation, then the step-up the save needs, then the success message. With
+ * demandStepUp the session must hold no valid step-up and the save must start one, so that each test proves the
+ * portal demands it; later saves reuse a step-up that is still valid.
+ */
+async function savePolicy(page: Page, user: readonly [string, string, string], demandStepUp = false): Promise<void> {
   await page.getByTestId('save-mcp').click()
   const confirm = page.getByRole('dialog', { name: 'Save MCP policy?' })
   await expectAccessible(page)
-  await withStepUp(page, () => confirm.getByRole('button', { name: 'Save policy' }).click(), user)
+  const save = () => confirm.getByRole('button', { name: 'Save policy' }).click()
+  if (demandStepUp) {
+    const me = await (await page.request.get('/api/v1/me')).json() as { step_up_valid_until: string | null }
+    expect(me.step_up_valid_until === null || Date.parse(me.step_up_valid_until) <= Date.now()).toBe(true)
+    await stepUp(page, save, ...user)
+  } else {
+    await withStepUp(page, save, user)
+  }
   await expect(page.getByTestId('mcp-saved')).toBeVisible()
 }
 
@@ -57,7 +68,7 @@ test('organization admin sets the MCP policy and their own write access', async 
   }
   await expect(picker.getByTestId('mcp-tool-portal-only').first()).toBeVisible()
   await expectAccessible(page)
-  await savePolicy(page, alice)
+  await savePolicy(page, alice, true)
 
   await page.reload()
   await expect(page.getByTestId('mcp-enabled').getByRole('checkbox')).toBeChecked()
@@ -119,7 +130,7 @@ test('platform admin saves the platform MCP policy', async ({ page }) => {
   await expectAccessible(page)
   await page.getByTestId('mcp-enabled').getByRole('checkbox').check()
   await page.getByTestId('mcp-mode-all').getByRole('radio').check()
-  await savePolicy(page, root)
+  await savePolicy(page, root, true)
   await page.reload()
   await expect(page.getByTestId('mcp-enabled').getByRole('checkbox')).toBeChecked()
   await expectAccessible(page)
