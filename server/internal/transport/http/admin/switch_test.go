@@ -31,7 +31,7 @@ func newTwoRoles(w *loginWorld) *twoRoles {
 // claims are the ID token claims of the identity with groups.
 func (u *twoRoles) claims(groups ...string) map[string]any {
 	return map[string]any{"aud": "paddock-portal", "sub": u.sub, "preferred_username": u.username, "amr": []string{"pwd", "mfa"},
-		"groups": groups}
+		"groups": groups, "paddock_mfa_classes": []string{admin.StepUpWebAuthnClass}}
 }
 
 func (u *twoRoles) both() map[string]any {
@@ -368,6 +368,38 @@ func TestRoleSwitchNotGranted(t *testing.T) {
 			t.Fatalf("events of the other user %v", got)
 		}
 	})
+}
+
+// TestRoleSwitchRequiresAPasskey: a switch opens its session from a new ID token through the same callback, so a token
+// whose login validated no WebAuthn authenticator is refused with passkey_required like a sign-in (ADR 0034 amendment
+// 2026-10-29); the previous session stays and no session is opened.
+func TestRoleSwitchRequiresAPasskey(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	e := w.e
+	u := newTwoRoles(w)
+	orgCookie := u.signIn(u.both())
+	sid := u.session(orgCookie).SID
+	before := len(e.sessions.records)
+	start := u.startSwitch(orgCookie, map[string]any{"role": "platform"})
+	if start.status != http.StatusOK {
+		t.Fatalf("switch: %d %s", start.status, start.body)
+	}
+	claims := u.both()
+	claims["paddock_mfa_classes"] = []string{totpClass}
+	res := u.complete(start, claims)
+	if res.Code != http.StatusFound || res.Header().Get("Location") != "/login-denied?reason=passkey_required" || cookieFrom(res) != nil {
+		t.Fatalf("callback: %d %s", res.Code, res.Header().Get("Location"))
+	}
+	if !u.hasRecord(sid) || len(e.sessions.records) != before {
+		t.Fatalf("records: previous present %v, %d records, want %d", u.hasRecord(sid), len(e.sessions.records), before)
+	}
+	if m := u.me(orgCookie); m.Role != adminapi.MeRoleOrgAdmin {
+		t.Fatalf("previous session after the refusal: %s", m.Role)
+	}
+	// The sign-in and the refused switch; only the refusal has an error code.
+	if n, _, errCode, reason, _ := w.loginEvents(u.username); n != 2 || errCode != "passkey_required" || reason != "passkey_required" {
+		t.Fatalf("audit: %d events, error code %q, reason %q", n, errCode, reason)
+	}
 }
 
 // TestMeAlternateRole: alternate_role is null for API tokens and single-role sessions, and PATCH /api/v1/me answers

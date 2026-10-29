@@ -91,6 +91,9 @@ const (
 	ReasonNotAuthorized = "not_authorized"
 	ReasonLoginFailed   = "login_failed"
 	ReasonMFARequired   = "mfa_required" // the ID token carried no second factor (amr without "mfa")
+	// ReasonPasskeyRequired: the portal sign-in validated no WebAuthn authenticator (ADR 0034 amendment 2026-10-29,
+	// PDK-500).
+	ReasonPasskeyRequired = "passkey_required"
 	// ReasonMCPLoginRequired: an MCP renewal without a live login binding of its sub and auth_time (ADR 0044
 	// amendment 2026-10-28).
 	ReasonMCPLoginRequired = "mcp_login_required"

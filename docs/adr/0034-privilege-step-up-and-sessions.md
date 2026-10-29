@@ -277,3 +277,42 @@ thresholds unchanged); RR-90 applies.
 ## Amendment 2026-10-29 (PDK-498) — passkey enrolment of the brand sign-in for administrators only
 The forced passkey enrolment of the brand sign-in (stage B) applies only to members of Paddock administrator groups;
 end users approving a device sign-in are not asked to enrol a passkey.
+
+## Amendment 2026-10-29 (PDK-500) — every portal role signs in with a passkey
+Context: the portal sign-in sends no `prompt` (amendment 2026-10-17), so an existing Authentik session satisfies it
+without running `paddock-admin-login`. A session from Authentik's default sign-in or from the device-code page may have
+validated TOTP only, and the callback only required `mfa` in `amr`. A user added to a portal role group within the
+session's lifetime therefore signed in to the portal without a WebAuthn authenticator. Authentik 2026.8.5
+(`providers/oauth2/id_token.py`, `common/oauth/constants.py`, `stages/authenticator_validate/stage.py`) emits `amr`
+`["pwd", "mfa"]` for password plus WebAuthn and for password plus TOTP alike, and `user` only for passwordless WebAuthn,
+so `amr` cannot carry the decision. An enrolment through a validation stage's setup stage records no device in the
+login event.
+
+Decisions:
+1. **Passkey at sign-in.** The login callback refuses a sign-in whose groups grant any portal role (platform
+   administrator, organization administrator, operator, auditor) unless the ID token's `paddock_mfa_classes` contains
+   `authentik_stages_authenticator_webauthn.webauthndevice`: redirect to `/login-denied?reason=passkey_required` and one
+   `admin.login` event, outcome denied, error code `passkey_required`, no session. The check runs before the active role
+   is chosen, so a role switch (`POST /api/auth/switch` opens its session through the same callback with a new ID token)
+   and any fallback between the two roles of one identity are covered; a token without the claim fails closed. Groups
+   that grant no role keep their own denial reason. `mfa` in `amr` stays required (amendment 2026-10-17).
+2. **Claim.** The portal provider carries the mapping `io.paddock/scope-login-mfa` (scope `paddock_mfa`, requested by
+   every portal sign-in), which emits `paddock_mfa_classes` from the session's login event like the step-up's mapping
+   (amendment 2026-10-18, decision 1).
+3. **Stage C.** `paddock-admin-login` gains `paddock-admin-login-webauthn-confirm` at order 32: validates `[webauthn]`,
+   `not_configured_action: deny`, binding mode *all* with the administrator-group policy of stage B (PDK-498) and the
+   policy `paddock-admin-login-webauthn-unconfirmed` (no WebAuthn device among the flow's validated devices), both
+   `failure_result: true`. An administrator who enrolled in stage A or B, or proved TOTP in stage A although a passkey
+   exists, confirms the passkey once, so the first sign-in after an enrolment is not refused. End users never reach it
+   (it would deny them and break the device-code sign-in).
+4. **Fallback.** The denial page for `passkey_required` explains the passkey (en/de) and offers *Sign out of the
+   identity provider* (the portal's logout, then Authentik's default invalidation flow on the issuer's origin), because
+   a retry without it reuses the refused session.
+5. **Development.** `PADDOCK_LOGIN_MFA_OPTIONAL` (development only, a production-check finding) also lifts the passkey
+   requirement; the development blueprint skips stage C like stages A and B. No new variable.
+
+Options weighed: `amr` (cannot tell WebAuthn from TOTP); `prompt=login` (rejected in amendment 2026-10-17);
+`ak_user_has_authenticator` (owning a passkey is not using it); the check without stage C (every enrolment would end in
+a refusal and a manual Authentik sign-out). Consequences: RR-38 and RR-62 are reworded; `docs/operations/step-up.md`
+and `device-login.md` describe the check. The MCP login (`paddock-mcp`, ADR 0044) still checks `amr` only and is
+followed up separately.
