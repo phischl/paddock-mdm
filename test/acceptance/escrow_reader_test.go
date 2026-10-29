@@ -75,7 +75,7 @@ func TestEscrowReaderIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 		// The service name resolves on cp, but the escrow-reader listens on its escrow address only.
-		out, err := stack.Docker(ctx, nil, "run", "--rm", "--network", "paddock_cp", image, "sh", "-c",
+		out, err := stack.Docker(ctx, nil, "run", "--rm", "--network", stack.Network("cp"), image, "sh", "-c",
 			"curl -sS -m 5 -o /dev/null -X POST http://paddock-escrow-reader:8080/internal/v1/decrypt; echo exit=$?")
 		if err != nil || !strings.Contains(out, "exit=7") {
 			t.Fatalf("from network cp: %q %v, want connection refused (curl exit 7)", out, err)
@@ -151,7 +151,7 @@ func callEscrowReader(t *testing.T, secret string, req map[string]any) (int, []b
 	script := `IFS= read -r auth; curl -sS -o /tmp/body -w '%{http_code}' -H "Authorization: Bearer $auth" ` +
 		`-H 'Content-Type: application/json' --data-binary @- http://escrow-reader:8080/internal/v1/decrypt; echo; cat /tmp/body`
 	out, err := stack.Docker(testContext(t, 2*time.Minute), strings.NewReader(secret+"\n"+string(body)),
-		"run", "--rm", "-i", "--network", "paddock_escrow", image, "sh", "-c", script)
+		"run", "--rm", "-i", "--network", stack.Network("escrow"), image, "sh", "-c", script)
 	if err != nil {
 		t.Fatalf("call from the escrow network: %v", err)
 	}

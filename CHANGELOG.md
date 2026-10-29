@@ -11,6 +11,14 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 
 ### Added
 
+- A second development stack on the same host (PDK-519): `PADDOCK_INSTANCE=2 make dev-secrets` in a second checkout
+  writes a `.env` with its own Compose project (`paddock2`), image tags and host ports (every port 100 higher: HTTPS
+  `8543`), and every `make` target and acceptance and end-to-end gate of that checkout then reaches that stack. The
+  loopback ports of the development stack are settings (`PADDOCK_DEV_*_PORT`); unset, nothing changes. A command with
+  a `PADDOCK_INSTANCE` other than the checkout's is refused. See "Running a second dev stack" in
+  `docs/operations/local-dev.md`.
+- The system gates on the test VMs run against the stack of their checkout (PDK-525): from a second development
+  stack's checkout they use its Compose project and HTTPS port, e.g. when they cut a device off from the server.
 - MCP tool catalog generated from the admin API contract (ADR 0044, PDK-434): `make gen` derives one tool per admin
   API operation (outside the login tag) from `api/openapi/admin.yaml`, classified as read or write, with scope,
   destructive and idempotent hints and a self-contained input schema. The contract gains the extensions

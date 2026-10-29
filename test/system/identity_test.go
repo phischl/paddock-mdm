@@ -598,10 +598,10 @@ func gateL2(t *testing.T, w *identityWorld) {
 	script := fmt.Sprintf(`#!/bin/bash
 iface=$(ip -o route get 10.0.2.2 | sed -n 's/.* dev \([^ ]*\).*/\1/p')
 for _ in $(seq 1 60); do [ "$(cat /sys/class/net/$iface/carrier)" = 0 ] && break; sleep 1; done
-timeout 5 bash -c '</dev/tcp/10.0.2.2/8443' && echo "authentik reachable" || echo "authentik unreachable"
+timeout 5 bash -c '</dev/tcp/10.0.2.2/%s' && echo "authentik reachable" || echo "authentik unreachable"
 cat /root/systest-secret | timeout 60 pamtester gdm-password %s authenticate acct_mgmt
 echo "rc=$?"
-`, w.dave.name)
+`, portal.HTTPSPort(), w.dave.name)
 	w.guestScript(script, w.dave.pin+"\n", "/root/systest-offline.log", 5*time.Second)
 	w.SetLink(false)
 	time.Sleep(90 * time.Second)
