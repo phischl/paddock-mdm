@@ -77,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
+  every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
+  enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
+  administrators, operators and auditors of every organization). End users approve with password and TOTP; the
+  portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml` gains the policy
+  `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
 - Production and lab installations (PDK-492): the api now finds the MCP login provider at
   `https://auth.<domain>/application/o/paddock-mcp/`. Before, it looked for it at the development port, never became
   ready and the installation or upgrade stopped at `./paddock start`. The bundle test refuses an OIDC issuer with an
