@@ -1062,3 +1062,34 @@ verified, and since PDK-420 it also kept its start-up value of `paddock_audit_ve
 - **Decision 29:** the rule stays per instance (`time() - paddock_audit_verify_last_run_timestamp_seconds > 36 * 3600`);
   no aggregation over replicas and no per-replica scrape targets. promtool cases: two replicas, the locked one
   following 5 minutes later, do not warn; a replica that does not advance warns on its own.
+
+## Amendment 2026-10-29 (PDK-424, main as architect lead)
+
+**Reason.** The scope-level guard of the PDK-111 addendum (review 2) refuses an organization's round whenever every role
+listing comes back empty while members are stored. It cannot tell a service token that lost its view of users from an
+organization whose last role holders really left. In the second case no `admin.role_revoked` was ever recorded, the
+round failed every interval, and the A.5.18 record had a gap. The architect decision of 2026-10-29 chose option A,
+a precise probe.
+
+- **Probe (decisions 35 and 36).** `ports.UserDirectory` gains `GroupReadable(ctx, groupName)` and
+  `UsersVisible(ctx)`. `RoleGroups.DirectoryVisible(ctx)` runs both once per round and shares the result between
+  `AdminAccounts.Reconcile` and `RoleMembership.SyncOrganization`. The probe holds when (1) every role group the round
+  listed without an error can be read by name (`GET /core/groups/?name=`), and (2) a user listing filtered to
+  `type=internal,external` returns at least one user. The paddock-service account is a `service_account`, so a token
+  that sees only itself does not pass. Authentik validates the `groups_by_name` filter against every group,
+  whatever the token may see, so a blind token gets an empty listing without an error; this is why the group must be
+  read on its own.
+- **Probe holds.** The emptying is real. `SyncOrganization` compares the listings as usual: the first round marks
+  every member and the second records one `admin.role_revoked` each. `AdminAccounts.Reconcile` confirms each enabled
+  account with the direct read of decision 22 (M8s) and disables it as removed, ending its sessions. The second
+  consumer follows the same logic as the first: a probe that proves the token sees the directory also makes that
+  direct read meaningful, and refusing would keep the sessions of administrators who were really removed.
+- **Probe fails.** The scope is refused as before with `ErrDirectoryEmpty`, and nothing is recorded, marked or
+  disabled. A failed probe read is a plain round error: it proves nothing and is not counted as a refusal.
+- **Metric and warning.** The worker counts each refused organization round once in
+  `paddock_identity_directory_refusals_total`, even when both consumers refused it. From three consecutive refusals
+  of the same organization it logs a warning naming the organization; a successful round ends the streak. The alert
+  `PaddockRoleDirectoryRefused` (warning) fires when refusals continue for 15 minutes.
+- **Unchanged.** The platform scope keeps its rule: an empty superuser listing refuses it. `ReconcilePlatform` keeps
+  its refusal of an empty `paddock.platform.admins` while platform administrators exist (follow-up ticket). No
+  migration.

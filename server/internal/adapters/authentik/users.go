@@ -204,6 +204,36 @@ func (c *Client) Superusers(ctx context.Context) ([]ports.IdentityUser, error) {
 	return c.settledUsers(ctx, url.Values{"is_superuser": {"true"}}, "the superusers")
 }
 
+// GroupReadable reads the group groupName by name. Authentik validates the groups_by_name filter of a user listing
+// against every group, whatever the token may see, so an empty role group listing alone does not show that the token
+// can read the group (PDK-424).
+func (c *Client) GroupReadable(ctx context.Context, groupName string) (bool, error) {
+	pk, err := c.findGroup(ctx, groupName)
+	return pk != "", err
+}
+
+// UsersVisible lists one page of internal and external users. Authentik filters a user listing by the token's
+// permissions and answers an empty page, not an error, to a token that may no longer see users; the paddock-service
+// account is a service account and does not count (PDK-424).
+func (c *Client) UsersVisible(ctx context.Context) (bool, error) {
+	q := url.Values{"type": {"internal", "external"}, "include_groups": {"false"}, "ordering": {"pk"}, "page": {"1"}, "page_size": {"1"}}
+	var page struct {
+		Results []struct {
+			Type string `json:"type"`
+		} `json:"results"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v3/core/users/?"+q.Encode(), nil, &page); err != nil {
+		return false, upstream(err)
+	}
+	// The type is checked again in case a later Authentik ignores the filter: a service account never proves sight.
+	for _, u := range page.Results {
+		if u.Type == "internal" || u.Type == "external" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // settledUsers lists the users matching filter, repeating the listing when it did not settle; what names the listing
 // in the error.
 func (c *Client) settledUsers(ctx context.Context, filter url.Values, what string) ([]ports.IdentityUser, error) {

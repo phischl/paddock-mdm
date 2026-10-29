@@ -100,6 +100,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recovery code per prompt, no passkey enrolment) and a lab check that a used recovery code is refused at the device
   approval. No behaviour change (PDK-325).
 
+- Role membership audit and administrator accounts (PDK-424, ISO 27001 A.5.18): when all role groups of an
+  organization come back empty while role holders are recorded or administrator accounts are enabled, the worker now
+  checks whether its Authentik service token can still see the directory: each role group must be readable by name and
+  a user listing must return at least one user who is not a service account. If both hold, the organization really
+  lost its last role holders: each one is recorded as `admin.role_revoked` after two consecutive rounds, and the
+  administrator accounts are disabled and their sessions ended. Otherwise the round is refused as before, and nothing
+  is recorded or changed. New metric `paddock_identity_directory_refusals_total` counts refused organization rounds;
+  from three refusals in a row the worker logs a warning naming the organization, and the new alert
+  `PaddockRoleDirectoryRefused` (warning) fires when refusals continue for 15 minutes.
+
 ### Fixed
 
 - Clock drift (PDK-418): a check-in that arrives while the worker records a clock drift episode can no longer open
