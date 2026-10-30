@@ -22,6 +22,7 @@ export const auditCodes = [
   'api_token.use_denied',
   'audit.chain_verification_failed',
   'audit.chain_verified',
+  'audit.export_requested',
   'autoinstall.generated',
   'config.applied',
   'device.agent_events_dropped',

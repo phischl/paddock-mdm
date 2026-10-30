@@ -408,6 +408,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Inventory:      app.NewInventory(orgPool),
 		AuditLog:       app.NewAuditLog(reader, orgPool),
 		AuditIntegrity: app.NewAuditIntegrity(reader),
+		AuditExports:   app.NewAuditExports(runner, reader),
 		Attention:      app.NewAttention(orgPool),
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),

@@ -28,12 +28,14 @@ type Deps struct {
 	AuditLog      *app.AuditLog
 	// AuditIntegrity reads the sealed days and the chain verification runs (plan M8b decision 31).
 	AuditIntegrity *app.AuditIntegrity
-	Tokens         *app.EnrollmentTokens
-	APITokens      *app.APITokens
-	Declarative    *app.Declarative
-	Devices        *app.Devices
-	Managed        *app.ManagedConfig
-	Releases       *app.AgentReleases
+	// AuditExports requests and reads the evidence exports (plan M10 decision 29).
+	AuditExports *app.AuditExports
+	Tokens       *app.EnrollmentTokens
+	APITokens    *app.APITokens
+	Declarative  *app.Declarative
+	Devices      *app.Devices
+	Managed      *app.ManagedConfig
+	Releases     *app.AgentReleases
 	// ReleaseImports import agent releases from the configured release source (ADR 0043).
 	ReleaseImports *app.ReleaseImports
 	Users          *app.Users
@@ -185,6 +187,7 @@ var privileged = map[string]struct {
 	"PUT /api/v1/settings/managed-files":                                   {app.ScopeOrg, app.SpecManagedFileSettingsChange},
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
+	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
 	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
 	"DELETE /api/v1/package-holds/{id}":                                    {app.ScopeOrg, app.SpecPackageHoldDelete},
@@ -227,7 +230,7 @@ func NewHandler(d Deps) http.Handler {
 
 	api := http.NewServeMux()
 	h := &handlers{
-		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, tokens: d.Tokens,
+		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, exports: d.AuditExports, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,

@@ -629,6 +629,90 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/audit/exports:
+    get:
+      operationId: listAuditExports
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor. The organization's evidence exports (ADR 0032 §5). q matches the purpose and the
+        requester's display name.
+      x-paddock-list:
+        sort: [requested_at, status, from_day, to_day]
+        default_sort: -requested_at
+        search: [purpose, requested_by.display]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AuditExportSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AuditExportStatus" }
+      responses:
+        "200":
+          description: One page of exports.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExportPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createAuditExport
+      x-paddock-step-up: true
+      tags: [audit]
+      description: |
+        Roles: org_admin, org_auditor, with a step-up within the last 300 s (403 step_up_required). Requests a signed
+        evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at
+        most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose
+        or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or
+        bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). At most two exports of the organization
+        may be pending or running (409 too_many_exports). The audit writer builds the package on the audit host; it is ready within
+        minutes for small ranges and expires 7 days after it is ready.
+        Recorded as audit.export_requested; every download as audit.export_downloaded.
+      x-paddock-audit: audit.export_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuditExportCreate" }
+      responses:
+        "202":
+          description: The pending export.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExport" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/exports/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getAuditExport
+      tags: [audit]
+      description: "Roles: org_admin, org_auditor. One evidence export of the organization."
+      responses:
+        "200":
+          description: The export.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExport" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api/v1/device-groups/{id}/devices:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -4427,6 +4511,14 @@ components:
         type: string
         enum: [day, -day]
         default: -day
+    AuditExportSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [requested_at, -requested_at, status, -status, from_day, -from_day, to_day, -to_day]
+        default: -requested_at
     IpAllowlistSort:
       name: sort
       in: query
@@ -5352,6 +5444,54 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/AuditManifest" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    AuditExportStatus:
+      type: string
+      enum: [pending, running, ready, failed, expired]
+    AuditExportCreate:
+      type: object
+      required: [from_day, to_day, purpose]
+      properties:
+        from_day: { type: string, format: date }
+        to_day: { type: string, format: date }
+        purpose: { type: string, minLength: 1, maxLength: 500 }
+    AuditExport:
+      type: object
+      required: [id, status, from_day, to_day, purpose, requested_by, requested_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, key_version, error]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/AuditExportStatus" }
+        from_day: { type: string, format: date }
+        to_day: { type: string, format: date }
+        purpose: { type: string }
+        requested_by:
+          allOf:
+            - $ref: "#/components/schemas/AuditActor"
+          description: The requester; never carries the client address (ip).
+        requested_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        event_count: { type: integer, format: int64, nullable: true }
+        object_count: { type: integer, nullable: true }
+        size: { type: integer, format: int64, nullable: true }
+        package_sha256: { type: string, nullable: true, description: Lowercase hex. }
+        verify_ok: { type: boolean, nullable: true }
+        verify_problems:
+          type: array
+          items: { type: string }
+        key_version: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+    AuditExportPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditExport" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

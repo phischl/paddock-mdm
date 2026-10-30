@@ -122,6 +122,11 @@ var (
 	MCPWriteNotEnabled = &Error{Code: "mcp_write_not_enabled", Status: http.StatusForbidden}
 	RateLimited        = &Error{Code: "rate_limited", Status: http.StatusTooManyRequests}
 	MCPLoginRequired   = &Error{Code: "mcp_login_required", Status: http.StatusUnauthorized}
+	// Evidence export (ADR 0032 §5, plan M10 decision 28): a day of the range has no manifest yet, the organization
+	// already has the maximum of pending or running exports, or the package is not ready for download.
+	DayNotSealed   = &Error{Code: "day_not_sealed", Status: http.StatusUnprocessableEntity}
+	TooManyExports = &Error{Code: "too_many_exports", Status: http.StatusConflict}
+	ExportNotReady = &Error{Code: "export_not_ready", Status: http.StatusConflict}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}

@@ -350,7 +350,8 @@ Fleet's own UI and admin API are **not** published; Paddock reaches them on the 
 **Separation of duties for audit (concept, "Audit log"):** the audit domain runs on a separate host
 with separate credentials. The control-plane host holds only a RabbitMQ credential that can **publish**
 to exchange `paddock.audit` and, for the portal's audit view, a **read-only** database role on the audit index
-(`paddock_audit_reader`: `SELECT` only, RLS by organization). It holds no write or delete credential for
+(`paddock_audit_reader`: `SELECT` only, RLS by organization; Amendment 2026-10-30, plan M10 decision 29: the reader
+also inserts pending export requests into `audit_export`, nothing else). It holds no write or delete credential for
 the audit database and no credential at all for the audit bucket.
 
 ### 4.2 Kubernetes later

@@ -32,6 +32,8 @@ type handlers struct {
 	releases  *app.AgentReleases
 	// imports is the agent release import from the release source (ADR 0043).
 	imports *app.ReleaseImports
+	// exports are the evidence exports of the audit log (plan M10 decision 29).
+	exports *app.AuditExports
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative

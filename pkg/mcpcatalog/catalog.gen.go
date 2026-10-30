@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "a0d14f3235c618a6e013f71431355fae09d102e826b809289394e916fa7f3c4d"
+const Version = "48730200e657e4837068212ebfaa5b5b06b516433632d326f3702d1515697f83"
 
 var tools = []Tool{
 	{
@@ -223,6 +223,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator; requires a step-up within the last 5 minutes (403 step_up_required), so an API token cannot create tokens. The role may not be above the creator's: org_admin creates any organization role, org_operator creates org_operator and org_auditor (403 forbidden). expires_at lies between 1 hour and 365 days ahead. The response carries the secret exactly once; only its SHA-256 is stored.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"expires_at\":{\"description\":\"Between 1 hour and 365 days ahead.\",\"format\":\"date-time\",\"type\":\"string\"},\"name\":{\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$\",\"type\":\"string\"},\"role\":{\"enum\":[\"org_admin\",\"org_operator\",\"org_auditor\"],\"type\":\"string\"}},\"required\":[\"name\",\"role\",\"expires_at\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "createAuditExport",
+		Method:      "POST",
+		Path:        "/api/v1/audit/exports",
+		Pattern:     "POST /api/v1/audit/exports",
+		Tag:         "audit",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "audit.export_requested",
+		Summary:     "",
+		Description: "Roles: org_admin, org_auditor, with a step-up within the last 300 s (403 step_up_required). Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). At most two exports of the organization may be pending or running (409 too_many_exports). The audit writer builds the package on the audit host; it is ready within minutes for small ranges and expires 7 days after it is ready. Recorded as audit.export_requested; every download as audit.export_downloaded.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"properties\":{\"from_day\":{\"format\":\"date\",\"type\":\"string\"},\"purpose\":{\"maxLength\":500,\"minLength\":1,\"type\":\"string\"},\"to_day\":{\"format\":\"date\",\"type\":\"string\"}},\"required\":[\"from_day\",\"to_day\",\"purpose\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "createDeviceGroup",
@@ -798,6 +816,24 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getAuditExport",
+		Method:      "GET",
+		Path:        "/api/v1/audit/exports/{id}",
+		Pattern:     "GET /api/v1/audit/exports/{id}",
+		Tag:         "audit",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_auditor. One evidence export of the organization.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -1591,6 +1627,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_auditor.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: occurred_at, code, outcome), q (search over: code, actor.display, target.display).",
 		InputSchema: json.RawMessage("{\"properties\":{\"actor_type\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"admin\",\"platform_admin\",\"system\",\"anonymous\",\"device\",\"api_token\"],\"type\":\"string\"},\"type\":\"array\"},\"code\":{\"description\":\"Exact event code; repeatable.\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"from\":{\"description\":\"RFC 3339; default to - 7 days.\",\"format\":\"date-time\",\"type\":\"string\"},\"outcome\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"success\",\"failure\",\"denied\",\"unknown\"],\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-occurred_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The event_id is the tie-breaker.\",\"enum\":[\"occurred_at\",\"-occurred_at\",\"code\",\"-code\",\"outcome\",\"-outcome\"],\"type\":\"string\"},\"target_id\":{\"description\":\"Exact target id (for example a device id).\",\"format\":\"uuid\",\"type\":\"string\"},\"to\":{\"description\":\"RFC 3339; default now. The range may span at most 92 days (400 range_too_large).\",\"format\":\"date-time\",\"type\":\"string\"}},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "listAuditExports",
+		Method:      "GET",
+		Path:        "/api/v1/audit/exports",
+		Pattern:     "GET /api/v1/audit/exports",
+		Tag:         "audit",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_auditor. The organization's evidence exports (ADR 0032 §5). q matches the purpose and the requester's display name.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: requested_at, status, from_day, to_day), q (search over: purpose, requested_by.display).",
+		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-requested_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"requested_at\",\"-requested_at\",\"status\",\"-status\",\"from_day\",\"-from_day\",\"to_day\",\"-to_day\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"pending\",\"running\",\"ready\",\"failed\",\"expired\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listAuditManifests",

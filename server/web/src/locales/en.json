@@ -230,7 +230,10 @@
     "forbidden": "You are not allowed to do this.",
     "not_found": "This item no longer exists.",
     "upstream_unavailable": "The identity provider is not reachable. The organization was saved and can be provisioned again.",
-    "range_too_large": "The time range may span at most 92 days.",
+    "range_too_large": "The time range is too large.",
+    "day_not_sealed": "A day of the range is not sealed yet. Exports cover sealed recording days only.",
+    "too_many_exports": "Two exports are already pending or running. Wait until one of them is finished.",
+    "export_not_ready": "The export is not ready for download yet.",
     "page_out_of_range": "This page is too far back. Narrow the search or filters.",
     "invalid_request": "The request was not valid.",
     "internal": "Something went wrong. Please try again.",
@@ -309,7 +312,8 @@
     },
     "audit": {
       "chain_verified": "The audit hash chain was verified for {from_day} to {to_day} ({days, number} days, {objects, number} objects, {trigger})",
-      "chain_verification_failed": "The audit hash chain verification found {problem_count, plural, one {# problem} other {# problems}} for {from_day} to {to_day} ({trigger})"
+      "chain_verification_failed": "The audit hash chain verification found {problem_count, plural, one {# problem} other {# problems}} for {from_day} to {to_day} ({trigger})",
+      "export_requested": "{actor} requested an evidence export of {from_day} to {to_day}"
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
