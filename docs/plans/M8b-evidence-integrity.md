@@ -1094,6 +1094,34 @@ a precise probe.
   its refusal of an empty `paddock.platform.admins` while platform administrators exist (follow-up ticket). No
   migration.
 
+## Amendment 2026-10-30 (PDK-534, main as architect lead)
+
+**Reason.** The amendment of 2026-10-29 (PDK-424) left `ReconcilePlatform` refusing an empty `paddock.platform.admins`
+while platform administrators exist. When the last platform administrator really left the group, the round failed
+every interval and the worker never ended that administrator's portal sessions. Main, as architect lead, chose option a
+on 2026-10-30: the platform path reuses the PDK-424 probe.
+
+- **Supersedes** the sentence of the 2026-10-29 amendment that `ReconcilePlatform` keeps its refusal of an empty
+  `paddock.platform.admins`. The rest of that "Unchanged" item stands: an empty superuser listing still refuses the
+  platform scope in `SyncPlatform`.
+- **Probe holds.** When the listing of `paddock.platform.admins` has no member with a UID, `ReconcilePlatform` runs
+  `RoleGroups.DirectoryVisible`: the group can be read by name, and a user listing returns at least one user who is
+  not a service account. If the probe holds, the emptying is real. Each platform administrator with open sessions is
+  confirmed by the direct read of decision 22 (M8s), its sessions end in that round, and one
+  `admin.sessions_revoked` is recorded in the platform pseudo-organization. `SyncPlatform` compares the single emptied
+  role as before, so `admin.role_revoked` is recorded after two consecutive rounds miss the member.
+- **Probe fails.** The round is refused with `ErrDirectoryEmpty`, and no session is ended or read. A failed probe read
+  is a plain round error and is not counted as a refusal.
+- **Metric and alert.** A refused platform round counts once in `paddock_identity_directory_refusals_total`, even when
+  both consumers refused it. Its streak of refusals is kept under the nil organization ID, and the warning after
+  three refusals in a row names that ID. The alert `PaddockRoleDirectoryRefused` covers the platform round.
+- **Residual.** A token with partial scope can pass the probe: the group is readable and some user is visible, but the
+  platform administrators are not. The direct read then finds no platform administrator, so every platform
+  administrator with sessions loses them as removed. Nobody is locked out, because the next login is decided by the
+  OIDC groups claim. This gap is inherited unchanged from the PDK-424 probe. Using a non-empty superuser listing as an
+  additional sign that the token can see the directory is left to follow-up ticket PDK-547.
+- No migration.
+
 ## Amendment 2026-10-30 (PDK-535, main as architect lead)
 
 **Reason.** An audit-writer replica that starts while another replica runs its nightly cycle seeded both gauges once

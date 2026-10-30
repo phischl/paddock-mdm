@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -110,6 +111,9 @@ var ErrLoginDenied = problem.Forbidden.WithDetail(ReasonNotAuthorized)
 // DenialOrganizationInactive is the denial reason of a role in an unknown or inactive organization.
 const DenialOrganizationInactive = "organization_inactive"
 
+// errLoginLookupFailed is the audit error code of a login whose organization lookup failed.
+var errLoginLookupFailed = &problem.Error{Code: ReasonLoginFailed, Status: http.StatusInternalServerError}
+
 // ErrOrganizationInactive is returned when the role's organization is unknown or not active; the denial is already
 // audited.
 var ErrOrganizationInactive = problem.Forbidden.WithDetail(DenialOrganizationInactive)
@@ -127,6 +131,8 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 	}
 	orgID, err := a.org.ResolveSlug(ctx, role.Slug)
 	if err != nil {
+		// No organization context exists yet, so the failed attempt is recorded like a failed code exchange (PDK-508).
+		a.RecordLoginFailure(ctx, id.IP, id.Username, ReasonLoginFailed, id.Channel, errLoginLookupFailed)
 		return LoginResult{}, err
 	}
 	if orgID == uuid.Nil { // unknown or inactive organization
