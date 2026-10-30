@@ -56,7 +56,9 @@ test('organization admin sets the MCP policy and their own write access', async 
     await expect(page.getByTestId('mcp-defaults-hint')).toHaveCount(0)
     test.info().annotations.push({ type: 'skip', description: 'defaults hint: acme already has a saved MCP policy (the acceptance gates save one)' })
   }
-  if (!saved.enabled) await expect(page.getByTestId('mcp-disabled-hint')).toBeVisible()
+  // The switched-off hint replaces the defaults hint once a policy is saved; a never-saved policy shows only the
+  // defaults hint (fresh installations, CI).
+  if (!saved.enabled && saved.updated_at !== null) await expect(page.getByTestId('mcp-disabled-hint')).toBeVisible()
   await expectAccessible(page)
 
   await page.getByTestId('mcp-enabled').getByRole('checkbox').check()
