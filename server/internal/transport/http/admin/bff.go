@@ -343,6 +343,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		orgID, err := b.accounts.OrganizationID(ctx, res.Slug)
 		if err != nil {
 			slog.ErrorContext(ctx, "login failed", "error", err)
+			b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonLoginFailed, "", errLoginFailed)
 			denied(w, r, app.ReasonLoginFailed)
 			return
 		}

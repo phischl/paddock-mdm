@@ -41,8 +41,9 @@ const refusedRepeatedly = 3
 
 var metricDirectoryRefusals = promauto.NewCounter(prometheus.CounterOpts{
 	Name: "paddock_identity_directory_refusals_total",
-	Help: "Organization rounds of admin-accounts refused because every role group listing was empty and the directory " +
-		"probe did not show that the service token sees the directory (app.ErrDirectoryEmpty, PDK-424).",
+	Help: "Organization rounds of admin-accounts and rounds of platform-admins refused because every role group listing " +
+		"was empty and the directory probe did not show that the service token sees the directory (app.ErrDirectoryEmpty, " +
+		"PDK-424, PDK-534).",
 })
 
 // BrandFlows keeps the platform-wide flows of the identity provider's default brand (authentik.Client).
@@ -128,10 +129,10 @@ func (i *Identity) adminAccounts(ctx context.Context) error {
 	return err
 }
 
-// noteRefusal counts a refused round of the caller's organization and warns from refusedRepeatedly consecutive
-// refusals on: role changes of the organization are not recorded and its administrator accounts are not followed
-// until an operator restores the service token's view (docs/operations/monitoring.md). A successful round ends the
-// streak; a round failing otherwise (Authentik unreachable) neither counts nor ends it.
+// noteRefusal counts a refused round of the caller's organization (uuid.Nil: the platform round) and warns from
+// refusedRepeatedly consecutive refusals on: role changes of the scope are not recorded and its administrators are not
+// followed until an operator restores the service token's view (docs/operations/monitoring.md). A successful round
+// ends the streak; a round failing otherwise (Authentik unreachable) neither counts nor ends it.
 func (i *Identity) noteRefusal(ctx context.Context, err error) {
 	p, _ := principal.From(ctx)
 	i.mu.Lock()
@@ -147,8 +148,8 @@ func (i *Identity) noteRefusal(ctx context.Context, err error) {
 	i.refused[p.OrganizationID]++
 	if n := i.refused[p.OrganizationID]; n >= refusedRepeatedly {
 		slog.WarnContext(ctx, "the identity provider's directory looked empty to the service token in consecutive rounds; "+
-			"the organization's role changes are not recorded and its administrator accounts are not followed",
-			"organization_id", p.OrganizationID, "rounds", n)
+			"the role changes of the organization (the platform for the nil ID) are not recorded and its administrators "+
+			"are not followed", "organization_id", p.OrganizationID, "rounds", n)
 	}
 }
 
@@ -159,12 +160,19 @@ func (i *Identity) RunPlatformAdmins(ctx context.Context) error {
 	return i.loop(ctx, i.syncEvery, "platform-admins", func(ctx context.Context) error {
 		sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 		_, err := i.platform.WithLeaderLock(sys, identityPlatformAdminsLockKey, func(ctx context.Context) error {
-			ctx = httpx.WithRequestID(ctx, "platform-admins-"+i.now().UTC().Format(time.RFC3339))
-			groups := i.roles.PlatformRoleGroups(ctx)
-			return errors.Join(i.accounts.ReconcilePlatform(ctx, groups), i.roles.SyncPlatform(ctx, groups))
+			return i.platformAdmins(httpx.WithRequestID(ctx, "platform-admins-"+i.now().UTC().Format(time.RFC3339)))
 		})
 		return err
 	})
+}
+
+// platformAdmins lists the platform group once for both consumers of the round; a round refused because the directory
+// looks empty to the service token is counted once, as an organization round is (PDK-534).
+func (i *Identity) platformAdmins(ctx context.Context) error {
+	groups := i.roles.PlatformRoleGroups(ctx)
+	err := errors.Join(i.accounts.ReconcilePlatform(ctx, groups), i.roles.SyncPlatform(ctx, groups))
+	i.noteRefusal(ctx, err)
+	return err
 }
 
 // RunReconcile runs the reconcile round at start and then every reconcile interval until ctx ends.
