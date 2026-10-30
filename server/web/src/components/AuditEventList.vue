@@ -62,7 +62,10 @@ function details(e: AuditEvent): [string, string][] {
       />
     </template>
     <template #[`item.actor`]="{ item }: { item: AuditEvent }">
-      <ActorChip :actor="item.actor" />
+      <ActorChip
+        :actor="item.actor"
+        :source="item.source"
+      />
     </template>
     <template #[`item.event`]="{ item }: { item: AuditEvent }">
       <span

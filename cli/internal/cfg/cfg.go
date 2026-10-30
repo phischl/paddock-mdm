@@ -25,6 +25,10 @@ type Config struct {
 type Sources struct {
 	URL, TokenFile, CAFile, ConfigFile string // flags; "" = not given
 	Getenv                             func(string) string
+	// NoToken resolves without an API token: paddockctl mcp authenticates with its own session, never with a token.
+	NoToken bool
+	// DefaultURL is used when neither flag, environment nor config file names a URL (the URL of an MCP session).
+	DefaultURL string
 }
 
 // file is the config file.
@@ -63,7 +67,7 @@ func Resolve(s Sources) (Config, error) {
 		}
 	}
 	c := Config{
-		URL:       first(s.URL, s.Getenv("PADDOCK_URL"), f.URL),
+		URL:       first(s.URL, s.Getenv("PADDOCK_URL"), f.URL, s.DefaultURL),
 		TokenFile: first(s.TokenFile, s.Getenv("PADDOCK_TOKEN_FILE"), f.TokenFile),
 		CAFile:    first(s.CAFile, s.Getenv("PADDOCK_CA_FILE"), f.CAFile),
 	}
@@ -73,6 +77,8 @@ func Resolve(s Sources) (Config, error) {
 	// The token travels in every request, so it is never sent in clear text (review 1 of PDK-008).
 	case !strings.HasPrefix(c.URL, "https://"):
 		return Config{}, Errorf("the URL %q must start with https://", c.URL)
+	case s.NoToken:
+		c.TokenFile = ""
 	case c.TokenFile == "":
 		return Config{}, Errorf("no token file: set --token-file, PADDOCK_TOKEN_FILE or token_file in %s", path)
 	}

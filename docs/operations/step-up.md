@@ -139,6 +139,11 @@ validate the required authenticator class" with the classes, never the token.
   administrator signs in again with the current role. A token without `groups`, or a platform session whose groups
   name an organization, is only refused.
 - A role switch (user menu) is a new sign-in: the new session starts without a step-up.
+- **MCP sessions never step up** (ADR 0044, [mcp.md](mcp.md)). A session of `paddockctl mcp login` has no step-up and
+  cannot get one: `/api/auth/stepup` and its callback refuse an MCP access token (403), operations that always need a
+  step-up are not offered to the MCP (403 `mcp_tool_not_allowed`), and a change that needs one in a given case answers
+  403 `step_up_required` with the detail `this change needs an interactive administrator in the portal: MCP sessions
+  cannot complete a step-up`, recorded as denied.
 
 The portal shows how long the last step-up stays valid: a chip *Confirmed until …* in the app bar and the line
 *Identity confirmed until …* in the user menu (*No current identity confirmation* otherwise), from

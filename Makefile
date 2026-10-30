@@ -34,6 +34,16 @@ ifneq ($(BACKUP),)
 export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
 endif
 
+# CI only (PDK-540): the workflow sets PADDOCK_CI_GOMODCACHE to the runner's module download cache, which the image
+# builds read instead of the module proxy; unset, as locally, the Compose files are unchanged.
+CI_GOMODCACHE_FILES := $(if $(PADDOCK_CI_GOMODCACHE),compose.ci-gomodcache.yaml,)
+# The same cache feeds the lint image builds as the named build context and govulncheck as a read-only file proxy
+# ahead of the default proxy list (PDK-516). Go checks every module from it against go.sum and go.work.sum, and a
+# module missing from it falls through to proxy.golang.org. Recursive, because comma is defined further down.
+CI_GOMODCACHE_BUILD = $(if $(PADDOCK_CI_GOMODCACHE),--build-context 'gomodcache=$(PADDOCK_CI_GOMODCACHE)',)
+CI_GOMODCACHE_RUN   = $(if $(PADDOCK_CI_GOMODCACHE),-v '$(PADDOCK_CI_GOMODCACHE):/gomodcache:ro' \
+	-e GOPROXY=file:///gomodcache$(comma)https://proxy.golang.org$(comma)direct,)
+
 # The stack of this checkout: deploy/compose/.env names its Compose project and host ports, so a second development
 # stack runs from a second checkout (docs/operations/local-dev.md, "Running a second dev stack"). The process
 # environment wins, as it does for Compose and lib.sh. Recursive, because `make up` creates .env (dev-secrets) first.
@@ -47,7 +57,7 @@ DEV_HTTPS   = https://%.$(call dev_setting,PADDOCK_DOMAIN,paddock.localhost):$(c
 
 COMPOSE = docker compose --project-directory $(COMPOSE_DIR) -p $(DEV_PROJECT) \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
-	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES),-f $(COMPOSE_DIR)/$(f))
+	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES) $(CI_GOMODCACHE_FILES),-f $(COMPOSE_DIR)/$(f))
 # Expanded only where a recipe uses them, so that the guard stops the stack's targets and no other one.
 unexport dotenv dev_setting dev_instance_guard DEV_PROJECT DEV_HTTPS COMPOSE LOAD_GUARD
 
@@ -112,7 +122,11 @@ changelog-check: ## Validate the changelog fragments in changelog.d/
 # the imports for linux/amd64 only. Paddock's own packages are MIT (LICENSE). Bundled container images:
 # docs/compliance/third-party.md.
 GO_LICENSES_VERSION := v2.0.1
-ALLOWED_LICENSES    := MIT ISC BSD-2-Clause BSD-3-Clause Apache-2.0 MPL-2.0 BlueOak-1.0.0 0BSD CC0-1.0 Python-2.0 Unlicense
+ALLOWED_LICENSES    := MIT MIT-0 ISC BSD-2-Clause BSD-3-Clause Apache-2.0 MPL-2.0 BlueOak-1.0.0 0BSD CC0-1.0 Python-2.0 Unlicense
+# The only ignored third-party module: github.com/segmentio/asm is MIT-0 (MIT No Attribution), OSI-approved, more
+# permissive than MIT; approved by the maintainer 2026-10-28; transitive via modelcontextprotocol/go-sdk →
+# segmentio/encoding, raised to v1.2.1 by goose in workspace mode. go-licenses cannot classify MIT-0, hence the ignore.
+GO_LICENSES_IGNORE  := github.com/segmentio/asm
 
 .PHONY: lint-licenses
 lint-licenses: ## License gate: Go and npm production dependencies against the allow list
@@ -122,7 +136,7 @@ lint-licenses: ## License gate: Go and npm production dependencies against the a
 		$(GO_BUILD_IMAGE) sh -c 'set -e; \
 			for m in $(GO_MODULES); do echo "go-licenses $$m"; cd /src/$$m; \
 				go run github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION) check ./... \
-					--ignore github.com/phischl/paddock-mdm \
+					--ignore github.com/phischl/paddock-mdm --ignore $(GO_LICENSES_IGNORE) \
 					--allowed_licenses=$(subst $(space),$(comma),$(ALLOWED_LICENSES)); done'
 	@if [ -f $(WEB_DIR)/package.json ]; then \
 		$(NODE_RUN) sh -c 'set -e; npm ci --no-audit --no-fund >/dev/null; \
@@ -164,7 +178,7 @@ lint-tidy:
 .PHONY: lint-vuln
 lint-vuln:
 	docker run --rm -v $(CURDIR):/src -w /src/server \
-		-v paddock-gomod:/go/pkg/mod -v paddock-govulncheck-cache:/root/.cache \
+		-v paddock-gomod:/go/pkg/mod -v paddock-govulncheck-cache:/root/.cache $(CI_GOMODCACHE_RUN) \
 		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
 		$(GO_BUILD_IMAGE) sh -c 'set -e; \
 			for m in $(GO_MODULES); do echo "govulncheck $$m"; go tool govulncheck -test -C /src/$$m ./...; done'
@@ -177,7 +191,7 @@ lint-vuln:
 lint-image:
 	@for target in build compiler build/linux/arm64; do \
 		docker build --target $${target%%/*} $$(case $$target in */*) echo --platform $${target#*/};; esac) \
-			-f $(COMPOSE_DIR)/Dockerfile \
+			-f $(COMPOSE_DIR)/Dockerfile $(CI_GOMODCACHE_BUILD) \
 			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
 			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
 			--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) . || exit 1; \
@@ -212,6 +226,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/ci/assert-hardening_test.sh
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
+	bash test/skill_test.sh
 	bash scripts/changelog-assemble_test.sh
 	bash scripts/acceptance-scope_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
@@ -408,8 +423,9 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 	@echo "built bin/paddockctl/{amd64,arm64}/paddockctl $(VERSION)"
 
 .PHONY: acceptance
-# The exactly-once gate checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check); they run in
-# parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8).
+# The exactly-once gate checks about 366 cases of ≈ 10 s each in the median, ≈ 17 s on average (delivery plus the 5 s
+# settle check); they run in parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8), about 29 min wall time on a
+# CI runner (≈ 1730 s, test/acceptance/shard-weights.txt; PDK-513).
 # SHARD=i/n runs shard i of n: test/acceptance/cmd/acceptanceshard puts every listed test into exactly one shard,
 # balanced by test/acceptance/shard-weights.txt; before the run it checks (-verify n) that the n shard regexes select
 # every test of `go test -list` exactly once, so a new test can never be left out.
@@ -504,6 +520,16 @@ ci: lint test web ## Everything CI runs
 logs: ## Show logs of the stack (token= values redacted, RR-63)
 	set -o pipefail; . $(LIB_SH) && $(COMPOSE) --profile paddock logs --no-color --tail 300 | redact_tokens
 
+# The CI acceptance jobs upload this directory as an artifact when they fail (PDK-555): a stall like PDK-545 leaves its
+# evidence outside the tail of make logs. ps -a also lists containers that exited, whose logs matter most.
+.PHONY: logs-dump
+logs-dump: ## Write the full logs of every service to LOGS_DIR/<service>.log (token= values redacted, RR-63)
+	@test -n '$(LOGS_DIR)' || { echo "usage: make logs-dump LOGS_DIR=<directory>" >&2; exit 2; }
+	set -o pipefail; . $(LIB_SH) && mkdir -p '$(LOGS_DIR)' && rc=0 && \
+	for s in $$($(COMPOSE) --profile paddock ps -a --services); do \
+		$(COMPOSE) --profile paddock logs --no-color --timestamps "$$s" 2>&1 | redact_tokens >'$(LOGS_DIR)'/"$$s".log || rc=1; \
+	done; exit $$rc
+
 # --- Release (plan M6b decision 4, plan M7b decisions 4–7 and 20, docs/operations/agent-releases.md) ---------------
 # The release workflow (.github/workflows/release.yml, tags v*.*.*) and the edge job of ci.yml call these targets, in
 # this order: release-images PUSH=1, release-packages (stable only), release-sbom, release-bundle, release-sums,
@@ -522,7 +548,7 @@ RELEASE_PGBACKREST_REPO ?= $(RELEASE_REGISTRY)/paddock-pgbackrest
 RELEASE_DIR             ?= dist/release/$(RELEASE_VERSION)
 RELEASE_SOURCE          ?= https://github.com/phischl/paddock-mdm
 DOCKER_CONFIG_DIR       ?= $(HOME)/.docker
-# Extra flags of every docker buildx build, e.g. the workflow's layer cache (--cache-from/--cache-to type=gha).
+# Extra flags of every docker buildx build.
 RELEASE_BUILDX_FLAGS    ?=
 RELEASE_IMAGES           = server=$(RELEASE_SERVER_REPO):$(RELEASE_VERSION) compiler=$(RELEASE_COMPILER_REPO):$(RELEASE_VERSION) \
 	pgbackrest=$(RELEASE_PGBACKREST_REPO):$(RELEASE_VERSION)
