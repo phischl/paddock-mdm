@@ -8,7 +8,16 @@ const { t } = useI18n()
 
 <template>
   <section class="page">
-    <h1>{{ t('audit.title') }}</h1>
+    <div class="page-header">
+      <h1>{{ t('audit.title') }}</h1>
+      <v-btn
+        :to="{ name: 'audit-exports' }"
+        variant="tonal"
+        data-testid="audit-exports-link"
+      >
+        {{ t('auditExports.title') }}
+      </v-btn>
+    </div>
     <AuditEventList
       :fetch="listAuditEvents"
       data-testid="audit-table"
