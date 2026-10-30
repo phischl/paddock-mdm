@@ -1,4 +1,4 @@
--- server/migrations/paddock/00079_retention_inventory_hold.sql
+-- server/migrations/paddock/00078_retention_inventory_hold.sql
 -- The retention round keeps a retired device's Fleet host and host reference while a device of the same hardware may
 -- still use the host ('hardware') or the host checked in after the retirement ('seen_recently'). The last answer the
 -- round recorded an event for is held here, so an unchanged answer records no event every round and, after a fixed

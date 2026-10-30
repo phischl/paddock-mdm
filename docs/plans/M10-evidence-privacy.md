@@ -1760,7 +1760,7 @@ Architect decisions on review 1 of PDK-583. They amend the amendment above where
   deleted, so gate R2 (host seen just before the retirement) stays deterministic. A failing lookup fails closed: no
   deletion, all rows kept, one failure event; an `upstream_unavailable` lookup failure counts toward the breaker like a
   failed deletion. The 7 days are retention days (`PADDOCK_RETENTION_UNIT`).
-- **M1: the kept answer is persisted.** Paddock migration 00079 adds `retention_inventory_hold` (`device_id` primary
+- **M1: the kept answer is persisted.** Paddock migration 00078 adds `retention_inventory_hold` (`device_id` primary
   key referencing `device` with `ON DELETE CASCADE`, `organization_id`, `last_answer` `'hardware'` or
   `'seen_recently'`, `unchanged_rounds`, `last_event_at`; ENABLE and FORCE row level security, the organization policy
   without `missing_ok`, granted to `paddock_worker` only). A successful action that keeps the host stores its answer
@@ -1789,7 +1789,7 @@ Decisions on review 2 of PDK-583. They amend M1, x3 and the bound above where th
   it, and when the drop fails the device is skipped this round and the pass fails (no action, no event). The action
   sets the held answer, or drops it on a failure or when nothing is kept, in the transaction that records its outcome.
   A held answer therefore always belongs to the last event of the device.
-- **The held answer belongs to one retirement.** `retention_inventory_hold.retired_at` (migration 00079) stores the
+- **The held answer belongs to one retirement.** `retention_inventory_hold.retired_at` (migration 00078) stores the
   device's `state_changed_at` with the answer. When it differs from the listed device's (reactivated and retired
   again), the answer counts as changed: the action runs, records its event and starts the count over.
 - **A lookup blip neither records an event nor restarts the count.** The comparison's host check and check-in lookup
@@ -1807,3 +1807,6 @@ Decisions on review 2 of PDK-583. They amend M1, x3 and the bound above where th
   Fleet's own 404 reads as a host that is gone.
 - **`device.inventory_host_kept` declares `failure`**: a notice that cannot be recorded fails with the count and is
   retried the next round.
+- **Migration numbers (renumbered 2026-10-30).** The hold table is paddock migration 00078; PDK-139 moves to 00079, so
+  the cluster leaves no gap of its own even if PDK-139 lands last (goose refuses missing versions). This supersedes the
+  "00078 belongs to PDK-139" note of the PDK-138 amendment.
