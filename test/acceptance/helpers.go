@@ -433,3 +433,20 @@ func stepUp(t *testing.T, p *env.Portal, user string, ok bool) {
 // operatorRootsMu serializes every read-modify-write of operator roots in this run: the list is replaced as a whole,
 // so two writers must never interleave (ensureOperatorRoots, the audit case of the setting, the isolation fixture).
 var operatorRootsMu sync.Mutex
+
+// requireSingleService fails unless exactly one container of the compose service runs in this stack. Gates whose
+// ordering proof holds for a single replica only call it, so scaling the service fails them loudly instead of letting
+// them pass for the wrong reason (PDK-572, PDK-573). One-off containers of `compose run` serve no traffic and are not
+// counted.
+func requireSingleService(t *testing.T, ctx context.Context, service string) {
+	t.Helper()
+	out, err := stack.Docker(ctx, nil, "ps", "-q", "--filter", "status=running",
+		"--filter", "label=com.docker.compose.project="+stack.Project(), "--filter", "label=com.docker.compose.service="+service,
+		"--filter", "label=com.docker.compose.oneoff=False")
+	if err != nil {
+		t.Fatalf("counting the %s containers: %v", service, err)
+	}
+	if n := len(strings.Fields(out)); n != 1 {
+		t.Fatalf("this gate's ordering proof assumes a single %s; found %d", service, n)
+	}
+}
