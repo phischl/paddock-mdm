@@ -574,6 +574,17 @@ sequenceDiagram
 - The `seq` value is issued by the gateway with an atomic `INCR seq:<device>` in Valkey; the worker persists
   `last_seq` from the heartbeat (rebuild source after a Valkey loss). A request whose `Paddock-Seq` is lower than
   the stored value minus 1 raises `clone_suspected` (§6.4). *(Amended 2026-10-04, M2a.)*
+
+  *Note 2026-10-30 (PDK-475):* the increment is conditional: an atomic script increments `seq:<device>` only if it
+  exists and never creates it, so a counter lost with Valkey cannot restart at 1. While it is missing, the gateway
+  issues no number and answers 503 `backpressure` with `Retry-After` (`ErrSeqMissing`). The worker restores the
+  counter together with the identity key: every write of `dk:<key_id>` (change notification, reconcile, enrollment)
+  first restores `seq:<device>` from `device_status.last_seq` if it is missing (`SET NX`). A live counter is never
+  raised or lowered: `last_seq` can include a number the gateway released after an ambiguous heartbeat publish, or
+  lag behind numbers the device already received after a restore from a stale value, so raising from it could put the
+  counter more than one ahead of the device and quarantine a healthy device as a clone. Residual (RR-97): a counter
+  restored from a stale `last_seq` (heartbeats still queued) or rolled back by an AOF replay reissues numbers up to
+  the depth of that lag until it catches up, which weakens clone detection for the device meanwhile.
 - **Event-triggered check-ins:** besides the timer, the agent checks in immediately (with 0–15 s random delay) when network connectivity becomes available (NetworkManager `Connectivity` = `FULL` via D-Bus, or `systemd-networkd` state change), after resume from suspend (logind `PrepareForSleep(false)`), and at boot. A laptop that comes online therefore receives a pending user lock within seconds, not after up to five minutes. Event-triggered check-ins are rate-limited to one per 60 s.
 - `next_checkin_s` = 300 × random(0.8, 1.2). Failure back-off: 30 s, 60 s, 2 min, 5 min, 10 min,
   30 min (cap), each with ±20 % jitter. The server MAY raise `next_checkin_s` under load (backpressure, §8).

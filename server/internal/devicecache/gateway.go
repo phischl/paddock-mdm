@@ -2,6 +2,7 @@ package devicecache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -27,11 +28,29 @@ func (c *Cache) UseNonce(ctx context.Context, device, nonce string) (bool, error
 
 func seqKey(device uuid.UUID) string { return "seq:" + device.String() }
 
-// NextSeq increments seq:<device> and returns the new value (architecture §6.4).
+// ErrSeqMissing reports that seq:<device> does not exist, so no sequence number can be issued until the worker has
+// restored it from device_status.last_seq.
+var ErrSeqMissing = errors.New("devicecache: sequence number not restored yet")
+
+// nextSeqScript increments seq:<device> only if it exists: a plain INCR on an emptied Valkey would restart the counter
+// at 1, far below device_status.last_seq, and hand out numbers the device already received. Restored values are never
+// negative, so 0 is free to mean "missing".
+var nextSeqScript = valkey.NewLuaScript(`
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  return redis.call('INCR', KEYS[1])
+end
+return 0
+`)
+
+// NextSeq increments seq:<device> and returns the new value (architecture §6.4). It returns ErrSeqMissing while the
+// counter has not been restored (PutDeviceKey restores it before the identity key becomes usable).
 func (c *Cache) NextSeq(ctx context.Context, device uuid.UUID) (int64, error) {
-	n, err := c.c.Do(ctx, c.c.B().Incr().Key(seqKey(device)).Build()).AsInt64()
+	n, err := nextSeqScript.Exec(ctx, c.c, []string{seqKey(device)}, nil).AsInt64()
 	if err != nil {
 		return 0, fmt.Errorf("devicecache: seq: %w", err)
+	}
+	if n == 0 {
+		return 0, ErrSeqMissing
 	}
 	return n, nil
 }
@@ -56,8 +75,12 @@ func (c *Cache) ReleaseSeq(ctx context.Context, device uuid.UUID, seq int64) (bo
 	return n >= 0, nil
 }
 
-// RestoreSeq sets seq:<device> to last unless it exists (the worker rebuilds an emptied Valkey from
-// device_status.last_seq, so clone detection survives a cache loss).
+// RestoreSeq sets seq:<device> to last (device_status.last_seq) only if it is missing (the worker rebuilds an emptied
+// Valkey from PostgreSQL, so clone detection survives a cache loss). A live counter is never changed: last_seq is
+// persisted asynchronously and can include a number the gateway released after an ambiguous heartbeat publish, or lag
+// behind numbers the device already holds after a restore from a stale value, so raising a live counter from it can
+// put the counter more than one ahead of the device and quarantine a healthy device as a clone (PDK-475). A counter
+// restored from a stale last_seq therefore reissues numbers until it catches up, which weakens clone detection (RR-97).
 func (c *Cache) RestoreSeq(ctx context.Context, device uuid.UUID, last int64) error {
 	err := c.c.Do(ctx, c.c.B().Set().Key(seqKey(device)).Value(strconv.FormatInt(last, 10)).Nx().Build()).Error()
 	if err != nil && !valkey.IsValkeyNil(err) {

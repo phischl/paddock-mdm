@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -104,22 +105,26 @@ func (s *CacheSync) Changed(ctx context.Context, payload string) error {
 	})
 }
 
-// ReconcileAll rewrites the cache entries of every organization.
+// ReconcileAll rewrites the cache entries of every organization. A failing organization is logged and skipped, and
+// the joined error of all failures is returned: since PDK-475 a device whose counter is missing gets 503 until a
+// reconcile restores it, so one broken organization must not keep the devices of all later ones waiting.
 func (s *CacheSync) ReconcileAll(ctx context.Context) error {
 	orgs, err := s.pool.OrganizationIDs(principal.With(ctx, principal.Principal{Kind: principal.KindSystem}))
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, org := range orgs {
 		if err := s.Reconcile(ctx, org); err != nil {
-			return fmt.Errorf("organization %s: %w", org, err)
+			slog.WarnContext(ctx, "device cache reconcile of an organization failed", "organization", org, "error", err)
+			errs = append(errs, fmt.Errorf("organization %s: %w", org, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
-// Reconcile rewrites the live tokens and the identity keys of one organization and restores missing sequence
-// numbers.
+// Reconcile rewrites the live tokens and the identity keys of one organization; writing a key restores its device's
+// missing sequence number.
 func (s *CacheSync) Reconcile(ctx context.Context, org uuid.UUID) error {
 	ctx = systemContext(ctx, org, "cache-sync")
 	return s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -129,15 +134,6 @@ func (s *CacheSync) Reconcile(ctx context.Context, org uuid.UUID) error {
 		}
 		for _, tok := range tokens {
 			if err := s.putToken(ctx, tok); err != nil {
-				return err
-			}
-		}
-		seqs, err := q.ListDeviceSeqs(ctx)
-		if err != nil {
-			return err
-		}
-		for _, sq := range seqs {
-			if err := s.cache.RestoreSeq(ctx, sq.DeviceID, sq.LastSeq); err != nil {
 				return err
 			}
 		}
@@ -181,7 +177,7 @@ func (s *CacheSync) putKeys(ctx context.Context, q *pgstore.Queries, org uuid.UU
 	for _, k := range keys {
 		if err := s.cache.PutDeviceKey(ctx, k.KeyID, devicecache.DeviceKey{
 			DeviceID: k.DeviceID, OrganizationID: org, Status: devicecache.KeyStatus(k.KeyStatus, k.State), PublicKey: k.PublicKey,
-		}); err != nil {
+		}, k.LastSeq); err != nil {
 			return err
 		}
 	}

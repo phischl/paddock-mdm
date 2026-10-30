@@ -3,6 +3,7 @@ package devicecache_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +54,7 @@ func TestRoundTrips(t *testing.T) {
 	}
 
 	key := devicecache.DeviceKey{DeviceID: uuid.New(), OrganizationID: org, Status: devicecache.KeyActive, PublicKey: []byte{1, 2, 3}}
-	if err := cache.PutDeviceKey(ctx, "abc", key); err != nil {
+	if err := cache.PutDeviceKey(ctx, "abc", key, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got, ok, err := cache.DeviceKey(ctx, "abc"); err != nil || !ok || got.DeviceID != key.DeviceID || !bytes.Equal(got.PublicKey, key.PublicKey) || got.Status != "active" {
@@ -137,6 +138,78 @@ func TestGatewayKeys(t *testing.T) {
 	}
 }
 
+// TestSeqAfterCacheLoss (PDK-475): on an emptied Valkey the counter does not restart at 1 below
+// device_status.last_seq; no number is issued until writing the identity key has restored it.
+func TestSeqAfterCacheLoss(t *testing.T) {
+	cache := devicecache.New(valkeytest.Start(t).Client(t))
+	ctx := context.Background()
+	dev := uuid.New()
+
+	if n, err := cache.NextSeq(ctx, dev); !errors.Is(err, devicecache.ErrSeqMissing) {
+		t.Fatalf("seq on an emptied cache: %d %v", n, err)
+	}
+	key := devicecache.DeviceKey{DeviceID: dev, OrganizationID: uuid.New(), Status: devicecache.KeyActive}
+	if err := cache.PutDeviceKey(ctx, "k1", key, 41); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cache.NextSeq(ctx, dev); err != nil || n != 42 {
+		t.Fatalf("first seq after the restore: %d %v", n, err)
+	}
+	// Rewriting the key keeps a counter that is already ahead of the persisted value.
+	if err := cache.PutDeviceKey(ctx, "k1", key, 3); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cache.NextSeq(ctx, dev); err != nil || n != 43 {
+		t.Fatalf("seq after rewriting the key: %d %v", n, err)
+	}
+	// A device that never checked in starts at 1.
+	fresh := uuid.New()
+	if err := cache.PutDeviceKey(ctx, "k2", devicecache.DeviceKey{DeviceID: fresh}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cache.NextSeq(ctx, fresh); err != nil || n != 1 {
+		t.Fatalf("first seq of a new device: %d %v", n, err)
+	}
+}
+
+// TestRestoreSeqKeepsLiveCounter (PDK-475): a missing counter is restored to last_seq; a live counter is never
+// changed, whether last_seq is higher (a released number that ingest persisted anyway, or a backlog that drained after
+// a restore from a stale value) or lower, so a restore never moves the counter ahead of the device.
+func TestRestoreSeqKeepsLiveCounter(t *testing.T) {
+	cache := devicecache.New(valkeytest.Start(t).Client(t))
+	ctx := context.Background()
+	dev := uuid.New()
+
+	if err := cache.RestoreSeq(ctx, dev, 5); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cache.NextSeq(ctx, dev); err != nil || n != 6 {
+		t.Fatalf("seq after restoring a missing counter: %d %v", n, err)
+	}
+	if err := cache.RestoreSeq(ctx, dev, 20); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cache.NextSeq(ctx, dev); err != nil || n != 7 {
+		t.Fatalf("seq after a higher restore: %d %v", n, err)
+	}
+	if err := cache.RestoreSeq(ctx, dev, 3); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cache.NextSeq(ctx, dev); err != nil || n != 8 {
+		t.Fatalf("seq after a lower restore: %d %v", n, err)
+	}
+	// A released number that ingest persisted anyway is not handed out ahead of the device.
+	if released, err := cache.ReleaseSeq(ctx, dev, 8); err != nil || !released {
+		t.Fatalf("release: %v %v", released, err)
+	}
+	if err := cache.RestoreSeq(ctx, dev, 8); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cache.NextSeq(ctx, dev); err != nil || n != 8 {
+		t.Fatalf("seq after restoring a released number: %d %v", n, err)
+	}
+}
+
 // TestErrorsDoNotCarryKeys: cache errors are logged by the gateway, so they must not contain the key ID from the
 // Paddock-Key-Id header or the hash of an enrollment token.
 func TestErrorsDoNotCarryKeys(t *testing.T) {
@@ -151,7 +224,7 @@ func TestErrorsDoNotCarryKeys(t *testing.T) {
 	_, _, readToken := cache.Token(ctx, tokenHash)
 	writeToken := cache.PutToken(ctx, tokenHash, devicecache.Token{ExpiresAt: now.Add(time.Hour)}, now)
 	_, _, readKey := cache.DeviceKey(ctx, keyID)
-	writeKey := cache.PutDeviceKey(ctx, keyID, devicecache.DeviceKey{})
+	writeKey := cache.PutDeviceKey(ctx, keyID, devicecache.DeviceKey{}, 0)
 	for name, err := range map[string]error{"Token": readToken, "PutToken": writeToken, "DeviceKey": readKey, "PutDeviceKey": writeKey} {
 		if err == nil {
 			t.Fatalf("%s with a cancelled context succeeded", name)
