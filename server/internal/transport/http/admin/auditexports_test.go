@@ -3,12 +3,17 @@ package admin_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
@@ -142,6 +147,95 @@ func TestAuditExportsRefusals(t *testing.T) {
 
 	if r := e.do(call{method: "GET", path: "/api/v1/audit/exports", cookie: operator}); r.status != http.StatusForbidden {
 		t.Fatalf("list as operator: %d %s", r.status, r.body)
+	}
+}
+
+// storeExport inserts an export of org as the audit writer leaves it, with the chunks, as in the use case tests.
+func storeExport(t *testing.T, e *env, org uuid.UUID, status string, chunks ...[]byte) (uuid.UUID, string) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, e.writerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	id := uuid.Must(uuid.NewV7())
+	sum := sha256.New()
+	var size int64
+	for _, c := range chunks {
+		sum.Write(c)
+		size += int64(len(c))
+	}
+	day := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
+	if _, err := conn.Exec(ctx, `INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose, requested_by,
+		correlation_id, ready_at, expires_at, size, package_sha256, event_count, object_count, verify_ok)
+		VALUES ($1, $2, $3, $4, $4, 'download test', '{}', 'c', now(), now() + interval '1 hour', $5, $6, 1, 1, true)`,
+		id, org, status, day, size, sum.Sum(nil)); err != nil {
+		t.Fatal(err)
+	}
+	for seq, c := range chunks {
+		if _, err := conn.Exec(ctx, "INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, $3, $4)", id, org, seq, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id, hex.EncodeToString(sum.Sum(nil))
+}
+
+func TestAuditExportDownload(t *testing.T) {
+	e := newEnv(t)
+	pkg := []byte("tar-bytes-chunk-one|tar-bytes-chunk-two")
+	id, sum := storeExport(t, e, e.acme, "ready", pkg[:20], pkg[20:])
+	path := "/api/v1/audit/exports/" + id.String() + "/download"
+
+	// Both roles of decision 35 download without a step-up; the response carries the package metadata.
+	for _, role := range []principal.Role{principal.RoleOrgAuditor, principal.RoleOrgAdmin} {
+		r := e.do(call{method: "GET", path: path, cookie: e.session(e.acme, role)})
+		if r.status != http.StatusOK || !bytes.Equal(r.body, pkg) {
+			t.Fatalf("%s: %d %q", role, r.status, r.body)
+		}
+		got := sha256.Sum256(r.body)
+		if r.header.Get("Content-Type") != "application/x-tar" || r.header.Get("Content-Length") != strconv.Itoa(len(pkg)) ||
+			r.header.Get("X-Paddock-Package-SHA256") != sum || hex.EncodeToString(got[:]) != sum {
+			t.Fatalf("%s headers %v", role, r.header)
+		}
+		cd := r.header.Get("Content-Disposition")
+		if !strings.HasPrefix(cd, `attachment; filename="paddock-audit-export-acme-`) || !strings.HasSuffix(cd, "-"+id.String()[:8]+`.tar"`) {
+			t.Fatalf("%s Content-Disposition %q", role, cd)
+		}
+		e.expectEvent(r, "audit.export_downloaded:success:")
+	}
+
+	// Another organization's auditor and an operator get no package; each attempt is one event.
+	carol := e.do(call{method: "GET", path: path, cookie: e.session(e.globex, principal.RoleOrgAuditor)})
+	if carol.status != http.StatusNotFound || carol.problemCode(t) != "not_found" || bytes.Contains(carol.body, pkg) {
+		t.Fatalf("globex download: %d %s", carol.status, carol.body)
+	}
+	e.expectEvent(carol, "audit.export_downloaded:failure:not_found")
+	op := e.do(call{method: "GET", path: path, cookie: e.session(e.acme, principal.RoleOrgOperator)})
+	if op.status != http.StatusForbidden {
+		t.Fatalf("operator download: %d %s", op.status, op.body)
+	}
+	e.expectEvent(op, "audit.export_downloaded:denied:forbidden")
+
+	// HEAD would run the download for a body that is never sent; it is refused before the use case, as one event. The
+	// contract has no HEAD operation, so the request bypasses e.do's contract check.
+	req := httptest.NewRequest(http.MethodHead, "https://admin.test"+path, nil)
+	req.AddCookie(e.session(e.acme, principal.RoleOrgAuditor))
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+	head := result{status: rec.Code, header: rec.Header(), body: rec.Body.Bytes()}
+	if head.status != http.StatusMethodNotAllowed || head.header.Get("Allow") != "GET" || bytes.Contains(head.body, pkg) {
+		t.Fatalf("HEAD download: %d %v %s", head.status, head.header, head.body)
+	}
+	e.expectEvent(head, "audit.export_downloaded:failure:invalid_request")
+
+	for _, status := range []string{"pending", "failed", "expired"} {
+		notReady, _ := storeExport(t, e, e.acme, status, pkg)
+		r := e.do(call{method: "GET", path: "/api/v1/audit/exports/" + notReady.String() + "/download", cookie: e.session(e.acme, principal.RoleOrgAuditor)})
+		if r.status != http.StatusConflict || r.problemCode(t) != "export_not_ready" || bytes.Contains(r.body, pkg) {
+			t.Fatalf("%s download: %d %s", status, r.status, r.body)
+		}
+		e.expectEvent(r, "audit.export_downloaded:failure:export_not_ready")
 	}
 }
 

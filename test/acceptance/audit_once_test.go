@@ -434,6 +434,19 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "audit.export_requested", "denied")
 		}},
 	},
+	// The success of a download needs a ready export of its own organization: gate E3 (TestAuditEvidenceExport) covers it.
+	"GET /api/v1/audit/exports/{id}/download": {
+		{"unknown export", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Bob), http.MethodGet, "/api/v1/audit/exports/"+uuid.NewString()+"/download", nil)
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+			expectOneEvent(t, w.alice, res.RequestID, "audit.export_downloaded", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, operatorUser(t).Portal, http.MethodGet, "/api/v1/audit/exports/"+uuid.NewString()+"/download", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "audit.export_downloaded", "denied")
+		}},
+	},
 	"POST /api/v1/me/mcp-write/enable": {
 		{"success", func(t *testing.T, w *auditWorld) {
 			a := adminUser(t, "a3-mcpw")

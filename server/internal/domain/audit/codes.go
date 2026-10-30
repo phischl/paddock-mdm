@@ -207,8 +207,9 @@ const (
 	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
 
 	// Evidence export (ADR 0032 §5, plan M10 §6.4).
-	CodeAuditExportRequested Code = "audit.export_requested"
-	CodeAuditExportCompleted Code = "audit.export_completed"
+	CodeAuditExportRequested  Code = "audit.export_requested"
+	CodeAuditExportCompleted  Code = "audit.export_completed"
+	CodeAuditExportDownloaded Code = "audit.export_downloaded"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1294,6 +1295,12 @@ var registry = map[Code]Definition{
 		Code: CodeAuditExportRequested, Emitted: true,
 		Description: "An organization administrator or auditor requested a signed evidence package for a range of sealed recording days after a step-up; denied with step_up_required without one.",
 		Params:      []string{"export_id", "from_day", "to_day", "purpose"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAuditExportDownloaded: {
+		Code: CodeAuditExportDownloaded, Emitted: true,
+		Description: "An organization administrator or auditor downloaded an evidence package; every download is recorded before the first byte is sent. failure carries error_code export_not_ready for an export that is not ready (pending, running, failed or expired).",
+		Params:      []string{"export_id", "from_day", "to_day", "size", "package_sha256"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeAuditExportCompleted: {

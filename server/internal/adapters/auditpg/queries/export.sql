@@ -84,6 +84,10 @@ WHERE c.export_id = e.id AND e.status IN ('failed', 'expired')
 SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(requested_at)), 0)::float8 AS age_seconds
 FROM audit_export WHERE status = 'pending';
 
+-- name: GetAuditExportChunk :one
+-- One chunk per call keeps at most one 8 MiB row in memory while the package streams.
+SELECT data FROM audit_export_chunk WHERE export_id = @export_id AND seq = @seq;
+
 -- name: EnsureAuditSigningKey :exec
 -- Insert-only: a published key is never changed, so the first public key seen for a version stays the one auditors
 -- compare against (plan M10 decision 36).

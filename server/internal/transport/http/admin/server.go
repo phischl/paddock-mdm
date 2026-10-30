@@ -188,6 +188,7 @@ var privileged = map[string]struct {
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
 	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
+	"GET /api/v1/audit/exports/{id}/download":                              {app.ScopeOrg, app.SpecAuditExportDownload},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
 	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
 	"DELETE /api/v1/package-holds/{id}":                                    {app.ScopeOrg, app.SpecPackageHoldDelete},
@@ -253,7 +254,7 @@ func NewHandler(d Deps) http.Handler {
 		})
 	adminapi.HandlerWithOptions(strict, adminapi.StdHTTPServerOptions{
 		BaseRouter:       api,
-		Middlewares:      []adminapi.MiddlewareFunc{s.csrf, s.mcpGuard, limitBody},
+		Middlewares:      []adminapi.MiddlewareFunc{s.refuseHead, s.csrf, s.mcpGuard, limitBody},
 		ErrorHandlerFunc: s.rejected,
 	})
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { httpx.WriteProblem(w, r, problem.NotFound) })
@@ -366,6 +367,21 @@ func (s *server) csrf(next http.Handler) http.Handler {
 			}
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// refuseHead answers HEAD on a privileged route with 405 and Allow: GET, audited like any other request rejected before
+// its handler. net/http routes HEAD to a GET pattern, so the evidence download would otherwise record a download and
+// read the whole package for a body that is never sent.
+func (s *server) refuseHead(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := privileged[r.Pattern]; r.Method != http.MethodHead || !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Allow", http.MethodGet)
+		s.rejected(w, r, &problem.Error{Code: problem.InvalidRequest.Code, Status: http.StatusMethodNotAllowed,
+			Detail: "HEAD is not supported on this route; use GET"})
 	})
 }
 

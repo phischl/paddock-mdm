@@ -325,6 +325,10 @@ var isolationFixtures = map[string]isolationFixture{
 		seedGlobexExport(t, w)
 		return "/api/v1/audit/exports/" + w.globexExport, nil
 	}},
+	"GET /api/v1/audit/exports/{id}/download": {kind: isoItem, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		seedGlobexExport(t, w)
+		return "/api/v1/audit/exports/" + w.globexExport + "/download", nil
+	}},
 
 	"GET /api/v1/enrollment-tokens": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/enrollment-tokens?page_size=100", nil
