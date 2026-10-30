@@ -87,10 +87,12 @@ const lastRunRetry = time.Minute
 // RunNightly seeds the gauges, then runs Cycle every day at 00:45 UTC (VerifyDelay) until ctx ends. While the
 // last nightly runs cannot be read, it retries every lastRunRetry until the read succeeds or a cycle sets the gauges.
 // When another replica holds the verification lock, it takes both gauges from that replica's recorded runs instead,
-// re-reading every lastRunRetry until the next cycle is due (plan M8b amendment 2026-10-29, PDK-421).
+// re-reading every lastRunRetry until the next cycle is due (plan M8b amendment 2026-10-29, PDK-421). After the
+// first successful seed it follows the recorded runs the same way, so a start during another replica's cycle does not
+// keep a mix of two nights until its own cycle (amendment 2026-10-30, PDK-535).
 func (n *Nightly) RunNightly(ctx context.Context) {
-	pending := !n.seedLastRun(ctx, false, false)
-	following := false
+	following := n.seedLastRun(ctx, false, false)
+	pending := !following
 	for {
 		now := n.now().UTC()
 		next := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Add(VerifyDelay)
@@ -108,8 +110,8 @@ func (n *Nightly) RunNightly(ctx context.Context) {
 		case <-n.after(wait):
 		}
 		if retry {
-			if n.seedLastRun(ctx, following, true) {
-				pending = false
+			if n.seedLastRun(ctx, following, true) && pending {
+				pending, following = false, true
 			}
 			// A slow read or a late timer can pass the due time; the next loop would then schedule tomorrow.
 			if n.now().Before(next) {
