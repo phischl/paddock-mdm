@@ -98,7 +98,10 @@ type Deps struct {
 	// Download fetches a package from the package store with at most limit bytes; nil uses Client.Download.
 	Download func(ctx context.Context, url string, limit int64) ([]byte, error)
 	Now      func() time.Time
-	Rand     func() float64 // uniform in [0, 1)
+	// Monotonic measures durations within the process, unaffected by wall-clock steps (tests set it apart from Now to
+	// step the wall clock); nil uses Now, whose time.Now readings carry the monotonic clock.
+	Monotonic func() time.Time
+	Rand      func() float64 // uniform in [0, 1)
 	// Sleep waits d or until ctx ends; nil waits.
 	Sleep func(ctx context.Context, d time.Duration) error
 }
@@ -125,6 +128,8 @@ type Agent struct {
 	policySkipped string
 	// supervisorSkipped is the last supervisor package version and reason not installed, logged once.
 	supervisorSkipped string
+	// markerSeen is the first sighting of the current supervisor-upgrade.json (supervisorMarker).
+	markerSeen markerSeen
 	// conversionJobs feeds the conversion worker (plan M8e decision 12); conversionCalls carries its reads and changes
 	// of the state to the loop; conversionBusy is set while a preparation is queued or runs.
 	conversionJobs  chan struct{}
