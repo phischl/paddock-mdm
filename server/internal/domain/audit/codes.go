@@ -27,6 +27,7 @@ const (
 	CodeDeviceUninstallRequested   Code = "device.uninstall_requested"
 	CodeDeviceUninstallCancelled   Code = "device.uninstall_cancelled"
 	CodeDeviceUninstalled          Code = "device.uninstalled"
+	CodeDeviceUninstallFailed      Code = "device.uninstall_failed"
 	CodeDeviceAgentUpdateRequested Code = "device.agent_update_requested"
 	CodeDeviceCloneSuspected       Code = "device.clone_suspected"
 	CodeDeviceBundleApplied        Code = "device.bundle_applied"
@@ -305,7 +306,7 @@ var registry = map[Code]Definition{
 		Description: "An administrator retired a device; its identity keys are revoked.",
 		Params:      []string{"hostname", "from_state", "reason", "conversion_cancelled", "conversion_id", "conversion_phase"},
 		Outcomes:    adminOutcomes,
-		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
+		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_cancelled (after_delivery) and conversion_id when it closed a prepared conversion or one with an abort on its way as cancelled, withdrawing a pending encrypt_disk_abort; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
 	},
 	CodeDeviceUninstallRequested: {
 		Code: CodeDeviceUninstallRequested, Emitted: true,
@@ -325,6 +326,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "The param outcome is completed or partial (a step failed); steps maps every step to done, skipped or failed:<message>. helper_failed: the agent could not start the removal, nothing was removed, the request ends and the device is not retired.",
+	},
+	CodeDeviceUninstallFailed: {
+		Code: CodeDeviceUninstallFailed, Emitted: true,
+		Description: "The device refused the command uninstall for a reason that cannot clear up, so the request ended without a removal and the device stays active (actor: the device); an administrator can request it again.",
+		Params:      []string{"hostname", "mode", "command_id", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "reason is invalid_params (PDK-403). A refusal with conversion_pending or revocation_pending records no event: the request stays open with the reason on the device until an administrator cancels it or requests it again.",
 	},
 	CodeDeviceEncryptRequested: {
 		Code: CodeDeviceEncryptRequested, Emitted: true,

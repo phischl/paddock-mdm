@@ -31,7 +31,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ retire: []; changed: [] }>()
 
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const router = useRouter()
 const confirm = useConfirm()
 const problemText = useProblemText()
@@ -107,6 +107,12 @@ async function revoke(action: RevokeAction): Promise<void> {
   requested.value = res
   await load()
   if (res.uninstall_cancelled) emit('changed')
+}
+
+/** The catalog text of a refusal reason, or the device's own word where the catalog has none (a newer agent's reason). */
+function refusedReason(reason: string): string {
+  const key = 'devices.uninstall.refusedReasons.' + reason
+  return te(key) ? t(key) : reason
 }
 
 /** Remove Paddock starts with a step-up; the uninstall dialog follows on return. */
@@ -231,6 +237,12 @@ onMounted(async () => {
           {{ t('devices.uninstall.pending', {
             mode: t('devices.uninstall.modes.' + uninstall!.mode), status: t('commands.statuses.' + uninstall!.command_status),
           }) }}
+        </p>
+        <p
+          v-if="uninstall!.refused_reason"
+          data-testid="uninstall-refused"
+        >
+          {{ t('devices.uninstall.refused', { reason: refusedReason(uninstall!.refused_reason) }) }}
         </p>
       </div>
       <v-btn

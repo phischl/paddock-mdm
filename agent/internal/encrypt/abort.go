@@ -75,6 +75,9 @@ func Abort(ctx context.Context, sys Host, l paths.Layout, store Store, id, by st
 		return false, ReasonNotAbortable
 	}
 	slog.InfoContext(ctx, "in-place encryption aborted", "conversion_id", c.ID, "by", by)
+	// Synchronous even while supervisor-upgrade.json exists (plan M8e item 18, amendment 2026-10-28, PDK-378): the
+	// initrds are built into temporary files, so a rollback restart killing this leaves only those and CleanupPending,
+	// which the worker completes once the upgrade is over.
 	_, _ = RunCleanup(ctx, sys, l, store) // logged; a later full pass retries
 	return true, ""
 }

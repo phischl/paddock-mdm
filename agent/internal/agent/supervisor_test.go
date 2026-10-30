@@ -328,3 +328,70 @@ func TestSupervisorUpgradeHeldDuringInitrdWork(t *testing.T) {
 		t.Fatal("a pending cleanup held the upgrade")
 	}
 }
+
+// writeUnreadableMarker writes a corrupt supervisor-upgrade.json whose mtime lies age before the agent's clock.
+func writeUnreadableMarker(t *testing.T, a *Agent, age time.Duration) {
+	t.Helper()
+	marker := a.d.Layout.SupervisorUpgrade()
+	if err := fsutil.WriteFile(marker, []byte("{not json"), 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mtime := a.d.Now().Add(-age)
+	if err := os.Chtimes(marker, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAgentUpdateUnreadableSupervisorMarker (PDK-337): an unreadable supervisor upgrade marker holds an agent update
+// back only until its mtime is older than supervisorpkg.StaleAfter.
+func TestAgentUpdateUnreadableSupervisorMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		age    time.Duration
+		staged bool
+	}{
+		{"younger than StaleAfter", supervisorpkg.StaleAfter - time.Minute, false},
+		{"older than StaleAfter", supervisorpkg.StaleAfter + time.Minute, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, g, _ := supervisorAgent(t, "")
+			signalled := 0
+			a.d.Supervisor = func() (int, error) { return 1, nil }
+			a.d.Signal = func(int) error { signalled++; return nil }
+			writeUnreadableMarker(t, a, tc.age)
+			offer(g, "9.1.0", []byte("new agent"))
+			a.Cycle(context.Background())
+			if staged := signalled == 1 && update.Pending(a.d.Layout); staged != tc.staged {
+				t.Fatalf("staged %v, want %v: signalled %d", staged, tc.staged, signalled)
+			}
+		})
+	}
+}
+
+// TestSupervisorPackageUnreadableMarker (PDK-337): an unreadable supervisor upgrade marker holds a further supervisor
+// upgrade back only until its mtime is older than supervisorpkg.StaleAfter.
+func TestSupervisorPackageUnreadableMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		age     time.Duration
+		started bool
+	}{
+		{"younger than StaleAfter", supervisorpkg.StaleAfter - time.Minute, false},
+		{"older than StaleAfter", supervisorpkg.StaleAfter + time.Minute, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, launched := supervisorAgent(t, "")
+			writeUnreadableMarker(t, a, tc.age)
+			a.Cycle(context.Background())
+			if started := len(*launched) == 1; started != tc.started {
+				t.Fatalf("started %v, want %v: %v", started, tc.started, *launched)
+			}
+			if !tc.started {
+				return
+			}
+			if m, err := supervisorpkg.ReadMarker(a.d.Layout); err != nil || m == nil || m.Version != buildinfo.Version {
+				t.Fatalf("marker %+v, %v", m, err)
+			}
+		})
+	}
+}

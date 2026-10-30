@@ -33,7 +33,18 @@ failures=0
 r="$work/repo"
 
 g() { git -C "$r" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false "$@"; }
-token() { python3 -c 'import secrets,string; a=string.ascii_letters+string.digits; print("ghp_"+"".join(secrets.choice(a) for _ in range(36)))'; }
+# The fake tokens come from the canary's alphabet, which has no l (PDK-388, PDK-522): the default's value-based global
+# allowlist drops any secret containing "false", ending in "null" or containing the alphabet stopword, so a token from
+# the full alphabet was skipped about twice in a million and a case that expects a leak then failed at random.
+token_alphabet="$(make --no-print-directory -s -C "$root" \
+  --eval 'print-gitleaks-canary-alphabet: ; @printf "%s" "$(GITLEAKS_CANARY_ALPHABET)"' print-gitleaks-canary-alphabet)"
+token_chars="$(printf '%s' {A..Z} {a..z} {0..9} | LC_ALL=C tr -dc "$token_alphabet")"
+if [[ ${#token_chars} -lt 32 || "$token_chars" == *[lL]* ]]; then
+  echo "FAIL setup: GITLEAKS_CANARY_ALPHABET must exclude l and L and keep enough characters"
+  exit 1
+fi
+export TOKEN_CHARS="$token_chars"
+token() { python3 -c 'import os,secrets; a=os.environ["TOKEN_CHARS"]; print("ghp_"+"".join(secrets.choice(a) for _ in range(36)))'; }
 
 # verdict <description> <want: pass|leak|fail> <reason> <exit code> <output>: a fail must print <reason> when one is
 # given.

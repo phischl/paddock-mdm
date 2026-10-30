@@ -1,12 +1,15 @@
 package device
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -154,26 +157,32 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, err)
 		return
 	}
+	// A failed check-in carries no seq, so the number is taken back: otherwise two failures in a row (an ingest stall,
+	// a device that gives up waiting) leave the device two behind and quarantine it as a clone.
+	fail := func(err error) {
+		g.releaseSeq(r, dev.id, seq)
+		g.fail(w, r, err)
+	}
 	out := protocol.CheckinResponse{Seq: seq, ServerTime: g.d.Now().UTC(), NextCheckinS: g.d.CheckinDelay(), Commands: []json.RawMessage{}}
 	var delivered []uuid.UUID
 	if dev.key.Status == devicecache.KeyActive {
 		if out.Bundle, err = g.bundleRef(r, dev, req.AppliedBundleVersion); err != nil {
-			g.fail(w, r, err)
+			fail(err)
 			return
 		}
 		if out.AgentUpdate, err = g.agentUpdate(r, dev, req); err != nil {
-			g.fail(w, r, err)
+			fail(err)
 			return
 		}
 		if out.Commands, delivered, err = g.commands(r, dev); err != nil {
-			g.fail(w, r, err)
+			fail(err)
 			return
 		}
 	}
 	// The time ticket proves the contact to the dead man's switch (plan M4c decision 14); quarantined devices get it
 	// too (fail safe).
 	if out.TimeTicket, err = g.d.Cache.TimeTicket(r.Context(), dev.key.OrganizationID); err != nil {
-		g.fail(w, r, err)
+		fail(err)
 		return
 	}
 	issued := seq - 1 // the value the device should have sent
@@ -188,17 +197,31 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := json.Marshal(hb)
 	if err != nil {
-		g.fail(w, r, err)
+		fail(err)
 		return
 	}
 	if err := g.publish(r.Context(), mq.ExchangeIngest, mq.Message{
 		RoutingKey: mq.IngestRoutingKey(mq.IngestHeartbeat, dev.key.OrganizationID),
 		MessageID:  uuid.Must(uuid.NewV7()).String(), Body: body,
 	}); err != nil {
-		g.fail(w, r, err)
+		fail(err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// releaseTimeout bounds taking back a sequence number; it runs detached from the request, whose failure is often the
+// device giving up (a cancelled context).
+const releaseTimeout = 5 * time.Second
+
+// releaseSeq takes back the sequence number of a failed check-in. A failure to do so is logged only: the device is
+// then one further behind, as before.
+func (g *gateway) releaseSeq(r *http.Request, device uuid.UUID, seq int64) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), releaseTimeout)
+	defer cancel()
+	if _, err := g.d.Cache.ReleaseSeq(ctx, device, seq); err != nil {
+		slog.WarnContext(ctx, "taking back the sequence number of a failed check-in failed", "device_id", device, "seq", seq, "error", err)
+	}
 }
 
 // maxCommands bounds the commands of one check-in response; the rest follow with the next check-ins.

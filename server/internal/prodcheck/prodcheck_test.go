@@ -884,3 +884,36 @@ func TestContainerHardeningFindings(t *testing.T) {
 		}
 	})
 }
+
+// TestAuthentikWebWorkersItem: the item fails unless authentik-server's AUTHENTIK_WEB__WORKERS is an integer of at least 1,
+// since Authentik falls back to 2 workers on an unparsable value and serves no login with 0 (PDK-545).
+func TestAuthentikWebWorkersItem(t *testing.T) {
+	for _, c := range []struct {
+		value string
+		ok    bool
+	}{{"4", true}, {"1", true}, {" 8 ", true}, {"0", false}, {"-1", false}, {"abc", false}, {"2.5", false}, {"", false}} {
+		t.Run(c.value, func(t *testing.T) {
+			f := newFixture(t)
+			f.cfg.Services["authentik-server"] = prodcheck.Service{Environment: map[string]*string{"AUTHENTIK_WEB__WORKERS": ptr(c.value)}}
+			var got *prodcheck.Result
+			for _, r := range prodcheck.Run(context.Background(), f.cfg, prodcheck.Options{Host: prodcheck.HostControlPlane}) {
+				if r.Item == "authentik web workers" {
+					got = &r
+				}
+			}
+			if got == nil {
+				t.Fatal("no item authentik web workers")
+			}
+			if got.OK != c.ok {
+				t.Fatalf("AUTHENTIK_WEB__WORKERS=%q: OK = %v, want %v (%s)", c.value, got.OK, c.ok, got.Detail)
+			}
+		})
+	}
+	t.Run("no authentik-server, no item", func(t *testing.T) {
+		for _, r := range prodcheck.Run(context.Background(), newFixture(t).cfg, prodcheck.Options{Host: prodcheck.HostControlPlane}) {
+			if r.Item == "authentik web workers" {
+				t.Fatal("item present without authentik-server")
+			}
+		}
+	})
+}
