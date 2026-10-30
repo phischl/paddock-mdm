@@ -32,6 +32,11 @@ SELECT device_id, username FROM device_user_seen WHERE last_seen_at >= @since OR
 -- name: HasExpiredDeviceUserSeen :one
 SELECT EXISTS (SELECT 1 FROM device_user_seen WHERE last_seen_at < @cutoff::timestamptz);
 
+-- name: SetRetentionLockTimeout :exec
+-- Bounds the row-lock wait of one retention batch, so a blocked DELETE cannot hold a pass past the outbox reaper's
+-- threshold (plan M10 amendment 2026-10-30); the transaction-local setting ends with the batch.
+SELECT set_config('lock_timeout', @timeout::text, true);
+
 -- name: DeleteExpiredDeviceUserSeen :execrows
 -- One batch of rows older than the cutoff (plan M10 decision 13); the retention round runs each batch in its own
 -- transaction until one deletes fewer than 1 000 rows (plan M10 amendment 2026-10-30).

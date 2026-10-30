@@ -214,6 +214,43 @@ func TestRetentionPurgeUserSeenBudget(t *testing.T) {
 	}
 }
 
+// TestRetentionPurgeUserSeenLockTimeout (plan M10 amendment 2026-10-30): a batch blocked by a row lock beyond the lock
+// timeout ends the pass with outcome success and the rows deleted so far; the next pass deletes the rest.
+func TestRetentionPurgeUserSeenLockTimeout(t *testing.T) {
+	w := newRetentionWorld(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	org := w.organization(t, 1500, now.Add(-400*time.Second))
+	log := w.batchLog(t, org, 0)
+	w.retention.SetLockTimeout(200 * time.Millisecond)
+
+	tx, err := w.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM device_user_seen WHERE organization_id = $1 FOR UPDATE`, org); err != nil {
+		t.Fatal(err)
+	}
+	n, err := w.retention.PurgeUserSeen(systemCtx(org), now)
+	if rbErr := tx.Rollback(ctx); rbErr != nil {
+		t.Fatal(rbErr)
+	}
+	if err != nil || n != 0 {
+		t.Fatalf("blocked pass purged %d (%v), want 0 without error", n, err)
+	}
+	if left := w.seen(t, org); left != 1500 {
+		t.Fatalf("%d rows left after the blocked pass, want 1500", left)
+	}
+	if n, err := w.retention.PurgeUserSeen(systemCtx(org), now); err != nil || n != 1500 {
+		t.Fatalf("second pass purged %d (%v), want 1500", n, err)
+	}
+	events := w.purgedEvents(t, org, log)
+	if len(events) != 2 || events[0].outcome != "success" || events[0].deleted != 0 ||
+		events[1].outcome != "success" || events[1].deleted != 1500 {
+		t.Fatalf("events %+v, want success 0 then success 1500", events)
+	}
+}
+
 // TestRetentionPurgeUserSeenNothingExpired: an organization without expired rows gets no event.
 func TestRetentionPurgeUserSeenNothingExpired(t *testing.T) {
 	w := newRetentionWorld(t)

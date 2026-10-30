@@ -24,6 +24,9 @@ const retentionBatch = 1000
 // without its deleted count. The rows left over follow in the next round (plan M10 amendment 2026-10-30).
 const retentionPassBudget = 5 * time.Minute
 
+// retentionLockTimeout bounds the row-lock wait of one batch; a timeout ends the pass like an elapsed budget.
+const retentionLockTimeout = 30 * time.Second
+
 // SpecRetentionPurged records one retention pass over one store of an organization; system principal only.
 var SpecRetentionPurged = ActionSpec{Code: audit.CodeRetentionPurged}
 
@@ -35,11 +38,13 @@ type Retention struct {
 	unit time.Duration
 	// budget bounds one pass (retentionPassBudget).
 	budget time.Duration
+	// lockTimeout bounds the row-lock wait of one batch (retentionLockTimeout).
+	lockTimeout time.Duration
 }
 
 // NewRetention creates the use cases.
 func NewRetention(runner *ActionRunner, org *db.OrgPool, unit time.Duration) *Retention {
-	return &Retention{runner: runner, org: org, unit: unit, budget: retentionPassBudget}
+	return &Retention{runner: runner, org: org, unit: unit, budget: retentionPassBudget, lockTimeout: retentionLockTimeout}
 }
 
 // PurgeUserSeen deletes the users seen on the context's organization's devices whose last login is older than
@@ -59,7 +64,7 @@ func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, er
 	if err != nil || !expired {
 		return 0, err
 	}
-	return purgeBatches(ctx, r.runner, r.org, StoreDeviceUserSeen, cutoff, r.budget, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+	return purgeBatches(ctx, r.runner, r.org, StoreDeviceUserSeen, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 		return q.DeleteExpiredDeviceUserSeen(ctx, cutoff)
 	})
 }
@@ -69,8 +74,9 @@ func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, er
 // never holds the locks of all its rows in one transaction, so the agents' logins do not wait for the purge. The event
 // carries the rows of the committed batches; when a batch fails, the batches before it stay deleted and the event is
 // recorded with outcome failure and their number. Once budget has elapsed after a committed batch, the pass ends with
-// outcome success and the rows deleted so far; the rest follows in the next round.
-func purgeBatches(ctx context.Context, runner *ActionRunner, org *db.OrgPool, store string, cutoff time.Time, budget time.Duration,
+// outcome success and the rows deleted so far; the rest follows in the next round. A batch that waits longer than
+// lockTimeout for a row lock rolls back alone and ends the pass the same way.
+func purgeBatches(ctx context.Context, runner *ActionRunner, org *db.OrgPool, store string, cutoff time.Time, budget, lockTimeout time.Duration,
 	batch func(ctx context.Context, q *pgstore.Queries) (int64, error)) (int64, error) {
 	spec := SpecRetentionPurged
 	spec.Params = map[string]any{"store": store, "cutoff": audit.Timestamp(cutoff).Format(time.RFC3339Nano)}
@@ -82,10 +88,15 @@ func purgeBatches(ctx context.Context, runner *ActionRunner, org *db.OrgPool, st
 			for {
 				var n int64
 				if err := org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+					if err := q.SetRetentionLockTimeout(ctx, fmt.Sprintf("%dms", lockTimeout.Milliseconds())); err != nil {
+						return err
+					}
 					var err error
 					n, err = batch(ctx, q)
 					return err
-				}); err != nil {
+				}); db.IsLockTimeout(err) {
+					return nil
+				} else if err != nil {
 					return fmt.Errorf("purge %s: %w", store, err)
 				}
 				deleted += n

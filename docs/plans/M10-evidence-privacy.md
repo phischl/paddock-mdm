@@ -1566,6 +1566,9 @@ Architect decision after the second external review of PDK-137; it changes the a
   next round, with their own event. So every pass still records exactly one `retention.purged` event per organization,
   store and round, now possibly with a partial count, and a large backlog (e.g. after lowering `login_history_days`)
   never ends as an `unknown` action without `deleted`. Supersedes stub PDK-564.
+- **Lock timeout per batch.** Every batch sets `lock_timeout` to 30 seconds (`app.retentionLockTimeout`) for its own
+  transaction. A batch blocked longer by a row lock rolls back alone and ends the pass like an elapsed budget (outcome
+  success, the rows committed so far), so a blocked `DELETE` cannot hold a pass past the reaper's threshold.
 - **Both lock keys on one connection.** The round takes `retentionLockKey` and the legacy login history key on the same
   connection (`db.PlatformPool.WithLeaderLocks`), instead of nesting a second `WithLeaderLock` that needed a second
   pool connection without a timeout. When another session holds either key, the round purges nothing and the key it

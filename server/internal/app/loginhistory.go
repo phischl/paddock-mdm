@@ -82,7 +82,7 @@ func (h *LoginHistory) Purge(ctx context.Context, now time.Time) (int64, error) 
 	if err != nil || !expired {
 		return 0, err
 	}
-	return purgeBatches(ctx, h.runner, h.org, StoreDeviceLoginEvent, cutoff, h.budget, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+	return purgeBatches(ctx, h.runner, h.org, StoreDeviceLoginEvent, cutoff, h.budget, retentionLockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 		return q.PurgeDeviceLoginEvents(ctx, cutoff)
 	})
 }

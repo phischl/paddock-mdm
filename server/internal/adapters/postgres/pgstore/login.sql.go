@@ -251,6 +251,17 @@ func (q *Queries) SetDeviceLoginsSuspended(ctx context.Context, arg SetDeviceLog
 	return i, err
 }
 
+const setRetentionLockTimeout = `-- name: SetRetentionLockTimeout :exec
+SELECT set_config('lock_timeout', $1::text, true)
+`
+
+// Bounds the row-lock wait of one retention batch, so a blocked DELETE cannot hold a pass past the outbox reaper's
+// threshold (plan M10 amendment 2026-10-30); the transaction-local setting ends with the batch.
+func (q *Queries) SetRetentionLockTimeout(ctx context.Context, timeout string) error {
+	_, err := q.db.Exec(ctx, setRetentionLockTimeout, timeout)
+	return err
+}
+
 const upsertDeviceUserSeen = `-- name: UpsertDeviceUserSeen :exec
 INSERT INTO device_user_seen (organization_id, device_id, username, last_seen_at)
 VALUES ($1, $2, $3, $4)
