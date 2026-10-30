@@ -145,7 +145,12 @@ jobs:
           go-version: "1.27.3"
           cache-dependency-path: "**/go.sum"
       - run: make dev-secrets
-      - run: make up
+      # The image builds take the server module's dependencies from the runner's module cache instead of the module
+      # proxy (PDK-540). On a setup-go cache hit the download below runs offline: the modules are in the cache and
+      # go.work.sum holds every sum it needs, so neither the proxy nor sum.golang.org is asked. A miss fetches here.
+      - name: Go modules for the image builds
+        run: cd server && go mod download
+      - run: PADDOCK_CI_GOMODCACHE="$(go env GOMODCACHE)/cache/download" make up
       - run: make dev-seed
       - run: make acceptance SHARD=${{ matrix.shard }}/${{ strategy.job-total }}
       - name: compose logs
@@ -175,7 +180,12 @@ jobs:
           go-version: "1.27.3"
           cache-dependency-path: "**/go.sum"
       - run: make dev-secrets
-      - run: make up
+      # The image builds take the server module's dependencies from the runner's module cache instead of the module
+      # proxy (PDK-540). On a setup-go cache hit the download below runs offline: the modules are in the cache and
+      # go.work.sum holds every sum it needs, so neither the proxy nor sum.golang.org is asked. A miss fetches here.
+      - name: Go modules for the image builds
+        run: cd server && go mod download
+      - run: PADDOCK_CI_GOMODCACHE="$(go env GOMODCACHE)/cache/download" make up
       - run: make dev-seed
       # End every portal session and restart OpenBao, so they run alone (plan M8s gate S13, plan M8u gate U4).
       - name: Disruptive acceptance gates
@@ -272,8 +282,7 @@ jobs:
         run: echo "EDGE_VERSION=edge-$(date -u +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - name: Edge images, SBOMs, bundle, checksums and signatures
         run: |
-          make release-images RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge PUSH=1 \
-            RELEASE_BUILDX_FLAGS="--cache-from type=gha,scope=edge --cache-to type=gha,mode=max,scope=edge"
+          make release-images RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge PUSH=1
           make release-sbom RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
           make release-bundle RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
           make release-sums RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
