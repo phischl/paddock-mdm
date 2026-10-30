@@ -200,6 +200,9 @@ const (
 	CodePlatformMCPPolicyChanged     Code = "platform.mcp_policy_changed"
 	CodeAdminMCPWriteEnabled         Code = "admin.mcp_write_enabled"  //nolint:gosec // an audit code, not a credential
 	CodeAdminMCPWriteDisabled        Code = "admin.mcp_write_disabled" //nolint:gosec // an audit code, not a credential
+
+	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
+	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1259,6 +1262,12 @@ var registry = map[Code]Definition{
 		Params:      []string{"role"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with forbidden for auditors and for requests made with an API token or through the MCP.",
+	},
+	CodeSettingsPrivacyChanged: {
+		Code: CodeSettingsPrivacyChanged, Emitted: true,
+		Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
+		Params:      []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"},
+		Outcomes:    adminOutcomes,
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

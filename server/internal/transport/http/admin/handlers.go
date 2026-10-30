@@ -58,6 +58,7 @@ type handlers struct {
 	dms         *app.DMS
 	inventory   *app.Inventory
 	updates     *app.Updates
+	privacy     *app.Privacy
 	attention   *app.Attention
 	ipAllowlist *app.IPAllowlist
 	overview    *app.Overview

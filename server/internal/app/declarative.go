@@ -329,11 +329,18 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	if err != nil {
 		return st, fmt.Errorf("managed-file settings: %w", err)
 	}
+	privacy, err := LoadPrivacySettings(ctx, q)
+	if err != nil {
+		return st, fmt.Errorf("privacy settings: %w", err)
+	}
 	doc.Settings = &declarative.Settings{Login: loginDocOfRow(login), Updates: &declarative.UpdateSettings{
 		SecurityDailyAt: upd.SecurityDailyAt, RegularSchedule: upd.RegularSchedule, RegularUpdatesEnabled: upd.RegularUpdatesEnabled,
 		MaxRandomDelayMin: upd.MaxRandomDelayMin, StalenessWarningH: upd.StalenessWarningH, StalenessCriticalH: upd.StalenessCriticalH,
 		AgentUpdatePolicy: upd.AgentUpdatePolicy,
-	}, ManagedFiles: &declarative.ManagedFileSettings{OperatorRoots: roots}}
+	}, ManagedFiles: &declarative.ManagedFileSettings{OperatorRoots: roots}, Privacy: &declarative.PrivacySettings{
+		RetiredInventoryDays: privacy.RetiredInventoryDays, AuditSearchRecorded: privacy.AuditSearchRecorded,
+		InventoryViewRecorded: privacy.InventoryViewRecorded,
+	}}
 
 	groups, err := q.ListAllDeviceGroups(ctx)
 	if err != nil {

@@ -1,4 +1,20 @@
 {
+  "privacySettings": {
+    "title": "Datenschutzeinstellungen",
+    "intro": "Wie lange Paddock das Inventar außer Betrieb genommener Geräte aufbewahrt und ob Zugriffe auf das Audit-Protokoll und auf das Geräteinventar protokolliert werden. Über die Überwachung von Administratoren entscheidet Ihre Betriebsvereinbarung.",
+    "retention": "Aufbewahrung",
+    "retiredInventoryDays": "Inventar außer Betrieb genommener Geräte aufbewahren",
+    "retiredInventoryDaysHint": "Software, Schwachstellen und Richtlinienergebnisse eines außer Betrieb genommenen Geräts werden in Paddock und in Fleet so viele Tage nach der Außerbetriebnahme gelöscht.",
+    "retiredInventoryDaysRange": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein.",
+    "days": "Tage",
+    "recording": "Protokollierung von Zugriffen",
+    "auditSearchRecorded": "Suchen im Audit-Protokoll protokollieren",
+    "auditSearchRecordedHint": "Jede Suche im Audit-Protokoll wird als Audit-Ereignis protokolliert, einmal pro Administrator und Stunde. Protokolliert werden die Filter, nie die Ergebnisse.",
+    "inventoryViewRecorded": "Ansichten des Geräteinventars protokollieren",
+    "inventoryViewRecordedHint": "Jede Ansicht der Software und Schwachstellen eines Geräts wird als Audit-Ereignis protokolliert, einmal pro Administrator, Gerät und Tag.",
+    "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",
+    "saved": "Die Datenschutzeinstellungen wurden gespeichert."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent-Updates",
@@ -89,6 +105,7 @@
     "attentionCount": "{count, plural, one {# offener Befund} other {# offene Befunde}}",
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
+    "privacySettings": "Datenschutz",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
     "start": "Start",
@@ -460,7 +477,8 @@
       "login_changed": "{actor} hat die Anmeldeeinstellungen geändert",
       "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
-      "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert"
+      "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
+      "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",

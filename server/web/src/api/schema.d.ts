@@ -1487,6 +1487,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/privacy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The privacy settings (ADR 0032 §2); the defaults until changed. */
+        get: operations["getPrivacySettings"];
+        /**
+         * @description Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired
+         *     device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches
+         *     of the audit log are recorded as audit.searched, once per administrator and hour) and
+         *     inventory_view_recorded (views of a device's software and vulnerabilities are recorded as
+         *     device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.
+         */
+        put: operations["updatePrivacySettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/package-holds": {
         parameters: {
             query?: never;
@@ -4162,6 +4186,18 @@ export interface components {
             staleness_critical_h: number;
             /** @description Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it. */
             agent_update_policy?: components["schemas"]["AgentUpdatePolicy"];
+        };
+        PrivacySettings: {
+            retired_inventory_days: number;
+            audit_search_recorded: boolean;
+            inventory_view_recorded: boolean;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PrivacySettingsUpdate: {
+            retired_inventory_days: number;
+            audit_search_recorded: boolean;
+            inventory_view_recorded: boolean;
         };
         UpdateSettings: {
             security_daily_at: string;
@@ -8032,6 +8068,57 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    getPrivacySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The privacy settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivacySettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updatePrivacySettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrivacySettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivacySettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     listPackageHolds: {

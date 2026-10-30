@@ -538,6 +538,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"PUT /api/v1/settings/updates": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/settings/updates", currentUpdateSettings(t, w.alice)
 	}},
+	"GET /api/v1/settings/privacy": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/privacy", nil
+	}},
+	"PUT /api/v1/settings/privacy": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/privacy", currentPrivacySettings(t, w.alice)
+	}},
 	"GET /api/v1/package-holds": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/package-holds?page_size=100", nil
 	}},
@@ -716,6 +722,19 @@ func putLoginHistory(t *testing.T, p *env.Portal, enabled bool, days int) env.Re
 func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 	t.Helper()
 	res := call(t, p, http.MethodGet, "/api/v1/settings/updates", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var s map[string]any
+	if err := res.JSON(&s); err != nil {
+		t.Fatal(err)
+	}
+	delete(s, "updated_at")
+	return s
+}
+
+// currentPrivacySettings returns acme's privacy settings as an update body (unchanged values).
+func currentPrivacySettings(t *testing.T, p *env.Portal) map[string]any {
+	t.Helper()
+	res := call(t, p, http.MethodGet, "/api/v1/settings/privacy", nil)
 	expectStatus(t, res, http.StatusOK, "")
 	var s map[string]any
 	if err := res.JSON(&s); err != nil {
