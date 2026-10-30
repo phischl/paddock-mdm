@@ -413,7 +413,7 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 # SHARD=i/n runs shard i of n: test/acceptance/cmd/acceptanceshard puts every listed test into exactly one shard,
 # balanced by test/acceptance/shard-weights.txt; before the run it checks (-verify n) that the n shard regexes select
 # every test of `go test -list` exactly once, so a new test can never be left out.
-acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
+acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll, TestSessionsPlatformEmptied and TestAutoUnsealRestart)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
 	@set -eo pipefail; run='$(T)'; \
 	if [ -n '$(SHARD)' ]; then \

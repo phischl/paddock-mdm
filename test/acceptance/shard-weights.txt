@@ -127,6 +127,7 @@
 0 TestAutoUnsealRestart
 0 TestWithoutOwnFailedAttempts
 0 TestSessionsEndAll
+0 TestSessionsPlatformEmptied
 0 TestUnknownTestRunsInExactlyOneShard
 0 TestUnparsableTestNameFailsInsteadOfDropping
 0 TestAssignIsDeterministic
