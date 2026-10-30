@@ -48,6 +48,12 @@ func newMCPWorld(t *testing.T) *mcpWorld {
 // newMCPWorldWith is newMCPWorld with store as the MCP session store; nil is the env's fake.
 func newMCPWorldWith(t *testing.T, store admin.MCPSessionStore) *mcpWorld {
 	t.Helper()
+	return newMCPWorldOpts(t, store, false)
+}
+
+// newMCPWorldOpts is newMCPWorldWith with the development switch PADDOCK_LOGIN_MFA_OPTIONAL as loginMFAOptional.
+func newMCPWorldOpts(t *testing.T, store admin.MCPSessionStore, loginMFAOptional bool) *mcpWorld {
+	t.Helper()
 	idp := newFakeStepUpIdP(t)
 	oidc := admin.NewOIDC(admin.OIDCConfig{Issuer: idp.URL, ClientID: "paddock-mcp", Scopes: admin.MCPScopes})
 	discover, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -61,7 +67,7 @@ func newMCPWorldWith(t *testing.T, store admin.MCPSessionStore) *mcpWorld {
 		if store == nil {
 			store = d.Sessions.(*fakeSessions)
 		}
-		d.MCPAuth = admin.NewMCPAuth(oidc, store, d.Accounts, false, m.now)
+		d.MCPAuth = admin.NewMCPAuth(oidc, store, d.Accounts, loginMFAOptional, m.now)
 	})
 	if err := m.e.super.QueryRow(context.Background(), "SELECT slug FROM organization WHERE id = $1", m.e.acme).Scan(&m.slug); err != nil {
 		t.Fatal(err)
@@ -462,6 +468,33 @@ func TestMCPLoginRequiresPasskey(t *testing.T) {
 	}
 	if _, ok := m.record(access); ok {
 		t.Fatal("the renewal of an unmarked binding opened a record")
+	}
+}
+
+// TestMCPLoginPasskeyDevSwitch: with the development switch PADDOCK_LOGIN_MFA_OPTIONAL a first MCP login without a
+// validated WebAuthn authenticator is accepted and its binding is marked, so that its renewals work. The switch is
+// refused outside PADDOCK_ENV=development by config (TestDevLoginMFAOptional) and prodcheck
+// (TestDevelopmentVariableFailsNamingIt).
+func TestMCPLoginPasskeyDevSwitch(t *testing.T) {
+	m := newMCPWorldOpts(t, nil, true)
+	u := m.user(m.admins())
+	id, access := m.pairClasses(u, []string{"pwd"}, nil, 30*time.Minute)
+	r := m.open(id, access, nil)
+	if r.status != http.StatusNoContent {
+		t.Fatalf("login without a passkey: %d %s", r.status, r.body)
+	}
+	if got := m.loginEvent(r); got != "success|mcp|-|-|-|mcp" {
+		t.Fatalf("login event %s", got)
+	}
+	m.e.sessions.mu.Lock()
+	marked := m.e.sessions.bindings[bindingID(u.sub, u.authTime)].PasskeyVerified
+	m.e.sessions.mu.Unlock()
+	if !marked {
+		t.Fatal("the binding of a dev login is not marked passkey_verified")
+	}
+	id, access = m.pairClasses(u, nil, nil, 30*time.Minute)
+	if r := m.open(id, access, nil); r.status != http.StatusNoContent {
+		t.Fatalf("renewal: %d %s", r.status, r.body)
 	}
 }
 
