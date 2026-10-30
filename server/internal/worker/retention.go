@@ -44,10 +44,10 @@ var (
 )
 
 // retentionPass purges one store of the context's organization and returns what it deleted: rows, or devices for
-// app.StoreRetiredInventory (plan M10 §6.6).
+// app.StoreRetiredInventory (plan M10 §6.6). round is the state the round shares across its organizations.
 type retentionPass struct {
 	store string
-	purge func(ctx context.Context, now time.Time) (int64, error)
+	purge func(ctx context.Context, now time.Time, round *app.RetentionRound) (int64, error)
 }
 
 // Retention is the one retention round (plan M10 amendment A3): per organization it runs every store's pass in a
@@ -66,10 +66,14 @@ type Retention struct {
 func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool, platform *db.PlatformPool, interval time.Duration) *Retention {
 	return &Retention{
 		passes: []retentionPass{
-			{store: app.StoreDeviceLoginEvent, purge: history.Purge},
-			{store: app.StoreDeviceUserSeen, purge: a.PurgeUserSeen},
-			{store: app.StoreRetiredInventory, purge: func(ctx context.Context, now time.Time) (int64, error) {
-				n, err := a.PurgeRetiredInventory(ctx, now)
+			{store: app.StoreDeviceLoginEvent, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
+				return history.Purge(ctx, now)
+			}},
+			{store: app.StoreDeviceUserSeen, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
+				return a.PurgeUserSeen(ctx, now)
+			}},
+			{store: app.StoreRetiredInventory, purge: func(ctx context.Context, now time.Time, round *app.RetentionRound) (int64, error) {
+				n, err := a.PurgeRetiredInventory(ctx, now, round)
 				return int64(n), err
 			}},
 		},
@@ -109,11 +113,12 @@ func (r *Retention) purge(ctx context.Context) error {
 		return err
 	}
 	now := r.now()
+	round := app.NewRetentionRound()
 	failed := make([]bool, len(r.passes))
 	var errs []error
 	for _, org := range orgs {
 		for i, pass := range r.passes {
-			n, err := pass.purge(systemContext(ctx, org, "retention-round"), now)
+			n, err := pass.purge(systemContext(ctx, org, "retention-round"), now, round)
 			// A failed pass still reports the rows of the batches, or the devices, it committed before the failure.
 			metricRetentionDeleted.WithLabelValues(pass.store).Add(float64(n))
 			if err != nil {

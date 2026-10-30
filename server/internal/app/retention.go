@@ -23,9 +23,15 @@ const StoreDeviceUserSeen = "device_user_seen"
 // 15); its evidence is device.inventory_purged per device.
 const StoreRetiredInventory = "retired_inventory"
 
-// retiredInventoryDevices bounds the devices of one organization whose inventory one pass purges (plan M10 decision
-// 16); the rest follow in the next round.
+// retiredInventoryDevices is the page of devices one listing of a pass reads (plan M10 decision 16); the pass pages on
+// after the last listed device until its budget elapses, so devices behind ones that keep failing are reached in the
+// same pass (amendment 2026-10-30, PDK-138).
 const retiredInventoryDevices = 100
+
+// fleetBreakerFailures is the number of consecutive upstream_unavailable failures of the Fleet step after which a
+// retention round skips the Fleet step for all its remaining devices and organizations, so an unreachable Fleet does
+// not cost every device its own retries and failure event (amendment 2026-10-30, PDK-138).
+const fleetBreakerFailures = 3
 
 // fleetDeleteTimeout bounds the deletion of one Fleet host including the adapter's retries, so a device's action
 // finishes well before the outbox reaper's threshold (outbox.DefaultReaperThreshold, 10 minutes) would record it as
@@ -50,11 +56,24 @@ var SpecRetentionPurged = ActionSpec{Code: audit.CodeRetentionPurged}
 // SpecDeviceInventoryPurged records the inventory purge of one retired device; system principal only.
 var SpecDeviceInventoryPurged = ActionSpec{Code: audit.CodeDeviceInventoryPurged}
 
-// hostUsers answers whether a device of any organization other than the retired one still uses a Fleet host or its
-// hardware (db.PlatformPool.FleetHostInUse).
+// hostUsers answers whether a device of any organization other than the retired one still uses a Fleet host or may
+// use it through the retired device's hardware: db.FleetHostUsedByRef, db.FleetHostUsedByHardware or
+// db.FleetHostUnused (db.PlatformPool.FleetHostInUse).
 type hostUsers interface {
-	FleetHostInUse(ctx context.Context, retiredDevice uuid.UUID, host string) (bool, error)
+	FleetHostInUse(ctx context.Context, retiredDevice uuid.UUID, host string) (string, error)
 }
+
+// RetentionRound is the state one retention round shares across its organizations' passes: the Fleet step's
+// consecutive upstream_unavailable failures. It is not safe for concurrent use; the round runs its passes one after
+// another.
+type RetentionRound struct {
+	fleetFailures int
+}
+
+// NewRetentionRound creates the state of one round.
+func NewRetentionRound() *RetentionRound { return &RetentionRound{} }
+
+func (r *RetentionRound) fleetSkipped() bool { return r.fleetFailures >= fleetBreakerFailures }
 
 // Retention deletes the expired rows of an organization's stores with deletion evidence (ADR 0032, plan M10 §3.3).
 type Retention struct {
@@ -68,12 +87,14 @@ type Retention struct {
 	budget time.Duration
 	// lockTimeout bounds the row-lock wait of one batch (retentionLockTimeout).
 	lockTimeout time.Duration
+	// page is the devices one listing of the retired inventory pass reads (retiredInventoryDevices).
+	page int32
 }
 
 // NewRetention creates the use cases.
 func NewRetention(runner *ActionRunner, org *db.OrgPool, hosts hostUsers, inventory ports.InventoryAdmin, unit time.Duration) *Retention {
 	return &Retention{runner: runner, org: org, hosts: hosts, inventory: inventory, unit: unit, budget: retentionPassBudget,
-		lockTimeout: retentionLockTimeout}
+		lockTimeout: retentionLockTimeout, page: retiredInventoryDevices}
 }
 
 // PurgeUserSeen deletes the users seen on the context's organization's devices whose last login is older than
@@ -100,16 +121,17 @@ func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, er
 
 // PurgeRetiredInventory deletes the inventory of the context's organization's devices retired longer than the
 // organization's retired_inventory_days at now, in Paddock and in Fleet (system principal, plan M10 decision 16): one
-// device.inventory_purged action per device, at most retiredInventoryDevices per pass, longest retired first. It
-// returns the number of devices whose inventory it purged (plan M10 §6.6). A failing device is recorded as its own
-// failure event and the pass goes on with the next one, so one device Fleet keeps refusing does not block the
-// organization (plan M10 amendment 2026-10-30, PDK-138); the pass then ends partial with an error that counts the
-// failed devices. The pass starts no further device once the budget has elapsed.
-func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time) (int, error) {
+// device.inventory_purged action per device, longest retired first, in pages of retiredInventoryDevices. It returns
+// the number of devices whose inventory it purged (plan M10 §6.6). A failing device is recorded as its own failure
+// event and the pass goes on with the next one, also on the next page, so devices Fleet keeps refusing do not block
+// the organization (plan M10 amendment 2026-10-30, PDK-138); the pass then ends partial with an error that counts the
+// failed devices. The pass starts no further device once the budget has elapsed. Once round has seen
+// fleetBreakerFailures consecutive Fleet failures, the pass starts no device at all and records one retention.purged
+// failure (upstream_unavailable, store retired_inventory) for the organization instead; the devices keep their rows.
+func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time, round *RetentionRound) (int, error) {
 	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
 		return 0, problem.Unauthenticated
 	}
-	var devices []pgstore.ListRetiredDevicesWithInventoryRow
 	var cutoff time.Time
 	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		settings, err := LoadPrivacySettings(ctx, q)
@@ -117,41 +139,87 @@ func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time) (i
 			return err
 		}
 		cutoff = now.Add(-time.Duration(settings.RetiredInventoryDays) * r.unit)
-		devices, err = q.ListRetiredDevicesWithInventory(ctx, pgstore.ListRetiredDevicesWithInventoryParams{
-			Cutoff: cutoff, MaxDevices: retiredInventoryDevices,
-		})
-		return err
+		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("list retired devices: %w", err)
+		return 0, fmt.Errorf("load the privacy settings: %w", err)
 	}
 	start := time.Now()
 	var purged, attempted int
-	var errs []error
-	for _, d := range devices {
-		attempted++
-		if err := r.purgeDeviceInventory(ctx, d, cutoff); err != nil {
-			errs = append(errs, fmt.Errorf("device %s: %w", d.ID, err))
-		} else {
-			purged++
-		}
-		if ctx.Err() != nil || time.Since(start) >= r.budget {
+	var failed, errs []error
+	var after pgstore.ListRetiredDevicesWithInventoryRow
+pages:
+	for {
+		devices, err := r.listRetired(ctx, cutoff, after)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("list retired devices: %w", err))
 			break
 		}
+		for _, d := range devices {
+			if round.fleetSkipped() {
+				errs = append(errs, r.recordFleetSkipped(ctx, cutoff))
+				break pages
+			}
+			attempted++
+			if err := r.purgeDeviceInventory(ctx, d, cutoff, round); err != nil {
+				failed = append(failed, fmt.Errorf("device %s: %w", d.ID, err))
+			} else {
+				purged++
+			}
+			if ctx.Err() != nil || time.Since(start) >= r.budget {
+				break pages
+			}
+		}
+		if len(devices) < int(r.page) {
+			break
+		}
+		after = devices[len(devices)-1]
+	}
+	if len(failed) > 0 {
+		errs = append(errs, fmt.Errorf("%d of %d devices failed: %w", len(failed), attempted, errors.Join(failed...)))
 	}
 	if len(errs) > 0 {
-		return purged, fmt.Errorf("purge retired inventory: %d of %d devices failed: %w", len(errs), attempted, errors.Join(errs...))
+		return purged, fmt.Errorf("purge retired inventory: %w", errors.Join(errs...))
 	}
 	return purged, nil
+}
+
+// listRetired lists the next page of retired devices with inventory after the device after (the zero row for the
+// first page).
+func (r *Retention) listRetired(ctx context.Context, cutoff time.Time, after pgstore.ListRetiredDevicesWithInventoryRow) (
+	[]pgstore.ListRetiredDevicesWithInventoryRow, error) {
+	var devices []pgstore.ListRetiredDevicesWithInventoryRow
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		devices, err = q.ListRetiredDevicesWithInventory(ctx, pgstore.ListRetiredDevicesWithInventoryParams{
+			Cutoff: cutoff, AfterChanged: after.StateChangedAt, AfterID: after.ID, MaxDevices: r.page,
+		})
+		return err
+	})
+	return devices, err
+}
+
+// recordFleetSkipped records the one retention.purged failure of an organization whose retired devices the round no
+// longer offers to Fleet, and returns its error.
+func (r *Retention) recordFleetSkipped(ctx context.Context, cutoff time.Time) error {
+	spec := SpecRetentionPurged
+	spec.Params = map[string]any{"store": StoreRetiredInventory, "cutoff": audit.Timestamp(cutoff).Format(time.RFC3339Nano),
+		"deleted": int64(0)}
+	skipped := fmt.Errorf("%w: the Fleet step failed %d times in a row this round; retired devices are retried next round",
+		problem.UpstreamUnavailable, fleetBreakerFailures)
+	return r.runner.RunTx(ctx, ScopeOrg, spec, func(context.Context, *pgstore.Queries, Recorder) error { return skipped })
 }
 
 // purgeDeviceInventory deletes one retired device's Fleet host and then its Paddock inventory rows as one
 // device.inventory_purged action. When the Fleet deletion fails, the Paddock rows stay, so the next round finds the
 // device again and retries the host; a host Fleet no longer knows counts as deleted. The host is kept when a device of
-// any organization still uses it or the same hardware enrolled again (plan M10 §13, amendment 2026-10-30); the
-// retired device's Paddock rows go all the same. When that check fails, nothing is deleted. cutoff is the one the
-// device was listed with; a device no longer retired before it is refused under the row lock.
-func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow, cutoff time.Time) error {
+// any organization still references it; the retired device's Paddock rows go all the same. When a device of the same
+// hardware has no reference yet, the host is kept and so is the retired device's reference, so later rounds list the
+// device again and decide once that device has synced or is gone (plan M10 amendments 2026-10-30); fleet_host_in_use
+// records the answer. When that check fails, nothing is deleted. cutoff is the one the device was listed with; a
+// device no longer retired before it is refused under the row lock. round counts the Fleet step's consecutive failures.
+func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow, cutoff time.Time,
+	round *RetentionRound) error {
 	spec := SpecDeviceInventoryPurged
 	spec.Target = &audit.Target{Type: "device", ID: d.ID.String(), Display: d.Hostname}
 	spec.Params = map[string]any{
@@ -159,8 +227,9 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 		"software": int64(0), "findings": int64(0), "policy_results": int64(0), "fleet_host_deleted": false,
 	}
 	var held pgstore.CountDeviceInventoryRow
-	var hostDeleted bool
-	return r.runner.RunExternal(ctx, ScopeOrg, spec,
+	var use string
+	var hostDeleted, fleetCalled bool
+	err := r.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 			if err := r.lockDevice(ctx, q, d.ID, cutoff); err != nil {
 				return err
@@ -173,15 +242,21 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 			if held.ExternalID == "" {
 				return nil
 			}
-			inUse, err := r.hosts.FleetHostInUse(ctx, d.ID, held.ExternalID)
+			var err error
+			use, err = r.hosts.FleetHostInUse(ctx, d.ID, held.ExternalID)
 			if err != nil {
 				return err
 			}
-			if inUse {
+			switch use {
+			case db.FleetHostUsedByRef, db.FleetHostUsedByHardware:
 				return nil
+			case db.FleetHostUnused:
+			default:
+				return fmt.Errorf("check the Fleet host's other devices: unexpected answer %q", use)
 			}
 			ctx, cancel := context.WithTimeout(ctx, fleetDeleteTimeout)
 			defer cancel()
+			fleetCalled = true
 			if err := r.inventory.DeleteHost(ctx, ports.HostRef(held.ExternalID)); err != nil {
 				return fmt.Errorf("%w: delete the Fleet host: %w", problem.UpstreamUnavailable, err)
 			}
@@ -194,13 +269,18 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 			rec.SetParam("findings", held.Findings)
 			rec.SetParam("policy_results", held.PolicyResults)
 			rec.SetParam("fleet_host_deleted", hostDeleted)
+			if use != "" {
+				rec.SetParam("fleet_host_in_use", use)
+			}
 			if externalErr != nil {
 				return nil
 			}
 			if err := r.setLockTimeout(ctx, q); err != nil {
 				return err
 			}
-			n, err := q.DeleteDeviceInventory(ctx, d.ID)
+			n, err := q.DeleteDeviceInventory(ctx, pgstore.DeleteDeviceInventoryParams{
+				DeviceID: d.ID, KeepRef: use == db.FleetHostUsedByHardware,
+			})
 			if err != nil {
 				return err
 			}
@@ -209,6 +289,14 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 			rec.SetParam("policy_results", n.PolicyResults)
 			return nil
 		})
+	if fleetCalled {
+		if hostDeleted {
+			round.fleetFailures = 0
+		} else {
+			round.fleetFailures++
+		}
+	}
+	return err
 }
 
 // lockDevice locks the retired device's row for the action's first transaction, waiting at most the lock timeout, and

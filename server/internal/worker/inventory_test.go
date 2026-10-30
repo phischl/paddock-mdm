@@ -66,6 +66,9 @@ type fakeSource struct {
 	policies  int
 	vulnState string
 	deleted   []ports.HostRef
+	// deleteErr makes every host deletion fail; deleteCalls counts the deletions asked for.
+	deleteErr   error
+	deleteCalls int
 }
 
 func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
@@ -85,6 +88,10 @@ func (s *fakeSource) HostInventory(_ context.Context, ref ports.HostRef) (ports.
 
 // DeleteHost records the deleted hosts (ports.InventoryAdmin of the retention round).
 func (s *fakeSource) DeleteHost(_ context.Context, ref ports.HostRef) error {
+	s.deleteCalls++
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	s.deleted = append(s.deleted, ref)
 	return nil
 }

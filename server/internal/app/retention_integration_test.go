@@ -28,17 +28,19 @@ type retentionWorld struct {
 }
 
 // fakeInventoryAdmin is Fleet's host deletion; err makes every deletion fail, failing makes the deletion of that host
-// fail.
+// fail; calls counts every deletion asked for.
 type fakeInventoryAdmin struct {
 	mu      sync.Mutex
 	deleted []ports.HostRef
 	err     error
 	failing ports.HostRef
+	calls   int
 }
 
 func (f *fakeInventoryAdmin) DeleteHost(_ context.Context, ref ports.HostRef) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
 	if f.err != nil {
 		return f.err
 	}

@@ -715,15 +715,15 @@ var registry = map[Code]Definition{
 	},
 	CodeRetentionPurged: {
 		Code: CodeRetentionPurged, Emitted: true,
-		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization) or audit_exports (one event per expired export, in its organization).",
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure upstream_unavailable, once per organization whose retired devices the round skipped because the Fleet step failed three times in a row; their evidence is otherwise device.inventory_purged).",
 		Params:      []string{"store", "deleted", "cutoff", "partition", "export_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
 	},
 	CodeDeviceInventoryPurged: {
 		Code: CodeDeviceInventoryPurged, Emitted: true,
-		Description: "The retention job deleted the inventory of a retired device in Paddock and its host in Fleet, retired_inventory_days after retirement (actor: system). software, findings and policy_results are the deleted rows; fleet_host_deleted is false when the device had no Fleet host or an active device of the same hardware still uses it. failure with upstream_unavailable leaves the Paddock rows in place (the counts are the rows kept); the device is retried next round.",
-		Params:      []string{"hostname", "retired_at", "software", "findings", "policy_results", "fleet_host_deleted"},
+		Description: "The retention job deleted the inventory of a retired device in Paddock and its host in Fleet, retired_inventory_days after retirement (actor: system). software, findings and policy_results are the deleted rows. fleet_host_in_use is the answer of the check across all organizations before the host is deleted: ref (another device of any organization references the host; the host stays, the device's Paddock rows go), hardware (an active, quarantined or pending device with the same hardware has no reference yet; the host and the device's host reference stay, its other rows go, and the device is checked again next round) or none (the host is deleted); it is absent when the device had no Fleet host or the check did not run. fleet_host_deleted is true only when the host was deleted or Fleet no longer knew it. A failure keeps all Paddock rows (the counts are the rows kept) and the device is retried next round: upstream_unavailable when Fleet failed, another code when the check failed or the device changed after it was listed.",
+		Params:      []string{"hostname", "retired_at", "software", "findings", "policy_results", "fleet_host_deleted", "fleet_host_in_use"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
 	},

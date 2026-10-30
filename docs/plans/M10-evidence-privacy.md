@@ -1634,7 +1634,7 @@ where they differ.
 - **Platform-scoped existence check before a Fleet host is deleted.** One Fleet serves every organization, and the
   organization scope of the retention pass cannot see another organization's re-enrolment of the same hardware. New
   decision: retention may use a platform-scoped existence check, read-only, boolean only. Before `DeleteHost` the
-  device's action asks `db.PlatformPool.FleetHostInUse` (function `paddock_fleet_host_in_use`, migration 00078,
+  device's action asks `db.PlatformPool.FleetHostInUse` (function `paddock_fleet_host_in_use`, migration 00076,
   `SECURITY DEFINER`, executable by `paddock_platform` only) whether, in any organization and other than the retired
   device itself, an inventory reference names the same Fleet host or an active or quarantined device has the retired
   device's hardware UUID (case-insensitive; also a device whose first inventory sync is still pending and has no
@@ -1652,3 +1652,33 @@ where they differ.
 - **Return value and metric.** `PurgeRetiredInventory(ctx, now) (devices int, err error)` as in §6.6: the number of
   devices whose inventory it purged. `paddock_retention_deleted_total{store="retired_inventory"}` therefore counts
   purged devices, not rows; the other stores keep counting rows.
+
+### Amendment 2026-10-30 (PDK-138, review 2 of the retired inventory)
+
+Architect decisions on the external review after fix round 1 of PDK-138. They amend the amendment above where they
+differ.
+
+- **Migration number.** The function is in `00076_fleet_host_in_use.sql`; 00078 belongs to PDK-139, 00077 is not used by this ticket.
+- **Tri-state instead of "boolean only".** `paddock_fleet_host_in_use` returns `text`: `'ref'`, `'hardware'` or
+  `'none'`, still never another organization's rows or IDs (`db.FleetHostUsedByRef`, `FleetHostUsedByHardware`,
+  `FleetHostUnused`; any other answer fails closed). `'ref'`: another device of any organization references the host;
+  the host stays and the retired device's Paddock rows are purged. `'hardware'`: no reference, but an active,
+  quarantined or **pending** device with the same hardware UUID (case-insensitive) has no inventory reference yet; the
+  host stays and so does the retired device's `device_inventory_ref` row, while its software, findings and policy
+  results are purged, so later rounds list the device again and decide once that device has synced (its reference
+  then names the same host, `'ref'`, or another one, `'none'`) or is gone. `'none'`: the host is deleted. The event
+  records the answer in the new parameter `fleet_host_in_use` (absent when the device had no host or the check did
+  not run); `fleet_host_deleted` stays false for `'ref'` and `'hardware'`.
+- **Hardening.** The function is `SET search_path = pg_catalog, public, pg_temp` and qualifies its tables with
+  `public.`; a test asserts that `paddock_worker` and `paddock_api` get permission denied and `paddock_platform` may
+  execute it.
+- **Paging within the pass.** The 100-device limit is the page size of one listing, not a cap of the pass: after a
+  page the pass lists the next one after the last listed `(state_changed_at, id)` (kept in memory, no new column) until
+  the budget elapses or no device is left, so devices behind ones that keep failing are reached in the same pass.
+  Every round still starts at the head; with a budget that never gets past failing devices at the head, the tail can
+  still starve across rounds (`PaddockRetentionPurgeStale` stays the alert).
+- **Fleet breaker per round.** After three consecutive `upstream_unavailable` failures of the Fleet deletion, the
+  round (state `app.RetentionRound`, created per round and passed into every organization's pass, no globals) starts
+  no further retired-inventory device in any organization. Instead of one event per skipped device, each organization
+  with due devices that the round skips gets one `retention.purged` failure (`store` `retired_inventory`,
+  `upstream_unavailable`); the skipped devices keep all their rows. A successful Fleet deletion resets the count.

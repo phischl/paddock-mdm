@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -160,6 +161,63 @@ func TestRetentionRoundRetiredInventory(t *testing.T) {
 	}
 	if d := testutil.ToFloat64(metricRetentionDeleted.WithLabelValues(app.StoreRetiredInventory)) - deletedBefore; d != 1 {
 		t.Fatalf("deleted_total grew by %v, want 1 device", d)
+	}
+}
+
+// TestRetentionRoundFleetBreaker (plan M10 amendment 2026-10-30): the round shares one Fleet breaker across its
+// organizations, so with Fleet down it asks Fleet three times in all; the organizations reached afterwards keep their
+// rows and get one retention.purged failure each instead of one event per device.
+func TestRetentionRoundFleetBreaker(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	day := 24 * time.Hour
+	fleet := &fakeSource{deleteErr: errors.New("fleet: HTTP 503: unavailable")}
+	r := NewRetention(app.NewRetention(runner, f.pool, platform, fleet, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	orgs := []uuid.UUID{f.org, newFixture(t).org}
+	for i, org := range orgs {
+		for j := range 3 {
+			dev := uuid.Must(uuid.NewV7())
+			for _, stmt := range []string{
+				"INSERT INTO device (id, organization_id, hostname, state, state_changed_at) VALUES ($1, $2, 'gone', 'retired', now() - interval '400 days')",
+				"INSERT INTO device_inventory_ref (device_id, organization_id, external_id) VALUES ($1, $2, $3)",
+			} {
+				args := []any{dev, org}
+				if strings.Contains(stmt, "$3") {
+					args = append(args, fmt.Sprintf("br-%d-%d", i, j))
+				}
+				if _, err := f.super.Exec(ctx, stmt, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+
+	if err := r.Round(ctx); err == nil {
+		t.Fatal("round without an error although Fleet failed")
+	}
+	if fleet.deleteCalls != 3 {
+		t.Fatalf("%d Fleet calls in the round, want 3", fleet.deleteCalls)
+	}
+	skipped := 0
+	for _, org := range orgs {
+		if n := f.count(t, "SELECT count(*) FROM device_inventory_ref WHERE organization_id = $1", org); n != 3 {
+			t.Fatalf("organization %s keeps %d host references, want 3", org, n)
+		}
+		skips := f.count(t, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'retention.purged'
+			AND params->>'store' = 'retired_inventory' AND outcome = 'failure' AND error_code = 'upstream_unavailable'`, org)
+		if skips > 1 {
+			t.Fatalf("organization %s has %d skip events, want at most 1", org, skips)
+		}
+		skipped += skips
+	}
+	if skipped == 0 {
+		t.Fatal("no organization recorded the skipped Fleet step")
 	}
 }
 
