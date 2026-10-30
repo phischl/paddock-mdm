@@ -29,7 +29,9 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   `no-new-privileges:true`); Caddy keeps only `NET_BIND_SERVICE` for 80 and 443; every service has a `pids_limit`.
   `./paddock check` fails the item `container hardening` when a Compose edit removes one of these settings.
 - Control plane: 4 vCPU, 16 GB RAM, 100 GB disk for 100 devices. Audit domain: 2 vCPU, 4 GB RAM, disk for 400 days
-  of audit evidence (about 1 GB per 100 devices and year).
+  of audit evidence (about 1 GB per 100 devices and year). Authentik serves logins with 4 web worker processes, one
+  core and about 250 MiB each; raise `PADDOCK_AUTHENTIK_WEB_WORKERS` with the cores for many simultaneous logins
+  (`docs/operations/capacity.md`, "Authentik web workers").
 - A **private interconnect** between the hosts (VPN such as WireGuard, or a private network), each host with a fixed
   address on it. Only these endpoints are published there, all with TLS from the internal CAs:
   - control plane → audit host: RabbitMQ `amqps` 5671 (the audit writer consumes), OpenBao 8200 (the audit writer
@@ -203,7 +205,8 @@ secret; 80/443 published by any service but Caddy, or another published port tha
 without proxies or proxies without a header, an unknown header name, item `edge client address`); a `/0` in a role's
 `PADDOCK_TRUSTED_PROXY_CIDRS`; a Paddock role or Caddy that keeps capabilities (beyond Caddy's `NET_BIND_SERVICE`)
 or may gain privileges, or a service without `pids_limit` (item `container hardening`);
-`PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
+`PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`); a
+`PADDOCK_AUTHENTIK_WEB_WORKERS` that is not an integer of at least 1 (item `authentik web workers`);
 the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
 audit bucket without Object Lock COMPLIANCE of at least 400 days.
 

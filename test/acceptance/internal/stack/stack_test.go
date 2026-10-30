@@ -26,17 +26,18 @@ func checkout(t *testing.T, env string) {
 }
 
 func TestStackSettings(t *testing.T) {
-	second := "PADDOCK_HTTPS_PORT=8443\nPADDOCK_PROJECT=paddock2\nPADDOCK_HTTPS_PORT=8543\nPADDOCK_DEV_POSTGRES_PORT=5532\n"
+	second := "PADDOCK_HTTPS_PORT=8443\nPADDOCK_PROJECT=paddock2\nPADDOCK_HTTPS_PORT=8543\nPADDOCK_DEV_POSTGRES_PORT=5532\nPADDOCK_DEV_FLEET_PORT=8512\n"
 	for _, c := range []struct {
-		name, env, envProject, project, port, admin, db string
+		name, env, envProject, project, port, admin, db, fleet string
 	}{
-		{"first stack without .env", "", "", "paddock", "8443", "https://admin.paddock.localhost:8443", "127.0.0.1:5432"},
-		{"first stack .env", "PADDOCK_HTTPS_PORT=8443\n", "", "paddock", "8443", "https://admin.paddock.localhost:8443", "127.0.0.1:5432"},
-		{"second stack .env, last line wins", second, "", "paddock2", "8543", "https://admin.paddock.localhost:8543", "127.0.0.1:5532"},
-		{"environment wins over .env", second, "paddock9", "paddock9", "8543", "https://admin.paddock.localhost:8543", "127.0.0.1:5532"},
+		{"first stack without .env", "", "", "paddock", "8443", "https://admin.paddock.localhost:8443", "127.0.0.1:5432", "http://127.0.0.1:8412"},
+		{"first stack .env", "PADDOCK_HTTPS_PORT=8443\n", "", "paddock", "8443", "https://admin.paddock.localhost:8443", "127.0.0.1:5432", "http://127.0.0.1:8412"},
+		{"second stack .env, last line wins", second, "", "paddock2", "8543", "https://admin.paddock.localhost:8543", "127.0.0.1:5532", "http://127.0.0.1:8512"},
+		{"environment wins over .env", second, "paddock9", "paddock9", "8543", "https://admin.paddock.localhost:8543", "127.0.0.1:5532", "http://127.0.0.1:8512"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			for _, v := range []string{"PADDOCK_PROJECT", "PADDOCK_HTTPS_PORT", "PADDOCK_DOMAIN", "PADDOCK_DEV_POSTGRES_PORT", "PADDOCK_TEST_ADMIN_URL"} {
+			for _, v := range []string{"PADDOCK_PROJECT", "PADDOCK_HTTPS_PORT", "PADDOCK_DOMAIN", "PADDOCK_DEV_POSTGRES_PORT", "PADDOCK_TEST_ADMIN_URL",
+				"PADDOCK_DEV_FLEET_PORT", "PADDOCK_TEST_FLEET_ADMIN_URL"} {
 				t.Setenv(v, "")
 			}
 			if c.envProject != "" {
@@ -54,6 +55,9 @@ func TestStackSettings(t *testing.T) {
 			}
 			if got := AdminURL(); got != c.admin {
 				t.Errorf("AdminURL() = %q, want %q", got, c.admin)
+			}
+			if got := FleetAdminURL(); got != c.fleet {
+				t.Errorf("FleetAdminURL() = %q, want %q", got, c.fleet)
 			}
 			if got := loopback("PADDOCK_DEV_POSTGRES_PORT", "5432"); got != c.db {
 				t.Errorf("PostgreSQL host = %q, want %q", got, c.db)

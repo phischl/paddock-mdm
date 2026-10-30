@@ -22,7 +22,13 @@ jobs:
         with:
           go-version: "1.27.3"
           cache-dependency-path: "**/go.sum"
-      - run: make lint # includes govulncheck for all modules (lint-vuln)
+      # The lint image builds, golangci-lint, govulncheck and go-licenses take the workspace's dependencies, govulncheck
+      # included, from the runner's module cache instead of the module proxy (PDK-540, PDK-516, PDK-550). go.work makes
+      # the download below cover every workspace module, not only server; on a setup-go cache hit it runs offline, a
+      # miss fetches here. go-licenses itself is in no go.sum and still comes from the proxy.
+      - name: Go modules for the lint images, golangci-lint, govulncheck and go-licenses
+        run: cd server && go mod download
+      - run: PADDOCK_CI_GOMODCACHE="$(go env GOMODCACHE)/cache/download" make lint # includes govulncheck for all modules (lint-vuln)
 
   test:
     runs-on: ubuntu-24.04
@@ -163,6 +169,19 @@ jobs:
         run: |
           docker ps -aq --filter label=com.docker.compose.project=paddock --filter label=com.docker.compose.service=fleet \
             | xargs -r -n1 docker logs 2>&1
+      # The full log of every service, which make logs cuts to 300 lines (PDK-555, evidence for stalls like PDK-545).
+      # The dumped files carry no secret values (gitleaks and a search for every generated secret over a sample: the
+      # RustFS access key IDs appear, never their secret keys); token= values are redacted as in make logs (RR-63).
+      - name: Full compose logs
+        if: failure()
+        run: make logs-dump LOGS_DIR="$RUNNER_TEMP/compose-logs"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: compose-logs-shard-${{ matrix.shard }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/compose-logs/
 
   # The disruptive gates and the Playwright suite on a stack of their own, in parallel with the shards.
   acceptance-e2e:
@@ -212,6 +231,18 @@ jobs:
         run: |
           docker ps -aq --filter label=com.docker.compose.project=paddock --filter label=com.docker.compose.service=fleet \
             | xargs -r -n1 docker logs 2>&1
+      # The full log of every service, which make logs cuts to 300 lines (PDK-555, evidence for stalls like PDK-545).
+      # As in the shard jobs: no secret values in the files.
+      - name: Full compose logs
+        if: failure()
+        run: make logs-dump LOGS_DIR="$RUNNER_TEMP/compose-logs"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: compose-logs-e2e
+          retention-days: 7
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/compose-logs/
 
   # The required status check "acceptance" of the default branch ruleset: green only if every shard and the e2e job
   # are; a skipped job (failed prerequisites) fails it too. On a pull request to main it always runs, so it never

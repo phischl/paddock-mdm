@@ -5666,7 +5666,7 @@ components:
         updated_at: { type: string, format: date-time }
     DeviceUninstall:
       type: object
-      required: [mode, requested_at, command_id, command_status, uninstalled_at, local_admin, tpm, report_overdue]
+      required: [mode, requested_at, command_id, command_status, uninstalled_at, local_admin, tpm, report_overdue, refused_reason]
       properties:
         mode: { type: string, enum: [leave, reset] }
         requested_at: { type: string, format: date-time }
@@ -5680,6 +5680,13 @@ components:
         uninstalled_at: { type: string, format: date-time, nullable: true, description: When the device reported the removal. }
         local_admin: { type: string, nullable: true, description: "From the removal report: removed, kept or kept_last_admin." }
         tpm: { type: string, nullable: true, description: "From the removal report: cleared, requested_at_next_boot, skipped_in_use, not_requested or failed." }
+        refused_reason:
+          type: string
+          nullable: true
+          description: >-
+            Why the device refused the command (command_status failed): conversion_pending or revocation_pending, which
+            clear up, so the request stays open until an administrator cancels it or requests it again. A refusal with
+            invalid_params ends the request. Null when the device did not refuse.
     DeviceUninstallRequest:
       type: object
       additionalProperties: false
