@@ -15,8 +15,8 @@ import (
 // hostRolloutActor is the system actor of the host commands (plan M7b decision 31).
 const hostRolloutActor = "paddock-server admin"
 
-// hostRollout runs paddock-server admin <args> in a one-off paddock-api container, as ./paddock agent-rollout and
-// ./paddock agent-rollout-halt do. It returns the combined output and whether the command succeeded.
+// hostRollout runs paddock-server admin <args> in a one-off paddock-api container, as ./paddock agent-rollout,
+// ./paddock agent-rollout-halt and ./paddock agent-rollout-resume do. It returns the combined output and whether the command succeeded.
 func hostRollout(t *testing.T, args ...string) (string, bool) {
 	t.Helper()
 	out, err := stack.Compose(testContext(t, 5*time.Minute), nil,
@@ -54,9 +54,9 @@ func expectHostRefusal(t *testing.T, idx *env.AuditIndex, code, problemCode, ver
 }
 
 // TestAgentRolloutFromHost is the gate of the ADR 0034 amendment 2026-10-26 (PDK-449): the host commands start a
-// rollout of a published release with the default waves and halt it, each with exactly one audit event of the system
-// actor; an unpublished release, a release whose rollout runs, another running rollout and invalid waves are refused
-// with the API's problem codes.
+// rollout of a published release with the default waves, halt it and resume it (PDK-452), each with exactly one audit
+// event of the system actor; an unpublished release, a release whose rollout runs, another running rollout, invalid
+// waves, a release without a rollout and a rollout that is not halted are refused with the API's problem codes.
 func TestAgentRolloutFromHost(t *testing.T) {
 	root, idx := login(t, env.PlatformAdmin), auditIndex(t)
 	haltRunningRollouts(t, root)
@@ -119,4 +119,21 @@ func TestAgentRolloutFromHost(t *testing.T) {
 		t.Fatalf("agent_rollout.halted actor %q, want %q", ev.ActorDisplay, hostRolloutActor)
 	}
 	expectHostRefusal(t, idx, "agent_rollout.halted", "invalid_state", v, "agent-rollout-halt", "--version", v)
+
+	// 6. The resume continues the halted rollout with one audit event of the host actor; it does not start a rollout,
+	// and a second resume is refused.
+	expectHostRefusal(t, idx, "agent_rollout.resumed", "not_found", other, "agent-rollout-resume", "--version", other)
+	out, ok = hostRollout(t, "agent-rollout-resume", "--version", v)
+	if !ok {
+		t.Fatalf("agent-rollout-resume %s:\n%s", v, out)
+	}
+	if r := hostRolloutJSON(t, out); r["status"] != "running" || r["halted_reason"] != nil {
+		t.Fatalf("resumed rollout: %v", r)
+	}
+	ev = expectOneIndexEvent(t, idx, platformOrg, "code = 'agent_rollout.resumed' AND outcome = 'success' AND params->>'version' = $1",
+		v, "agent_rollout.resumed", "success", auditPollTimeout)
+	if ev.ActorDisplay != hostRolloutActor {
+		t.Fatalf("agent_rollout.resumed actor %q, want %q", ev.ActorDisplay, hostRolloutActor)
+	}
+	expectHostRefusal(t, idx, "agent_rollout.resumed", "invalid_state", v, "agent-rollout-resume", "--version", v)
 }

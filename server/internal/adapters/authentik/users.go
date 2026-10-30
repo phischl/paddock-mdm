@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -190,10 +191,83 @@ const roleGroupAttempts = 3
 // the listing shifts the next page and another member could be skipped: the listing is ordered by pk and repeated when
 // the total changed between pages or does not match what was read, and fails if it never settles.
 func (c *Client) RoleGroupUsers(ctx context.Context, groupName string) ([]ports.IdentityUser, error) {
-	out, err := c.settledUsers(ctx, url.Values{"groups_by_name": {groupName}}, groupName)
+	return c.groupMembers(ctx, []string{groupName}, groupName)
+}
+
+// roleGroupsQueryBytes bounds the encoded group names of one listing of RoleGroupsUsers, so the request line stays
+// far below the limits of proxies and of Authentik's HTTP server (16 KiB for the request head).
+const roleGroupsQueryBytes = 4096
+
+// RoleGroupsUsers lists the direct members of the groups groupNames with one settled listing per batch of names
+// instead of one per group, so ending all sessions does not grow by a call per role group (PDK-501). Authentik
+// filters by several names at once and refuses the whole batch when it does not know one of them; the groups that do
+// not exist are skipped (existingGroupsMembers). A user in groups of several batches is listed once per batch.
+func (c *Client) RoleGroupsUsers(ctx context.Context, groupNames []string) ([]ports.IdentityUser, error) {
+	var out []ports.IdentityUser
+	for len(groupNames) > 0 {
+		n, size := 0, 0
+		for n < len(groupNames) {
+			param := len("&groups_by_name=") + len(url.QueryEscape(groupNames[n]))
+			if n > 0 && size+param > roleGroupsQueryBytes {
+				break
+			}
+			size += param
+			n++
+		}
+		users, err := c.existingGroupsMembers(ctx, groupNames[:n])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, users...)
+		groupNames = groupNames[n:]
+	}
+	return out, nil
+}
+
+// existingGroupsMembers lists the direct members of the groups names, skipping the groups that do not exist. Authentik
+// names the first unknown group in its refusal: that group is dropped and the rest listed again, so each missing group
+// costs one listing. A refusal that names none of them (a changed message) halves the batch instead.
+func (c *Client) existingGroupsMembers(ctx context.Context, names []string) ([]ports.IdentityUser, error) {
+	for len(names) > 0 {
+		users, err := c.groupMembers(ctx, names, fmt.Sprintf("%d role groups from %s", len(names), names[0]))
+		var missing *missingGroup
+		if !errors.As(err, &missing) {
+			return users, err
+		}
+		if len(names) == 1 {
+			return nil, nil
+		}
+		if i := slices.IndexFunc(names, func(n string) bool { return strings.Contains(missing.body, " "+n+" ") }); i >= 0 {
+			names = slices.Delete(slices.Clone(names), i, i+1)
+			continue
+		}
+		first, err := c.existingGroupsMembers(ctx, names[:len(names)/2])
+		if err != nil {
+			return nil, err
+		}
+		second, err := c.existingGroupsMembers(ctx, names[len(names)/2:])
+		if err != nil {
+			return nil, err
+		}
+		return append(first, second...), nil
+	}
+	return nil, nil
+}
+
+// missingGroup is Authentik's refusal of a group name it does not know; body is the refusal, which names the group.
+type missingGroup struct{ what, body string }
+
+func (e *missingGroup) Error() string { return e.what + ": " + ports.ErrGroupNotFound.Error() }
+
+func (e *missingGroup) Unwrap() error { return ports.ErrGroupNotFound }
+
+// groupMembers lists the direct members of any of the groups names in one settled listing; what names them in an
+// error. Authentik refuses a filter on a group name it does not know with 400 on groups_by_name: ErrGroupNotFound.
+func (c *Client) groupMembers(ctx context.Context, names []string, what string) ([]ports.IdentityUser, error) {
+	out, err := c.settledUsers(ctx, url.Values{"groups_by_name": names}, what)
 	var st *errStatus
 	if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
-		return nil, fmt.Errorf("%s: %w", groupName, ports.ErrGroupNotFound)
+		return nil, &missingGroup{what: what, body: st.body}
 	}
 	return out, err
 }
@@ -202,6 +276,36 @@ func (c *Client) RoleGroupUsers(ctx context.Context, groupName string) ([]ports.
 // rights), with the same settled listing as RoleGroupUsers (plan M8b decision 33).
 func (c *Client) Superusers(ctx context.Context) ([]ports.IdentityUser, error) {
 	return c.settledUsers(ctx, url.Values{"is_superuser": {"true"}}, "the superusers")
+}
+
+// GroupReadable reads the group groupName by name. Authentik validates the groups_by_name filter of a user listing
+// against every group, whatever the token may see, so an empty role group listing alone does not show that the token
+// can read the group (PDK-424).
+func (c *Client) GroupReadable(ctx context.Context, groupName string) (bool, error) {
+	pk, err := c.findGroup(ctx, groupName)
+	return pk != "", err
+}
+
+// UsersVisible lists one page of internal and external users. Authentik filters a user listing by the token's
+// permissions and answers an empty page, not an error, to a token that may no longer see users; the paddock-service
+// account is a service account and does not count (PDK-424).
+func (c *Client) UsersVisible(ctx context.Context) (bool, error) {
+	q := url.Values{"type": {"internal", "external"}, "include_groups": {"false"}, "ordering": {"pk"}, "page": {"1"}, "page_size": {"1"}}
+	var page struct {
+		Results []struct {
+			Type string `json:"type"`
+		} `json:"results"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v3/core/users/?"+q.Encode(), nil, &page); err != nil {
+		return false, upstream(err)
+	}
+	// The type is checked again in case a later Authentik ignores the filter: a service account never proves sight.
+	for _, u := range page.Results {
+		if u.Type == "internal" || u.Type == "external" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // settledUsers lists the users matching filter, repeating the listing when it did not settle; what names the listing
@@ -250,7 +354,8 @@ func (c *Client) listSettled(ctx context.Context, filter url.Values, what string
 
 // EndUserSessions deletes every Authentik authenticated session of the users userPKs in one bulk delete and returns
 // how many it deleted; Authentik deletes the browser's Django session with each, which signs the browser out (plan
-// M8f decision 17). The caller chunks the users.
+// M8f decision 17). The caller chunks the users. A bulk delete repeated after a timeout or a 5xx reports only what its
+// last attempt found left, so the caller counts the sessions first (CountUserSessions, PDK-342).
 func (c *Client) EndUserSessions(ctx context.Context, userPKs []string) (int, error) {
 	if len(userPKs) == 0 {
 		return 0, nil
@@ -269,6 +374,34 @@ func (c *Client) EndUserSessions(ctx context.Context, userPKs []string) (int, er
 		return 0, upstream(err)
 	}
 	return res.Deleted, nil
+}
+
+// CountUserSessions counts the Authentik authenticated sessions of the users userPKs in one listing of every session;
+// the listing has no filter by user pk.
+func (c *Client) CountUserSessions(ctx context.Context, userPKs []string) (int, error) {
+	users := make(map[int]bool, len(userPKs))
+	for _, pk := range userPKs {
+		n, err := strconv.Atoi(pk)
+		if err != nil {
+			return 0, fmt.Errorf("authentik: user pk %q is not an integer", pk)
+		}
+		users[n] = true
+	}
+	if len(users) == 0 {
+		return 0, nil
+	}
+	n := 0
+	err := pages(ctx, c, "/api/v3/core/authenticated_sessions/", url.Values{}, func(s struct {
+		User int `json:"user"`
+	}) {
+		if users[s.User] {
+			n++
+		}
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func userPath(pk string) string { return "/api/v3/core/users/" + url.PathEscape(pk) + "/" }

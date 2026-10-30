@@ -74,6 +74,12 @@ type UserDirectory interface {
 	// Superusers lists the users with the identity provider's superuser rights in one paged listing; the worker records
 	// who gains or loses them (plan M8b decision 33).
 	Superusers(ctx context.Context) ([]IdentityUser, error)
+	// GroupReadable reports whether the group groupName itself can be read: it exists and its object is visible to the
+	// service token. With UsersVisible it proves that empty role group listings are real, not a blind token (PDK-424).
+	GroupReadable(ctx context.Context, groupName string) (bool, error)
+	// UsersVisible reports whether a listing of users returns at least one user who is not a service account; the
+	// service token's own user does not count, since a token may see itself without seeing anyone else (PDK-424).
+	UsersVisible(ctx context.Context) (bool, error)
 }
 
 // GroupDirectory manages Paddock's user groups (plan M3a decisions 3 and 9).

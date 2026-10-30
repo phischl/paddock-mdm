@@ -177,6 +177,14 @@ func (f *fakeIdP) Superusers(context.Context) ([]ports.IdentityUser, error) {
 	return nil, f.err()
 }
 
+func (f *fakeIdP) GroupReadable(context.Context, string) (bool, error) {
+	return false, f.err()
+}
+
+func (f *fakeIdP) UsersVisible(context.Context) (bool, error) {
+	return false, f.err()
+}
+
 func (f *fakeIdP) UserMembership(context.Context, string, string) (ports.IdentityUser, []string, bool, error) {
 	return ports.IdentityUser{}, nil, false, f.err()
 }

@@ -55,6 +55,9 @@ type world struct {
 
 	validator *fakeValidator
 	bao       *baotest.Bao
+	// restart replaces comp by a new compiler on the same stores, as a restarted compiler process with a changed
+	// configuration.
+	restart func(change func(*compiler.Config))
 }
 
 // fakeValidator refuses rendered sudoers files that contain reject (no visudo needed in unit tests; the real visudo
@@ -120,6 +123,11 @@ func newWorldConfig(t *testing.T, change func(*compiler.Config)) *world {
 		change(&cfg)
 	}
 	w.comp = compiler.New(pool, signer, w.store, w.cache, cfg)
+	w.restart = func(change func(*compiler.Config)) {
+		next := cfg
+		change(&next)
+		w.comp = compiler.New(pool, signer, w.store, w.cache, next)
+	}
 	w.exec("INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'C', 'active')", w.org, "c"+w.org.String()[24:])
 	w.exec("INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'g1'), ($3, $2, 'g2')", w.g1, w.org, w.g2)
 	return w

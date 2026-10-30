@@ -1059,6 +1059,13 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > `platform_and_organization` is no longer a denial reason; `role_not_granted` (a switch whose role the fresh
 > `groups` claim does not grant) is. Several organizations per identity stay denied (`multiple_organizations`).
 
+> **Amendment 2026-10-29 (PDK-498):** the WebAuthn enrolment of the portal sign-in (stage
+> `paddock-admin-login-webauthn`) runs only for an account without a WebAuthn device that is a direct member of
+> `paddock.platform.admins` or of an organization's `admins`, `operators` or `auditors` group (policy
+> `paddock-admin-login-webauthn-administrator` next to `paddock-admin-login-webauthn-missing`). An end user who
+> approves a device sign-in through the brand sign-in is not asked to enrol a passkey (ADR 0034 and ADR 0007
+> amendments 2026-10-29).
+
 ---
 
 ## 10. Permission profiles and sudo

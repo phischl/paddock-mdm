@@ -85,3 +85,11 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
 - The portal sign-in lands in the organization role; `POST /api/auth/switch` starts a new sign-in for the other
   role that ends the previous session. The step-up callback accepts a step-up token whose groups grant the
   session's role next to the other one. The organization and platform reconciliation rounds are unchanged.
+
+## Amendment 2026-10-29 (PDK-498, ADR 0034 amendment 2026-10-29) — stage B enrols administrators only
+- The WebAuthn enrolment of the portal login (`paddock-admin-login-webauthn`) is bound with two policies, both of
+  which must pass: `paddock-admin-login-webauthn-missing` (no WebAuthn device) and
+  `paddock-admin-login-webauthn-administrator` (a direct member of `paddock.platform.admins` or of an
+  organization's `admins`, `operators` or `auditors` group). The administrator policy fails closed: an error in
+  its evaluation enrols the account.
+- An end user who approves a device sign-in through the brand sign-in is not asked to enrol a passkey.

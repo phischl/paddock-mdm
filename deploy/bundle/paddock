@@ -26,6 +26,7 @@ usage: ./paddock <command> [arguments]
                 [--failure-threshold-min M]
                                   start the staged rollout of a published release (control plane)
   agent-rollout-halt <version>    halt the running rollout of a release (control plane)
+  agent-rollout-resume <version>  resume the halted rollout of a release (control plane)
   auto-unseal status|enable|disable
                                   automatic unseal of OpenBao on this host (docs/operations/openbao.md section 6)
   migrate-from <old dir>          take over .env and .secrets/ of the bundle directory of the running version
@@ -64,7 +65,7 @@ case "$cmd" in
     echo "copied .env and .secrets/ from $old"
     exit 0
     ;;
-  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | auto-unseal) ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal) ;;
   *) usage ;;
 esac
 
@@ -203,12 +204,12 @@ case "$cmd" in
     compose run --rm --no-deps $(tty_flag) -v "$release_dir:/release:ro" paddock-api \
       admin agent-release --version "$1" --dir /release
     ;;
-  agent-rollout | agent-rollout-halt)
+  agent-rollout | agent-rollout-halt | agent-rollout-resume)
     # Host operator exception from the portal's sign-in and step-up (ADR 0034 amendment 2026-10-26, RR-90).
     if [[ "$cmd" == agent-rollout ]]; then
       [[ $# -ge 1 && "$1" != -* ]] || die "usage: ./paddock agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P] [--failure-threshold-min M]" 2
     else
-      [[ $# -eq 1 && "$1" != -* ]] || die "usage: ./paddock agent-rollout-halt <version>" 2
+      [[ $# -eq 1 && "$1" != -* ]] || die "usage: ./paddock $cmd <version>" 2
     fi
     require_host controlplane lab "$cmd"
     version="$1"

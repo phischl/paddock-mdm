@@ -2,8 +2,8 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -21,11 +21,13 @@ type SessionEnder interface {
 
 // IdentitySessionEnder ends the identity provider's browser sessions of users (Authentik authenticated sessions).
 type IdentitySessionEnder interface {
+	// CountUserSessions counts the identity provider's browser sessions of users.
+	CountUserSessions(ctx context.Context, userPKs []string) (int, error)
 	EndUserSessions(ctx context.Context, userPKs []string) (int, error)
 }
 
 // PortalUserLister lists the identity provider's users who hold a portal role: the platform admins group and the
-// three role groups of every organization (ports.UserDirectory.RoleGroupUsers for each).
+// three role groups of every organization.
 type PortalUserLister interface {
 	PortalUsers(ctx context.Context) ([]ports.IdentityUser, error)
 }
@@ -43,17 +45,24 @@ const identitySessionChunk = 50
 // 120 s, and the runner's final transaction may take up to 30 s after it.
 const identitySessionBudget = 80 * time.Second
 
+// identitySessionCountBudget bounds the count of the identity-provider sessions before they are ended; the bulk
+// deletes get the time the count took on top of identitySessionBudget, so 80 + 5 + 30 s stay below the 120 s write
+// timeout (PDK-342).
+const identitySessionCountBudget = 5 * time.Second
+
 // Sessions ends portal sessions.
 type Sessions struct {
 	runner   *ActionRunner
 	store    SessionEnder
 	users    PortalUserLister
 	identity IdentitySessionEnder
+	// countBudget is identitySessionCountBudget; tests shorten it.
+	countBudget time.Duration
 }
 
 // NewSessions creates the use case.
 func NewSessions(runner *ActionRunner, store SessionEnder, users PortalUserLister, identity IdentitySessionEnder) *Sessions {
-	return &Sessions{runner: runner, store: store, users: users, identity: identity}
+	return &Sessions{runner: runner, store: store, users: users, identity: identity, countBudget: identitySessionCountBudget}
 }
 
 // EndAll ends every portal session, the caller's own with its next request, and every identity-provider browser
@@ -76,7 +85,7 @@ func (s *Sessions) endAll(ctx context.Context, spec ActionSpec) (int64, error) {
 	)
 	// The calls to Valkey and Authentik run outside any transaction (RunExternal): the started action is committed
 	// first, so a crash in between leaves an action the reaper records as unknown, and no transaction stays open for
-	// 1 + 3 × organizations directory calls (plan M8f decision 16, amended 2026-10-18).
+	// the directory calls (plan M8f decision 16, amended 2026-10-18).
 	err := s.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(context.Context, *pgstore.Queries, Recorder) error { return nil },
 		func(ctx context.Context) error {
@@ -111,10 +120,17 @@ func (s *Sessions) endAll(ctx context.Context, spec ActionSpec) (int64, error) {
 // endIdentitySessions ends the identity provider's browser sessions of every portal user, in chunks, within
 // identitySessionBudget, and returns the number of listed users (-1 when the listing failed) and of the sessions
 // ended so far.
+//
+// When every chunk is ended, the sessions ended are the larger of the users' sessions counted before and the sum the
+// bulk deletes report: a bulk delete repeated after a timeout reports only what its last attempt found left
+// (PDK-342). A session that ends between the count and the delete (a logout, an expiry, a concurrent end all) is an
+// accepted over-count. The count is best-effort and never takes time from the deletes: it has its own bound, and the
+// deletes' deadline moves by the time it took.
 func (s *Sessions) endIdentitySessions(ctx context.Context) (users, ended int, err error) {
-	ctx, cancel := context.WithTimeout(ctx, identitySessionBudget)
-	defer cancel()
-	listed, err := s.users.PortalUsers(ctx)
+	deadline := time.Now().Add(identitySessionBudget)
+	listCtx, cancelList := context.WithDeadline(ctx, deadline)
+	defer cancelList()
+	listed, err := s.users.PortalUsers(listCtx)
 	if err != nil {
 		return -1, -1, fmt.Errorf("list portal users: %w", err)
 	}
@@ -122,30 +138,58 @@ func (s *Sessions) endIdentitySessions(ctx context.Context) (users, ended int, e
 	for i, u := range listed {
 		pks[i] = u.PK
 	}
+	began := time.Now()
+	counted := s.countIdentitySessions(ctx, pks)
+	deleteCtx, cancelDelete := context.WithDeadline(ctx, deadline.Add(time.Since(began)))
+	defer cancelDelete()
 	for start := 0; start < len(pks); start += identitySessionChunk {
-		n, err := s.identity.EndUserSessions(ctx, pks[start:min(start+identitySessionChunk, len(pks))])
+		n, err := s.identity.EndUserSessions(deleteCtx, pks[start:min(start+identitySessionChunk, len(pks))])
 		ended += n
 		if err != nil {
 			return len(listed), ended, fmt.Errorf("end identity-provider sessions: %w", err)
 		}
 	}
-	return len(listed), ended, nil
+	return len(listed), max(counted, ended), nil
+}
+
+// countIdentitySessions counts the identity provider's sessions of the users pks within countBudget, 0 when the count
+// fails.
+func (s *Sessions) countIdentitySessions(ctx context.Context, pks []string) int {
+	if len(pks) == 0 {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.countBudget)
+	defer cancel()
+	n, err := s.identity.CountUserSessions(ctx, pks)
+	if err != nil {
+		slog.WarnContext(ctx, "counting the identity provider's sessions before ending them failed; the deletes' count is recorded", "error", err)
+		return 0
+	}
+	return n
+}
+
+// RoleGroupsDirectory lists the members of many role groups at once (authentik.Client).
+type RoleGroupsDirectory interface {
+	// RoleGroupsUsers lists the direct members of the groups names in a number of calls that does not grow with each
+	// group (PDK-501); a group that does not exist is skipped, and a user may be listed more than once.
+	RoleGroupsUsers(ctx context.Context, names []string) ([]ports.IdentityUser, error)
 }
 
 // PortalUsers lists the identity provider's portal users: the members of the platform admins group and of the role
 // groups of every organization, each user once.
 type PortalUsers struct {
 	platform *db.PlatformPool
-	dir      ports.UserDirectory
+	dir      RoleGroupsDirectory
 }
 
 // NewPortalUsers creates the lister.
-func NewPortalUsers(platform *db.PlatformPool, dir ports.UserDirectory) *PortalUsers {
+func NewPortalUsers(platform *db.PlatformPool, dir RoleGroupsDirectory) *PortalUsers {
 	return &PortalUsers{platform: platform, dir: dir}
 }
 
 // PortalUsers implements PortalUserLister. A role group that does not exist (an organization whose groups are not
-// provisioned yet) is skipped.
+// provisioned yet) is skipped. The groups are listed together, not one call after another: with one call per group,
+// about 90 organizations exceeded the request's budget (PDK-501).
 func (p *PortalUsers) PortalUsers(ctx context.Context) ([]ports.IdentityUser, error) {
 	var slugs []string
 	err := p.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -160,28 +204,23 @@ func (p *PortalUsers) PortalUsers(ctx context.Context) ([]ports.IdentityUser, er
 }
 
 // portalUsers lists the members of the platform admins group and of the role groups of the organizations slugs.
-func portalUsers(ctx context.Context, dir ports.UserDirectory, slugs []string) ([]ports.IdentityUser, error) {
+func portalUsers(ctx context.Context, dir RoleGroupsDirectory, slugs []string) ([]ports.IdentityUser, error) {
 	groups := []string{organization.PlatformAdminsGroup()}
 	for _, slug := range slugs {
 		for _, g := range []organization.GroupRole{organization.GroupAdmins, organization.GroupOperators, organization.GroupAuditors} {
 			groups = append(groups, organization.RoleGroup(slug, g))
 		}
 	}
+	members, err := dir.RoleGroupsUsers(ctx, groups)
+	if err != nil {
+		return nil, fmt.Errorf("role groups: %w", err)
+	}
 	seen := map[string]bool{}
 	var out []ports.IdentityUser
-	for _, g := range groups {
-		members, err := dir.RoleGroupUsers(ctx, g)
-		if errors.Is(err, ports.ErrGroupNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("role group %s: %w", g, err)
-		}
-		for _, m := range members {
-			if !seen[m.PK] {
-				seen[m.PK] = true
-				out = append(out, m)
-			}
+	for _, m := range members {
+		if !seen[m.PK] {
+			seen[m.PK] = true
+			out = append(out, m)
 		}
 	}
 	return out, nil
