@@ -118,7 +118,14 @@ The audit writer's `/metrics` exports `paddock_audit_verify_runs_total{trigger,r
   (audit-writer container) lists every partition with `DROP` or `KEEP` and changes nothing.
 - **Evidence exports.** Evidence packages (`POST /api/v1/audit/exports`) are built on the audit host by the audit
   writer and stored in the audit index database, never in the bucket; a package expires 7 days after it is ready and
-  the nightly purge deletes it (`retention.purged`, store `audit_exports`).
+  the nightly purge deletes it (`retention.purged`, store `audit_exports`). An auditor requests a package for sealed
+  days on the portal's *Evidence exports* page (`/audit/exports`) after a step-up; the request is recorded as
+  `audit.export_requested`, the finished build as `audit.export_completed` and every download as
+  `audit.export_downloaded` (also when refused). A day that is not sealed yet is refused (`day_not_sealed`) and at most
+  two exports of an organization are open at a time (`too_many_exports`). The auditor verifies the downloaded package
+  without any access to Paddock: `paddockctl audit verify-export <file> --fingerprint <fingerprint>`
+  ([paddockctl.md](paddockctl.md#verifying-an-evidence-package)), with the fingerprint of the `audit-chain` key from the
+  signing-keys list of the page or from `paddock-server audit keys` on the audit host.
 
 **What to do on `PaddockAuditChainBroken`.** The alert fires as soon as a nightly cycle found a broken or
 unreadable chain of at least one organization. A restart of the audit writer does not clear it: at start the writer
