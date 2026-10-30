@@ -104,6 +104,26 @@ func (g gapDevice) waitOpenGap(from, to int64) {
 	}
 }
 
+// waitContiguous waits until a round moved the device's contiguous pointer to seq. The round sets it below the lowest
+// gap it leaves open and scans only above it afterwards (app.EventGaps.evaluate), so once it reached seq no gap up to
+// seq is open or can be opened and reported later; a wrong gap keeps the pointer below seq and fails the wait.
+func (g gapDevice) waitContiguous(seq int64) {
+	g.t.Helper()
+	ctx := testContext(g.t, time.Minute)
+	for deadline := time.Now().Add(45 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+		var contiguous int64
+		if err := g.db.QueryRow(ctx, "SELECT coalesce(max(event_seq_contiguous), 0) FROM device_status WHERE device_id = $1", g.d.DeviceID).Scan(&contiguous); err != nil {
+			g.t.Fatal(err)
+		}
+		if contiguous >= seq {
+			return
+		}
+		if time.Now().After(deadline) {
+			g.t.Fatalf("event numbering of %s contiguous up to %d, not %d within 45 s", g.d.DeviceID, contiguous, seq)
+		}
+	}
+}
+
 // attention returns the details of the device's event_gap conditions.
 func (g gapDevice) attention(p *env.Portal) []string {
 	g.t.Helper()
@@ -225,7 +245,7 @@ func TestEventGap(t *testing.T) {
 	g.materialize()
 	g.materialize()
 	g.materialize()
-	time.Sleep(20 * time.Second) // one more round after the last check-in; a wrong gap would be reported by now
+	g.waitContiguous(7)
 	if got := g.attention(alice); len(got) != 0 {
 		t.Fatalf("attention event_gap after a declared drop: %v", got)
 	}
