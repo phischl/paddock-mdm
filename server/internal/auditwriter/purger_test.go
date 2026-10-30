@@ -785,3 +785,68 @@ func TestPurgerRunDailyWaitsForOtherReplica(t *testing.T) {
 		t.Errorf("gauge after the retried purge %v, want %d", v, finished.Unix())
 	}
 }
+
+// TestEnsurePartitionIgnoresTemporaryShadow (PDK-558): temporary tables named like the parent or the partition of the
+// writer's session never steer audit_ensure_partition; the partition is created in public all the same.
+func TestEnsurePartitionIgnoresTemporaryShadow(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	if _, err := s.super.Exec(ctx, "GRANT TEMPORARY ON DATABASE paddock_audit TO paddock_audit_writer"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		bg := context.Background()
+		if _, err := s.super.Exec(bg, "DROP TABLE IF EXISTS public.audit_event_2001_09"); err != nil {
+			t.Error(err)
+		}
+		if _, err := s.super.Exec(bg, "REVOKE TEMPORARY ON DATABASE paddock_audit FROM paddock_audit_writer"); err != nil {
+			t.Error(err)
+		}
+	})
+	if s.partitionExists(t, "public.audit_event_2001_09") {
+		t.Fatal("audit_event_2001_09 exists; this test needs the month without a partition")
+	}
+	conn := writerSession(t)
+	for _, ddl := range []string{
+		"CREATE TEMPORARY TABLE audit_event_2001_09 (recorded_at timestamptz)",
+		"CREATE TEMPORARY TABLE audit_event (recorded_at timestamptz)",
+	} {
+		if _, err := conn.Exec(ctx, ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec(ctx, "SELECT audit_ensure_partition($1)", month(2001, time.September)); err != nil {
+		t.Fatal(err)
+	}
+	var partitioned bool
+	if err := s.super.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_inherits i
+		WHERE i.inhrelid = to_regclass('public.audit_event_2001_09') AND i.inhparent = to_regclass('public.audit_event'))`).
+		Scan(&partitioned); err != nil || !partitioned {
+		t.Errorf("public.audit_event_2001_09 is not a partition of public.audit_event (%v)", err)
+	}
+	var temps int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_class
+		WHERE relnamespace = pg_my_temp_schema() AND relname IN ('audit_event', 'audit_event_2001_09')`).Scan(&temps); err != nil || temps != 2 {
+		t.Errorf("temporary tables = %d, want 2 untouched (%v)", temps, err)
+	}
+}
+
+// TestEnsurePartitionIsIdempotent (PDK-558): the normal caller still gets a partition, and a second call is a no-op.
+func TestEnsurePartitionIsIdempotent(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if _, err := s.super.Exec(context.Background(), "DROP TABLE IF EXISTS public.audit_event_2001_10"); err != nil {
+			t.Error(err)
+		}
+	})
+	conn := writerSession(t)
+	for range 2 {
+		if _, err := conn.Exec(ctx, "SELECT audit_ensure_partition($1)", month(2001, time.October)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !s.partitionExists(t, "public.audit_event_2001_10") {
+		t.Error("audit_event_2001_10 not created")
+	}
+}
