@@ -29,6 +29,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
@@ -484,7 +485,7 @@ func (c *collected) addProblem(p string) {
 }
 
 // build reads the range twice: the first pass collects manifests, object hashes and the decoded events (temp file),
-// so export.json and its signature exist before the README, which names the result, is written first in the tar.
+// so export.json (which carries the README hash) and its signature exist before the README is written first in the tar.
 // Objects are re-read in the second pass and must hash as in the first.
 func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (built, error) {
 	org := export.OrganizationID
@@ -534,19 +535,38 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 	}
 
 	doc := e.exportDoc(export, c, runs, verifiedAt, keys)
-	canonical, err := canonicaljson.Marshal(doc)
-	if err != nil {
-		return built{}, err
+	// The README names the signing key, which only the signer knows; export.json covers the README hash, so the README
+	// is rendered before signing for the newest published key and once more if the signer used another one.
+	keyVersion := 0
+	for v := range keys {
+		keyVersion = max(keyVersion, v)
 	}
-	digest := auditevidence.ExportDigest(canonical)
-	sig, err := e.signer.Sign(ctx, SigningKey, digest[:])
-	if err != nil {
-		return built{}, fmt.Errorf("sign: %w", err)
+	var readme, canonical, sigFile []byte
+	var sig bao.Signature
+	for attempt := 0; ; attempt++ {
+		readme = renderReadme(doc, keyVersion, auditevidence.Fingerprint(keys[keyVersion]))
+		readmeSum := sha256.Sum256(readme)
+		doc.ReadmeSHA256 = hex.EncodeToString(readmeSum[:])
+		canonical, err = canonicaljson.Marshal(doc)
+		if err != nil {
+			return built{}, err
+		}
+		digest := auditevidence.ExportDigest(canonical)
+		if sig, err = e.signer.Sign(ctx, SigningKey, digest[:]); err != nil {
+			return built{}, fmt.Errorf("sign: %w", err)
+		}
+		if !auditevidence.VerifySignature(keys, sig.KeyVersion, sig.Value, digest[:]) {
+			return built{}, fmt.Errorf("the signature does not verify with the published audit-chain v%d", sig.KeyVersion)
+		}
+		if sig.KeyVersion == keyVersion {
+			break
+		}
+		if attempt > 0 {
+			return built{}, fmt.Errorf("the signer switched from audit-chain v%d to v%d twice", keyVersion, sig.KeyVersion)
+		}
+		keyVersion = sig.KeyVersion
 	}
-	if !auditevidence.VerifySignature(keys, sig.KeyVersion, sig.Value, digest[:]) {
-		return built{}, fmt.Errorf("the signature does not verify with the published audit-chain v%d", sig.KeyVersion)
-	}
-	sigFile, err := json.Marshal(auditevidence.Signature{Signature: sig.Value, KeyVersion: sig.KeyVersion})
+	sigFile, err = json.Marshal(auditevidence.Signature{Signature: sig.Value, KeyVersion: sig.KeyVersion})
 	if err != nil {
 		return built{}, err
 	}
@@ -556,7 +576,6 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 	if err != nil {
 		return built{}, err
 	}
-	readme := renderReadme(doc, sig.KeyVersion, auditevidence.Fingerprint(keys[sig.KeyVersion]))
 
 	cw := newChunkWriter(e.chunkSize, func(seq int32, data []byte) error {
 		return e.pool.InWriterWithTimeout(ctx, exportChunkTimeout, func(ctx context.Context, q *auditstore.Queries) error {

@@ -219,11 +219,23 @@ func TestVerifyTamperedPackages(t *testing.T) {
 			p.ResignManifest("2026-03-30", p.Priv, func(m *auditevidence.Manifest) { m.Objects = append(m.Objects, m.Objects[0]) })
 			return p
 		}, "", []string{"is listed more than once"}},
-		{"README is not trusted", func() *evidencetest.Pkg {
+		{"README changed with the signature intact", func() *evidencetest.Pkg {
 			p := evidencetest.Assemble(t, twoDays(), -1)
 			p.Set("README.md", []byte("verification: no problems; fingerprint 00\n"))
 			return p
-		}, "", nil},
+		}, "", []string{"README.md does not match readme_sha256"}},
+		{"README removed", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.Remove("README.md")
+			return p
+		}, "", []string{"README.md is missing"}},
+		{"export.json without readme_sha256", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.OmitReadmeHash = true
+			p.Export.ReadmeSHA256 = ""
+			p.Resign()
+			return p
+		}, "", []string{"export.json has no readme_sha256"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

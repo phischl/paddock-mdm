@@ -80,11 +80,12 @@ func (h *handlers) GetAuditExport(ctx context.Context, req adminapi.GetAuditExpo
 // body (up to 32 KiB, the size io.Copy hands over) gets exportWriteDeadline, so a stalled client ends the transfer
 // within that bound. The whole transfer gets max(exportMinTransfer, size / exportMinRate per second), so a client
 // that keeps reading a few bytes at a time cannot hold the download forever; 64 KiB/s still moves a 1 GiB package in
-// under five hours.
+// under five hours. exportMaxTransfer caps the result so a huge size cannot overflow the duration.
 const (
 	exportWriteDeadline = 60 * time.Second
 	exportMinTransfer   = 10 * time.Minute
 	exportMinRate       = 64 << 10
+	exportMaxTransfer   = 24 * time.Hour
 )
 
 // transferBounds limit how long a package download may write each piece of its body and how long it may take in all.
@@ -92,18 +93,23 @@ type transferBounds struct {
 	write    time.Duration
 	minTotal time.Duration
 	minRate  int64
+	maxTotal time.Duration
 }
 
 // total is how long the transfer of a package of size bytes may take in all.
 func (b transferBounds) total(size int64) time.Duration {
-	return max(b.minTotal, time.Duration(size/b.minRate)*time.Second)
+	secs := size / b.minRate
+	if secs >= int64(b.maxTotal/time.Second) {
+		return b.maxTotal
+	}
+	return max(b.minTotal, time.Duration(secs)*time.Second)
 }
 
 // DownloadAuditExport streams the package through a pipe: the use case writes each chunk as it reads it, and the
 // response body reads from the pipe, so the package is never held in memory (plan M10 decision 35).
 func (h *handlers) DownloadAuditExport(ctx context.Context, req adminapi.DownloadAuditExportRequestObject) (adminapi.DownloadAuditExportResponseObject, error) {
 	return streamExport(ctx, req.Id, h.exports.Download,
-		transferBounds{write: exportWriteDeadline, minTotal: exportMinTransfer, minRate: exportMinRate})
+		transferBounds{write: exportWriteDeadline, minTotal: exportMinTransfer, minRate: exportMinRate, maxTotal: exportMaxTransfer})
 }
 
 // exportDownload is the use case behind a package download (app.AuditExports.Download).

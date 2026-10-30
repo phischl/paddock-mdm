@@ -200,6 +200,44 @@ func TestAuditExportDownloadDetectsDamagedChunks(t *testing.T) {
 	expectOne(t, h.harness, audit.OutcomeSuccess, "")
 }
 
+// TestAuditExportDownloadChunkRemovedMidStream: a chunk that disappears after the first one was streamed aborts the
+// transfer with an error; the single success event stays the only event.
+func TestAuditExportDownloadChunkRemovedMidStream(t *testing.T) {
+	h := newExportHarness(t)
+	id, _ := h.storeExport(t, h.org, "ready", time.Now().Add(time.Hour), []byte("one,"), []byte("two,"), []byte("three"))
+	conn, err := pgx.Connect(context.Background(), h.writerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	var body bytes.Buffer
+	err = h.exports.Download(h.admin(principal.RoleOrgAuditor), id, func(app.ExportPackage) {}, func(chunk []byte) error {
+		body.Write(chunk)
+		if _, err := conn.Exec(context.Background(), "DELETE FROM audit_export_chunk WHERE export_id = $1 AND seq = 1", id); err != nil {
+			t.Error(err)
+		}
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "different checksum") {
+		t.Fatalf("err = %v", err)
+	}
+	if body.String() != "one," {
+		t.Fatalf("streamed %q, want only the first chunk", body.String())
+	}
+	expectOne(t, h.harness, audit.OutcomeSuccess, "")
+}
+
+// TestAuditExportDownloadRefusesEmptyPackage: a ready export that records no bytes is not offered.
+func TestAuditExportDownloadRefusesEmptyPackage(t *testing.T) {
+	h := newExportHarness(t)
+	id, _ := h.storeExport(t, h.org, "ready", time.Now().Add(time.Hour))
+	err := h.exports.Download(h.admin(principal.RoleOrgAuditor), id, func(app.ExportPackage) { t.Error("begun") }, func([]byte) error { return nil })
+	if !errors.Is(err, problem.ExportNotReady) {
+		t.Fatalf("err = %v", err)
+	}
+	expectOne(t, h.harness, audit.OutcomeFailure, problem.ExportNotReady.Code)
+}
+
 // TestAuditExportDownloadReleasesReaderBetweenChunks: with a single audit reader connection, a second download
 // completes while the first waits on a client that does not read, because no reader transaction is held while a chunk
 // is written.

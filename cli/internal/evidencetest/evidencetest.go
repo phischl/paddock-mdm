@@ -43,6 +43,9 @@ type Pkg struct {
 	Pub     ed25519.PublicKey
 	Members []TarMember
 	Export  auditevidence.Export
+
+	// OmitReadmeHash keeps readme_sha256 empty on Resign, to build a package of a builder that predates the field.
+	OmitReadmeHash bool
 }
 
 func EventLine(org, schema string, n int) string {
@@ -169,9 +172,14 @@ func Assemble(t *testing.T, days [][]ObjSpec, breakLink int) *Pkg {
 	return p
 }
 
-// Resign rewrites export.json and export.sig from p.Export.
+// Resign rewrites export.json and export.sig from p.Export. An empty readme_sha256 is filled from the README member
+// unless OmitReadmeHash is set.
 func (p *Pkg) Resign() {
 	p.t.Helper()
+	if p.Export.ReadmeSHA256 == "" && !p.OmitReadmeHash {
+		readme := sha256.Sum256(p.Members[p.Idx("README.md")].Body)
+		p.Export.ReadmeSHA256 = hex.EncodeToString(readme[:])
+	}
 	canonical, err := canonicaljson.Marshal(p.Export)
 	if err != nil {
 		p.t.Fatal(err)

@@ -384,6 +384,10 @@ func TestExportBuildsPackage(t *testing.T) {
 		doc.EventsSHA256 != hex.EncodeToString(eventsSum[:]) || doc.ChainAnchor != nil || !doc.Verification.OK {
 		t.Fatalf("export.json = %+v", doc)
 	}
+	readmeSum := sha256.Sum256(byName["README.md"])
+	if doc.ReadmeSHA256 != hex.EncodeToString(readmeSum[:]) {
+		t.Fatalf("readme_sha256 %s, README.md hashes to %x", doc.ReadmeSHA256, readmeSum)
+	}
 	if bytes.Contains(raw, []byte("organization_slug")) {
 		t.Fatal("export.json carries an organization slug (plan M10 amendment 2026-10-30)")
 	}

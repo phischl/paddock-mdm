@@ -743,7 +743,9 @@ paths:
         The response carries Content-Length (the package size), Content-Disposition (paddock-audit-export-<organization
         slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar) and X-Paddock-Package-SHA256 (the lowercase hex SHA-256
         of the body). Recorded as audit.export_downloaded before the first byte is sent; a transfer that breaks later
-        is not recorded again. No range requests.
+        is not recorded again. No range requests. HEAD is refused with 405 (Allow: GET) and is audited as a rejected
+        request; a transfer whose stored chunks are damaged ends without a body error, so the client detects it by
+        the short body against Content-Length and X-Paddock-Package-SHA256.
       x-paddock-audit: audit.export_downloaded
       responses:
         "200":

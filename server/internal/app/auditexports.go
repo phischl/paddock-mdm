@@ -206,7 +206,7 @@ func (a *AuditExports) chunk(ctx context.Context, id uuid.UUID, seq int32) ([]by
 // requireDownloadable refuses an export that is not ready or past its expiry; the audit writer's expiry job may lag
 // behind expires_at, and the chunks of an expired package must not be offered.
 func requireDownloadable(e auditstore.AuditExport, now time.Time) error {
-	if e.Status != "ready" || e.Size == nil || len(e.PackageSha256) == 0 || (e.ExpiresAt != nil && !e.ExpiresAt.After(now)) {
+	if e.Status != "ready" || e.Size == nil || *e.Size <= 0 || len(e.PackageSha256) == 0 || (e.ExpiresAt != nil && !e.ExpiresAt.After(now)) {
 		return problem.ExportNotReady.WithDetail("the export is " + e.Status)
 	}
 	return nil

@@ -962,6 +962,7 @@ export.sig                           {"signature":"vault:v<N>:<base64>","key_ver
   "objects": [{"key": "org/<org>/2026/01/01/08-<id>.jsonl.zst", "path": "objects/2026/01/01/08-<id>.jsonl.zst", "sha256": "<hex>", "event_count": 40}],
   "event_count": 120,
   "events_sha256": "<hex>",
+  "readme_sha256": "<hex SHA-256 of the README.md member>",
   "chain_anchor": "<hex of the first day's prev_manifest_sha256, or null>",
   "verification": {"ok": true, "problems": [], "verified_at": "2026-04-02T07:00:40Z", "verifier": "paddock-server <version>",
                    "runs": [{"run_id": "<uuid>", "started_at": "2026-04-01T02:00:00Z", "from_day": "2026-03-31", "to_day": "2026-03-31", "ok": true, "problems": []}]},
@@ -1840,3 +1841,30 @@ Decisions on review 2 of PDK-583. They amend M1, x3 and the bound above where th
   deletion on uncertainty); the breaker resets only after a real deletion, because a successful lookup proves nothing
   about DELETE. Scattered timeouts that trip the breaker stop the deletions of that round and the next round retries;
   a windowed count is decided in PDK-589.
+
+### Amendment 2026-10-31 (PDK-605: README covered by export.json; decision 35 as built)
+
+Architect decisions 2026-10-30 (PDK-143 amendment items 4-5, PDK-144 decision 35), implemented in PDK-605, which
+folds in PDK-599. Where this amendment and §3.9 decision 35, §6.5 or the amendment "PDK-143: no organization slug in
+the export" differ, this amendment wins.
+
+1. **Item 4 of the PDK-143 amendment is replaced: the README is covered by the signature.** `export.json` gains
+   `readme_sha256` (lowercase hex SHA-256 of the `README.md` member bytes; §6.5 example updated). `export.sig` signs
+   `export.json`, so a README altered in transit fails `paddockctl audit verify-export`: a mismatch, a missing README
+   or an `export.json` without the field is a problem (`verify_ok=false`). This is not circular: the README holds
+   only values of `export.json` that exist before signing, never the hash of `export.json` or of the signature. It
+   also names the signing key version and fingerprint, which the signer decides; the exporter renders the README for
+   the newest published key before signing and renders and signs once more if the signer used another version.
+2. **Decision 32/§6.5 override stays as written in the PDK-143 amendment item 5** (an object that is modified or
+   cannot be decoded is packed verbatim without events and sets `verify_ok=false`).
+3. **Decision 35 as built.** The download reads each chunk in its own short `reader.InOrg` transaction (by primary
+   key), so a slow client holds no audit-reader connection between chunks; the export row is looked up before the
+   action's `RunTx` and reused for the headers, with no second readiness check after the event. The transfer has
+   write deadline 60 s per piece and an overall cap of `max(10 min, size / 64 KiB/s)`, itself capped at 24 h so a huge
+   recorded size cannot overflow the duration. `size <= 0` counts as not ready.
+4. **A chunk that goes missing mid-stream aborts the stream.** The use case returns an error, the handler ends the
+   body short of `Content-Length` without appending a problem body, and no second event is recorded (one event per
+   attempt, recorded before the first byte). The final size and SHA-256 check stays. Covered by
+   `TestAuditExportDownloadChunkRemovedMidStream`.
+5. **HEAD is refused with 405 (`Allow: GET`)** before the use case and audited as one rejected request, because
+   net/http would otherwise run the download for a body that is never sent.
