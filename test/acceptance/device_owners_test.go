@@ -118,10 +118,11 @@ func TestDeviceOwners(t *testing.T) {
 
 	res = call(t, alice, http.MethodPut, ownersPath, map[string]any{"user_ids": []string{a, b}})
 	expectStatus(t, res, http.StatusOK, "")
-	expectOneEvent(t, alice, res.RequestID, "device.owners_changed", "success")
+	_, waited := expectOneEventWaited(t, alice, res.RequestID, "device.owners_changed", "success")
 	before := eventCount(t, alice, "device.owners_changed", dev.DeviceID)
 	expectStatus(t, call(t, alice, http.MethodDelete, "/api/v1/users/"+b, nil), http.StatusNoContent, "")
-	time.Sleep(auditSettleDelay)
+	// The lag just measured tells whether the pipeline is loaded (PDK-561).
+	time.Sleep(auditSettle(waited))
 	if n := eventCount(t, alice, "device.owners_changed", dev.DeviceID); n != before {
 		t.Fatalf("deleting a user recorded device.owners_changed (%d events, before %d)", n, before)
 	}

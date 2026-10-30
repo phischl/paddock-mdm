@@ -344,30 +344,29 @@ func extraRequiredParams(item *openapi3.PathItem, op *openapi3.Operation) bool {
 	return false
 }
 
-// jsonSuccess reports whether the first 2xx response carries JSON or no body at all (204): a download (binary, YAML)
-// is not something a tool result can hold.
+// jsonSuccess reports whether every 2xx response carries no body at all (204) or one offered only as
+// application/json: a download (binary, YAML) is not something a tool result can hold, and the server may pick any
+// listed success response or media type, so a single non-JSON alternative hides the tool.
 func jsonSuccess(op *openapi3.Operation) bool {
 	if op.Responses == nil {
 		return false
 	}
-	codes := make([]string, 0)
-	for code := range op.Responses.Map() {
-		if len(code) == 3 && code[0] == '2' {
-			codes = append(codes, code)
+	found := false
+	for code, resp := range op.Responses.Map() {
+		if len(code) != 3 || code[0] != '2' {
+			continue
+		}
+		found = true
+		if resp == nil || resp.Value == nil {
+			return false
+		}
+		for mediaType := range resp.Value.Content {
+			if mediaType != "application/json" {
+				return false
+			}
 		}
 	}
-	if len(codes) == 0 {
-		return false
-	}
-	sort.Strings(codes)
-	resp := op.Responses.Value(codes[0])
-	if resp == nil || resp.Value == nil {
-		return false
-	}
-	if len(resp.Value.Content) == 0 {
-		return true
-	}
-	return resp.Value.Content["application/json"] != nil
+	return found
 }
 
 // inputSchema builds the tool's argument schema: one property per path parameter (required) and query parameter,

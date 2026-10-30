@@ -2,10 +2,15 @@
 # Link check of the Claude skill skills/operate-paddock (ADR 0044 decision 9, plan M14 §3.8, `make test`): the front
 # matter has name and description, SKILL.md has its six sections, every workflow step names a runbook anchor and a
 # tool, every referenced path exists, every #anchor matches a heading of its file (GitHub's rules), and every
-# backticked tool name exists in pkg/mcpcatalog/catalog.gen.go. Prints what it checked; checking nothing fails.
+# backticked tool name exists in pkg/mcpcatalog/catalog.gen.go, and every operation the catalog marks StepUp (from
+# x-paddock-step-up) is named in the table under ## What the assistant cannot do, which names no other operation.
+# Prints what it checked; checking nothing fails.
 #
 # Without an argument it checks the repository and then proves itself on broken scratch copies. With a directory it
 # checks only that tree (laid out like the repository).
+# SC2016: the single-quoted backticks are Markdown code spans matched literally, not command substitutions.
+# SC2001: sed prefixes every line of a multi-line output, which a parameter expansion does not do as plainly.
+# shellcheck disable=SC2016,SC2001
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +33,7 @@ slugs() {
 }
 
 check() {
-  local tree="$1" errors=0 paths=0 anchors=0 tools=0 steps=0
+  local tree="$1" errors=0 paths=0 anchors=0 tools=0 steps=0 stepups=0
   local dir="$tree/$skill_rel" catalog="$tree/pkg/mcpcatalog/catalog.gen.go"
   local skill="$dir/SKILL.md" ref="$dir/references/tools.md"
   fail() { echo "skill check: $*" >&2; errors=$((errors + 1)); }
@@ -106,8 +111,27 @@ check() {
     grep -qxF -- "$name" <<<"$names" || fail "unknown tool: $name"
   done < <(cat "$skill" "$ref" | grep -oE '`[^`]+`' | tr -d '`' | grep -E "$tool_re" | sort -u)
 
-  echo "skill check: $paths paths, $anchors anchors, $tools tool names, $steps workflow steps"
-  for n in "$paths" "$anchors" "$tools" "$steps"; do
+  # The hand-written table names exactly the catalog's step-up operations: a new one cannot be missing there, and an
+  # operation an MCP session can be offered is never declined as one.
+  local table catalog_stepups
+  table="$(awk '
+    /^## / { in_sec = ($0 == "## What the assistant cannot do"); next }
+    in_sec && /^\|/' "$skill" | grep -oE '`[^`]+`' | tr -d '`' | grep -E "$tool_re" | sort -u || true)"
+  catalog_stepups="$(awk '
+    match($0, /^[[:space:]]*Name:[[:space:]]*"[^"]+",$/) { split($0, q, "\""); name = q[2]; next }
+    /^[[:space:]]*StepUp:[[:space:]]*true,$/ && name != "" { print name }' "$catalog")"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    stepups=$((stepups + 1))
+    grep -qxF -- "$name" <<<"$table" || fail "step-up operation missing from the table in SKILL.md: $name"
+  done <<<"$catalog_stepups"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    grep -qxF -- "$name" <<<"$catalog_stepups" || fail "not a step-up operation in the table in SKILL.md: $name"
+  done <<<"$table"
+
+  echo "skill check: $paths paths, $anchors anchors, $tools tool names, $steps workflow steps, $stepups step-up operations"
+  for n in "$paths" "$anchors" "$tools" "$steps" "$stepups"; do
     ((n > 0)) || { echo "skill check: a count is 0, nothing was checked" >&2; return 1; }
   done
   ((errors == 0)) || { echo "skill check: $errors errors" >&2; return 1; }
@@ -162,6 +186,15 @@ expect_fail "a broken tool name" "unknown tool: getDeviceDisks" "$t"
 t="$(copy reftool)"
 sed -i 's|`listDevices`|`listDevicez`|' "$t/$skill_rel/references/tools.md"
 expect_fail "a broken tool name in references/tools.md" "unknown tool: listDevicez" "$t"
+
+t="$(copy stepup)"
+sed -i 's|, `endAllSessions`||' "$t/$skill_rel/SKILL.md"
+expect_fail "a step-up operation missing from the table" \
+  "step-up operation missing from the table in SKILL.md: endAllSessions" "$t"
+
+t="$(copy notstepup)"
+sed -i 's|, `endAllSessions`|, `endAllSessions`, `listDevices`|' "$t/$skill_rel/SKILL.md"
+expect_fail "a non-step-up operation in the table" "not a step-up operation in the table in SKILL.md: listDevices" "$t"
 
 t="$(copy front)"
 sed -i '/^description: /d' "$t/$skill_rel/SKILL.md"

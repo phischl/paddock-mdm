@@ -90,11 +90,13 @@ func TestClockDrift(t *testing.T) {
 	waitEvents := func(code string, want int) {
 		t.Helper()
 		for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(time.Second) {
+			// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+			polled := time.Now()
 			n := eventCount(t, alice, code, d.DeviceID)
 			if n == want {
 				return
 			}
-			if n > want || time.Now().After(deadline) {
+			if n > want || polled.After(deadline) {
 				t.Fatalf("%d %s for %s, want %d", n, code, d.DeviceID, want)
 			}
 		}
@@ -128,7 +130,11 @@ func TestClockDrift(t *testing.T) {
 	// A second skewed check-in and one 45 s off (between the clear and the raise threshold) change nothing.
 	materialize(-2 * time.Minute)
 	materialize(-45 * time.Second)
-	time.Sleep(2 * time.Second) // the evaluation follows the heartbeat write; a wrong clear would show by now
+	// The drift evaluation runs after the heartbeat write, in the same handler, and the stack's single worker handles
+	// heartbeats one at a time: once a further check-in in the same band is materialized, the evaluation of the one
+	// before has finished and a wrong clear is visible.
+	requireSingleService(t, testContext(t, time.Minute), "paddock-worker")
+	materialize(-45 * time.Second)
 	if got := drift(alice); len(got) != 1 {
 		t.Fatalf("clock_drift after a check-in 45 s off: %+v, want still open", got)
 	}

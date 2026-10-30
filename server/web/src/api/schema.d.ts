@@ -154,9 +154,12 @@ export interface paths {
          *     access token then authenticates admin API requests as a bearer with channel mcp.
          *
          *     An ID token with amr is a login: it must name the second factor (amr mfa; otherwise 401 with detail
-         *     mfa_required), and its sub and auth_time are bound for 8 hours, the refresh token's life. An ID token without
-         *     amr (a refreshed one) is a renewal: it is accepted only for a live binding of its sub and auth_time, otherwise
-         *     401 mcp_login_required (ADR 0044 amendment 2026-10-28), and is recorded as admin.login with renewal true.
+         *     mfa_required) and, for an identity with a role, a validated WebAuthn authenticator in paddock_mfa_classes
+         *     (scope paddock_mfa; otherwise, also without the claim, 401 with detail passkey_required), and its sub and
+         *     auth_time are bound for 8 hours, the refresh token's life. An ID token without amr (a refreshed one) is a
+         *     renewal: it is accepted only for a live binding of its sub and auth_time whose login validated the passkey,
+         *     otherwise 401 mcp_login_required (ADR 0044 amendment 2026-10-28, PDK-531), and is recorded as admin.login with
+         *     renewal true.
          *     Every attempt with verifiable tokens records one admin.login event with channel mcp; a refused role answers
          *     403 forbidden with the denial reason as detail (no_role, multiple_organizations, role_not_granted, …).
          */
@@ -178,8 +181,9 @@ export interface paths {
         put?: never;
         /**
          * End the MCP session of the bearer's access token
-         * @description Deletes the session of the access token and the login binding of its renewals; a token without a session is
-         *     already signed out (204). The refresh token is revoked by paddockctl at Authentik's revocation endpoint.
+         * @description Deletes the session of the access token, the login binding of its renewals and the sessions of every other
+         *     access token of the same refresh chain, also after the binding expired; a token without a session is already
+         *     signed out (204). The refresh token is revoked by paddockctl at Authentik's revocation endpoint.
          */
         post: operations["closeMcpSession"];
         delete?: never;
@@ -2601,7 +2605,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable. */
+        /** @description Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable. Refused with invalid_state while a file of the release is being uploaded or when a stored file does not match its checksum (PDK-496); upstream_unavailable when the artifact store cannot be read. */
         post: operations["publishAgentRelease"];
         delete?: never;
         options?: never;
@@ -5435,7 +5439,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Session ended. The client navigates to end_session_url to end the Authentik session. */
+            /** @description Session ended. The client navigates to end_session_url, Authentik's brand invalidation flow on the issuer's origin, to end the Authentik session (the portal's address when the issuer is unknown). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10061,6 +10065,7 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     startAgentRollout: {

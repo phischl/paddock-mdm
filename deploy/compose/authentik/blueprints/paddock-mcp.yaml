@@ -11,7 +11,7 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: Public OIDC application of paddockctl mcp (device authorization grant)
 entries:
-  # The login flow and the groups mapping.
+  # The login flow, the groups and the authenticator classes mappings.
   - model: authentik_blueprints.metaapplyblueprint
     attrs:
       identifiers:
@@ -58,6 +58,9 @@ entries:
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-offline_access]]
         - !Find [authentik_providers_oauth2.scopemapping, [managed, io.paddock/scope-groups]]
+        # The portal's authenticator classes claim: a first MCP login needs a validated WebAuthn authenticator like the
+        # portal sign-in (PDK-531); paddock-portal.yaml defines it.
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, io.paddock/scope-login-mfa]]
 
   # No policy binding (plan M14 §3.3 item 11): the Paddock groups decide when the api resolves the role, so that an
   # identity without a role reaches the api and its refusal is audited as admin.login denied.

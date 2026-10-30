@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -270,10 +272,26 @@ func (f *fakeIdP) UpstreamGroups(_ context.Context, slug string) ([]ports.Identi
 	return out, f.err()
 }
 
-// discardStore accepts agent artifacts without storing them.
-type discardStore struct{}
+// memoryStore keeps agent artifacts in memory, so that publishing can read them back (PDK-496).
+type memoryStore struct {
+	mu      sync.Mutex
+	objects map[string][]byte
+}
 
-func (discardStore) Put(context.Context, string, string, string, []byte) error { return nil }
+func (m *memoryStore) Put(_ context.Context, key, _, _ string, body []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.objects[key] = body
+	return nil
+}
+
+func (m *memoryStore) SHA256(_ context.Context, key string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.objects[key]
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), ok, nil
+}
 
 type discardCommands struct{}
 
@@ -388,7 +406,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Managed:        app.NewManagedConfig(runner, orgPool),
 		Organizations:  e.orgs,
 		Accounts:       app.NewAccounts(runner, orgPool, platformPool, e.sessions),
-		Releases:       app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
+		Releases:       app.NewAgentReleases(runner, platformPool, &memoryStore{objects: map[string][]byte{}}, verifyRelease, verifyRelease, true),
 		AgentUpdates:   app.NewAgentUpdates(runner, orgPool, noOffer{}),
 		Uninstalls:     app.NewUninstalls(runner, orgPool, discardCommands{}),
 		Conversions:    app.NewDiskConversions(runner, orgPool, discardCommands{}),
