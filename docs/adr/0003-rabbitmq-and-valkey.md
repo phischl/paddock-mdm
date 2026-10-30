@@ -43,3 +43,13 @@ Valkey additionally holds the server-side half of portal sessions (`sess:<sid>`,
 `sess-gen`), written and read by the `api` role and revoked by the `worker`. These keys are state the portal
 depends on (503 `session_store_unavailable` while Valkey is unreachable), not a cache: `appendonly yes` and no
 `maxmemory` stay mandatory, and `paddock-server admin rebuild-cache` does not touch them. Devices are unaffected.
+
+## Amendment 2026-10-29 (plan M6d)
+From release 0.1.0-alpha.7 the majors are **RabbitMQ 4.4** (Erlang/OTP 29, Khepri metadata store, quorum queues as
+before) and **Valkey 9** for both the control plane's store and Fleet's Redis (one image pin, plan
+`docs/plans/M6d-upstream-majors.md`, decisions 7–8). The topology, the plugin restriction (management and
+Prometheus only), publisher confirms, consumer idempotency and the Valkey configuration are unchanged. Neither
+component is backed up (ADR 0016), and the release ships no upgrade path: both start on empty volumes (fresh
+installation; maintainer decision 2026-10-29). The 4.4 line writes a classic-queue message store that 4.3 cannot
+read, which matters only to a rollback this project does not offer. The Amazon MQ feature check of the consequences
+above applies to every future RabbitMQ bump as before.

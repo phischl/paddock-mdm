@@ -214,14 +214,17 @@ jobs:
             | xargs -r -n1 docker logs 2>&1
 
   # The required status check "acceptance" of the default branch ruleset: green only if every shard and the e2e job
-  # are; a skipped job (failed prerequisites) fails it too. On pull requests into other branches it is skipped together
-  # with the gates; on a pull request to main it always runs, so it never reports gates that did not run as passed.
+  # are; a skipped job (failed prerequisites) fails it too. On a pull request to main it always runs, so it never
+  # reports gates that did not run as passed. On pull requests into other branches it succeeds without checking, under
+  # another name (PDK-538): a skipped "acceptance" would count as passed and stay so when the pull request is retargeted
+  # to main, which starts no run; without a check of that name the pull request waits for a new run instead.
   # The only exception is a documentation-only pull request to main (PDK-537): green only if the scope job succeeded
   # and said so, every prerequisite of the gates succeeded and the gates were skipped. A failed or skipped scope job
   # leaves the gates skipped and this check red.
   acceptance:
+    name: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && 'acceptance' || 'acceptance (not required off main)' }}
     needs: [acceptance-scope, lint, test, web, secrets, trivy, acceptance-shard, acceptance-e2e]
-    if: always() && (github.event_name != 'pull_request' || github.base_ref == 'main')
+    if: always()
     runs-on: ubuntu-24.04
     steps:
       - run: |
@@ -240,6 +243,7 @@ jobs:
             ${{ needs.trivy.result }}
           SHARDS: ${{ needs.acceptance-shard.result }}
           E2E: ${{ needs.acceptance-e2e.result }}
+        if: github.event_name != 'pull_request' || github.base_ref == 'main'
 
   edge:
     needs: [acceptance]
