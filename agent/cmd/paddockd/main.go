@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -255,18 +256,27 @@ func runUninstall(ctx context.Context, layout paths.Layout, args []string) int {
 		fmt.Fprint(os.Stderr, usage)
 		return 1
 	}
+	preparation := []string{layout.UninstallPlan(), layout.UninstallBinary()}
+	// The agent launches the helper once and never again, so a helper that gives up early would leave its preparation
+	// below /root for good. A plan other than the agent's is a manual run: the agent's preparation is not its to drop.
+	giveUp := func() int {
+		if filepath.Clean(*planFile) == layout.UninstallPlan() {
+			uninstall.Discard(ctx, preparation...)
+		}
+		return 1
+	}
 	if layout.Root == "/" && os.Geteuid() != 0 {
 		slog.Error("paddockd uninstall must run as root")
-		return 1
+		return giveUp()
 	}
 	plan, err := uninstall.ReadPlan(*planFile)
 	if err != nil {
 		slog.ErrorContext(ctx, "uninstall plan unreadable; nothing removed", "error", err)
-		return 1
+		return giveUp()
 	}
 	h := &uninstall.Helper{Root: layout.Root, Run: uninstall.RunOS, Now: time.Now, Sleep: sleep, ReportFor: uninstall.ReportFor,
 		TPM:         uninstall.DeviceTPM{Tools: luks.OS{}, Root: layout.Root, Run: uninstall.RunOS},
-		Preparation: []string{layout.UninstallPlan(), layout.UninstallBinary()}}
+		Preparation: preparation}
 	// The identity, configuration and state are read before anything is removed: the report needs them at the end.
 	st, err := state.Load(layout.State())
 	if err != nil {

@@ -32,6 +32,7 @@ type conversionView struct {
 	FailureReason      *string `json:"failure_reason"`
 	FinishedAt         *string `json:"finished_at"`
 	AbortCommandID     *string `json:"abort_command_id"`
+	AbortCommandStatus *string `json:"abort_command_status"`
 	AbortRefusedReason *string `json:"abort_refused_reason"`
 	Active             bool    `json:"active"`
 }
@@ -453,7 +454,8 @@ func TestDiskConversionUninstall(t *testing.T) {
 
 // TestDiskConversionLockAndRetire covers the lifecycle actions of gate A1 (plan M8e §14.5 decisions 38 and 39, §14.6
 // decision 50): a Lock and a Retire withdraw an undelivered encrypt_disk command and record it on their own event; a
-// delivered one is left alone.
+// delivered one is left alone, unless a Retire meets a prepared conversion with a pending abort, which it closes as
+// cancelled and withdraws the abort (amendment 2026-10-28).
 func TestDiskConversionLockAndRetire(t *testing.T) {
 	alice := login(t, env.Alice)
 	admin := adminUser(t, "encrypt-lock")
@@ -493,6 +495,24 @@ func TestDiskConversionLockAndRetire(t *testing.T) {
 		t.Fatalf("device.retired params %v", ev.Params)
 	}
 	if c := conversionOf(t, alice, delivered.DeviceID); c.Phase != "requested" || c.CommandStatus != "delivered" {
+		t.Fatalf("after the retirement %+v", c)
+	}
+
+	aborting := newConversionSim(t, alice, "a1p")
+	c = aborting.request(t, admin, alice)
+	aborting.deliver(t, c.CommandID)
+	aborting.post(t, protocol.EventDiskConversionPrepared, map[string]any{"conversion_id": c.ID, "layout": "lvm", "data_bytes": 100})
+	waitConversion(t, alice, aborting.DeviceID, "prepared", func(c *conversionView) bool { return c.Phase == "prepared" })
+	admin.stepUp(t)
+	expectStatus(t, call(t, admin.Portal, http.MethodPost, aborting.path("/encrypt/cancel"), aborting.cancelBody()), http.StatusOK, "")
+	res = call(t, admin.Portal, http.MethodPost, aborting.path("/retire"), nil)
+	expectStatus(t, res, http.StatusOK, "")
+	ev = expectOneEvent(t, alice, res.RequestID, "device.retired", "success")
+	if ev.Params["conversion_cancelled"] != "after_delivery" || ev.Params["conversion_phase"] != nil || ev.Params["conversion_id"] != c.ID {
+		t.Fatalf("device.retired params %v", ev.Params)
+	}
+	if c := conversionOf(t, alice, aborting.DeviceID); c.Phase != "cancelled" || c.FinishedAt == nil || c.AbortCommandStatus == nil ||
+		*c.AbortCommandStatus != "cancelled" {
 		t.Fatalf("after the retirement %+v", c)
 	}
 }

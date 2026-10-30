@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,6 +49,8 @@ type volume struct {
 	// boot is the mount point findmnt reports for /boot ("" fails the call); calls collects every tool call.
 	boot  string
 	calls []string
+	// mu guards calls and the keyslot state: luks.ParseCrypttab calls the tools from several goroutines.
+	mu sync.Mutex
 }
 
 // LUKS UUIDs of the fixture's volumes.
@@ -118,7 +121,9 @@ func (d *dataVolume) dump() string {
 
 func (v *volume) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
+	v.mu.Lock()
 	v.calls = append(v.calls, line)
+	v.mu.Unlock()
 	if file, ok := strings.CutPrefix(line, "cryptsetup luksUUID -- "); ok && strings.HasSuffix(file, ".img") {
 		// A header backup: the UUID of the volume whose header it holds (a data volume's dump names its UUID).
 		data, err := os.ReadFile(file) //nolint:gosec // a backup file of the test layout
@@ -134,9 +139,12 @@ func (v *volume) Command(_ context.Context, _ []string, name string, args ...str
 	}
 	for device, d := range v.extra {
 		if slices.Contains(args, device) {
+			// Outside the lock: a hanging data volume must not block the other tools.
 			return d.command(line, device, args)
 		}
 	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	switch {
 	case name == "findmnt" && slices.Contains(args, "/boot"):
 		if v.boot == "" {

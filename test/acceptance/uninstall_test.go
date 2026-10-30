@@ -22,6 +22,7 @@ type uninstallState struct {
 		UninstalledAt *string `json:"uninstalled_at"`
 		LocalAdmin    *string `json:"local_admin"`
 		Tpm           *string `json:"tpm"`
+		RefusedReason *string `json:"refused_reason"`
 	} `json:"uninstall"`
 }
 
@@ -86,18 +87,23 @@ func TestUninstall(t *testing.T) {
 	d := activeDevice(t, alice, "", hostname)
 	hostname = getDevice(t, alice, d.DeviceID).Hostname
 	path := "/api/v1/devices/" + d.DeviceID + "/uninstall"
+	// Every request that needs a step-up takes it right before: the waits between them (enrollment, audit delivery,
+	// check-ins) outlast the dev stack's 30 s step-up window, and a step-up checked earlier may have only 10 s left.
+	steppedUpPost := func(target string, body any) env.Response {
+		t.Helper()
+		admin.stepUp(t)
+		return call(t, admin.Portal, http.MethodPost, target, body)
+	}
 
 	expectStatus(t, call(t, withoutStepUp(t, admin), http.MethodPost, path, uninstallBody(d, hostname, "leave", nil)),
 		http.StatusForbidden, "step_up_required")
 	expectStatus(t, call(t, login(t, env.Bob), http.MethodPost, path, uninstallBody(d, hostname, "leave", nil)), http.StatusForbidden, "")
-	// The dev stack's step-up window is 30 s; the device setup and the sign-ins above can outlast it.
-	admin.stepUp(t)
-	expectStatus(t, call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, "other", "leave", nil)),
+	expectStatus(t, steppedUpPost(path, uninstallBody(d, "other", "leave", nil)),
 		http.StatusUnprocessableEntity, "invalid_request")
-	expectStatus(t, call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", map[string]any{"clear_tpm": true})),
+	expectStatus(t, steppedUpPost(path, uninstallBody(d, hostname, "leave", map[string]any{"clear_tpm": true})),
 		http.StatusUnprocessableEntity, "invalid_request")
 
-	res := call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", nil))
+	res := steppedUpPost(path, uninstallBody(d, hostname, "leave", nil))
 	expectStatus(t, res, http.StatusOK, "")
 	ev := expectOneEvent(t, alice, res.RequestID, "device.uninstall_requested", "success")
 	s := uninstallOf(t, alice, d.DeviceID)
@@ -120,9 +126,7 @@ func TestUninstall(t *testing.T) {
 	if err := cmds.JSON(&page); err != nil || len(page.Items) != 1 || page.Items[0].Type != "uninstall" || page.Items[0].ID != s.Uninstall.CommandID {
 		t.Fatalf("commands %s (%v)", cmds.Body, err)
 	}
-	// The audit wait above can outlast the dev stack's 30 s step-up window.
-	admin.stepUp(t)
-	res = call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", nil))
+	res = steppedUpPost(path, uninstallBody(d, hostname, "leave", nil))
 	expectStatus(t, res, http.StatusConflict, "invalid_state")
 	if detail := problemDetail(t, res); detail != "an uninstall is already requested" {
 		t.Fatalf("second request: %q", detail)
@@ -150,13 +154,11 @@ func TestUninstall(t *testing.T) {
 		_ = call(t, alice, http.MethodGet, "/api/v1/devices/"+d.DeviceID+"/disk", nil).JSON(&disk)
 		return len(disk.Tokens) == 2
 	})
-	// The dev stack's step-up window is 30 s; the wait for the health report outlasts it.
-	admin.stepUp(t)
-	res = call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "reset", map[string]any{"clear_tpm": true}))
+	res = steppedUpPost(path, uninstallBody(d, hostname, "reset", map[string]any{"clear_tpm": true}))
 	expectStatus(t, res, http.StatusConflict, "tpm_in_use_by_disk")
 
 	// Requested again; the check-in delivers it: no cancel any more.
-	res = call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", nil))
+	res = steppedUpPost(path, uninstallBody(d, hostname, "leave", nil))
 	expectStatus(t, res, http.StatusOK, "")
 	cmd := uninstallOf(t, alice, d.DeviceID).Uninstall.CommandID
 	checkinUntil(t, d, 2*time.Minute, func(r protocol.CheckinResponse) bool { return len(r.Commands) > 0 })
@@ -240,4 +242,53 @@ func TestUninstall(t *testing.T) {
 	freshStepUp(t, carol, env.Carol)
 	expectStatus(t, call(t, carol, http.MethodPost, path, uninstallBody(d, hostname, "leave", nil)), http.StatusNotFound, "not_found")
 	expectStatus(t, call(t, carol, http.MethodPost, path+"/cancel", nil), http.StatusNotFound, "not_found")
+}
+
+// TestUninstallRefused covers PDK-403 (plan M8d amendment 2026-10-28): a refusal with conversion_pending or
+// revocation_pending keeps the request open with the reason on the device until the administrator cancels it; a
+// refusal with invalid_params ends the request with exactly one device.uninstall_failed event by the device.
+func TestUninstallRefused(t *testing.T) {
+	alice := login(t, env.Alice)
+	admin := adminUser(t, "uninstall-refused")
+	idx, acme := auditIndex(t), orgOf(t, alice)
+	for _, reason := range []string{"conversion_pending", "revocation_pending", "invalid_params"} {
+		t.Run(reason, func(t *testing.T) {
+			d := activeDevice(t, alice, "", "a8r-"+uniqueSuffix())
+			hostname := getDevice(t, alice, d.DeviceID).Hostname
+			path := "/api/v1/devices/" + d.DeviceID + "/uninstall"
+			admin.stepUp(t)
+			expectStatus(t, call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", nil)), http.StatusOK, "")
+			cmd := uninstallOf(t, alice, d.DeviceID).Uninstall.CommandID
+			checkinUntil(t, d, 2*time.Minute, func(r protocol.CheckinResponse) bool { return len(r.Commands) > 0 })
+			result := json.RawMessage(`{"accepted":false,"reason":"` + reason + `"}`)
+			if r, err := d.CommandResult(testContext(t, time.Minute), cmd, "failed", result); err != nil || r.Status >= 300 {
+				t.Fatalf("result: %v %d %s", err, r.Status, r.Body)
+			}
+			if reason == "invalid_params" {
+				ev := expectOneIndexEvent(t, idx, acme, "code = 'device.uninstall_failed' AND target->>'id' = $1", d.DeviceID,
+					"device.uninstall_failed", "success", time.Minute)
+				if ev.Params["reason"] != "invalid_params" || ev.Params["command_id"] != cmd || ev.Params["mode"] != "leave" {
+					t.Fatalf("device.uninstall_failed params %v", ev.Params)
+				}
+				if s := uninstallOf(t, alice, d.DeviceID); s.State != "active" || s.Uninstall != nil {
+					t.Fatalf("after the refusal: %+v", s)
+				}
+				admin.stepUp(t)
+				expectStatus(t, call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", nil)), http.StatusOK, "")
+				return
+			}
+			eventually(t, "the refusal", time.Minute, func() bool {
+				u := uninstallOf(t, alice, d.DeviceID).Uninstall
+				return u != nil && u.CommandStatus == "failed" && u.RefusedReason != nil && *u.RefusedReason == reason
+			})
+			res := call(t, admin.Portal, http.MethodPost, path+"/cancel", nil)
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, alice, res.RequestID, "device.uninstall_cancelled", "success")
+			// The cancel's event is indexed after the refusal's would have been: the index is caught up.
+			found, err := idx.Events(testContext(t, time.Minute), acme, "code = 'device.uninstall_failed' AND target->>'id' = $1", d.DeviceID)
+			if err != nil || len(found) != 0 {
+				t.Fatalf("device.uninstall_failed events for %s: %+v (%v)", reason, found, err)
+			}
+		})
+	}
 }

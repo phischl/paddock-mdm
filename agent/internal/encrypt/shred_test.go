@@ -307,6 +307,88 @@ func TestCleanupBootableSymlinkToOrphan(t *testing.T) {
 	}
 }
 
+// linkOlderInitrdToTemp makes the older kernel's initrd a symlink to a key-carrying temporary initrd of kernel v and
+// checks rule B (0) at every dracut run: while the link is there, its target is neither written nor unlinked. It
+// returns a handle on the temporary file, to read it after it was removed.
+func linkOlderInitrdToTemp(t *testing.T, f *fixture, v string) *os.File {
+	t.Helper()
+	f.dev.buildInitrd(tempPath(v), olderKernel, true)
+	before := f.read(tempPath(v))
+	if err := os.Remove(f.dev.Path("/boot/initrd.img-" + olderKernel)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(f.dev.Path(tempPath(v)), f.dev.Path("/boot/initrd.img-"+olderKernel)); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.Open(f.dev.Path(tempPath(v)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = held.Close() })
+	f.dev.set(func(d *device) {
+		d.afterDracut = func(d *device) {
+			info, err := os.Lstat(d.Path("/boot/initrd.img-" + olderKernel))
+			if err != nil || info.Mode()&os.ModeSymlink == 0 {
+				return
+			}
+			if raw, err := os.ReadFile(d.Path("/boot/initrd.img-" + olderKernel)); err != nil || string(raw) != before {
+				t.Errorf("rule B (0): the target of the bootable link changed during dracut %s: %v", v, err)
+			}
+		}
+	})
+	return held
+}
+
+// checkLinkResolved checks that the older kernel's initrd is a regular file again, that no temporary initrd is left
+// and that the one the link referred to was overwritten before it went (rule B).
+func checkLinkResolved(t *testing.T, f *fixture, held *os.File) {
+	t.Helper()
+	if info, err := os.Lstat(f.dev.Path("/boot/initrd.img-" + olderKernel)); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("the initrd of %s is no regular file: %v", olderKernel, err)
+	}
+	if left := glob(t, f.dev.Path("/boot/.initrd.img-*")); len(left) != 0 {
+		t.Fatalf("temporary initrds left: %v", left)
+	}
+	raw := make([]byte, 64)
+	if n, _ := held.Read(raw); n == 0 || strings.Trim(string(raw[:n]), "\x00") != "" {
+		t.Fatalf("the temporary initrd was not overwritten: %q", raw[:n])
+	}
+}
+
+// TestRegenerateBootableLinkedToTemp: PDK-386, rule B (0) — a bootable kernel's initrd that is a symlink to a
+// temporary initrd (its own kernel's, another bootable kernel's, a removed kernel's) does not keep the regeneration
+// from running: the kernel's rebuild renames over the link, then the temporary file is overwritten and removed.
+func TestRegenerateBootableLinkedToTemp(t *testing.T) {
+	for _, v := range []string{olderKernel, runningKernel, "6.5.0-9-generic"} {
+		t.Run(v, func(t *testing.T) {
+			f := convertedFixture(t)
+			c := f.conversion()
+			held := linkOlderInitrdToTemp(t, f, v)
+			if err := encrypt.RegenerateInitrd(context.Background(), f.dev, f.dev.layout, c.Mapping, c.LUKSUUID, true); err != nil {
+				t.Fatalf("regeneration: %v", err)
+			}
+			checkLinkResolved(t, f, held)
+		})
+	}
+}
+
+// TestCleanupBootableLinkedToTemp: PDK-386, rule B (0) — with dracut installed, the cleanup's rebuild renames over a
+// bootable kernel's initrd symlink to a temporary initrd, the temporary file is then overwritten and removed, and the
+// cleanup finishes (the install keyslot's passphrase goes).
+func TestCleanupBootableLinkedToTemp(t *testing.T) {
+	for _, v := range []string{olderKernel, runningKernel, "6.5.0-9-generic"} {
+		t.Run(v, func(t *testing.T) {
+			f := preparedFixture(t)
+			held := linkOlderInitrdToTemp(t, f, v)
+			done, err := encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store)
+			if !done || err != nil || f.dev.Exists(installPassphrase) {
+				t.Fatalf("cleanup %v %v", done, err)
+			}
+			checkLinkResolved(t, f, held)
+		})
+	}
+}
+
 // TestCleanupHandlesEveryGroup: amendment item 19, rule B (review of 3ff90816, point 2) — a file kept for an outside
 // hard link does not keep another orphan from being overwritten and removed; the cleanup stays pending.
 func TestCleanupHandlesEveryGroup(t *testing.T) {

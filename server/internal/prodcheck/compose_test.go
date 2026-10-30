@@ -654,3 +654,33 @@ func TestDeviceBlueprintOneDevicePrompt(t *testing.T) {
 			"binding fails the whole blueprint import)")
 	}
 }
+
+// TestAuthentikWebWorkers: every installation runs authentik-server with PADDOCK_AUTHENTIK_WEB_WORKERS web workers,
+// default 4 instead of Authentik's 2, under which simultaneous logins queued until clients timed out (PDK-545).
+func TestAuthentikWebWorkers(t *testing.T) {
+	cases := map[string]struct {
+		files    []string
+		envFiles []string
+	}{
+		"production control plane": {prodFiles(t, "controlplane"), []string{"prod.env.example"}},
+		"lab":                      {prodFiles(t, "lab"), []string{"lab.env.example"}},
+		"development":              {libFiles(t, "DEV_FILES"), []string{".env.example"}},
+	}
+	for name, tc := range cases {
+		for _, c := range []struct{ value, want string }{{"", "4"}, {"8", "8"}} {
+			t.Run(name+" PADDOCK_AUTHENTIK_WEB_WORKERS="+c.value, func(t *testing.T) {
+				t.Setenv("PADDOCK_AUTHENTIK_WEB_WORKERS", c.value)
+				cfg := renderConfig(t, tc.files, tc.envFiles...)
+				got := cfg.Services["authentik-server"].Environment["AUTHENTIK_WEB__WORKERS"]
+				if got == nil || *got != c.want {
+					t.Fatalf("authentik-server AUTHENTIK_WEB__WORKERS = %v, want %s", got, c.want)
+				}
+				for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{}) {
+					if r.Item == "authentik web workers" && !r.OK {
+						t.Fatalf("item authentik web workers fails: %s", r.Detail)
+					}
+				}
+			})
+		}
+	}
+}

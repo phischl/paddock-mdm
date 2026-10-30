@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -32,10 +33,19 @@ import (
 
 // Polling bounds of the audit checks (plan M0 §8, A3).
 const (
-	auditPollTimeout = 10 * time.Second
-	auditSettleDelay = 5 * time.Second
+	// auditPollTimeout covers the worst-case lag from a request to its event in the audit view on a loaded host
+	// (PDK-551): relay wake-up (≤ 1 s) + the writer batch already in flight (≤ 5 s processing) + the event's own batch
+	// wait (auditwriter.MaxBatchWait, 5 s) + its own transaction with the WORM put (≤ 5 s) ≈ 16 s, and one requeue
+	// after a failed batch (auditwriter.RetryPause, 5 s) on top still fits. 10 s failed at load ~46 although the
+	// event was recorded after 4.5 s and 5.0 s.
+	auditPollTimeout = 30 * time.Second
+	// auditSettleDelay is how long an exactly-once check waits for a late duplicate: one writer batch cycle at the
+	// normal lag. When the event itself took longer than auditNormalLag, the pipeline is loaded and the check waits
+	// auditLoadedSettleDelay, one batch wait plus the processing allowance of auditPollTimeout (PDK-551).
+	auditSettleDelay       = 5 * time.Second
+	auditLoadedSettleDelay = 10 * time.Second
 	// auditLookback bounds the audit list expectOneEvent pages through. Unbounded, one poll pages through every event
-	// of the last 7 days (about 90 pages on a busy stack) and takes most of the 10 s window, so an event indexed just
+	// of the last 7 days (about 90 pages on a busy stack) and takes most of a 10 s window, so an event indexed just
 	// after the first poll began is never seen (PDK-445). It is far longer than any case waits between its request and
 	// the check, so the request's event is always inside it.
 	auditLookback = 15 * time.Minute
@@ -96,25 +106,38 @@ func expectStatus(t *testing.T, res env.Response, status int, code string) {
 	}
 }
 
-// expectOneEvent polls the audit log visible to viewer (max 10 s) for the request's correlation ID and requires
-// exactly one event with code and outcome — also after another 5 s.
+// auditSettle returns the settle delay of an exactly-once check whose event became visible after waited.
+func auditSettle(waited time.Duration) time.Duration {
+	if waited > auditNormalLag {
+		return auditLoadedSettleDelay
+	}
+	return auditSettleDelay
+}
+
+// expectOneEvent polls the audit log visible to viewer (max auditPollTimeout) for the request's correlation ID and
+// requires exactly one event with code and outcome — also after the settle delay (auditSettle).
 func expectOneEvent(t *testing.T, viewer *env.Portal, requestID, code, outcome string) env.AuditEvent {
 	t.Helper()
 	ctx := testContext(t, 2*time.Minute)
 	from := time.Now().Add(-auditLookback)
 	var found []env.AuditEvent
-	deadline := time.Now().Add(auditPollTimeout)
+	start := time.Now()
+	deadline := start.Add(auditPollTimeout)
 	for {
+		// The deadline is checked against the poll's start: on a loaded host one poll pages for seconds, and a
+		// snapshot taken before the deadline must not end the wait (PDK-551).
+		polled := time.Now()
 		events, err := viewer.AuditEventsSince(ctx, "", from)
 		if err != nil {
 			t.Fatal(err)
 		}
 		found = env.EventsFor(events, requestID)
-		if len(found) > 0 || time.Now().After(deadline) {
+		if len(found) > 0 || polled.After(deadline) {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+	waited := time.Since(start)
 	check := func(when string) {
 		if len(found) != 1 {
 			t.Fatalf("%s: %d audit events for request %s, want exactly 1 (%s/%s): %+v", when, len(found), requestID, code, outcome, found)
@@ -123,14 +146,15 @@ func expectOneEvent(t *testing.T, viewer *env.Portal, requestID, code, outcome s
 			t.Fatalf("%s: event %s/%s, want %s/%s", when, found[0].Code, found[0].Outcome, code, outcome)
 		}
 	}
-	check("after polling")
-	time.Sleep(auditSettleDelay)
+	check(fmt.Sprintf("after polling %s", waited.Round(time.Second)))
+	settle := auditSettle(waited)
+	time.Sleep(settle)
 	events, err := viewer.AuditEventsSince(ctx, "", from)
 	if err != nil {
 		t.Fatal(err)
 	}
 	found = env.EventsFor(events, requestID)
-	check("5 s later")
+	check(fmt.Sprintf("%s later", settle))
 	return found[0]
 }
 
@@ -148,32 +172,36 @@ func auditIndex(t *testing.T) *env.AuditIndex {
 // audit index of org directly.
 func expectOneIndexEvent(t *testing.T, idx *env.AuditIndex, org uuid.UUID, where string, arg any, code, outcome string, timeout time.Duration) env.IndexEvent {
 	t.Helper()
-	ctx := testContext(t, timeout+time.Minute)
+	ctx := testContext(t, timeout+auditLoadedSettleDelay+time.Minute)
 	var found []env.IndexEvent
-	deadline := time.Now().Add(timeout)
+	start := time.Now()
+	deadline := start.Add(timeout)
 	for {
+		polled := time.Now()
 		var err error
 		found, err = idx.Events(ctx, org, where, arg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(found) > 0 || time.Now().After(deadline) {
+		if len(found) > 0 || polled.After(deadline) {
 			break
 		}
 		time.Sleep(time.Second)
 	}
+	waited := time.Since(start)
 	check := func(when string) {
 		if len(found) != 1 || found[0].Code != code || found[0].Outcome != outcome {
 			t.Fatalf("%s: index events of %s where %s=%v: %+v, want exactly one %s/%s", when, org, where, arg, found, code, outcome)
 		}
 	}
-	check("after polling")
-	time.Sleep(auditSettleDelay)
+	check(fmt.Sprintf("after polling %s", waited.Round(time.Second)))
+	settle := auditSettle(waited)
+	time.Sleep(settle)
 	var err error
 	if found, err = idx.Events(ctx, org, where, arg); err != nil {
 		t.Fatal(err)
 	}
-	check("5 s later")
+	check(fmt.Sprintf("%s later", settle))
 	return found[0]
 }
 
