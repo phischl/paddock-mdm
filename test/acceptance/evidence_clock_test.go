@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // TestClockDrift (plan M8b §9 C1–C2, decisions 11–15): a device whose signed check-in time is 2 minutes behind the
@@ -131,6 +133,7 @@ func TestClockDrift(t *testing.T) {
 	// The drift evaluation runs after the heartbeat write, in the same handler, and the stack's single worker handles
 	// heartbeats one at a time: once a further check-in in the same band is materialized, the evaluation of the one
 	// before has finished and a wrong clear is visible.
+	requireSingleWorker(t)
 	materialize(-45 * time.Second)
 	if got := drift(alice); len(got) != 1 {
 		t.Fatalf("clock_drift after a check-in 45 s off: %+v, want still open", got)
@@ -142,5 +145,25 @@ func TestClockDrift(t *testing.T) {
 	waitEvents("device.clock_drift_cleared", 1)
 	if n := eventCount(t, alice, "device.clock_drift", d.DeviceID); n != 1 {
 		t.Fatalf("%d device.clock_drift for %s after the episode, want 1", n, d.DeviceID)
+	}
+}
+
+// requireSingleWorker fails unless exactly one paddock-worker of the stack is running: with several, heartbeats of one
+// device are handled concurrently and a materialized check-in no longer proves that the one before was evaluated.
+// One-off containers of `compose run` (admin commands of other gates) consume no queue and are not counted.
+func requireSingleWorker(t *testing.T) {
+	t.Helper()
+	out, err := stack.Compose(testContext(t, time.Minute), nil, "ps", "--status", "running", "--format", "{{.Name}}", "paddock-worker")
+	if err != nil {
+		t.Fatalf("listing the running paddock-worker containers: %v", err)
+	}
+	var workers []string
+	for _, name := range strings.Fields(out) {
+		if !strings.Contains(name, "-run-") {
+			workers = append(workers, name)
+		}
+	}
+	if len(workers) != 1 {
+		t.Fatalf("this gate's ordering proof assumes a single paddock-worker; found %d %v", len(workers), workers)
 	}
 }
