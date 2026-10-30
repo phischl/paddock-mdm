@@ -54,7 +54,7 @@ var MCPScopes = []string{"openid", "profile", "email", "groups", "offline_access
 type MCPSessionStore interface {
 	SessionStore
 	RevokeAccount(ctx context.Context, accountID uuid.UUID) (int, error)
-	Bind(ctx context.Context, sub string, authTime int64, b sessions.Binding, ttl time.Duration) (sessions.Binding, error)
+	Bind(ctx context.Context, sid, sub string, authTime int64, b sessions.Binding, ttl time.Duration) (sessions.Binding, error)
 	Binding(ctx context.Context, sub string, authTime int64) (b sessions.Binding, gen int64, found bool, err error)
 	Unbind(ctx context.Context, sub string, authTime int64, accountID uuid.UUID) error
 	CreateMCP(ctx context.Context, sid string, rec sessions.Record, ttl time.Duration, ch sessions.Chain) (sessions.Record, error)
@@ -252,6 +252,13 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 		refuse(username, app.ReasonLoginFailed, bad, bad)
 		return
 	}
+	// The record's chain is keyed on the ID token's auth_time and logout uses the access token's (PDK-546); Authentik
+	// keeps the login's auth_time in refreshed tokens, so a legitimate pair always matches.
+	if access.AuthTime != claims.AuthTime {
+		bad := problem.InvalidRequest.WithDetail("the tokens belong to different logins")
+		refuse(username, app.ReasonLoginFailed, bad, bad)
+		return
+	}
 	remaining := at.Expiry.Sub(now)
 	if remaining > mcpMaxTokenLife {
 		bad := problem.InvalidRequest.WithDetail("the access token lives longer than an MCP session may")
@@ -365,7 +372,7 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		bound = true
-		b, err := m.sessions.Bind(ctx, claims.Subject, claims.AuthTime, sessions.Binding{AccountID: p.ID, Kind: string(p.Kind),
+		b, err := m.sessions.Bind(ctx, sid, claims.Subject, claims.AuthTime, sessions.Binding{AccountID: p.ID, Kind: string(p.Kind),
 			Role: string(p.Role), Org: p.OrganizationID, Client: client}, bindingLeft)
 		if err != nil {
 			return err
@@ -403,7 +410,8 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteProblem(w, r, problem.Forbidden.WithDetail(denialReason(role, err)))
 		return
 	case errors.Is(err, sessions.ErrNoBinding):
-		// A logout or revocation ended the binding during the renewal: it stands, nothing else needs ending.
+		// A logout or revocation ended the binding during the renewal, or the first login's record before its binding:
+		// it stands, nothing else needs ending.
 		discard()
 		httpx.WriteProblem(w, r, problem.MCPLoginRequired.WithDetail(mcpLoginHint))
 		return

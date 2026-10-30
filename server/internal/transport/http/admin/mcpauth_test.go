@@ -1089,3 +1089,93 @@ func TestMCPLogoutAfterBindingExpiry(t *testing.T) {
 		}
 	}
 }
+
+// bindHookStore is the Valkey session store with a hook that runs before a first login's binding is written.
+type bindHookStore struct {
+	*sessions.Store
+	beforeBind func()
+}
+
+func (s *bindHookStore) Bind(ctx context.Context, sid, sub string, authTime int64, b sessions.Binding, ttl time.Duration) (sessions.Binding, error) {
+	if s.beforeBind != nil {
+		s.beforeBind()
+		s.beforeBind = nil
+	}
+	return s.Store.Bind(ctx, sid, sub, authTime, b, ttl)
+}
+
+// TestMCPLoginRacingChainEnd: a logout or a revocation between the record and the binding of a first login refuses the
+// login with one audited failure and leaves no binding that would accept renewals of the ended login (PDK-546), against
+// Valkey.
+func TestMCPLoginRacingChainEnd(t *testing.T) {
+	for name, end := range map[string]func(m *mcpWorld, store *sessions.Store, access string){
+		"logout": func(m *mcpWorld, _ *sessions.Store, access string) { m.logout(access) },
+		"revocation": func(m *mcpWorld, store *sessions.Store, access string) {
+			rec, _, found, err := store.Get(context.Background(), sessionIDOf(access))
+			if err != nil || !found {
+				m.t.Fatalf("record before the binding: found %v %v", found, err)
+			}
+			if _, err := store.RevokeAccount(context.Background(), rec.AccountID); err != nil {
+				m.t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &bindHookStore{Store: sessions.NewStore(valkeytest.Start(t).Client(t))}
+			m := newMCPWorldWith(t, store)
+			u := m.user(m.admins())
+			id, access := m.pair(u, []string{"pwd", "mfa"}, 30*time.Minute)
+			store.beforeBind = func() { end(m, store.Store, access) }
+			r := m.open(id, access, nil)
+			expectProblem(t, "login racing "+name, r, http.StatusUnauthorized, "mcp_login_required")
+			if got := m.loginEvent(r); !strings.HasPrefix(got, "failure|mcp|-|") {
+				t.Fatalf("event %s", got)
+			}
+			if _, _, found, err := store.Binding(context.Background(), u.sub, u.authTime); err != nil || found {
+				t.Fatalf("binding after the race: found %v %v", found, err)
+			}
+			expectProblem(t, "bearer", m.me(access), http.StatusUnauthorized, "mcp_login_required")
+			renewID, renewed := m.pair(u, nil, 30*time.Minute)
+			expectProblem(t, "renewal", m.open(renewID, renewed, nil), http.StatusUnauthorized, "mcp_login_required")
+		})
+	}
+}
+
+// TestMCPTokensOfDifferentLogins: an access token whose auth_time differs from the ID token's is refused with one
+// audited failure and opens nothing, at a first login and at a renewal (PDK-546); a renewal pair carrying the login's
+// auth_time, as Authentik issues it, still opens a session.
+func TestMCPTokensOfDifferentLogins(t *testing.T) {
+	m := newMCPWorld(t)
+	u := m.user(m.admins())
+	other := u
+	other.authTime--
+	refused := func(name string, amr []string) {
+		t.Helper()
+		id, _ := m.pair(u, amr, 30*time.Minute)
+		_, access := m.pair(other, amr, 30*time.Minute)
+		r := m.open(id, access, nil)
+		expectProblem(t, name, r, http.StatusBadRequest, "invalid_request")
+		if got := m.loginEvent(r); !strings.HasPrefix(got, "failure|mcp|-|-|login_failed|") {
+			t.Fatalf("%s: event %s", name, got)
+		}
+		if _, ok := m.record(access); ok {
+			t.Fatalf("%s: a record was opened", name)
+		}
+	}
+	refused("first login", []string{"pwd", "mfa"})
+	if m.bound(u) || m.bound(other) {
+		t.Fatal("a refused first login left a binding")
+	}
+
+	if _, r := m.login(u, nil); r.status != http.StatusNoContent {
+		t.Fatalf("login: %d %s", r.status, r.body)
+	}
+	refused("renewal", nil)
+	id, renewed := m.pair(u, nil, 30*time.Minute)
+	if r := m.open(id, renewed, nil); r.status != http.StatusNoContent {
+		t.Fatalf("renewal with the login's auth_time: %d %s", r.status, r.body)
+	}
+	if r := m.me(renewed); r.status != http.StatusOK {
+		t.Fatalf("renewed bearer: %d %s", r.status, r.body)
+	}
+}

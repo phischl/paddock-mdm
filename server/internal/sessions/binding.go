@@ -42,8 +42,9 @@ func chainKey(sub string, authTime int64) string {
 	return "mcp-chain:" + strings.TrimPrefix(bindingKey(sub, authTime), "mcp-bind:")
 }
 
-// ErrNoBinding refuses an MCP renewal record whose login binding ended before the record was written (logout, End all
-// sessions or a revocation racing the renewal).
+// ErrNoBinding refuses an MCP renewal record whose login binding ended before the record was written, and the binding
+// of a first login whose record ended before the binding was written (logout, End all sessions or a revocation racing
+// the session call).
 var ErrNoBinding = errors.New("sessions: MCP login binding ended")
 
 // Chain names the login binding an MCP session record belongs to (PDK-468): logout and every end of the binding delete
@@ -109,8 +110,13 @@ func (s *Store) CreateMCP(ctx context.Context, sid string, rec Record, ttl time.
 }
 
 // bindScript writes the binding with the current generation spliced in and adds its key to the account's set of
-// bindings, which RevokeAccount clears.
+// bindings, which RevokeAccount clears. It writes nothing and returns -1 unless the first login's record (KEYS[4]) still
+// exists and is in the chain's set (KEYS[5]) (PDK-546): a logout ends the chain and a revocation the record between
+// CreateMCP and Bind, and a binding written after either would accept renewals of the ended login again.
 var bindScript = valkey.NewLuaScript(`
+if redis.call('EXISTS', KEYS[4]) == 0 or redis.call('SISMEMBER', KEYS[5], ARGV[4]) == 0 then
+  return -1
+end
 local gen = tonumber(redis.call('GET', KEYS[3]) or '0')
 redis.call('SET', KEYS[1], ARGV[1] .. gen .. ARGV[2], 'PX', ARGV[3])
 redis.call('SADD', KEYS[2], KEYS[1])
@@ -120,8 +126,9 @@ return gen
 `)
 
 // Bind writes the binding of (sub, authTime) for ttl; Gen is read from sess-gen inside the same call, so that End all
-// sessions also ends the bindings written before it.
-func (s *Store) Bind(ctx context.Context, sub string, authTime int64, b Binding, ttl time.Duration) (Binding, error) {
+// sessions also ends the bindings written before it. sid is the first login's record, written by CreateMCP for the same
+// (sub, authTime); if it no longer exists or left the chain, Bind writes nothing and fails with ErrNoBinding.
+func (s *Store) Bind(ctx context.Context, sid, sub string, authTime int64, b Binding, ttl time.Duration) (Binding, error) {
 	if ttl <= 0 {
 		return Binding{}, errors.New("sessions: binding without lifetime")
 	}
@@ -135,10 +142,14 @@ func (s *Store) Bind(ctx context.Context, sub string, authTime int64, b Binding,
 		return Binding{}, errors.New("sessions: binding without gen")
 	}
 	prefix += `"gen":`
-	gen, err := bindScript.Exec(ctx, s.c, []string{bindingKey(sub, authTime), accountBindingsKey(b.AccountID), genKey},
-		[]string{prefix, suffix, strconv.FormatInt(ttl.Milliseconds(), 10)}).AsInt64()
+	gen, err := bindScript.Exec(ctx, s.c, []string{bindingKey(sub, authTime), accountBindingsKey(b.AccountID), genKey,
+		sessionKey(sid), chainKey(sub, authTime)},
+		[]string{prefix, suffix, strconv.FormatInt(ttl.Milliseconds(), 10), sid}).AsInt64()
 	if err != nil {
 		return Binding{}, unavailable(err)
+	}
+	if gen < 0 {
+		return Binding{}, ErrNoBinding
 	}
 	b.Gen = gen
 	return b, nil
