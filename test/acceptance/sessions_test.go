@@ -6,6 +6,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -458,5 +459,135 @@ func TestSessionsPlatformAdminRemoved(t *testing.T) {
 	waitUnauthenticated(t, p, accountRoundTimeout)
 	if ev := revokedEvent(t, idx, platformOrg, user, auditPollTimeout); ev.Params["reason"] != "removed" {
 		t.Fatalf("event params %v", ev.Params)
+	}
+}
+
+// platformAdminsGroup is the group that grants the role platform_admin.
+const platformAdminsGroup = "paddock.platform.admins"
+
+// TestSessionsPlatformEmptied is the gate of PDK-534: when the last members leave paddock.platform.admins, the worker's
+// platform round ends their portal sessions (admin.sessions_revoked, reason removed) within two rounds, and the second
+// round that misses them revokes their role. It empties the platform group of the stack, so it runs only with
+// PADDOCK_ACCEPTANCE_DISRUPTIVE=1, alone; the cleanup puts the members back whatever happened and checks that the
+// development platform administrator signs in with its role again.
+func TestSessionsPlatformEmptied(t *testing.T) {
+	if os.Getenv("PADDOCK_ACCEPTANCE_DISRUPTIVE") != "1" {
+		t.Skip("empties paddock.platform.admins; set PADDOCK_ACCEPTANCE_DISRUPTIVE=1")
+	}
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A run killed before its cleanup (a test timeout or an interrupt skips t.Cleanup) leaves the development platform
+	// administrator outside the group; a new run repairs that before it reads the members it will restore.
+	if err := ak.AddToGroup(testContext(t, time.Minute), env.PlatformAdmin, platformAdminsGroup); err != nil {
+		t.Fatal(err)
+	}
+	members, err := ak.GroupMembers(testContext(t, time.Minute), platformAdminsGroup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restorePlatformAdmins(t, ak, members) })
+
+	created := time.Now()
+	user, password := tempUser(t, "pdk534", platformAdminsGroup)
+	root := login(t, env.PlatformAdmin)
+	second, err := loginAs(t, user, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []*env.Portal{root, second} {
+		if m := whoami(t, p); m.Role != "platform_admin" {
+			t.Fatalf("role of %s %s, want platform_admin", p.User, m.Role)
+		}
+	}
+	idx := auditIndex(t)
+	// admin.role_revoked follows only for a member a round has stored, so the temporary user's grant comes first; the
+	// development platform administrator is stored since the stack's first round.
+	if ev := platformEventsSince(t, idx, "admin.role_granted", "params->>'username'", user, created, roleEventWait); len(ev) != 1 {
+		t.Fatalf("admin.role_granted of %s: %+v, want one", user, ev)
+	}
+	if n := paddockSQL(t, "SELECT count(*) FROM platform_role_member WHERE role = 'platform_admin' AND username = '"+
+		env.PlatformAdmin+"' AND missing_since IS NULL"); n != "1" {
+		t.Fatalf("stored listed platform_admin rows of %s: %s, want 1", env.PlatformAdmin, n)
+	}
+	emptied := time.Now()
+	for _, m := range append(slices.Clone(members), user) {
+		if err := ak.RemoveFromGroup(testContext(t, time.Minute), m, platformAdminsGroup); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if left, err := ak.GroupMembers(testContext(t, time.Minute), platformAdminsGroup); err != nil || len(left) != 0 {
+		t.Fatalf("%s after removing every member: %v (%v), want empty", platformAdminsGroup, left, err)
+	}
+
+	// The first round that lists the empty group ends the sessions; a round that started before the last removal may
+	// still list a member, so the bound is two rounds.
+	for _, p := range []*env.Portal{root, second} {
+		waitUnauthenticated(t, p, 2*accountRoundTimeout)
+	}
+	for _, u := range []string{env.PlatformAdmin, user} {
+		ev := platformEventsSince(t, idx, "admin.sessions_revoked", "target->>'display'", u, emptied, auditPollTimeout)
+		if len(ev) != 1 || ev[0].Outcome != "success" || ev[0].Params["reason"] != "removed" {
+			t.Fatalf("admin.sessions_revoked of %s since the group was emptied: %+v, want one success with reason removed", u, ev)
+		}
+	}
+	// A revocation needs two consecutive listings that miss the member; the first may have run before the sessions
+	// ended, so the second follows within one more round.
+	for _, u := range []string{env.PlatformAdmin, user} {
+		ev := platformEventsSince(t, idx, "admin.role_revoked", "params->>'username'", u, emptied, accountRoundTimeout+roleAuditWait)
+		if len(ev) != 1 || ev[0].Outcome != "success" || ev[0].Params["role"] != "platform_admin" {
+			t.Fatalf("admin.role_revoked of %s since the group was emptied: %+v, want one success for platform_admin", u, ev)
+		}
+	}
+}
+
+// platformEventsSince waits up to wait until the platform pseudo-organization has an event code whose field (a SQL
+// expression of the index) is username, occurred after since, and returns them all. The username comes from the test
+// itself (a development user or a random temporary one), never from the stack.
+func platformEventsSince(t *testing.T, idx *env.AuditIndex, code, field, username string, since time.Time, wait time.Duration) []env.IndexEvent {
+	t.Helper()
+	where := "code = '" + code + "' AND " + field + " = '" + username + "' AND occurred_at > $1"
+	for deadline := time.Now().Add(wait); ; time.Sleep(2 * time.Second) {
+		events, err := idx.Events(testContext(t, time.Minute), platformOrg, where, since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) > 0 || time.Now().After(deadline) {
+			return events
+		}
+	}
+}
+
+// restorePlatformAdmins puts members back into paddock.platform.admins and checks that the development platform
+// administrator signs in with its role again, so a failure midway leaves the following gates, the development seed and
+// the e2e suite a stack they can sign in to. A member deleted in the meantime is skipped.
+func restorePlatformAdmins(t *testing.T, ak *env.Authentik, members []string) {
+	t.Helper()
+	for _, m := range members {
+		var err error
+		for deadline := time.Now().Add(time.Minute); ; time.Sleep(2 * time.Second) {
+			var pk int
+			if pk, err = ak.UserPK(testContext(t, time.Minute), m); err == nil {
+				if pk == 0 {
+					break
+				}
+				err = ak.AddToGroup(testContext(t, time.Minute), m, platformAdminsGroup)
+			}
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+		}
+		if err != nil {
+			t.Errorf("restore %s in %s: %v; add it back in Authentik before the next gate", m, platformAdminsGroup, err)
+		}
+	}
+	p, err := env.Login(testContext(t, time.Minute), env.PlatformAdmin, "")
+	if err != nil {
+		t.Errorf("%s cannot sign in after the restore: %v", env.PlatformAdmin, err)
+		return
+	}
+	if m := whoami(t, p); m.Role != "platform_admin" {
+		t.Errorf("role of %s after the restore %s, want platform_admin", env.PlatformAdmin, m.Role)
 	}
 }
