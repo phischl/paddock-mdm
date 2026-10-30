@@ -87,3 +87,15 @@ FROM audit_export WHERE status = 'pending';
 -- name: GetAuditExportChunk :one
 -- One chunk per call keeps at most one 8 MiB row in memory while the package streams.
 SELECT data FROM audit_export_chunk WHERE export_id = @export_id AND seq = @seq;
+
+-- name: EnsureAuditSigningKey :exec
+-- Insert-only: a published key is never changed, so the first public key seen for a version stays the one auditors
+-- compare against (plan M10 decision 36).
+INSERT INTO audit_signing_key (key_version, public_key) VALUES (@key_version, @public_key)
+ON CONFLICT (key_version) DO NOTHING;
+
+-- name: GetAuditSigningKey :one
+SELECT public_key FROM audit_signing_key WHERE key_version = @key_version;
+
+-- name: ListAuditSigningKeys :many
+SELECT * FROM audit_signing_key ORDER BY key_version;

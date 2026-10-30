@@ -398,6 +398,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_auditor. The public keys the audit chain and the evidence packages are signed with, by key version, with their SHA-256 fingerprints. A version appears after the first manifest or package signed with it. Compare the fingerprint of a package with a value recorded independently, for example the output of `paddock-server audit keys`. */
+        get: operations["listAuditEvidenceKeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit/exports": {
         parameters: {
             query?: never;
@@ -3469,6 +3486,21 @@ export interface components {
             to_day: string;
             purpose: string;
         };
+        AuditEvidenceKey: {
+            key_version: number;
+            /**
+             * Format: byte
+             * @description Base64 of the raw 32-byte ed25519 public key.
+             */
+            public_key: string;
+            /** @description Lowercase hex SHA-256 of the raw public key. */
+            fingerprint: string;
+            /** Format: date-time */
+            first_seen_at: string;
+        };
+        AuditEvidenceKeys: {
+            keys: components["schemas"]["AuditEvidenceKey"][];
+        };
         AuditExport: {
             /** Format: uuid */
             id: string;
@@ -6159,6 +6191,28 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    listAuditEvidenceKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEvidenceKeys"];
+                };
+            };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
         };

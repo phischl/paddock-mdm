@@ -4,10 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +130,41 @@ func TestAuditEvidenceExport(t *testing.T) {
 		done.Params["key_version"] != float64(*ready.KeyVersion) || len(fmt.Sprint(done.Params["package_sha256"])) != 64 {
 		t.Fatalf("E2 event params: %+v", done.Params)
 	}
+
+	// E3 (PDK-148): the key version the package names is published with the fingerprint that the audit-writer CLI
+	// prints from OpenBao; an operator may not read the list.
+	res = call(t, auditor.Portal, http.MethodGet, "/api/v1/audit/keys", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var published struct {
+		Keys []struct {
+			KeyVersion  int    `json:"key_version"`
+			PublicKey   string `json:"public_key"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"keys"`
+	}
+	if err := res.JSON(&published); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := ""
+	for _, k := range published.Keys {
+		if k.KeyVersion == *ready.KeyVersion {
+			fingerprint = k.Fingerprint
+			if raw, err := base64.StdEncoding.DecodeString(k.PublicKey); err != nil || len(raw) != 32 || fingerprint != hex.EncodeToString(sha256Sum(raw)) {
+				t.Fatalf("E3 key v%d: %+v (decode: %v)", k.KeyVersion, k, err)
+			}
+		}
+	}
+	if fingerprint == "" {
+		t.Fatalf("E3 key v%d of the package is not published: %s", *ready.KeyVersion, res.Body)
+	}
+	code, out, err := stack.PaddockServer(ctx, "audit", "keys")
+	if err != nil || code != 0 {
+		t.Fatalf("E3 audit keys: exit %d, %v\n%s", code, err, out)
+	}
+	if want := fmt.Sprintf("audit-chain v%d %s", *ready.KeyVersion, fingerprint); !strings.Contains(out, want+"\n") {
+		t.Fatalf("E3 audit keys prints %q, want a line %q", out, want)
+	}
+	expectStatus(t, call(t, operator.Portal, http.MethodGet, "/api/v1/audit/keys", nil), http.StatusForbidden, "forbidden")
 
 	// E1: at most two exports are pending or running. The builder finishes a request within seconds, so the second
 	// export is awaited and two running exports are held through the writer role for the refusal and finished
@@ -303,4 +340,9 @@ func holdOpenExports(t *testing.T, org uuid.UUID, n int) {
 			t.Fatalf("hold an open export of %s: %v", org, err)
 		}
 	}
+}
+
+func sha256Sum(b []byte) []byte {
+	sum := sha256.Sum256(b)
+	return sum[:]
 }

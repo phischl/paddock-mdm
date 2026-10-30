@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -235,5 +236,55 @@ func TestAuditExportDownload(t *testing.T) {
 			t.Fatalf("%s download: %d %s", status, r.status, r.body)
 		}
 		e.expectEvent(r, "audit.export_downloaded:failure:export_not_ready")
+	}
+}
+
+func TestAuditEvidenceKeys(t *testing.T) {
+	e := newEnv(t)
+	pub := make([]byte, 32)
+	for i := range pub {
+		pub[i] = byte(i + 1)
+	}
+	const version = 7001
+	err := e.writer.InWriter(context.Background(), func(ctx context.Context, q *auditstore.Queries) error {
+		return q.EnsureAuditSigningKey(ctx, auditstore.EnsureAuditSigningKeyParams{KeyVersion: version, PublicKey: pub})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := auditevidence.Fingerprint(pub)
+
+	// The key is not organization data: auditors and admins of every organization read the same list.
+	for _, c := range []struct {
+		org  uuid.UUID
+		role principal.Role
+	}{{e.acme, principal.RoleOrgAuditor}, {e.acme, principal.RoleOrgAdmin}, {e.globex, principal.RoleOrgAuditor}} {
+		r := e.do(call{method: "GET", path: "/api/v1/audit/keys", cookie: e.session(c.org, c.role)})
+		var got adminapi.AuditEvidenceKeys
+		r.decode(t, &got)
+		if r.status != http.StatusOK {
+			t.Fatalf("%s: %d %s", c.role, r.status, r.body)
+		}
+		var found bool
+		for i, k := range got.Keys {
+			if i > 0 && got.Keys[i-1].KeyVersion >= k.KeyVersion {
+				t.Fatalf("keys not in version order: %s", r.body)
+			}
+			if k.KeyVersion == version {
+				found = k.Fingerprint == want && bytes.Equal(k.PublicKey, pub) && !k.FirstSeenAt.IsZero()
+			}
+		}
+		if !found {
+			t.Fatalf("%s: key v%d with fingerprint %s missing: %s", c.role, version, want, r.body)
+		}
+	}
+
+	for _, role := range []principal.Role{principal.RoleOrgOperator} {
+		if r := e.do(call{method: "GET", path: "/api/v1/audit/keys", cookie: e.session(e.acme, role)}); r.status != http.StatusForbidden {
+			t.Fatalf("%s: %d %s, want 403", role, r.status, r.body)
+		}
+	}
+	if r := e.do(call{method: "GET", path: "/api/v1/audit/keys", skipReqCheck: true}); r.status != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d %s, want 401", r.status, r.body)
 	}
 }

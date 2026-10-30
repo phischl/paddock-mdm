@@ -18,6 +18,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getAuditExport` | read | no | One evidence export of the organization. |
 | `getAuditIntegrity` | read | no | The integrity of the organization's audit evidence (plan M8b decision 30): the last sealed day, the number of sealed days, the newest chain verification run and the times of the last successful and the last failed run. |
 | `listAuditEvents` | read | no | GET /api/v1/audit-events |
+| `listAuditEvidenceKeys` | read | no | The public keys the audit chain and the evidence packages are signed with, by key version, with their SHA-256 fingerprints. |
 | `listAuditExports` | read | no | The organization's evidence exports (ADR 0032 §5). |
 | `listAuditManifests` | read | no | The sealed days of the organization with the result of the newest verification run covering each day. |
 | `listAuditVerificationRuns` | read | no | The chain verification runs of the organization (nightly window, random sample day, paddock-server audit verify). |

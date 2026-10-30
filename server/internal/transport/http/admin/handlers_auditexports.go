@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
+	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -209,6 +210,21 @@ func (d *deadlineReader) Close() error {
 		return c.Close()
 	}
 	return nil
+}
+
+func (h *handlers) ListAuditEvidenceKeys(ctx context.Context, _ adminapi.ListAuditEvidenceKeysRequestObject) (adminapi.ListAuditEvidenceKeysResponseObject, error) {
+	rows, err := h.exports.Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]adminapi.AuditEvidenceKey, len(rows))
+	for i, k := range rows {
+		keys[i] = adminapi.AuditEvidenceKey{
+			KeyVersion: int(k.KeyVersion), PublicKey: k.PublicKey, Fingerprint: auditevidence.Fingerprint(k.PublicKey),
+			FirstSeenAt: k.FirstSeenAt.UTC(),
+		}
+	}
+	return adminapi.ListAuditEvidenceKeys200JSONResponse(adminapi.AuditEvidenceKeys{Keys: keys}), nil
 }
 
 // toAuditExport maps an export row to the API; requested_by is stored as an audit actor, verify_problems as a JSON

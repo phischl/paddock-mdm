@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "8b381dbdb6f7213ca7e432dc81f38fa360fbddea8fe19bee20b84de38836e458"
+const Version = "4ed5566b547481590cdf92ffd3f6898c15ee90df9fd7939caef5925112533e25"
 
 var tools = []Tool{
 	{
@@ -1645,6 +1645,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_auditor.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: occurred_at, code, outcome), q (search over: code, actor.display, target.display).",
 		InputSchema: json.RawMessage("{\"properties\":{\"actor_type\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"admin\",\"platform_admin\",\"system\",\"anonymous\",\"device\",\"api_token\"],\"type\":\"string\"},\"type\":\"array\"},\"code\":{\"description\":\"Exact event code; repeatable.\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"from\":{\"description\":\"RFC 3339; default to - 7 days.\",\"format\":\"date-time\",\"type\":\"string\"},\"outcome\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"success\",\"failure\",\"denied\",\"unknown\"],\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-occurred_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The event_id is the tie-breaker.\",\"enum\":[\"occurred_at\",\"-occurred_at\",\"code\",\"-code\",\"outcome\",\"-outcome\"],\"type\":\"string\"},\"target_id\":{\"description\":\"Exact target id (for example a device id).\",\"format\":\"uuid\",\"type\":\"string\"},\"to\":{\"description\":\"RFC 3339; default now. The range may span at most 92 days (400 range_too_large).\",\"format\":\"date-time\",\"type\":\"string\"}},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "listAuditEvidenceKeys",
+		Method:      "GET",
+		Path:        "/api/v1/audit/keys",
+		Pattern:     "GET /api/v1/audit/keys",
+		Tag:         "audit",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_auditor. The public keys the audit chain and the evidence packages are signed with, by key version, with their SHA-256 fingerprints. A version appears after the first manifest or package signed with it. Compare the fingerprint of a package with a value recorded independently, for example the output of `paddock-server audit keys`.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listAuditExports",
