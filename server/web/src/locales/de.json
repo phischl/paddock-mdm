@@ -358,6 +358,7 @@
       "supervisor_update_failed": "Das Gerät {target} konnte Supervisor {version} nicht installieren und behält {from_version} ({outcome})",
       "login_assignment_changed": "{actor} hat geändert, wer sich an {hostname} anmelden darf",
       "logins_suspended": "{actor} hat die Anmeldungen an {hostname} ausgesetzt",
+      "inventory_purged": "Inventarlöschung des außer Betrieb genommenen Geräts {hostname}: {software, plural, one {# Paket} other {# Pakete}}, {findings, plural, one {# Befund} other {# Befunde}}",
       "logins_resumed": "{actor} hat die Anmeldungen an {hostname} wieder zugelassen",
       "bundle_render_failed": "Ein neues Bundle für {target} wurde blockiert: Die sudo-Rechte von {username} haben die Prüfung nicht bestanden",
       "bundle_entry_omitted": "Das Bundle für {target} lässt die sudo-Rechte von {username} aus: Ein Berechtigungsprofil enthält einen Befehl, der nicht mehr erlaubt ist",

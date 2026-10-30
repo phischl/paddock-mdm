@@ -238,6 +238,29 @@ func TestAPIRoleGrants(t *testing.T) {
 	expectPermissionDenied(t, "paddock_api SELECT outbox", err)
 }
 
+// TestFleetHostInUseGrant (plan M10 amendments 2026-10-30): only paddock_platform may ask whether a Fleet host is in
+// use across organizations; the worker and api roles get permission denied, so no organization-scoped role reads past
+// its organization through the function.
+func TestFleetHostInUseGrant(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	env := sharedPaddock(t)
+	for role, dsn := range map[string]string{"paddock_worker": env.Worker, "paddock_api": env.API} {
+		conn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = conn.Exec(ctx, "SELECT paddock_fleet_host_in_use($1, 'h1')", uuid.Must(uuid.NewV7()))
+		expectPermissionDenied(t, role+" EXECUTE paddock_fleet_host_in_use", err)
+		_ = conn.Close(ctx)
+	}
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem})
+	use, err := f.platform.FleetHostInUse(sys, uuid.Must(uuid.NewV7()), "no-such-host")
+	if err != nil || use != db.FleetHostUnused {
+		t.Fatalf("paddock_platform: %q (%v), want %q", use, err, db.FleetHostUnused)
+	}
+}
+
 func TestOrganizationIDBySlug(t *testing.T) {
 	f := newFixture(t)
 	var slug string

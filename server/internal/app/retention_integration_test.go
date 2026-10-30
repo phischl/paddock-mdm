@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
@@ -21,7 +23,32 @@ import (
 
 type retentionWorld struct {
 	retention *app.Retention
+	fleet     *fakeInventoryAdmin
 	super     *pgx.Conn
+}
+
+// fakeInventoryAdmin is Fleet's host deletion; err makes every deletion fail, failing makes the deletion of that host
+// fail; calls counts every deletion asked for.
+type fakeInventoryAdmin struct {
+	mu      sync.Mutex
+	deleted []ports.HostRef
+	err     error
+	failing ports.HostRef
+	calls   int
+}
+
+func (f *fakeInventoryAdmin) DeleteHost(_ context.Context, ref ports.HostRef) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return f.err
+	}
+	if ref == f.failing {
+		return fmt.Errorf("fleet: HTTP 422: host %s refused", ref)
+	}
+	f.deleted = append(f.deleted, ref)
+	return nil
 }
 
 // newRetentionWorld runs the use case with the worker's role and counts days as seconds, as a development stack does.
@@ -44,7 +71,9 @@ func newRetentionWorld(t *testing.T) retentionWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = super.Close(ctx) })
-	return retentionWorld{retention: app.NewRetention(app.NewActionRunner(pool, platform, httpx.RequestID), pool, time.Second), super: super}
+	fleet := &fakeInventoryAdmin{}
+	return retentionWorld{retention: app.NewRetention(app.NewActionRunner(pool, platform, httpx.RequestID), pool, platform, fleet, time.Second),
+		fleet: fleet, super: super}
 }
 
 // organization creates an organization with one device that has seen n users at seen.
