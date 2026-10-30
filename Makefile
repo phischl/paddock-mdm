@@ -37,9 +37,11 @@ endif
 # CI only (PDK-540): the workflow sets PADDOCK_CI_GOMODCACHE to the runner's module download cache, which the image
 # builds read instead of the module proxy; unset, as locally, the Compose files are unchanged.
 CI_GOMODCACHE_FILES := $(if $(PADDOCK_CI_GOMODCACHE),compose.ci-gomodcache.yaml,)
-# The same cache feeds the lint image builds as the named build context and govulncheck as a read-only file proxy
-# ahead of the default proxy list (PDK-516). Go checks every module from it against go.sum and go.work.sum, and a
-# module missing from it falls through to proxy.golang.org. Recursive, because comma is defined further down.
+# The same cache feeds the lint image builds as the named build context and golangci-lint, govulncheck and go-licenses
+# as a read-only file proxy ahead of the default proxy list (PDK-516, PDK-550). Go checks every module from it against
+# go.sum and go.work.sum, and a module missing from it falls through to proxy.golang.org: go-licenses itself is in no
+# go.sum, so its own modules always come from there, checked against sum.golang.org. Recursive, because comma is
+# defined further down.
 CI_GOMODCACHE_BUILD = $(if $(PADDOCK_CI_GOMODCACHE),--build-context 'gomodcache=$(PADDOCK_CI_GOMODCACHE)',)
 CI_GOMODCACHE_RUN   = $(if $(PADDOCK_CI_GOMODCACHE),-v '$(PADDOCK_CI_GOMODCACHE):/gomodcache:ro' \
 	-e GOPROXY=file:///gomodcache$(comma)https://proxy.golang.org$(comma)direct,)
@@ -131,7 +133,7 @@ GO_LICENSES_IGNORE  := github.com/segmentio/asm
 .PHONY: lint-licenses
 lint-licenses: ## License gate: Go and npm production dependencies against the allow list
 	docker run --rm -v $(CURDIR):/src -w /src \
-		-v paddock-gomod:/go/pkg/mod -v paddock-golicenses-cache:/root/.cache \
+		-v paddock-gomod:/go/pkg/mod -v paddock-golicenses-cache:/root/.cache $(CI_GOMODCACHE_RUN) \
 		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
 		$(GO_BUILD_IMAGE) sh -c 'set -e; \
 			for m in $(GO_MODULES); do echo "go-licenses $$m"; cd /src/$$m; \
@@ -161,7 +163,7 @@ lint-caddy:
 .PHONY: lint-go
 lint-go:
 	docker run --rm -v $(CURDIR):/src -w /src \
-		-v paddock-gomod:/go/pkg/mod -v paddock-golangci-cache:/root/.cache \
+		-v paddock-gomod:/go/pkg/mod -v paddock-golangci-cache:/root/.cache $(CI_GOMODCACHE_RUN) \
 		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
 		$(GOLANGCI_LINT_IMAGE) golangci-lint run $(GO_PACKAGES)
 	go vet $(GO_PACKAGES)
