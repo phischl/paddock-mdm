@@ -138,7 +138,7 @@ account gets up to that many per replica. Portal sessions and API tokens are not
 
 | Path | Effect |
 | --- | --- |
-| `paddockctl mcp logout` | Deletes the local file, ends the session of the current access token at the api and revokes the refresh token at Authentik. Records of earlier access tokens of the same sign-in stay valid until those tokens expire (at most 30 minutes; RR-87). |
+| `paddockctl mcp logout` | Deletes the local file, ends the session of the current access token at the api and revokes the refresh token at Authentik. The sessions of the earlier access tokens of the same sign-in end with it. |
 | Deactivation in Authentik | Authentik deletes the user's tokens; the api ends the account's sessions at the next identity sync round (`admin.sessions_revoked`, reason `deactivated`) and refuses the account's next request once Paddock has disabled it. |
 | Role change | The account's sessions end at the next identity sync round (reason `role_changed`) or at the account's next request, whichever comes first; the renewal under the old sign-in is refused. |
 | *End all sessions* (*Platform › Sessions*) | Ends every MCP session together with the portal sessions. |
@@ -160,6 +160,7 @@ account gets up to that many per replica. Portal sessions and API tokens are not
 | `mcp_write_not_enabled` (403) | The policy does not allow changes, or the administrator's write access is off; the detail says which. |
 | `rate_limited` (429) | The account exceeded its per-minute budget; wait `Retry-After` seconds. |
 | `step_up_required` (403) | The change needs an interactive administrator in the portal; `error.portal_path` names the page. |
+| `mcp_login_required` right after a `session_store_unavailable` (503) | The failed call already used the sign-in's tokens once, and a token is never accepted twice. A renewal recovers on its own with the next refreshed token; after a store outage, the first session of a device login needs `paddockctl mcp login` again. |
 | `login timed out` at sign-in | The code was not confirmed before it expired. Run the login again. |
 
 `paddockctl mcp` logs to stderr only and never logs a token, tool arguments or results.

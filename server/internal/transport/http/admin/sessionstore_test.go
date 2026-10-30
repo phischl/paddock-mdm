@@ -31,6 +31,9 @@ type fakeSessions struct {
 	ttls         map[string]time.Duration
 	// bindings are the MCP login bindings by subject and auth_time.
 	bindings map[string]sessions.Binding
+	// chains are the MCP session records of each binding's refresh chain, by binding; chainTTLs their sets' lifetimes.
+	chains    map[string]map[string]bool
+	chainTTLs map[string]time.Duration
 	// used are the login tokens presented to MCP session calls.
 	used map[string]bool
 	// failing names the methods that fail as with an unreachable Valkey; lostReply the methods that write and then
@@ -61,7 +64,8 @@ func (f *fakeSessions) UseLoginToken(_ context.Context, identity string, _ time.
 
 func newFakeSessions() *fakeSessions {
 	return &fakeSessions{records: map[string]sessions.Record{}, ttls: map[string]time.Duration{},
-		bindings: map[string]sessions.Binding{}, used: map[string]bool{}, failing: map[string]bool{}, lostReply: map[string]bool{}}
+		bindings: map[string]sessions.Binding{}, chains: map[string]map[string]bool{},
+		chainTTLs: map[string]time.Duration{}, used: map[string]bool{}, failing: map[string]bool{}, lostReply: map[string]bool{}}
 }
 
 func bindingID(sub string, authTime int64) string { return fmt.Sprintf("%s|%d", sub, authTime) }
@@ -102,7 +106,13 @@ func (f *fakeSessions) Unbind(_ context.Context, sub string, authTime int64, _ u
 	if err := f.err(); err != nil {
 		return err
 	}
-	delete(f.bindings, bindingID(sub, authTime))
+	id := bindingID(sub, authTime)
+	for sid := range f.chains[id] {
+		delete(f.records, sid)
+	}
+	delete(f.chains, id)
+	delete(f.chainTTLs, id)
+	delete(f.bindings, id)
 	return nil
 }
 
@@ -115,6 +125,15 @@ func (f *fakeSessions) err() error {
 }
 
 func (f *fakeSessions) Create(_ context.Context, sid string, rec sessions.Record, ttl time.Duration) (sessions.Record, error) {
+	return f.create(sid, rec, ttl, nil)
+}
+
+// CreateMCP is Create with the record joining its chain; the hooks and failures of Create apply.
+func (f *fakeSessions) CreateMCP(_ context.Context, sid string, rec sessions.Record, ttl time.Duration, ch sessions.Chain) (sessions.Record, error) {
+	return f.create(sid, rec, ttl, &ch)
+}
+
+func (f *fakeSessions) create(sid string, rec sessions.Record, ttl time.Duration, ch *sessions.Chain) (sessions.Record, error) {
 	if f.beforeCreate != nil {
 		f.beforeCreate()
 	}
@@ -122,6 +141,17 @@ func (f *fakeSessions) Create(_ context.Context, sid string, rec sessions.Record
 	defer f.mu.Unlock()
 	if err := errors.Join(f.err(), f.methodErr("Create")); err != nil {
 		return sessions.Record{}, err
+	}
+	if ch != nil {
+		id := bindingID(ch.Sub, ch.AuthTime)
+		if _, ok := f.bindings[id]; ch.Renewal && !ok {
+			return sessions.Record{}, sessions.ErrNoBinding
+		}
+		if f.chains[id] == nil {
+			f.chains[id] = map[string]bool{}
+		}
+		f.chains[id][sid] = true
+		f.chainTTLs[id] = max(f.chainTTLs[id], ch.TTL, ttl)
 	}
 	rec.Gen = f.gen
 	f.records[sid] = rec
@@ -182,6 +212,8 @@ func (f *fakeSessions) RevokeAccount(_ context.Context, accountID uuid.UUID) (in
 	for id, b := range f.bindings {
 		if b.AccountID == accountID {
 			delete(f.bindings, id)
+			delete(f.chains, id)
+			delete(f.chainTTLs, id)
 		}
 	}
 	return n, nil

@@ -7,9 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +24,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
@@ -39,6 +42,12 @@ type mcpWorld struct {
 
 func newMCPWorld(t *testing.T) *mcpWorld {
 	t.Helper()
+	return newMCPWorldWith(t, nil)
+}
+
+// newMCPWorldWith is newMCPWorld with store as the MCP session store; nil is the env's fake.
+func newMCPWorldWith(t *testing.T, store admin.MCPSessionStore) *mcpWorld {
+	t.Helper()
 	idp := newFakeStepUpIdP(t)
 	oidc := admin.NewOIDC(admin.OIDCConfig{Issuer: idp.URL, ClientID: "paddock-mcp", Scopes: admin.MCPScopes})
 	discover, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -49,7 +58,10 @@ func newMCPWorld(t *testing.T) *mcpWorld {
 	}
 	m := &mcpWorld{t: t, idp: idp, clock: time.Now()}
 	m.e = newEnvWith(t, func(d *admin.Deps) {
-		d.MCPAuth = admin.NewMCPAuth(oidc, d.Sessions.(*fakeSessions), d.Accounts, false, m.now)
+		if store == nil {
+			store = d.Sessions.(*fakeSessions)
+		}
+		d.MCPAuth = admin.NewMCPAuth(oidc, store, d.Accounts, false, m.now)
 	})
 	if err := m.e.super.QueryRow(context.Background(), "SELECT slug FROM organization WHERE id = $1", m.e.acme).Scan(&m.slug); err != nil {
 		t.Fatal(err)
@@ -868,5 +880,212 @@ func TestMCPLoginTokenSingleUse(t *testing.T) {
 	expectProblem(t, "access token as ID token", r, http.StatusUnauthorized, "unauthenticated")
 	if got := m.loginEvent(r); !strings.HasPrefix(got, "failure|mcp|-|-|login_failed|") {
 		t.Fatalf("access token as ID token: event %s", got)
+	}
+}
+
+// logout signs the bearer's MCP session out.
+func (m *mcpWorld) logout(token string) {
+	m.t.Helper()
+	if r := authCall(m.e, call{method: "POST", path: "/api/auth/mcp/logout", headers: bearer(token)}); r.status != http.StatusNoContent {
+		m.t.Fatalf("logout: %d %s", r.status, r.body)
+	}
+}
+
+// chain logs u in and renews twice; it returns the three access tokens of the refresh chain, oldest first.
+func (m *mcpWorld) chain(u mcpUser) []string {
+	m.t.Helper()
+	first, r := m.login(u, nil)
+	if r.status != http.StatusNoContent {
+		m.t.Fatalf("login: %d %s", r.status, r.body)
+	}
+	tokens := []string{first}
+	for range 2 {
+		m.advance(10 * time.Minute)
+		id, renewed := m.pair(u, nil, 30*time.Minute)
+		if r := m.open(id, renewed, nil); r.status != http.StatusNoContent {
+			m.t.Fatalf("renewal: %d %s", r.status, r.body)
+		}
+		tokens = append(tokens, renewed)
+	}
+	return tokens
+}
+
+// TestMCPLogoutEndsRefreshChain: logout with any access token of a refresh chain ends the sessions of all its access
+// tokens, not only the bearer's (PDK-468); the chain's set lives as long as the binding.
+func TestMCPLogoutEndsRefreshChain(t *testing.T) {
+	for _, bearerOf := range []int{2, 0} {
+		t.Run(fmt.Sprintf("logout with token %d", bearerOf), func(t *testing.T) {
+			m := newMCPWorld(t)
+			u := m.user(m.admins())
+			tokens := m.chain(u)
+			for i, token := range tokens {
+				if r := m.me(token); r.status != http.StatusOK {
+					t.Fatalf("token %d before logout: %d %s", i, r.status, r.body)
+				}
+			}
+			m.e.sessions.mu.Lock()
+			members, ttl := len(m.e.sessions.chains[bindingID(u.sub, u.authTime)]), m.e.sessions.chainTTLs[bindingID(u.sub, u.authTime)]
+			m.e.sessions.mu.Unlock()
+			if members != 3 || ttl < 7*time.Hour {
+				t.Fatalf("chain of %d records living %s, want 3 records for the binding's lifetime", members, ttl)
+			}
+			other := m.user(m.admins())
+			otherToken, r := m.login(other, nil)
+			if r.status != http.StatusNoContent {
+				t.Fatalf("login of another user: %d %s", r.status, r.body)
+			}
+
+			m.logout(tokens[bearerOf])
+			for i, token := range tokens {
+				expectProblem(t, fmt.Sprintf("token %d after logout", i), m.me(token), http.StatusUnauthorized, "mcp_login_required")
+			}
+			if m.bound(u) {
+				t.Fatal("logout left the binding")
+			}
+			if r := m.me(otherToken); r.status != http.StatusOK {
+				t.Fatalf("another chain after logout: %d %s", r.status, r.body)
+			}
+		})
+	}
+}
+
+// TestMCPBindingEndEndsRefreshChain: a renewal that finds its binding made stale by End all sessions ends the chain's
+// records with the binding, and a mismatching renewal ends them with the account's sessions (PDK-468).
+func TestMCPBindingEndEndsRefreshChain(t *testing.T) {
+	m := newMCPWorld(t)
+	u := m.user(m.admins())
+	tokens := m.chain(u)
+	if _, err := m.e.sessions.EndAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	id, renewed := m.pair(u, nil, 30*time.Minute)
+	expectProblem(t, "renewal of a stale binding", m.open(id, renewed, nil), http.StatusUnauthorized, "mcp_login_required")
+	for i, token := range tokens {
+		if _, ok := m.record(token); ok {
+			t.Fatalf("record %d survived the end of its stale binding", i)
+		}
+	}
+	if m.bound(u) {
+		t.Fatal("the stale binding is left")
+	}
+
+	v := m.user(m.admins())
+	tokens = m.chain(v)
+	v.groups = []string{organization.RoleGroup(m.slug, organization.GroupAuditors)}
+	id, renewed = m.pair(v, nil, 30*time.Minute)
+	expectProblem(t, "mismatching renewal", m.open(id, renewed, nil), http.StatusUnauthorized, "mcp_login_required")
+	for i, token := range tokens {
+		if _, ok := m.record(token); ok {
+			t.Fatalf("record %d survived a mismatching renewal", i)
+		}
+	}
+	m.e.sessions.mu.Lock()
+	_, chainLeft := m.e.sessions.chains[bindingID(v.sub, v.authTime)]
+	m.e.sessions.mu.Unlock()
+	if chainLeft || m.bound(v) {
+		t.Fatal("a mismatching renewal left the chain or the binding")
+	}
+}
+
+// TestMCPRenewalRacingLogout: a logout between the binding lookup and the new record refuses the renewal without
+// writing its record and without ending the account's other sessions.
+func TestMCPRenewalRacingLogout(t *testing.T) {
+	m := newMCPWorld(t)
+	u := m.user(m.admins())
+	first, r := m.login(u, nil)
+	if r.status != http.StatusNoContent {
+		t.Fatalf("login: %d %s", r.status, r.body)
+	}
+	rec, _ := m.record(first)
+	portal := sessions.NewID()
+	if _, err := m.e.sessions.Create(context.Background(), portal, sessions.Record{AccountID: rec.AccountID, Kind: rec.Kind,
+		Role: rec.Role, Org: rec.Org}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	m.e.sessions.beforeCreate = func() {
+		m.e.sessions.beforeCreate = nil
+		m.logout(first)
+	}
+	id, renewed := m.pair(u, nil, 30*time.Minute)
+	r = m.open(id, renewed, nil)
+	expectProblem(t, "renewal racing logout", r, http.StatusUnauthorized, "mcp_login_required")
+	if got := m.loginEvent(r); !strings.HasPrefix(got, "failure|mcp|true|") {
+		t.Fatalf("event %s", got)
+	}
+	if _, ok := m.record(renewed); ok {
+		t.Fatal("the renewal wrote its record after the logout")
+	}
+	m.e.sessions.mu.Lock()
+	_, portalLeft := m.e.sessions.records[portal]
+	m.e.sessions.mu.Unlock()
+	if !portalLeft {
+		t.Fatal("a renewal racing logout ended the account's portal session")
+	}
+}
+
+// TestMCPSessionCallFailingAfterMarker: a session call that fails after its single-use marker keeps the marker (fail
+// closed, PDK-468): the same tokens are refused as replayed. A renewal recovers on its own with the next refreshed ID
+// token, which has a new jti; a first login needs paddockctl mcp login again.
+func TestMCPSessionCallFailingAfterMarker(t *testing.T) {
+	m := newMCPWorld(t)
+	u := m.user(m.admins())
+	if _, r := m.login(u, nil); r.status != http.StatusNoContent {
+		t.Fatalf("login: %d %s", r.status, r.body)
+	}
+	id, renewed := m.pair(u, nil, 30*time.Minute)
+	m.e.sessions.failing["Create"] = true
+	r := m.open(id, renewed, nil)
+	m.e.sessions.failing["Create"] = false
+	if r.status == http.StatusNoContent {
+		t.Fatal("the failing renewal succeeded")
+	}
+	expectProblem(t, "the same renewal again", m.open(id, renewed, nil), http.StatusUnauthorized, "mcp_login_required")
+	id, renewed = m.pair(u, nil, 30*time.Minute)
+	if r := m.open(id, renewed, nil); r.status != http.StatusNoContent {
+		t.Fatalf("the next refreshed tokens: %d %s", r.status, r.body)
+	}
+	if r := m.me(renewed); r.status != http.StatusOK {
+		t.Fatalf("the recovered session: %d %s", r.status, r.body)
+	}
+
+	fresh := m.user(m.admins())
+	id, access := m.pair(fresh, []string{"pwd", "mfa"}, 30*time.Minute)
+	m.e.sessions.failing["Create"] = true
+	r = m.open(id, access, nil)
+	m.e.sessions.failing["Create"] = false
+	if r.status == http.StatusNoContent {
+		t.Fatal("the failing login succeeded")
+	}
+	expectProblem(t, "the same login again", m.open(id, access, nil), http.StatusUnauthorized, "mcp_login_required")
+	if m.bound(fresh) {
+		t.Fatal("a failed login left a binding to renew")
+	}
+}
+
+// TestMCPLogoutAfterBindingExpiry: logout ends the chain's records also when the binding is already gone, as it is
+// after auth_time + 8 h while the records of the last renewals still live (PDK-468 review 1), against Valkey.
+func TestMCPLogoutAfterBindingExpiry(t *testing.T) {
+	c := valkeytest.Start(t).Client(t)
+	store := sessions.NewStore(c)
+	m := newMCPWorldWith(t, store)
+	u := m.user(m.admins())
+	tokens := m.chain(u)
+	sum := sha256.Sum256([]byte(u.sub))
+	if err := c.Do(context.Background(), c.B().Del().Key("mcp-bind:"+hex.EncodeToString(sum[:])+":"+
+		strconv.FormatInt(u.authTime, 10)).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	for i, token := range tokens {
+		if r := m.me(token); r.status != http.StatusOK {
+			t.Fatalf("token %d after the binding expired: %d %s", i, r.status, r.body)
+		}
+	}
+
+	m.logout(tokens[2])
+	for i, token := range tokens {
+		expectProblem(t, fmt.Sprintf("token %d after logout", i), m.me(token), http.StatusUnauthorized, "mcp_login_required")
+		if _, _, found, err := store.Get(context.Background(), sessionIDOf(token)); err != nil || found {
+			t.Fatalf("record %d after logout: found %v %v", i, found, err)
+		}
 	}
 }
