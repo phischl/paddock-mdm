@@ -13,6 +13,43 @@ import (
 	"github.com/google/uuid"
 )
 
+const claimPendingAuditExport = `-- name: ClaimPendingAuditExport :one
+UPDATE audit_export SET status = 'running', started_at = now()
+WHERE id = (SELECT id FROM audit_export WHERE status = 'pending' ORDER BY requested_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+RETURNING id, organization_id, status, from_day, to_day, purpose, requested_by, requested_at, started_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, signature, key_version, error, correlation_id
+`
+
+// One replica claims the oldest pending export; SKIP LOCKED lets every other replica claim the next one instead of
+// waiting (plan M10 decision 31). pending → running keeps the export open, so it needs no request lock.
+func (q *Queries) ClaimPendingAuditExport(ctx context.Context) (AuditExport, error) {
+	row := q.db.QueryRow(ctx, claimPendingAuditExport)
+	var i AuditExport
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Status,
+		&i.FromDay,
+		&i.ToDay,
+		&i.Purpose,
+		&i.RequestedBy,
+		&i.RequestedAt,
+		&i.StartedAt,
+		&i.ReadyAt,
+		&i.ExpiresAt,
+		&i.EventCount,
+		&i.ObjectCount,
+		&i.Size,
+		&i.PackageSha256,
+		&i.VerifyOk,
+		&i.VerifyProblems,
+		&i.Signature,
+		&i.KeyVersion,
+		&i.Error,
+		&i.CorrelationID,
+	)
+	return i, err
+}
+
 const countAuditExports = `-- name: CountAuditExports :one
 SELECT count(*) FROM (
   SELECT 1 FROM audit_export
@@ -45,6 +82,33 @@ func (q *Queries) CountOpenAuditExports(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const deleteAuditExportChunks = `-- name: DeleteAuditExportChunks :execrows
+DELETE FROM audit_export_chunk WHERE export_id = $1
+`
+
+func (q *Queries) DeleteAuditExportChunks(ctx context.Context, exportID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAuditExportChunks, exportID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteEndedAuditExportChunks = `-- name: DeleteEndedAuditExportChunks :execrows
+DELETE FROM audit_export_chunk c USING audit_export e
+WHERE c.export_id = e.id AND e.status IN ('failed', 'expired')
+  AND ($1::uuid IS NULL OR e.id = $1::uuid)
+`
+
+// The status is read in the same statement, so the chunks of an export that became ready are never deleted.
+func (q *Queries) DeleteEndedAuditExportChunks(ctx context.Context, exportID uuid.NullUUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteEndedAuditExportChunks, exportID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getAuditExport = `-- name: GetAuditExport :one
@@ -135,6 +199,27 @@ func (q *Queries) InsertAuditExport(ctx context.Context, arg InsertAuditExportPa
 	return i, err
 }
 
+const insertAuditExportChunk = `-- name: InsertAuditExportChunk :exec
+INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, $3, $4)
+`
+
+type InsertAuditExportChunkParams struct {
+	ExportID       uuid.UUID
+	OrganizationID uuid.UUID
+	Seq            int32
+	Data           []byte
+}
+
+func (q *Queries) InsertAuditExportChunk(ctx context.Context, arg InsertAuditExportChunkParams) error {
+	_, err := q.db.Exec(ctx, insertAuditExportChunk,
+		arg.ExportID,
+		arg.OrganizationID,
+		arg.Seq,
+		arg.Data,
+	)
+	return err
+}
+
 const listAuditExports = `-- name: ListAuditExports :many
 SELECT id, organization_id, status, from_day, to_day, purpose, requested_by, requested_at, started_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, signature, key_version, error, correlation_id FROM audit_export
 WHERE ($1::text[] IS NULL OR status = ANY($1::text[]))
@@ -209,6 +294,98 @@ func (q *Queries) ListAuditExports(ctx context.Context, arg ListAuditExportsPara
 	return items, nil
 }
 
+const listExpiredAuditExports = `-- name: ListExpiredAuditExports :many
+SELECT id, organization_id, status, from_day, to_day, purpose, requested_by, requested_at, started_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, signature, key_version, error, correlation_id FROM audit_export WHERE status = 'ready' AND expires_at < $1 ORDER BY expires_at LIMIT 100
+`
+
+func (q *Queries) ListExpiredAuditExports(ctx context.Context, now *time.Time) ([]AuditExport, error) {
+	rows, err := q.db.Query(ctx, listExpiredAuditExports, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditExport{}
+	for rows.Next() {
+		var i AuditExport
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Status,
+			&i.FromDay,
+			&i.ToDay,
+			&i.Purpose,
+			&i.RequestedBy,
+			&i.RequestedAt,
+			&i.StartedAt,
+			&i.ReadyAt,
+			&i.ExpiresAt,
+			&i.EventCount,
+			&i.ObjectCount,
+			&i.Size,
+			&i.PackageSha256,
+			&i.VerifyOk,
+			&i.VerifyProblems,
+			&i.Signature,
+			&i.KeyVersion,
+			&i.Error,
+			&i.CorrelationID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStuckAuditExports = `-- name: ListStuckAuditExports :many
+SELECT id, organization_id, status, from_day, to_day, purpose, requested_by, requested_at, started_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, signature, key_version, error, correlation_id FROM audit_export WHERE status = 'running' AND started_at < $1 ORDER BY started_at LIMIT 100
+`
+
+func (q *Queries) ListStuckAuditExports(ctx context.Context, startedBefore *time.Time) ([]AuditExport, error) {
+	rows, err := q.db.Query(ctx, listStuckAuditExports, startedBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditExport{}
+	for rows.Next() {
+		var i AuditExport
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Status,
+			&i.FromDay,
+			&i.ToDay,
+			&i.Purpose,
+			&i.RequestedBy,
+			&i.RequestedAt,
+			&i.StartedAt,
+			&i.ReadyAt,
+			&i.ExpiresAt,
+			&i.EventCount,
+			&i.ObjectCount,
+			&i.Size,
+			&i.PackageSha256,
+			&i.VerifyOk,
+			&i.VerifyProblems,
+			&i.Signature,
+			&i.KeyVersion,
+			&i.Error,
+			&i.CorrelationID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockAuditExportRequests = `-- name: LockAuditExportRequests :exec
 SELECT pg_advisory_xact_lock(hashtextextended('audit_export:' || current_setting('paddock.org_id'), 0))
 `
@@ -218,4 +395,92 @@ SELECT pg_advisory_xact_lock(hashtextextended('audit_export:' || current_setting
 func (q *Queries) LockAuditExportRequests(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, lockAuditExportRequests)
 	return err
+}
+
+const oldestPendingAuditExportAge = `-- name: OldestPendingAuditExportAge :one
+SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(requested_at)), 0)::float8 AS age_seconds
+FROM audit_export WHERE status = 'pending'
+`
+
+func (q *Queries) OldestPendingAuditExportAge(ctx context.Context) (float64, error) {
+	row := q.db.QueryRow(ctx, oldestPendingAuditExportAge)
+	var age_seconds float64
+	err := row.Scan(&age_seconds)
+	return age_seconds, err
+}
+
+const updateAuditExportExpired = `-- name: UpdateAuditExportExpired :execrows
+UPDATE audit_export SET status = 'expired' WHERE id = $1 AND status = 'ready' AND expires_at < $2
+`
+
+type UpdateAuditExportExpiredParams struct {
+	ID  uuid.UUID
+	Now *time.Time
+}
+
+func (q *Queries) UpdateAuditExportExpired(ctx context.Context, arg UpdateAuditExportExpiredParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAuditExportExpired, arg.ID, arg.Now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateAuditExportFailed = `-- name: UpdateAuditExportFailed :execrows
+UPDATE audit_export SET status = 'failed', error = $1 WHERE id = $2 AND status = 'running'
+`
+
+type UpdateAuditExportFailedParams struct {
+	Error *string
+	ID    uuid.UUID
+}
+
+func (q *Queries) UpdateAuditExportFailed(ctx context.Context, arg UpdateAuditExportFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAuditExportFailed, arg.Error, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateAuditExportReady = `-- name: UpdateAuditExportReady :execrows
+UPDATE audit_export SET status = 'ready', ready_at = $1, expires_at = $2, event_count = $3,
+  object_count = $4, size = $5, package_sha256 = $6, verify_ok = $7,
+  verify_problems = $8, signature = $9, key_version = $10
+WHERE id = $11 AND status = 'running'
+`
+
+type UpdateAuditExportReadyParams struct {
+	ReadyAt        *time.Time
+	ExpiresAt      *time.Time
+	EventCount     *int64
+	ObjectCount    *int32
+	Size           *int64
+	PackageSha256  []byte
+	VerifyOk       *bool
+	VerifyProblems json.RawMessage
+	Signature      *string
+	KeyVersion     *int32
+	ID             uuid.UUID
+}
+
+// Only a running export becomes ready: an export the stuck check failed in the meantime stays failed.
+func (q *Queries) UpdateAuditExportReady(ctx context.Context, arg UpdateAuditExportReadyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAuditExportReady,
+		arg.ReadyAt,
+		arg.ExpiresAt,
+		arg.EventCount,
+		arg.ObjectCount,
+		arg.Size,
+		arg.PackageSha256,
+		arg.VerifyOk,
+		arg.VerifyProblems,
+		arg.Signature,
+		arg.KeyVersion,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

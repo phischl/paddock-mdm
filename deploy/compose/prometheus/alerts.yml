@@ -93,6 +93,25 @@ groups:
           summary: "The audit index was not purged for 48 hours"
           description: "The audit writer's last complete index purge finished {{ $value | humanizeDuration }} ago; check the audit writer's log for the 01:15 UTC purge and run paddock-server audit purge --dry-run."
 
+      # An evidence export failed (plan M10 decision 34): the requester sees status failed and has to request again.
+      - alert: PaddockAuditExportFailed
+        expr: increase(paddock_audit_export_total{result="failed"}[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "An evidence export failed"
+          description: "The audit writer marked an evidence export as failed in the last hour; the export's error and the audit writer's log (evidence export failed) name the cause."
+
+      # The writer polls every PADDOCK_AUDIT_EXPORT_POLL_INTERVAL; an hour-old pending export means no writer builds.
+      - alert: PaddockAuditExportStuck
+        expr: paddock_audit_export_pending_age_seconds > 3600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An evidence export has been pending for over an hour"
+          description: "The oldest pending evidence export has waited {{ $value | humanizeDuration }}; check that the audit writer runs and its log for evidence export errors."
+
   - name: paddock-control-plane
     rules:
       - alert: PaddockCompileLatencyHigh

@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -78,6 +79,10 @@ func (d *auditDeps) verifier() *auditwriter.Verifier {
 
 func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Common) error {
 	amqpCfg := config.LoadAMQP(l)
+	poll := l.Duration("PADDOCK_AUDIT_EXPORT_POLL_INTERVAL", 30*time.Second)
+	if poll <= 0 {
+		l.Invalid("PADDOCK_AUDIT_EXPORT_POLL_INTERVAL", "must be positive")
+	}
 	deps, err := loadAuditDeps(ctx, l)
 	if err != nil {
 		return err
@@ -92,6 +97,11 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	}
 	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
 	purger := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention)
+	keys := func(ctx context.Context) (map[int][]byte, error) {
+		return deps.bao.PublicKeys(ctx, auditwriter.SigningKey)
+	}
+	exporter := auditwriter.NewExporter(deps.pool, deps.writer, deps.store, deps.bao, keys, deps.verifier(),
+		buildinfo.Version, poll)
 	slog.InfoContext(ctx, "audit-writer starting", "bucket", deps.store.Bucket())
 
 	return runAll(ctx,
@@ -108,6 +118,7 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 		func(ctx context.Context) error { sealer.RunDaily(ctx); return nil },
 		func(ctx context.Context) error { nightly.RunNightly(ctx); return nil },
 		func(ctx context.Context) error { purger.RunDaily(ctx); return nil },
+		exporter.Run,
 	)
 }
 

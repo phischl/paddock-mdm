@@ -132,3 +132,24 @@ func PoolIndex(pool *db.AuditWriterPool) (
 	p := poolIndex{pool}
 	return p.lockedOrganizations, p.latestNightlyRun, p.latestFailedOrganizations, p.organizations
 }
+
+// SetExporterClock replaces the exporter's clock.
+func SetExporterClock(e *Exporter, now func() time.Time) { e.now = now }
+
+// ChunkWriter is the exporter's chunk writer.
+type ChunkWriter = chunkWriter
+
+// NewChunkWriter creates a chunk writer that hands every row to flush.
+var NewChunkWriter = newChunkWriter
+
+// ExportReadme renders the README of a package.
+var ExportReadme = renderReadme
+
+// SetExportMaxDecoded lowers the decompressed size limit of one object.
+func SetExportMaxDecoded(e *Exporter, n uint64) { e.maxDecoded = n }
+
+// SetReadyCommitted replaces the error of the transaction that marks an export ready after it ended, to simulate a
+// COMMIT whose outcome the client never learned.
+func SetReadyCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
+	e.readyCommitted = fn
+}

@@ -41,3 +41,45 @@ SELECT count(*) FROM audit_export WHERE status IN ('pending', 'running');
 -- Serializes the export requests of the transaction's organization so the count of open exports and the insert are
 -- atomic (PDK-142 review); released at the end of the transaction. pg_advisory_xact_lock needs no grant.
 SELECT pg_advisory_xact_lock(hashtextextended('audit_export:' || current_setting('paddock.org_id'), 0));
+
+-- name: ClaimPendingAuditExport :one
+-- One replica claims the oldest pending export; SKIP LOCKED lets every other replica claim the next one instead of
+-- waiting (plan M10 decision 31). pending → running keeps the export open, so it needs no request lock.
+UPDATE audit_export SET status = 'running', started_at = now()
+WHERE id = (SELECT id FROM audit_export WHERE status = 'pending' ORDER BY requested_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+RETURNING *;
+
+-- name: UpdateAuditExportReady :execrows
+-- Only a running export becomes ready: an export the stuck check failed in the meantime stays failed.
+UPDATE audit_export SET status = 'ready', ready_at = @ready_at, expires_at = @expires_at, event_count = @event_count,
+  object_count = @object_count, size = @size, package_sha256 = @package_sha256, verify_ok = @verify_ok,
+  verify_problems = @verify_problems, signature = @signature, key_version = @key_version
+WHERE id = @id AND status = 'running';
+
+-- name: UpdateAuditExportFailed :execrows
+UPDATE audit_export SET status = 'failed', error = @error WHERE id = @id AND status = 'running';
+
+-- name: UpdateAuditExportExpired :execrows
+UPDATE audit_export SET status = 'expired' WHERE id = @id AND status = 'ready' AND expires_at < @now;
+
+-- name: ListExpiredAuditExports :many
+SELECT * FROM audit_export WHERE status = 'ready' AND expires_at < @now ORDER BY expires_at LIMIT 100;
+
+-- name: ListStuckAuditExports :many
+SELECT * FROM audit_export WHERE status = 'running' AND started_at < @started_before ORDER BY started_at LIMIT 100;
+
+-- name: InsertAuditExportChunk :exec
+INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES (@export_id, @organization_id, @seq, @data);
+
+-- name: DeleteAuditExportChunks :execrows
+DELETE FROM audit_export_chunk WHERE export_id = @export_id;
+
+-- name: DeleteEndedAuditExportChunks :execrows
+-- The status is read in the same statement, so the chunks of an export that became ready are never deleted.
+DELETE FROM audit_export_chunk c USING audit_export e
+WHERE c.export_id = e.id AND e.status IN ('failed', 'expired')
+  AND (sqlc.narg(export_id)::uuid IS NULL OR e.id = sqlc.narg(export_id)::uuid);
+
+-- name: OldestPendingAuditExportAge :one
+SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(requested_at)), 0)::float8 AS age_seconds
+FROM audit_export WHERE status = 'pending';
