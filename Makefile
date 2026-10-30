@@ -423,8 +423,9 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 	@echo "built bin/paddockctl/{amd64,arm64}/paddockctl $(VERSION)"
 
 .PHONY: acceptance
-# The exactly-once gate checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check); they run in
-# parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8).
+# The exactly-once gate checks about 366 cases of ≈ 10 s each in the median, ≈ 17 s on average (delivery plus the 5 s
+# settle check); they run in parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8), about 29 min wall time on a
+# CI runner (≈ 1730 s, test/acceptance/shard-weights.txt; PDK-513).
 # SHARD=i/n runs shard i of n: test/acceptance/cmd/acceptanceshard puts every listed test into exactly one shard,
 # balanced by test/acceptance/shard-weights.txt; before the run it checks (-verify n) that the n shard regexes select
 # every test of `go test -list` exactly once, so a new test can never be left out.
