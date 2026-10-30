@@ -1527,18 +1527,27 @@ TestAuditEvidenceExport|TestLoginHistory'`. No VM system test (nothing on the ag
 
 ### Amendment 2026-10-30 (PDK-140, audit index purge)
 
-Architect decisions on review 1 of PDK-140. They amend decision 22 and the `audit_purge_partition` text of §6.2;
-audit migration `00007_index_purge.sql` implements them and is the binding text from now on.
+Architect decisions on reviews 1 and 2 of PDK-140. They amend decision 22 and the `audit_purge_partition` text of
+§6.2; audit migration `00007_index_purge.sql` implements them and is the binding text from now on.
 
-1. **Retention floor in the database.** `audit_purge_partition` raises an exception (SQLSTATE `22023`) when
-   `p_cutoff` is `NULL` or later than `now() - interval '400 days'`, before it looks at any partition. The 400 days are
-   hardcoded: they are a safety net under the Go checks (`Purger.Run`, `loadAuditDeps`) at the privilege boundary, not
-   configuration, so a `paddock_audit_writer` session calling the function directly cannot drop events within the
-   WORM retention. A Go test asserts that the function's floor equals `auditwriter.MinRetentionDays`; EXECUTE is
-   granted only to `paddock_audit_writer`, the role that purges.
-2. **Pinned search path.** The function is `SET search_path = pg_catalog, public, pg_temp` and qualifies every name
-   with `public.` (also in the `format` calls: `public.%I`), so no temporary table can shadow a partition, as in audit
-   migration `00006`.
+1. **Retention floor in the database, cutoff from the database's clock (review 2).** The function is
+   `audit_purge_partition(p_month date, p_days integer)` and returns `(dropped, events, reason, cutoff, relid)`. It
+   takes the index retention in days, not a cutoff, and computes `cutoff = now() - make_interval(days => p_days)` from
+   the database's clock, so the writer's clock never decides what is dropped and a writer clock running ahead cannot
+   trip the floor. It raises an exception (SQLSTATE `22023`) when `p_days` is `NULL` or below 400 (the check is
+   `p_days < 400`), before it looks at any partition. The 400 days are hardcoded: they are a safety net under the Go
+   checks (`Purger.Run`, `loadAuditDeps`) at the privilege boundary, not configuration, so a `paddock_audit_writer`
+   session calling the function directly cannot drop events within the WORM retention. A Go test asserts that the
+   function's floor equals `auditwriter.MinRetentionDays`; EXECUTE is granted only to `paddock_audit_writer`, the
+   role that purges. `Purger.Run(ctx, dryRun)` takes no clock: it reads the report's cutoff for listing the due
+   partitions from the database (`PurgeCutoff`, the same `now() - days`), and each `retention.purged` records the
+   cutoff its own purge transaction returned (a failed drop, which returns none, records the report's cutoff). This
+   supersedes stub PDK-565.
+2. **Pinned search path and time zone (review 2).** The function is `SET search_path = pg_catalog, public, pg_temp`
+   and qualifies every name with `public.` (also in the `format` calls: `public.%I`), so no temporary table can shadow
+   a partition, as in audit migration `00006`. It is also `SET TimeZone = 'UTC'`, so the month boundary
+   (`end_ts::timestamptz`) and the day arithmetic of the cutoff are the same in a caller session with another
+   `TimeZone`; a test calls it under `Etc/GMT+12`, `Pacific/Kiritimati` and `Europe/Berlin`.
 3. **Lock before the count (ratified deviation from §6.2 verbatim).** The function takes
    `LOCK TABLE ONLY public.audit_event, public.<partition> IN ACCESS EXCLUSIVE MODE` before it counts and drops.
    Without it, an event committed between the count and the `DETACH` would be dropped although it was recorded within
@@ -1550,9 +1559,13 @@ audit migration `00007_index_purge.sql` implements them and is the binding text 
    by the writer transaction timeout. A monthly partition whose sequential scan approaches that timeout fails as
    `purge_failed` every night and raises `PaddockAuditIndexPurgeStale`; operators with such volumes need an index on
    `recorded_at` first (a later audit migration, architect decision).
-5. **Unknown commit outcome and the no-partition race.** When a drop's transaction ends with an error other than a lock
-   timeout, or is cancelled, the purger checks in a new session whether the partition still exists; if it is gone, it
-   records `retention.purged` success without `deleted`, since the count was lost with the result. A writer
+5. **Unknown commit outcome and the no-partition race.** When a drop's transaction ends with an error or is cancelled
+   after the function reported the drop, the purger checks in a new session whether the dropped relation still
+   exists, by the OID the function returned (`relid`, taken before the drop), not by the partition's name (review 2):
+   the writer may already have created a partition of the same name again for a late event, and a partition someone
+   else dropped before the purge transaction is no drop of the purge. If the relation is gone, it records
+   `retention.purged` success without `deleted`, since the count was lost with the result. Without a function result
+   that reported the drop, no `COMMIT` was sent, so the failure path applies. A writer
    transaction whose insert finds no partition (SQLSTATE `23514`, the purge dropped the month after
    `ensurePartitions`) is retried like the sealed-day refusal (`PA422`), and the retry creates the partition again.
 

@@ -14,18 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const auditPartitionExists = `-- name: AuditPartitionExists :one
-SELECT (to_regclass('public.' || quote_ident($1::text)) IS NOT NULL)::boolean AS exists
-`
-
-// Whether a partition of audit_event still exists, after a purge whose COMMIT outcome is unknown (PDK-140).
-func (q *Queries) AuditPartitionExists(ctx context.Context, name string) (bool, error) {
-	row := q.db.QueryRow(ctx, auditPartitionExists, name)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const auditPartitionStats = `-- name: AuditPartitionStats :one
 SELECT count(*) AS events, COALESCE(max(recorded_at), 'epoch')::timestamptz AS newest FROM audit_event
 WHERE occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
@@ -47,6 +35,19 @@ func (q *Queries) AuditPartitionStats(ctx context.Context, arg AuditPartitionSta
 	var i AuditPartitionStatsRow
 	err := row.Scan(&i.Events, &i.Newest)
 	return i, err
+}
+
+const auditRelationExists = `-- name: AuditRelationExists :one
+SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE oid = CAST($1::bigint AS oid)) AS present
+`
+
+// Whether the relation a purge dropped still exists, by OID: a partition of the same name that the writer created
+// again for a late event is another relation (PDK-140).
+func (q *Queries) AuditRelationExists(ctx context.Context, relid int64) (bool, error) {
+	row := q.db.QueryRow(ctx, auditRelationExists, relid)
+	var present bool
+	err := row.Scan(&present)
+	return present, err
 }
 
 const countAuditEvents = `-- name: CountAuditEvents :one
@@ -926,26 +927,47 @@ func (q *Queries) LockAuditDays(ctx context.Context, organizationID uuid.UUID) e
 }
 
 const purgeAuditPartition = `-- name: PurgeAuditPartition :one
-SELECT p.dropped::boolean AS dropped, p.events::bigint AS events, p.reason::text AS reason
-FROM audit_purge_partition($1::date, $2::timestamptz) AS p
+SELECT p.dropped::boolean AS dropped, p.events::bigint AS events, p.reason::text AS reason,
+       p.cutoff::timestamptz AS cutoff, COALESCE(p.relid, 0)::bigint AS relid
+FROM audit_purge_partition($1::date, $2::integer) AS p
 `
 
 type PurgeAuditPartitionParams struct {
-	Month  time.Time
-	Cutoff time.Time
+	Month time.Time
+	Days  int32
 }
 
 type PurgeAuditPartitionRow struct {
 	Dropped bool
 	Events  int64
 	Reason  string
+	Cutoff  time.Time
+	Relid   int64
 }
 
 func (q *Queries) PurgeAuditPartition(ctx context.Context, arg PurgeAuditPartitionParams) (PurgeAuditPartitionRow, error) {
-	row := q.db.QueryRow(ctx, purgeAuditPartition, arg.Month, arg.Cutoff)
+	row := q.db.QueryRow(ctx, purgeAuditPartition, arg.Month, arg.Days)
 	var i PurgeAuditPartitionRow
-	err := row.Scan(&i.Dropped, &i.Events, &i.Reason)
+	err := row.Scan(
+		&i.Dropped,
+		&i.Events,
+		&i.Reason,
+		&i.Cutoff,
+		&i.Relid,
+	)
 	return i, err
+}
+
+const purgeCutoff = `-- name: PurgeCutoff :one
+SELECT (now() - interval '24 hours' * $1::integer)::timestamptz AS cutoff
+`
+
+// The cutoff audit_purge_partition computes for the retention, from the database's clock (24 h days, as in UTC).
+func (q *Queries) PurgeCutoff(ctx context.Context, days int32) (time.Time, error) {
+	row := q.db.QueryRow(ctx, purgeCutoff, days)
+	var cutoff time.Time
+	err := row.Scan(&cutoff)
+	return cutoff, err
 }
 
 const releaseAuditPurgeLock = `-- name: ReleaseAuditPurgeLock :one

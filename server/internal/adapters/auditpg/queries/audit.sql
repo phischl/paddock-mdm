@@ -224,12 +224,18 @@ SELECT inhrelid::regclass::text AS name FROM pg_catalog.pg_inherits WHERE inhpar
 SELECT set_config('lock_timeout', '5s', true);
 
 -- name: PurgeAuditPartition :one
-SELECT p.dropped::boolean AS dropped, p.events::bigint AS events, p.reason::text AS reason
-FROM audit_purge_partition(@month::date, @cutoff::timestamptz) AS p;
+SELECT p.dropped::boolean AS dropped, p.events::bigint AS events, p.reason::text AS reason,
+       p.cutoff::timestamptz AS cutoff, COALESCE(p.relid, 0)::bigint AS relid
+FROM audit_purge_partition(@month::date, @days::integer) AS p;
 
--- name: AuditPartitionExists :one
--- Whether a partition of audit_event still exists, after a purge whose COMMIT outcome is unknown (PDK-140).
-SELECT (to_regclass('public.' || quote_ident(@name::text)) IS NOT NULL)::boolean AS exists;
+-- name: PurgeCutoff :one
+-- The cutoff audit_purge_partition computes for the retention, from the database's clock (24 h days, as in UTC).
+SELECT (now() - interval '24 hours' * @days::integer)::timestamptz AS cutoff;
+
+-- name: AuditRelationExists :one
+-- Whether the relation a purge dropped still exists, by OID: a partition of the same name that the writer created
+-- again for a late event is another relation (PDK-140).
+SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE oid = CAST(@relid::bigint AS oid)) AS present;
 
 -- name: TryAuditPurgeLock :one
 SELECT pg_try_advisory_lock(hashtext('audit-purge')) AS locked;

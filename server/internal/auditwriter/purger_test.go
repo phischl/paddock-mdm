@@ -105,7 +105,7 @@ func TestPurgerDropsExpiredPartition(t *testing.T) {
 	}
 	purger := auditwriter.NewPurger(s.pool, s.writer, 400)
 
-	dry, err := purger.Run(ctx, time.Now(), true)
+	dry, err := purger.Run(ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,12 +120,12 @@ func TestPurgerDropsExpiredPartition(t *testing.T) {
 	}
 
 	now := time.Now()
-	report, err := purger.Run(ctx, now, false)
+	report, err := purger.Run(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := audit.Timestamp(now.UTC().AddDate(0, 0, -400)); !report.Cutoff.Equal(want) {
-		t.Errorf("cutoff = %s, want %s", report.Cutoff, want)
+	if want := now.UTC().AddDate(0, 0, -400); report.Cutoff.Sub(want).Abs() > time.Minute {
+		t.Errorf("cutoff = %s, want the database's now − 400 days, about %s", report.Cutoff, want)
 	}
 	dropped := partitionOf(t, report, "audit_event_2001_01")
 	if !dropped.Dropped || dropped.Events != 2 || dropped.Reason != auditwriter.PurgeReasonDropped {
@@ -152,9 +152,13 @@ func TestPurgerDropsExpiredPartition(t *testing.T) {
 	if err := json.Unmarshal(ev.Params, &params); err != nil {
 		t.Fatal(err)
 	}
-	if ev.Org != audit.PlatformOrganizationID || ev.Outcome != string(audit.OutcomeSuccess) ||
-		params["deleted"] != float64(2) || params["cutoff"] != report.Cutoff.Format(time.RFC3339Nano) {
+	if ev.Org != audit.PlatformOrganizationID || ev.Outcome != string(audit.OutcomeSuccess) || params["deleted"] != float64(2) {
 		t.Errorf("retention.purged = %+v %v", ev, params)
+	}
+	// The recorded cutoff is the one the drop's own transaction computed, a moment after the report's.
+	if cutoff, err := time.Parse(time.RFC3339Nano, fmt.Sprint(params["cutoff"])); err != nil ||
+		cutoff.Before(report.Cutoff) || cutoff.Sub(report.Cutoff) > time.Minute {
+		t.Errorf("recorded cutoff %v, want just after the report's %s (%v)", params["cutoff"], report.Cutoff, err)
 	}
 	body, err := s.store.Get(ctx, ev.ObjectKey)
 	if err != nil {
@@ -170,7 +174,7 @@ func TestPurgerDropsExpiredPartition(t *testing.T) {
 	}
 
 	// The purge is idempotent: the next night finds nothing more to drop and records nothing again.
-	if _, err := purger.Run(ctx, time.Now(), false); err != nil {
+	if _, err := purger.Run(ctx, false); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(s.purgedEvents(t, "audit_event_2001_01")); n != 1 {
@@ -181,33 +185,49 @@ func TestPurgerDropsExpiredPartition(t *testing.T) {
 	}
 }
 
-// TestPurgerMonthBoundary: a partition whose month ends exactly at the cutoff is kept; one second later it is
-// dropped.
+// TestPurgerMonthBoundary: the cutoff is the database's now − index retention. A partition whose month ends after it
+// is kept as not due; with one retention day less, the month ends before the cutoff and the partition is dropped.
 func TestPurgerMonthBoundary(t *testing.T) {
 	s := newStack(t)
 	ctx := context.Background()
 	m := month(2001, time.March)
 	s.writeBackdated(t, uuid.Must(uuid.NewV7()), m, 1)
-	purger := auditwriter.NewPurger(s.pool, s.writer, 400)
-	atCutoff := m.AddDate(0, 1, 0).AddDate(0, 0, 400)
+	days, sinceMidnight := retentionReaching(t, s, m.AddDate(0, 1, 0))
 
-	report, err := purger.Run(ctx, atCutoff, false)
+	report, err := auditwriter.NewPurger(s.pool, s.writer, days+1).Run(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p := partitionOf(t, report, "audit_event_2001_03"); p.Due || p.Dropped || p.Reason != auditwriter.PurgeReasonNotDue {
-		t.Errorf("month ending at the cutoff = %+v, want kept as not due", p)
+		t.Errorf("month ending %s after the cutoff = %+v, want kept as not due", 24*time.Hour-sinceMidnight, p)
 	}
 	if !s.partitionExists(t, "audit_event_2001_03") {
-		t.Fatal("partition ending at the cutoff dropped")
+		t.Fatal("partition ending after the cutoff dropped")
 	}
-	report, err = purger.Run(ctx, atCutoff.Add(time.Second), false)
+	report, err = auditwriter.NewPurger(s.pool, s.writer, days).Run(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p := partitionOf(t, report, "audit_event_2001_03"); !p.Dropped || p.Events != 1 {
-		t.Errorf("month ending before the cutoff = %+v, want dropped", p)
+		t.Errorf("month ending %s before the cutoff = %+v, want dropped", sinceMidnight, p)
 	}
+}
+
+// retentionReaching returns the whole days from end to the database's now and the time of day of that now (UTC), so
+// that now − days is that time of day after end and now − (days+1) is before it. It skips the test within a minute of
+// midnight UTC, where the few milliseconds until the purge reads its own now() could cross the day.
+func retentionReaching(t *testing.T, s stack, end time.Time) (days int, sinceMidnight time.Duration) {
+	t.Helper()
+	var now time.Time
+	if err := s.super.QueryRow(context.Background(), "SELECT now()").Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	since := now.Sub(end)
+	sinceMidnight = since % (24 * time.Hour)
+	if sinceMidnight < time.Minute || sinceMidnight > 24*time.Hour-time.Minute {
+		t.Skip("too close to midnight UTC for a deterministic month boundary")
+	}
+	return int(since / (24 * time.Hour)), sinceMidnight
 }
 
 // TestPurgerLockTimeout: a purge that cannot lock the partition within lock_timeout keeps it with reason
@@ -227,7 +247,7 @@ func TestPurgerLockTimeout(t *testing.T) {
 	purger := auditwriter.NewPurger(s.pool, s.writer, 400)
 
 	start := time.Now()
-	report, err := purger.Run(ctx, time.Now(), false)
+	report, err := purger.Run(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +266,7 @@ func TestPurgerLockTimeout(t *testing.T) {
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	report, err = purger.Run(ctx, time.Now(), false)
+	report, err = purger.Run(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +303,7 @@ func TestPurgerKeepsEventCommittedDuringPurge(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		r, err := purger.Run(ctx, time.Now(), false)
+		r, err := purger.Run(ctx, false)
 		done <- result{r, err}
 	}()
 	deadline := time.Now().Add(4 * time.Second)
@@ -314,15 +334,15 @@ func TestPurgerFailedDropIsRecorded(t *testing.T) {
 	s := newStack(t)
 	ctx := context.Background()
 	s.writeBackdated(t, uuid.Must(uuid.NewV7()), month(2001, time.June), 1)
-	if _, err := s.super.Exec(ctx, "REVOKE EXECUTE ON FUNCTION audit_purge_partition(date, timestamptz) FROM paddock_audit_writer"); err != nil {
+	if _, err := s.super.Exec(ctx, "REVOKE EXECUTE ON FUNCTION audit_purge_partition(date, integer) FROM paddock_audit_writer"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := s.super.Exec(context.Background(), "GRANT EXECUTE ON FUNCTION audit_purge_partition(date, timestamptz) TO paddock_audit_writer"); err != nil {
+		if _, err := s.super.Exec(context.Background(), "GRANT EXECUTE ON FUNCTION audit_purge_partition(date, integer) TO paddock_audit_writer"); err != nil {
 			t.Error(err)
 		}
 	})
-	report, err := auditwriter.NewPurger(s.pool, s.writer, 400).Run(ctx, time.Now(), false)
+	report, err := auditwriter.NewPurger(s.pool, s.writer, 400).Run(ctx, false)
 	if err == nil {
 		t.Fatal("Run succeeded although the drop failed")
 	}
@@ -351,16 +371,16 @@ func TestPurgerLocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	purger := auditwriter.NewPurger(s.pool, s.writer, 400)
-	if _, err := purger.Run(ctx, time.Now(), false); !errors.Is(err, auditwriter.ErrPurgeLocked) {
+	if _, err := purger.Run(ctx, false); !errors.Is(err, auditwriter.ErrPurgeLocked) {
 		t.Errorf("Run = %v, want ErrPurgeLocked", err)
 	}
-	if _, err := purger.Run(ctx, time.Now(), true); err != nil {
+	if _, err := purger.Run(ctx, true); err != nil {
 		t.Errorf("dry run = %v", err)
 	}
 	if _, err := other.Exec(ctx, "SELECT pg_advisory_unlock(hashtext('audit-purge'))"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := purger.Run(ctx, time.Now(), false); err != nil {
+	if _, err := purger.Run(ctx, false); err != nil {
 		t.Errorf("Run after unlock = %v", err)
 	}
 }
@@ -368,7 +388,7 @@ func TestPurgerLocked(t *testing.T) {
 // TestPurgerRefusesIndexRetentionBelowWORM: the index is never purged ahead of the WORM retention.
 func TestPurgerRefusesIndexRetentionBelowWORM(t *testing.T) {
 	s := newStack(t)
-	if _, err := auditwriter.NewPurger(s.pool, s.writer, 399).Run(context.Background(), time.Now(), false); err == nil {
+	if _, err := auditwriter.NewPurger(s.pool, s.writer, 399).Run(context.Background(), false); err == nil {
 		t.Fatal("index retention below the WORM retention accepted")
 	}
 }
@@ -389,7 +409,7 @@ func TestWriterHasNoDeleteOnAuditEvent(t *testing.T) {
 	}
 	var canPurge bool
 	if err := s.super.QueryRow(context.Background(),
-		"SELECT has_function_privilege('paddock_audit_writer', 'audit_purge_partition(date, timestamptz)', 'EXECUTE')").Scan(&canPurge); err != nil {
+		"SELECT has_function_privilege('paddock_audit_writer', 'audit_purge_partition(date, integer)', 'EXECUTE')").Scan(&canPurge); err != nil {
 		t.Fatal(err)
 	}
 	if !canPurge {
@@ -397,37 +417,37 @@ func TestWriterHasNoDeleteOnAuditEvent(t *testing.T) {
 	}
 }
 
-// TestPurgePartitionRefusesCutoffWithinRetention (PDK-140 review): the writer role calling audit_purge_partition
-// directly cannot drop a partition with a cutoff inside the 400-day WORM retention; just past it, it can.
-func TestPurgePartitionRefusesCutoffWithinRetention(t *testing.T) {
+// TestPurgePartitionRefusesDaysWithinRetention (PDK-140 review): the writer role calling audit_purge_partition
+// directly cannot drop a partition with a retention below the 400-day WORM retention, nor with none; with 400 days,
+// it can.
+func TestPurgePartitionRefusesDaysWithinRetention(t *testing.T) {
 	s := newStack(t)
 	ctx := context.Background()
 	m := month(2001, time.July)
 	s.writeBackdated(t, uuid.Must(uuid.NewV7()), m, 1)
-	purge := func(cutoff time.Time) (auditstore.PurgeAuditPartitionRow, error) {
+	conn := writerSession(t)
+	purge := func(days *int32) (auditstore.PurgeAuditPartitionRow, error) {
 		var row auditstore.PurgeAuditPartitionRow
-		err := s.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
-			var err error
-			row, err = q.PurgeAuditPartition(ctx, auditstore.PurgeAuditPartitionParams{Month: m, Cutoff: cutoff})
-			return err
-		})
+		err := conn.QueryRow(ctx, "SELECT dropped, events, reason FROM audit_purge_partition($1, $2)", m, days).
+			Scan(&row.Dropped, &row.Events, &row.Reason)
 		return row, err
 	}
-	for name, cutoff := range map[string]time.Time{
-		"now":       time.Now(),
-		"399 days":  time.Now().AddDate(0, 0, -399),
-		"far ahead": time.Now().AddDate(100, 0, 0),
+	for name, days := range map[string]*int32{
+		"none":     nil,
+		"0 days":   new(int32(0)),
+		"399 days": new(int32(399)),
+		"negative": new(int32(-36500)),
 	} {
-		if _, err := purge(cutoff); err == nil || !strings.Contains(err.Error(), "minimum retention of 400 days") {
-			t.Errorf("cutoff %s: err = %v, want the retention floor", name, err)
+		if _, err := purge(days); err == nil || !strings.Contains(err.Error(), "below the minimum retention of 400 days") {
+			t.Errorf("%s: err = %v, want the retention floor", name, err)
 		}
 		if !s.partitionExists(t, "audit_event_2001_07") {
-			t.Fatalf("cutoff %s dropped the partition", name)
+			t.Fatalf("%s dropped the partition", name)
 		}
 	}
-	row, err := purge(time.Now().AddDate(0, 0, -401))
+	row, err := purge(new(int32(auditwriter.MinRetentionDays)))
 	if err != nil || !row.Dropped || row.Events != 1 {
-		t.Fatalf("cutoff 401 days ago = %+v, %v, want dropped with 1 event", row, err)
+		t.Fatalf("400 days = %+v, %v, want dropped with 1 event", row, err)
 	}
 }
 
@@ -437,11 +457,51 @@ func TestPurgePartitionFloorMatchesMinRetentionDays(t *testing.T) {
 	s := newStack(t)
 	var def string
 	if err := s.super.QueryRow(context.Background(),
-		"SELECT pg_get_functiondef('public.audit_purge_partition(date, timestamptz)'::regprocedure)").Scan(&def); err != nil {
+		"SELECT pg_get_functiondef('public.audit_purge_partition(date, integer)'::regprocedure)").Scan(&def); err != nil {
 		t.Fatal(err)
 	}
-	if want := fmt.Sprintf("now() - interval '%d days'", auditwriter.MinRetentionDays); !strings.Contains(def, want) {
+	if want := fmt.Sprintf("p_days < %d", auditwriter.MinRetentionDays); !strings.Contains(def, want) {
 		t.Errorf("audit_purge_partition has no floor %q:\n%s", want, def)
+	}
+}
+
+// TestPurgePartitionIgnoresSessionTimeZone (PDK-140 review): the month decision of audit_purge_partition is the same
+// in a caller session with another TimeZone as in UTC. Each call runs in a rolled-back transaction, so the partition
+// stays for the next one.
+func TestPurgePartitionIgnoresSessionTimeZone(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	m := month(2002, time.January)
+	s.writeBackdated(t, uuid.Must(uuid.NewV7()), m, 1)
+	days, _ := retentionReaching(t, s, m.AddDate(0, 1, 0))
+	conn := writerSession(t)
+	decide := func(tz string, days int) (dropped bool, reason string) {
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, "SELECT set_config('TimeZone', $1, true)", tz); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.QueryRow(ctx, "SELECT dropped, reason FROM audit_purge_partition($1, $2)", m, days).
+			Scan(&dropped, &reason); err != nil {
+			t.Fatal(err)
+		}
+		return dropped, reason
+	}
+	// With days the cutoff is up to a day after the month's end, with days+1 up to a day before it; UTC−12 and UTC+14
+	// shift a month end taken in the session's zone across one of the two for every time of day.
+	for _, d := range []int{days, days + 1} {
+		wantDropped, wantReason := decide("UTC", d)
+		if wantDropped != (d == days) {
+			t.Fatalf("UTC, %d days: dropped = %v (%s)", d, wantDropped, wantReason)
+		}
+		for _, tz := range []string{"Etc/GMT+12", "Pacific/Kiritimati", "Europe/Berlin"} {
+			if dropped, reason := decide(tz, d); dropped != wantDropped || reason != wantReason {
+				t.Errorf("%s, %d days: %v %q, want %v %q as in UTC", tz, d, dropped, reason, wantDropped, wantReason)
+			}
+		}
 	}
 }
 
@@ -452,7 +512,7 @@ func TestPurgePartitionExecuteGrantees(t *testing.T) {
 	rows, err := s.super.Query(context.Background(),
 		`SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
 		 FROM pg_proc p, aclexplode(p.proacl) a
-		 WHERE p.oid = 'public.audit_purge_partition(date, timestamptz)'::regprocedure
+		 WHERE p.oid = 'public.audit_purge_partition(date, integer)'::regprocedure
 		   AND a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner`)
 	if err != nil {
 		t.Fatal(err)
@@ -489,7 +549,7 @@ func TestPurgePartitionIgnoresTemporaryShadow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := conn.QueryRow(ctx, "SELECT dropped, events, reason FROM audit_purge_partition($1, $2)",
-		month(2001, time.August), time.Now().AddDate(0, 0, -401)).Scan(&row.Dropped, &row.Events, &row.Reason); err != nil {
+		month(2001, time.August), auditwriter.MinRetentionDays).Scan(&row.Dropped, &row.Events, &row.Reason); err != nil {
 		t.Fatal(err)
 	}
 	if row.Dropped || row.Reason != "no such partition" {
@@ -502,37 +562,47 @@ func TestPurgePartitionIgnoresTemporaryShadow(t *testing.T) {
 }
 
 // TestPurgerRecordsDropWithUnknownCommitOutcome (PDK-140 review): when the purge transaction of a partition returns
-// an error or is cancelled although its COMMIT went through, the purger finds the partition gone and records the
-// drop as retention.purged success, without a deleted count, instead of a failure or nothing.
+// an error or is cancelled although its COMMIT went through, the purger finds the dropped relation gone and records
+// the drop as retention.purged success, without a deleted count, instead of a failure or nothing. That holds also when
+// the writer already created a partition of the same name again for a late event ("recreated").
 func TestPurgerRecordsDropWithUnknownCommitOutcome(t *testing.T) {
-	for name, m := range map[string]time.Time{"error": month(2001, time.September), "cancelled": month(2001, time.October)} {
+	for name, m := range map[string]time.Time{
+		"error": month(2001, time.September), "cancelled": month(2001, time.October), "recreated": month(2001, time.December),
+	} {
 		t.Run(name, func(t *testing.T) {
 			s := newStack(t)
-			s.writeBackdated(t, uuid.Must(uuid.NewV7()), m, 1)
+			org := uuid.Must(uuid.NewV7())
+			s.writeBackdated(t, org, m, 1)
 			partition := "audit_event_" + m.Format("2006_01")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			purger := auditwriter.NewPurger(s.pool, s.writer, 400)
-			auditwriter.SetPurgeCommitted(purger, func(_ context.Context, err error) error {
-				if err != nil || s.partitionExists(t, partition) {
+			auditwriter.SetPurgeCommitted(purger, func(_ context.Context, part string, err error) error {
+				if part != partition || err != nil || s.partitionExists(t, partition) {
 					return err
 				}
-				if name == "cancelled" {
+				switch name {
+				case "cancelled":
 					cancel()
 					return context.Canceled
+				case "recreated":
+					late := event(org, m.AddDate(0, 0, 20), audit.CodeDeviceGroupUpdated)
+					if _, err := s.writer.WriteBatch(context.Background(), []audit.Event{late}); err != nil {
+						t.Fatal(err)
+					}
 				}
 				return errors.New("unexpected EOF")
 			})
 
-			report, err := purger.Run(ctx, time.Now(), false)
-			if name == "error" && err != nil {
+			report, err := purger.Run(ctx, false)
+			if name != "cancelled" && err != nil {
 				t.Fatalf("Run = %v, want nil", err)
 			}
 			if p := partitionOf(t, report, partition); !p.Dropped || p.Failed || p.Reason != auditwriter.PurgeReasonDropped {
 				t.Errorf("partition = %+v, want dropped", p)
 			}
-			if s.partitionExists(t, partition) {
-				t.Fatal("partition still exists")
+			if exists := s.partitionExists(t, partition); exists != (name == "recreated") {
+				t.Fatalf("partition exists = %v after the purge", exists)
 			}
 			recorded := s.purgedEvents(t, partition)
 			if len(recorded) != 1 || recorded[0].Outcome != string(audit.OutcomeSuccess) {
@@ -546,6 +616,46 @@ func TestPurgerRecordsDropWithUnknownCommitOutcome(t *testing.T) {
 				t.Errorf("params = %v, want the partition and no deleted count", params)
 			}
 		})
+	}
+}
+
+// TestPurgerRecordsNoDropOfPartitionGoneBeforehand (PDK-140 review): a partition that someone else dropped before its
+// purge transaction, which then fails for an unrelated reason, is recorded as a failed purge, never as a drop.
+func TestPurgerRecordsNoDropOfPartitionGoneBeforehand(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	first, gone := month(2002, time.February), month(2002, time.March)
+	s.writeBackdated(t, org, first, 1)
+	s.writeBackdated(t, org, gone, 1)
+	other := otherSession(t)
+	purger := auditwriter.NewPurger(s.pool, s.writer, 400)
+	auditwriter.SetPurgeCommitted(purger, func(_ context.Context, part string, err error) error {
+		switch part {
+		case "audit_event_2002_02":
+			for _, stmt := range []string{
+				"ALTER TABLE audit_event DETACH PARTITION audit_event_2002_03", "DROP TABLE audit_event_2002_03",
+			} {
+				if _, err := other.Exec(ctx, stmt); err != nil {
+					t.Fatal(err)
+				}
+			}
+		case "audit_event_2002_03":
+			return errors.New("unexpected EOF")
+		}
+		return err
+	})
+
+	report, err := purger.Run(ctx, false)
+	if err == nil {
+		t.Fatal("Run succeeded although the purge transaction failed")
+	}
+	if p := partitionOf(t, report, "audit_event_2002_03"); p.Dropped || !p.Failed {
+		t.Errorf("partition = %+v, want failed, not dropped", p)
+	}
+	recorded := s.purgedEvents(t, "audit_event_2002_03")
+	if len(recorded) != 1 || recorded[0].Outcome != string(audit.OutcomeFailure) {
+		t.Fatalf("recorded = %+v, want one failure and no success", recorded)
 	}
 }
 

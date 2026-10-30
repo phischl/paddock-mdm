@@ -217,7 +217,7 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 			return err
 		}
 		defer deps.pool.Close()
-		report, err := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention).Run(ctx, time.Now(), *dryRun)
+		report, err := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention).Run(ctx, *dryRun)
 		if err == nil || len(report.Partitions) > 0 {
 			printPurgeReport(os.Stdout, report)
 		}

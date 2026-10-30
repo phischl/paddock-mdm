@@ -26,7 +26,9 @@ func SetPartitionsEnsured(w *Writer, fn func()) { w.ensured = fn }
 
 // SetPurgeCommitted replaces the error of a partition's purge transaction after it ended, to simulate a COMMIT whose
 // outcome the client never learned.
-func SetPurgeCommitted(p *Purger, fn func(ctx context.Context, err error) error) { p.committed = fn }
+func SetPurgeCommitted(p *Purger, fn func(ctx context.Context, partition string, err error) error) {
+	p.committed = fn
+}
 
 // SetSealerClock replaces the sealer's clock.
 func SetSealerClock(s *Sealer, now func() time.Time) { s.now = now }
