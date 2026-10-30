@@ -99,8 +99,6 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 
 ### Fixed
 
-- The inventory gate on the test VMs calls the Fleet of its checkout's development stack (PDK-549): run from a
-  second stack, it no longer reaches the first stack's Fleet and fails with 401.
 - Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
   every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
   enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
