@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -77,11 +78,12 @@ func (w *loginWorld) login(ctx context.Context, claims map[string]any) *httptest
 	return rec
 }
 
-// adminClaims are the claims of an organization administrator of acme; amr names the authentication methods (nil
-// leaves the claim out).
+// adminClaims are the claims of an organization administrator of acme who signed in with a passkey; amr names the
+// authentication methods (nil leaves the claim out).
 func (w *loginWorld) adminClaims(username string, amr []string) map[string]any {
 	c := map[string]any{"aud": "paddock-portal", "sub": "sub-" + uuid.NewString(), "preferred_username": username,
-		"groups": []string{organization.RoleGroup(w.slug, organization.GroupAdmins)}}
+		"groups":              []string{organization.RoleGroup(w.slug, organization.GroupAdmins)},
+		"paddock_mfa_classes": []string{admin.StepUpWebAuthnClass}}
 	if amr != nil {
 		c["amr"] = amr
 	}
@@ -179,6 +181,106 @@ func TestLoginRefusesATokenWithoutMFA(t *testing.T) {
 	t.Run("development switch", func(t *testing.T) {
 		dev := newLoginWorld(t, func(d *admin.Deps) { d.LoginMFAOptional = true })
 		res := dev.login(ctx, dev.adminClaims("mfa-"+uuid.NewString()+"@acme.test", nil))
+		if res.Code != http.StatusFound || res.Header().Get("Location") != "/" || cookieOf(res, admin.SessionCookie) == nil {
+			t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+		}
+	})
+}
+
+// loginEvents are the admin.login events of username: count, outcome, error code and the params reason and channel.
+func (w *loginWorld) loginEvents(username string) (n int, outcome, errCode, reason, channel string) {
+	w.t.Helper()
+	if err := w.e.super.QueryRow(context.Background(), `SELECT count(*), coalesce(max(outcome), ''),
+		coalesce(max(error_code), ''), coalesce(max(params->>'reason'), ''), coalesce(max(params->>'channel'), '')
+		FROM action WHERE code = 'admin.login' AND actor->>'display' = $1`,
+		username).Scan(&n, &outcome, &errCode, &reason, &channel); err != nil {
+		w.t.Fatal(err)
+	}
+	return n, outcome, errCode, reason, channel
+}
+
+// TestLoginRequestsTheAuthenticatorClasses: the sign-in asks for the scope that carries paddock_mfa_classes, without
+// which every sign-in would be refused with passkey_required.
+func TestLoginRequestsTheAuthenticatorClasses(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	loc, err := url.Parse(w.start().Header().Get("Location"))
+	if err != nil || !slices.Contains(strings.Fields(loc.Query().Get("scope")), "paddock_mfa") {
+		t.Fatalf("authorize URL %v without the scope paddock_mfa: %v", loc, err)
+	}
+}
+
+// TestLoginRequiresAPasskey: every portal role signs in only with a login that validated a WebAuthn authenticator
+// (ADR 0034 amendment 2026-10-29, PDK-500). An Authentik session from a TOTP sign-in, a token without the claim and a
+// token without any class are refused with passkey_required, one denied admin.login and no session; a login with a
+// passkey starts the session; groups without a portal role keep their own reason; the development switch lets a
+// token without the claim pass.
+func TestLoginRequiresAPasskey(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	ctx := context.Background()
+	roles := map[string]string{
+		"platform administrator": organization.PlatformAdminsGroup(),
+		"organization admin":     organization.RoleGroup(w.slug, organization.GroupAdmins),
+		"operator":               organization.RoleGroup(w.slug, organization.GroupOperators),
+		"auditor":                organization.RoleGroup(w.slug, organization.GroupAuditors),
+	}
+	refused := map[string]any{"TOTP only": []string{totpClass}, "no class": []string{}, "claim missing": nil}
+	for role, group := range roles {
+		for name, classes := range refused {
+			t.Run(role+"/"+name, func(t *testing.T) {
+				username := "passkey-" + uuid.NewString() + "@acme.test"
+				claims := w.adminClaims(username, []string{"pwd", "mfa"})
+				claims["groups"] = []string{group}
+				if classes == nil {
+					delete(claims, "paddock_mfa_classes")
+				} else {
+					claims["paddock_mfa_classes"] = classes
+				}
+				before := len(w.e.sessions.records)
+				res := w.login(ctx, claims)
+				if res.Code != http.StatusFound || res.Header().Get("Location") != "/login-denied?reason=passkey_required" {
+					t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+				}
+				if cookieOf(res, admin.SessionCookie) != nil {
+					t.Fatal("session cookie set without a passkey")
+				}
+				if after := len(w.e.sessions.records); after != before {
+					t.Fatalf("%d session records, want %d", after, before)
+				}
+				if n, outcome, errCode, reason, channel := w.loginEvents(username); n != 1 || outcome != "denied" ||
+					errCode != "passkey_required" || reason != "passkey_required" || channel != "portal" {
+					t.Fatalf("audit: %d events, outcome %q, error code %q, reason %q, channel %q", n, outcome, errCode, reason, channel)
+				}
+			})
+		}
+		t.Run(role+"/passkey", func(t *testing.T) {
+			username := "passkey-" + uuid.NewString() + "@acme.test"
+			claims := w.adminClaims(username, []string{"pwd", "mfa"})
+			claims["groups"] = []string{group}
+			claims["paddock_mfa_classes"] = []string{totpClass, admin.StepUpWebAuthnClass}
+			res := w.login(ctx, claims)
+			if res.Code != http.StatusFound || res.Header().Get("Location") != "/" || cookieOf(res, admin.SessionCookie) == nil {
+				t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+			}
+			if n, outcome, _, _, _ := w.loginEvents(username); n != 1 || outcome != "success" {
+				t.Fatalf("audit: %d events, outcome %q", n, outcome)
+			}
+		})
+	}
+
+	t.Run("no portal role", func(t *testing.T) {
+		claims := w.adminClaims("passkey-"+uuid.NewString()+"@acme.test", []string{"pwd", "mfa"})
+		claims["groups"] = []string{"staff"}
+		claims["paddock_mfa_classes"] = []string{totpClass}
+		if res := w.login(ctx, claims); res.Header().Get("Location") != "/login-denied?reason=no_role" {
+			t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+		}
+	})
+
+	t.Run("development switch", func(t *testing.T) {
+		dev := newLoginWorld(t, func(d *admin.Deps) { d.LoginMFAOptional = true })
+		claims := dev.adminClaims("passkey-"+uuid.NewString()+"@acme.test", nil)
+		delete(claims, "paddock_mfa_classes")
+		res := dev.login(ctx, claims)
 		if res.Code != http.StatusFound || res.Header().Get("Location") != "/" || cookieOf(res, admin.SessionCookie) == nil {
 			t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
 		}

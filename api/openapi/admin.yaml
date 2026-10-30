@@ -4730,6 +4730,13 @@ components:
           allOf: [ { $ref: "#/components/schemas/MeAlternateRole" } ]
           nullable: true
           description: The role this identity may switch to (ADR 0045); null for a single-role identity, API tokens and MCP sessions.
+        role_fallback:
+          type: string
+          enum: [organization_inactive]
+          description: |
+            Set when a plain sign-in of an identity with the platform role and an organization role entered the
+            platform role because the organization is unknown or not active (ADR 0045 amendment 2026-10-29); absent
+            otherwise. The portal shows a notice while it is set.
         channel:
           type: string
           enum: [portal, api, mcp]

@@ -372,3 +372,20 @@ The description of `GET /api/auth/callback` names the switch (previous session e
 - Follow-ups: PDK-201 (server, contract, acceptance gate, docs) and PDK-450 (portal) implement this ADR; PDK-436 and
   PDK-439 (M14) implement decision 7; architecture §9.6 amendment (text in PDK-201); ADR 0007, ADR 0034 and
   ADR 0044 carry dated cross-references.
+
+## Amendment 2026-10-29 — sign-in fallback when the organization is not active (PDK-458)
+
+A plain sign-in of a two-role identity falls back to the platform role when its organization is not active; audited
+with fallback=organization_inactive; the portal says so; an explicit switch to the organization stays denied.
+
+- "Not active" is what refuses an organization sign-in: an unknown organization or one that is not active (`Login` →
+  `organization_inactive`). Without the fallback one stale organization group locked a platform administrator out of
+  platform administration, because the switch needs a session.
+- The `admin.login` success event of the platform session carries the param `fallback: organization_inactive`; no
+  denial event is recorded for the organization role.
+- `GET` and `PATCH /api/v1/me` answer `role_fallback: organization_inactive` for the session; the portal shows a
+  notice that cannot be dismissed (en/de: "Your organization is not active; you are signed in as platform
+  administrator.").
+- Only a plain portal sign-in falls back. A switch to the organization role is refused with `organization_inactive`
+  as before and leaves the platform session in place; a single-role identity is refused as before. An MCP login
+  does not fall back; it can ask for the platform role explicitly.

@@ -21,6 +21,8 @@ export const useSessionStore = defineStore('session', () => {
   const alternateRole = computed(() => me.value?.alternate_role ?? null)
   /** Whether the account opted in to MCP write access (ADR 0044 decision 5, third layer). */
   const mcpWriteEnabled = computed(() => me.value?.mcp_write_enabled ?? false)
+  /** Why a plain sign-in entered the platform role instead of the organization role (ADR 0045 amendment 2026-10-29). */
+  const roleFallback = computed(() => me.value?.role_fallback ?? null)
 
   function load(): Promise<Me | null> {
     if (me.value) return Promise.resolve(me.value)
@@ -97,6 +99,6 @@ export const useSessionStore = defineStore('session', () => {
 
   return {
     me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, alternateRole, mcpWriteEnabled,
-    load, setLocale, setTheme, setMcpWrite, logout, switchRole,
+    roleFallback, load, setLocale, setTheme, setMcpWrite, logout, switchRole,
   }
 })

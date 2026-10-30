@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -345,6 +346,111 @@ func TestRoleMembershipEmptyListings(t *testing.T) {
 	w.dir.roleGroups = full
 	if err := w.syncOrganization(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRoleMembershipOrganizationEmptied (PDK-424): when the last holders of all three roles really leave, the directory
+// probe proves the empty listings real (each role group readable, users visible): the first round marks every member,
+// the second records one admin.role_revoked each, and later rounds record nothing. The probe runs only for the
+// all-empty round, once per round.
+func TestRoleMembershipOrganizationEmptied(t *testing.T) {
+	w := newRoleWorld(t)
+	org, slug, ctx := w.organization(t, "rx")
+	pk := org.String()[:8] + "-"
+	ev := orgEvents{pk: pk}
+	var events []string
+	w.dir.readable = map[string]bool{}
+	admins, operators, auditors := organization.RoleGroup(slug, organization.GroupAdmins),
+		organization.RoleGroup(slug, organization.GroupOperators), organization.RoleGroup(slug, organization.GroupAuditors)
+	for _, ro := range []struct{ role, name, group string }{{"org_admin", "alice", admins}, {"org_operator", "bob", operators},
+		{"org_auditor", "carol", auditors}} {
+		g := ro.group
+		w.dir.roleGroups[g] = []ports.IdentityUser{{PK: pk + ro.name, Username: ro.name, UID: "uid-" + ro.name, Active: true}}
+		w.dir.readable[g] = true
+		events = append(events, ev.granted(ro.role, ro.name, g, "true"))
+	}
+	w.dir.usersVisible = true
+	if err := w.syncOrganization(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w.dir.probes != 0 {
+		t.Fatalf("%d probes with members listed, want none", w.dir.probes)
+	}
+	w.dir.roleGroups = map[string][]ports.IdentityUser{}
+	if err := w.syncOrganization(ctx); err != nil {
+		t.Fatalf("first emptied round: %v", err)
+	}
+	if w.dir.probes != 4 {
+		t.Fatalf("%d probe reads, want 4 (three groups and the user listing)", w.dir.probes)
+	}
+	if got := w.roleEvents(t, org, pk); !slices.Equal(got, events) {
+		t.Fatalf("events after one emptied round %v, want only the baseline", got)
+	}
+	if got := w.members(t, "organization_role_member", "organization_id = $1", org); !slices.Equal(got, []string{"org_admin:alice?", "org_auditor:carol?", "org_operator:bob?"}) {
+		t.Fatalf("rows %v, want all marked missing", got)
+	}
+	if err := w.syncOrganization(ctx); err != nil {
+		t.Fatalf("second emptied round: %v", err)
+	}
+	events = append(events, ev.revoked("org_admin", "alice", admins), ev.revoked("org_operator", "bob", operators),
+		ev.revoked("org_auditor", "carol", auditors))
+	if got := w.roleEvents(t, org, pk); !slices.Equal(got, events) {
+		t.Fatalf("events\n%s\nwant\n%s", got, events)
+	}
+	if got := w.members(t, "organization_role_member", "organization_id = $1", org); len(got) != 0 {
+		t.Fatalf("rows %v, want none", got)
+	}
+	if err := w.syncOrganization(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.roleEvents(t, org, pk); !slices.Equal(got, events) {
+		t.Fatalf("events after the emptied organization's next round %v", got)
+	}
+}
+
+// TestRoleMembershipBlindToken (PDK-424): all role listings empty while members are recorded, and the probe does not
+// prove the token sees them — the groups are not readable, no user that is not a service account is visible, or the
+// probe read fails: the round is refused (ErrDirectoryEmpty, a failed read as plain error), nothing is marked or
+// revoked, however often it repeats.
+func TestRoleMembershipBlindToken(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		readable, visible  bool
+		probeFail          error
+		wantDirectoryEmpty bool
+	}{
+		{name: "groups unreadable", visible: true, wantDirectoryEmpty: true},
+		{name: "no user visible", readable: true, wantDirectoryEmpty: true},
+		{name: "probe fails", readable: true, visible: true, probeFail: errors.New("authentik: HTTP 503")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newRoleWorld(t)
+			org, slug, ctx := w.organization(t, "rb")
+			pk := org.String()[:8] + "-"
+			w.dir.readable = map[string]bool{}
+			for i, g := range []organization.GroupRole{organization.GroupAdmins, organization.GroupOperators, organization.GroupAuditors} {
+				name := organization.RoleGroup(slug, g)
+				w.dir.roleGroups[name] = []ports.IdentityUser{{PK: fmt.Sprintf("%s%d", pk, i), Username: fmt.Sprintf("u%d", i)}}
+				w.dir.readable[name] = tc.readable
+			}
+			if err := w.syncOrganization(ctx); err != nil {
+				t.Fatal(err)
+			}
+			w.dir.roleGroups = map[string][]ports.IdentityUser{}
+			w.dir.usersVisible, w.dir.probeFail = tc.visible, tc.probeFail
+			for range 3 {
+				err := w.syncOrganization(ctx)
+				if err == nil || errors.Is(err, app.ErrDirectoryEmpty) != tc.wantDirectoryEmpty {
+					t.Fatalf("refused round: %v, want ErrDirectoryEmpty %v", err, tc.wantDirectoryEmpty)
+				}
+			}
+			if got := w.roleEvents(t, org, pk); len(got) != 3 || slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, "admin.role_revoked") }) {
+				t.Fatalf("events %v, want only the three baseline grants", got)
+			}
+			if got := w.members(t, "organization_role_member", "organization_id = $1", org); !slices.Equal(got, []string{"org_admin:u0", "org_auditor:u2", "org_operator:u1"}) {
+				t.Fatalf("rows %v, want all kept and unmarked", got)
+			}
+		})
 	}
 }
 

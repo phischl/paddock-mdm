@@ -1,4 +1,6 @@
 // Package acceptance holds the acceptance gates of the milestone plans; they run against the development stack.
+// A gate must not depend on state that accumulates across runs (docs/operations/local-dev.md, "Acceptance gates on
+// a long-lived stack").
 package acceptance
 
 import (

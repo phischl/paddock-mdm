@@ -44,6 +44,12 @@ type directory struct {
 	// superusers are the users with superuser rights; superFail makes their listing fail.
 	superusers []ports.IdentityUser
 	superFail  error
+	// readable are the role groups the token may read by name and usersVisible whether it sees any user that is not a
+	// service account (the directory probe, PDK-424); probeFail makes both reads fail and probes counts them.
+	readable     map[string]bool
+	usersVisible bool
+	probeFail    error
+	probes       int
 }
 
 func newDirectory() *directory {
@@ -89,6 +95,18 @@ func (d *directory) Superusers(context.Context) ([]ports.IdentityUser, error) {
 		return nil, d.superFail
 	}
 	return slices.Clone(d.superusers), d.fail
+}
+func (d *directory) GroupReadable(_ context.Context, name string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.probes++
+	return d.readable[name], d.probeFail
+}
+func (d *directory) UsersVisible(context.Context) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.probes++
+	return d.usersVisible, d.probeFail
 }
 func (d *directory) UserMembership(_ context.Context, username, uid string) (ports.IdentityUser, []string, bool, error) {
 	d.mu.Lock()
