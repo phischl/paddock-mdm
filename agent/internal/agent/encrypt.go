@@ -116,8 +116,9 @@ func (a *Agent) encryptDiskAbortCommand(ctx context.Context, c *command.Command)
 			return refuse(encrypt.ReasonNotAbortable)
 		}
 		// Without ctx's cancel, as on the worker: an agent stop must not kill an initrd rebuild halfway.
-		if aborted, reason := encrypt.Abort(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, a.directStore(), id, encrypt.ByAdmin,
-			false); !aborted {
+		store := a.directStore()
+		if aborted, reason := encrypt.Abort(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, store, id, encrypt.ByAdmin,
+			false, a.neutralizeReport(store)); !aborted {
 			return refuse(reason)
 		}
 		return protocol.CommandSucceeded, map[string]any{"aborted": true}
@@ -153,6 +154,13 @@ func (a *Agent) startConversion(ctx context.Context) {
 	a.adoptConversion(ctx)
 	a.answerAbort()
 	c := a.st.Conversion
+	// Before the worker and the first restart notice (plan M8e amendment 2026-10-30, PDK-482): a kill between the cancel
+	// and the neutralization, or a dracut run that finished meanwhile, leaves an initrd that would still convert.
+	if c.Phase == state.ConversionCancelled && c.CleanupPending && !a.bootConverted {
+		if isLUKS, ok := encrypt.IsLUKS(ctx, a.d.Encrypt, a.d.Layout, encrypt.DiskOf(*c)); ok && !isLUKS {
+			a.disarmCancelled(context.WithoutCancel(ctx), a.directStore())
+		}
+	}
 	if c.ResumeFailures != 0 {
 		c.ResumeFailures = 0
 		a.saveState()
@@ -207,6 +215,9 @@ func (a *Agent) adoptConversion(ctx context.Context) bool {
 	now := a.d.Now().UTC()
 	slog.WarnContext(ctx, "the root partition carries the conversion's LUKS header; adopting the conversion", "conversion_id", c.ID,
 		"phase", c.Phase, "init_result", boot.InitResult())
+	// A cancelled conversion that encrypted anyway (a restart before its initrds were neutralized or rebuilt) is
+	// adopted — its key is escrowed and the disk needs it — but reported as such (plan M8e amendment 2026-10-30).
+	afterCancel := c.Phase == state.ConversionCancelled
 	c.Phase, c.StartedAt, c.CleanupPending, c.CleanupError, c.AbortRequested, c.Notified = state.ConversionEncrypting, &now, false, "",
 		false, nil
 	c.PackagesBusySince = nil
@@ -215,6 +226,9 @@ func (a *Agent) adoptConversion(ctx context.Context) bool {
 	data := map[string]any{"conversion_id": c.ID, "volume": c.LUKSUUID, "init_result": boot.InitResult()}
 	if boot != nil && boot.Seconds >= 0 {
 		data["init_s"] = boot.Seconds
+	}
+	if afterCancel {
+		data["after_cancel"] = true
 	}
 	a.event(protocol.EventDiskConversionStarted, data)
 	a.answerAbort()
@@ -403,8 +417,9 @@ func (a *Agent) handleAbortRequest(ctx context.Context) {
 	aborted, reason := false, encrypt.ReasonUnknownConversion
 	if a.d.Encrypt != nil {
 		// Without ctx's cancel, as on the worker: an agent stop must not kill an initrd rebuild halfway.
-		aborted, reason = encrypt.Abort(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, a.directStore(), req.ConversionID,
-			encrypt.ByOperator, false)
+		store := a.directStore()
+		aborted, reason = encrypt.Abort(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, store, req.ConversionID,
+			encrypt.ByOperator, false, a.neutralizeReport(store))
 	}
 	slog.InfoContext(ctx, "encrypt-abort request handled", "aborted", aborted, "reason", reason)
 	if err := encrypt.WriteAbortResponse(a.d.Layout, encrypt.AbortResponse{Nonce: req.Nonce, State: encrypt.AbortDone,
@@ -572,8 +587,13 @@ func (a *Agent) finishConversion(fctx context.Context, c state.DiskConversion, d
 		if err := encrypt.RestoreModule(ctx, a.d.Encrypt, a.d.Layout, a.d.EncryptModule); err != nil {
 			slog.ErrorContext(ctx, "reinstalling the unlock path of the converted disk failed; retrying later", "conversion_id", c.ID,
 				"error", err)
-			return !errors.Is(err, encrypt.ErrPackagesBusy), false, err
+			busy := errors.Is(err, encrypt.ErrPackagesBusy)
+			if !busy {
+				reportOnce(ctx, store, &a.restoreReported, err, encrypt.RestoreReason, encrypt.ReportRestoreFailed)
+			}
+			return !busy, false, err
 		}
+		reportOnce(ctx, store, &a.restoreReported, nil, encrypt.RestoreReason, encrypt.ReportRestoreFailed)
 		if err := store.Update(func(c *state.DiskConversion, _ *state.LUKS) { c.ModuleRestorePending = false }); err != nil {
 			slog.ErrorContext(ctx, "recording the reinstalled unlock path failed", "error", err)
 			return true, false, nil
@@ -612,14 +632,51 @@ func (a *Agent) revokedSince(ctx context.Context) bool {
 }
 
 // retryCleanup is the I3 retry of an unfinished cleanup on the worker — never while the partition is LUKS or its header
-// cannot be checked (invariant I1).
+// cannot be checked (invariant I1). A cancelled conversion's initrds are disarmed again first (disarmCancelled).
 func (a *Agent) retryCleanup(ctx context.Context, disk encrypt.Disk) (attempted, succeeded bool, err error) {
 	if isLUKS, ok := encrypt.IsLUKS(ctx, a.d.Encrypt, a.d.Layout, disk); isLUKS || !ok {
 		return false, false, nil
 	}
-	done, err := encrypt.RunCleanup(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, a.loopStore(ctx))
+	store := a.loopStore(ctx)
+	a.disarmCancelled(context.WithoutCancel(ctx), store)
+	done, err := encrypt.RunCleanup(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, store)
 	// A package run holding dpkg's locks is no failure of the cleanup: it is retried at the next pass, not backed off.
 	return !errors.Is(err, encrypt.ErrPackagesBusy), done, err
+}
+
+// disarmCancelled runs encrypt.Disarm for a cancelled conversion whose cleanup is pending (plan M8e item 18, amendment
+// 2026-10-30, PDK-482): an initrd that a dracut run already under way at the abort built, or one a kill between the
+// cancel and its neutralization left, is neutralized before the next restart. A failure is reported through
+// neutralizeReport. The caller has checked that the partition is not LUKS (invariant I1).
+func (a *Agent) disarmCancelled(ctx context.Context, store agentStore) {
+	a.neutralizeReport(store)(ctx, encrypt.Disarm(ctx, a.d.Encrypt, a.d.Layout, store))
+}
+
+// neutralizeReport reports the outcome of a Disarm, the abort's included, with disk.conversion_neutralize_failed once
+// per reason and start (reportOnce): the worker retries at every full pass while a package run holds dpkg's locks.
+func (a *Agent) neutralizeReport(store agentStore) encrypt.NeutralizeReport {
+	return func(ctx context.Context, err error) {
+		reportOnce(ctx, store, &a.neutralizeReported, err, encrypt.NeutralizeReason, encrypt.ReportNeutralizeFailed)
+	}
+}
+
+// reportOnce emits the event of a failure (emit) once per reason (reasonOf) and agent start: a failure with the reason
+// last emitted emits nothing, and err nil, a success, clears it (PDK-482). The reason is recorded only once its event
+// was stored. last is read and written through store, so on the run loop (directly at the start, before it runs).
+func reportOnce(ctx context.Context, store agentStore, last *string, err error, reasonOf func(error) string,
+	emit func(context.Context, encrypt.Store, error) error) {
+	reason := ""
+	if err != nil {
+		reason = reasonOf(err)
+	}
+	prev := ""
+	if store.run(func() { prev = *last }) != nil {
+		return
+	}
+	if reason != "" && reason != prev && emit(ctx, store, err) != nil {
+		return
+	}
+	_ = store.run(func() { *last = reason })
 }
 
 // Backoff of the initrd work (amendment 2026-10-21, items 16 and 17): every failed cleanup, reinstall or regeneration
@@ -698,8 +755,9 @@ func (a *Agent) refuseUnrunAbort() {
 
 // preparer builds the preparation from the applied bundle; it runs on the loop.
 func (a *Agent) preparer(ctx context.Context) *encrypt.Preparer {
+	store := a.loopStore(ctx)
 	p := &encrypt.Preparer{Sys: a.d.Encrypt, Layout: a.d.Layout, Escrow: loopEscrow{a: a, ctx: ctx}, Keys: a.bundleKeys(),
-		State: a.loopStore(ctx), Module: a.d.EncryptModule, TestHooks: buildinfo.Dev, Now: a.d.Now,
+		State: store, ReportNeutralize: a.neutralizeReport(store), Module: a.d.EncryptModule, TestHooks: buildinfo.Dev, Now: a.d.Now,
 		Hold:  func(context.Context) error { return a.holdForSupervisor(ctx) },
 		Sleep: func(_ context.Context, d time.Duration) error { return a.d.Sleep(ctx, d) }}
 	if a.current != nil {
