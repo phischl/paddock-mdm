@@ -22,11 +22,11 @@ jobs:
         with:
           go-version: "1.27.3"
           cache-dependency-path: "**/go.sum"
-      # The lint image builds and govulncheck take the server module's dependencies, govulncheck included, from the
-      # runner's module cache instead of the module proxy (PDK-540, PDK-516). On a setup-go cache hit the download
-      # below runs offline; a miss fetches here. The other modules' dependencies come in with lint-tidy, which make
-      # lint runs before lint-vuln and lint-image.
-      - name: Go modules for the image builds and govulncheck
+      # The lint image builds, golangci-lint, govulncheck and go-licenses take the workspace's dependencies, govulncheck
+      # included, from the runner's module cache instead of the module proxy (PDK-540, PDK-516, PDK-550). go.work makes
+      # the download below cover every workspace module, not only server; on a setup-go cache hit it runs offline, a
+      # miss fetches here. go-licenses itself is in no go.sum and still comes from the proxy.
+      - name: Go modules for the lint images, golangci-lint, govulncheck and go-licenses
         run: cd server && go mod download
       - run: PADDOCK_CI_GOMODCACHE="$(go env GOMODCACHE)/cache/download" make lint # includes govulncheck for all modules (lint-vuln)
 

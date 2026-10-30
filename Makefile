@@ -37,9 +37,11 @@ endif
 # CI only (PDK-540): the workflow sets PADDOCK_CI_GOMODCACHE to the runner's module download cache, which the image
 # builds read instead of the module proxy; unset, as locally, the Compose files are unchanged.
 CI_GOMODCACHE_FILES := $(if $(PADDOCK_CI_GOMODCACHE),compose.ci-gomodcache.yaml,)
-# The same cache feeds the lint image builds as the named build context and govulncheck as a read-only file proxy
-# ahead of the default proxy list (PDK-516). Go checks every module from it against go.sum and go.work.sum, and a
-# module missing from it falls through to proxy.golang.org. Recursive, because comma is defined further down.
+# The same cache feeds the lint image builds as the named build context and golangci-lint, govulncheck and go-licenses
+# as a read-only file proxy ahead of the default proxy list (PDK-516, PDK-550). Go checks every module from it against
+# go.sum and go.work.sum, and a module missing from it falls through to proxy.golang.org: go-licenses itself is in no
+# go.sum, so its own modules always come from there, checked against sum.golang.org. Recursive, because comma is
+# defined further down.
 CI_GOMODCACHE_BUILD = $(if $(PADDOCK_CI_GOMODCACHE),--build-context 'gomodcache=$(PADDOCK_CI_GOMODCACHE)',)
 CI_GOMODCACHE_RUN   = $(if $(PADDOCK_CI_GOMODCACHE),-v '$(PADDOCK_CI_GOMODCACHE):/gomodcache:ro' \
 	-e GOPROXY=file:///gomodcache$(comma)https://proxy.golang.org$(comma)direct,)
@@ -94,6 +96,8 @@ lint-supervisor-budget:
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
+	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
+	shellcheck -s bash test/stack-preflight.sh test/stack-preflight_test.sh
 	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
 	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 
@@ -131,7 +135,7 @@ GO_LICENSES_IGNORE  := github.com/segmentio/asm
 .PHONY: lint-licenses
 lint-licenses: ## License gate: Go and npm production dependencies against the allow list
 	docker run --rm -v $(CURDIR):/src -w /src \
-		-v paddock-gomod:/go/pkg/mod -v paddock-golicenses-cache:/root/.cache \
+		-v paddock-gomod:/go/pkg/mod -v paddock-golicenses-cache:/root/.cache $(CI_GOMODCACHE_RUN) \
 		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
 		$(GO_BUILD_IMAGE) sh -c 'set -e; \
 			for m in $(GO_MODULES); do echo "go-licenses $$m"; cd /src/$$m; \
@@ -161,7 +165,7 @@ lint-caddy:
 .PHONY: lint-go
 lint-go:
 	docker run --rm -v $(CURDIR):/src -w /src \
-		-v paddock-gomod:/go/pkg/mod -v paddock-golangci-cache:/root/.cache \
+		-v paddock-gomod:/go/pkg/mod -v paddock-golangci-cache:/root/.cache $(CI_GOMODCACHE_RUN) \
 		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
 		$(GOLANGCI_LINT_IMAGE) golangci-lint run $(GO_PACKAGES)
 	go vet $(GO_PACKAGES)
@@ -226,6 +230,8 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/ci/assert-hardening_test.sh
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
+	bash test/require-tests_test.sh
+	bash test/stack-preflight_test.sh
 	bash test/skill_test.sh
 	bash scripts/changelog-assemble_test.sh
 	bash scripts/acceptance-scope_test.sh
@@ -435,9 +441,15 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 # SHARD=i/n runs shard i of n: test/acceptance/cmd/acceptanceshard puts every listed test into exactly one shard,
 # balanced by test/acceptance/shard-weights.txt; before the run it checks (-verify n) that the n shard regexes select
 # every test of `go test -list` exactly once, so a new test can never be left out.
+# T is read with $(value T) so a `$` anchor survives make's expansion (`T='^TestX$/sub'` would otherwise lose `$/`);
+# test/require-tests.sh fails a run whose filter matched no test, which go test itself reports as passed (PDK-339).
+# STACK_PREFLIGHT stops acceptance, system-test and e2e up front when the checkout lacks deploy/compose/.env or the
+# secrets, instead of minutes in (PDK-353).
+STACK_PREFLIGHT = @bash test/stack-preflight.sh $(COMPOSE_DIR) $(SECRETS_DIR)
 acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_GO_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
+	$(STACK_PREFLIGHT)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
-	@set -eo pipefail; run='$(T)'; \
+	@set -eo pipefail; run='$(value T)'; \
 	if [ -n '$(SHARD)' ]; then \
 		[ -z "$$run" ] || { echo "acceptance: T and SHARD are mutually exclusive" >&2; exit 1; }; \
 		list="$$(go test -list '.*' ./test/acceptance/...)"; \
@@ -449,16 +461,19 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 	set --; [ -z "$$run" ] || set -- -run "$$run"; \
 	set -x; PADDOCK_PROJECT=$(DEV_PROJECT) PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
 		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) $(if $(ACCEPTANCE_GO_PARALLEL),-parallel $(ACCEPTANCE_GO_PARALLEL),) \
-		./test/acceptance/... "$$@" -v
+		./test/acceptance/... "$$@" -v | bash test/require-tests.sh
 
 .PHONY: system-test
+# T and the zero-test guard as for acceptance (PDK-339).
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
 	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex>]"; exit 1; }
+	$(STACK_PREFLIGHT)
 	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev REVOKE_TAGS=paddock_revoke_testtarget
 	$(MAKE) --no-print-directory fleetd-deb
 	CGO_ENABLED=0 go build -trimpath -o bin/revoke-release/paddock-revoke ./agent/cmd/paddock-revoke
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
-	PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... $(if $(T),-run '$(T)',) -v
+	set -o pipefail; PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... \
+		$(if $(value T),-run '$(value T)',) -v | bash test/require-tests.sh
 
 # The Playwright image ships the browsers of exactly one @playwright/test version (PDK-290): refuse a mismatch before
 # any test runs instead of failing on missing browsers. Dependabot ignores the package; bump both together.
@@ -476,6 +491,7 @@ e2e-check-playwright:
 # the Go helpers they run, bin/devicesim and bin/agentrelease (PADDOCK_SECRETS_DIR, stack.SecretsDir) (PDK-353).
 .PHONY: e2e
 e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (optional SPEC=<spec file or filter>; PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
+	$(STACK_PREFLIGHT)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \

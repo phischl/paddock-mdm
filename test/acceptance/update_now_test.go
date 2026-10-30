@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -36,6 +37,30 @@ func rolloutBucket(deviceID string) int {
 	return int(h.Sum32() % 100)
 }
 
+// offerWithdrawalTimeout spans two rounds of the worker's rollout loop (worker.RolloutInterval, 60 s) plus slack.
+const offerWithdrawalTimeout = 150 * time.Second
+
+// waitOfferWithdrawn waits until the stack offers no agent release any more. haltRunningRollouts only halts a rollout
+// left by another gate; its offer (Valkey ar:current) stays published until the worker's next rollout round, and a
+// device outside that rollout's unknown wave cannot see it (PDK-553). An update-now request is the one observable that
+// reads the offer regardless of the wave, so it is made for a throwaway device, never for the gate's own one.
+func waitOfferWithdrawn(t *testing.T, p *env.Portal, throwaway *devicesim.Device) {
+	t.Helper()
+	path := "/api/v1/devices/" + throwaway.DeviceID + "/update-agent"
+	for deadline := time.Now().Add(offerWithdrawalTimeout); ; time.Sleep(3 * time.Second) {
+		res := call(t, p, http.MethodPost, path, nil)
+		if res.Status == http.StatusConflict && problemDetail(t, res) == "no agent release is being offered" {
+			return
+		}
+		if res.Status != http.StatusOK {
+			t.Fatalf("waiting for the offer to be withdrawn: HTTP %d %s", res.Status, res.Body)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("an agent release is still offered %s after halting the running rollouts", offerWithdrawalTimeout)
+		}
+	}
+}
+
 // TestUpdateNow is gate A6 of plan M8d (AC6): with a rollout whose first wave excludes the device, an operator's
 // update-now request makes the next check-in carry a requested offer; the device's report clears the request; a
 // second request while the device runs the release, a request without a rollout and one for a halted rollout are
@@ -58,6 +83,7 @@ func TestUpdateNow(t *testing.T) {
 	d.Arch, probe.Arch = protocol.ArchAMD64, protocol.ArchAMD64
 	path := "/api/v1/devices/" + d.DeviceID + "/update-agent"
 	operator := operatorUser(t)
+	waitOfferWithdrawn(t, operator.Portal, activeDevice(t, alice, "", "a6-"+uniqueSuffix()))
 
 	res := call(t, operator.Portal, http.MethodPost, path, nil)
 	expectStatus(t, res, http.StatusConflict, "invalid_state")

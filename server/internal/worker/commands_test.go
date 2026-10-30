@@ -58,7 +58,7 @@ func newCommandWorld(t *testing.T) commandWorld {
 		t.Fatal(err)
 	}
 	w := commandWorld{fixture: f, trust: trust, device: uuid.Must(uuid.NewV7()),
-		c: NewCommands(app.NewDeviceCommands(f.pool), app.NewRevocationReports(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool),
+		c: NewCommands(app.NewDeviceCommands(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool), app.NewRevocationReports(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool),
 			f.pool, platform, f.cache, signer)}
 	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-cmd', 'active')",
 		w.device, f.org); err != nil {
@@ -127,7 +127,7 @@ func TestCommandIssuedAndResult(t *testing.T) {
 	}
 	// Delivery is recorded from the heartbeat of the check-in that carried the command.
 	r := NewReports(app.NewDeviceReports(app.NewActionRunner(w.pool, nil, func(context.Context) string { return "t" }), w.pool),
-		app.NewDeviceCommands(w.pool), w.cache)
+		app.NewDeviceCommands(app.NewActionRunner(w.pool, nil, func(context.Context) string { return "t" }), w.pool), w.cache)
 	hb, _ := json.Marshal(ingest.Heartbeat{DeviceID: w.device, OrganizationID: w.org, ReceivedAt: time.Now(), Seq: 1,
 		DeliveredCommands: []uuid.UUID{id}})
 	if o := r.heartbeat(ctx, "hb", hb); o != ack || w.status(t, id) != devicecommand.StatusDelivered {
@@ -217,7 +217,7 @@ func TestRevocationDeliveryAndConfirmation(t *testing.T) {
 	}
 	id := revoke(time.Hour)
 	r := NewReports(app.NewDeviceReports(app.NewActionRunner(w.pool, nil, func(context.Context) string { return "t" }), w.pool),
-		app.NewDeviceCommands(w.pool), w.cache)
+		app.NewDeviceCommands(app.NewActionRunner(w.pool, nil, func(context.Context) string { return "t" }), w.pool), w.cache)
 	hb, _ := json.Marshal(ingest.Heartbeat{DeviceID: w.device, OrganizationID: w.org, ReceivedAt: time.Now(), Seq: 1,
 		DeliveredCommands: []uuid.UUID{id}})
 	if o := r.heartbeat(ctx, "hb", hb); o != ack || status(id) != "delivered" {
