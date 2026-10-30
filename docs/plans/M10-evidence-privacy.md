@@ -1387,11 +1387,12 @@ decision above differ, this amendment wins. Numbers refer to the decisions of §
 | --- | --- | --- |
 | `privacy_settings` (§6.1) | PDK-136 | `server/migrations/paddock/00074_privacy_settings.sql` |
 | `retention_grants` (decision 11) | PDK-137 | `server/migrations/paddock/00075_retention_grants.sql` |
-| `read_audit_window` (§6.1) | PDK-139 | `server/migrations/paddock/00076_read_audit_window.sql` |
+| `read_audit_window` (§6.1) | PDK-139 | `server/migrations/paddock/00079_read_audit_window.sql` |
 | `index_purge` (§6.2) | PDK-140 | `server/migrations/audit/00007_index_purge.sql` |
 | `audit_exports` (§6.2) | PDK-142 | `server/migrations/audit/00008_audit_exports.sql` |
 
-Reserved: paddock `00074`–`00076`, audit `00007`–`00008`. `change_set_before_purge` is **not** created (A3). The
+Reserved: paddock `00074`–`00076` (2026-10-30: `read_audit_window` is `00079`, see the PDK-583 round 3
+amendment), audit `00007`–`00008`. `change_set_before_purge` is **not** created (A3). The
 "next free number" rule of §3.0 is replaced by these fixed numbers; a ticket that finds its number taken stops
 (§12). In `00008_audit_exports.sql` the `DO` block stays as written: `audit_manifest` already has the `reader`
 policy from `00004`, `audit_object` has none and gets it here together with its `SELECT` grant.
@@ -1658,7 +1659,7 @@ where they differ.
 Architect decisions on the external review after fix round 1 of PDK-138. They amend the amendment above where they
 differ.
 
-- **Migration number.** The function is in `00076_fleet_host_in_use.sql`; 00078 belongs to PDK-139, 00077 is not used by this ticket.
+- **Migration number.** The function is in `00076_fleet_host_in_use.sql`; 00079 belongs to PDK-139 (renumbered 2026-10-30, see the PDK-583 round 3 amendment), 00077 is PDK-496.
 - **Tri-state instead of "boolean only".** `paddock_fleet_host_in_use` returns `text`: `'ref'`, `'hardware'` or
   `'none'`, still never another organization's rows or IDs (`db.FleetHostUsedByRef`, `FleetHostUsedByHardware`,
   `FleetHostUnused`; any other answer fails closed). `'ref'`: another device of any organization references the host;
@@ -1809,4 +1810,11 @@ Decisions on review 2 of PDK-583. They amend M1, x3 and the bound above where th
   retried the next round.
 - **Migration numbers (renumbered 2026-10-30).** The hold table is paddock migration 00078; PDK-139 moves to 00079, so
   the cluster leaves no gap of its own even if PDK-139 lands last (goose refuses missing versions). This supersedes the
-  "00078 belongs to PDK-139" note of the PDK-138 amendment.
+  "00078 belongs to PDK-139" note of the PDK-138 amendment; §6.1's table names 00079 for `read_audit_window`. Merge
+  order to main: 00076 (PDK-138), 00077 (PDK-496), 00078 (PDK-583), 00079 (PDK-139); the next migration merged into
+  the cluster takes the next free number.
+- **Architect-confirmed (2026-10-30).** Two choices of this round are confirmed by the architect: a check-in lookup
+  blip skips the device without an event, counts toward the breaker and leaves the stale alert as the safety net (no
+  deletion on uncertainty); the breaker resets only after a real deletion, because a successful lookup proves nothing
+  about DELETE. Scattered timeouts that trip the breaker stop the deletions of that round and the next round retries;
+  a windowed count is decided in PDK-589.
