@@ -47,7 +47,7 @@ needs a documented reason to deviate, **MAY** is a genuine degree of freedom.
 | Topic | Decision | ADR |
 | --- | --- | --- |
 | Server language | Go (same toolchain as agent, CLI, shared protocol packages) | [0001](adr/0001-go-for-server-agent-and-cli.md) |
-| Persistence and org isolation | PostgreSQL 17, isolation by Row-Level Security set in one repository layer | [0002](adr/0002-postgresql-with-row-level-security.md) |
+| Persistence and org isolation | PostgreSQL 18, isolation by Row-Level Security set in one repository layer | [0002](adr/0002-postgresql-with-row-level-security.md) |
 | Queue and async processing (A8) | RabbitMQ (quorum queues, no plugins) for ingest and internal events; Valkey for the gateway's hot read path, nonces and locks. Both map 1:1 to managed AWS services (Amazon MQ for RabbitMQ, ElastiCache for Valkey) | [0003](adr/0003-rabbitmq-and-valkey.md) |
 | Agent–server protocol and identity (A5, A6) | HTTPS on 443, per-request signatures with a device key (TPM-bound where available), end-to-end signed payloads | [0004](adr/0004-device-identity-and-protocol.md) |
 | State compilation (A9) | Event-driven compiler, DSSE-signed per-device bundles in object storage, served through short-lived presigned URLs | [0005](adr/0005-state-compilation-and-bundle-format.md) |
