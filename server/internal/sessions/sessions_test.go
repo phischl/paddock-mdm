@@ -163,7 +163,8 @@ func TestStoreMCPBinding(t *testing.T) {
 	c := srv.Client(t)
 	s := sessions.NewStore(c)
 	account := uuid.Must(uuid.NewV7())
-	b := sessions.Binding{AccountID: account, Kind: "admin", Role: "org_admin", Org: uuid.Must(uuid.NewV7()), Client: "Claude Code"}
+	b := sessions.Binding{AccountID: account, Kind: "admin", Role: "org_admin", Org: uuid.Must(uuid.NewV7()), Client: "Claude Code",
+		PasskeyVerified: true}
 	rec := sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin", Channel: "mcp"}
 	login := func(sid, sub string, authTime int64) string {
 		t.Helper()
@@ -190,6 +191,15 @@ func TestStoreMCPBinding(t *testing.T) {
 	}
 	if _, err := s.Bind(ctx, "mcp:"+strings.Repeat("a1", 32), "sub-a", 1, b, 0); err == nil {
 		t.Fatal("a binding without lifetime was written")
+	}
+
+	// A binding written before PDK-531 has no passkey_verified and reads as unmarked.
+	legacy := `{"account_id":"` + account.String() + `","kind":"admin","role":"org_admin","org":"` + uuid.Nil.String() + `","gen":0}`
+	if err := c.Do(ctx, c.B().Set().Key(bindingKeyOf("sub-l", 100)).Value(legacy).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, found, err := s.Binding(ctx, "sub-l", 100); err != nil || !found || got.PasskeyVerified || got.AccountID != account {
+		t.Fatalf("legacy binding: %+v found %v %v", got, found, err)
 	}
 
 	if _, err := s.EndAll(ctx); err != nil {
@@ -252,6 +262,11 @@ func TestStoreUseLoginToken(t *testing.T) {
 	if first, err := s.UseLoginToken(ctx, "id-token-c", time.Hour); err != nil || !first {
 		t.Fatalf("after expiry: %v %v", first, err)
 	}
+}
+
+// bindingKeyOf is the key of a login binding, as the store names it.
+func bindingKeyOf(sub string, authTime int64) string {
+	return "mcp-bind:" + strings.TrimPrefix(chainKeyOf(sub, authTime), "mcp-chain:")
 }
 
 // chainKeyOf is the key of the set of a binding's MCP session records, as the store names it.

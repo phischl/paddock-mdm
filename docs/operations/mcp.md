@@ -9,7 +9,9 @@ child process of the MCP client and talks to it over stdio; Paddock itself offer
 
 - **Sign-in through Authentik.** `paddockctl mcp login` signs the administrator in with Authentik's device
   authorization grant on the public OIDC provider `paddock-mcp`: the browser opens Authentik's device page, which runs
-  the portal's login flow (password and second factor) and confirms the code `paddockctl` shows. There is no client
+  the portal's login flow (password and passkey) and confirms the code `paddockctl` shows. Like the portal sign-in, the
+  login must have validated a passkey (WebAuthn): a sign-in with TOTP only is refused with `passkey_required`
+  (PDK-531). There is no client
   secret on the workstation and no API token. The api verifies the ID and access token, resolves the role from the
   Paddock groups exactly like a portal sign-in, records `admin.login` with `channel: mcp` and keeps an MCP session record
   in Valkey next to the portal sessions.
@@ -161,6 +163,8 @@ account gets up to that many per replica. Portal sessions and API tokens are not
 | `rate_limited` (429) | The account exceeded its per-minute budget; wait `Retry-After` seconds. |
 | `step_up_required` (403) | The change needs an interactive administrator in the portal; `error.portal_path` names the page. |
 | `mcp_login_required` right after a `session_store_unavailable` (503) | The failed call already used the sign-in's tokens once, and a token is never accepted twice. A renewal recovers on its own with the next refreshed token; after a store outage, the first session of a device login needs `paddockctl mcp login` again. |
+| `passkey_required` at sign-in | The sign-in validated no passkey (for example TOTP only, or an Authentik session from such a sign-in). Sign out of Authentik, then run `paddockctl mcp login` again and confirm with a passkey. |
+| `login_required` or `mcp_login_required` right after the upgrade to the passkey requirement (PDK-531) | Sessions opened before the upgrade do not record that their sign-in validated a passkey and are not renewed. Run `paddockctl mcp login` once. |
 | `login timed out` at sign-in | The code was not confirmed before it expired. Run the login again. |
 
 `paddockctl mcp` logs to stderr only and never logs a token, tool arguments or results.

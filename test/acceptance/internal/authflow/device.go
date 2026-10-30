@@ -82,8 +82,9 @@ func (e *TokenError) Error() string {
 // DeviceScopes are the scopes Himmelblau requests (PoC M1).
 const DeviceScopes = "openid profile email offline_access"
 
-// MCPScopes are the scopes `paddockctl mcp login` requests (ADR 0044): the api resolves the role from the groups.
-const MCPScopes = "openid profile email groups offline_access"
+// MCPScopes are the scopes `paddockctl mcp login` requests (ADR 0044): the api resolves the role from the groups and
+// checks the passkey in paddock_mfa_classes (PDK-531).
+const MCPScopes = "openid profile email groups offline_access paddock_mfa"
 
 // StartDevice requests a device code for the public client clientID at authURL with DeviceScopes.
 func StartDevice(ctx context.Context, client *http.Client, authURL, clientID string) (DeviceAuthorization, error) {

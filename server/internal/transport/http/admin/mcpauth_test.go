@@ -96,8 +96,18 @@ func (m *mcpWorld) user(groups ...string) mcpUser {
 func (m *mcpWorld) admins() string { return organization.RoleGroup(m.slug, organization.GroupAdmins) }
 
 // pair returns an ID token and an access token of u; amr nil leaves amr out of the ID token (a refreshed one), and
-// life is the access token's remaining life.
+// life is the access token's remaining life. The ID token of a login names a validated WebAuthn authenticator.
 func (m *mcpWorld) pair(u mcpUser, amr []string, life time.Duration) (idToken, accessToken string) {
+	var classes []string
+	if amr != nil {
+		classes = []string{admin.StepUpWebAuthnClass}
+	}
+	return m.pairClasses(u, amr, classes, life)
+}
+
+// pairClasses is pair with the authenticator classes of the ID token (claim paddock_mfa_classes); nil leaves the claim
+// out.
+func (m *mcpWorld) pairClasses(u mcpUser, amr, classes []string, life time.Duration) (idToken, accessToken string) {
 	now := time.Now()
 	base := func() map[string]any {
 		return map[string]any{"iss": m.idp.URL, "aud": "paddock-mcp", "sub": u.sub, "preferred_username": u.username,
@@ -107,9 +117,12 @@ func (m *mcpWorld) pair(u mcpUser, amr []string, life time.Duration) (idToken, a
 	if amr != nil {
 		id["amr"] = amr
 	}
+	if classes != nil {
+		id["paddock_mfa_classes"] = classes
+	}
 	// Authentik copies amr into the access token of a login, as into its ID token.
 	access := base()
-	access["azp"], access["scope"] = "paddock-mcp", "openid profile email groups offline_access"
+	access["azp"], access["scope"] = "paddock-mcp", "openid profile email groups offline_access paddock_mfa"
 	if amr != nil {
 		access["amr"] = amr
 	}
@@ -221,7 +234,7 @@ func TestMCPLoginConfig(t *testing.T) {
 	var cfg admin.McpLoginConfig
 	r.decode(t, &cfg)
 	if r.status != http.StatusOK || cfg.Issuer != m.idp.URL || cfg.ClientID != "paddock-mcp" ||
-		strings.Join(cfg.Scopes, " ") != "openid profile email groups offline_access" ||
+		strings.Join(cfg.Scopes, " ") != "openid profile email groups offline_access paddock_mfa" ||
 		cfg.DeviceAuthorizationEndpoint != m.idp.URL+"/device" || cfg.TokenEndpoint != m.idp.URL+"/token" ||
 		cfg.RevocationEndpoint != m.idp.URL+"/revoke" {
 		t.Fatalf("config: %d %s", r.status, r.body)
@@ -382,6 +395,74 @@ func TestMCPSessionRefusals(t *testing.T) {
 
 	m.advance(8*time.Hour + time.Minute)
 	renew("expired binding", bob)
+}
+
+// TestMCPLoginRequiresPasskey covers PDK-531: a first MCP login is held to the portal's sign-in policy, so it needs a
+// validated WebAuthn authenticator in paddock_mfa_classes (one admin.login denied event with passkey_required, a
+// missing claim fails closed); a renewal against a binding that does not say its login validated a passkey (written
+// before PDK-531) is refused with mcp_login_required, while a marked binding renews without a new check.
+func TestMCPLoginRequiresPasskey(t *testing.T) {
+	m := newMCPWorld(t)
+	refused := func(name string, classes []string) {
+		t.Helper()
+		u := m.user(m.admins())
+		id, access := m.pairClasses(u, []string{"pwd", "mfa"}, classes, 30*time.Minute)
+		r := m.open(id, access, nil)
+		expectProblem(t, name, r, http.StatusUnauthorized, "unauthenticated")
+		var p httpx.Problem
+		r.decode(t, &p)
+		if p.Detail != "passkey_required" {
+			t.Fatalf("%s: detail %q", name, p.Detail)
+		}
+		if got := m.loginEvent(r); got != "denied|mcp|-|-|passkey_required|mcp" {
+			t.Fatalf("%s: event %s", name, got)
+		}
+		if _, ok := m.record(access); ok || m.bound(u) {
+			t.Fatalf("%s: a record or binding was opened", name)
+		}
+	}
+	refused("TOTP only", []string{"authentik_stages_authenticator_totp.totpdevice"})
+	refused("no authenticator", []string{})
+	refused("claim missing", nil)
+
+	alice := m.user(m.admins())
+	id, access := m.pairClasses(alice, []string{"pwd", "mfa"},
+		[]string{"authentik_stages_authenticator_totp.totpdevice", admin.StepUpWebAuthnClass}, 30*time.Minute)
+	r := m.open(id, access, nil)
+	if r.status != http.StatusNoContent {
+		t.Fatalf("passkey login: %d %s", r.status, r.body)
+	}
+	if got := m.loginEvent(r); got != "success|mcp|-|-|-|mcp" {
+		t.Fatalf("passkey login event %s", got)
+	}
+	// A renewal is not checked again: Authentik's refreshed ID tokens carry neither amr nor, necessarily, the classes.
+	id, access = m.pairClasses(alice, nil, nil, 30*time.Minute)
+	if r := m.open(id, access, nil); r.status != http.StatusNoContent {
+		t.Fatalf("renewal of a marked binding: %d %s", r.status, r.body)
+	}
+
+	bob := m.user(m.admins())
+	if _, r := m.login(bob, nil); r.status != http.StatusNoContent {
+		t.Fatalf("login: %d %s", r.status, r.body)
+	}
+	m.e.sessions.mu.Lock()
+	b := m.e.sessions.bindings[bindingID(bob.sub, bob.authTime)]
+	if !b.PasskeyVerified {
+		m.e.sessions.mu.Unlock()
+		t.Fatal("a new binding is not marked passkey_verified")
+	}
+	b.PasskeyVerified = false
+	m.e.sessions.bindings[bindingID(bob.sub, bob.authTime)] = b
+	m.e.sessions.mu.Unlock()
+	id, access = m.pair(bob, nil, 30*time.Minute)
+	r = m.open(id, access, nil)
+	expectProblem(t, "renewal of an unmarked binding", r, http.StatusUnauthorized, "mcp_login_required")
+	if got := m.loginEvent(r); got != "failure|mcp|-|-|mcp_login_required|mcp" {
+		t.Fatalf("unmarked renewal event %s", got)
+	}
+	if _, ok := m.record(access); ok {
+		t.Fatal("the renewal of an unmarked binding opened a record")
+	}
 }
 
 // TestMCPRoleChoice covers ADR 0045 decision 7 for MCP sessions: the organization role by default, the platform role
