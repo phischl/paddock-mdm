@@ -42,13 +42,15 @@ const (
 )
 
 // parallelCases returns a semaphore that bounds the parallel cases of a gate: PADDOCK_ACCEPTANCE_PARALLEL, default 8
-// (plan M3b decision 2).
+// (plan M3b decision 2). go test caps parallel subtests as well (-parallel, default GOMAXPROCS), so the effective limit
+// is min(semaphore, -parallel); make acceptance passes -parallel only with ACCEPTANCE_GO_PARALLEL (PDK-556).
 func parallelCases(t *testing.T) chan struct{} {
 	t.Helper()
 	return make(chan struct{}, parallelism(t))
 }
 
-// parallelism is the number of parallel cases of a gate (PADDOCK_ACCEPTANCE_PARALLEL, default 8).
+// parallelism is the semaphore size for a gate's parallel cases (PADDOCK_ACCEPTANCE_PARALLEL, default 8), an upper
+// bound: go test's -parallel may hold fewer at a time (see parallelCases).
 func parallelism(t *testing.T) int {
 	t.Helper()
 	n := 8
