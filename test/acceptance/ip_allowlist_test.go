@@ -51,6 +51,20 @@ func denialWhere(since time.Time) string {
 	return fmt.Sprintf("params->>'ip' = $1 AND occurred_at >= '%s'", since.UTC().Format(time.RFC3339))
 }
 
+// requireSingleAPI fails unless exactly one paddock-api container runs: the ordering proof of the denial marker
+// holds for one IPDenials recorder only, and each api replica has its own (PDK-572).
+func requireSingleAPI(t *testing.T, ctx context.Context) {
+	t.Helper()
+	out, err := stack.Docker(ctx, nil, "ps", "-q", "--filter", "status=running",
+		"--filter", "label=com.docker.compose.project="+stack.Project(), "--filter", "label=com.docker.compose.service=paddock-api")
+	if err != nil {
+		t.Fatalf("counting the paddock-api containers: %v", err)
+	}
+	if n := len(strings.Fields(out)); n != 1 {
+		t.Fatalf("this gate's ordering proof assumes a single paddock-api; found %d", n)
+	}
+}
+
 // TestIPAllowlist is gate A1 (plan M7a step 2; AC1, AC3, AC4): the platform admin manages the list with a step-up,
 // self-lockout and switch-off need an explicit confirmation, every attempt is one audit event, and once the list has
 // entries the api refuses sessions and API tokens from other addresses before anything is read — aggregated into the
@@ -187,6 +201,7 @@ func TestIPAllowlist(t *testing.T) {
 	// earlier outbox id, which the audit pipeline keeps in order; expectOneIndexEvent's settle covers its retry
 	// reordering (as in PDK-569). The summary of 192.0.2.9 is only queued when the window ends, after the marker as
 	// long as the marker shares the window, so the check counts the events recorded up to the marker.
+	requireSingleAPI(t, ctx)
 	r = denied(sessionWith(t, root, map[string]string{"X-Forwarded-For": "192.0.2.10"}), "/api/v1/me")
 	if r.Status != http.StatusForbidden || r.ProblemCode() != "ip_not_allowed" {
 		t.Fatalf("marker from 192.0.2.10: HTTP %d %s", r.Status, r.Body)
