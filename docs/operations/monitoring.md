@@ -48,6 +48,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockAuditWriterNotConsuming` | `audit.writer` has no consumer for 5 minutes (visible on the control plane) | critical |
 | `PaddockAuditChainBroken` | the last nightly chain verification found a broken or unreadable audit chain of at least one organization (`docs/operations/audit-bucket.md` section 3) | critical |
 | `PaddockAuditVerifyStale` | no nightly chain verification has finished for 36 hours, for one hour | warning |
+| `PaddockAuditIndexPurgeStale` | no complete audit index purge (01:15 UTC) has finished for 48 hours, for one hour; a purge with a failed or timed-out partition is not complete (`docs/operations/audit-bucket.md` section 4) | warning |
 | `PaddockAuditWriterTransactionSlow` | the audit writer's transaction p95 is above 5 s for 5 minutes (see [Attributing a slow audit writer](#attributing-a-slow-audit-writer)) | warning |
 | `PaddockCompileLatencyHigh` | bundle compilation p95 above 30 s for 10 minutes | warning |
 | `PaddockGateway5xx` | more than 5 % of the device API's responses are 5xx for 10 minutes | warning |
@@ -94,6 +95,8 @@ On a lab host (`docs/operations/lab-install.md`) the probe dials your TLS proxy 
 | `paddock_audit_verify_runs_total{trigger,result}` | audit writer: chain verification runs by `trigger` (`nightly`, `sample`, `cli`) and `result`. `ok` and `failed` are read from `audit_verification_run` at every scrape, so they count the runs of every process, `paddock-server audit verify` included, and survive restarts; they are omitted while the audit database cannot be read. `error` (the verification could not run) and `record_error` (the run could not be recorded) count this process's runs only |
 | `paddock_audit_verify_failed_organizations` | audit writer: organizations whose nightly verification (window or sample day) failed or could not run in the last cycle |
 | `paddock_audit_verify_last_run_timestamp_seconds` | audit writer: end of the last nightly cycle; at start the end of the last recorded nightly run, or the start time |
+| `paddock_audit_index_purge_last_success_timestamp_seconds` | audit writer: end of the last index purge in which no partition failed or hit the lock timeout; at start the start time |
+| `paddock_audit_index_partitions_dropped_total` | audit writer: monthly audit index partitions dropped by the nightly purge of this process |
 
 Both histograms use the buckets 5 ms to 41 s and carry no organization or other identifying labels.
 

@@ -21,8 +21,25 @@ func SetDayChosen(w *Writer, fn func(day time.Time)) { w.dayChosen = fn }
 // SetRowInserted runs fn in the writer transaction after it inserted the audit_object row and before the WORM put.
 func SetRowInserted(w *Writer, fn func(day time.Time)) { w.rowInserted = fn }
 
+// SetPartitionsEnsured runs fn in the writer transaction after it ensured the partitions and before it inserts.
+func SetPartitionsEnsured(w *Writer, fn func()) { w.ensured = fn }
+
+// SetPurgeCommitted replaces the error of a partition's purge transaction after it ended, to simulate a COMMIT whose
+// outcome the client never learned.
+func SetPurgeCommitted(p *Purger, fn func(ctx context.Context, partition string, err error) error) {
+	p.committed = fn
+}
+
 // SetSealerClock replaces the sealer's clock.
 func SetSealerClock(s *Sealer, now func() time.Time) { s.now = now }
+
+// SetPurgerClock replaces the purger's clock and timer.
+func SetPurgerClock(p *Purger, now func() time.Time, after func(time.Duration) <-chan time.Time) {
+	p.now, p.after = now, after
+}
+
+// PartitionMonth parses the month of a partition name.
+var PartitionMonth = partitionMonth
 
 // EncodeObject renders events as a WORM object body.
 var EncodeObject = encodeObject

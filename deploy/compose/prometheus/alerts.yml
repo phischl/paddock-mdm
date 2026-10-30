@@ -81,6 +81,17 @@ groups:
         annotations:
           summary: "The audit chain was not verified for 36 hours"
           description: "The audit writer's last nightly chain verification finished {{ $value | humanizeDuration }} ago; check the audit writer's log for the 00:45 UTC cycle."
+      # The index purge runs at 01:15 UTC (plan M10 decisions 23 and 25); 48 h leave one missed or timed-out night of
+      # slack. The writer seeds the gauge at start, so a fresh writer does not fire; a run with a failed or timed-out
+      # partition does not set it.
+      - alert: PaddockAuditIndexPurgeStale
+        expr: time() - paddock_audit_index_purge_last_success_timestamp_seconds > 48 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The audit index was not purged for 48 hours"
+          description: "The audit writer's last complete index purge finished {{ $value | humanizeDuration }} ago; check the audit writer's log for the 01:15 UTC purge and run paddock-server audit purge --dry-run."
 
   - name: paddock-control-plane
     rules:

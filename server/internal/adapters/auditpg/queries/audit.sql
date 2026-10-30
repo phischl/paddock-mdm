@@ -213,3 +213,37 @@ SELECT count(*) FROM (
     AND (sqlc.narg(q_pattern)::text IS NULL OR m.object_key ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
   LIMIT @count_limit
 ) matching;
+
+-- name: ListAuditPartitions :many
+-- The monthly partitions of audit_event (plan M10 decision 22).
+SELECT inhrelid::regclass::text AS name FROM pg_catalog.pg_inherits WHERE inhparent = 'audit_event'::regclass ORDER BY 1;
+
+-- name: SetPurgeLockTimeout :exec
+-- SET LOCAL lock_timeout = '5s' (plan M10 decision 22): a purge waits at most 5 s for the writers and readers of
+-- audit_event, so it never stalls them longer; a timed-out purge is retried the next night.
+SELECT set_config('lock_timeout', '5s', true);
+
+-- name: PurgeAuditPartition :one
+SELECT p.dropped::boolean AS dropped, p.events::bigint AS events, p.reason::text AS reason,
+       p.cutoff::timestamptz AS cutoff, COALESCE(p.relid, 0)::bigint AS relid
+FROM audit_purge_partition(@month::date, @days::integer) AS p;
+
+-- name: PurgeCutoff :one
+-- The cutoff audit_purge_partition computes for the retention, from the database's clock (24 h days, as in UTC).
+SELECT (now() - interval '24 hours' * @days::integer)::timestamptz AS cutoff;
+
+-- name: AuditRelationExists :one
+-- Whether the relation a purge dropped still exists, by OID: a partition of the same name that the writer created
+-- again for a late event is another relation (PDK-140).
+SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE oid = CAST(@relid::bigint AS oid)) AS present;
+
+-- name: TryAuditPurgeLock :one
+SELECT pg_try_advisory_lock(hashtext('audit-purge')) AS locked;
+
+-- name: ReleaseAuditPurgeLock :one
+SELECT pg_advisory_unlock(hashtext('audit-purge')) AS unlocked;
+
+-- name: AuditPartitionStats :one
+-- Events and newest recorded_at (epoch when empty) of one month, read without a lock (dry run of the index purge).
+SELECT count(*) AS events, COALESCE(max(recorded_at), 'epoch')::timestamptz AS newest FROM audit_event
+WHERE occurred_at >= @month_start::timestamptz AND occurred_at < @month_end::timestamptz;
