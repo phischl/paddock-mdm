@@ -1153,7 +1153,9 @@
       },
       "confirmLabel": "Remove Paddock",
       "typed": "Type the hostname to confirm. The device is retired once it reports the removal.",
-      "pending": "Removal requested ({mode}) — {status}. The device removes Paddock at its next check-in and is then retired.",
+      "pending": "Removal requested ({mode}) — {status}.",
+      "running": "The device removes Paddock at its next check-in and is then retired.",
+      "stopped": "The command will not run any more. Cancel the request and request it again.",
       "refused": "The device refused the removal: {reason}. Cancel the request and request it again once the cause is resolved.",
       "refusedReasons": {
         "conversion_pending": "an in-place encryption of its disk is pending",
