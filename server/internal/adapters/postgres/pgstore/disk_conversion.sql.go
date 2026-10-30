@@ -50,6 +50,26 @@ func (q *Queries) CancelDiskConversion(ctx context.Context, arg CancelDiskConver
 	return result.RowsAffected(), nil
 }
 
+const closeDiskConversion = `-- name: CloseDiskConversion :execrows
+UPDATE device_disk_conversion SET phase = 'cancelled', phase_at = $1::timestamptz, finished_at = $1::timestamptz
+WHERE id = $2 AND phase IN ('requested','prepared')
+`
+
+type CloseDiskConversionParams struct {
+	At time.Time
+	ID uuid.UUID
+}
+
+// A Retire closes a prepared conversion or one with an abort on its way (plan M8e §14.5 decision 38, amendment
+// 2026-10-28).
+func (q *Queries) CloseDiskConversion(ctx context.Context, arg CloseDiskConversionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, closeDiskConversion, arg.At, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const completeDiskConversion = `-- name: CompleteDiskConversion :execrows
 UPDATE device_disk_conversion SET phase = 'completed', finished_at = now(), phase_at = now(),
   data_bytes = coalesce($1, data_bytes)

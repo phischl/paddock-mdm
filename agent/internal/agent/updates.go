@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
-	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -79,10 +78,14 @@ func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 		return
 	}
 	// A running supervisor upgrade restarts the supervisor; an agent update staged meanwhile would meet the old or the
-	// new supervisor at random (review finding 12). A marker that cannot be read counts as running.
-	if marker, err := supervisorpkg.ReadMarker(a.d.Layout); marker != nil || err != nil {
-		slog.InfoContext(ctx, "agent update waits for the running supervisor upgrade", "version", offer.Version)
+	// new supervisor at random (review finding 12). A marker that cannot be read counts as running until it is stale.
+	running, markerErr := a.supervisorUpgradeHolds()
+	if running {
+		slog.InfoContext(ctx, "agent update waits for the running supervisor upgrade", "version", offer.Version, "error", markerErr)
 		return
+	}
+	if markerErr != nil {
+		slog.WarnContext(ctx, "unreadable supervisor upgrade marker is stale; staging the agent update", "version", offer.Version, "error", markerErr)
 	}
 	if a.updatePolicy() == bundle.UpdatePolicyManual && !fresh {
 		if a.policySkipped != offer.Version {

@@ -227,6 +227,34 @@ including the last, `q`, one and two kinds, a kind without matches, `device_id`)
 no table scan refers to a query parameter. The HTTP figures after this change are still to be measured once it is
 merged and deployed.
 
+## Authentik web workers
+
+Every portal login, step-up, device login and every call of the worker's identity rounds is a request to
+`authentik-server`. Its Python web server (Gunicorn with Uvicorn workers, Authentik 2026.8) runs
+`AUTHENTIK_WEB__WORKERS` processes; Paddock sets it from `PADDOCK_AUTHENTIK_WEB_WORKERS` in `.env`, **default 4**
+(Authentik's own default is 2), in the development, production and lab stacks alike.
+
+- **CPU:** a worker process serves its requests concurrently, but Python executes in it on at most one core at a time.
+  The workers are therefore the number of cores Authentik can use for its requests. Under more simultaneous requests
+  every request of a worker slows down instead of being refused: with 2 workers, 24 parallel login loops on the
+  reference machine reached p50 17 s and p99 33 s per login, and 5 of 600 logins exceeded the client's 30 s timeout
+  (PDK-545). 8 parallel loops stayed below 6.5 s.
+- **Memory:** measured on the development stack (`docker stats`, `/proc/<pid>/smaps_rollup`), each worker process holds
+  about 220–240 MiB proportional set size, of which about 190 MiB are private; `authentik-server` with 2 workers uses
+  650–710 MiB. Four workers add about 0.5 GiB, about 1.2 GiB in total.
+- **Sizing:** one worker per core you give Authentik. The default of 4 matches the minimum of 4 vCPU of the control
+  plane (`install.md`) and of the lab (`lab-install.md`); the workers only use a core while they serve requests. On a
+  larger host with many simultaneous logins (shift start, a large device rollout) raise it with the cores and plan
+  about 250 MiB RAM per worker. Apply a change with `./paddock up` (it recreates `authentik-server`).
+- `./paddock check` fails the item `authentik web workers` unless the value is an integer of at least 1: Authentik
+  falls back to 2 workers on a value it cannot parse and serves no login with 0.
+- Authentik's API throttle for anonymous requests counts in a cache of each worker process, so its per-address ceiling
+  is the configured rate times the workers; 4 workers double it compared with Authentik's default. The device login
+  throttle (`PADDOCK_DEVICE_LOGIN_THROTTLE`) counts in PostgreSQL and does not change with the workers.
+- `AUTHENTIK_WEB__THREADS` is not set: Authentik's Uvicorn workers ignore Gunicorn's thread setting, so it does not
+  change the capacity. Authentik's HTTP timeouts (`web.timeout_http_*`) stay at their defaults; their sum (215 s) only
+  bounds a request in Authentik's Rust front end and is not what clients run into.
+
 ## Method
 
 The load generator is k6 (`K6_IMAGE` in `deploy/compose/versions.env`, a tool only, never shipped). It runs as a

@@ -805,3 +805,71 @@ func TestUninstallOverdueRequestClaimsAfterItsChecks(t *testing.T) {
 		t.Fatal("a refused request changed the open command")
 	}
 }
+
+// TestUninstallReleasesClaimOnRollback (PDK-357): a cancel or an overdue re-request that won the result claim and then
+// rolls back takes its claim back, so the device's result for the still open command is not a conflict; a result the
+// device claimed first is never released.
+func TestUninstallReleasesClaimOnRollback(t *testing.T) {
+	w := newUninstallWorld(t)
+	admin := w.as(w.org, principal.RoleOrgAdmin, true)
+	fake := &fakeUninstallCache{claims: map[uuid.UUID]string{}}
+	uninstalls := app.NewUninstalls(w.runner, w.api, resultMeanwhileCache{fakeUninstallCache: fake, record: func(id uuid.UUID) {
+		w.exec(t, "UPDATE device_command SET status = 'succeeded', finished_at = now() WHERE id = $1", id)
+	}})
+	released := func(t *testing.T, cmd uuid.UUID) {
+		t.Helper()
+		if _, ok := fake.claims[cmd]; ok || !slices.Equal(fake.released, []uuid.UUID{cmd}) {
+			t.Fatalf("claims %v, released %v", fake.claims, fake.released)
+		}
+		fake.released = nil
+	}
+
+	t.Run("cancel", func(t *testing.T) {
+		dev, host := w.newDevice(t, w.org, "active")
+		u, err := w.uninstalls.Request(admin, dev, app.UninstallInput{Mode: "leave", ConfirmHostname: host, Reason: "returned laptop"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := u.UninstallCommandID.UUID
+		_, err = uninstalls.Cancel(admin, dev)
+		expectUninstallProblem(t, err, "invalid_state", 409, "the command can no longer be cancelled")
+		released(t, cmd)
+		if n := w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND uninstall_command_id = $2", dev, cmd); n != 1 {
+			t.Fatal("a rolled-back cancel cleared the request")
+		}
+	})
+
+	t.Run("overdue request", func(t *testing.T) {
+		dev, host := w.newDevice(t, w.org, "active")
+		in := app.UninstallInput{Mode: "leave", ConfirmHostname: host, Reason: "returned laptop"}
+		u, err := w.uninstalls.Request(admin, dev, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := u.UninstallCommandID.UUID
+		w.exec(t, "UPDATE device_command SET status = 'delivered', delivered_at = now() - interval '25 hours' WHERE id = $1", cmd)
+		_, err = uninstalls.Request(admin, dev, in)
+		expectUninstallProblem(t, err, "invalid_state", 409, "the command can no longer be cancelled")
+		released(t, cmd)
+		if n := w.count(t, "SELECT count(*) FROM device_command WHERE device_id = $1 AND type = 'uninstall'", dev); n != 1 {
+			t.Fatal("a rolled-back request issued a command")
+		}
+	})
+
+	t.Run("device claimed first", func(t *testing.T) {
+		dev, host := w.newDevice(t, w.org, "active")
+		u, err := w.uninstalls.Request(admin, dev, app.UninstallInput{Mode: "leave", ConfirmHostname: host, Reason: "returned laptop"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := u.UninstallCommandID.UUID
+		if _, _, err := w.cache.ClaimResult(context.Background(), dev, cmd, "succeeded"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = w.uninstalls.Cancel(admin, dev)
+		expectUninstallProblem(t, err, "invalid_state", 409, "the device already received the command")
+		if w.cache.claims[cmd] != dev.String()+":succeeded" || slices.Contains(w.cache.released, cmd) {
+			t.Fatalf("the device's claim was released: claims %v, released %v", w.cache.claims, w.cache.released)
+		}
+	})
+}
