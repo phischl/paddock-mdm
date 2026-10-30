@@ -199,6 +199,39 @@ func (p *PlatformPool) InPlatform(ctx context.Context, fn func(ctx context.Conte
 	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
+// The answers of PlatformPool.FleetHostInUse (plan M10 amendments 2026-10-30).
+const (
+	// FleetHostUsedByRef: another device's inventory reference names the host.
+	FleetHostUsedByRef = "ref"
+	// FleetHostUsedByHardware: an active, quarantined or pending device with the retired device's hardware has no
+	// inventory reference yet, so the host may become its own.
+	FleetHostUsedByHardware = "hardware"
+	// FleetHostUnused: neither.
+	FleetHostUnused = "none"
+)
+
+// FleetHostInUse reports whether a device of any organization other than retiredDevice still uses the Fleet host or
+// may use it through retiredDevice's hardware (plan M10 amendments 2026-10-30): one Fleet serves every organization,
+// and the retention round's organization scope cannot see another organization's re-enrolment. A read-only existence
+// check that answers only FleetHostUsedByRef, FleetHostUsedByHardware or FleetHostUnused (InPlatform's principals); any
+// other answer is an error.
+func (p *PlatformPool) FleetHostInUse(ctx context.Context, retiredDevice uuid.UUID, host string) (string, error) {
+	var use string
+	err := p.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		use, err = q.FleetHostInUse(ctx, pgstore.FleetHostInUseParams{RetiredDevice: retiredDevice, Host: host})
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("check the Fleet host's other devices: %w", err)
+	}
+	switch use {
+	case FleetHostUsedByRef, FleetHostUsedByHardware, FleetHostUnused:
+		return use, nil
+	}
+	return "", fmt.Errorf("check the Fleet host's other devices: unexpected answer %q", use)
+}
+
 // WithLeaderLock runs fn while holding the session advisory lock key on a dedicated connection, so that only one
 // replica of a role runs a periodic job at a time. It reports false (and does not call fn) when another session
 // holds the lock.

@@ -362,6 +362,7 @@
       "supervisor_update_failed": "The device {target} could not install supervisor {version} and keeps {from_version} ({outcome})",
       "login_assignment_changed": "{actor} changed who may log in on {hostname}",
       "logins_suspended": "{actor} suspended logins on {hostname}",
+      "inventory_purged": "Inventory purge of the retired device {hostname}: {software, plural, one {# package} other {# packages}}, {findings, plural, one {# finding} other {# findings}}",
       "logins_resumed": "{actor} resumed logins on {hostname}",
       "bundle_render_failed": "A new bundle of {target} was blocked: the sudo rights of {username} failed the check",
       "bundle_entry_omitted": "The bundle of {target} leaves out the sudo rights of {username}: a permission profile holds a command that is no longer allowed",

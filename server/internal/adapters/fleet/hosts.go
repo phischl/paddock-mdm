@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -16,7 +19,10 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 )
 
-var _ ports.Inventory = (*Client)(nil)
+var (
+	_ ports.Inventory      = (*Client)(nil)
+	_ ports.InventoryAdmin = (*Client)(nil)
+)
 
 // hostsPerPage is the page size of the host list.
 const hostsPerPage = 500
@@ -139,6 +145,35 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 		}
 	}
 	return inv, nil
+}
+
+// DeleteHost implements ports.InventoryAdmin: the host leaves Fleet with its software, vulnerabilities and policy
+// results (retention of retired devices, ADR 0032). A host Fleet no longer knows counts as deleted; only a 404 with
+// Fleet's own error body says so (isFleetNotFound).
+func (c *Client) DeleteHost(ctx context.Context, ref ports.HostRef) error {
+	id, err := strconv.Atoi(string(ref))
+	if err != nil {
+		return fmt.Errorf("fleet: invalid host reference %q", ref)
+	}
+	err = c.do(ctx, http.MethodDelete, "/api/v1/fleet/hosts/"+strconv.Itoa(id), nil, nil)
+	if st := (*errStatus)(nil); errors.As(err, &st) && st.code == http.StatusNotFound && isFleetNotFound(st.body) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete fleet host %d: %w", id, err)
+	}
+	return nil
+}
+
+// isFleetNotFound reports whether a 404 body is Fleet's JSON error body, {"message": ..., "errors": [...]}. A 404 from
+// anything else on the way (a reverse proxy, a wrong base URL) would otherwise count as a deleted host and the Paddock
+// rows would go while the host stays in Fleet (plan M10 amendment 2026-10-30, PDK-138).
+func isFleetNotFound(body string) bool {
+	var e struct {
+		Message string            `json:"message"`
+		Errors  []json.RawMessage `json:"errors"`
+	}
+	return json.Unmarshal([]byte(body), &e) == nil && e.Message != "" && len(e.Errors) > 0
 }
 
 // maxHardwareRunes bounds every hardware string Paddock stores (plan M8d decision 6).
