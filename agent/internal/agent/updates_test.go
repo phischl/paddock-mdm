@@ -296,3 +296,33 @@ func TestUpdateResultEventTypes(t *testing.T) {
 		}
 	}
 }
+
+// TestSignatureInvalidResultMarksReleaseFailed (PDK-480): the supervisor reports signature_invalid for a request whose
+// release directory a crash removed; the agent marks that release failed, does not stage it again, and takes a later
+// version.
+func TestSignatureInvalidResultMarksReleaseFailed(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	a.d.Supervisor = func() (int, error) { return 4242, nil }
+	a.d.Signal = func(int) error { return nil }
+	res := `{"version":"9.1.0","from_version":"0.0.0-dev","outcome":"signature_invalid","at":"2026-10-04T10:00:00Z"}`
+	if err := fsutil.WriteFile(a.d.Layout.UpdateResult(), []byte(res), 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	offer(g, "9.1.0", []byte("failed agent"))
+	a.Cycle(context.Background())
+	if a.st.FailedUpdateVersion != "9.1.0" {
+		t.Fatalf("failed version not remembered: %+v", a.st)
+	}
+	if len(eventsOf(g, protocol.EventAgentUpdateFailed)) != 1 {
+		t.Fatal("no agent.update_failed event")
+	}
+	if update.Pending(a.d.Layout) {
+		t.Fatal("the failed release was staged again")
+	}
+	offer(g, "9.2.0", []byte("later agent"))
+	a.Cycle(context.Background())
+	if _, err := os.Stat(filepath.Join(a.d.Layout.Staging(), "9.2.0", "paddockd")); err != nil || !update.Pending(a.d.Layout) {
+		t.Fatalf("later version not staged: %v", err)
+	}
+}
