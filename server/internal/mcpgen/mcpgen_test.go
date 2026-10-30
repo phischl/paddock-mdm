@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -315,6 +316,41 @@ func TestRequestContentMustBeExactlyJSON(t *testing.T) {
 	}
 	if strings.Contains(string(schema), `"body"`) {
 		t.Errorf("a */* request body became a body argument: %s", schema)
+	}
+}
+
+func TestSuccessContentMustBeExactlyJSON(t *testing.T) {
+	response := func(content openapi3.Content) *openapi3.ResponseRef {
+		return &openapi3.ResponseRef{Value: openapi3.NewResponse().WithContent(content)}
+	}
+	cases := map[string]struct {
+		responses map[int]openapi3.Content
+		expose    bool
+	}{
+		"json only":            {map[int]openapi3.Content{200: {"application/json": jsonBody()}}, true},
+		"no content":           {map[int]openapi3.Content{204: nil}, true},
+		"json and no content":  {map[int]openapi3.Content{200: {"application/json": jsonBody()}, 204: nil}, true},
+		"json and binary":      {map[int]openapi3.Content{200: {"application/json": jsonBody(), "application/octet-stream": jsonBody()}}, false},
+		"wildcard":             {map[int]openapi3.Content{200: {"*/*": jsonBody()}}, false},
+		"json then binary 206": {map[int]openapi3.Content{200: {"application/json": jsonBody()}, 206: {"application/octet-stream": jsonBody()}}, false},
+		"binary then json 201": {map[int]openapi3.Content{200: {"application/yaml": jsonBody()}, 201: {"application/json": jsonBody()}}, false},
+		"no success response":  {map[int]openapi3.Content{}, false},
+	}
+	for name, c := range cases {
+		op := openapi3.NewOperation()
+		op.OperationID = "op"
+		op.Responses = openapi3.NewResponses()
+		op.Responses.Delete("default")
+		for code, content := range c.responses {
+			op.Responses.Set(strconv.Itoa(code), response(content))
+		}
+		tl, err := buildTool("GET", "/api/v1/x", &openapi3.PathItem{}, op)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if tl.Expose != c.expose {
+			t.Errorf("%s: expose %t, want %t", name, tl.Expose, c.expose)
+		}
 	}
 }
 

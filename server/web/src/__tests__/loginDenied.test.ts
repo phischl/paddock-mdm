@@ -73,12 +73,10 @@ describe('login denied', () => {
     expect(w.get('button').text()).toBe('Beim Identitätsanbieter abmelden')
   })
 
-  it('ends the portal session and runs the identity provider\'s invalidation flow on its origin', async () => {
+  it('ends the portal session and goes to the identity provider\'s invalidation flow', async () => {
     const assign = vi.fn()
     Object.defineProperty(window, 'location', { value: { ...original, origin: 'https://admin.test', assign }, writable: true })
-    POST.mockResolvedValue({
-      data: { end_session_url: 'https://auth.test/application/o/paddock-portal/end-session/?post_logout_redirect_uri=x' },
-    })
+    POST.mockResolvedValue({ data: { end_session_url: 'https://auth.test/flows/-/default/invalidation/' } })
     const w = await mountView('passkey_required')
     await w.get('button').trigger('click')
     await flushPromises()
@@ -90,6 +88,16 @@ describe('login denied', () => {
     const assign = vi.fn()
     Object.defineProperty(window, 'location', { value: { ...original, origin: 'https://admin.test', assign }, writable: true })
     POST.mockResolvedValue({ data: { end_session_url: 'https://admin.test/' } })
+    const w = await mountView('passkey_required')
+    await w.get('button').trigger('click')
+    await flushPromises()
+    expect(assign).toHaveBeenCalledWith('https://admin.test/')
+  })
+
+  it('returns to the portal when the logout fails', async () => {
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', { value: { ...original, origin: 'https://admin.test', assign }, writable: true })
+    POST.mockRejectedValue(new Error('offline'))
     const w = await mountView('passkey_required')
     await w.get('button').trigger('click')
     await flushPromises()

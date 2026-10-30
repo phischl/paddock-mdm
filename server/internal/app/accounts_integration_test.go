@@ -378,3 +378,74 @@ func TestMCPWriteOptInRefusesMCPChannel(t *testing.T) {
 		}
 	}
 }
+
+// TestLoginRecordsAFailedOrganizationLookup: when a database lookup of a login fails before its admin.login transaction
+// (here: PostgreSQL rejects a NUL byte in the slug or the subject), the attempt still leaves exactly one failed
+// admin.login in its channel (PDK-508): the organization lookup, the denied identity's organization lookup, and the
+// account lookups of the organization and the platform role.
+func TestLoginRecordsAFailedOrganizationLookup(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	org, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(org.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	orgID := uuid.Must(uuid.NewV7())
+	slug := "f" + orgID.String()[24:]
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Lookup', 'active')", orgID, slug); err != nil {
+		t.Fatal(err)
+	}
+	accounts := app.NewAccounts(app.NewActionRunner(org, platform, httpx.RequestID), org, platform, nil)
+	broken := "broken\x00value"
+	cases := map[string]struct {
+		subject string
+		role    app.LoginRole
+	}{
+		"organization lookup":        {uuid.NewString(), app.LoginRole{Slug: broken, Role: principal.RoleOrgAdmin}},
+		"denied organization lookup": {uuid.NewString(), app.LoginRole{Denied: true, Slugs: []string{slug, broken}, DenialReason: "no_role"}},
+		"organization account":       {broken, app.LoginRole{Slug: slug, Role: principal.RoleOrgAdmin}},
+		"platform account":           {broken, app.LoginRole{Platform: true, Role: principal.RolePlatform}},
+	}
+	for name, tc := range cases {
+		for chName, channel := range map[string]principal.Channel{"portal": "", "mcp": principal.ChannelMCP} {
+			t.Run(name+"/"+chName, func(t *testing.T) {
+				username := "lookup-" + uuid.NewString() + "@acme.test"
+				opened := false
+				_, err := accounts.Login(ctx, app.LoginIdentity{Subject: tc.subject, Username: username, IP: "192.0.2.7",
+					Channel: channel, OpenSession: func(context.Context, principal.Principal) error { opened = true; return nil }},
+					tc.role)
+				if err == nil || errors.Is(err, problem.Forbidden) || opened {
+					t.Fatalf("login with a failing lookup: %v, session opened %v", err, opened)
+				}
+				var n int
+				var outcome, errCode, reason, gotChannel, org, ip string
+				if err := super.QueryRow(ctx, `SELECT count(*), max(outcome), coalesce(max(error_code), ''),
+					coalesce(max(params->>'reason'), ''), coalesce(max(params->>'channel'), ''), max(organization_id::text),
+					coalesce(max(actor->>'ip'), '') FROM action WHERE code = 'admin.login' AND actor->>'display' = $1`,
+					username).Scan(&n, &outcome, &errCode, &reason, &gotChannel, &org, &ip); err != nil {
+					t.Fatal(err)
+				}
+				want := "portal"
+				if channel != "" {
+					want = string(channel)
+				}
+				if n != 1 || outcome != "failure" || errCode != app.ReasonLoginFailed || reason != app.ReasonLoginFailed ||
+					gotChannel != want || org != audit.PlatformOrganizationID.String() || ip != "192.0.2.7" {
+					t.Fatalf("audit: %d events, outcome %q, error code %q, reason %q, channel %q, organization %s, ip %q",
+						n, outcome, errCode, reason, gotChannel, org, ip)
+				}
+			})
+		}
+	}
+}

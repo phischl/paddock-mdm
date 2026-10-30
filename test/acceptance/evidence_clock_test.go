@@ -90,11 +90,13 @@ func TestClockDrift(t *testing.T) {
 	waitEvents := func(code string, want int) {
 		t.Helper()
 		for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(time.Second) {
+			// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+			polled := time.Now()
 			n := eventCount(t, alice, code, d.DeviceID)
 			if n == want {
 				return
 			}
-			if n > want || time.Now().After(deadline) {
+			if n > want || polled.After(deadline) {
 				t.Fatalf("%d %s for %s, want %d", n, code, d.DeviceID, want)
 			}
 		}

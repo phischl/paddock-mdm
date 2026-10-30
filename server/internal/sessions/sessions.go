@@ -150,8 +150,9 @@ func (s *Store) Delete(ctx context.Context, sid string, accountID uuid.UUID) err
 	return nil
 }
 
-// revokeScript deletes every session of the set and the set itself, and every MCP login binding of the account and
-// its set (KEYS[2]), and returns how many sessions still existed.
+// revokeScript deletes every session of the set and the set itself, and every MCP login binding of the account, the
+// set of its chain (chainKey) and its set (KEYS[2]), and returns how many sessions still existed. The chain's records
+// are sessions of the account and already gone with KEYS[1].
 var revokeScript = valkey.NewLuaScript(`
 local n = 0
 for _, sid in ipairs(redis.call('SMEMBERS', KEYS[1])) do
@@ -159,7 +160,7 @@ for _, sid in ipairs(redis.call('SMEMBERS', KEYS[1])) do
 end
 redis.call('DEL', KEYS[1])
 for _, key in ipairs(redis.call('SMEMBERS', KEYS[2])) do
-  redis.call('DEL', key)
+  redis.call('DEL', key, 'mcp-chain:' .. string.sub(key, string.len('mcp-bind:') + 1))
 end
 redis.call('DEL', KEYS[2])
 return n

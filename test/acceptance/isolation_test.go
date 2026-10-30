@@ -42,12 +42,14 @@ func TestOrganizationIsolation(t *testing.T) {
 	seedGlobexChangeSet(t, w)
 	ctx := testContext(t, time.Minute)
 	var globexEvents []env.AuditEvent
-	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		var err error
 		if globexEvents, err = w.carol.AuditEvents(ctx, "device_group.created"); err != nil {
 			t.Fatal(err)
 		}
-		if len(globexEvents) > 0 {
+		if len(globexEvents) > 0 || polled.After(deadline) {
 			break
 		}
 	}

@@ -202,14 +202,21 @@ func TestCloneDetection(t *testing.T) {
 			t.Fatalf("quarantined check-in: %v HTTP %d bundle %+v", err, res.Status, out.Bundle)
 		}
 	}
-	deadline := time.Now().Add(20 * time.Second)
-	for eventCount(t, alice, "device.clone_suspected", original.DeviceID) == 0 {
-		if time.Now().After(deadline) {
+	// Audit poll window, deadline against the poll's start and a load-dependent settle, as in expectOneEvent (PDK-551,
+	// PDK-561).
+	start := time.Now()
+	deadline := start.Add(auditPollTimeout)
+	for {
+		polled := time.Now()
+		if eventCount(t, alice, "device.clone_suspected", original.DeviceID) > 0 {
+			break
+		}
+		if polled.After(deadline) {
 			t.Fatal("no device.clone_suspected audit event")
 		}
 		time.Sleep(time.Second)
 	}
-	time.Sleep(auditSettleDelay)
+	time.Sleep(auditSettle(time.Since(start)))
 	if n := eventCount(t, alice, "device.clone_suspected", original.DeviceID); n != 1 {
 		t.Fatalf("%d device.clone_suspected events, want exactly 1", n)
 	}

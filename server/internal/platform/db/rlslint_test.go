@@ -23,6 +23,8 @@ func TestRLSLint(t *testing.T) {
 		"goose_db_version": true, "organization": true, "platform_admin": true,
 		// Platform data of agent releases (plan M2b decision 19), role paddock_platform only.
 		"agent_release": true, "agent_artifact": true, "agent_rollout": true, "agent_package": true,
+		// Upload leases of release files (PDK-496), platform data like the release.
+		"agent_upload_lease": true,
 		// Ubuntu's vulnerability data (plan M5c decision 1), platform data without organization data.
 		"osv_ubuntu": true, "osv_ubuntu_binary": true, "osv_sync_state": true,
 		// IP allow list of the administrative surfaces (plan M7a decision 10), role paddock_platform only.
