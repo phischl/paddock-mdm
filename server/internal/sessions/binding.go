@@ -36,6 +36,78 @@ func bindingKey(sub string, authTime int64) string {
 
 func accountBindingsKey(accountID uuid.UUID) string { return "acct-mcp-bind:" + accountID.String() }
 
+// chainKey is the set of the MCP session records opened under the binding of (sub, authTime), one per access token of
+// its refresh chain. revokeScript derives it from the binding key, so both share the suffix after their prefix.
+func chainKey(sub string, authTime int64) string {
+	return "mcp-chain:" + strings.TrimPrefix(bindingKey(sub, authTime), "mcp-bind:")
+}
+
+// ErrNoBinding refuses an MCP renewal record whose login binding ended before the record was written (logout, End all
+// sessions or a revocation racing the renewal).
+var ErrNoBinding = errors.New("sessions: MCP login binding ended")
+
+// Chain names the login binding an MCP session record belongs to (PDK-468): logout and every end of the binding delete
+// all records of its refresh chain, not only the record of the bearer.
+type Chain struct {
+	Sub      string
+	AuthTime int64
+	// TTL is how long the chain's set lives at least: the binding's remaining lifetime (auth_time + 8 h).
+	TTL time.Duration
+	// Renewal requires the binding to exist when the record is written; a first login writes its record before the
+	// binding.
+	Renewal bool
+}
+
+// createMCPScript is createScript for an MCP record that also joins the set of its binding's chain (KEYS[5]), in one
+// call: a logout that ends the chain either runs before (a renewal finds no binding, KEYS[4], and writes nothing) or
+// after (the chain's set already names the record). The set lives as long as its binding or longest record: NX sets a
+// first expiry, GT only ever extends it.
+var createMCPScript = valkey.NewLuaScript(`
+if ARGV[6] == '1' and redis.call('EXISTS', KEYS[4]) == 0 then
+  return -1
+end
+local gen = tonumber(redis.call('GET', KEYS[3]) or '0')
+redis.call('SET', KEYS[1], ARGV[1] .. gen .. ARGV[2], 'PX', ARGV[3])
+redis.call('SADD', KEYS[2], ARGV[4])
+redis.call('PEXPIRE', KEYS[2], ARGV[3], 'NX')
+redis.call('PEXPIRE', KEYS[2], ARGV[3], 'GT')
+redis.call('SADD', KEYS[5], ARGV[4])
+redis.call('PEXPIRE', KEYS[5], ARGV[5], 'NX')
+redis.call('PEXPIRE', KEYS[5], ARGV[5], 'GT')
+return gen
+`)
+
+// CreateMCP writes an MCP session record as Create does and adds it to the set of its chain, whose expiry it extends
+// to the longer of ch.TTL and ttl. A renewal whose binding no longer exists writes nothing and fails with ErrNoBinding.
+func (s *Store) CreateMCP(ctx context.Context, sid string, rec Record, ttl time.Duration, ch Chain) (Record, error) {
+	rec.Gen = 0
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return Record{}, err
+	}
+	prefix, suffix, ok := strings.Cut(string(raw), `"gen":0`)
+	if !ok {
+		return Record{}, errors.New("sessions: record without gen")
+	}
+	prefix += `"gen":`
+	renewal := "0"
+	if ch.Renewal {
+		renewal = "1"
+	}
+	gen, err := createMCPScript.Exec(ctx, s.c,
+		[]string{sessionKey(sid), accountKey(rec.AccountID), genKey, bindingKey(ch.Sub, ch.AuthTime), chainKey(ch.Sub, ch.AuthTime)},
+		[]string{prefix, suffix, strconv.FormatInt(ttl.Milliseconds(), 10), sid,
+			strconv.FormatInt(max(ch.TTL, ttl).Milliseconds(), 10), renewal}).AsInt64()
+	if err != nil {
+		return Record{}, unavailable(err)
+	}
+	if gen < 0 {
+		return Record{}, ErrNoBinding
+	}
+	rec.Gen = gen
+	return rec, nil
+}
+
 // bindScript writes the binding with the current generation spliced in and adds its key to the account's set of
 // bindings, which RevokeAccount clears.
 var bindScript = valkey.NewLuaScript(`
@@ -101,16 +173,26 @@ func (s *Store) Binding(ctx context.Context, sub string, authTime int64) (b Bind
 	return b, gen, true, nil
 }
 
-// Unbind removes the binding of (sub, authTime) and its member in the account's set.
+// unbindScript deletes every record of the chain's set (KEYS[3]) and its member in the account's set of sessions
+// (KEYS[4]), the set itself, the binding (KEYS[1]) and its member in the account's set of bindings (KEYS[2]).
+var unbindScript = valkey.NewLuaScript(`
+for _, sid in ipairs(redis.call('SMEMBERS', KEYS[3])) do
+  redis.call('DEL', 'sess:' .. sid)
+  redis.call('SREM', KEYS[4], sid)
+end
+redis.call('DEL', KEYS[3], KEYS[1])
+redis.call('SREM', KEYS[2], KEYS[1])
+return 0
+`)
+
+// Unbind ends the binding of (sub, authTime): it removes the binding, its member in the account's set and every MCP
+// session record of its refresh chain (PDK-468), in one call.
 func (s *Store) Unbind(ctx context.Context, sub string, authTime int64, accountID uuid.UUID) error {
 	key := bindingKey(sub, authTime)
-	res := s.c.DoMulti(ctx,
-		s.c.B().Del().Key(key).Build(),
-		s.c.B().Srem().Key(accountBindingsKey(accountID)).Member(key).Build())
-	for _, r := range res {
-		if err := r.Error(); err != nil {
-			return unavailable(err)
-		}
+	err := unbindScript.Exec(ctx, s.c, []string{key, accountBindingsKey(accountID), chainKey(sub, authTime),
+		accountKey(accountID)}, nil).Error()
+	if err != nil {
+		return unavailable(err)
 	}
 	return nil
 }

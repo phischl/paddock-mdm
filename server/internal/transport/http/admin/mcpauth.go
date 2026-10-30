@@ -57,6 +57,7 @@ type MCPSessionStore interface {
 	Bind(ctx context.Context, sub string, authTime int64, b sessions.Binding, ttl time.Duration) (sessions.Binding, error)
 	Binding(ctx context.Context, sub string, authTime int64) (b sessions.Binding, gen int64, found bool, err error)
 	Unbind(ctx context.Context, sub string, authTime int64, accountID uuid.UUID) error
+	CreateMCP(ctx context.Context, sid string, rec sessions.Record, ttl time.Duration, ch sessions.Chain) (sessions.Record, error)
 	UseLoginToken(ctx context.Context, identity string, ttl time.Duration) (bool, error)
 }
 
@@ -280,6 +281,12 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 			refuse(username, app.ReasonLoginFailed, err, problem.SessionStoreUnavailable)
 			return
 		}
+		if found && b.Gen < gen {
+			// End all sessions already invalidated the chain's records; this removes them and the stale binding.
+			if err := m.sessions.Unbind(ctx, claims.Subject, claims.AuthTime, b.AccountID); err != nil {
+				slog.WarnContext(ctx, "stale MCP login binding not deleted", "error", err)
+			}
+		}
 		if !found || b.Gen < gen || bindingLeft <= 0 {
 			refuse(username, app.ReasonMCPLoginRequired, problem.MCPLoginRequired, problem.MCPLoginRequired.WithDetail(mcpLoginHint))
 			return
@@ -343,9 +350,10 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 		}
 		// Set before the write: a reply lost after Create or Bind wrote still leaves discard something to delete.
 		opened = p.ID
-		rec, err := m.sessions.Create(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
+		rec, err := m.sessions.CreateMCP(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
 			Org: p.OrganizationID, CreatedAt: now.Unix(), Channel: string(principal.ChannelMCP), Display: username,
-			Subject: claims.Subject}, remaining)
+			Subject: claims.Subject}, remaining,
+			sessions.Chain{Sub: claims.Subject, AuthTime: claims.AuthTime, TTL: bindingLeft, Renewal: renewal})
 		if err != nil {
 			return err
 		}
@@ -394,6 +402,11 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 		discard()
 		httpx.WriteProblem(w, r, problem.Forbidden.WithDetail(denialReason(role, err)))
 		return
+	case errors.Is(err, sessions.ErrNoBinding):
+		// A logout or revocation ended the binding during the renewal: it stands, nothing else needs ending.
+		discard()
+		httpx.WriteProblem(w, r, problem.MCPLoginRequired.WithDetail(mcpLoginHint))
+		return
 	case errors.Is(err, errBindingMismatch):
 		discard()
 		if renewal {
@@ -428,7 +441,8 @@ func (m *MCPAuth) renewalMatches(ctx context.Context, b sessions.Binding, role o
 }
 
 // CloseSession serves POST /api/auth/mcp/logout: it deletes the session record of the bearer's access token and the
-// login binding of its renewals. A token without a record is already signed out.
+// login binding of its renewals with every session record of their refresh chain (PDK-468). A token without a record
+// is already signed out.
 func (m *MCPAuth) CloseSession(w http.ResponseWriter, r *http.Request) {
 	if m == nil {
 		httpx.WriteProblem(w, r, problem.NotFound)
@@ -447,13 +461,20 @@ func (m *MCPAuth) CloseSession(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	sid := mcpSessionID(token)
 	rec, _, found, err := m.sessions.Get(ctx, sid)
+	var account uuid.UUID
 	if err == nil && found && rec.Channel == string(principal.ChannelMCP) {
+		account = rec.AccountID
 		err = m.sessions.Delete(ctx, sid, rec.AccountID)
 	}
 	if err == nil {
 		var b sessions.Binding
-		if b, _, found, err = m.sessions.Binding(ctx, claims.Subject, claims.AuthTime); err == nil && found {
-			err = m.sessions.Unbind(ctx, claims.Subject, claims.AuthTime, b.AccountID)
+		if b, _, found, err = m.sessions.Binding(ctx, claims.Subject, claims.AuthTime); err == nil {
+			if found {
+				account = b.AccountID
+			}
+			// Also without a binding: one that expired at auth_time + 8 h leaves the records of its last renewals alive
+			// for up to 30 minutes, and the chain's set still names them.
+			err = m.sessions.Unbind(ctx, claims.Subject, claims.AuthTime, account)
 		}
 	}
 	if err != nil {

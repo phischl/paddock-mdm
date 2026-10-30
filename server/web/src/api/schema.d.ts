@@ -178,8 +178,9 @@ export interface paths {
         put?: never;
         /**
          * End the MCP session of the bearer's access token
-         * @description Deletes the session of the access token and the login binding of its renewals; a token without a session is
-         *     already signed out (204). The refresh token is revoked by paddockctl at Authentik's revocation endpoint.
+         * @description Deletes the session of the access token, the login binding of its renewals and the sessions of every other
+         *     access token of the same refresh chain, also after the binding expired; a token without a session is already
+         *     signed out (204). The refresh token is revoked by paddockctl at Authentik's revocation endpoint.
          */
         post: operations["closeMcpSession"];
         delete?: never;
