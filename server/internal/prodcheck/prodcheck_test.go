@@ -89,10 +89,12 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
-// harden gives every service of cfg the settings of plan M8s decisions 34 and 35.
+// harden gives every service of cfg the settings of plan M8s decisions 34 and 35 and the log rotation of plan M10
+// decision 40.
 func harden(cfg prodcheck.Config) {
 	for name, s := range cfg.Services {
 		s.PidsLimit = 256
+		s.Logging = prodcheck.Logging{Driver: "json-file", Options: map[string]string{"max-size": "50m", "max-file": "10"}}
 		if strings.HasPrefix(name, "paddock-") || name == "caddy" || name == "caddy-ca-export" {
 			s.CapDrop, s.SecurityOpt = []string{"ALL"}, []string{"no-new-privileges:true"}
 		}
@@ -141,8 +143,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 16 {
-		t.Fatalf("expected 16 items:\n%s", out)
+	if strings.Count(out, "PASS") != 17 {
+		t.Fatalf("expected 17 items:\n%s", out)
 	}
 }
 
@@ -160,6 +162,42 @@ func TestDevelopmentVariableFailsNamingIt(t *testing.T) {
 			failLine(t, out, "paddock-api: "+name)
 		})
 	}
+}
+
+// TestUnrotatedContainerLogFailsNamingTheService: a service without max-size or with another log driver fails the
+// item with its name, on every host (plan M10 decision 40, M10-11).
+func TestUnrotatedContainerLogFailsNamingTheService(t *testing.T) {
+	cases := map[string]struct {
+		logging prodcheck.Logging
+		want    string
+	}{
+		"no logging block":   {prodcheck.Logging{}, `caddy: logging driver "", want json-file`},
+		"max-size unset":     {prodcheck.Logging{Driver: "json-file", Options: map[string]string{"max-file": "10"}}, "caddy: logging option max-size is unset"},
+		"other driver":       {prodcheck.Logging{Driver: "local", Options: map[string]string{"max-size": "50m"}}, `caddy: logging driver "local", want json-file`},
+		"empty max-size":     {prodcheck.Logging{Driver: "json-file", Options: map[string]string{"max-size": " "}}, "caddy: logging option max-size is unset"},
+		"journald forwarder": {prodcheck.Logging{Driver: "journald"}, `caddy: logging driver "journald", want json-file`},
+	}
+	for name, tc := range cases {
+		for _, host := range []string{prodcheck.HostControlPlane, prodcheck.HostAudit, prodcheck.HostLab} {
+			t.Run(name+"/"+host, func(t *testing.T) {
+				f := newFixture(t)
+				s := f.service("caddy")
+				s.Logging = tc.logging
+				f.cfg.Services["caddy"] = s
+				_, out := run(t, f.cfg, prodcheck.Options{Host: host})
+				failLine(t, out, tc.want)
+				if strings.Contains(out, "PASS  container logs are rotated") {
+					t.Fatalf("item passed:\n%s", out)
+				}
+			})
+		}
+	}
+	t.Run("rotated logs pass", func(t *testing.T) {
+		_, out := run(t, newFixture(t).cfg, prodcheck.Options{})
+		if !strings.Contains(out, "PASS  container logs are rotated") {
+			t.Fatalf("item did not pass:\n%s", out)
+		}
+	})
 }
 
 func TestDevelopmentEnvAndOverlayFail(t *testing.T) {
@@ -522,6 +560,7 @@ var labItems = []string{
 	"secret files readable by the Paddock services",
 	"secrets the services reference are mounted",
 	"openbao auto-unseal",
+	"container logs are rotated",
 	"only Caddy's HTTP port published, on the bind address",
 	"links between the hosts use TLS",
 	"container hardening",

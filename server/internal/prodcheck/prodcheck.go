@@ -60,6 +60,13 @@ type Service struct {
 	CapDrop     []string                  `json:"cap_drop"`
 	SecurityOpt []string                  `json:"security_opt"`
 	PidsLimit   int64                     `json:"pids_limit"`
+	Logging     Logging                   `json:"logging"`
+}
+
+// Logging is a service's container log driver and its options (plan M10 decision 40).
+type Logging struct {
+	Driver  string            `json:"driver"`
+	Options map[string]string `json:"options"`
 }
 
 // ServiceNetwork is a service's attachment to one network.
@@ -152,6 +159,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		checkSecretFilesReadableByServices(c),
 		checkMountedReferences(c),
 		checkAutoUnseal(c, o),
+		checkLogRotation(c),
 	}
 	lab := o.Host == HostLab
 	if lab {
@@ -658,6 +666,22 @@ func checkContainerHardening(c Config) Result {
 		}
 	}
 	return result("container hardening", f)
+}
+
+// checkLogRotation bounds the size of every service's container log (ADR 0032, plan M10 decision 40): the json-file
+// driver honours max-size, and without it Caddy's access log with client addresses grows without a retention limit.
+func checkLogRotation(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		l := c.Services[name].Logging
+		switch {
+		case l.Driver != "json-file":
+			f = append(f, fmt.Sprintf("%s: logging driver %q, want json-file", name, l.Driver))
+		case strings.TrimSpace(l.Options["max-size"]) == "":
+			f = append(f, name+": logging option max-size is unset")
+		}
+	}
+	return result("container logs are rotated", f)
 }
 
 // dsnProblem reads the DSN file a *_URL_FILE variable names (inside the container: /run/secrets/<target>) and

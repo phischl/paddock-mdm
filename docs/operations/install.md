@@ -203,6 +203,8 @@ secret; 80/443 published by any service but Caddy, or another published port tha
 without proxies or proxies without a header, an unknown header name, item `edge client address`); a `/0` in a role's
 `PADDOCK_TRUSTED_PROXY_CIDRS`; a Paddock role or Caddy that keeps capabilities (beyond Caddy's `NET_BIND_SERVICE`)
 or may gain privileges, or a service without `pids_limit` (item `container hardening`);
+a service whose container log is not rotated (log driver other than `json-file` or no `max-size`, item
+`container logs are rotated`);
 `PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
 the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
 audit bucket without Object Lock COMPLIANCE of at least 400 days.
@@ -217,6 +219,14 @@ stolen browser session cannot sign in again without password and authenticator; 
 affected. When Authentik cannot be reached, or does not answer within 80 seconds, both fail with
 `upstream_unavailable` after the portal sessions have ended (the CLI command exits with an error); this is expected while
 Authentik is down. Run the action again once Authentik is back, so that the identity provider's sessions end too.
+
+**Logs.** Every service writes its log to standard output, which Docker keeps per container: the Paddock roles log
+structured lines (`slog`) with usernames, hostnames and organization and device identifiers in the messages but never
+secrets, and Caddy's access log holds the client address of every request. The Compose files rotate these logs with
+the `json-file` driver at 50 MB per file and 10 files per container (anchor `x-paddock-logging`), so each container
+keeps at most about 500 MB and the oldest lines are deleted as new ones arrive (retention schedule of ADR 0032).
+`./paddock check` fails a service without this rotation. Shipping the logs to a central log system (journald, syslog,
+Loki or a SIEM) is the operator's choice and not part of Paddock; keep its retention no longer than the purpose needs.
 
 **AI assistants (MCP).** Authentik applies the blueprint `paddock-mcp.yaml` at its start, like the portal and step-up
 blueprints: the public OIDC provider and application `paddock-mcp` (device authorization grant, the portal's login
