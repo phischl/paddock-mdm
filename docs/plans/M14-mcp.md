@@ -227,6 +227,14 @@ troubleshooting workflows to the assistant.
       chain's set, in the same Valkey call, so a logout or revocation between the record and the binding refuses the
       login (401 `mcp_login_required`) and leaves no binding; a session call whose access token carries another
       `auth_time` than its ID token is refused with 400 `invalid_request`.
+      *Amendment 2026-10-30 (PDK-531):* a first login is held to the portal's sign-in policy (ADR 0034 amendment
+      2026-10-29, the same decision function as the portal callback): the provider `paddock-mcp` maps
+      `io.paddock/scope-login-mfa`, `/api/auth/mcp/config` offers scope `paddock_mfa`, and an ID token of an identity
+      with a role whose `paddock_mfa_classes` names no WebAuthn authenticator (or lacks the claim) is refused with 401
+      `unauthenticated`, detail `passkey_required`, and one denied `admin.login`. New bindings carry
+      `passkey_verified`; a renewal against a binding without it (written before this amendment) is refused with 401
+      `mcp_login_required`, so every MCP user signs in once more after the upgrade. Renewals of a marked binding are
+      not checked again. `PADDOCK_LOGIN_MFA_OPTIONAL` (development only) also lifts the MCP passkey requirement.
 14. **Bearer authentication of MCP requests** (`server.bearer`): a bearer that starts with `pdk_` keeps today's
     API-token path; a bearer with the shape of a JWT (three base64url segments) is an **MCP access token**: the api
     verifies it with the MCP provider's verifier (signature via JWKS, issuer, audience `paddock-mcp`, expiry) and

@@ -166,7 +166,7 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch route {
 	case "GET /api/auth/mcp/config":
 		writeJSON(w, http.StatusOK, map[string]any{"issuer": f.Srv.URL + "/idp/", "client_id": "paddock-mcp",
-			"scopes":                        []string{"openid", "profile", "email", "groups", "offline_access"},
+			"scopes":                        []string{"openid", "profile", "email", "groups", "offline_access", "paddock_mfa"},
 			"device_authorization_endpoint": f.Srv.URL + "/idp/device", "token_endpoint": f.Srv.URL + "/idp/token",
 			"revocation_endpoint": f.Srv.URL + "/idp/revoke"})
 		return

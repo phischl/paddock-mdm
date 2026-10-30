@@ -25,7 +25,11 @@ type Binding struct {
 	Role      string    `json:"role"`
 	Org       uuid.UUID `json:"org"`
 	Client    string    `json:"client,omitempty"`
-	Gen       int64     `json:"gen"`
+	// PasskeyVerified says the first login satisfied the sign-in policy that requires a validated WebAuthn
+	// authenticator (PDK-531; in development PADDOCK_LOGIN_MFA_OPTIONAL may have waived it). A binding written before
+	// that policy lacks it and serves no renewal.
+	PasskeyVerified bool  `json:"passkey_verified,omitempty"`
+	Gen             int64 `json:"gen"`
 }
 
 // bindingKey hashes the subject, so that a subject never shapes the key.
