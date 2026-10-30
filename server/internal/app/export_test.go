@@ -32,3 +32,6 @@ func (f hostUsersFunc) FleetHostInUse(ctx context.Context, retiredDevice uuid.UU
 
 // SetPage shortens the page of the retired inventory pass for tests with more devices than one page.
 func (r *Retention) SetPage(n int32) { r.page = n }
+
+// SetHoldNotice shortens the unchanged rounds of a kept Fleet host before its notice, for tests of the notice.
+func (r *Retention) SetHoldNotice(n int32) { r.holdNotice = n }

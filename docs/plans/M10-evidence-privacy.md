@@ -1387,11 +1387,12 @@ decision above differ, this amendment wins. Numbers refer to the decisions of §
 | --- | --- | --- |
 | `privacy_settings` (§6.1) | PDK-136 | `server/migrations/paddock/00074_privacy_settings.sql` |
 | `retention_grants` (decision 11) | PDK-137 | `server/migrations/paddock/00075_retention_grants.sql` |
-| `read_audit_window` (§6.1) | PDK-139 | `server/migrations/paddock/00076_read_audit_window.sql` |
+| `read_audit_window` (§6.1) | PDK-139 | `server/migrations/paddock/00079_read_audit_window.sql` |
 | `index_purge` (§6.2) | PDK-140 | `server/migrations/audit/00007_index_purge.sql` |
 | `audit_exports` (§6.2) | PDK-142 | `server/migrations/audit/00008_audit_exports.sql` |
 
-Reserved: paddock `00074`–`00076`, audit `00007`–`00008`. `change_set_before_purge` is **not** created (A3). The
+Reserved: paddock `00074`–`00076` (2026-10-30: `read_audit_window` is `00079`, see the PDK-583 round 3
+amendment), audit `00007`–`00008`. `change_set_before_purge` is **not** created (A3). The
 "next free number" rule of §3.0 is replaced by these fixed numbers; a ticket that finds its number taken stops
 (§12). In `00008_audit_exports.sql` the `DO` block stays as written: `audit_manifest` already has the `reader`
 policy from `00004`, `audit_object` has none and gets it here together with its `SELECT` grant.
@@ -1658,7 +1659,7 @@ where they differ.
 Architect decisions on the external review after fix round 1 of PDK-138. They amend the amendment above where they
 differ.
 
-- **Migration number.** The function is in `00076_fleet_host_in_use.sql`; 00078 belongs to PDK-139, 00077 is not used by this ticket.
+- **Migration number.** The function is in `00076_fleet_host_in_use.sql`; 00079 belongs to PDK-139 (renumbered 2026-10-30, see the PDK-583 round 3 amendment), 00077 is PDK-496.
 - **Tri-state instead of "boolean only".** `paddock_fleet_host_in_use` returns `text`: `'ref'`, `'hardware'` or
   `'none'`, still never another organization's rows or IDs (`db.FleetHostUsedByRef`, `FleetHostUsedByHardware`,
   `FleetHostUnused`; any other answer fails closed). `'ref'`: another device of any organization references the host;
@@ -1732,3 +1733,110 @@ database. Where this amendment and §6.5, §6.7 or decision 32 differ, this amen
    lines to `events.jsonl` and has `event_count` 0; the problem is in `verification.problems` (the mismatch text of
    decision 32, or `"<day>: object <key> cannot be decoded"`) and `verify_ok` is false. The offline verifier reports
    such an object's hash or decode problem and builds the expected `events.jsonl` without it.
+
+### Amendment 2026-10-30 (PDK-583, review leftovers of the retired inventory)
+
+Architect decisions on the non-blocking findings of PDK-138's third review. They amend the amendment above where they
+differ.
+
+- **Breaker counts only transient Fleet failures.** `ports.InventoryAdmin.DeleteHost` classifies its errors: Fleet
+  failing or unreachable (5xx, timeout, connection error, and statuses that concern Fleet or the way to it rather than
+  the host: 401, 403, a 404 without Fleet's own error body, 408, 429) is `upstream_unavailable`; Fleet refusing
+  this one host or an invalid host reference is `invalid_state`. Round 2 below narrows the refusal and covers
+  redirects. Both fail the device with one
+  `device.inventory_purged` failure event and keep its rows. Only `upstream_unavailable` counts toward the round's
+  breaker; a refusal neither counts nor resets the count, a successful deletion resets it. Permanently refused hosts at
+  the head of one organization therefore no longer skip the retired inventory of every organization.
+- **A persisting `'hardware'` answer records no event.** (Replaced by round 2 below: the derived "unchanged" check
+  missed a first sight and a change from a failure.) Before starting a device's action, the pass reads the
+  device's remaining inventory; when nothing but the host reference is left and the host check answers `'hardware'`,
+  the pass starts no action and only logs. The round that purged the other rows recorded the answer; the next event
+  follows when the answer changes to `'ref'` or `'none'` and the reference is deleted. No new column: "unchanged" is
+  derived from the remaining rows, since `'hardware'` is the only answer that leaves the reference without other
+  rows. A device that had nothing but the reference when it was first listed records no event until the answer
+  changes, because nothing is deleted. The check is read-only and fail-safe (an error starts the action, which
+  re-checks under the row lock and records the outcome), so the one-event-per-attempt rule holds: a skipped device is
+  no attempt. `paddock_retention_deleted_total{store="retired_inventory"}` therefore counts only devices whose rows
+  were deleted.
+- Open, not decided: x3 (two Fleet hosts of the same hardware) and x4 (no event for a pass-level failure). Both are
+  decided in round 2 below.
+
+### Amendment 2026-10-30 (PDK-583 round 2, review 1 of the leftovers)
+
+Architect decisions on review 1 of PDK-583. They amend the amendment above where they differ.
+
+- **B1: only Fleet's own refusal is `invalid_state`.** A 4xx is Fleet's refusal of this one host only when it carries
+  Fleet's JSON error body (`{"message": ..., "errors": [...]}`, the same check that makes a 404 "already gone") and
+  is not 401, 403, 404, 408 or 429. Any other 4xx (a proxy or ingress in front of Fleet answering 405, 407, 421, or 400
+  without Fleet's body) fails every host alike and is `upstream_unavailable`, so it trips the breaker.
+- **Redirects (PDK-586, folded in).** The Fleet client does not follow redirects (`CheckRedirect` returns
+  `http.ErrUseLastResponse`): Go would turn a redirected DELETE into a GET whose 200 reads as a deleted host. Every 3xx
+  is `upstream_unavailable`.
+- **A canceled context** (shutdown) is neither `upstream_unavailable` nor `invalid_state` and does not count toward
+  the breaker.
+- **x3: a host still checking in is kept.** When the host check answers `'none'`, the device's action first reads
+  Fleet's last check-in of the host (`ports.InventoryAdmin.HostSeenAt`, the host detail without software). A host
+  seen **after the device's retirement and within 7 retention days of now** is still in use, by fleetd still running
+  on the retired machine or by a successor without a reference of its own. It is kept with the retired device's
+  reference like `'hardware'`; the other Paddock rows go. The event records `fleet_host_kept` `seen_recently` and
+  `fleet_host_seen_at`. A host seen only before the retirement or longer ago, never seen, or no longer known is
+  deleted, so gate R2 (host seen just before the retirement) stays deterministic. A failing lookup fails closed: no
+  deletion, all rows kept, one failure event; an `upstream_unavailable` lookup failure counts toward the breaker like a
+  failed deletion. The 7 days are retention days (`PADDOCK_RETENTION_UNIT`).
+- **M1: the kept answer is persisted.** Paddock migration 00078 adds `retention_inventory_hold` (`device_id` primary
+  key referencing `device` with `ON DELETE CASCADE`, `organization_id`, `last_answer` `'hardware'` or
+  `'seen_recently'`, `unchanged_rounds`, `last_event_at`; ENABLE and FORCE row level security, the organization policy
+  without `missing_ok`, granted to `paddock_worker` only). A successful action that keeps the host stores its answer
+  (`fleet_host_kept`) with zero rounds. Before a listed device's action, the pass compares: when the device has a held
+  answer, nothing but the host reference is left and the current answer (the host check and, on `'none'`, the
+  check-in lookup) equals the held one, the pass starts no action, counts the unchanged round and logs. Otherwise it
+  drops the held answer and the action runs, so every change of answer records one event: a first sight, a change from
+  a failure or `'none'` to a kept answer, between `'hardware'` and `'seen_recently'`, and from a kept answer to the
+  host's deletion. An action that fails therefore leaves no held answer, and the next kept answer is recorded again.
+  A skip is no attempt and starts no action, so the one-event-per-attempt rule holds. The row goes when the answer
+  changes and with the device.
+- **Bound: one notice after 30 unchanged rounds.** The round that reaches 30 unchanged rounds of a held answer
+  records one `device.inventory_host_kept` success event (new code; `fleet_host_kept`, `rounds`) in the same
+  transaction as the count, and deletes nothing. Later unchanged rounds record no further notice; a change of answer
+  starts over. It is a notice in the audit trail, no alert.
+- **x4: a pass-level failure records one event.** A failure loading the organization's privacy settings or listing
+  the first page of its retired devices records one `retention.purged` failure (`store` `retired_inventory`) for the
+  organization and round, through `RunTx` like the breaker skip.
+
+### Amendment 2026-10-30 (PDK-583 round 3, review 2 of the leftovers)
+
+Decisions on review 2 of PDK-583. They amend M1, x3 and the bound above where they differ.
+
+- **The held answer is consistent with the last event.** A device's action never runs while the device has a held
+  answer: before the action the pass drops the held answer in a transaction of its own, also when it could not read
+  it, and when the drop fails the device is skipped this round and the pass fails (no action, no event). The action
+  sets the held answer, or drops it on a failure or when nothing is kept, in the transaction that records its outcome.
+  A held answer therefore always belongs to the last event of the device.
+- **The held answer belongs to one retirement.** `retention_inventory_hold.retired_at` (migration 00078) stores the
+  device's `state_changed_at` with the answer. When it differs from the listed device's (reactivated and retired
+  again), the answer counts as changed: the action runs, records its event and starts the count over.
+- **A lookup blip neither records an event nor restarts the count.** The comparison's host check and check-in lookup
+  run under the same bound as the action's Fleet step (`fleetDeleteTimeout`). When the check-in lookup of a held
+  device fails with `upstream_unavailable`, the device keeps its held answer and its count, is skipped this round
+  without an action or event, the pass fails (the worker logs it and the store's last success does not advance) and the
+  failure counts toward the round's Fleet breaker like a failed lookup in an action. Any other failure of the
+  comparison lets the action run; it checks again and records the outcome.
+- **The breaker is reset only by a deleted host.** A successful lookup does not reset it, so a proxy that answers
+  reads but fails every deletion still trips it.
+- **`paddock_retention_deleted_total{store="retired_inventory"}` counts a device only when rows or its Fleet host were
+  deleted**; a first sight or changed kept answer of a device with nothing but its host reference left counts nothing.
+- **`HostSeenAt` fails closed on a foreign answer.** A 200 without a host object (or host id) or without `seen_time`
+  is `upstream_unavailable`: Fleet always sends both, and a host that never checked in carries Fleet's zero time. Only
+  Fleet's own 404 reads as a host that is gone.
+- **`device.inventory_host_kept` declares `failure`**: a notice that cannot be recorded fails with the count and is
+  retried the next round.
+- **Migration numbers (renumbered 2026-10-30).** The hold table is paddock migration 00078; PDK-139 moves to 00079, so
+  the cluster leaves no gap of its own even if PDK-139 lands last (goose refuses missing versions). This supersedes the
+  "00078 belongs to PDK-139" note of the PDK-138 amendment; §6.1's table names 00079 for `read_audit_window`. Merge
+  order to main: 00076 (PDK-138), 00077 (PDK-496), 00078 (PDK-583), 00079 (PDK-139); the next migration merged into
+  the cluster takes the next free number.
+- **Architect-confirmed (2026-10-30).** Two choices of this round are confirmed by the architect: a check-in lookup
+  blip skips the device without an event, counts toward the breaker and leaves the stale alert as the safety net (no
+  deletion on uncertainty); the breaker resets only after a real deletion, because a successful lookup proves nothing
+  about DELETE. Scattered timeouts that trip the breaker stop the deletions of that round and the next round retries;
+  a windowed count is decided in PDK-589.

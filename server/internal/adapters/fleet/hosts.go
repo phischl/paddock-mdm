@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/phischl/paddock-mdm/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 var (
@@ -149,26 +150,83 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 
 // DeleteHost implements ports.InventoryAdmin: the host leaves Fleet with its software, vulnerabilities and policy
 // results (retention of retired devices, ADR 0032). A host Fleet no longer knows counts as deleted; only a 404 with
-// Fleet's own error body says so (isFleetNotFound).
+// Fleet's own error body says so (isFleetErrorBody). An invalid reference and every other failure are classified by
+// hostError (plan M10 amendments 2026-10-30, PDK-583).
 func (c *Client) DeleteHost(ctx context.Context, ref ports.HostRef) error {
 	id, err := strconv.Atoi(string(ref))
 	if err != nil {
-		return fmt.Errorf("fleet: invalid host reference %q", ref)
+		return fmt.Errorf("%w: fleet: invalid host reference %q", problem.InvalidState, ref)
 	}
 	err = c.do(ctx, http.MethodDelete, "/api/v1/fleet/hosts/"+strconv.Itoa(id), nil, nil)
-	if st := (*errStatus)(nil); errors.As(err, &st) && st.code == http.StatusNotFound && isFleetNotFound(st.body) {
+	st := (*errStatus)(nil)
+	if err == nil || errors.As(err, &st) && st.code == http.StatusNotFound && isFleetErrorBody(st.body) {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("delete fleet host %d: %w", id, err)
-	}
-	return nil
+	return hostError(err, fmt.Sprintf("delete fleet host %d", id))
 }
 
-// isFleetNotFound reports whether a 404 body is Fleet's JSON error body, {"message": ..., "errors": [...]}. A 404 from
+// HostSeenAt implements ports.InventoryAdmin with Fleet's host detail without its software. A host Fleet no longer
+// knows (a 404 with Fleet's own error body) and a host that never checked in (Fleet's zero seen_time) report the zero
+// time; failures are classified like DeleteHost's. A 200 without the host or its seen_time is upstream_unavailable:
+// Fleet always sends both, so another answer is not Fleet's, and reading it as never seen would delete a host in use.
+func (c *Client) HostSeenAt(ctx context.Context, ref ports.HostRef) (time.Time, error) {
+	id, err := strconv.Atoi(string(ref))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: fleet: invalid host reference %q", problem.InvalidState, ref)
+	}
+	var out struct {
+		Host *struct {
+			ID       int        `json:"id"`
+			SeenTime *time.Time `json:"seen_time"`
+		} `json:"host"`
+	}
+	err = c.do(ctx, http.MethodGet, "/api/v1/fleet/hosts/"+strconv.Itoa(id)+"?exclude_software=true", nil, &out)
+	st := (*errStatus)(nil)
+	switch {
+	case err == nil && out.Host != nil && out.Host.ID != 0 && out.Host.SeenTime != nil:
+		return *out.Host.SeenTime, nil
+	case err == nil:
+		return time.Time{}, fmt.Errorf("%w: get fleet host %d: the answer has no host with its seen_time",
+			problem.UpstreamUnavailable, id)
+	case errors.As(err, &st) && st.code == http.StatusNotFound && isFleetErrorBody(st.body):
+		return time.Time{}, nil
+	}
+	return time.Time{}, hostError(err, fmt.Sprintf("get fleet host %d", id))
+}
+
+// hostError classifies a failed request about one host: Fleet's refusal of this one host (hostRefused) is
+// problem.InvalidState; a canceled context stays unclassified, so a shutdown does not count as Fleet failing; every
+// other failure (5xx, 3xx, a 4xx without Fleet's error body, timeout, connection error) is
+// problem.UpstreamUnavailable, the only class the retention round's Fleet breaker counts (plan M10 amendments
+// 2026-10-30, PDK-583).
+func hostError(err error, what string) error {
+	st := (*errStatus)(nil)
+	switch {
+	case errors.As(err, &st) && hostRefused(st.code, st.body):
+		return fmt.Errorf("%w: %s: %w", problem.InvalidState, what, err)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("%s: %w", what, err)
+	default:
+		return fmt.Errorf("%w: %s: %w", problem.UpstreamUnavailable, what, err)
+	}
+}
+
+// hostRefused reports whether an answer is Fleet's about this one host rather than about Fleet or the way to it: a 4xx
+// with Fleet's own error body (a proxy or ingress in front of Fleet answers 405, 407, 421 or 400 for every host alike),
+// other than 401 and 403 (Paddock's token, every host fails alike), 404 (Fleet's own 404 means gone) and 408 and 429
+// (Fleet is slow or throttling).
+func hostRefused(code int, body string) bool {
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return false
+	}
+	return code >= 400 && code < 500 && isFleetErrorBody(body)
+}
+
+// isFleetErrorBody reports whether a body is Fleet's JSON error body, {"message": ..., "errors": [...]}. A 404 from
 // anything else on the way (a reverse proxy, a wrong base URL) would otherwise count as a deleted host and the Paddock
 // rows would go while the host stays in Fleet (plan M10 amendment 2026-10-30, PDK-138).
-func isFleetNotFound(body string) bool {
+func isFleetErrorBody(body string) bool {
 	var e struct {
 		Message string            `json:"message"`
 		Errors  []json.RawMessage `json:"errors"`

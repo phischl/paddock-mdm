@@ -96,6 +96,11 @@ func (s *fakeSource) DeleteHost(_ context.Context, ref ports.HostRef) error {
 	return nil
 }
 
+// HostSeenAt reports every host as never seen, so the retention round deletes it.
+func (s *fakeSource) HostSeenAt(context.Context, ports.HostRef) (time.Time, error) {
+	return time.Time{}, nil
+}
+
 func (s *fakeSource) ApplyPolicies(_ context.Context, p []ports.PolicyDefinition) error {
 	s.policies = len(p)
 	return nil
