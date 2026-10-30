@@ -173,6 +173,13 @@ func (g *gateway) fail(w http.ResponseWriter, r *http.Request, err error) {
 			"request_id", httpx.RequestID(r.Context()))
 		e = errBackpressure.with("a dependency is temporarily unavailable")
 		e.retryAfter = unavailableRetryAfter
+	case errors.Is(err, devicecache.ErrSeqMissing):
+		// Valkey lost the counter and the worker has not restored it yet; issuing a number now would restart the
+		// sequence below device_status.last_seq and blind clone detection (PDK-475).
+		slog.WarnContext(r.Context(), "device request deferred: sequence number not restored yet", "error", err,
+			"request_id", httpx.RequestID(r.Context()))
+		e = errBackpressure.with("the device cache is being rebuilt")
+		e.retryAfter = unavailableRetryAfter
 	default:
 		slog.ErrorContext(r.Context(), "device request failed", "error", err, "request_id", httpx.RequestID(r.Context()))
 		e = errInternal

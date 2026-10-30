@@ -37,6 +37,9 @@ type EnrollResult struct {
 	DeviceID  uuid.UUID
 	State     string
 	KeyStatus string
+	// LastSeq is device_status.last_seq of an existing device (a redelivered request), 0 for a new one; the worker
+	// restores the device's check-in counter from it.
+	LastSeq int64
 }
 
 // Enroll consumes one use of the token, creates the device in state active (auto-approve) or pending, its identity
@@ -117,7 +120,14 @@ func (e *Enrollments) existing(ctx context.Context, keyID string) (EnrollResult,
 		if err != nil {
 			return err
 		}
-		res, found = EnrollResult{DeviceID: dev.ID, State: dev.State, KeyStatus: key.Status}, true
+		var last int64
+		switch st, err := q.GetDeviceStatus(ctx, dev.ID); {
+		case err == nil:
+			last = st.LastSeq
+		case !db.IsNoRows(err):
+			return err
+		}
+		res, found = EnrollResult{DeviceID: dev.ID, State: dev.State, KeyStatus: key.Status, LastSeq: last}, true
 		return nil
 	})
 	return res, found, err

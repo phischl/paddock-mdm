@@ -261,7 +261,7 @@ func (e *env) enrolled(c client, status string) uuid.UUID {
 	id := uuid.New()
 	if err := e.cache.PutDeviceKey(context.Background(), c.keyID, devicecache.DeviceKey{
 		DeviceID: id, OrganizationID: e.org, Status: status, PublicKey: c.spki,
-	}); err != nil {
+	}, 0); err != nil {
 		e.t.Fatal(err)
 	}
 	return id
@@ -315,7 +315,7 @@ func TestEnrollFlow(t *testing.T) {
 	}
 	// An administrator approves: the worker caches the key, which makes the enrollment active.
 	if err := e.cache.PutDeviceKey(context.Background(), c.keyID, devicecache.DeviceKey{DeviceID: id, OrganizationID: e.org,
-		Status: "active", PublicKey: c.spki}); err != nil {
+		Status: "active", PublicKey: c.spki}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if s := status(); s.Status != "active" {
@@ -547,6 +547,36 @@ func TestCheckinSeqBundleAndClone(t *testing.T) {
 	}
 }
 
+// TestCheckinSeqNotRestored (PDK-475): after Valkey lost its data, a check-in that arrives before the worker restored
+// the counter from device_status.last_seq is deferred with a 503 instead of restarting the sequence at 1, and the
+// counter stays missing so the restore still applies.
+func TestCheckinSeqNotRestored(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	if err := e.valkey.Do(ctx, e.valkey.B().Del().Key("seq:"+id.String()).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 41})
+	e.expectProblem(r, http.StatusServiceUnavailable, "backpressure")
+	if r.header.Get("Retry-After") == "" {
+		t.Fatal("no Retry-After on a deferred check-in")
+	}
+	if err := e.cache.RestoreSeq(ctx, id, 41); err != nil {
+		t.Fatal(err)
+	}
+	r = e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 41})
+	if r.status != http.StatusOK {
+		t.Fatalf("checkin after the restore: %d %s", r.status, r.body)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.Seq != 42 || hb.CloneSuspected {
+		t.Fatalf("heartbeat after the restore: %+v", hb)
+	}
+}
+
 // TestCheckinFailureKeepsSeq: a check-in that fails after the gateway drew its sequence number (ingest queue full, a
 // confirm the device stopped waiting for) carries no seq, so the number does not count as issued. Two such failures in
 // a row once left a lab laptop two behind and quarantined it as a clone.
@@ -593,6 +623,84 @@ func TestCheckinFailureKeepsSeq(t *testing.T) {
 	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
 	if !hb.CloneSuspected || hb.Seq != 4 {
 		t.Fatalf("clone not suspected: %+v", hb)
+	}
+}
+
+// TestCheckinAmbiguousPublishThenReconcile (PDK-475): a heartbeat whose publish was ambiguous (the device stopped
+// waiting for the confirm after the frame was sent) can still be persisted as last_seq although the gateway released
+// its number. The reconcile that follows leaves the live counter unchanged: raising it to that last_seq for two such
+// rounds in a row would hand out numbers the device never received and quarantine it as a clone.
+func TestCheckinAmbiguousPublishThenReconcile(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	if r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 0}); r.status != http.StatusOK {
+		t.Fatalf("first checkin: %d %s", r.status, r.body)
+	}
+	for round := 1; round <= 2; round++ {
+		cur, err := e.valkey.Do(ctx, e.valkey.B().Get().Key("seq:"+id.String()).Build()).AsInt64()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reqCtx, cancel := context.WithCancel(ctx)
+		e.pub.fail = func() error { cancel(); return &net.OpError{Op: "read", Net: "tcp", Err: reqCtx.Err()} }
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1,
+			mutate: func(r *http.Request, _ *[]byte) { *r = *r.WithContext(reqCtx) }})
+		e.expectProblem(r, http.StatusServiceUnavailable, "backpressure")
+		e.pub.fail = nil
+		// The broker routed the heartbeat anyway: ingest persists the drawn number as last_seq, and the reconcile
+		// restores the counter from it (PutDeviceKey → RestoreSeq).
+		if err := e.cache.RestoreSeq(ctx, id, cur+1); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+	}
+	if r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1}); r.status != http.StatusOK {
+		t.Fatalf("checkin after the ambiguous rounds: %d %s", r.status, r.body)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.CloneSuspected || hb.ReportedSeq != 1 {
+		t.Fatalf("healthy device suspected as a clone: %+v", hb)
+	}
+}
+
+// TestCheckinStaleRestoreThenDrain (PDK-475, Review 3): after a cache loss the counter is restored from a last_seq that
+// lags behind the device (heartbeats still queued), so the device receives numbers below the true last_seq. When the
+// backlog drains and a reconcile runs, the live counter must not be raised to the drained last_seq: that would put it
+// more than one ahead of the device and quarantine a healthy device as a clone. The reissued numbers are RR-97.
+func TestCheckinStaleRestoreThenDrain(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	checkin := func(seq int64) ingest.Heartbeat {
+		t.Helper()
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin with seq %d: %d %s", seq, r.status, r.body)
+		}
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+		return hb
+	}
+	// The device holds 10; Valkey lost the counter and the restore reads a stale last_seq of 6 (PutDeviceKey →
+	// RestoreSeq on the missing key).
+	if err := e.valkey.Do(ctx, e.valkey.B().Del().Key("seq:"+id.String()).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cache.RestoreSeq(ctx, id, 6); err != nil {
+		t.Fatal(err)
+	}
+	if hb := checkin(10); hb.Seq != 7 || hb.CloneSuspected {
+		t.Fatalf("checkin after the stale restore: %+v", hb)
+	}
+	// The backlog drains, so last_seq becomes 10, and the next reconcile restores the counter from it.
+	if err := e.cache.RestoreSeq(ctx, id, 10); err != nil {
+		t.Fatal(err)
+	}
+	if hb := checkin(7); hb.CloneSuspected || hb.ReportedSeq != 7 || hb.Seq != 8 {
+		t.Fatalf("healthy device suspected as a clone after drain and reconcile: %+v", hb)
 	}
 }
 
