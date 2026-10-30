@@ -98,7 +98,7 @@ func TestUpdateNow(t *testing.T) {
 
 	// Requests older than 24 hours end in the command round.
 	h.exec(t, "UPDATE device SET agent_update_requested_version = $2, agent_update_requested_at = now() - interval '25 hours' WHERE id = $1", dev, v)
-	cmds := app.NewDeviceCommands(h.workerPool(t))
+	cmds := app.NewDeviceCommands(nil, h.workerPool(t))
 	if n, err := cmds.ExpireAgentUpdateRequests(systemCtx(org), time.Now()); err != nil || n != 1 || h.requested(t, dev) != "" {
 		t.Fatalf("expired %d (%v)", n, err)
 	}

@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -38,16 +39,21 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/device"
 )
 
-// fakePublisher records published messages; nack makes the broker refuse them.
+// fakePublisher records published messages; nack makes the broker refuse them, fail (if set) is a connection-level
+// error such as a confirm the request stopped waiting for.
 type fakePublisher struct {
 	mu   sync.Mutex
 	msgs map[string][]mq.Message // by exchange
 	nack bool
+	fail func() error
 }
 
 func (f *fakePublisher) PublishBatch(_ context.Context, exchange string, msgs []mq.Message) ([]error, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail != nil {
+		return nil, f.fail()
+	}
 	res := make([]error, len(msgs))
 	for i, m := range msgs {
 		if f.nack {
@@ -538,6 +544,55 @@ func TestCheckinSeqBundleAndClone(t *testing.T) {
 	_ = json.Unmarshal(r.body, &out)
 	if r.status != http.StatusOK || out.Bundle != nil {
 		t.Fatalf("quarantined device: %d %+v", r.status, out)
+	}
+}
+
+// TestCheckinFailureKeepsSeq: a check-in that fails after the gateway drew its sequence number (ingest queue full, a
+// confirm the device stopped waiting for) carries no seq, so the number does not count as issued. Two such failures in
+// a row once left a lab laptop two behind and quarantined it as a clone.
+func TestCheckinFailureKeepsSeq(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	checkin := func(seq int64) result {
+		t.Helper()
+		return e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: seq})
+	}
+	if r := checkin(0); r.status != http.StatusOK {
+		t.Fatalf("first checkin: %d %s", r.status, r.body)
+	}
+	e.pub.nack = true
+	e.expectProblem(checkin(1), http.StatusServiceUnavailable, "backpressure")
+	e.pub.nack = false
+	// The device gives up waiting for the confirm: the request context is cancelled when the publish fails.
+	ctx, cancel := context.WithCancel(context.Background())
+	e.pub.fail = func() error { cancel(); return &net.OpError{Op: "read", Net: "tcp", Err: ctx.Err()} }
+	r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1,
+		mutate: func(r *http.Request, _ *[]byte) { *r = *r.WithContext(ctx) }})
+	e.expectProblem(r, http.StatusServiceUnavailable, "backpressure")
+	e.pub.fail = nil
+	if r := checkin(1); r.status != http.StatusOK {
+		t.Fatalf("checkin after the failures: %d %s", r.status, r.body)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.CloneSuspected || hb.Seq != 2 || hb.ReportedSeq != 1 {
+		t.Fatalf("failed check-ins consumed sequence numbers: %+v", hb)
+	}
+
+	// A number another holder of the identity drew meanwhile is never taken back.
+	if _, err := e.cache.NextSeq(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.cache.ReleaseSeq(context.Background(), id, 2); err != nil || ok {
+		t.Fatalf("superseded number released: %v %v", ok, err)
+	}
+	if r := checkin(1); r.status != http.StatusOK {
+		t.Fatalf("checkin: %d %s", r.status, r.body)
+	}
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if !hb.CloneSuspected || hb.Seq != 4 {
+		t.Fatalf("clone not suspected: %+v", hb)
 	}
 }
 

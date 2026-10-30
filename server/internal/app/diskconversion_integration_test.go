@@ -41,7 +41,7 @@ func newConversionWorld(t *testing.T) conversionWorld {
 	}
 	t.Cleanup(worker.Close)
 	w.conversions = app.NewDiskConversions(w.runner, w.api, w.cache)
-	w.commands = app.NewDeviceCommands(worker)
+	w.commands = app.NewDeviceCommands(app.NewActionRunner(worker, nil, httpx.RequestID), worker)
 	w.health(t, w.device, eligibleHealth)
 	return w
 }
@@ -481,6 +481,160 @@ func TestDiskConversionRetireAndLock(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDiskConversionRetireClosesOpen (plan M8e §14.5 decision 38, amendment 2026-10-28, PDK-396): Retire closes a
+// prepared conversion or one with an abort on its way as cancelled, withdraws a pending encrypt_disk_abort and records
+// the closure on its one device.retired event; a terminal conversion and another organization's device stay as they are.
+func TestDiskConversionRetireClosesOpen(t *testing.T) {
+	w := newConversionWorld(t)
+	retired := func(t *testing.T, dev uuid.UUID) map[string]any {
+		t.Helper()
+		if n := w.count(t, `SELECT count(*) FROM outbox WHERE payload ->> 'code' = 'device.retired'
+			AND payload -> 'target' ->> 'id' = $1`, dev.String()); n != 1 {
+			t.Fatalf("%d device.retired events, want 1", n)
+		}
+		var raw []byte
+		if err := w.super.QueryRow(context.Background(), `SELECT payload -> 'params' FROM outbox WHERE payload ->> 'code' = 'device.retired'
+			AND payload -> 'target' ->> 'id' = $1`, dev.String()).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var p map[string]any
+		_ = json.Unmarshal(raw, &p)
+		return p
+	}
+	open := func(t *testing.T, prepared, abort bool) (dev, conversion, abortID uuid.UUID, host string) {
+		t.Helper()
+		dev, host = w.newDevice(t, w.org, "active")
+		w.health(t, dev, eligibleHealth)
+		if _, err := w.conversions.Request(w.admin(), dev, app.DiskConversionInput{ConfirmHostname: host, Reason: "policy", BackupConfirmed: true}); err != nil {
+			t.Fatal(err)
+		}
+		var cmd uuid.UUID
+		if err := w.super.QueryRow(context.Background(), "SELECT id, command_id FROM device_disk_conversion WHERE device_id = $1", dev).
+			Scan(&conversion, &cmd); err != nil {
+			t.Fatal(err)
+		}
+		w.exec(t, "UPDATE device_command SET status = 'delivered', delivered_at = now() WHERE id = $1", cmd)
+		if prepared {
+			w.post(t, dev, protocol.EventDiskConversionPrepared, map[string]any{"conversion_id": conversion.String(), "layout": "lvm",
+				"volume": uuid.NewString(), "data_bytes": 1000})
+		}
+		if abort {
+			if _, err := w.conversions.Cancel(w.admin(), dev, host); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.super.QueryRow(context.Background(), "SELECT abort_command_id FROM device_disk_conversion WHERE id = $1", conversion).
+				Scan(&abortID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dev, conversion, abortID, host
+	}
+	for _, tc := range []struct {
+		name          string
+		prepared      bool
+		abortStatus   string
+		wantWithdrawn bool
+		// commandExpired expires the delivered encrypt_disk after the abort was issued (review 1 finding 1).
+		commandExpired bool
+		// claimedFirst lets the device claim the abort's result before the Retire (review 1 finding 3).
+		claimedFirst bool
+	}{
+		{name: "prepared", prepared: true},
+		{name: "prepared with a pending abort", prepared: true, abortStatus: "pending", wantWithdrawn: true},
+		{name: "requested with a pending abort", abortStatus: "pending", wantWithdrawn: true},
+		{name: "prepared with a delivered abort", prepared: true, abortStatus: "delivered"},
+		{name: "prepared with a succeeded abort", prepared: true, abortStatus: "succeeded"},
+		{name: "requested with a pending abort and an expired command", abortStatus: "pending", wantWithdrawn: true,
+			commandExpired: true},
+		{name: "prepared with an abort result the device claimed first", prepared: true, abortStatus: "pending",
+			claimedFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dev, conversion, abort, _ := open(t, tc.prepared, tc.abortStatus != "")
+			if tc.abortStatus != "" && tc.abortStatus != "pending" {
+				w.exec(t, "UPDATE device_command SET status = $2, delivered_at = now() WHERE id = $1", abort, tc.abortStatus)
+			}
+			if tc.commandExpired {
+				w.exec(t, `UPDATE device_command SET status = 'expired', finished_at = now()
+					WHERE id = (SELECT command_id FROM device_disk_conversion WHERE id = $1)`, conversion)
+			}
+			if tc.claimedFirst {
+				w.cache.claims[abort] = dev.String() + ":succeeded"
+			}
+			deleted := len(w.cache.deleted)
+			if _, err := w.devices.Retire(w.admin(), dev); err != nil {
+				t.Fatal(err)
+			}
+			if phase, _, _, finished := w.row(t, conversion); phase != "cancelled" || !finished {
+				t.Fatalf("phase %s, finished %v, want cancelled", phase, finished)
+			}
+			p := retired(t, dev)
+			if p["conversion_cancelled"] != app.ConversionCancelledAfterDelivery || p["conversion_id"] != conversion.String() ||
+				p["conversion_phase"] != nil {
+				t.Fatalf("params %v", p)
+			}
+			if tc.abortStatus == "" {
+				if len(w.cache.deleted) != deleted {
+					t.Fatalf("removed from the gateway: %v", w.cache.deleted[deleted:])
+				}
+				return
+			}
+			want := tc.abortStatus
+			if tc.wantWithdrawn {
+				want = "cancelled"
+				if len(w.cache.deleted) != deleted+1 || w.cache.deleted[deleted] != abort || w.cache.claims[abort] != dev.String()+":cancelled" {
+					t.Fatalf("removed from the gateway %v, claims %v", w.cache.deleted[deleted:], w.cache.claims)
+				}
+			} else if len(w.cache.deleted) != deleted {
+				t.Fatalf("removed from the gateway: %v", w.cache.deleted[deleted:])
+			}
+			if tc.claimedFirst && w.cache.claims[abort] != dev.String()+":succeeded" {
+				t.Fatalf("the device's claim was replaced: %v", w.cache.claims[abort])
+			}
+			if n := w.count(t, "SELECT count(*) FROM device_command WHERE id = $1 AND status = $2", abort, want); n != 1 {
+				t.Fatalf("the abort command is not %s", want)
+			}
+		})
+	}
+
+	t.Run("terminal conversion", func(t *testing.T) {
+		dev, conversion, _, _ := open(t, true, false)
+		w.post(t, dev, protocol.EventDiskConversionFailed, map[string]any{"conversion_id": conversion.String(), "stage": "init", "reason": "x"})
+		var before time.Time
+		if err := w.super.QueryRow(context.Background(), "SELECT phase_at FROM device_disk_conversion WHERE id = $1", conversion).Scan(&before); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.devices.Retire(w.admin(), dev); err != nil {
+			t.Fatal(err)
+		}
+		var after time.Time
+		if err := w.super.QueryRow(context.Background(), "SELECT phase_at FROM device_disk_conversion WHERE id = $1", conversion).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if phase, stage, _, _ := w.row(t, conversion); phase != "failed" || stage != "init" || !after.Equal(before) {
+			t.Fatalf("phase %s, stage %s, phase_at %v -> %v", phase, stage, before, after)
+		}
+		if p := retired(t, dev); p["conversion_cancelled"] != nil || p["conversion_id"] != nil || p["conversion_phase"] != nil {
+			t.Fatalf("params %v", p)
+		}
+	})
+
+	t.Run("another organization", func(t *testing.T) {
+		dev, conversion, abort, _ := open(t, true, true)
+		deleted := len(w.cache.deleted)
+		if _, err := w.devices.Retire(w.as(uuid.Must(uuid.NewV7()), principal.RoleOrgAdmin, true), dev); !errors.Is(err, problem.NotFound) {
+			t.Fatalf("retire from another organization: %v", err)
+		}
+		w.expectPhase(t, conversion, "prepared")
+		if n := w.count(t, "SELECT count(*) FROM device_command WHERE id = $1 AND status = 'pending'", abort); n != 1 {
+			t.Fatal("the abort command is no longer pending")
+		}
+		if len(w.cache.deleted) != deleted || w.cache.claims[abort] != "" {
+			t.Fatalf("removed from the gateway %v, claims %v", w.cache.deleted[deleted:], w.cache.claims)
+		}
+	})
 }
 
 // TestDiskConversionLatestAfterAdoption (architect decision 2026-10-21, PDK-241 review 1): the latest conversion is

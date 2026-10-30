@@ -398,7 +398,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
 		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
-		Commands:       app.NewDeviceCommands(orgPool),
+		Commands:       app.NewDeviceCommands(runner, orgPool),
 		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:    app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
 		Disk:           app.NewDisk(runner, orgPool, escrowAccess, e.disk),

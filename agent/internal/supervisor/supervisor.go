@@ -237,7 +237,12 @@ func (s *Supervisor) onRequest(ctx context.Context) {
 	}
 	s.testing = true
 	go func() {
-		s.tested <- selfTest{version: req.Version, slot: slot, err: s.runSelfTest(ctx, slot, req.Version)}
+		err := s.runSelfTest(ctx, slot, req.Version)
+		// The shutdown kills the self-test, and Run's select may pick the error over ctx.Done: that error is no verdict
+		// on the release, so it is dropped and the request stays for the restart (PDK-061, PDK-372).
+		if ctx.Err() == nil {
+			s.tested <- selfTest{version: req.Version, slot: slot, err: err}
+		}
 	}()
 }
 
@@ -507,11 +512,15 @@ func (s *Supervisor) finishAt(version, from, outcome string, at time.Time) error
 	return err
 }
 
+// cleanup removes the release directory before the request (PDK-469): the request hands the staging directory to the
+// supervisor, and once it is gone the agent may stage again (update.Pending) or sweep (update.Sweep). Removed first,
+// it let a late RemoveAll delete files the agent had begun to stage anew under the same version, leaving a request
+// without its release in normal operation, not only after a crash between the two removals.
 func (s *Supervisor) cleanup(version string) {
-	_ = os.Remove(filepath.Join(s.cfg.Staging, "request.json"))
 	if version != "" {
 		_ = os.RemoveAll(filepath.Join(s.cfg.Staging, version))
 	}
+	_ = os.Remove(filepath.Join(s.cfg.Staging, "request.json"))
 }
 
 // resumeRequest processes an update request that a restarted supervisor (or device) interrupted before the switch,

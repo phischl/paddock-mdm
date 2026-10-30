@@ -1555,6 +1555,66 @@ func TestRestartDuringTheSelfTestProcessesTheRequestAgain(t *testing.T) {
 	}
 }
 
+// TestShutdownDuringTheSelfTestIsNotASelfTestFailure (PDK-372): the shutdown kills the running self-test, and its
+// error could reach the loop together with the shutdown. That error is no verdict on the release: the supervisor must
+// neither report self_test_failed nor remove the request, which the restart processes again. The loop is held in a
+// watchdog tick until the killed self-test is reaped and its error would be queued, so that both are ready when it
+// selects next.
+func TestShutdownDuringTheSelfTestIsNotASelfTestFailure(t *testing.T) {
+	f := newFake(t)
+	layout := paths.Layout{Root: f.dir}
+	f.cfg.Staging = layout.Staging()
+	tested := filepath.Join(f.dir, "self-tested")
+	bin := fmt.Appendf(nil, "#!/bin/sh\ncase \"$1\" in\nversion) echo 1.1.0 ;;\nself-test) echo $$ >%[1]s.new; mv %[1]s.new %[1]s; exec sleep 300 ;;\nrun) %[2]s ;;\nesac\n",
+		tested, f.good())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var s *Supervisor
+	var pid atomic.Int64
+	f.cfg.Notify = func(n string) {
+		if n != "WATCHDOG=1" {
+			return
+		}
+		p := int(pid.Swap(0))
+		if p == 0 {
+			return
+		}
+		cancel()
+		// Notify runs in Run's goroutine, where t.Fatal must not be called.
+		for deadline := time.Now().Add(10 * time.Second); syscall.Kill(p, 0) != syscall.ESRCH; time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Error("the killed self-test was not reaped")
+				return
+			}
+		}
+		// A queued error follows the reap at once; the bound only limits how long a correct supervisor is watched.
+		for deadline := time.Now().Add(200 * time.Millisecond); len(s.tested) == 0 && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+		// Checked here because the select picks randomly between a queued error and the shutdown: asserting only the
+		// outcome would pass about half of the runs even without the guard.
+		if len(s.tested) != 0 {
+			t.Error("the killed self-test's error was queued as a verdict")
+		}
+	}
+	s = New(f.cfg)
+	done := make(chan struct{})
+	go func() { s.Run(ctx, f.usr1); close(done) }()
+	f.stageAfterCheckin("1.1.0", bin)
+	var started int64
+	f.waitFor("the self-test started", func() bool {
+		data, err := os.ReadFile(tested)
+		_, scanErr := fmt.Sscan(string(data), &started)
+		return err == nil && scanErr == nil
+	})
+	pid.Store(started)
+	<-done
+	if !update.Pending(layout) || f.active() != "A" {
+		t.Fatalf("pending %t, current %s; want the request left before the switch", update.Pending(layout), f.active())
+	}
+	f.expectNoResult()
+}
+
 // TestRequestThatOutlivedItsResultIsNotProcessedAgain (PDK-061): a request whose release the existing result already
 // names came back after its result was written; processing it again would report the release a second time, so the
 // restarted supervisor only removes it.
