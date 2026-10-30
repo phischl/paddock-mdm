@@ -85,6 +85,7 @@ lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
+	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 
 # Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
 # [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them
@@ -212,6 +213,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
 	bash scripts/changelog-assemble_test.sh
+	bash scripts/acceptance-scope_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -446,16 +448,20 @@ e2e-check-playwright:
 		exit 1; \
 	fi
 
+# Only the checkout is mounted at /src, so a .secrets symlink to another worktree would dangle in the container
+# (ENOENT on every login); its resolved path is mounted at /secrets instead, for the specs (PADDOCK_E2E_SECRETS) and
+# the Go helpers they run, bin/devicesim and bin/agentrelease (PADDOCK_SECRETS_DIR, stack.SecretsDir) (PDK-353).
 .PHONY: e2e
 e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (optional SPEC=<spec file or filter>; PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
-		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim -e PADDOCK_PROJECT=$(DEV_PROJECT) \
+		-e PADDOCK_E2E_SECRETS=/secrets -e PADDOCK_SECRETS_DIR=/secrets -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
+		-e PADDOCK_PROJECT=$(DEV_PROJECT) \
 		-e PADDOCK_E2E_BASE_URL=$(or $(PADDOCK_E2E_BASE_URL),$(subst %,admin,$(DEV_HTTPS))) \
 		-e PADDOCK_E2E_AUTH_URL=$(or $(PADDOCK_E2E_AUTH_URL),$(subst %,auth,$(DEV_HTTPS))) \
 		-e PADDOCK_E2E_AGENTRELEASE=/src/bin/agentrelease -e PADDOCK_E2E_SCREENSHOTS \
-		-v $(CURDIR):/src -w /src/$(WEB_DIR) \
+		-v $(CURDIR):/src -v "$$(realpath -e $(SECRETS_DIR))":/secrets -w /src/$(WEB_DIR) \
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test $(SPEC)'
 
 # Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network <project>_cp and talk to

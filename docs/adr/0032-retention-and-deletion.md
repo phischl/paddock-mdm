@@ -210,3 +210,19 @@ holds the implementation. The rows marked "follow-up ticket" in decision 1 becom
 
 The period equals the audit index retention (≥ the WORM retention): these rows explain audit events and must not
 disappear while the index still shows them. The escrow of retired devices stays open (question 1 of plan M10).
+
+## Amendment 2026-10-29 (plan M10 refresh for alpha.7)
+
+- Decision 1, "Deletion lag": the residual risk is **RR-94**, not RR-35 (RR-35 was taken by M8s on 2026-10-16;
+  `docs/compliance/residual-risks.md` on main ends at RR-93). The evidence-export egress is RR-95 and the
+  index-purge-equals-WORM-expiry risk is RR-96 (plan M10 decision 4, amendment A4).
+- Decision 3, second bullet: the audit writer records `retention.purged` and its export events through **its own
+  write path, `auditwriter.Writer.WriteBatch`** — the same path `auditwriter.Recorder.Record` (ADR 0030, M8b)
+  uses for the chain-verification events. `Recorder` itself is specific to verification runs; the thin helper
+  `RecordSelf` of plan M10 (amendment A1) builds the system event and hands it to `WriteBatch`. There is still
+  exactly one write path for the writer's own events.
+- Decision 3, first bullet: the `change_set.before` pass joins the worker's retention round with the M11 ticket
+  that creates the column (PDK-154), not with plan M10 (plan M10 amendment A3; plan M11 amendment 2026-10-29).
+  The period (90 days) and the event (`retention.purged`, store `change_set_before`) are unchanged.
+- Decision 6: "the version the `server` module already pins" is binding, not the number quoted (v1.20.3 on
+  2026-10-29).
