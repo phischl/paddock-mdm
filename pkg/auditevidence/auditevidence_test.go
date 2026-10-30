@@ -87,6 +87,11 @@ func TestObjectPath(t *testing.T) {
 		"2026/01/01/08-x.jsonl.zst",
 		"org/" + org + "/",
 		"org/" + org,
+		"org/" + org + "/../" + "0190a0a0-0000-7000-8000-000000000002/x.jsonl.zst",
+		"org/" + org + "/2026/../../x.jsonl.zst",
+		"org/" + org + "/2026/01/..",
+		"org/" + org + "//etc/x.jsonl.zst",
+		"org/" + org + "/2026\\01\\x.jsonl.zst",
 	} {
 		if _, err := auditevidence.ObjectPath(org, key); err == nil {
 			t.Errorf("foreign key %q accepted", key)

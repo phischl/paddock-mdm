@@ -1725,3 +1725,10 @@ database. Where this amendment and §6.5, §6.7 or decision 32 differ, this amen
 3. **No migration, no change to the request API.** A slug snapshot taken at request time (an `audit_export` column
    filled by PDK-142's request path) would need an audit migration and is not part of this milestone; it is recorded
    as a low-priority follow-up stub.
+4. **The README is not covered by the signature.** `export.sig` signs `export.json` only; the offline verifier
+   (PDK-146) treats `README.md` as informational and takes every fact from `export.json`.
+5. **Objects the builder does not decode** (review of PDK-143). An object whose SHA-256 differs from its manifest
+   entry, or whose decompressed size exceeds 256 MiB, is still packed verbatim under `objects/` but contributes no
+   lines to `events.jsonl` and has `event_count` 0; the problem is in `verification.problems` (the mismatch text of
+   decision 32, or `"<day>: object <key> cannot be decoded"`) and `verify_ok` is false. The offline verifier reports
+   such an object's hash or decode problem and builds the expected `events.jsonl` without it.

@@ -15,6 +15,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -54,6 +55,10 @@ const (
 	targetAuditExport    = "audit_export"
 )
 
+// exportMaxDecodedObject: an object holds at most MaxBatch events, so 256 MiB leaves over 500 KiB per event; anything
+// larger is treated as a decompression bomb and reported as undecodable instead of exhausting the writer's memory.
+const exportMaxDecodedObject = 256 << 20
+
 var (
 	metricExport = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "paddock_audit_export_total", Help: "Evidence exports finished per result (ready, failed, expired).",
@@ -81,6 +86,8 @@ type Exporter struct {
 	poll      time.Duration
 	now       func() time.Time
 	chunkSize int
+	// maxDecoded bounds the decompressed size of one object.
+	maxDecoded uint64
 }
 
 // NewExporter creates an exporter; version names the generator in the package.
@@ -91,11 +98,16 @@ func NewExporter(pool *db.AuditWriterPool, writer *Writer, store ObjectStore, si
 		metricExport.WithLabelValues(result)
 	}
 	return &Exporter{pool: pool, writer: writer, store: store, signer: signer, keys: keys, verifier: verifier,
-		version: version, poll: poll, now: time.Now, chunkSize: ExportChunkSize}
+		version: version, poll: poll, now: time.Now, chunkSize: ExportChunkSize,
+		maxDecoded: exportMaxDecodedObject}
 }
 
 // Run builds pending exports and expires old ones every poll interval until ctx ends.
 func (e *Exporter) Run(ctx context.Context) error {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	// A separate loop, because a long or hung build must not freeze the gauge PaddockAuditExportStuck watches.
+	wg.Go(func() { e.observeLoop(ctx) })
 	for {
 		e.round(ctx)
 		select {
@@ -127,8 +139,18 @@ func (e *Exporter) round(ctx context.Context) {
 	if _, err := e.Expire(ctx, e.now()); err != nil {
 		slog.ErrorContext(ctx, "evidence export expiry failed", "error", err)
 	}
-	if err := e.observePending(ctx); err != nil {
-		slog.ErrorContext(ctx, "evidence export: pending age not read", "error", err)
+}
+
+func (e *Exporter) observeLoop(ctx context.Context) {
+	for {
+		if err := e.observePending(ctx); err != nil && ctx.Err() == nil {
+			slog.ErrorContext(ctx, "evidence export: pending age not read", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(e.poll):
+		}
 	}
 }
 
@@ -185,8 +207,17 @@ func (e *Exporter) Build(ctx context.Context, export auditstore.AuditExport) err
 		if ctx.Err() != nil {
 			return err
 		}
-		if _, failErr := e.failRunning(ctx, export.ID, exportErrorText(err)); failErr != nil {
+		failed, failErr := e.failRunning(ctx, export.ID, exportErrorText(err))
+		if failErr != nil {
 			return errors.Join(err, failErr)
+		}
+		if !failed {
+			// The stuck check failed the export and recorded its outcome while this build may still have
+			// inserted chunks.
+			if _, delErr := e.deleteChunks(context.WithoutCancel(ctx), export.ID); delErr != nil {
+				return errors.Join(err, errNotRunning, delErr)
+			}
+			return errors.Join(err, errNotRunning)
 		}
 		metricExport.WithLabelValues("failed").Inc()
 		e.recordSelf(ctx, completedEvent(export, nil, exportErrorText(err)))
@@ -497,7 +528,7 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 // cannot hold it.
 func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Time, byDay map[string]auditstore.AuditManifest,
 	events *os.File, c *collected) error {
-	dec, err := zstd.NewReader(nil)
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(e.maxDecoded))
 	if err != nil {
 		return err
 	}
@@ -536,11 +567,11 @@ func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Tim
 				return fmt.Errorf("day %s: object %s unreadable: %w", name, o.Key, err)
 			}
 			sum := sha256.Sum256(body)
-			if hex.EncodeToString(sum[:]) != o.SHA256 {
-				c.addProblem(fmt.Sprintf("%s: object %s was modified (SHA-256 mismatch)", name, o.Key))
-			}
 			n := 0
-			if plain, err := dec.DecodeAll(body, nil); err != nil {
+			if hex.EncodeToString(sum[:]) != o.SHA256 {
+				// Bytes the chain does not vouch for are packed for the auditor but never decompressed.
+				c.addProblem(fmt.Sprintf("%s: object %s was modified (SHA-256 mismatch)", name, o.Key))
+			} else if plain, err := dec.DecodeAll(body, nil); err != nil {
 				c.addProblem(fmt.Sprintf("%s: object %s cannot be decoded", name, o.Key))
 			} else {
 				if _, err := out.Write(plain); err != nil {

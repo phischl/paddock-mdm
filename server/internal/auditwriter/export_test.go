@@ -144,3 +144,6 @@ var NewChunkWriter = newChunkWriter
 
 // ExportReadme renders the README of a package.
 var ExportReadme = renderReadme
+
+// SetExportMaxDecoded lowers the decompressed size limit of one object.
+func SetExportMaxDecoded(e *Exporter, n uint64) { e.maxDecoded = n }

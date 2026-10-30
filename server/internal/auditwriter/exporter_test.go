@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -612,6 +613,182 @@ func TestExportBuildOfAbandonedExportRecordsNothing(t *testing.T) {
 	}
 	if n := len(e.events(t, org, audit.CodeAuditExportCompleted, x.ID)); n != 0 {
 		t.Fatalf("%d audit.export_completed events", n)
+	}
+}
+
+// TestExportBuildFailingAfterStuckCheckRecordsOnce: when the stuck check failed an export while its build was still
+// running and the build then fails as well, the stuck check's failure stays the only completed event and the chunks
+// the build wrote are gone.
+func TestExportBuildFailingAfterStuckCheckRecordsOnce(t *testing.T) {
+	e := newExportEnv(t)
+	ctx := context.Background()
+	for _, c := range []struct {
+		name string
+		// lastDay prepares the failure and returns the last day of the export's range.
+		lastDay func(t *testing.T, d time.Time, key string) time.Time
+	}{
+		{"missing manifest", func(_ *testing.T, d time.Time, _ string) time.Time { return d.AddDate(0, 0, 1) }},
+		{"unreadable object", func(_ *testing.T, d time.Time, key string) time.Time {
+			e.store.mu.Lock()
+			delete(e.store.objects, key)
+			e.store.mu.Unlock()
+			return d
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			org := uuid.Must(uuid.NewV7())
+			d := pastDay(5)
+			key := e.object(t, org, d.Add(time.Hour), 1)
+			e.seal(t, org, d)
+			x := e.running(t, org, d, c.lastDay(t, d, key), c.name)
+			if _, err := e.exporter.Expire(ctx, time.Now().Add(auditwriter.ExportStuckAfter+time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.super.Exec(ctx, "INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, 0, 'abc')", x.ID, org); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.exporter.Build(ctx, x); err == nil {
+				t.Fatal("build succeeded")
+			}
+			if got := e.export(t, x.ID); got.Status != "failed" || got.Error == nil || *got.Error != "exporter restarted" {
+				t.Fatalf("export = %+v", got)
+			}
+			if n := len(e.chunks(t, x.ID)); n != 0 {
+				t.Fatalf("%d bytes of chunks left", n)
+			}
+			evs := e.events(t, org, audit.CodeAuditExportCompleted, x.ID)
+			if len(evs) != 1 || evs[0].outcome != "failure" || evs[0].params["error"] != "exporter restarted" {
+				t.Fatalf("audit.export_completed = %+v", evs)
+			}
+		})
+	}
+}
+
+// TestExportDoesNotDecodeUnsafeObjects: an object whose hash does not match its manifest is packed but not
+// decompressed, and an object that decompresses beyond the size limit is reported as undecodable; both packages
+// are delivered with verify_ok=false and without the object's events.
+func TestExportDoesNotDecodeUnsafeObjects(t *testing.T) {
+	e := newExportEnv(t)
+	ctx := context.Background()
+	for _, c := range []struct {
+		name    string
+		prepare func(t *testing.T, org uuid.UUID, d time.Time, key string)
+		problem string
+	}{
+		{"replaced object", func(t *testing.T, org uuid.UUID, d time.Time, key string) {
+			body, err := auditwriter.EncodeObject([]audit.Event{event(org, d.Add(time.Hour), audit.CodeDeviceGroupCreated)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.store.mu.Lock()
+			e.store.objects[key] = body
+			e.store.mu.Unlock()
+		}, "%s: object %s was modified (SHA-256 mismatch)"},
+		{"oversized object", func(*testing.T, uuid.UUID, time.Time, string) {
+			auditwriter.SetExportMaxDecoded(e.exporter, 1<<10)
+		}, "%s: object %s cannot be decoded"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			org := uuid.Must(uuid.NewV7())
+			d := pastDay(7)
+			key := e.object(t, org, d.Add(time.Hour), 20)
+			e.seal(t, org, d)
+			c.prepare(t, org, d, key)
+			stored, err := e.store.Get(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			x := e.running(t, org, d, d, c.name)
+			if err := e.exporter.Build(ctx, x); err != nil {
+				t.Fatal(err)
+			}
+			got := e.export(t, x.ID)
+			if got.Status != "ready" || got.VerifyOk == nil || *got.VerifyOk || got.EventCount == nil || *got.EventCount != 0 {
+				t.Fatalf("export = %+v", got)
+			}
+			var problems []string
+			if err := json.Unmarshal(got.VerifyProblems, &problems); err != nil {
+				t.Fatal(err)
+			}
+			want := fmt.Sprintf(c.problem, d.Format(time.DateOnly), key)
+			if !slices.Contains(problems, want) {
+				t.Fatalf("problems %q lack %q", problems, want)
+			}
+			path, _ := auditevidence.ObjectPath(org.String(), key)
+			for _, m := range untar(t, e.chunks(t, x.ID)) {
+				switch m.name {
+				case path:
+					if !bytes.Equal(m.body, stored) {
+						t.Fatal("the package does not hold the stored bytes")
+					}
+				case "events.jsonl":
+					if len(m.body) != 0 {
+						t.Fatalf("events.jsonl holds %d bytes", len(m.body))
+					}
+				}
+			}
+		})
+	}
+}
+
+// hangingStore blocks every Get until ctx ends and closes reached on the first one.
+type hangingStore struct {
+	auditwriter.ObjectStore
+	once    sync.Once
+	reached chan struct{}
+}
+
+func (s *hangingStore) Get(ctx context.Context, _ string) ([]byte, error) {
+	s.once.Do(func() { close(s.reached) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestExportPendingAgeDuringHungBuild: while a build hangs, the pending-age gauge still follows an export that
+// became pending after the build started, so PaddockAuditExportStuck can fire.
+func TestExportPendingAgeDuringHungBuild(t *testing.T) {
+	e := newExportEnv(t)
+	org := uuid.Must(uuid.NewV7())
+	d := pastDay(9)
+	e.object(t, org, d.Add(time.Hour), 1)
+	e.seal(t, org, d)
+	t.Cleanup(func() {
+		if _, err := e.super.Exec(context.Background(), `UPDATE audit_export SET status = 'failed', error = 'test cleanup'
+			WHERE organization_id = $1 AND status IN ('pending', 'running')`, org); err != nil {
+			t.Error(err)
+		}
+	})
+	pending := func(age time.Duration) {
+		id := uuid.Must(uuid.NewV7())
+		if _, err := e.super.Exec(context.Background(), `INSERT INTO audit_export (id, organization_id, status, from_day,
+			to_day, purpose, requested_by, correlation_id, requested_at) VALUES ($1, $2, 'pending', $3, $3, 'x',
+			'{"type":"admin"}', $4, now() - make_interval(secs => $5))`, id, org, d, "req-"+id.String(), age.Seconds()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending(0)
+	store := &hangingStore{ObjectStore: e.store, reached: make(chan struct{})}
+	keyFn := func(context.Context) (map[int][]byte, error) { return e.keys, nil }
+	exporter := auditwriter.NewExporter(e.pool, e.writer, store, edSigner{}, keyFn, auditwriter.NewVerifier(e.pool, store, keyFn),
+		"test", 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = exporter.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-store.reached:
+	case <-time.After(30 * time.Second):
+		t.Fatal("no build started")
+	}
+
+	pending(2 * time.Hour)
+	deadline := time.Now().Add(10 * time.Second)
+	for gaugeValue(t, "paddock_audit_export_pending_age_seconds") < 7000 {
+		if time.Now().After(deadline) {
+			t.Fatalf("pending age %v during the hung build", gaugeValue(t, "paddock_audit_export_pending_age_seconds"))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

@@ -122,12 +122,19 @@ func TestAuditEvidenceExport(t *testing.T) {
 		t.Fatalf("E2 event params: %+v", done.Params)
 	}
 
-	// E1: at most two exports are pending or running. The builder finishes a request within seconds, so two running
-	// exports are held through the writer role for the refusal and finished afterwards.
+	// E1: at most two exports are pending or running. The builder finishes a request within seconds, so the second
+	// export is awaited and two running exports are held through the writer role for the refusal and finished
+	// afterwards; exactly two are then open at the third request.
 	auditor.stepUp(t)
 	res = request(today, today, "E1 second")
 	expectStatus(t, res, http.StatusAccepted, "")
+	var second auditExport
+	if err := res.JSON(&second); err != nil {
+		t.Fatal(err)
+	}
+	waitForExport(t, auditor.Portal, second.ID, 60*time.Second)
 	holdOpenExports(t, org, 2)
+	auditor.stepUp(t)
 	res = request(today, today, "E1 third")
 	expectStatus(t, res, http.StatusConflict, "too_many_exports")
 	expectOneEvent(t, auditor.Portal, res.RequestID, "audit.export_requested", "failure")
