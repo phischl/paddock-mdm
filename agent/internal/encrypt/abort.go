@@ -89,9 +89,9 @@ func Abort(ctx context.Context, sys Host, l paths.Layout, store Store, id, by st
 // reports a failure once per reason and start (review 2 of PDK-482, X3).
 type NeutralizeReport func(ctx context.Context, err error)
 
-// neutralize disarms the initrds of an aborted conversion before the cleanup rebuilds them, which can fail, be killed
-// or wait for dpkg's locks (Disarm; plan M8e item 18, amendment 2026-10-30, PDK-482). The outcome goes to report, a
-// failure without one to disk.conversion_neutralize_failed; the cleanup runs regardless.
+// neutralize disarms the initrds of an aborted or failed conversion before the cleanup rebuilds them, which can fail,
+// be killed or wait for dpkg's locks (Disarm; plan M8e item 18, amendment 2026-10-30, PDK-482 and PDK-579). The
+// outcome goes to report, a failure without one to disk.conversion_neutralize_failed; the cleanup runs regardless.
 func neutralize(ctx context.Context, sys Host, l paths.Layout, store Store, report NeutralizeReport) {
 	err := Disarm(ctx, sys, l, store)
 	switch {

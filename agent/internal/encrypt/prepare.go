@@ -108,8 +108,8 @@ type Preparer struct {
 	// TestHooks writes the marker that lets the init script honour the test delays (plan M8e decision 19); only a
 	// dev build (buildinfo.Dev) sets it.
 	TestHooks bool
-	// ReportNeutralize receives the outcome of the disarm of an abort requested while preparing (Abort); nil reports
-	// a failure itself.
+	// ReportNeutralize receives the outcome of the disarm of an abort requested while preparing (Abort) and of a
+	// failed preparation (fail); nil reports a failure itself.
 	ReportNeutralize NeutralizeReport
 	// Hold returns once no supervisor upgrade runs (plan M8e decision 37); nil holds nothing.
 	Hold  func(ctx context.Context) error
@@ -248,7 +248,8 @@ func (p *Preparer) abort(ctx context.Context, c state.DiskConversion) Outcome {
 	return Stopped
 }
 
-// fail records the failure of step n and, once step 7 started in this or an earlier run, cleans up under invariant I3.
+// fail records the failure of step n and, once step 7 started in this or an earlier run, disarms the initrds (Disarm,
+// PDK-579) and cleans up under invariant I3.
 // It never cleans up a partition that is LUKS (invariants I1 and I2): the disk converted at a boot, so the failure is
 // not recorded and the worker adopts the conversion (Stopped). While the header cannot be checked the failure is
 // recorded with CleanupPending and the cleanup is left to the retry of a full pass. A failure whose save failed is not
@@ -279,6 +280,9 @@ func (p *Preparer) fail(ctx context.Context, c state.DiskConversion, n int, reas
 		return Stopped
 	}
 	if runCleanup {
+		// Before the cleanup, which can fail, be killed or wait for dpkg's locks: an initrd built since step 7 wrote the
+		// module still converts the disk at a restart (plan M8e item 18, amendment 2026-10-30, PDK-579).
+		neutralize(ctx, p.Sys, p.Layout, p.State, p.ReportNeutralize)
 		_, _ = RunCleanup(ctx, p.Sys, p.Layout, p.State) // logged; a later full pass retries
 	}
 	return Failed
