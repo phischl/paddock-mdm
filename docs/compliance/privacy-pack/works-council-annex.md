@@ -38,7 +38,7 @@ keystrokes, screen content, location.
 | What | When | Stored | Deleted |
 | --- | --- | --- | --- |
 | Enrollment: hostname, hardware UUID, machine ID, `/etc/os-release`, agent version, public identity key | once | device record | Lifetime of the organization; a retired device stays as the anchor of its audit trail |
-| Check-in: applied bundle and agent versions, bundle schema versions, architecture, health (agent status and last error, sudo implementation, disk encryption state with the keyslot kinds and per encrypted volume device path, LUKS UUID and keyslot count, capabilities of `paddock-revoke`, current hostname), reboot required, `event_seq_high`, clock offset | every check-in (5 minutes) | device status | Lifetime of the organization |
+| Check-in: time of the last check-in, applied bundle and agent versions, bundle schema versions, architecture, health (agent status and last error, sudo implementation, disk encryption state with the keyslot kinds and per encrypted volume device path, LUKS UUID and keyslot count, capabilities of `paddock-revoke`, current hostname), reboot required, `event_seq_high`, clock offset | every check-in (5 minutes) | device status | Lifetime of the organization |
 | Events of the agent's own work: bundle applied or rejected (resource IDs and error messages), configuration drift corrected, agent updated or rolled back, login and sudo configuration applied or failed, locks and suspensions applied | when they happen | audit log | WORM retention (at least 400 days): [configured days] |
 | Update runs (`updates.run`): kind, start and end, result, number of upgraded packages, held-back package names, reboot required | after each run | audit log, device update status | WORM retention |
 | Revocation results: per volume the device path and the keyslot counts before and after, unresolved crypttab entries, refusals with their reason | after a Lock, Destroy or refused token | audit log, revocation request | WORM retention; revocation request: index retention after it finished |
@@ -46,7 +46,7 @@ keystrokes, screen content, location.
 | `session.login`: the directory user's name and the time, at most once per user and 24 hours | at a directory user's login | `device_user_seen` (no session, terminal or remote host) | 365 days after the last login |
 | Login history (`device_login_event`): user name, device and start time of every session of a directory user | only while the login history is switched on (off by default), and only sessions that started after the switch-on | `device_login_event` | `login_history_days` after the login (7–365, default 90); switching it off deletes every row at once |
 | `local_admin.login`: the PAM service and the time of a login of the managed local administrator | at such a login | audit log (no terminal or remote host) | WORM retention |
-| Escrowed secrets: LUKS recovery key and header, local administrator password, encrypted to `escrow-wrap` | when they change | escrow (decrypted only after a step-up) | Until a Destroy or until the device row is deleted |
+| Escrowed secrets: LUKS recovery key and header, local administrator password, encrypted to `escrow-wrap` | when they change | escrow (decrypted only after a step-up) | LUKS recovery keys and headers: until a Destroy, otherwise with the device record; local administrator password: with the device record (not deleted by Paddock yet) |
 
 ### 3.3 fleetd (inventory and vulnerabilities)
 
@@ -69,8 +69,8 @@ What fleetd reads on the device:
 | `users` | local user accounts | off |
 
 Fleet also stores the membership in its built-in labels, the time a host was last seen and the proxy's address. Two
-checks return pass or fail only: `paddock_agent_running` and `disk_encrypted`. Free disk space, uptime and network
-addresses stay in Fleet.
+checks return pass or fail only: `paddock_agent_running` and `disk_encrypted`. Free disk space, uptime and the
+proxy's address stay in Fleet.
 
 What Paddock stores of it:
 
@@ -84,11 +84,19 @@ What Paddock stores of it:
 
 The host in Fleet of a retired device is deleted with the inventory.
 
-### 3.4 Administrators
+### 3.4 Users and configuration
 
-The account (user name, display name, organization, role, portal language); in every audit event of their actions
-the actor's name, the client IP address and whether the action had a step-up; API tokens as hashes with name,
-creator and expiry; snapshots of the portal role groups every 5 minutes. An administrator who connects an AI
+| What | Stored | Deleted |
+| --- | --- | --- |
+| User account, copied from the directory or created in Paddock: user name, display name, e-mail address, source, lock state and the time of the lock | `app_user` | When the user is removed from the directory or deleted in Paddock |
+| Group memberships, device owners (with who assigned them and when), login assignments, sudo profile assignments | configuration | With the user, or when an administrator removes them |
+
+### 3.5 Administrators
+
+The account (user name, display name, organization, role, portal language and theme, time of the last sign-in,
+whether AI assistants may make changes for the administrator); in every audit event of their actions the actor's
+name, the client IP address and whether the action had a step-up; API tokens as hashes with name, role, creator,
+expiry and time of last use; snapshots of the portal role groups every 5 minutes. An administrator who connects an AI
 assistant (`paddockctl mcp`) passes what the role reads to that assistant: [permitted | not permitted | permitted
 for selected tools only].
 
@@ -112,7 +120,7 @@ for selected tools only].
 | Role | Access |
 | --- | --- |
 | Organization administrator (`org_admin`) | Everything in the organization, including reveal of secrets, Lock and Destroy approval |
-| Operator (`org_operator`) | Devices, users, profiles, commands; no reveal, Lock or Destroy |
+| Operator (`org_operator`) | Devices, users, profiles, commands; no reveal, user lock, Lock or Destroy |
 | Auditor (`org_auditor`) | Read-only: the pages of section 4 except *Revocations*, including the audit log, evidence integrity and evidence export |
 | Platform operator [Operator] | The platform administrator role creates organizations and manages releases and has **no** access to organization data in the portal or the API. It cannot change or delete audit events (WORM store). Technical access to servers, databases and the Fleet UI (only through a local port forward) is governed by [agreement]. |
 
@@ -128,28 +136,29 @@ Persons holding each role: [list or reference to the role concept]. Role changes
 | `retired_inventory_days`: days after retirement until the inventory of a device is deleted (1–365) | *Privacy* (`settings.privacy`) | 30 | [ ] |
 | `login_history_enabled`: record every session start of a directory user | *Login & privileges* → *Login history* (`settings.login`) | off | [ ] |
 | `login_history_days`: days the login history is kept (7–365) | *Login & privileges* → *Login history* (`settings.login`) | 90 | [ ] |
-| Dead man's switch: devices lock themselves after the period of uptime without contact to Paddock (at least 7 days; warnings 3 and 1 days before) | *Dead man's switch* | off | [ ] (enabled, period in days, or disabled) |
+| Dead man's switch: devices lock themselves after the period of uptime without contact to Paddock (at least 7 days; warnings by default 3 and 1 days before, configurable) | *Dead man's switch* | off | [ ] (enabled, period in days, or disabled) |
 
 ## 7. Deletion periods
 
 | Data | Deleted after |
 | --- | --- |
-| Audit events in the WORM store | `PADDOCK_AUDIT_RETENTION_DAYS` (at least 400) from the recording day: [configured days]; erasure requests are answered by restriction |
+| Audit events in the WORM store | Kept at least `PADDOCK_AUDIT_RETENTION_DAYS` (at least 400) from the recording day: [configured days]; Paddock never deletes them, the operator's lifecycle rule on the bucket does: [after n days | not deleted]; erasure requests are answered by restriction |
 | Audit index and `action` (searchable copy of the audit events) | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` (default = WORM retention, never less): [configured days]; erasure requests are answered by restriction |
 | Last login per user and device (`device_user_seen`) | 365 days after the last login |
 | Login history (`device_login_event`) | `login_history_days` after the login (7–365, default 90); at once when switched off |
 | Inventory of a retired device, its hardware facts and its Fleet host | `retired_inventory_days` after retirement (default 30, 1–365) |
 | Inventory of an active device | while the device is active; replaced by every sync round |
 | Finished commands, cleared alerts, finished revocation requests with approvals, role-group snapshots, device event gaps | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` (default = WORM retention, never less): [configured days] |
-| Managed file contents before a change (`change_set.before`) | 90 days after `applied_at` |
 | Read-access coalescing keys (`read_audit_window`) | 48 hours |
 | Evidence packages | 7 days after `ready` |
 | Container logs | Docker `json-file` rotation: 50 MiB × 10 files per container |
 | Backups | 14 full backups (14 days) plus WAL; bucket noncurrent versions and `openbao/`, `fleet/` objects 30 days |
-| Device record, escrowed secrets of retired devices, configuration, administrator accounts | not deleted by Paddock yet ([retention.md](../retention.md), "What is not purged yet") |
+| User accounts, group memberships, device owners, login and sudo assignments | when the user is removed from the directory or deleted in Paddock |
+| Device record, escrowed secrets of retired devices, configuration, change sets, administrator accounts, API tokens | not deleted by Paddock yet ([retention.md](../retention.md), "What is not purged yet") |
 
-Every deletion is recorded as `retention.purged` or `device.inventory_purged` and can be shown to the works council
-on request.
+Every deletion by Paddock's retention jobs is recorded as `retention.purged` or `device.inventory_purged` and can be
+shown to the works council on request. The expiry of backups, container logs and WORM objects (lifecycle rule) is not
+recorded in the audit log.
 
 ## 8. Change procedure
 
@@ -157,10 +166,13 @@ on request.
   role, or a changed value of a switch in section 6 is a change of this annex and needs [the works council's prior
   agreement].
 - Paddock records every change of the switches as an audit event: `settings.privacy_changed` (privacy settings),
-  `settings.login_changed` (login history), `settings.dms_changed` (dead man's switch). [Organization] gives the
+  `settings.login_changed` (login history), `settings.dms_changed` (dead man's switch). A change of the privacy
+  settings through the declarative configuration (`paddockctl apply`) is recorded as `config.applied` with the section
+  `settings.privacy` and its change set. [Organization] gives the
   works council [the list of these events every n months | access on request].
 - A Paddock update that adds a data category or an evaluation is installed only after this annex has been updated;
-  the changelog and [privacy.md](../privacy.md) of the new version name the change.
+  [Organization] checks the changelog and [privacy.md](../privacy.md) of the new version for such changes before
+  installing it.
 
 ## 9. Information rights of employees
 

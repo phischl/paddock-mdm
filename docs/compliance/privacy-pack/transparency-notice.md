@@ -31,8 +31,9 @@ with Paddock.
 
 - device identity at enrollment: hostname, hardware UUID, machine ID, operating system release, agent version, the
   device's public key;
-- device status every 5 minutes: applied configuration and agent versions, architecture, health (agent status, sudo
-  implementation, disk encryption state, current hostname), whether a reboot is required, and the clock offset;
+- device status every 5 minutes: the time of the last check-in, applied configuration and agent versions,
+  architecture, health (agent status, sudo implementation, disk encryption state, current hostname), whether a reboot
+  is required, and the clock offset;
 - events of the agent's own work: configuration applied or rejected, drift corrected, agent updated, login and sudo
   configuration applied, locks applied;
 - update runs: kind, start and end, result, number of upgraded packages, held-back package names, reboot required;
@@ -47,6 +48,12 @@ with Paddock.
 - logins of the managed local administrator account: the PAM service and the time;
 - escrowed secrets: the disk recovery key and header and the local administrator password, stored encrypted.
 
+**From the directory and from administrators:**
+
+- your user account as Paddock copies it from the directory or as an administrator created it: user name, display
+  name, e-mail address, group memberships, and whether and since when it is locked;
+- the devices you own or may log in to, and the permission profiles that give you sudo rights.
+
 **From your device (inventory agent fleetd, a component of Paddock):**
 
 - operating system name, version and kernel; versions of osquery and orbit;
@@ -60,8 +67,9 @@ with Paddock.
 - pass or fail of two checks: the Paddock agent runs, and the disk is encrypted.
 
 **About administrators** (if you administer Paddock): your account (user name, display name, organization, role,
-portal language), your actions with your name, client IP address and whether you confirmed them with a second
-factor, your API tokens (stored as hashes), and your membership in the portal role groups.
+portal language and theme, time of the last sign-in, whether AI assistants may make changes for you), your actions
+with your name, client IP address and whether you confirmed them with a second factor, your API tokens (stored as
+hashes), and your membership in the portal role groups.
 
 ## What Paddock never collects
 
@@ -94,15 +102,16 @@ devices, users or the organization. Transfer to a third country: [none unless th
 
 | Data | Retention |
 | --- | --- |
-| Audit events (actions, device events, tamper events, logins of the local administrator, update runs, revocation results) | `PADDOCK_AUDIT_RETENTION_DAYS` from the recording day, at least 400 days: [configured days]; cannot be deleted earlier. The searchable copy (audit index and `action`) is kept for `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, never less: [configured days] |
+| Audit events (actions, device events, tamper events, logins of the local administrator, update runs, revocation results) | At least `PADDOCK_AUDIT_RETENTION_DAYS` from the recording day, at least 400 days: [configured days]; cannot be deleted earlier. Paddock itself never deletes them; afterwards they are deleted by [the operator's lifecycle rule on the audit store, after n days | not deleted]. The searchable copy (audit index and `action`) is kept for `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, never less: [configured days] |
 | Your last login per device (`device_user_seen`) | 365 days after your last login on that device |
 | Login history (`device_login_event`) | `login_history_days` after the login (7–365, default 90): [configured days | switched off]; switching it off deletes every entry at once |
 | Inventory of a retired device (packages, vulnerabilities, check results, hardware facts, the host in Fleet) | `retired_inventory_days` after retirement (1–365, default 30): [configured days] |
 | Inventory of an active device | while the device is active; replaced at every inventory sync |
 | Device record (identity, status, applied versions) | lifetime of the organization in Paddock |
-| Escrowed secrets of a retired device | until the disk is destroyed or the device record is deleted |
+| Escrowed disk recovery keys and headers | until a Destroy of the disk; otherwise with the device record |
+| Escrowed local administrator password | with the device record (not deleted by Paddock yet) |
+| Your user account, group memberships, device ownership and login and sudo assignments | until you are removed from the directory or deleted in Paddock |
 | Finished commands, cleared alerts, finished revocation requests, role-group snapshots | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` (at least the audit event retention): [configured days] |
-| Contents of managed files before a change | 90 days after the change |
 | Evidence packages for auditors | 7 days after they are ready |
 | Container logs (client IPs, hostnames, user names in messages) | rotation at 50 MiB × 10 files per container |
 | Backups | 14 full backups (14 days) plus WAL; bucket noncurrent versions and `openbao/`, `fleet/` objects 30 days |
@@ -119,15 +128,22 @@ can lodge a complaint with a supervisory authority, for example [competent super
 
 ## Recording of reads
 
-Reads of the inventory and searches of the audit log by administrators are [recorded | not recorded] in the audit
-log, according to [Organization]'s privacy settings. Evidence exports for auditors are always recorded.
+According to [Organization]'s privacy settings, Paddock records in the audit log:
+
+- views of a device's *Software* and *Vulnerabilities* pages: [recorded, once per administrator, device and day |
+  not recorded];
+- searches of the audit log: [recorded, the first search per administrator and hour, with its filters but without a
+  search term | not recorded].
+
+Other reads, for example of the device overview or of the logins on a device, are not recorded. Every request and
+every download of an evidence export for auditors is recorded.
 
 ## Dead man's switch
 
 The dead man's switch is [enabled, period: n days | disabled]. When it is enabled, your device locks itself
 after the period of uptime in which it never reached Paddock, also when Paddock itself is unreachable for that long.
-The device warns you 3 and 1 days before. Powered-off time does not count. Restoring a locked device needs
-[contact].
+The device warns you [3 and 1] days before (default 3 and 1). Powered-off time does not count. Restoring a locked
+device needs [contact].
 
 ## Login history
 

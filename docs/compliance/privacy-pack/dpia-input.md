@@ -31,7 +31,7 @@ Likelihood and severity are left for [Organization] to assess (for example low, 
 | --- | --- | --- | --- | --- |
 | **RR-01 Root bypass** | Employees keep local administrator rights. Evidence collected on the device ends where root starts: a colleague with root on a shared device, or the employee, can change what the device reports, so an event in the audit log may be incomplete or wrong, and a silent device may lead to wrong conclusions about the employee. | Events are shipped in near real time; a missing heartbeat, a stopped agent and a gap in the device's event numbering are themselves audit events; everything stored on the server is out of the user's reach. | [ ] | [ ] |
 | **RR-06 Offline login window** | An offline login uses the cached PIN without a second factor; a locked employee's PIN keeps working on an offline device until its next contact. A stolen device can therefore be used with the employee's identity for that window. | A lock acts in the identity provider at once and on the device at its next check-in (≤ 6 minutes with jitter); offline emergency access is off by default. | [ ] | [ ] |
-| **RR-15 Dead man's switch** | If enabled, the employee's device locks itself after the agreed period without contact to Paddock, also when Paddock is down or the employee is on leave; unsaved work is lost and the employee cannot work until the device is restored. | The period is at least 7 days (portal warns below 30); warnings 3 and 1 days before; only uptime counts; turning it off cancels the tokens; `device.presumed_self_locked`. | [ ] | [ ] |
+| **RR-15 Dead man's switch** | If enabled, the employee's device locks itself after the agreed period without contact to Paddock, also when Paddock is down or the employee is on leave; unsaved work is lost and the employee cannot work until the device is restored. | The period is at least 7 days (portal warns below 30); warnings by default 3 and 1 days before (configurable, can be switched off); only uptime counts; turning it off cancels the tokens; `device.presumed_self_locked`. | [ ] | [ ] |
 | **RR-20 Data loss on revocation** | A Lock or a `terminate` user lock ends the employee's sessions; unsaved work is lost. A Destroy makes the disk unreadable. | Confirmation with typed hostname; Destroy needs a second administrator; limits per administrator (3 per hour, 10 per 24 h), per organization (20 per 24 h) and per device (1 per 24 h). | [ ] | [ ] |
 | **RR-94 Deletion lag in backups** | Data that the retention schedule deletes stays in backups for up to 30 days and in the audit event that proves its deletion; the employee's data lives longer than the stated period. | Backups are encrypted and outside the control-plane host and expire after 30 days; every purge is recorded (`retention.purged`, `device.inventory_purged`). | [ ] | [ ] |
 | **RR-95 Evidence export** | An evidence package for an auditor holds every audit event of the requested range with the employee's user name and the administrators' names and client addresses; it leaves Paddock as a file. | The request needs a step-up and a purpose and is audited (`audit.export_requested`); every download is audited (`audit.export_downloaded`); only organization administrators and auditors can request and download; the package expires 7 days after it is ready. | [ ] | [ ] |
@@ -43,8 +43,9 @@ Likelihood and severity are left for [Organization] to assess (for example low, 
   data, keystrokes, screen content and location are never collected ([privacy.md](../privacy.md)).
 - **Data minimisation in the inventory:** Fleet's queries that read users' home directories, network addresses and
   software usage are switched off; free disk space and uptime stay in Fleet.
-- **Recorded reads, coalesced:** audit searches (`audit.searched`) and inventory views (`device.inventory_viewed`,
-  per administrator, device and day) are recorded when the organization switches them on.
+- **Recorded reads, coalesced:** audit searches (`audit.searched`, the first per administrator and hour) and views of
+  a device's *Software* and *Vulnerabilities* tabs (`device.inventory_viewed`, once per administrator, device and day)
+  are recorded when the organization switches them on.
 - **Purge jobs with evidence:** login trace 365 days, login history `login_history_days`, inventory of retired devices
   `retired_inventory_days`, operational history per index retention; each deletion is recorded
   ([retention.md](../retention.md)).
@@ -54,7 +55,7 @@ Likelihood and severity are left for [Organization] to assess (for example low, 
 - **Separation of roles:** operators cannot reveal secrets, lock or destroy; auditors read only; the platform
   administrator role has no access to organization data.
 - **Tamper-proof audit trail:** every privileged action is an audit event in a WORM store that no administrator can
-  change or delete.
+  change or delete before its retention ends.
 
 ## Residual risks accepted by the organization
 
