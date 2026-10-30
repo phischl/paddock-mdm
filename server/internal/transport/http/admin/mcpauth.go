@@ -221,7 +221,7 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || claims.Subject == "" || claims.AuthTime == 0 {
 		slog.WarnContext(ctx, "MCP ID token rejected", "error", err)
-		refuse("", app.ReasonLoginFailed, errLoginFailed, problem.Unauthenticated)
+		refuse("", app.ReasonLoginFailed, app.ErrLoginFailed, problem.Unauthenticated)
 		return
 	}
 	username := claims.PreferredUsername
@@ -230,7 +230,7 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if claims.isAccessToken(m.oidc.cfg.ClientID) {
 		slog.WarnContext(ctx, "MCP access token presented as the ID token")
-		refuse(username, app.ReasonLoginFailed, errLoginFailed, problem.Unauthenticated)
+		refuse(username, app.ReasonLoginFailed, app.ErrLoginFailed, problem.Unauthenticated)
 		return
 	}
 	at, err := verifier.Verify(ctx, req.AccessToken)
@@ -243,7 +243,7 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "MCP access token rejected", "error", err)
-		refuse(username, app.ReasonLoginFailed, errLoginFailed, problem.Unauthenticated)
+		refuse(username, app.ReasonLoginFailed, app.ErrLoginFailed, problem.Unauthenticated)
 		return
 	}
 	if access.Subject != claims.Subject {
@@ -292,7 +292,7 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if bindingLeft <= 0 {
-			refuse(username, app.ReasonLoginFailed, errLoginFailed, problem.MCPLoginRequired.WithDetail(mcpLoginHint))
+			refuse(username, app.ReasonLoginFailed, app.ErrLoginFailed, problem.MCPLoginRequired.WithDetail(mcpLoginHint))
 			return
 		}
 	}

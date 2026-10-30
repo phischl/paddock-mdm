@@ -111,8 +111,9 @@ var ErrLoginDenied = problem.Forbidden.WithDetail(ReasonNotAuthorized)
 // DenialOrganizationInactive is the denial reason of a role in an unknown or inactive organization.
 const DenialOrganizationInactive = "organization_inactive"
 
-// errLoginLookupFailed is the audit error code of a login whose organization lookup failed.
-var errLoginLookupFailed = &problem.Error{Code: ReasonLoginFailed, Status: http.StatusInternalServerError}
+// ErrLoginFailed is the audit error code of every failed login (code exchange, ID token, a database lookup before the
+// login transaction). It is only recorded, never answered, so one status serves all of them.
+var ErrLoginFailed = &problem.Error{Code: ReasonLoginFailed, Status: http.StatusBadGateway}
 
 // ErrOrganizationInactive is returned when the role's organization is unknown or not active; the denial is already
 // audited.
@@ -131,8 +132,7 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 	}
 	orgID, err := a.org.ResolveSlug(ctx, role.Slug)
 	if err != nil {
-		// No organization context exists yet, so the failed attempt is recorded like a failed code exchange (PDK-508).
-		a.RecordLoginFailure(ctx, id.IP, id.Username, ReasonLoginFailed, id.Channel, errLoginLookupFailed)
+		a.recordLookupFailure(ctx, id)
 		return LoginResult{}, err
 	}
 	if orgID == uuid.Nil { // unknown or inactive organization
@@ -159,6 +159,7 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 		return nil
 	})
 	if err != nil {
+		a.recordLookupFailure(ctx, id)
 		return LoginResult{}, err
 	}
 	var locale string
@@ -203,6 +204,7 @@ func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginRe
 		return nil
 	})
 	if err != nil {
+		a.recordLookupFailure(ctx, id)
 		return LoginResult{}, err
 	}
 	var locale string
@@ -268,6 +270,7 @@ func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []s
 	for _, s := range slugs {
 		orgID, err := a.org.ResolveSlug(ctx, s)
 		if err != nil {
+			a.recordLookupFailure(ctx, id)
 			return err
 		}
 		if orgID != uuid.Nil {
@@ -308,6 +311,12 @@ func (a *Accounts) RecordLoginFailure(ctx context.Context, ip, username, reason 
 	_ = a.runner.RunTx(principal.With(ctx, sys), ScopePlatform, spec, func(context.Context, *pgstore.Queries, Recorder) error {
 		return cause
 	})
+}
+
+// recordLookupFailure audits a login whose database lookup failed before its admin.login transaction ran. No
+// organization context exists yet, so it is recorded like a failed code exchange (PDK-508).
+func (a *Accounts) recordLookupFailure(ctx context.Context, id LoginIdentity) {
+	a.RecordLoginFailure(ctx, id.IP, id.Username, ReasonLoginFailed, id.Channel, ErrLoginFailed)
 }
 
 func displayName(id LoginIdentity) string {

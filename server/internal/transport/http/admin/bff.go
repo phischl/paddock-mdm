@@ -235,9 +235,6 @@ func (c idClaims) hasPasskey() bool {
 	return slices.Contains(c.MFAClasses, StepUpWebAuthnClass)
 }
 
-// errLoginFailed is the audit error code of logins that fail after the state check (code exchange, ID token).
-var errLoginFailed = &problem.Error{Code: app.ReasonLoginFailed, Status: http.StatusBadGateway}
-
 // errMFARequired is the audit error code of a login whose ID token carried no second factor. It also wraps
 // problem.Forbidden, so that the runner records the refusal as denied rather than failed.
 var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFARequired, Status: http.StatusForbidden},
@@ -286,7 +283,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	token, err := oauth.Exchange(exchangeContext(ctx), q.Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		slog.WarnContext(ctx, "code exchange failed", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", app.ErrLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -301,7 +298,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || claims.Subject == "" {
 		slog.WarnContext(ctx, "ID token rejected", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", app.ErrLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -343,7 +340,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		orgID, err := b.accounts.OrganizationID(ctx, res.Slug)
 		if err != nil {
 			slog.ErrorContext(ctx, "login failed", "error", err)
-			b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonLoginFailed, "", errLoginFailed)
+			b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonLoginFailed, "", app.ErrLoginFailed)
 			denied(w, r, app.ReasonLoginFailed)
 			return
 		}
