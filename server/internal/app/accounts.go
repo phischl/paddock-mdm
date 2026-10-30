@@ -325,6 +325,8 @@ type Me struct {
 	APIToken *MeAPIToken
 	// MCPWriteEnabled is the account's MCP write opt-in (ADR 0044 amendment 2026-10-25); false for API tokens.
 	MCPWriteEnabled bool
+	// MCPWriteEnabledAt is since when the opt-in holds (plan M14 §6.6 amendment 2026-10-29); nil while it is off.
+	MCPWriteEnabledAt *time.Time
 }
 
 // MeAPIToken is the API token a request authenticated with.
@@ -352,6 +354,7 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 			}
 			me.Username, me.DisplayName, me.Locale, me.Theme = acc.Username, acc.DisplayName, acc.Locale, acc.Theme
 			me.MCPWriteEnabled = acc.McpWriteEnabledAt != nil
+			me.MCPWriteEnabledAt = acc.McpWriteEnabledAt
 			return nil
 		})
 		return me, unauthenticatedIfGone(err)
@@ -367,6 +370,7 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 		}
 		me.Username, me.DisplayName, me.Locale, me.Theme, me.Organization = acc.Username, acc.DisplayName, acc.Locale, acc.Theme, &org
 		me.MCPWriteEnabled = acc.McpWriteEnabledAt != nil
+		me.MCPWriteEnabledAt = acc.McpWriteEnabledAt
 		return nil
 	})
 	return me, unauthenticatedIfGone(err)

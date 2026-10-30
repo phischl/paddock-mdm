@@ -86,6 +86,12 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
   role that ends the previous session. The step-up callback accepts a step-up token whose groups grant the
   session's role next to the other one. The organization and platform reconciliation rounds are unchanged.
 
+## Amendment 2026-10-25 (ADR 0044)
+
+A third public OAuth2 provider `paddock-mcp` (device grant, `paddock-admin-login` authentication flow, the
+MFA-enforcing authorization flow of the device providers, Paddock groups mapping, 30-minute access and 8-hour refresh
+tokens) for `paddockctl mcp login`.
+
 ## Amendment 2026-10-29 (PDK-498, ADR 0034 amendment 2026-10-29) — stage B enrols administrators only
 - The WebAuthn enrolment of the portal login (`paddock-admin-login-webauthn`) is bound with two policies, both of
   which must pass: `paddock-admin-login-webauthn-missing` (no WebAuthn device) and

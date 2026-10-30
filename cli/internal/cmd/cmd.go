@@ -42,6 +42,15 @@ commands:
                                 show the plan of a configuration and apply it; deletions need --yes
   devices list [--page N] [--page-size 10|25|50|100] [--sort <field>] [-q <text>] [--state <s>]...
                [--device-group-id <uuid>] [--disk-state <s>]... [-o table|json]
+  mcp login [--no-browser] [--platform]
+                                sign in for the MCP server through the browser (password and second factor);
+                                --platform signs in with the platform role of an identity that has both
+  mcp logout                    end the MCP session and delete its local tokens
+  mcp tools [-o table|json]     list the tools the MCP server offers right now
+  mcp                           run the MCP server on stdin/stdout (started by an MCP client such as Claude Code)
+
+The MCP commands keep their session in $XDG_STATE_HOME/paddockctl/mcp-session.json (mode 0600) and never use the
+API token; mcp and mcp tools exit 2 without a session.
 
 global flags (after the command):
   --url <url>          admin API base URL (PADDOCK_URL, config file url)
@@ -157,6 +166,8 @@ func dispatch(ctx context.Context, e Env) error {
 			return usagef("usage: paddockctl devices list [flags]")
 		}
 		return runDevicesList(ctx, e, args[2:])
+	case "mcp":
+		return runMCP(ctx, e, args[1:])
 	}
 	return usagef("unknown command %q", args[0])
 }

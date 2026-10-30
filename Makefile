@@ -116,7 +116,11 @@ changelog-check: ## Validate the changelog fragments in changelog.d/
 # the imports for linux/amd64 only. Paddock's own packages are MIT (LICENSE). Bundled container images:
 # docs/compliance/third-party.md.
 GO_LICENSES_VERSION := v2.0.1
-ALLOWED_LICENSES    := MIT ISC BSD-2-Clause BSD-3-Clause Apache-2.0 MPL-2.0 BlueOak-1.0.0 0BSD CC0-1.0 Python-2.0 Unlicense
+ALLOWED_LICENSES    := MIT MIT-0 ISC BSD-2-Clause BSD-3-Clause Apache-2.0 MPL-2.0 BlueOak-1.0.0 0BSD CC0-1.0 Python-2.0 Unlicense
+# The only ignored third-party module: github.com/segmentio/asm is MIT-0 (MIT No Attribution), OSI-approved, more
+# permissive than MIT; approved by the maintainer 2026-10-28; transitive via modelcontextprotocol/go-sdk →
+# segmentio/encoding, raised to v1.2.1 by goose in workspace mode. go-licenses cannot classify MIT-0, hence the ignore.
+GO_LICENSES_IGNORE  := github.com/segmentio/asm
 
 .PHONY: lint-licenses
 lint-licenses: ## License gate: Go and npm production dependencies against the allow list
@@ -126,7 +130,7 @@ lint-licenses: ## License gate: Go and npm production dependencies against the a
 		$(GO_BUILD_IMAGE) sh -c 'set -e; \
 			for m in $(GO_MODULES); do echo "go-licenses $$m"; cd /src/$$m; \
 				go run github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION) check ./... \
-					--ignore github.com/phischl/paddock-mdm \
+					--ignore github.com/phischl/paddock-mdm --ignore $(GO_LICENSES_IGNORE) \
 					--allowed_licenses=$(subst $(space),$(comma),$(ALLOWED_LICENSES)); done'
 	@if [ -f $(WEB_DIR)/package.json ]; then \
 		$(NODE_RUN) sh -c 'set -e; npm ci --no-audit --no-fund >/dev/null; \
@@ -216,6 +220,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/ci/assert-hardening_test.sh
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
+	bash test/skill_test.sh
 	bash scripts/changelog-assemble_test.sh
 	bash scripts/acceptance-scope_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest

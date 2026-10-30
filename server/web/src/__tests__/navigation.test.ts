@@ -40,6 +40,7 @@ const admin: Me = {
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: ['acme.test'] },
   locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
   server_version: '0.1.0-alpha.5', alternate_role: null, channel: 'portal', mcp_write_enabled: false,
+  mcp_write_enabled_at: null,
 }
 
 let wrapper: VueWrapper | null = null
@@ -101,7 +102,7 @@ describe('navigation drawer', () => {
       'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package holds', 'Change sets',
       'Security review', 'Revocations', "Dead man's switch", 'Login & privileges',
       'Software', 'Vulnerabilities',
-      'Users', 'Groups', 'API tokens', 'Updates', 'Audit log', 'Evidence integrity',
+      'Users', 'Groups', 'API tokens', 'MCP', 'Updates', 'Audit log', 'Evidence integrity',
     ])
     const security = w.find('[data-testid="nav-group-security"]')
     expect(security.attributes('role')).toBe('group')
@@ -172,7 +173,7 @@ describe('navigation drawer', () => {
 
     const platform = await mountApp({ ...admin, role: 'platform_admin', organization: null }, '/platform/organizations')
     expect(groupLabels(platform.w)).toEqual(['Overview', 'Platform'])
-    expect(linkLabels(platform.w)).toEqual(['Overview', 'Organizations', 'Agent releases', 'IP allow list', 'Sessions', 'OpenBao'])
+    expect(linkLabels(platform.w)).toEqual(['Overview', 'Organizations', 'Agent releases', 'IP allow list', 'Sessions', 'OpenBao', 'MCP policy'])
     expect(platform.w.find('[data-testid="app-bar-attention"]').exists()).toBe(false)
     expect(platform.w.find('[data-testid="org-name"]').exists()).toBe(false)
   })
@@ -195,10 +196,10 @@ describe('navigation drawer', () => {
   it('is one Tab stop with a roving tabindex: Up/Down move, Home/End jump', async () => {
     const { w } = await mountApp(admin, '/managed-files')
     const links = drawer(w).findAll('a.pd-nav-item')
-    expect(links.length).toBe(23)
+    expect(links.length).toBe(24)
     const stops = links.filter((a) => a.attributes('tabindex') === '0')
     expect(stops.map((a) => a.attributes('href'))).toEqual(['/managed-files'])
-    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(22)
+    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(23)
 
     ;(stops[0].element as HTMLElement).focus()
     await stops[0].trigger('keydown', { key: 'ArrowDown' })
