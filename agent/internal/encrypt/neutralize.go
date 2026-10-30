@@ -80,8 +80,8 @@ func segmentAt(size int64) []byte {
 // segment that overrides the step's plan with an invalid one (neutralizeSegment), so that a restart before the cleanup
 // finished boots the device unencrypted (plan M8e item 18, amendment 2026-10-30, PDK-482). Per kernel the current
 // initrd is listed (an initrd whose listing shows no marker of the module is left alone: the segment would only make
-// initramfs-tools' lister fail on it), copied into its temporary file (the cleanup's names, tempInitrd; the ".next"
-// one when a bootable kernel's link refers to the first, rule B (0)), the segment is appended, the file is fsynced and
+// initramfs-tools' lister fail on it), copied into its temporary file (the cleanup's names, buildTemp; a ".next" one
+// when a bootable kernel's link refers to the first, rule B (0)), the segment is appended, the file is fsynced and
 // renamed over the initrd's name, and /boot is fsynced: no initrd is written in place and no file a bootable link
 // points to is written or unlinked. An initrd that changed meanwhile (a kernel package's dracut run, checked by its
 // stamp right before the rename) is left as it is. A copy that does not fit is a BootSpaceError; a failed copy is
@@ -212,10 +212,7 @@ func neutralizeInitrd(ctx context.Context, sys Host, l paths.Layout, listers *[]
 	if free < needed {
 		return &BootSpaceError{Needed: needed, Free: free}
 	}
-	tmp := l.Join(tempInitrd(v))
-	if linkedTemps(l)[tmp] {
-		tmp = l.Join(tempInitrd(v + ".next"))
-	}
+	tmp := buildTemp(l, v)
 	if err := clearTemp(ctx, l, tmp); err != nil {
 		return err
 	}
