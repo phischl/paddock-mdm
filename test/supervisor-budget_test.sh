@@ -21,6 +21,7 @@ expect() {
     echo "ok   $desc ($got)"
   else
     echo "FAIL $desc: got $got, want $want with '$text'"
+    # shellcheck disable=SC2001 # sed indents every line of a multi-line output; an expansion would miss the first.
     sed 's/^/       /' <<<"$out"
     failures=$((failures + 1))
   fi
