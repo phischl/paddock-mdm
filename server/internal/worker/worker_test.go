@@ -321,13 +321,14 @@ func TestHeartbeatsAndClones(t *testing.T) {
 	r := NewReports(app.NewDeviceReports(runner, f.pool), app.NewDeviceCommands(runner, f.pool), f.cache)
 	ctx := context.Background()
 	dev := f.device(t, "active")
-	hb := func(seq, reported int64, clone bool, at time.Time) []byte {
+	hb := func(seq, reported, expected int64, clone bool, at time.Time) []byte {
 		b, _ := json.Marshal(ingest.Heartbeat{DeviceID: dev, OrganizationID: f.org, ReceivedAt: at, AppliedBundleVersion: 2,
-			AgentVersion: "0.1.0", Health: json.RawMessage(`{"reconcile":"ok"}`), Seq: seq, ReportedSeq: reported, CloneSuspected: clone})
+			AgentVersion: "0.1.0", Health: json.RawMessage(`{"reconcile":"ok"}`), Seq: seq, ReportedSeq: reported,
+			ExpectedSeq: expected, CloneSuspected: clone})
 		return b
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	if o := r.heartbeat(ctx, "m1", hb(1, 0, false, now)); o != ack {
+	if o := r.heartbeat(ctx, "m1", hb(1, 0, 0, false, now)); o != ack {
 		t.Fatalf("outcome %v", o)
 	}
 	var last time.Time
@@ -339,7 +340,7 @@ func TestHeartbeatsAndClones(t *testing.T) {
 		t.Fatalf("status %s %d %d", last, applied, seq)
 	}
 	// Coalesced: a second heartbeat within 60 s does not write.
-	if o := r.heartbeat(ctx, "m2", hb(2, 1, false, now.Add(time.Second))); o != ack {
+	if o := r.heartbeat(ctx, "m2", hb(2, 1, 1, false, now.Add(time.Second))); o != ack {
 		t.Fatalf("outcome %v", o)
 	}
 	if f.count(t, "SELECT count(*) FROM device_status WHERE device_id = $1 AND last_seq = 1", dev) != 1 {
@@ -348,7 +349,7 @@ func TestHeartbeatsAndClones(t *testing.T) {
 
 	// Two clone reports quarantine the device once, with exactly one audit event.
 	for i, id := range []string{"m3", "m4"} {
-		if o := r.heartbeat(ctx, id, hb(int64(5+i), 1, true, now.Add(2*time.Second))); o != ack {
+		if o := r.heartbeat(ctx, id, hb(int64(5+i), 1, 3, true, now.Add(2*time.Second))); o != ack {
 			t.Fatalf("outcome %v", o)
 		}
 	}
@@ -357,6 +358,11 @@ func TestHeartbeatsAndClones(t *testing.T) {
 	}
 	if n := f.count(t, "SELECT count(*) FROM action WHERE code = 'device.clone_suspected' AND target->>'id' = $1", dev.String()); n != 1 {
 		t.Fatalf("%d clone events, want 1", n)
+	}
+	// issued_seq reports the number the check-in was compared against, not the draw (PDK-590).
+	if n := f.count(t, `SELECT count(*) FROM action WHERE code = 'device.clone_suspected' AND target->>'id' = $1
+		AND params->>'issued_seq' = '3' AND params->>'reported_seq' = '1'`, dev.String()); n != 1 {
+		t.Fatalf("%d clone events with issued_seq 3, want 1", n)
 	}
 	if o := r.heartbeat(ctx, "m5", []byte("{")); o != poison {
 		t.Fatalf("garbage: %v", o)

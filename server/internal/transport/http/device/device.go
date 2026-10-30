@@ -180,6 +180,11 @@ func (g *gateway) fail(w http.ResponseWriter, r *http.Request, err error) {
 			"request_id", httpx.RequestID(r.Context()))
 		e = errBackpressure.with("the device cache is being rebuilt")
 		e.retryAfter = unavailableRetryAfter
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		// The device stopped waiting; the status only reaches logs and metrics.
+		slog.InfoContext(r.Context(), "device request abandoned by the device", "error", err,
+			"request_id", httpx.RequestID(r.Context()))
+		e = errBackpressure.with("the request was abandoned")
 	default:
 		slog.ErrorContext(r.Context(), "device request failed", "error", err, "request_id", httpx.RequestID(r.Context()))
 		e = errInternal
