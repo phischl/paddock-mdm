@@ -1,0 +1,20 @@
+# CI only (PDK-540): the image builds of `make up` read Go modules from the runner's module cache, which
+# actions/setup-go restores, instead of proxy.golang.org (Dockerfile stage `gomodcache`). The Makefile adds this file
+# only when PADDOCK_CI_GOMODCACHE is set; a local `make up` never sees it. Compose grants Bake read access to the
+# context path itself, so no Bake entitlement switch is needed.
+x-gomodcache: &gomodcache
+  additional_contexts:
+    gomodcache: ${PADDOCK_CI_GOMODCACHE:?}
+
+services:
+  paddock-migrate: { build: *gomodcache }
+  paddock-api: { build: *gomodcache }
+  paddock-revocation-issuer: { build: *gomodcache }
+  paddock-escrow-reader: { build: *gomodcache }
+  paddock-outbox-relay: { build: *gomodcache }
+  paddock-worker: { build: *gomodcache }
+  paddock-gateway: { build: *gomodcache }
+  paddock-compiler: { build: *gomodcache }
+  paddock-audit-migrate: { build: *gomodcache }
+  paddock-audit-writer: { build: *gomodcache }
+  paddock-unsealer: { build: *gomodcache }
