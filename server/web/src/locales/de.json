@@ -373,6 +373,7 @@
       "uninstall_requested": "{actor} hat angefordert, Paddock von {hostname} zu entfernen ({mode})",
       "uninstall_cancelled": "{actor} hat die Entfernung von Paddock von {hostname} zurückgezogen",
       "uninstalled": "Das Gerät {target} hat Paddock entfernt ({mode}, {outcome})",
+      "uninstall_failed": "Das Gerät {target} hat die Entfernung von Paddock abgelehnt ({reason}); die Anforderung ist beendet",
       "encrypt_requested": "{actor} hat angefordert, die Festplatte von {hostname} nachträglich zu verschlüsseln",
       "encrypt_cancelled": "{actor} hat die nachträgliche Verschlüsselung von {hostname} abgebrochen ({mode})",
       "disk_conversion_prepared": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte vorbereitet und wartet auf einen Neustart",
@@ -1150,6 +1151,11 @@
       "confirmLabel": "Paddock entfernen",
       "typed": "Geben Sie den Hostnamen zur Bestätigung ein. Das Gerät wird außer Betrieb genommen, sobald es die Entfernung meldet.",
       "pending": "Entfernung angefordert ({mode}) — {status}. Das Gerät entfernt Paddock beim nächsten Check-in und wird dann außer Betrieb genommen.",
+      "refused": "Das Gerät hat die Entfernung abgelehnt: {reason}. Brechen Sie die Anforderung ab und fordern Sie sie erneut an, sobald die Ursache behoben ist.",
+      "refusedReasons": {
+        "conversion_pending": "eine nachträgliche Verschlüsselung der Festplatte steht aus",
+        "revocation_pending": "eine Sperre oder Vernichtung steht aus"
+      },
       "modes": {
         "leave": "so lassen",
         "reset": "zurücksetzen"

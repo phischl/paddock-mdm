@@ -578,6 +578,110 @@ func TestLoopAbortSurvivesStop(t *testing.T) {
 	}
 }
 
+// abortPrepared aborts the prepared conversion through encrypt_disk_abort ("command") or `paddockd encrypt-abort`
+// ("request").
+func abortPrepared(t *testing.T, a *Agent, via string) {
+	t.Helper()
+	if via == "command" {
+		a.encryptDiskAbortCommand(context.Background(), encryptCmd(command.TypeEncryptDiskAbort, "c-abort",
+			`{"conversion_id":"`+testConversionID+`"}`))
+		return
+	}
+	req, _ := json.Marshal(encrypt.AbortRequest{Nonce: "n1", ConversionID: testConversionID, By: "operator", RequestedAt: a.d.Now()})
+	if err := fsutil.WriteFile(a.d.Layout.EncryptAbortRequest(), req, 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a.handleAbortRequest(context.Background())
+}
+
+// writeFreshSupervisorMarker writes supervisor-upgrade.json of an upgrade that started now.
+func writeFreshSupervisorMarker(t *testing.T, a *Agent) {
+	t.Helper()
+	marker, _ := json.Marshal(supervisorpkg.Marker{Version: "1.2.0", StartedAt: a.d.Now()})
+	if err := fsutil.WriteFile(a.d.Layout.SupervisorUpgrade(), marker, 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAbortCleansUpDuringSupervisorUpgrade: PDK-378 (plan M8e item 18, amendment 2026-10-28) — an explicit abort of a
+// prepared conversion cleans up at once although a supervisor upgrade runs: no initrd keeps the module and the key is
+// gone.
+func TestAbortCleansUpDuringSupervisorUpgrade(t *testing.T) {
+	params := `{"conversion_id":"` + testConversionID + `"}`
+	for _, via := range []string{"command", "request"} {
+		a, _, d := convAgent(t)
+		a.encryptDiskCommand(context.Background(), encryptCmd(command.TypeEncryptDisk, "c-1", params))
+		runWorker(t, a)
+		if a.st.Conversion.Phase != state.ConversionPrepared {
+			t.Fatalf("%s: not prepared: %+v", via, a.st.Conversion)
+		}
+		writeFreshSupervisorMarker(t, a)
+		before := initrdBuilds(d)
+		abortPrepared(t, a, via)
+		initrd, _ := os.ReadFile(d.Path("/boot/initrd.img-" + testKernel))
+		if c := a.st.Conversion; c.Phase != state.ConversionCancelled || c.CleanupPending || initrdBuilds(d) == before ||
+			strings.Contains(string(initrd), "paddock-encrypt") || d.Exists("/var/lib/paddock/install-passphrase") ||
+			d.Exists(encrypt.ModuleDir) {
+			t.Fatalf("%s: abort deferred its cleanup during the upgrade: %+v", via, c)
+		}
+	}
+}
+
+// TestAbortCleanupInterruptedLeftToWorker: PDK-378 (amendment 2026-10-28) — an abort whose cleanup fails or is killed
+// mid-rebuild leaves the prepared initrd in place, only temporary files and CleanupPending with the key; the worker
+// defers the retry while the supervisor upgrade runs and completes the cleanup once the marker is gone.
+func TestAbortCleanupInterruptedLeftToWorker(t *testing.T) {
+	params := `{"conversion_id":"` + testConversionID + `"}`
+	temp := "/boot/.initrd.img-" + testKernel + ".paddock"
+	for _, via := range []string{"command", "request"} {
+		a, _, d := convAgent(t)
+		a.encryptDiskCommand(context.Background(), encryptCmd(command.TypeEncryptDisk, "c-1", params))
+		runWorker(t, a)
+		prepared, _ := os.ReadFile(d.Path("/boot/initrd.img-" + testKernel))
+		if !strings.Contains(string(prepared), "paddock-encrypt") {
+			t.Fatalf("%s: the prepared initrd carries no module", via)
+		}
+		writeFreshSupervisorMarker(t, a)
+		d.set(func(d *convDevice) {
+			d.onLine = func(line string) {
+				if strings.HasPrefix(line, "dracut -f --no-uefi /boot/.initrd.img-") {
+					d.Write(temp, "half built")
+					d.set(func(d *convDevice) { d.dracutExit = 1 })
+				}
+			}
+		})
+		abortPrepared(t, a, via)
+		initrd, _ := os.ReadFile(d.Path("/boot/initrd.img-" + testKernel))
+		if c := a.st.Conversion; c.Phase != state.ConversionCancelled || !c.CleanupPending ||
+			string(initrd) != string(prepared) || !d.Exists("/var/lib/paddock/install-passphrase") {
+			t.Fatalf("%s: after the failed cleanup: %+v", via, c)
+		}
+		// A kill mid-rebuild leaves the temporary file behind; the agent's next start removes it (item 17).
+		d.Write(temp, "half built")
+		d.set(func(d *convDevice) { d.onLine, d.dracutExit = nil, 0 })
+		a.startConversion(context.Background())
+		if d.Exists(temp) || !a.st.Conversion.CleanupPending {
+			t.Fatalf("%s: after the restart: temp %v, %+v", via, d.Exists(temp), a.st.Conversion)
+		}
+		before := initrdBuilds(d)
+		a.tickConversion(context.Background())
+		runWorker(t, a)
+		if initrdBuilds(d) != before || !a.st.Conversion.CleanupPending {
+			t.Fatalf("%s: the worker cleaned up during the supervisor upgrade", via)
+		}
+		if err := os.Remove(a.d.Layout.SupervisorUpgrade()); err != nil {
+			t.Fatal(err)
+		}
+		a.tickConversion(context.Background())
+		runWorker(t, a)
+		initrd, _ = os.ReadFile(d.Path("/boot/initrd.img-" + testKernel))
+		if c := a.st.Conversion; c.CleanupPending || strings.Contains(string(initrd), "paddock-encrypt") || d.Exists(temp) ||
+			d.Exists("/var/lib/paddock/install-passphrase") {
+			t.Fatalf("%s: the worker did not finish the cleanup: %+v", via, c)
+		}
+	}
+}
+
 // TestStoreSaveFailureChangesNothing: Review 2, minor-4 — when the state cannot be saved, the abort's phase change is
 // undone in memory and its event is not emitted; the abort is refused.
 func TestStoreSaveFailureChangesNothing(t *testing.T) {
