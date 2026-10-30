@@ -89,6 +89,43 @@ func (c *Cache) RestoreSeq(ctx context.Context, device uuid.UUID, last int64) er
 	return nil
 }
 
+func deliveredKey(device uuid.UUID) string { return "sd:" + device.String() }
+
+// LastDelivered reads sd:<device>, the highest sequence number a check-in response carried. It reports false when
+// the key is missing; the caller then flags nothing (plan M2a amendment PDK-590, option a).
+func (c *Cache) LastDelivered(ctx context.Context, device uuid.UUID) (int64, bool, error) {
+	n, err := c.c.Do(ctx, c.c.B().Get().Key(deliveredKey(device)).Build()).AsInt64()
+	if valkey.IsValkeyNil(err) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("devicecache: delivered seq: %w", err)
+	}
+	return n, true, nil
+}
+
+// markDeliveredScript raises sd:<device> and never lowers it: a slower request that delivered an older number must
+// not undo a newer delivery.
+var markDeliveredScript = valkey.NewLuaScript(`
+local cur = redis.call('GET', KEYS[1])
+if not cur or tonumber(cur) < tonumber(ARGV[1]) then
+  redis.call('SET', KEYS[1], ARGV[1])
+end
+return 1
+`)
+
+// MarkDelivered raises sd:<device> to seq once a check-in response carries it. Clone detection compares against
+// delivered numbers only, because a number drawn for a check-in that stalled and failed after the device's retry
+// cannot be released and would otherwise count as issued (PDK-590). The key is never lowered and not restored after a
+// cache loss: while the key is missing the gateway flags nothing, and the next delivery seeds it.
+func (c *Cache) MarkDelivered(ctx context.Context, device uuid.UUID, seq int64) error {
+	err := markDeliveredScript.Exec(ctx, c.c, []string{deliveredKey(device)}, []string{strconv.FormatInt(seq, 10)}).Error()
+	if err != nil {
+		return fmt.Errorf("devicecache: mark delivered seq: %w", err)
+	}
+	return nil
+}
+
 // BundlePointer is bp:<device>: the newest uploaded bundle of a device.
 type BundlePointer struct {
 	Version   int64

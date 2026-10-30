@@ -279,7 +279,7 @@ func (d *DeviceReports) QuarantineClone(ctx context.Context, hb ingest.Heartbeat
 	spec := ActionSpec{
 		Code:   audit.CodeDeviceCloneSuspected,
 		Target: &audit.Target{Type: "device", ID: hb.DeviceID.String()},
-		Params: map[string]any{"reported_seq": hb.ReportedSeq, "issued_seq": hb.Seq - 1},
+		Params: map[string]any{"reported_seq": hb.ReportedSeq, "issued_seq": hb.ExpectedSeq},
 	}
 	err = d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		_, err := TransitionDevice(ctx, q, rec, device.ActionQuarantine, hb.DeviceID)

@@ -260,3 +260,26 @@ func TestReleaseResult(t *testing.T) {
 		t.Fatalf("device result %s %v %v", status, ok, err)
 	}
 }
+
+// TestDeliveredSeq (PDK-590): sd:<device> is missing until a delivery, and is raised but never lowered.
+func TestDeliveredSeq(t *testing.T) {
+	srv := valkeytest.Start(t)
+	cache := devicecache.New(srv.Client(t))
+	ctx := context.Background()
+	dev := uuid.New()
+
+	if n, ok, err := cache.LastDelivered(ctx, dev); err != nil || ok || n != 0 {
+		t.Fatalf("missing key: %d %v %v", n, ok, err)
+	}
+	for _, step := range []struct{ mark, want int64 }{{5, 5}, {3, 5}, {5, 5}, {6, 6}} {
+		if err := cache.MarkDelivered(ctx, dev, step.mark); err != nil {
+			t.Fatal(err)
+		}
+		if n, ok, err := cache.LastDelivered(ctx, dev); err != nil || !ok || n != step.want {
+			t.Fatalf("after marking %d: %d %v %v, want %d", step.mark, n, ok, err, step.want)
+		}
+	}
+	if n, ok, err := cache.LastDelivered(ctx, uuid.New()); err != nil || ok || n != 0 {
+		t.Fatalf("other device sees the key: %d %v %v", n, ok, err)
+	}
+}
