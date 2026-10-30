@@ -6,9 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +52,8 @@ type auditExport struct {
 // E2 (PDK-143): the audit writer builds the package without operator action; it holds exactly the events the
 // organization had when its day was sealed (plan M10 amendment A7) and its chain verifies. E3 (PDK-144): the auditor downloads the ready package with the
 // headers and checksum of plan M10 decision 35, a not-ready export is refused, another organization gets 404 and
-// every attempt is recorded. E4 (offline verification) follows in this function with PDK-146.
+// every attempt is recorded. E4 (PDK-146, PDK-147): `paddockctl audit verify-export` accepts the download against the
+// fingerprint of the keys endpoint and rejects a package with a modified object or without its first manifest.
 //
 // Like TestAuditIntegrity it uses a fresh organization so the development-only `audit seal --day --org` can seal today
 // without sealing other organizations' days early.
@@ -215,21 +219,38 @@ func TestAuditEvidenceExport(t *testing.T) {
 		ready.PackageSHA256 == nil || *ready.PackageSHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("E3 download headers %v (%d bytes, export %+v)", res.Header, len(res.Body), ready)
 	}
+	members := readTarMembers(t, res.Body)
 	files := map[string]bool{}
-	for r := tar.NewReader(bytes.NewReader(res.Body)); ; {
-		h, err := r.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatalf("E3 tar: %v", err)
-		}
-		files[h.Name] = true
+	for _, m := range members {
+		files[m.name] = true
 	}
 	for _, name := range []string{"README.md", "events.jsonl", "export.json", "export.sig"} {
 		if !files[name] {
 			t.Fatalf("E3 package lacks %s: %v", name, files)
 		}
+	}
+	// E3 (PDK-148): the fingerprint the keys endpoint publishes is the one the downloaded package names in export.json.
+	var doc struct {
+		Keys []struct {
+			KeyVersion  int    `json:"key_version"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"keys"`
+	}
+	for _, m := range members {
+		if m.name == "export.json" {
+			if err := json.Unmarshal(m.body, &doc); err != nil {
+				t.Fatalf("E3 export.json: %v", err)
+			}
+		}
+	}
+	inPackage := false
+	for _, k := range doc.Keys {
+		if k.KeyVersion == *ready.KeyVersion && k.Fingerprint == fingerprint {
+			inPackage = true
+		}
+	}
+	if !inPackage {
+		t.Fatalf("E3 export.json keys[] %+v lack key v%d with fingerprint %s", doc.Keys, *ready.KeyVersion, fingerprint)
 	}
 	downloaded := expectOneEventOfCode(t, auditor.Portal, res.RequestID, "audit.export_downloaded", "success")
 	if downloaded.Params["export_id"] != first.ID || downloaded.Params["from_day"] != today || downloaded.Params["to_day"] != today ||
@@ -251,6 +272,103 @@ func TestAuditEvidenceExport(t *testing.T) {
 	expectOneEventOfCode(t, auditor.Portal, res.RequestID, "audit.export_downloaded", "failure")
 	expectStatus(t, call(t, carol, http.MethodGet, downloadPath, nil), http.StatusNotFound, "not_found")
 	expectStatus(t, call(t, operatorUser(t).Portal, http.MethodGet, downloadPath, nil), http.StatusForbidden, "forbidden")
+
+	// E4: an auditor verifies the downloaded package offline against the fingerprint of the keys endpoint; a package
+	// with a flipped object byte or without its first manifest does not verify.
+	ctl := newPaddockctl(t)
+	dir := t.TempDir()
+	write := func(name string, data []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	verify := func(file string) ctlResult {
+		return ctl.run(t, "", "", "audit", "verify-export", file, "--fingerprint", fingerprint)
+	}
+	if r := verify(write("package.tar", res.Body)); r.code != 0 || !strings.HasPrefix(r.stdout, "OK ") ||
+		!strings.Contains(r.stdout, "fingerprint "+fingerprint) {
+		t.Fatalf("E4 verify-export of the download: exit %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	flipped := false
+	tampered := writeTarMembers(t, members, func(m tarMember) (tarMember, bool) {
+		if !flipped && strings.HasPrefix(m.name, "objects/") && len(m.body) > 0 {
+			flipped = true
+			m.body = append([]byte{}, m.body...)
+			m.body[len(m.body)/2] ^= 1
+		}
+		return m, true
+	})
+	if !flipped {
+		t.Fatalf("E4 package has no object to modify: %v", files)
+	}
+	if r := verify(write("flipped.tar", tampered)); r.code != 1 || !strings.Contains(r.stdout, "SHA-256 mismatch") {
+		t.Fatalf("E4 verify-export of a modified object: exit %d, want 1 with SHA-256 mismatch\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	firstManifest := "manifests/" + today + ".json"
+	removed := false
+	noManifest := writeTarMembers(t, members, func(m tarMember) (tarMember, bool) {
+		if m.name == firstManifest {
+			removed = true
+			return m, false
+		}
+		return m, true
+	})
+	if !removed {
+		t.Fatalf("E4 package lacks %s: %v", firstManifest, files)
+	}
+	if r := verify(write("no-manifest.tar", noManifest)); r.code != 1 || !strings.Contains(r.stdout, "no manifest") {
+		t.Fatalf("E4 verify-export without the first manifest: exit %d, want 1 with no manifest\n%s%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+type tarMember struct {
+	name string
+	body []byte
+}
+
+// readTarMembers returns the regular files of a tar archive in archive order.
+func readTarMembers(t *testing.T, data []byte) []tarMember {
+	t.Helper()
+	var members []tarMember
+	for r := tar.NewReader(bytes.NewReader(data)); ; {
+		h, err := r.Next()
+		if err == io.EOF {
+			return members
+		}
+		if err != nil {
+			t.Fatalf("tar: %v", err)
+		}
+		body, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("tar member %s: %v", h.Name, err)
+		}
+		members = append(members, tarMember{name: h.Name, body: body})
+	}
+}
+
+// writeTarMembers builds a tar archive from members after edit decided for each whether it stays and with which body.
+func writeTarMembers(t *testing.T, members []tarMember, edit func(tarMember) (tarMember, bool)) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	for _, m := range members {
+		m, keep := edit(m)
+		if !keep {
+			continue
+		}
+		if err := w.WriteHeader(&tar.Header{Name: m.name, Mode: 0o600, Size: int64(len(m.body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(m.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 // auditTotalSince is the total the audit log lists for the viewer's organization from 00:00 UTC of day.
