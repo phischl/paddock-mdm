@@ -2,13 +2,17 @@ package admin_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
@@ -113,4 +117,91 @@ func TestReadAccessRecordingOneRange(t *testing.T) {
 		t.Fatalf("GET: %d %s", r.status, r.body)
 	}
 	e.expectEvent(r, "audit.searched:success:")
+}
+
+// TestReadAccessRecordingSwitchUnknown (plan M10 amendment 2026-10-31, PDK-139 round 3): when the recording switch
+// cannot be read, the read records nothing and fails, so no list is served unrecorded. The request's deadline has
+// passed before the handler opens its transaction. The request bypasses the contract check of env.do: the contract
+// documents no 500 response.
+func TestReadAccessRecordingSwitchUnknown(t *testing.T) {
+	e := newEnv(t)
+	org := e.org("switchunknown")
+	dev := uuid.Must(uuid.NewV7())
+	if _, err := e.super.Exec(context.Background(), "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'ws-1', 'active')", dev, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization_privacy_settings
+		SET audit_search_recorded = true, inventory_view_recorded = true WHERE organization_id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	alice := e.session(org, principal.RoleOrgAdmin)
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	for _, path := range []string{"/api/v1/audit-events", "/api/v1/devices/" + dev.String() + "/software",
+		"/api/v1/devices/" + dev.String() + "/vulnerabilities"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(expired, http.MethodGet, "https://admin.test"+path, nil)
+		req.AddCookie(alice)
+		e.handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), `"items"`) {
+			t.Fatalf("GET %s with the switch unknown: %d %s", path, rec.Code, rec.Body)
+		}
+		if ev := e.events(rec.Header().Get(httpx.HeaderRequestID)); len(ev) != 0 {
+			t.Fatalf("GET %s with the switch unknown recorded %v", path, ev)
+		}
+	}
+}
+
+// TestReadAccessRecordingMillisecondRange (PDK-139 round 3): a range finer than a millisecond is truncated once, so the
+// recorded range and the listed range are the same. An event at T is listed by a search from T+0.4 ms to T+1.4 ms,
+// whose recording names T and T+1 ms.
+func TestReadAccessRecordingMillisecondRange(t *testing.T) {
+	e := newEnv(t)
+	org := e.org("msrange")
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization_privacy_settings
+		SET audit_search_recorded = true WHERE organization_id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	err := e.writer.InWriter(context.Background(), func(ctx context.Context, q *auditstore.Queries) error {
+		if err := q.EnsureAuditPartition(ctx, at); err != nil {
+			return err
+		}
+		_, err := q.InsertAuditEvent(ctx, auditstore.InsertAuditEventParams{
+			EventID: uuid.Must(uuid.NewV7()), OrganizationID: org, OccurredAt: at, RecordedAt: at, Code: "device_group.created",
+			Outcome: "success", Source: "portal", Actor: []byte(`{"type":"admin","display":"alice","step_up":false}`),
+			Params: []byte(`{}`), CorrelationID: "at-t", ObjectKey: "k",
+		})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := url.Values{
+		"from": {at.Add(400 * time.Microsecond).Format(time.RFC3339Nano)},
+		"to":   {at.Add(1400 * time.Microsecond).Format(time.RFC3339Nano)},
+	}
+	r := e.do(call{method: http.MethodGet, path: "/api/v1/audit-events?" + query.Encode(), cookie: e.session(org, principal.RoleOrgAdmin)})
+	if r.status != http.StatusOK {
+		t.Fatalf("GET: %d %s", r.status, r.body)
+	}
+	var listed struct {
+		Items []struct {
+			CorrelationID string `json:"correlation_id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(r.body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Items) != 1 || listed.Items[0].CorrelationID != "at-t" {
+		t.Fatalf("listed %s, want the event at %s", r.body, at.Format(time.RFC3339Nano))
+	}
+	var from, to string
+	if err := e.super.QueryRow(context.Background(), `SELECT params->>'from', params->>'to' FROM action
+		WHERE correlation_id = $1 AND code = 'audit.searched'`, r.header.Get(httpx.HeaderRequestID)).Scan(&from, &to); err != nil {
+		t.Fatal(err)
+	}
+	if from != at.Format(time.RFC3339Nano) || to != at.Add(time.Millisecond).Format(time.RFC3339Nano) {
+		t.Fatalf("recorded %s to %s, want %s to %s", from, to, at.Format(time.RFC3339Nano), at.Add(time.Millisecond).Format(time.RFC3339Nano))
+	}
 }

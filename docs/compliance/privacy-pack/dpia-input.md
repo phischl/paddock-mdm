@@ -45,7 +45,9 @@ Likelihood and severity are left for [Organization] to assess (for example low, 
   software usage are switched off; free disk space and uptime stay in Fleet.
 - **Recorded reads, coalesced:** audit searches (`audit.searched`, the first per administrator, hour and set of
   filters) and views of a device's *Software* and *Vulnerabilities* tabs (`device.inventory_viewed`, once per
-  administrator, device and day) are recorded when the organization switches them on.
+  administrator, device and day) are recorded when the organization switches them on. Failure events of refused reads
+  (an invalid range or paging, a missing device) are not coalesced: each refused attempt records one event; coalescing
+  them per actor, problem code and hour is planned as a follow-up.
 - **Purge jobs with evidence:** login trace 365 days, login history `login_history_days`, inventory of retired devices
   `retired_inventory_days`, operational history per index retention; each deletion is recorded
   ([retention.md](../retention.md)).

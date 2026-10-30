@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -137,7 +138,9 @@ func expectRecorded(t *testing.T, recorded bool, err error, want bool) {
 // row; a fresh claim inserts its window row, the action and the outbox row in one transaction; a claim error rolls
 // the window row back and is recorded as failure; a denied role is recorded as denied without running the claim; with
 // the switch off the claim does not run and nothing is recorded. A cancellation before the switch is read records
-// nothing, one after it is a claim error (amendment 2026-10-30, PDK-139 round 2).
+// nothing, one after it is a claim error (amendment 2026-10-30, PDK-139 round 2). Any error before the switch is read
+// records nothing and is returned, and once the switch was read as off nothing is recorded whatever fails afterwards
+// (amendment 2026-10-31, PDK-139 round 3).
 func TestRecordReadOnce(t *testing.T) {
 	h := newHarness(t)
 	ctx := h.admin(principal.RoleOrgAdmin)
@@ -218,6 +221,53 @@ func TestRecordReadOnce(t *testing.T) {
 		}
 		if actions, events := h.recorded(t, "corr-"+t.Name()); len(actions) != 0 || len(events) != 0 {
 			t.Fatalf("canceled before the switch: %d actions, %d outbox rows", len(actions), len(events))
+		}
+	})
+	t.Run("switch unknown", func(t *testing.T) {
+		h := newHarness(t)
+		broken := errors.New("settings read broke")
+		expired, cancel := context.WithDeadline(h.admin(principal.RoleOrgAdmin), time.Now().Add(-time.Second))
+		defer cancel()
+		for name, read := range map[string]func() error{
+			"settings read fails": func() error {
+				_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgAdmin), app.SpecAuditSearched,
+					func(context.Context, *pgstore.Queries) (bool, error) { return true, broken }, claimWindow(h.org, "broken", nil))
+				if !errors.Is(err, broken) {
+					return fmt.Errorf("%v, want the settings error", err)
+				}
+				return nil
+			},
+			"deadline exceeded": func() error {
+				_, err := h.runner.RecordReadOnce(expired, app.SpecAuditSearched, switchedOn, claimWindow(h.org, "expired", nil))
+				if err == nil {
+					return errors.New("an expired read was not refused")
+				}
+				return nil
+			},
+		} {
+			if err := read(); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		}
+		if actions, events := h.recorded(t, "corr-"+t.Name()); len(actions) != 0 || len(events) != 0 {
+			t.Fatalf("switch unknown: %d actions, %d outbox rows", len(actions), len(events))
+		}
+		if n := countRows(t, h.super, "SELECT count(*) FROM read_audit_window WHERE organization_id = $1", h.org); n != 0 {
+			t.Fatalf("switch unknown: %d window rows", n)
+		}
+	})
+	t.Run("canceled after the switch, switched off", func(t *testing.T) {
+		h := newHarness(t)
+		ctx, cancel := context.WithCancel(h.admin(principal.RoleOrgAdmin))
+		defer cancel()
+		recorded, err := h.runner.RecordReadOnce(ctx, app.SpecAuditSearched,
+			func(context.Context, *pgstore.Queries) (bool, error) { cancel(); return false, nil },
+			claimWindow(h.org, "off", errors.New("claim ran")))
+		if recorded {
+			t.Fatalf("recorded with the switch off (%v)", err)
+		}
+		if actions, events := h.recorded(t, "corr-"+t.Name()); len(actions) != 0 || len(events) != 0 {
+			t.Fatalf("canceled with the switch off: %d actions, %d outbox rows (%v)", len(actions), len(events), err)
 		}
 	})
 	t.Run("canceled after the switch", func(t *testing.T) {
@@ -486,6 +536,40 @@ func TestReadAuditRefused(t *testing.T) {
 		if n := len(w.events(t, w.org, c.code)); n != before {
 			t.Fatalf("%s with the switches off: %d new events", c.name, n-before)
 		}
+	}
+}
+
+// TestReadAuditInventoryTarget (plan M10 amendment 2026-10-31, PDK-139 round 3): a view of another organization's
+// device or of an unknown or invalid request records its failure with target_id_used and no device ID anywhere in the
+// event; a view of an own device records the device as target.
+func TestReadAuditInventoryTarget(t *testing.T) {
+	w := newReadWorld(t, false, true)
+	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7())})
+	foreign := w.device(t, w.otherOrg(t), "globex-3")
+	unknown := uuid.Must(uuid.NewV7())
+	own := w.device(t, w.org, "ws-own")
+	bad := problem.InvalidRequest.WithDetail("unknown severity")
+	for _, c := range []struct {
+		id      uuid.UUID
+		invalid error
+	}{{foreign, nil}, {unknown, nil}, {own, bad}} {
+		before := len(w.events(t, w.org, audit.CodeDeviceInventoryViewed))
+		if _, err := w.reads.InventoryViewed(alice, c.id, app.InventoryViewVulnerabilities, c.invalid); err == nil {
+			t.Fatalf("view of %s was not refused", c.id)
+		}
+		ev := w.events(t, w.org, audit.CodeDeviceInventoryViewed)[before]
+		raw, _ := json.Marshal(ev)
+		if ev.Outcome != audit.OutcomeFailure || ev.Target != nil || ev.Params["target_id_used"] != true ||
+			strings.Contains(string(raw), c.id.String()) {
+			t.Fatalf("refused view of %s recorded %s", c.id, raw)
+		}
+	}
+	recorded, err := w.reads.InventoryViewed(alice, own, app.InventoryViewSoftware, nil)
+	expectRecorded(t, recorded, err, true)
+	events := w.events(t, w.org, audit.CodeDeviceInventoryViewed)
+	if ev := events[len(events)-1]; ev.Target == nil || ev.Target.ID != own.String() || ev.Target.Display != "ws-own" ||
+		ev.Params["target_id_used"] != nil {
+		t.Fatalf("view of an own device: %+v", ev)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -61,8 +62,10 @@ type AuditListed struct {
 	Count   int
 }
 
-// effectiveRange is the range the query searches at now (or at f.Now when set): to defaults to now, from to DefaultAuditRange before to; an
-// empty or reversed range and one longer than MaxAuditRange are refused.
+// effectiveRange is the range the query searches at now (or at f.Now when set): to defaults to now, from to
+// DefaultAuditRange before to, both truncated to the millisecond of audit timestamps, so the recorded range, its filter
+// hash and the list search the same bounds (PDK-139). An empty or reversed range and one longer than MaxAuditRange are
+// refused.
 func (f AuditQuery) effectiveRange(now time.Time) (from, to time.Time, err error) {
 	if !f.Now.IsZero() {
 		now = f.Now
@@ -75,6 +78,7 @@ func (f AuditQuery) effectiveRange(now time.Time) (from, to time.Time, err error
 	if f.From != nil {
 		from = *f.From
 	}
+	from, to = audit.Timestamp(from), audit.Timestamp(to)
 	if !from.Before(to) {
 		return from, to, problem.InvalidRequest.WithDetail("from must be before to")
 	}

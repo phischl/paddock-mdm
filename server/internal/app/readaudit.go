@@ -172,7 +172,9 @@ func registeredCodes(codes []string) (known []string, unknown int) {
 // InventoryViewed records the view (InventoryViewSoftware or InventoryViewVulnerabilities) of the device's inventory
 // as device.inventory_viewed, once per actor, device and UTC day, while inventory_view_recorded is on. While recording
 // is on, a refused view is recorded as failure and refused: invalid is the input error the handler found (or nil),
-// and a missing or foreign device is not_found.
+// and a missing or foreign device is not_found. The device is the event's target only once it resolved within the
+// caller's organization; otherwise only target_id_used is recorded, so another organization's device ID never enters
+// this organization's audit trail.
 func (r *ReadAudit) InventoryViewed(ctx context.Context, deviceID uuid.UUID, view string, invalid error) (bool, error) {
 	now := r.now()
 	enabled := func(ctx context.Context, qs *pgstore.Queries) (bool, error) {
@@ -180,24 +182,25 @@ func (r *ReadAudit) InventoryViewed(ctx context.Context, deviceID uuid.UUID, vie
 		return s.InventoryViewRecorded, err
 	}
 	return r.runner.RecordReadOnce(ctx, SpecInventoryViewed, enabled, func(ctx context.Context, qs *pgstore.Queries, rec Recorder) (bool, error) {
-		rec.SetTarget(audit.Target{Type: "device", ID: deviceID.String()})
 		rec.SetParam("view", view)
 		if invalid != nil {
+			rec.SetParam("target_id_used", true)
 			return false, invalid
 		}
 		dev, err := qs.GetDevice(ctx, deviceID)
-		if db.IsNoRows(err) {
-			return false, problem.NotFound
-		}
 		if err != nil {
+			rec.SetParam("target_id_used", true)
+			if db.IsNoRows(err) {
+				return false, problem.NotFound
+			}
 			return false, fmt.Errorf("device of the inventory view: %w", err)
 		}
+		rec.SetTarget(audit.Target{Type: "device", ID: deviceID.String(), Display: dev.Hostname})
+		rec.SetParam("hostname", dev.Hostname)
 		window := now.UTC().Truncate(24 * time.Hour)
 		if fresh, err := claimReadWindow(ctx, qs, audit.CodeDeviceInventoryViewed, deviceID.String(), window); err != nil || !fresh {
 			return false, err
 		}
-		rec.SetTarget(audit.Target{Type: "device", ID: deviceID.String(), Display: dev.Hostname})
-		rec.SetParam("hostname", dev.Hostname)
 		rec.SetParam("window_start", window.Format(time.RFC3339))
 		return true, nil
 	})

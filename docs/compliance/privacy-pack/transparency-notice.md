@@ -130,10 +130,14 @@ can lodge a complaint with a supervisory authority, for example [competent super
 
 According to [Organization]'s privacy settings, Paddock records in the audit log:
 
-- views of a device's *Software* and *Vulnerabilities* pages: [recorded, once per administrator, device and day |
-  not recorded];
+- views of a device's *Software* and *Vulnerabilities* pages: [recorded, the first view per administrator, device and
+  day | not recorded];
 - searches of the audit log: [recorded, the first search per administrator, hour and set of filters, with its filters
   but without a search term | not recorded].
+
+Only the first access per window is recorded: further views of the same device on the same day, and further searches
+with the same filters in the same hour, leave no entry in the audit log. The audit log therefore shows that and when
+an administrator first read your data in a window, not how often.
 
 Other reads, for example of the device overview or of the logins on a device, are not recorded. Every request and
 every download of an evidence export for auditors is recorded.

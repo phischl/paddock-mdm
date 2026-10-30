@@ -19,7 +19,8 @@ var readAuditCodes = []string{"audit.searched", "device.inventory_viewed"}
 // administrator, hour and set of filters is recorded, so two searches with the same filters and different search
 // texts record one event without the text; a target_id that is no device of the organization is recorded only as
 // target_id_used; the software and vulnerabilities of one device viewed twice record exactly one
-// device.inventory_viewed; a refused search and a view of a missing device record one failure each; an auditor's
+// device.inventory_viewed; a refused search and a view of a missing device record one failure each, the view without
+// the device ID, only with target_id_used (amendment 2026-10-31, PDK-139 round 3); an auditor's
 // search records its own event, and another organization's administrator sees none of them. The organization is fresh, so no other gate's reads fall into its windows.
 func TestReadAccessAudit(t *testing.T) {
 	slug, org := gateOrganization(t)
@@ -63,7 +64,8 @@ func TestReadAccessAudit(t *testing.T) {
 	get(admin, software)
 	get(auditor, "/api/v1/audit-events")
 	expectStatus(t, call(t, admin, http.MethodGet, "/api/v1/audit-events?from=2099-01-01T00:00:00Z", nil), http.StatusBadRequest, "invalid_request")
-	expectStatus(t, call(t, admin, http.MethodGet, "/api/v1/devices/"+uuid.NewString()+"/software", nil), http.StatusNotFound, "not_found")
+	missingDevice := uuid.NewString()
+	expectStatus(t, call(t, admin, http.MethodGet, "/api/v1/devices/"+missingDevice+"/software", nil), http.StatusNotFound, "not_found")
 
 	searched := expectOneIndexEvent(t, idx, org, `code = 'audit.searched' AND outcome = 'success' AND actor->>'id' = $1
 		AND params->>'q_used' = 'false' AND NOT params ? 'target_id_used'`, adminID, "audit.searched", "success", 30*time.Second)
@@ -92,10 +94,11 @@ func TestReadAccessAudit(t *testing.T) {
 	if viewed.Params["view"] != "software" {
 		t.Errorf("device.inventory_viewed params %v, want view software", viewed.Params)
 	}
-	missing := expectOneIndexEvent(t, idx, org, "code = 'device.inventory_viewed' AND outcome = 'failure' AND actor->>'id' = $1", adminID,
-		"device.inventory_viewed", "failure", 30*time.Second)
-	if missing.Params["error_code"] != "not_found" {
-		t.Errorf("refused view params %v, want error_code not_found", missing.Params)
+	missing := expectOneIndexEvent(t, idx, org, `code = 'device.inventory_viewed' AND outcome = 'failure' AND actor->>'id' = $1
+		AND coalesce(target::text, 'null') = 'null'`, adminID, "device.inventory_viewed", "failure", 30*time.Second)
+	if missing.Params["error_code"] != "not_found" || missing.Params["target_id_used"] != true ||
+		containsAny([]byte(fmt.Sprint(missing.Params)), []string{missingDevice}) != "" {
+		t.Errorf("refused view params %v, want error_code not_found, target_id_used and no device ID", missing.Params)
 	}
 	expectOneIndexEvent(t, idx, org, "code = 'audit.searched' AND actor->>'type' = 'admin' AND actor->>'id' = $1", auditorID,
 		"audit.searched", "success", 30*time.Second)

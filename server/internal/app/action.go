@@ -409,8 +409,9 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 // on, claim. claim returns false when the window key existed, and then nothing is recorded (no action, no outbox
 // row); true records outcome success in the same transaction. A claim error (a refused read, a failed claim) rolls
 // back, so no window is claimed, and is recorded as failure (plan M10 decision 18, amendment 2026-10-30 PDK-139 round
-// 2). A cancellation before enabled has read the switch records nothing: whether the read was to be recorded is not
-// known then.
+// 2). Any error before enabled has read the switch (a cancellation, a failed transaction start or settings read)
+// records nothing and is returned, so the read fails: whether it was to be recorded is not known then. Once the
+// switch was read as off, nothing is recorded whatever fails afterwards (amendment 2026-10-31, PDK-139 round 3).
 func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 	enabled func(ctx context.Context, q *pgstore.Queries) (bool, error),
 	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
@@ -424,14 +425,13 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 		return false, err
 	}
 	defer r.recordPanic(ctx, p, ScopeOrg, rec)
-	recorded, switchRead := false, false
+	recorded, on := false, false
 	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		on, err := enabled(ctx, q)
+		switchedOn, err := enabled(ctx, q)
 		if err != nil {
 			return err
 		}
-		switchRead = true
-		if !on {
+		if on = switchedOn; !on {
 			return nil
 		}
 		fresh, err := claim(ctx, q, rec)
@@ -442,7 +442,8 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 		return r.insertFinished(ctx, q, rec, nil)
 	})
 	if err != nil {
-		if !switchRead && errors.Is(err, context.Canceled) {
+		// on is set only once the switch was read as on: before that, or with it off, the read is not recorded.
+		if !on {
 			return false, err
 		}
 		r.recordFinal(ctx, p, ScopeOrg, rec, err)
