@@ -34,6 +34,10 @@ ifneq ($(BACKUP),)
 export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
 endif
 
+# CI only (PDK-540): the workflow sets PADDOCK_CI_GOMODCACHE to the runner's module download cache, which the image
+# builds read instead of the module proxy; unset, as locally, the Compose files are unchanged.
+CI_GOMODCACHE_FILES := $(if $(PADDOCK_CI_GOMODCACHE),compose.ci-gomodcache.yaml,)
+
 # The stack of this checkout: deploy/compose/.env names its Compose project and host ports, so a second development
 # stack runs from a second checkout (docs/operations/local-dev.md, "Running a second dev stack"). The process
 # environment wins, as it does for Compose and lib.sh. Recursive, because `make up` creates .env (dev-secrets) first.
@@ -47,7 +51,7 @@ DEV_HTTPS   = https://%.$(call dev_setting,PADDOCK_DOMAIN,paddock.localhost):$(c
 
 COMPOSE = docker compose --project-directory $(COMPOSE_DIR) -p $(DEV_PROJECT) \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
-	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES),-f $(COMPOSE_DIR)/$(f))
+	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES) $(CI_GOMODCACHE_FILES),-f $(COMPOSE_DIR)/$(f))
 # Expanded only where a recipe uses them, so that the guard stops the stack's targets and no other one.
 unexport dotenv dev_setting dev_instance_guard DEV_PROJECT DEV_HTTPS COMPOSE LOAD_GUARD
 
@@ -527,7 +531,7 @@ RELEASE_PGBACKREST_REPO ?= $(RELEASE_REGISTRY)/paddock-pgbackrest
 RELEASE_DIR             ?= dist/release/$(RELEASE_VERSION)
 RELEASE_SOURCE          ?= https://github.com/phischl/paddock-mdm
 DOCKER_CONFIG_DIR       ?= $(HOME)/.docker
-# Extra flags of every docker buildx build, e.g. the workflow's layer cache (--cache-from/--cache-to type=gha).
+# Extra flags of every docker buildx build.
 RELEASE_BUILDX_FLAGS    ?=
 RELEASE_IMAGES           = server=$(RELEASE_SERVER_REPO):$(RELEASE_VERSION) compiler=$(RELEASE_COMPILER_REPO):$(RELEASE_VERSION) \
 	pgbackrest=$(RELEASE_PGBACKREST_REPO):$(RELEASE_VERSION)
