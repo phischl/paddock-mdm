@@ -2170,8 +2170,8 @@
   },
   "mcp": {
     "title": "KI-Assistenten (MCP)",
-    "intro": "Administratoren melden sich mit ihrem Paddock-Konto beim MCP an (`paddockctl mcp login`) und handeln mit ihrer eigenen Rolle. Diese Richtlinie begrenzt, was jede MCP-Sitzung dieser {scope} tun darf. Änderungen brauchen zusätzlich den eigenen Schreibzugriff des Administrators.",
-    "connectHint": "Um einen Assistenten anzubinden, führen Sie `paddockctl mcp login` aus und tragen `paddockctl mcp` in Ihrem MCP-Client ein. Details stehen im Betriebshandbuch.",
+    "intro": "Administratoren melden sich mit ihrem Paddock-Konto beim MCP an (paddockctl mcp login) und handeln mit ihrer eigenen Rolle. Diese Richtlinie begrenzt, was jede MCP-Sitzung dieser {scope} tun darf. Änderungen brauchen zusätzlich den eigenen Schreibzugriff des Administrators.",
+    "connectHint": "Um einen Assistenten anzubinden, führen Sie paddockctl mcp login aus und tragen paddockctl mcp in Ihrem MCP-Client ein. Details stehen im Betriebshandbuch.",
     "enabled": "MCP eingeschaltet",
     "writeEnabled": "Änderungen über den MCP erlauben",
     "mode": {
