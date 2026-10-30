@@ -77,7 +77,7 @@ func TestSealPublishesSigningKey(t *testing.T) {
 		t.Fatalf("published keys of v%d = %x, want exactly %x", k.version, got, []byte(k.pub))
 	}
 
-	// Insert-only: a later, different key for the same version does not replace the published one.
+	// Insert-only: a later, different key for the same version neither replaces the published one nor is sealed with.
 	other, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +86,15 @@ func TestSealPublishesSigningKey(t *testing.T) {
 	org2 := uuid.Must(uuid.NewV7())
 	k.object(t, org2, day.Add(time.Hour), 1)
 	sealer = auditwriter.NewSealer(k.pool, k.writer, k.signer, auditwriter.NewKeyPublisher(changed))
-	if _, err := sealer.SealOrganizationThrough(context.Background(), org2, day); err != nil {
+	if _, err := sealer.SealOrganizationThrough(context.Background(), org2, day); !errors.Is(err, auditwriter.ErrSigningKeyMismatch) {
+		t.Fatalf("seal with a different key: err = %v, want ErrSigningKeyMismatch", err)
+	}
+	var n int
+	if err := k.super.QueryRow(context.Background(), "SELECT count(*) FROM audit_manifest WHERE organization_id = $1", org2).Scan(&n); err != nil {
 		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("%d manifests recorded despite the key mismatch", n)
 	}
 	if got := k.published(t); len(got) != 1 || string(got[0]) != string(k.pub) {
 		t.Fatalf("published key of v%d changed to %x", k.version, got)
@@ -173,5 +180,32 @@ func TestExportBuildPublishesSigningKey(t *testing.T) {
 	}
 	if got := k.published(t); len(got) != 1 || string(got[0]) != string(k.pub) {
 		t.Fatalf("published keys of v%d after Build = %x, want %x", k.version, got, []byte(k.pub))
+	}
+}
+
+func TestExportBuildFailsOnSigningKeyMismatch(t *testing.T) {
+	k := newKeyTestEnv(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	day := pastDay(5)
+	k.object(t, org, day.Add(time.Hour), 2)
+	sealer := auditwriter.NewSealer(k.pool, k.writer, k.signer, auditwriter.NewKeyPublisher(k.keyFn))
+	if _, err := sealer.SealOrganizationThrough(ctx, org, day); err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.super.Exec(ctx, "UPDATE audit_signing_key SET public_key = $1 WHERE key_version = $2", []byte(other), k.version); err != nil {
+		t.Fatal(err)
+	}
+	exporter := auditwriter.NewExporter(k.pool, k.writer, k.store, k.signer, k.keyFn,
+		auditwriter.NewVerifier(k.pool, k.store, k.keyFn), "test", time.Second)
+	if err := exporter.Build(ctx, k.running(t, org, day, day, "mismatch")); !errors.Is(err, auditwriter.ErrSigningKeyMismatch) {
+		t.Fatalf("Build with a mismatching published key: err = %v, want ErrSigningKeyMismatch", err)
+	}
+	if got := k.published(t); len(got) != 1 || string(got[0]) != string([]byte(other)) {
+		t.Fatalf("published key of v%d was rewritten: %x", k.version, got)
 	}
 }

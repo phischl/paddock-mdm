@@ -1,14 +1,22 @@
 package auditwriter
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
 
+	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 )
+
+// ErrSigningKeyMismatch means OpenBao's public key for an audit-chain version differs from the one already published.
+// Signing on would use a key whose fingerprint auditors cannot find, so the seal or export stops instead.
+var ErrSigningKeyMismatch = errors.New("published audit signing key differs from the OpenBao key")
 
 // keyCacheTTL bounds how long the audit-chain public keys read from OpenBao are reused (plan M10 decision 36). A
 // rotation is picked up at the latest after this time; a version the cache does not know forces a read at once.
@@ -33,7 +41,8 @@ func NewKeyPublisher(keys PublicKeys) *KeyPublisher {
 	return &KeyPublisher{keys: keys, now: time.Now}
 }
 
-// Ensure records the public key of version; an already published version is left untouched.
+// Ensure records the public key of version; an already published version is left untouched and must
+// match pub, otherwise ErrSigningKeyMismatch.
 func (p *KeyPublisher) Ensure(ctx context.Context, q *auditstore.Queries, version int) error {
 	pub, err := p.lookup(ctx, version)
 	if err != nil {
@@ -69,6 +78,15 @@ func ensureSigningKey(ctx context.Context, q *auditstore.Queries, version int, p
 	}
 	if err := q.EnsureAuditSigningKey(ctx, auditstore.EnsureAuditSigningKeyParams{KeyVersion: int32(version), PublicKey: pub}); err != nil { //nolint:gosec // range checked above
 		return fmt.Errorf("publish audit-chain v%d: %w", version, err)
+	}
+	stored, err := q.GetAuditSigningKey(ctx, int32(version)) //nolint:gosec // range checked above
+	if err != nil {
+		return fmt.Errorf("read published audit-chain v%d: %w", version, err)
+	}
+	if !bytes.Equal(stored, pub) {
+		slog.ErrorContext(ctx, "audit signing key differs from the published one", "key_version", version,
+			"published_fingerprint", auditevidence.Fingerprint(stored), "openbao_fingerprint", auditevidence.Fingerprint(pub))
+		return fmt.Errorf("%w: audit-chain v%d", ErrSigningKeyMismatch, version)
 	}
 	return nil
 }

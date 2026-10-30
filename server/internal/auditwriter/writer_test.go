@@ -52,6 +52,11 @@ func newStack(t *testing.T) stack {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = super.Close(ctx) })
+	// Every stack starts its own OpenBao with fresh keys while the audit database is shared, so a key published by an
+	// earlier test would read as a mismatch.
+	if _, err := super.Exec(ctx, "DELETE FROM audit_signing_key"); err != nil {
+		t.Fatal(err)
+	}
 
 	rfs := s3test.Start(t, "paddock-audit")
 	store := objectstore.New(rfs.Endpoint, s3test.RootUser, s3test.RootPassword, rfs.Bucket)

@@ -161,6 +161,17 @@ func (q *Queries) GetAuditExport(ctx context.Context, id uuid.UUID) (AuditExport
 	return i, err
 }
 
+const getAuditSigningKey = `-- name: GetAuditSigningKey :one
+SELECT public_key FROM audit_signing_key WHERE key_version = $1
+`
+
+func (q *Queries) GetAuditSigningKey(ctx context.Context, keyVersion int32) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getAuditSigningKey, keyVersion)
+	var public_key []byte
+	err := row.Scan(&public_key)
+	return public_key, err
+}
+
 const insertAuditExport = `-- name: InsertAuditExport :one
 INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose, requested_by, correlation_id)
 VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7)

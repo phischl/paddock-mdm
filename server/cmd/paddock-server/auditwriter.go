@@ -222,12 +222,15 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 		if len(args) != 1 {
 			return errUsage
 		}
-		deps, err := loadAuditDeps(ctx, l)
+		baoCfg := config.LoadOpenBao(l)
+		if err := l.Err(); err != nil {
+			return err
+		}
+		baoClient, err := bao.New(baoCfg.Addr, baoCfg.RoleID, baoCfg.SecretID)
 		if err != nil {
 			return err
 		}
-		defer deps.pool.Close()
-		keys, err := deps.publicKeys(ctx)
+		keys, err := baoClient.PublicKeys(ctx, auditwriter.SigningKey)
 		if err != nil {
 			return err
 		}

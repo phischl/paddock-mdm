@@ -173,9 +173,10 @@ its log for the 00:45 UTC cycle.
 - **Signing key fingerprints.** After every seal and every evidence package the audit writer records the public key of
   the `audit-chain` version it signed with in `paddock_audit.audit_signing_key` (insert-only, so a published key never
   changes; the writer reads OpenBao at most every 10 minutes for this and fails the seal or export if the key cannot be
-  recorded). Auditors and organization admins read them with `GET /api/v1/audit/keys` (`key_version`, `public_key`,
-  `fingerprint` = lowercase hex SHA-256 of the raw 32-byte key). `paddock-server audit keys` (in the audit-writer
-  container) prints `audit-chain v<N> <fingerprint>` per version straight from OpenBao, never from the database.
+  recorded or differs from the published key of that version: the mismatch is logged at ERROR with both fingerprints
+  and stops sealing, which the seal-staleness alert surfaces). Auditors and organization admins read them with
+  `GET /api/v1/audit/keys` (`key_version`, `public_key`, `fingerprint` = lowercase hex SHA-256 of the raw 32-byte key).
+  `paddock-server audit keys` (in the audit-writer container) prints `audit-chain v<N> <fingerprint>` per version straight from OpenBao, never from the database.
   Record that output out of band (ISMS register, signed hand-over note) when a version first appears and after every
   key rotation: an auditor trusts a package only if its fingerprint equals a value that did not travel with the
   package. Key rotation itself is not covered here.

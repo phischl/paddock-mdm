@@ -67,6 +67,11 @@ func newExportEnv(t *testing.T) exportEnv {
 	t.Cleanup(pool.Close)
 	super := superConn(t)
 	t.Cleanup(func() { _ = super.Close(ctx) })
+	// The audit database is shared and every test draws fresh keys for versions 1 and 2, so a key published by an
+	// earlier test would read as a mismatch.
+	if _, err := super.Exec(ctx, "DELETE FROM audit_signing_key WHERE key_version IN (1, 2)"); err != nil {
+		t.Fatal(err)
+	}
 	store := &memStore{objects: map[string][]byte{}}
 	writer, err := auditwriter.NewWriter(pool, store, 400)
 	if err != nil {

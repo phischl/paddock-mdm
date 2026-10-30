@@ -90,5 +90,8 @@ FROM audit_export WHERE status = 'pending';
 INSERT INTO audit_signing_key (key_version, public_key) VALUES (@key_version, @public_key)
 ON CONFLICT (key_version) DO NOTHING;
 
+-- name: GetAuditSigningKey :one
+SELECT public_key FROM audit_signing_key WHERE key_version = @key_version;
+
 -- name: ListAuditSigningKeys :many
 SELECT * FROM audit_signing_key ORDER BY key_version;
