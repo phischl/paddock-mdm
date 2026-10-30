@@ -1625,3 +1625,30 @@ Architect decisions on reviews 1 and 2 of PDK-140. They amend decision 22 and th
 
 `audit_ensure_partition` keeps its `search_path` weakness for now; it is fixed in audit migration `00009` (PDK-558),
 not here.
+
+### Amendment 2026-10-30 (PDK-138, retired inventory)
+
+Architect decision after the external review of PDK-138; it changes decisions 16 and 17 and §13 "re-enrolled device"
+where they differ.
+
+- **Platform-scoped existence check before a Fleet host is deleted.** One Fleet serves every organization, and the
+  organization scope of the retention pass cannot see another organization's re-enrolment of the same hardware. New
+  decision: retention may use a platform-scoped existence check, read-only, boolean only. Before `DeleteHost` the
+  device's action asks `db.PlatformPool.FleetHostInUse` (function `paddock_fleet_host_in_use`, migration 00078,
+  `SECURITY DEFINER`, executable by `paddock_platform` only) whether, in any organization and other than the retired
+  device itself, an inventory reference names the same Fleet host or an active or quarantined device has the retired
+  device's hardware UUID (case-insensitive; also a device whose first inventory sync is still pending and has no
+  reference yet). The answer is yes or no; no rows, organization IDs or device IDs of other organizations reach the
+  caller, the logs or the audit. On yes the host stays in Fleet (`fleet_host_deleted` false) and the retired device's
+  Paddock rows are purged as for re-enrolled hardware. When the check fails, the device fails closed: no Fleet call, no
+  Paddock row deleted, a failure event. It replaces the organization-scoped reference count. Supersedes stub PDK-575.
+- **No head-of-line blocking.** A failing device is recorded as its own `device.inventory_purged` failure event (target
+  the device) and the pass goes on with the next device, within the pass budget and the 100-device limit. A pass with
+  failed devices ends partial: its error counts them (`n of m devices failed`), the store's last success is not set,
+  and `PaddockRetentionPurgeStale` stays the fallback alert.
+- **A 404 counts as "already gone" only with Fleet's error body.** `DeleteHost` treats a 404 as a deleted host only
+  when the body is Fleet's JSON error (`{"message": ..., "errors": [...]}`); any other 404 (a proxy, a wrong base URL)
+  is a failure, so no deletion is recorded and the Paddock rows stay.
+- **Return value and metric.** `PurgeRetiredInventory(ctx, now) (devices int, err error)` as in §6.6: the number of
+  devices whose inventory it purged. `paddock_retention_deleted_total{store="retired_inventory"}` therefore counts
+  purged devices, not rows; the other stores keep counting rows.

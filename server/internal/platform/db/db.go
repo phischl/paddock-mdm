@@ -199,6 +199,23 @@ func (p *PlatformPool) InPlatform(ctx context.Context, fn func(ctx context.Conte
 	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
+// FleetHostInUse reports whether a device of any organization other than retiredDevice still uses the Fleet host or
+// retiredDevice's hardware (plan M10 amendment 2026-10-30): one Fleet serves every organization, and the retention
+// round's organization scope cannot see another organization's re-enrolment. A read-only existence check that answers
+// only yes or no (InPlatform's principals).
+func (p *PlatformPool) FleetHostInUse(ctx context.Context, retiredDevice uuid.UUID, host string) (bool, error) {
+	var inUse bool
+	err := p.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		inUse, err = q.FleetHostInUse(ctx, pgstore.FleetHostInUseParams{RetiredDevice: retiredDevice, Host: host})
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("check the Fleet host's other devices: %w", err)
+	}
+	return inUse, nil
+}
+
 // WithLeaderLock runs fn while holding the session advisory lock key on a dedicated connection, so that only one
 // replica of a role runs a periodic job at a time. It reports false (and does not call fn) when another session
 // holds the lock.

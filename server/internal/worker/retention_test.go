@@ -65,7 +65,7 @@ func TestRetentionRound(t *testing.T) {
 	t.Cleanup(platform.Close)
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
-	r := NewRetention(app.NewRetention(runner, f.pool, &fakeSource{}, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	r := NewRetention(app.NewRetention(runner, f.pool, platform, &fakeSource{}, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
 
 	failing := newFixture(t).org
 	expired := time.Now().Add(-400 * day)
@@ -128,7 +128,7 @@ func TestRetentionRoundRetiredInventory(t *testing.T) {
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
 	fleet := &fakeSource{}
-	r := NewRetention(app.NewRetention(runner, f.pool, fleet, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	r := NewRetention(app.NewRetention(runner, f.pool, platform, fleet, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
 	if len(r.passes) != 3 || r.passes[2].store != app.StoreRetiredInventory {
 		t.Fatalf("passes %+v, want retired_inventory third of 3", r.passes)
 	}
@@ -158,8 +158,8 @@ func TestRetentionRoundRetiredInventory(t *testing.T) {
 	if testutil.ToFloat64(lastSuccess) == 0 {
 		t.Fatal("retired_inventory has no last success")
 	}
-	if d := testutil.ToFloat64(metricRetentionDeleted.WithLabelValues(app.StoreRetiredInventory)) - deletedBefore; d != 2 {
-		t.Fatalf("deleted_total grew by %v, want 2", d)
+	if d := testutil.ToFloat64(metricRetentionDeleted.WithLabelValues(app.StoreRetiredInventory)) - deletedBefore; d != 1 {
+		t.Fatalf("deleted_total grew by %v, want 1 device", d)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestRetentionRoundWaitsForLegacyLock(t *testing.T) {
 	t.Cleanup(platform.Close)
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
-	r := NewRetention(app.NewRetention(runner, f.pool, &fakeSource{}, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	r := NewRetention(app.NewRetention(runner, f.pool, platform, &fakeSource{}, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
 	f.seenUsers(t, f.org, 2, time.Now().Add(-400*day))
 	seen := func() int {
 		return f.count(t, "SELECT count(*) FROM device_user_seen WHERE organization_id = $1", f.org)

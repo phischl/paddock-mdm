@@ -270,8 +270,7 @@ WITH s AS (DELETE FROM installed_software x WHERE x.device_id = @device_id RETUR
 SELECT (SELECT count(*) FROM s)::bigint AS software, (SELECT count(*) FROM f)::bigint AS findings,
        (SELECT count(*) FROM p)::bigint AS policy_results, (SELECT count(*) FROM r)::bigint AS refs;
 
--- The active or quarantined devices other than device_id whose inventory is the Fleet host external_id: the hardware
--- of a retired device that enrolled again (plan M10 §13).
--- name: CountInventoryRefsByExternalID :one
-SELECT count(*) FROM device_inventory_ref r JOIN device d ON d.id = r.device_id
-WHERE r.external_id = @external_id AND r.device_id <> @device_id AND d.state IN ('active','quarantined');
+-- Whether a device of any organization other than retired_device still uses the Fleet host or the retired device's
+-- hardware (platform pool, plan M10 amendment 2026-10-30): yes or no, never another organization's rows.
+-- name: FleetHostInUse :one
+SELECT paddock_fleet_host_in_use(@retired_device::uuid, @host::text)::boolean;

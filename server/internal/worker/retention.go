@@ -33,7 +33,7 @@ var (
 	}, []string{"store"})
 	metricRetentionDeleted = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "paddock_retention_deleted_total",
-		Help: "Rows the retention round deleted, per store.",
+		Help: "Rows the retention round deleted, per store; devices whose inventory it purged for store retired_inventory.",
 	}, []string{"store"})
 	// metricRetentionStores lets an alert notice stores whose last success is never exported, e.g. because a pass
 	// fails from the start (PaddockRetentionPurgeMissing).
@@ -43,7 +43,8 @@ var (
 	})
 )
 
-// retentionPass purges one store of the context's organization and returns the deleted rows.
+// retentionPass purges one store of the context's organization and returns what it deleted: rows, or devices for
+// app.StoreRetiredInventory (plan M10 §6.6).
 type retentionPass struct {
 	store string
 	purge func(ctx context.Context, now time.Time) (int64, error)
@@ -67,7 +68,10 @@ func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool,
 		passes: []retentionPass{
 			{store: app.StoreDeviceLoginEvent, purge: history.Purge},
 			{store: app.StoreDeviceUserSeen, purge: a.PurgeUserSeen},
-			{store: app.StoreRetiredInventory, purge: a.PurgeRetiredInventory},
+			{store: app.StoreRetiredInventory, purge: func(ctx context.Context, now time.Time) (int64, error) {
+				n, err := a.PurgeRetiredInventory(ctx, now)
+				return int64(n), err
+			}},
 		},
 		pool: pool, platform: platform, interval: interval, now: time.Now,
 	}
@@ -110,7 +114,7 @@ func (r *Retention) purge(ctx context.Context) error {
 	for _, org := range orgs {
 		for i, pass := range r.passes {
 			n, err := pass.purge(systemContext(ctx, org, "retention-round"), now)
-			// A failed pass still reports the rows of the batches it committed before the failure.
+			// A failed pass still reports the rows of the batches, or the devices, it committed before the failure.
 			metricRetentionDeleted.WithLabelValues(pass.store).Add(float64(n))
 			if err != nil {
 				failed[i] = true

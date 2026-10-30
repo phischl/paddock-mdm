@@ -1,6 +1,11 @@
 package app
 
-import "time"
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // SetTimeout shortens the bound of one import for tests of a source that does not answer.
 func (r *ReleaseImports) SetTimeout(d time.Duration) { r.timeout = d }
@@ -13,3 +18,14 @@ func (r *Retention) SetBudget(d time.Duration) { r.budget = d }
 
 // SetLockTimeout shortens the row-lock wait of one batch for tests of a blocked batch.
 func (r *Retention) SetLockTimeout(d time.Duration) { r.lockTimeout = d }
+
+// SetHostUsers replaces the cross-organization check of a Fleet host's other devices, for tests of a failing check.
+func (r *Retention) SetHostUsers(f func(ctx context.Context, retiredDevice uuid.UUID, host string) (bool, error)) {
+	r.hosts = hostUsersFunc(f)
+}
+
+type hostUsersFunc func(ctx context.Context, retiredDevice uuid.UUID, host string) (bool, error)
+
+func (f hostUsersFunc) FleetHostInUse(ctx context.Context, retiredDevice uuid.UUID, host string) (bool, error) {
+	return f(ctx, retiredDevice, host)
+}

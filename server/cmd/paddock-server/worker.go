@@ -125,7 +125,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), app.NewRoleMembership(runner, pool, platformPool, ak),
 		ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
-	retention := worker.NewRetention(app.NewRetention(runner, pool, fleetClient, retentionDay),
+	retention := worker.NewRetention(app.NewRetention(runner, pool, platformPool, fleetClient, retentionDay),
 		app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, retentionEvery)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
 		platformPool, inventoryEvery)

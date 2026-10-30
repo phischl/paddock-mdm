@@ -27,11 +27,13 @@ type retentionWorld struct {
 	super     *pgx.Conn
 }
 
-// fakeInventoryAdmin is Fleet's host deletion; err makes every deletion fail.
+// fakeInventoryAdmin is Fleet's host deletion; err makes every deletion fail, failing makes the deletion of that host
+// fail.
 type fakeInventoryAdmin struct {
 	mu      sync.Mutex
 	deleted []ports.HostRef
 	err     error
+	failing ports.HostRef
 }
 
 func (f *fakeInventoryAdmin) DeleteHost(_ context.Context, ref ports.HostRef) error {
@@ -39,6 +41,9 @@ func (f *fakeInventoryAdmin) DeleteHost(_ context.Context, ref ports.HostRef) er
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
+	}
+	if ref == f.failing {
+		return fmt.Errorf("fleet: HTTP 422: host %s refused", ref)
 	}
 	f.deleted = append(f.deleted, ref)
 	return nil
@@ -65,7 +70,7 @@ func newRetentionWorld(t *testing.T) retentionWorld {
 	}
 	t.Cleanup(func() { _ = super.Close(ctx) })
 	fleet := &fakeInventoryAdmin{}
-	return retentionWorld{retention: app.NewRetention(app.NewActionRunner(pool, platform, httpx.RequestID), pool, fleet, time.Second),
+	return retentionWorld{retention: app.NewRetention(app.NewActionRunner(pool, platform, httpx.RequestID), pool, platform, fleet, time.Second),
 		fleet: fleet, super: super}
 }
 

@@ -36,6 +36,9 @@ type fakeFleet struct {
 
 const fakeToken = "fake-token"
 
+// fleetHostNotFound is the body Fleet answers DELETE /hosts/{id} with for a host it does not know.
+const fleetHostNotFound = `{"message":"Resource Not Found","errors":[{"name":"base","reason":"Host was not found in the datastore"}]}`
+
 func newFake(t *testing.T) (*fakeFleet, *httptest.Server) {
 	t.Helper()
 	data, err := os.ReadFile("testdata/get_config.json")
@@ -104,7 +107,9 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/fleet/hosts/"):
 		id := strings.TrimPrefix(path, "/api/v1/fleet/hosts/")
 		if (id != "1" && id != "2") || f.deletedHosts[id] {
-			http.Error(w, `{"message":"Resource Not Found"}`, http.StatusNotFound)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(fleetHostNotFound))
 			return
 		}
 		f.deletedHosts[id] = true

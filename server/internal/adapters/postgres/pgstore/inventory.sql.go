@@ -91,25 +91,6 @@ func (q *Queries) CountDeviceVulnerabilities(ctx context.Context, arg CountDevic
 	return count, err
 }
 
-const countInventoryRefsByExternalID = `-- name: CountInventoryRefsByExternalID :one
-SELECT count(*) FROM device_inventory_ref r JOIN device d ON d.id = r.device_id
-WHERE r.external_id = $1 AND r.device_id <> $2 AND d.state IN ('active','quarantined')
-`
-
-type CountInventoryRefsByExternalIDParams struct {
-	ExternalID string
-	DeviceID   uuid.UUID
-}
-
-// The active or quarantined devices other than device_id whose inventory is the Fleet host external_id: the hardware
-// of a retired device that enrolled again (plan M10 §13).
-func (q *Queries) CountInventoryRefsByExternalID(ctx context.Context, arg CountInventoryRefsByExternalIDParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countInventoryRefsByExternalID, arg.ExternalID, arg.DeviceID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countSoftware = `-- name: CountSoftware :one
 SELECT count(*) FROM (
   SELECT 1 FROM installed_software s JOIN device d ON d.id = s.device_id AND d.state IN ('active','quarantined')
@@ -283,6 +264,24 @@ func (q *Queries) DeviceExists(ctx context.Context, id uuid.UUID) (bool, error) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const fleetHostInUse = `-- name: FleetHostInUse :one
+SELECT paddock_fleet_host_in_use($1::uuid, $2::text)::boolean
+`
+
+type FleetHostInUseParams struct {
+	RetiredDevice uuid.UUID
+	Host          string
+}
+
+// Whether a device of any organization other than retired_device still uses the Fleet host or the retired device's
+// hardware (platform pool, plan M10 amendment 2026-10-30): yes or no, never another organization's rows.
+func (q *Queries) FleetHostInUse(ctx context.Context, arg FleetHostInUseParams) (bool, error) {
+	row := q.db.QueryRow(ctx, fleetHostInUse, arg.RetiredDevice, arg.Host)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const getDeviceHardware = `-- name: GetDeviceHardware :one

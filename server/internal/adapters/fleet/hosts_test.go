@@ -2,6 +2,8 @@ package fleet_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
@@ -83,6 +85,28 @@ func TestDeleteHost(t *testing.T) {
 	}
 	if want := "DELETE /api/v1/fleet/hosts/1"; f.requests[0] != want {
 		t.Fatalf("first request %q, want %q", f.requests[0], want)
+	}
+}
+
+// TestDeleteHostForeign404 (plan M10 amendment 2026-10-30): only Fleet's own JSON error body makes a 404 "already
+// gone"; a 404 from anything else between Paddock and Fleet is a failure, so no deletion is recorded.
+func TestDeleteHostForeign404(t *testing.T) {
+	for name, body := range map[string]string{
+		"proxy text":          "404 page not found",
+		"html":                "<html><body>Not Found</body></html>",
+		"json without errors": `{"message":"Resource Not Found"}`,
+		"empty":               "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(srv.Close)
+			if err := client(srv.URL).DeleteHost(context.Background(), "1"); err == nil {
+				t.Fatal("foreign 404 counted as a deleted host")
+			}
+		})
 	}
 }
 
