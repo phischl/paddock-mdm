@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -177,7 +177,7 @@ func TestRetentionRoundFleetBreaker(t *testing.T) {
 	t.Cleanup(platform.Close)
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
-	fleet := &fakeSource{deleteErr: errors.New("fleet: HTTP 503: unavailable")}
+	fleet := &fakeSource{deleteErr: fmt.Errorf("%w: fleet: HTTP 503: unavailable", problem.UpstreamUnavailable)}
 	r := NewRetention(app.NewRetention(runner, f.pool, platform, fleet, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
 	orgs := []uuid.UUID{f.org, newFixture(t).org}
 	for i, org := range orgs {

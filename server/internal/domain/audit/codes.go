@@ -83,6 +83,7 @@ const (
 	CodeSettingsLoginChanged        Code = "settings.login_changed"
 	CodeRetentionPurged             Code = "retention.purged"
 	CodeDeviceInventoryPurged       Code = "device.inventory_purged"
+	CodeDeviceInventoryHostKept     Code = "device.inventory_host_kept"
 	CodeDeviceLoginAssignmentChange Code = "device.login_assignment_changed"
 	CodeDeviceLoginsSuspended       Code = "device.logins_suspended"
 	CodeDeviceLoginsResumed         Code = "device.logins_resumed"
@@ -718,17 +719,25 @@ var registry = map[Code]Definition{
 	},
 	CodeRetentionPurged: {
 		Code: CodeRetentionPurged, Emitted: true,
-		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure upstream_unavailable, once per organization whose retired devices the round skipped because the Fleet step failed three times in a row; their evidence is otherwise device.inventory_purged).",
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
 		Params:      []string{"store", "deleted", "cutoff", "partition", "export_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
 	},
 	CodeDeviceInventoryPurged: {
 		Code: CodeDeviceInventoryPurged, Emitted: true,
-		Description: "The retention job deleted the inventory of a retired device in Paddock and its host in Fleet, retired_inventory_days after retirement (actor: system). software, findings and policy_results are the deleted rows. fleet_host_in_use is the answer of the check across all organizations before the host is deleted: ref (another device of any organization references the host; the host stays, the device's Paddock rows go), hardware (an active, quarantined or pending device with the same hardware has no reference yet; the host and the device's host reference stay, its other rows go, and the device is checked again next round) or none (the host is deleted); it is absent when the device had no Fleet host or the check did not run. fleet_host_deleted is true only when the host was deleted or Fleet no longer knew it. A failure keeps all Paddock rows (the counts are the rows kept) and the device is retried next round: upstream_unavailable when Fleet failed, another code when the check failed or the device changed after it was listed.",
-		Params:      []string{"hostname", "retired_at", "software", "findings", "policy_results", "fleet_host_deleted", "fleet_host_in_use"},
+		Description: "The retention job deleted the inventory of a retired device in Paddock and its host in Fleet, retired_inventory_days after retirement (actor: system). software, findings and policy_results are the deleted rows. fleet_host_in_use is the answer of the check across all organizations before the host is deleted: ref (another device of any organization references the host; the host stays, the device's Paddock rows go), hardware (an active, quarantined or pending device with the same hardware has no reference yet) or none; it is absent when the device had no Fleet host or the check did not run. On none, Fleet's last check-in of the host is read first: fleet_host_seen_at is that time when known, and a host seen after the device's retirement and within the last 7 days is still in use. fleet_host_kept names why the host stays with the device's host reference while its other rows go: hardware or seen_recently; the device is checked again next round, and an event is recorded only when that answer changes (device.inventory_host_kept after 30 unchanged rounds). fleet_host_deleted is true only when the host was deleted or Fleet no longer knew it. A failure keeps all Paddock rows (the counts are the rows kept) and the device is retried next round: upstream_unavailable when Fleet failed or could not be reached (also an answer from a proxy in front of Fleet or a redirect), invalid_state when Fleet refused this host with its own error body, another code when a check failed or the device changed after it was listed.",
+		Params: []string{"hostname", "retired_at", "software", "findings", "policy_results", "fleet_host_deleted", "fleet_host_in_use",
+			"fleet_host_kept", "fleet_host_seen_at"},
+		Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:     "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
+	},
+	CodeDeviceInventoryHostKept: {
+		Code: CodeDeviceInventoryHostKept, Emitted: true,
+		Description: "The retention job has kept a retired device's Fleet host and host reference for rounds unchanged rounds with the same answer fleet_host_kept (hardware or seen_recently, see device.inventory_purged) and records it once (actor: system). Nothing is deleted; the device is still checked every round and records device.inventory_purged again when the answer changes. A failure means the notice could not be recorded; the next round retries it.",
+		Params:      []string{"hostname", "retired_at", "fleet_host_kept", "rounds"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
+		Note:        "Notice; ADR 0032.",
 	},
 	CodeDeviceLoginAssignmentChange: {
 		Code: CodeDeviceLoginAssignmentChange, Emitted: true,

@@ -84,6 +84,11 @@ type Inventory interface {
 
 // InventoryAdmin deletes hosts from the inventory system (retention of retired devices, ADR 0032).
 type InventoryAdmin interface {
-	// DeleteHost removes a host; a host that no longer exists is not an error.
+	// DeleteHost removes a host; a host that no longer exists is not an error. An error wrapping
+	// problem.UpstreamUnavailable means the inventory system failed or could not be reached; problem.InvalidState means
+	// it refused this one host.
 	DeleteHost(ctx context.Context, ref HostRef) error
+	// HostSeenAt returns when the host last checked in; the zero time for a host that never did or no longer exists.
+	// Its errors are classified like DeleteHost's.
+	HostSeenAt(ctx context.Context, ref HostRef) (time.Time, error)
 }
