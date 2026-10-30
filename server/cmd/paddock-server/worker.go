@@ -58,10 +58,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	if retentionDay < time.Hour {
 		retentionDefault = 15 * time.Second
 	}
-	retentionEvery := l.Duration("PADDOCK_RETENTION_INTERVAL", retentionDefault)
-	if retentionEvery <= 0 {
-		l.Invalid("PADDOCK_RETENTION_INTERVAL", "must be positive")
-	}
+	retentionEvery := config.RetentionInterval(l, common, retentionDefault)
 	if err := l.Err(); err != nil {
 		return err
 	}

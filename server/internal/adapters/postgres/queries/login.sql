@@ -33,8 +33,8 @@ SELECT device_id, username FROM device_user_seen WHERE last_seen_at >= @since OR
 SELECT EXISTS (SELECT 1 FROM device_user_seen WHERE last_seen_at < @cutoff::timestamptz);
 
 -- name: DeleteExpiredDeviceUserSeen :execrows
--- One batch of rows older than the cutoff (plan M10 decision 13); the batch limits the lock scope, not the
--- transaction: the retention round repeats it inside one transaction until a batch deletes fewer than 1 000 rows.
+-- One batch of rows older than the cutoff (plan M10 decision 13); the retention round runs each batch in its own
+-- transaction until one deletes fewer than 1 000 rows (plan M10 amendment 2026-10-30).
 DELETE FROM device_user_seen WHERE ctid IN (
   SELECT ctid FROM device_user_seen WHERE last_seen_at < @cutoff::timestamptz LIMIT 1000
 );

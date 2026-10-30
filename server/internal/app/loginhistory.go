@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
-	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
@@ -64,9 +63,8 @@ func (h *LoginHistory) List(ctx context.Context, deviceID uuid.UUID, query Login
 	return out, err
 }
 
-// Purge deletes the logins of the context's organization older than login_history_days at now, in batches of 1 000
-// rows inside one transaction with its retention.purged event (system principal); without expired rows it records
-// nothing. It returns the number of deleted rows.
+// Purge deletes the logins of the context's organization older than login_history_days at now (system principal);
+// without expired rows it records nothing. It returns the number of deleted rows (purgeBatches).
 func (h *LoginHistory) Purge(ctx context.Context, now time.Time) (int64, error) {
 	var cutoff time.Time
 	var expired bool
@@ -82,23 +80,7 @@ func (h *LoginHistory) Purge(ctx context.Context, now time.Time) (int64, error) 
 	if err != nil || !expired {
 		return 0, err
 	}
-	var deleted int64
-	spec := ActionSpec{Code: audit.CodeRetentionPurged, Params: map[string]any{
-		"store": StoreDeviceLoginEvent, "cutoff": audit.Timestamp(cutoff).Format(time.RFC3339Nano),
-	}}
-	err = h.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		for {
-			n, err := q.PurgeDeviceLoginEvents(ctx, cutoff)
-			if err != nil {
-				return err
-			}
-			deleted += n
-			if n == 0 {
-				break
-			}
-		}
-		rec.SetParam("deleted", deleted)
-		return nil
+	return purgeBatches(ctx, h.runner, h.org, StoreDeviceLoginEvent, cutoff, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+		return q.PurgeDeviceLoginEvents(ctx, cutoff)
 	})
-	return deleted, err
 }

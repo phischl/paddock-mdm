@@ -74,7 +74,8 @@ func (w retentionWorld) seen(t *testing.T, org uuid.UUID) int {
 }
 
 // batchLog records every DELETE statement on device_user_seen that removes rows of org: its transaction and its row
-// count. With failAt > 0 the failAt-th statement of a transaction raises after deleting, injecting a batch failure.
+// count. With failAt > 0 the failAt-th deleting statement raises after deleting, injecting a batch failure; its log row
+// rolls back with it, so the log keeps the committed batches only.
 // It returns the log table's name.
 func (w retentionWorld) batchLog(t *testing.T, org uuid.UUID, failAt int) string {
 	t.Helper()
@@ -88,7 +89,7 @@ func (w retentionWorld) batchLog(t *testing.T, org uuid.UUID, failAt int) string
 		  SELECT count(*) INTO c FROM old_rows WHERE organization_id = '%[2]s';
 		  IF c > 0 THEN
 		    INSERT INTO %[1]s VALUES (xid(pg_current_xact_id()), c);
-		    IF %[3]d > 0 AND (SELECT count(*) FROM %[1]s WHERE xid = xid(pg_current_xact_id())) >= %[3]d THEN
+		    IF %[3]d > 0 AND (SELECT count(*) FROM %[1]s) >= %[3]d THEN
 		      RAISE EXCEPTION 'injected batch failure';
 		    END IF;
 		  END IF;
@@ -138,9 +139,9 @@ func (w retentionWorld) purgedEvents(t *testing.T, org uuid.UUID, log string) []
 	return out
 }
 
-// TestRetentionPurgeUserSeen (plan M10 decision 13): 2 500 expired rows go in three statements of at most 1 000 rows,
-// all inside the transaction of the one retention.purged event; rows inside the window stay; a second purge finds
-// nothing and records nothing.
+// TestRetentionPurgeUserSeen (plan M10 decision 13, amendment 2026-10-30): 2 500 expired rows go in three batches of
+// at most 1 000 rows, each in its own transaction, recorded as one retention.purged event with the total; rows inside
+// the window stay; a second purge finds nothing and records nothing.
 func TestRetentionPurgeUserSeen(t *testing.T) {
 	w := newRetentionWorld(t)
 	ctx := context.Background()
@@ -165,8 +166,8 @@ func TestRetentionPurgeUserSeen(t *testing.T) {
 		Scan(&statements, &txs, &largest); err != nil {
 		t.Fatal(err)
 	}
-	if statements != 3 || txs != 1 || largest > 1000 {
-		t.Fatalf("%d statements in %d transactions, largest %d rows; want 3 in 1, at most 1 000", statements, txs, largest)
+	if statements != 3 || txs != 3 || largest > 1000 {
+		t.Fatalf("%d statements in %d transactions, largest %d rows; want 3 in 3, at most 1 000", statements, txs, largest)
 	}
 	events := w.purgedEvents(t, org, log)
 	if len(events) != 1 {
@@ -174,7 +175,7 @@ func TestRetentionPurgeUserSeen(t *testing.T) {
 	}
 	ev := events[0]
 	cutoff, err := time.Parse(time.RFC3339, ev.cutoff)
-	if ev.outcome != "success" || ev.deleted != 2500 || !ev.sameTx || err != nil ||
+	if ev.outcome != "success" || ev.deleted != 2500 || ev.sameTx || err != nil ||
 		cutoff.Sub(now.Add(-365*time.Second)).Abs() > time.Millisecond {
 		t.Fatalf("event %+v (cutoff %v)", ev, err)
 	}
@@ -204,21 +205,40 @@ func TestRetentionPurgeUserSeenNothingExpired(t *testing.T) {
 	}
 }
 
-// TestRetentionPurgeUserSeenBatchFailure: a failing second batch rolls the first one back and records the event with
-// outcome failure and nothing deleted.
+// TestRetentionPurgeUserSeenBatchFailure (plan M10 amendment 2026-10-30): a failing second batch rolls back alone; the
+// committed first batch stays deleted and the one event records outcome failure with its 1 000 rows.
 func TestRetentionPurgeUserSeenBatchFailure(t *testing.T) {
 	w := newRetentionWorld(t)
 	now := time.Now().UTC()
 	org := w.organization(t, 1500, now.Add(-400*time.Second))
 	log := w.batchLog(t, org, 2)
-	if n, err := w.retention.PurgeUserSeen(systemCtx(org), now); err == nil || n != 0 {
-		t.Fatalf("purged %d (%v), want an error", n, err)
+	if n, err := w.retention.PurgeUserSeen(systemCtx(org), now); err == nil || n != 1000 {
+		t.Fatalf("purged %d (%v), want an error after 1 000", n, err)
 	}
-	if left := w.seen(t, org); left != 1500 {
-		t.Fatalf("%d rows left, want all 1 500 (rolled back)", left)
+	if left := w.seen(t, org); left != 500 {
+		t.Fatalf("%d rows left, want the 500 of the failed batch", left)
 	}
 	events := w.purgedEvents(t, org, log)
-	if len(events) != 1 || events[0].outcome != "failure" || events[0].deleted != 0 || events[0].store != app.StoreDeviceUserSeen {
+	if len(events) != 1 || events[0].outcome != "failure" || events[0].deleted != 1000 || events[0].store != app.StoreDeviceUserSeen {
+		t.Fatalf("events %+v, want one failure with deleted 1000", events)
+	}
+}
+
+// TestRetentionPurgeUserSeenFirstBatchFails (plan M10 amendment 2026-10-30): when no batch commits, the failure event
+// claims no deleted rows.
+func TestRetentionPurgeUserSeenFirstBatchFails(t *testing.T) {
+	w := newRetentionWorld(t)
+	now := time.Now().UTC()
+	org := w.organization(t, 10, now.Add(-400*time.Second))
+	log := w.batchLog(t, org, 1)
+	if n, err := w.retention.PurgeUserSeen(systemCtx(org), now); err == nil || n != 0 {
+		t.Fatalf("purged %d (%v), want an error and nothing deleted", n, err)
+	}
+	if left := w.seen(t, org); left != 10 {
+		t.Fatalf("%d rows left, want all 10", left)
+	}
+	events := w.purgedEvents(t, org, log)
+	if len(events) != 1 || events[0].outcome != "failure" || events[0].deleted != 0 {
 		t.Fatalf("events %+v, want one failure with deleted 0", events)
 	}
 }

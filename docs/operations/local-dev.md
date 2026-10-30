@@ -139,8 +139,9 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
 - Retention days in seconds: `PADDOCK_RETENTION_UNIT` (`days` default; the dev stack sets `seconds`) is the length of
   a retention day for `paddock-worker` (login history, users seen on devices: 365 days become 365 s); with
   `PADDOCK_ENV=production`, `seconds` stops the start with a configuration error.
-- A faster retention round: `PADDOCK_RETENTION_INTERVAL` (Go duration, default `6h`; `15s` when unset and the unit is
-  `seconds`; the dev stack sets `15s`) is how often `paddock-worker` runs the retention round.
+
+The dev stack also sets the operator variable `PADDOCK_RETENTION_INTERVAL` to `15s` (`15s` is the default when it is
+unset and the unit is `seconds`); outside development it must be at least `1m` (`docs/operations/monitoring.md`).
 
 ## Acceptance gates on a long-lived stack
 

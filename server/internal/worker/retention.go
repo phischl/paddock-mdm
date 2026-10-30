@@ -21,6 +21,11 @@ const RetentionInterval = 6 * time.Hour
 // retentionLockKey is the advisory lock of the round ("padd ret").
 const retentionLockKey = 0x7061646420726574
 
+// legacyLoginHistoryLockKey is the lock of the login history round the retention round replaced ("padd log"). The
+// round holds it too, so that during a rolling upgrade a worker of an earlier version never purges the login history
+// at the same time (plan M10 amendment 2026-10-30).
+const legacyLoginHistoryLockKey = 0x70616464206c6f67
+
 var (
 	metricRetentionLastSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "paddock_retention_last_success_timestamp_seconds",
@@ -88,31 +93,37 @@ func (r *Retention) Run(ctx context.Context) error {
 func (r *Retention) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	_, err := r.platform.WithLeaderLock(sys, retentionLockKey, func(ctx context.Context) error {
-		orgs, err := r.pool.OrganizationIDs(ctx)
-		if err != nil {
-			return err
-		}
-		now := r.now()
-		failed := make([]bool, len(r.passes))
-		var errs []error
-		for _, org := range orgs {
-			for i, pass := range r.passes {
-				n, err := pass.purge(systemContext(ctx, org, "retention-round"), now)
-				if err != nil {
-					failed[i] = true
-					errs = append(errs, fmt.Errorf("organization %s, store %s: %w", org, pass.store, err))
-					continue
-				}
-				metricRetentionDeleted.WithLabelValues(pass.store).Add(float64(n))
-			}
-		}
-		done := float64(r.now().Unix())
-		for i, pass := range r.passes {
-			if !failed[i] {
-				metricRetentionLastSuccess.WithLabelValues(pass.store).Set(done)
-			}
-		}
-		return errors.Join(errs...)
+		_, err := r.platform.WithLeaderLock(ctx, legacyLoginHistoryLockKey, r.purge)
+		return err
 	})
 	return err
+}
+
+// purge runs every pass for every organization while the round holds its locks.
+func (r *Retention) purge(ctx context.Context) error {
+	orgs, err := r.pool.OrganizationIDs(ctx)
+	if err != nil {
+		return err
+	}
+	now := r.now()
+	failed := make([]bool, len(r.passes))
+	var errs []error
+	for _, org := range orgs {
+		for i, pass := range r.passes {
+			n, err := pass.purge(systemContext(ctx, org, "retention-round"), now)
+			// A failed pass still reports the rows of the batches it committed before the failure.
+			metricRetentionDeleted.WithLabelValues(pass.store).Add(float64(n))
+			if err != nil {
+				failed[i] = true
+				errs = append(errs, fmt.Errorf("organization %s, store %s: %w", org, pass.store, err))
+			}
+		}
+	}
+	done := float64(r.now().Unix())
+	for i, pass := range r.passes {
+		if !failed[i] {
+			metricRetentionLastSuccess.WithLabelValues(pass.store).Set(done)
+		}
+	}
+	return errors.Join(errs...)
 }

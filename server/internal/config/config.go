@@ -290,6 +290,23 @@ func RetentionUnit(l *Loader, c Common) time.Duration {
 	return 24 * time.Hour
 }
 
+// MinRetentionInterval is the shortest PADDOCK_RETENTION_INTERVAL outside development (plan M10 amendment
+// 2026-10-30): a shorter round only adds load, the retention periods count days.
+const MinRetentionInterval = time.Minute
+
+// RetentionInterval reads PADDOCK_RETENTION_INTERVAL, the period of the worker's retention round (default def). It is
+// an operator setting; below MinRetentionInterval it is only allowed with PADDOCK_ENV=development.
+func RetentionInterval(l *Loader, c Common, def time.Duration) time.Duration {
+	d := l.Duration("PADDOCK_RETENTION_INTERVAL", def)
+	switch {
+	case d <= 0:
+		l.Invalid("PADDOCK_RETENTION_INTERVAL", "must be positive")
+	case d < MinRetentionInterval && !c.Development():
+		l.Invalid("PADDOCK_RETENTION_INTERVAL", "must be at least 1m unless PADDOCK_ENV=development")
+	}
+	return d
+}
+
 // AMQP is the RabbitMQ connection of relay, audit-writer and provision.
 type AMQP struct {
 	URL      string

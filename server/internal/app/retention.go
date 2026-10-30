@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -14,7 +15,8 @@ import (
 // StoreDeviceUserSeen is the store name of the users seen on devices in retention.purged (plan M10 decision 13).
 const StoreDeviceUserSeen = "device_user_seen"
 
-// retentionBatch is the row limit of one deletion statement; it bounds the lock scope, not the transaction.
+// retentionBatch is the row limit of one deletion statement; every batch commits on its own, so it bounds how long the
+// rows stay locked (plan M10 amendment 2026-10-30).
 const retentionBatch = 1000
 
 // SpecRetentionPurged records one retention pass over one store of an organization; system principal only.
@@ -34,9 +36,8 @@ func NewRetention(runner *ActionRunner, org *db.OrgPool, unit time.Duration) *Re
 }
 
 // PurgeUserSeen deletes the users seen on the context's organization's devices whose last login is older than
-// SeenWindow at now, in batches of 1 000 rows inside one transaction with its retention.purged event, so evidence and
-// deletion commit or roll back together. Without expired rows it records nothing. It returns the number of deleted
-// rows; a failure rolls every batch back and records the event with outcome failure and deleted 0.
+// SeenWindow at now (system principal). Without expired rows it records nothing. It returns the number of deleted rows
+// (purgeBatches).
 func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, error) {
 	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
 		return 0, problem.Unauthenticated
@@ -51,27 +52,42 @@ func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, er
 	if err != nil || !expired {
 		return 0, err
 	}
-	spec := SpecRetentionPurged
-	spec.Params = map[string]any{
-		"store": StoreDeviceUserSeen, "cutoff": audit.Timestamp(cutoff).Format(time.RFC3339Nano), "deleted": int64(0),
-	}
-	var deleted int64
-	err = r.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		for {
-			n, err := q.DeleteExpiredDeviceUserSeen(ctx, cutoff)
-			if err != nil {
-				return err
-			}
-			deleted += n
-			if n < retentionBatch {
-				break
-			}
-		}
-		rec.SetParam("deleted", deleted)
-		return nil
+	return purgeBatches(ctx, r.runner, r.org, StoreDeviceUserSeen, cutoff, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+		return q.DeleteExpiredDeviceUserSeen(ctx, cutoff)
 	})
-	if err != nil {
-		return 0, err
-	}
-	return deleted, nil
+}
+
+// purgeBatches deletes a store's rows older than cutoff in batches of retentionBatch rows, each batch in its own
+// transaction, and records them as one retention.purged event (plan M10 amendment 2026-10-30): a long backlog then
+// never holds the locks of all its rows in one transaction, so the agents' logins do not wait for the purge. The event
+// carries the rows of the committed batches; when a batch fails, the batches before it stay deleted and the event is
+// recorded with outcome failure and their number.
+func purgeBatches(ctx context.Context, runner *ActionRunner, org *db.OrgPool, store string, cutoff time.Time,
+	batch func(ctx context.Context, q *pgstore.Queries) (int64, error)) (int64, error) {
+	spec := SpecRetentionPurged
+	spec.Params = map[string]any{"store": store, "cutoff": audit.Timestamp(cutoff).Format(time.RFC3339Nano)}
+	var deleted int64
+	err := runner.RunExternal(ctx, ScopeOrg, spec,
+		func(context.Context, *pgstore.Queries, Recorder) error { return nil },
+		func(ctx context.Context) error {
+			for {
+				var n int64
+				if err := org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+					var err error
+					n, err = batch(ctx, q)
+					return err
+				}); err != nil {
+					return fmt.Errorf("purge %s: %w", store, err)
+				}
+				deleted += n
+				if n < retentionBatch {
+					return nil
+				}
+			}
+		},
+		func(_ context.Context, _ *pgstore.Queries, rec Recorder, _ error) error {
+			rec.SetParam("deleted", deleted)
+			return nil
+		})
+	return deleted, err
 }

@@ -27,8 +27,8 @@ DELETE FROM device_user_seen WHERE ctid IN (
 )
 `
 
-// One batch of rows older than the cutoff (plan M10 decision 13); the batch limits the lock scope, not the
-// transaction: the retention round repeats it inside one transaction until a batch deletes fewer than 1 000 rows.
+// One batch of rows older than the cutoff (plan M10 decision 13); the retention round runs each batch in its own
+// transaction until one deletes fewer than 1 000 rows (plan M10 amendment 2026-10-30).
 func (q *Queries) DeleteExpiredDeviceUserSeen(ctx context.Context, cutoff time.Time) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteExpiredDeviceUserSeen, cutoff)
 	if err != nil {

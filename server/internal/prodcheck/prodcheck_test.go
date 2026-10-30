@@ -456,6 +456,31 @@ func TestAllowlistBypass(t *testing.T) {
 	failLine(t, out, "PADDOCK_IP_ALLOWLIST_BYPASS is true")
 }
 
+// TestRetentionInterval: a retention round below one minute fails, an operator's longer interval passes (plan M10
+// amendment 2026-10-30).
+func TestRetentionInterval(t *testing.T) {
+	for value, want := range map[string]string{
+		"15s":   "paddock-api: PADDOCK_RETENTION_INTERVAL=15s is not a duration of at least 1m0s",
+		"59s":   "paddock-api: PADDOCK_RETENTION_INTERVAL=59s",
+		"often": "paddock-api: PADDOCK_RETENTION_INTERVAL=often",
+	} {
+		f := newFixture(t)
+		f.setEnv("paddock-api", "PADDOCK_RETENTION_INTERVAL", value)
+		ok, out := run(t, f.cfg, prodcheck.Options{})
+		if ok {
+			t.Fatalf("%s: expected FAIL:\n%s", value, out)
+		}
+		failLine(t, out, want)
+	}
+	for _, value := range []string{"1m", "12h"} {
+		f := newFixture(t)
+		f.setEnv("paddock-api", "PADDOCK_RETENTION_INTERVAL", value)
+		if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok {
+			t.Fatalf("%s: expected all PASS:\n%s", value, out)
+		}
+	}
+}
+
 func TestReleaseKeys(t *testing.T) {
 	t.Run("secret key next to the public key", func(t *testing.T) {
 		f := newFixture(t)

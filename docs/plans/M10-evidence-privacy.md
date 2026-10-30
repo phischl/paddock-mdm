@@ -1524,3 +1524,34 @@ TestAuditEvidenceExport|TestLoginHistory'`. No VM system test (nothing on the ag
 - A residual-risk number RR-94 to RR-96 exists on main when PDK-135 starts.
 - `audit.Actor` or `audit.Event` gained a field that changes the stored event JSON of existing objects
   (`events.jsonl` must stay byte-identical to the WORM objects).
+
+### Amendment 2026-10-30 (PDK-137, retention batching)
+
+Architect decision after the external review of PDK-137; it changes A3 and A8 where they differ.
+
+- **One transaction per batch (changes A3 "each in its own `RunTx`").** A pass deletes its expired rows in batches of
+  1 000 rows, each batch in its own transaction, so a long backlog never holds the row locks of every expired row of an
+  organization at once and the devices' login upserts do not wait for the purge. The pass still records exactly one
+  `retention.purged` event per organization, store and round, through `app.ActionRunner.RunExternal`: transaction 1
+  records the started action, the batches run as the "external" step, transaction 2 finishes the action with
+  `deleted` = the rows of the committed batches. A failing batch rolls back alone; the batches before it stay deleted
+  and the event has outcome failure with their number (never a number of rows that were not deleted). A crash between
+  the transactions leaves a started action that the reaper records as outcome unknown. The helper is
+  `app.purgeBatches`; `app.LoginHistory.Purge` and `app.Retention.PurgeUserSeen` use it. The cheap pre-check outside
+  the action stays, so an organization without expired rows records nothing.
+- **Index.** Migration `00075` also creates `device_user_seen_org_last_seen_idx ON device_user_seen (organization_id,
+  last_seen_at)`, so every batch finds its rows through the index instead of rescanning the table (the RLS policy adds
+  the organization). `device_login_event` already has `device_login_event_org_at_idx (organization_id, at)` (00054).
+- **Lock key during a rolling upgrade.** The round holds `retentionLockKey` and, nested, the key of the replaced login
+  history round (`0x70616464206c6f67`, "padd log"); while a worker of an earlier version holds that key, the round
+  purges nothing in that run. The legacy key can be dropped once no release before PDK-137 can run next to a newer
+  worker.
+- **`PADDOCK_RETENTION_INTERVAL` is an operator setting (changes A8).** It is honoured in production, with a minimum of
+  1 minute unless `PADDOCK_ENV=development` (`config.RetentionInterval`, a shorter value stops the start naming the
+  variable); `paddock prodcheck` fails on a value below 1 minute. Development keeps the 15 s default when the unit is
+  seconds. The variable is not in the development-only list of `docs/operations/local-dev.md`; it is documented with
+  the worker's retention metrics in `docs/operations/monitoring.md`. `PADDOCK_RETENTION_UNIT` stays development-only.
+- **Residual race (open for the architect).** Between the pre-check and the first batch a login can refresh the only
+  expired rows; the pass then records a success event with `deleted` 0, which is truthful. Moving the check into the
+  action's transaction does not remove it: an action that has started always records its event, and ending an action
+  without recording it would need a new `ActionRunner` step outside its one-event-per-attempt contract.

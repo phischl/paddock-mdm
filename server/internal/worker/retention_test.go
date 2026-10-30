@@ -114,3 +114,41 @@ func TestRetentionRound(t *testing.T) {
 		t.Fatalf("deleted_total grew by %v, want at least 4", d)
 	}
 }
+
+// TestRetentionRoundWaitsForLegacyLock (plan M10 amendment 2026-10-30): while a worker of an earlier version holds the
+// login history round's lock, the retention round purges nothing, so a rolling upgrade never runs both purges at once.
+func TestRetentionRoundWaitsForLegacyLock(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	day := 24 * time.Hour
+	r := NewRetention(app.NewRetention(runner, f.pool, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	f.seenUsers(t, f.org, 2, time.Now().Add(-400*day))
+	seen := func() int {
+		return f.count(t, "SELECT count(*) FROM device_user_seen WHERE organization_id = $1", f.org)
+	}
+
+	if _, err := f.super.Exec(ctx, "SELECT pg_advisory_lock($1)", int64(legacyLoginHistoryLockKey)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := seen(); n != 2 {
+		t.Fatalf("%d rows left while the legacy lock is held, want 2", n)
+	}
+	if _, err := f.super.Exec(ctx, "SELECT pg_advisory_unlock($1)", int64(legacyLoginHistoryLockKey)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := seen(); n != 0 {
+		t.Fatalf("%d rows left after the legacy lock was released, want 0", n)
+	}
+}
