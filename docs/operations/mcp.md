@@ -61,10 +61,10 @@ client (or the server in it) after a change of the policy or of the write access
 ## Off until a policy is saved
 
 The MCP is switched off in every organization and on the platform until an administrator saves a policy: without a
-saved policy every MCP request of that scope answers 403 `mcp_disabled`, `paddockctl mcp tools` lists nothing and
-`paddockctl mcp` prints `the MCP is switched off for this scope`. Only `GET /api/v1/me`, `GET /api/v1/mcp/access` and
-`GET /api/v1/mcp/catalog` answer, so that the client can tell the administrator why. The settings page says *No policy
-saved yet* until then.
+saved policy every MCP request of that scope answers 403 `mcp_disabled`, `paddockctl mcp tools` lists nothing, and
+both `paddockctl mcp tools` and `paddockctl mcp` print `the MCP is switched off for this scope` on stderr. Only
+`GET /api/v1/me`, `GET /api/v1/mcp/access` and `GET /api/v1/mcp/catalog` answer, so that the client can tell the
+administrator why. The settings page says *No policy saved yet* until then.
 
 ## Connect Claude Code
 
