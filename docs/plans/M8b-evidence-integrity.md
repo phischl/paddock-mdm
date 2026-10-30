@@ -1093,3 +1093,14 @@ a precise probe.
 - **Unchanged.** The platform scope keeps its rule: an empty superuser listing refuses it. `ReconcilePlatform` keeps
   its refusal of an empty `paddock.platform.admins` while platform administrators exist (follow-up ticket). No
   migration.
+
+## Amendment 2026-10-30 (PDK-476)
+
+**Reason.** Decision 17 counts a number as delivered when it is in `device_event_seen`. Only the audited event types
+claimed their number there. The agent also numbers `session.login`, which is not audited, so every login left a
+permanent false hole and, two check-ins later, a `device.event_gap` on a genuine device.
+
+- **Decision 17/19:** every numbered event claims its `(device_id, event_seq)` in `device_event_seen`, `session.login`
+  included. A login updates `device_user_seen` and the login history only when its claim is new, so a redelivery
+  changes nothing. A malformed login only claims its number. Logins stay unaudited. No protocol, agent or migration
+  change. Not retroactive: holes from earlier logins stay open until they are closed by hand or by a counter reset.
