@@ -47,6 +47,7 @@ cannot be allow-listed. A refused request is `403 ip_not_allowed`.
 | `paddockctl mcp` | The stdio MCP server for an MCP client such as Claude Code: the admin API operations the session may call as tools, with the administrator's role ([mcp.md](mcp.md)). |
 | `paddockctl mcp tools [-o table\|json]` | Lists the tools the MCP session is offered now. |
 | `paddockctl mcp logout` | Ends the MCP session, revokes its refresh token and deletes the session file. |
+| `paddockctl audit verify-export <file> [--fingerprint <hex>] [-o text\|json]` | Verifies an audit evidence package offline: no configuration, token or network. See [Verifying an evidence package](#verifying-an-evidence-package). |
 | `paddockctl devices list [--page N] [--page-size 10\|25\|50\|100] [--sort <field>] [-q <text>] [--state <s>]… [--device-group-id <uuid>] [--disk-state <s>]… [-o table\|json]` | Lists devices with the parameters of the admin API's list contract; `-o json` prints the API's answer unchanged. |
 
 A plan shows one line per created (`+`) and deleted (`-`) item and one line per changed field (`~ settings.login
@@ -155,3 +156,53 @@ docker compose … run --rm --no-deps paddock-worker admin recompile --all
 Each prints one line (`bumped bundle_seq of 42 devices by 1000000`, `cache rebuilt for 2 organizations`,
 `recompile requested for 2 organizations`) and exits with 0, 1 (failure) or 2 (usage). `paddock-server audit verify`
 stays the command to verify the audit trail. It needs the audit domain's credentials, which stay on the audit host.
+
+## Verifying an evidence package
+
+An evidence package (a tar file the portal offers for download, ADR 0032) lets an auditor check the audit trail of an
+organization without any access to Paddock. `paddockctl audit verify-export` needs no configuration file, no token
+and no network; it reads the file twice and never extracts it.
+
+```
+paddockctl audit verify-export package.tar --fingerprint <fingerprint recorded by your ISMS>
+```
+
+**The fingerprint handshake.** The package carries the public key it was signed with, so on its own it can only prove
+that it is consistent with itself. What makes it evidence is the fingerprint (SHA-256 of the audit-chain public key)
+that you obtained out of band: from the portal's signing-keys page, from the operator's ISMS record or from an earlier
+package. With `--fingerprint` the verifier requires the key of the package signature to match it (a mismatch is the
+problem `signing key fingerprint differs from --fingerprint`). Without it the result is still printed, but with a note
+that the key is not authenticated. The manifests and the key versions they use are covered by the signed
+`export.json`, so one pinned key is enough, also across a key rotation.
+
+**What is checked** (all problems are collected; the verifier does not stop at the first):
+
+1. `export.json` has the schema `paddock.audit-export.v1` and its signature in `export.sig` verifies with the embedded
+   key of the stated version; the key matches `--fingerprint`.
+2. For every day of the range there is a signed manifest that matches the hash in `export.json`, belongs to the
+   organization and the day, and links to the previous day's manifest. The first day's link is reported as the chain
+   anchor; verify consecutive packages against each other to extend the chain.
+3. Every object listed in a manifest is in the package with the listed SHA-256; no object is unlisted; the object list
+   of `export.json` equals the manifests'.
+4. `events.jsonl` has the SHA-256 `events_sha256` and equals the decoded objects, in manifest order, byte for byte; its
+   line count equals `event_count`; every line is JSON of this organization with schema `paddock.audit.v1`. An object
+   whose hash differs or that cannot be decoded (or decodes to more than 256 MiB) is reported and contributes no events.
+5. The server's own verification at build time and the nightly runs are reported (`chain verified by the server`,
+   `nightly runs`, its problems), but a problem found there is not a problem of the verifier.
+
+`README.md` in the package is informational: it is not covered by the signature and the verifier takes every fact
+from `export.json`. Members with an unsafe name (`..`, absolute, backslash, empty or `.` segments), duplicates,
+members that are not regular files and members no package contains are reported as problems. The verifier bounds
+memory and decompression (256 MiB per object); a package beyond its limits is refused with exit code 2.
+
+Output: `OK <organization_id> <from>..<to>: <days> days, <objects> objects, <events> events; signed with audit-chain
+v<N> (fingerprint <hex>); chain anchor <hex|none>` or one `FAIL <problem>` line per problem and a `NOT OK` summary.
+`-o json` prints `ok`, `organization_id`, `from_day`, `to_day`, `days`, `objects`, `events`, `key_version`,
+`fingerprint`, `fingerprint_checked`, `chain_anchor`, `server_verification` (`ok`, `problems`, `runs`,
+`runs_with_problems`) and `problems`.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | The package verifies. |
+| 1 | The package has problems; they are printed. |
+| 2 | Usage error, an unreadable file, a file that is not a tar archive, or a package beyond the verifier's limits. |
