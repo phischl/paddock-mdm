@@ -29,6 +29,16 @@ ON CONFLICT (device_id, username) DO UPDATE SET last_seen_at = greatest(device_u
 -- name: ListDeviceUsersSeenSince :many
 SELECT device_id, username FROM device_user_seen WHERE last_seen_at >= @since ORDER BY device_id, username;
 
+-- name: HasExpiredDeviceUserSeen :one
+SELECT EXISTS (SELECT 1 FROM device_user_seen WHERE last_seen_at < @cutoff::timestamptz);
+
+-- name: DeleteExpiredDeviceUserSeen :execrows
+-- One batch of rows older than the cutoff (plan M10 decision 13); the batch limits the lock scope, not the
+-- transaction: the retention round repeats it inside one transaction until a batch deletes fewer than 1 000 rows.
+DELETE FROM device_user_seen WHERE ctid IN (
+  SELECT ctid FROM device_user_seen WHERE last_seen_at < @cutoff::timestamptz LIMIT 1000
+);
+
 -- Device groups of every device, for the effective profiles of the organization.
 -- name: ListAllDeviceGroupMembers :many
 SELECT device_id, device_group_id FROM device_group_member ORDER BY device_id, device_group_id;

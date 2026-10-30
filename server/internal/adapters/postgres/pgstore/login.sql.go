@@ -21,6 +21,22 @@ func (q *Queries) DeleteDeviceLoginAssignments(ctx context.Context, deviceID uui
 	return err
 }
 
+const deleteExpiredDeviceUserSeen = `-- name: DeleteExpiredDeviceUserSeen :execrows
+DELETE FROM device_user_seen WHERE ctid IN (
+  SELECT ctid FROM device_user_seen WHERE last_seen_at < $1::timestamptz LIMIT 1000
+)
+`
+
+// One batch of rows older than the cutoff (plan M10 decision 13); the batch limits the lock scope, not the
+// transaction: the retention round repeats it inside one transaction until a batch deletes fewer than 1 000 rows.
+func (q *Queries) DeleteExpiredDeviceUserSeen(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredDeviceUserSeen, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteLoginAssignmentsOfSubject = `-- name: DeleteLoginAssignmentsOfSubject :many
 DELETE FROM device_login_assignment WHERE subject_id = $1 RETURNING device_id
 `
@@ -44,6 +60,17 @@ func (q *Queries) DeleteLoginAssignmentsOfSubject(ctx context.Context, subjectID
 		return nil, err
 	}
 	return items, nil
+}
+
+const hasExpiredDeviceUserSeen = `-- name: HasExpiredDeviceUserSeen :one
+SELECT EXISTS (SELECT 1 FROM device_user_seen WHERE last_seen_at < $1::timestamptz)
+`
+
+func (q *Queries) HasExpiredDeviceUserSeen(ctx context.Context, cutoff time.Time) (bool, error) {
+	row := q.db.QueryRow(ctx, hasExpiredDeviceUserSeen, cutoff)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const insertDeviceLoginAssignment = `-- name: InsertDeviceLoginAssignment :exec
