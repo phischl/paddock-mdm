@@ -1743,6 +1743,12 @@ Generated code tends to emit audit events on success only. The rule in the appli
 
 > **Amendment 2026-10-15 (M8b):** the audit writer verifies its chain every night (ADR 0030, §6.4 of plan M8b).
 
+> **Amendment 2026-10-29 (M10, ADR 0032):** one platform-wide WORM retention applies today; per-organization
+> retention is planned as an extend-only setting (per object at write time). The audit index is purged by partition
+> once every event of a monthly partition was recorded more than `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` ago (default and
+> minimum: the WORM retention). Evidence exports are built by the audit writer in the audit domain and stored in the
+> audit index database, never in the bucket. Retention schedule: `docs/compliance/retention.md`.
+
 ---
 
 ## 15. Fleet and osquery integration (A10)
@@ -1936,6 +1942,11 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > the name the device **reports**: set at enrollment and refreshed from `health.hostname` at every check-in (a
 > conditional update, so an unchanged name does not touch the row). The portal derives `name_state`
 > (`unmanaged | pending | applied`) from both. ADR [0041](adr/0041-device-hostname.md).
+
+> **Amendment 2026-10-29 (M10, ADR 0032):** new tables `organization_privacy_settings` (per-organization privacy
+> settings) and `read_audit_window` (coalescing keys of read-access events, 48 hours) in the database `paddock`, and
+> `audit_export`, `audit_export_chunk` (evidence export requests and their packages in 8 MiB chunks) and
+> `audit_signing_key` (`audit-chain` public keys) in the database `paddock_audit`.
 
 ### 16.2 Conventions
 

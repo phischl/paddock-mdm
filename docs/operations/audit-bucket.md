@@ -109,6 +109,17 @@ The audit writer's `/metrics` exports `paddock_audit_verify_runs_total{trigger,r
 `paddock_audit_verify_failed_organizations` and `paddock_audit_verify_last_run_timestamp_seconds`
 (`docs/operations/monitoring.md`).
 
+**Other nightly work of the audit writer** (ADR 0032, `docs/compliance/retention.md`):
+
+- **Index purge.** Every night at 01:15 UTC, after the seal and the verification, the audit writer drops every
+  monthly partition of the audit index whose events were all recorded more than `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`
+  ago (default and minimum: the WORM retention) and records `retention.purged` (store `audit_index`) per partition in
+  the platform pseudo-organization. The WORM bucket, `audit_object` and `audit_manifest` are never touched. `paddock-server audit purge --dry-run`
+  (audit-writer container) lists every partition with `DROP` or `KEEP` and changes nothing.
+- **Evidence exports.** Evidence packages (`POST /api/v1/audit/exports`) are built on the audit host by the audit
+  writer and stored in the audit index database, never in the bucket; a package expires 7 days after it is ready and
+  the nightly purge deletes it (`retention.purged`, store `audit_exports`).
+
 **What to do on `PaddockAuditChainBroken`.** The alert fires as soon as a nightly cycle found a broken or
 unreadable chain of at least one organization. A restart of the audit writer does not clear it: at start the writer
 counts the organizations whose newest recorded nightly window or sample day failed.
