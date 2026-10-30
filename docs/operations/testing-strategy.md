@@ -20,9 +20,10 @@ public repository has a queue of 20 GitHub runners, which cannot run the accepta
 | `secrets` | gitleaks: on a pull request over its own commits and, as a second view, over the final content of every changed file and every added blob (`make scan-secrets`, `make scan-secrets-diff`); otherwise over the full history | as `lint` |
 | `trivy` | `make scan-fs` and `make scan-images` (vulnerabilities in dependencies and images) | as `lint`; the weekly schedule catches new CVEs in unchanged dependencies |
 | `web` | `make web` (the portal build) | as `lint` |
-| `acceptance (shard 1)` … `acceptance (shard 4)` | each shard on its own stack: `make dev-secrets`, `make up`, `make dev-seed`, then `make acceptance SHARD=i/4` | pull requests to `main`, pushes to `main`, the schedule; after `lint`, `test`, `web`, `secrets` and `trivy` passed |
+| `acceptance-scope` | decides whether a pull request changes documentation only (`scripts/acceptance-scope.sh`, see *Documentation-only pull requests* below); on a push or the schedule it always answers "no" | pull requests to `main`, pushes to `main`, the schedule |
+| `acceptance (shard 1)` … `acceptance (shard 4)` | each shard on its own stack: `make dev-secrets`, `make up`, `make dev-seed`, then `make acceptance SHARD=i/4` | pull requests to `main` that do not change documentation only, pushes to `main`, the schedule; after `acceptance-scope`, `lint`, `test`, `web`, `secrets` and `trivy` passed |
 | `acceptance (disruptive, e2e)` | on its own stack: the disruptive gates (`PADDOCK_ACCEPTANCE_DISRUPTIVE=1 make acceptance T='TestSessionsEndAll\|TestAutoUnsealRestart'`, which end every portal session and restart OpenBao and therefore run alone), then `make e2e` (Playwright) | as the shards, in parallel with them |
-| `acceptance` | summary job: green only if every shard and the disruptive/e2e job are green; a skipped prerequisite fails it | as the shards |
+| `acceptance` | summary job: green only if every shard and the disruptive/e2e job are green; a skipped prerequisite fails it. A documentation-only pull request is the one exception (below) | every run of `ci.yml`; on a pull request to another branch than `main` it is named `acceptance (not required off main)` and succeeds without checking anything |
 | `bundle-smoke` | builds the images and the operator bundle from the pull request's code and installs it with the smoke scripts (default profile, then the lab profile behind Nginx); nothing is pushed or signed | only pull requests that change `deploy/**`, the `Makefile`, `.dockerignore` or the workflow itself (path filter) |
 | `edge` | release images (pushed to ghcr.io and signed keylessly), SBOMs, operator bundle, checksums, then the smoke test of the edge bundle and of its lab profile | pushes to `main` only, after `acceptance` |
 
@@ -30,6 +31,35 @@ CodeQL (GitHub's default setup) scans pull requests to `main` and `main` itself.
 
 **Required checks.** The ruleset of `main` requires the `acceptance` summary job, not the shard jobs. The number of
 shards can therefore change in `ci.yml` alone, without a change to the ruleset.
+
+**Check naming.** The summary job is called `acceptance` only on a pull request to `main`, on a push to `main` and on
+the schedule. On a pull request to any other branch (a cluster branch) it is called `acceptance (not required off
+main)` and passes without running anything. A skipped check named `acceptance` would count as passed, and it would
+stay passed when the pull request is later retargeted to `main`. Under the other name, a pull request retargeted to
+`main` has no `acceptance` check at all, and GitHub shows the required check as "expected" until a new run reports
+it. Changing the base branch starts no run. Start one with a push to the pull request's branch, or by closing and
+reopening the pull request. Re-running an old run does not help: a re-run replays the event of the original run,
+with its original base branch, and reports the off-`main` name again. Never merge a retargeted pull request without
+an `acceptance` run that started after its last change of base.
+
+**Documentation-only pull requests.** A pull request to `main` that changes documentation only skips the acceptance
+shards and the disruptive/e2e job; `acceptance` still reports and is green only if `acceptance-scope` said so and
+`lint`, `test`, `web`, `secrets` and `trivy` passed. Documentation means:
+
+- everything under `docs/`, except `docs/assets/` (the portal build copies the logo from there, so it counts as
+  code);
+- everything under `changelog.d/`;
+- a `*.md` file in the repository root; a Markdown file in any other directory counts as code.
+
+The decision fails closed: any doubt runs the full stage. An empty diff, a missing merge base, several merge bases,
+an unknown revision or a missing script all count as "not documentation only". `ci.yml` takes
+`scripts/acceptance-scope.sh` from the pull request's **base** commit, so a pull request cannot change the script
+that judges it. The script checks both the overall diff since the merge base and **every commit** in the range (each
+merge commit against each of its parents): code added and removed again within the branch still runs the stage.
+
+As a consequence, a documentation-only pull request that merges `main` into its branch runs the full stage, because
+the merge commit brings in `main`'s code changes compared with the branch. Rebasing the branch onto `main` instead
+keeps the skip. Pushes to `main` and the weekly schedule never skip.
 
 `bundle-smoke` is deliberately **not** a required check. Because of its path filter it does not run at all on a pull
 request that changes only Go code or the portal, and GitHub keeps a required check that never reports in the
