@@ -951,3 +951,97 @@ result precedes the restart; how the system-gate S4 counts the events (audit que
   "Konfiguration veraltet". Default: as stated.
 - O4 (open, default chosen): M8b's residual-risk reservation RR-40–42 collides with M8x's RR-40; default: M8b
   renumbers when it is planned, M8f keeps RR-62–66.
+
+## Amendment 2026-10-29 (architect, PDK-360) — the acceptance budget applies per shard
+
+Decision 36, success criterion S11 and stop condition S10 describe one CI job `acceptance` that runs the whole suite
+serially with `ACCEPTANCE_TIMEOUT: 120m` and `timeout-minutes: 180`, and S11 asks that an unsharded `make acceptance`
+finish within 96 min. That layout no longer exists: the serial run reached 101 min on a GitHub runner on 2026-10-21
+(PR #118), and the gates summed to ~131 min on 2026-10-29. PDK-359 split the stage into shards, PDK-361 rebalanced them
+by measured durations and runs four, PDK-526 restricted the stage to the default branch, and PDK-463 (PR #229) gives
+the unsharded local run a timeout that fits; this amendment is delivered after PDK-463 and describes the Makefile as it
+is with that change. The original text above stays as written; the following replaces its figures and its budget rule.
+
+### Layout (replaces the job description of decision 36)
+
+1. `.github/workflows/ci.yml` runs the acceptance stage as three kinds of jobs, every one against a stack of its own
+   (`make dev-secrets`, `make up`, `make dev-seed` per job):
+   - `acceptance-shard` (`name: acceptance (shard ${{ matrix.shard }})`), matrix `shard: [1, 2, 3, 4]`, step
+     `make acceptance SHARD=${{ matrix.shard }}/${{ strategy.job-total }}`; `ACCEPTANCE_TIMEOUT: 120m`,
+     `timeout-minutes: 135`.
+   - `acceptance-e2e` (`name: acceptance (disruptive, e2e)`): the disruptive gates
+     `PADDOCK_ACCEPTANCE_DISRUPTIVE=1 make acceptance T='TestSessionsEndAll|TestAutoUnsealRestart'` and `make e2e`;
+     `timeout-minutes: 40`.
+   - `acceptance`: the summary job, `needs: [acceptance-shard, acceptance-e2e]`, `if: always() && …`, green only if
+     every shard and the e2e job succeeded (a skipped prerequisite fails it). It is the required status check of the
+     default branch ruleset and the prerequisite of `edge`. The shard count MUST be changed in the matrix only;
+     `strategy.job-total` carries it into the `make` call.
+2. The stage runs only where its result gates a merge into `main` (PDK-526): pull requests whose base is `main`,
+   pushes to `main` and the weekly schedule (`if: github.event_name != 'pull_request' || github.base_ref == 'main'` on
+   all three jobs). Per-ticket pull requests into cluster branches get the fast jobs (`lint`, `test`, `web`, `secrets`,
+   `trivy`) only.
+3. Partition: `make acceptance SHARD=i/n` lists every top-level test of `./test/acceptance/...` (`go test -list`) and
+   `test/acceptance/cmd/acceptanceshard` puts each into exactly one shard, balanced by
+   `test/acceptance/shard-weights.txt` (format `<seconds> <test> [group]`; a group stays in one shard and weighs as
+   much as its slowest member because its tests run in parallel, decision 37; a test missing from the file weighs
+   60 s; the disruptive gates and the helper packages weigh 0). Before the run, `acceptanceshard -verify n` MUST pass:
+   the n shard regexes select every listed test exactly once, so a new gate can never be left out. `T` and `SHARD`
+   are mutually exclusive.
+4. Weights are measured, not estimated. The source of a weight is the median of the `--- PASS: <Test> (<s>)` lines of
+   recent green CI runs on GitHub `ubuntu-24.04` runners; the file's header names the runs. A test whose subtests
+   call `t.Parallel()` MUST be weighed by its wall time, measured as the package time (`ok …/test/acceptance <s>`)
+   of its shard minus the sum of the other top-level tests of that shard, because `go test` prints a parent's
+   `--- PASS` duration before its parallel subtests run. `TestAuditExactlyOnce` reports ~400 s this way but costs
+   ~1730 s. The measured gate time of a shard is the package time of its `make acceptance` step, the
+   `ok …/test/acceptance <s>` line of the job log (not the job duration, which carries the `make up` variance). The
+   weights MUST be refreshed from CI logs when the slowest and the fastest shard differ by more than 5 min of
+   measured gate time in each of three consecutive green runs on `main`; the refresh is a ticket of its own that
+   records the runs it read in the file header. Exception (floor case): a spread whose slowest shard holds only
+   `TestAuditExactlyOnce` (or its group) does not trigger a refresh, because `acceptanceshard` already gives that
+   gate a shard of its own once it exceeds the mean shard time and no reassignment can shorten it. That case, and a
+   shard over 96 min because of it, is reported to the architect, who decides a ticket to split or speed up that
+   gate (the candidate is parallelism inside it, decision 38) — not more shards.
+5. Measured on 2026-10-29 (PDK-361, eight green CI runs): ~131 min of gate time in total, ~32 min per shard; the
+   four shard jobs of PR #227's run of 2026-10-29 took 39–43 min including ~8 min `make up`. `TestAuditExactlyOnce`
+   (~29 min) is the floor of any shard: a fifth shard would save ~3 min, so the count stays at four until a shard's
+   measured gate time exceeds its budget below.
+
+### Budgets (replaces the figures of decision 36)
+
+6. The 20 % headroom rule of decision 36 holds, applied to each budget separately:
+
+   | Budget | Value | Where | 80 % threshold |
+   |---|---|---|---|
+   | one shard's `make acceptance SHARD=i/4` step | `ACCEPTANCE_TIMEOUT: 120m` | `ci.yml` job env; `Makefile` default with `SHARD` or `T` | 96 min |
+   | one `acceptance-shard` job | `timeout-minutes: 135` | `ci.yml` (`make up` 8 min + acceptance 120 min + logs) | 108 min |
+   | the `acceptance-e2e` job | `timeout-minutes: 40` | `ci.yml` (`make up` 8 min + disruptive 2 min + e2e 10 min + logs) | 32 min |
+   | unsharded local `make acceptance` (neither `SHARD` nor `T`) | `ACCEPTANCE_TIMEOUT` default 180m, introduced by PDK-463 (`$(if $(SHARD)$(T),120m,180m)`) | `Makefile` | 144 min |
+
+   The Makefile comment above `ACCEPTANCE_TIMEOUT` MUST keep naming the measured total and the per-shard gate time
+   with their dates; when a measurement is refreshed, the comment is updated in the same commit. Raising any budget is
+   an architect decision (stop condition below).
+7. Local runs: `make acceptance` without `SHARD` is the serial run of every gate against one stack and MUST stay
+   possible (it is the measurement of the total). `make acceptance SHARD=i/N` run for `i = 1…N` one after another
+   against the same stack is the local sharded alternative with CI's partition; a developer MAY run only the shard that
+   failed in CI. The disruptive gates run only with `PADDOCK_ACCEPTANCE_DISRUPTIVE=1` and skip otherwise, in every
+   layout.
+
+### S11 (restated)
+
+| ID | Criterion | Role |
+|---|---|---|
+| S11a (per shard) | On a pull request to `main`, every `acceptance-shard` job's step `make acceptance SHARD=i/4` finishes within 96 min (80 % of 120m) with every gate of the shard green; `acceptanceshard -verify 4` passes before each shard. | Dev |
+| S11b (per job) | Every `acceptance-shard` job finishes within 108 min (80 % of 135) and the `acceptance-e2e` job within 32 min (80 % of 40); the summary job `acceptance` is green only when all five are. | Dev |
+| S11c (local) | `make acceptance` without `SHARD` finishes within 144 min (80 % of 180m) with every gate green against one stack; `make acceptance SHARD=i/4` for each `i` finishes within 96 min against one stack. | Dev |
+| S11d (record) | The Makefile comment above `ACCEPTANCE_TIMEOUT` names the measured total and per-shard gate time with their dates; `test/acceptance/shard-weights.txt` names the CI runs its weights come from; the four session gates of decision 37 run in parallel inside one shard. | Dev |
+
+### Stop condition S10 (restated)
+
+- S10: a shard's `make acceptance` step exceeds 96 min, an `acceptance-shard` job exceeds 108 min, the
+  `acceptance-e2e` job exceeds 32 min, or the unsharded local run exceeds 144 min: report the measurement (the
+  `ok …/test/acceptance <s>` line per shard, the `--- PASS` lines or the job durations). The first remedy is a
+  refresh of `test/acceptance/shard-weights.txt` by the rule of item 4; the second is one more shard in the matrix,
+  and only when the slowest shard after a refresh still exceeds 96 min and holds more than `TestAuditExactlyOnce` (or
+  its group). A shard over 96 min that holds only `TestAuditExactlyOnce` is the floor case of item 4: report it to
+  the architect, who decides a ticket to split or speed up that gate; do not add a shard for it. Do not raise
+  `ACCEPTANCE_TIMEOUT` or any `timeout-minutes` without the architect, and do not remove, skip or weaken a gate.
