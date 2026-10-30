@@ -219,7 +219,8 @@ func TestAuditEvidenceExport(t *testing.T) {
 		ready.PackageSHA256 == nil || *ready.PackageSHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("E3 download headers %v (%d bytes, export %+v)", res.Header, len(res.Body), ready)
 	}
-	members := readTarMembers(t, res.Body)
+	pkgTar := res.Body
+	members := readTarMembers(t, pkgTar)
 	files := map[string]bool{}
 	for _, m := range members {
 		files[m.name] = true
@@ -287,7 +288,7 @@ func TestAuditEvidenceExport(t *testing.T) {
 	verify := func(file string) ctlResult {
 		return ctl.run(t, "", "", "audit", "verify-export", file, "--fingerprint", fingerprint)
 	}
-	if r := verify(write("package.tar", res.Body)); r.code != 0 || !strings.HasPrefix(r.stdout, "OK ") ||
+	if r := verify(write("package.tar", pkgTar)); r.code != 0 || !strings.HasPrefix(r.stdout, "OK ") ||
 		!strings.Contains(r.stdout, "fingerprint "+fingerprint) {
 		t.Fatalf("E4 verify-export of the download: exit %d\n%s%s", r.code, r.stdout, r.stderr)
 	}
