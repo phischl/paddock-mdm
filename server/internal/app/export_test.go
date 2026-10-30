@@ -7,3 +7,6 @@ func (r *ReleaseImports) SetTimeout(d time.Duration) { r.timeout = d }
 
 // SetCountBudget shortens the bound of the identity-provider session count for tests of a count that does not answer.
 func (s *Sessions) SetCountBudget(d time.Duration) { s.countBudget = d }
+
+// SetBudget shortens the bound of one retention pass for tests of a backlog larger than one pass.
+func (r *Retention) SetBudget(d time.Duration) { r.budget = d }

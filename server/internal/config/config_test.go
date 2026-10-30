@@ -178,6 +178,41 @@ func TestRetentionUnit(t *testing.T) {
 	}
 }
 
+// TestRetentionInterval: an operator setting with a floor of one minute outside development (plan M10 amendment
+// 2026-10-30).
+func TestRetentionInterval(t *testing.T) {
+	for _, tc := range []struct {
+		env, value string
+		want       time.Duration
+		fails      bool
+	}{
+		{"production", "", 6 * time.Hour, false},
+		{"production", "1h", time.Hour, false},
+		{"production", "1m", time.Minute, false},
+		{"production", "59s", 59 * time.Second, true},
+		{"production", "15s", 15 * time.Second, true},
+		{"development", "15s", 15 * time.Second, false},
+		{"development", "0s", 0, true},
+		{"production", "-1h", -time.Hour, true},
+		{"production", "24h", 24 * time.Hour, false},
+		{"production", "24h1s", 24*time.Hour + time.Second, true},
+		{"production", "48h", 48 * time.Hour, true},
+		{"development", "48h", 48 * time.Hour, false},
+		{"production", "often", 6 * time.Hour, true},
+	} {
+		vars := map[string]string{}
+		if tc.value != "" {
+			vars["PADDOCK_RETENTION_INTERVAL"] = tc.value
+		}
+		l := NewLoaderFrom(vars)
+		if got := RetentionInterval(l, Common{Env: tc.env}, 6*time.Hour); got != tc.want || (l.Err() != nil) != tc.fails {
+			t.Errorf("%s %q: %s, %v", tc.env, tc.value, got, l.Err())
+		} else if tc.fails && !strings.Contains(l.Err().Error(), "PADDOCK_RETENTION_INTERVAL") {
+			t.Errorf("%s %q: error does not name the variable: %v", tc.env, tc.value, l.Err())
+		}
+	}
+}
+
 // TestStalenessUnit: thresholds count hours; minutes only in development (plan M5b decision 9).
 func TestStalenessUnit(t *testing.T) {
 	for _, tc := range []struct {

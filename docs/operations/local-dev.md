@@ -136,6 +136,12 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
 - A TOTP step-up: the shipped step-up flow accepts WebAuthn only; the development blueprint skips that stage and adds
   `paddock-dev-stepup-mfa` (WebAuthn or TOTP), so the test users complete step-ups with their seeded TOTP keys
   (`docs/operations/step-up.md`, "Development stack").
+- Retention days in seconds: `PADDOCK_RETENTION_UNIT` (`days` default; the dev stack sets `seconds`) is the length of
+  a retention day for `paddock-worker` (login history, users seen on devices: 365 days become 365 s); with
+  `PADDOCK_ENV=production`, `seconds` stops the start with a configuration error.
+
+The dev stack also sets the operator variable `PADDOCK_RETENTION_INTERVAL` to `15s` (`15s` is the default when it is
+unset and the unit is `seconds`); outside development it must be at least `1m` (`docs/operations/monitoring.md`).
 
 ## Acceptance gates on a long-lived stack
 

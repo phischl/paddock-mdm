@@ -203,20 +203,34 @@ func (p *PlatformPool) InPlatform(ctx context.Context, fn func(ctx context.Conte
 // replica of a role runs a periodic job at a time. It reports false (and does not call fn) when another session
 // holds the lock.
 func (p *PlatformPool) WithLeaderLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (bool, error) {
+	return p.WithLeaderLocks(ctx, []int64{key}, fn)
+}
+
+// WithLeaderLocks is WithLeaderLock for several keys, all taken on the same connection, so the job never needs a
+// second pool connection while it holds the first lock. It reports false (and does not call fn) when another session
+// holds any of the keys; the keys it got are released again.
+func (p *PlatformPool) WithLeaderLocks(ctx context.Context, keys []int64, fn func(ctx context.Context) error) (bool, error) {
 	conn, err := p.p.Acquire(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer conn.Release()
-	var locked bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&locked); err != nil || !locked {
-		return false, err
-	}
+	var held []int64
 	defer func() {
-		if _, err := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", key); err != nil {
-			_ = conn.Conn().Close(context.WithoutCancel(ctx)) // closing the session releases the lock
+		for i := len(held) - 1; i >= 0; i-- {
+			if _, err := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", held[i]); err != nil {
+				_ = conn.Conn().Close(context.WithoutCancel(ctx)) // closing the session releases the locks
+				return
+			}
 		}
 	}()
+	for _, key := range keys {
+		var locked bool
+		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&locked); err != nil || !locked {
+			return false, err
+		}
+		held = append(held, key)
+	}
 	return true, fn(ctx)
 }
 
