@@ -264,7 +264,7 @@ func (d *Devices) Retire(ctx context.Context, id uuid.UUID) (pgstore.Device, err
 			return err
 		}
 		// A presumed-lost device stays retirable: a conversion never refuses it (plan M8e §14.5 decision 38).
-		withdrawn, err = withdrawConversion(ctx, q, claims, rec, id, time.Now())
+		withdrawn, err = withdrawConversion(ctx, q, claims, rec, id, time.Now(), true)
 		return err
 	})
 	claims.releaseOn(ctx, err)

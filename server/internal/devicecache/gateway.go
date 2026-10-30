@@ -36,6 +36,26 @@ func (c *Cache) NextSeq(ctx context.Context, device uuid.UUID) (int64, error) {
 	return n, nil
 }
 
+// releaseSeqScript decrements seq:<device> only while it still holds the value given: a check-in of another holder of
+// the identity (a clone) that drew a number meanwhile is never rewound.
+var releaseSeqScript = valkey.NewLuaScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DECR', KEYS[1])
+end
+return -1
+`)
+
+// ReleaseSeq takes back seq, drawn by NextSeq for a check-in that failed before its response, so a number the
+// device never received does not count as issued (architecture §6.4: the tolerance of one is for a lost response,
+// not for failed check-ins). It reports whether seq was still the current value.
+func (c *Cache) ReleaseSeq(ctx context.Context, device uuid.UUID, seq int64) (bool, error) {
+	n, err := releaseSeqScript.Exec(ctx, c.c, []string{seqKey(device)}, []string{strconv.FormatInt(seq, 10)}).AsInt64()
+	if err != nil {
+		return false, fmt.Errorf("devicecache: release seq: %w", err)
+	}
+	return n >= 0, nil
+}
+
 // RestoreSeq sets seq:<device> to last unless it exists (the worker rebuilds an emptied Valkey from
 // device_status.last_seq, so clone detection survives a cache loss).
 func (c *Cache) RestoreSeq(ctx context.Context, device uuid.UUID, last int64) error {

@@ -20,6 +20,11 @@ keep_local_admin}`) and `POST /api/v1/devices/{id}/uninstall/cancel`.
   clears anything.
 - On the device the command is refused (`failed`, reason `revocation_pending`) while a Lock or Destroy token was handed
   to `paddock-revoke` within the last 24 hours.
+- A refused command (`failed`, reasons `conversion_pending` and `revocation_pending`, which clear up) leaves the request
+  open: the device page and `uninstall.refused_reason` of `GET /api/v1/devices/{id}` show the reason, and an
+  administrator cancels the request and requests it again once the cause is resolved. Nothing retries on its own. A
+  refusal with `invalid_params` can never succeed: it ends the request with one `device.uninstall_failed` event by the
+  device, and the device stays active.
 - A Lock or Destroy requested while the removal is pending cancels it (recorded on `revocation.requested` as
   `uninstall_cancelled` and `uninstall_command_id`): a command without a result is withdrawn like a cancel; when the device had already received it, the
   device page warns that it may already have removed `paddock-revoke` (`docs/operations/revocation.md`).
@@ -29,8 +34,8 @@ keep_local_admin}`) and `POST /api/v1/devices/{id}/uninstall/cancel`.
 The agent accepts the command (result `{accepted: true}`), writes the plan and a copy of itself to
 `/root/paddock-uninstall/` and, once the server accepted the result, starts `paddockd uninstall` in the transient unit
 `paddock-uninstall.service`, outside the supervisor; the helper deletes the copy and the plan once it wrote its
-summary `result.json`. While a supervisor upgrade runs, the start waits for it, at most 30 minutes. The helper runs these steps in order; a failed step never stops
-the following ones and is reported as `failed:<message>`:
+summary `result.json`. While a supervisor upgrade runs, the start waits for it, at most 30 minutes. The helper runs
+these steps in order; a failed step never stops the following ones and is reported as `failed:<message>`:
 
 | Step | `leave` | `reset` |
 | --- | --- | --- |
@@ -53,6 +58,15 @@ What stays in both modes: every local account other than the removed managed adm
 `/srv`, the disk encryption with its PIN and recovery key, the break-glass accounts' sudo rights, and the escrowed
 secrets of the device on the server (the recovery key may still be needed; Destroy is the way to make data
 unrecoverable).
+
+What stays in `/root/paddock-uninstall/` (0700, root only, no secrets; nothing below `/root` is cleared at a reboot):
+
+- after a removal: `result.json` and, if there was anything to quarantine, the `quarantine/` copy, kept as evidence
+  until you delete them;
+- after a withdrawn request, a start that failed (`helper_failed`), or a helper that gave up on an unreadable plan:
+  nothing, the agent or the helper deletes the plan, the copy and the then empty directory; a `result.json` of an
+  earlier removal keeps the directory;
+- after a helper that was ended mid-removal (for example by a reboot): the copy and the plan, which you may delete.
 
 ## The last-administrator guard
 

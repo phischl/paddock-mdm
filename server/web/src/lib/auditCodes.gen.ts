@@ -86,6 +86,7 @@ export const auditCodes = [
   'device.tamper_sudoers_changed',
   'device.tamper_sudoers_d_file',
   'device.uninstall_cancelled',
+  'device.uninstall_failed',
   'device.uninstall_requested',
   'device.uninstalled',
   'device.updates_run',
