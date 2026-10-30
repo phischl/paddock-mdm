@@ -1850,7 +1850,7 @@ Found while implementing PDK-245. The binding text of decisions 3, 18, 21, 22 an
         ends (zstd, gzip, xz; read from its magic after the early uncompressed archives) or behind an initrd that is
         uncompressed to its end; any other compression (lz4's legacy format has no end marker) is a failure reported
         as below.
-      - Each initrd is copied into its temporary name of item 19 (the `.next` name when a bootable kernel's link refers
+      - Each initrd is copied into its temporary name of item 19 (a `.next` name no bootable link refers to when one refers
         to the first, rule B (0)), the segment appended, the file fsynced and renamed over the initrd's name, and
         `/boot` fsynced. An initrd whose stamp changed since it was listed, checked right before the rename, is left
         alone and the failure reported. Without dpkg's locks a kernel package's dracut can still replace the initrd

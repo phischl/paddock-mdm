@@ -120,6 +120,42 @@ func TestAbortNeutralizesLinkedInitrd(t *testing.T) {
 	}
 }
 
+// TestNeutralizeLinkedInitrdAtNext: PDK-481 (rule B (0) of plan M8e item 19) — when the temporary initrd a bootable
+// kernel's symlink refers to is also hard-linked at the ".next" name, the copy is built at a name no bootable link
+// refers to: the link is replaced by the neutralized copy, the linked file is neither written nor unlinked under
+// either name, and the copy's temporary file is gone.
+func TestNeutralizeLinkedInitrdAtNext(t *testing.T) {
+	f := preparedFixture(t)
+	name := f.dev.Path("/boot/initrd.img-" + runningKernel)
+	target := f.dev.Path("/boot/.initrd.img-" + runningKernel + ".paddock")
+	next := f.dev.Path("/boot/.initrd.img-" + runningKernel + ".next.paddock")
+	original := f.read("/boot/initrd.img-" + runningKernel)
+	if err := os.Rename(name, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, next); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(target), name); err != nil {
+		t.Fatal(err)
+	}
+	if err := encrypt.NeutralizeInitrds(context.Background(), f.dev, f.dev.layout); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() || !neutralized(t, f, runningKernel, original) {
+		t.Fatalf("the link was not replaced by the neutralized copy: %v %v", info, err)
+	}
+	for _, linked := range []string{target, next} {
+		if raw, err := os.ReadFile(linked); err != nil || string(raw) != original { //nolint:gosec // test root
+			t.Fatalf("the link's target %s changed: %v", linked, err)
+		}
+	}
+	if f.dev.Exists("/boot/.initrd.img-" + runningKernel + ".next2.paddock") {
+		t.Fatal("the copy's temporary file is left")
+	}
+}
+
 // TestAbortNeutralizeBootFull: PDK-482 — a /boot without room for the copy leaves the initrds as they were, logs the
 // error and reports disk.conversion_neutralize_failed with reason boot_space_low; the cleanup runs as before.
 func TestAbortNeutralizeBootFull(t *testing.T) {
