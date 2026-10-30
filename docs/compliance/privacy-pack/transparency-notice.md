@@ -23,7 +23,7 @@ with Paddock.
 3. **Keep evidence:** record every privileged action and every security-relevant event in a tamper-proof audit log, as
    required for information security (ISO/IEC 27001) and data protection accountability.
 
-Paddock is not used to evaluate your performance or behaviour. [Reference to the works council agreement, if any].
+[Organization] does not use Paddock to evaluate your performance or behaviour (works council annex, section 2). [Reference to the works council agreement, if any].
 
 ## Which data Paddock processes
 
@@ -51,7 +51,8 @@ Paddock is not used to evaluate your performance or behaviour. [Reference to the
 
 - operating system name, version and kernel; versions of osquery and orbit;
 - hostname, hardware UUID, serial number, vendor, model, CPU type, memory, disk size;
-- time since boot and free and total disk space (kept in the inventory component, not copied into Paddock);
+- time since boot and free disk space (kept in the inventory component, not copied into Paddock); the total disk
+  size is copied (see hardware above);
 - whether the root file system is encrypted;
 - installed packages of the system package managers (deb, rpm, pacman) and system-wide Python packages: name,
   version, source;
@@ -78,8 +79,8 @@ Neither the Paddock agent nor fleetd collects, and Paddock never stores:
 
 - Administrators of [Organization] with the roles organization administrator, operator and auditor, each to the
   extent of their role.
-- The platform operator [Operator], who runs Paddock `[as a processor under Art. 28 GDPR | as an internal
-  department]`. The platform administrator role has no access to your organization's data in the portal or the API;
+- The platform operator [Operator], who runs Paddock [as a processor under Art. 28 GDPR | as an internal
+  department]. The platform administrator role has no access to your organization's data in the portal or the API;
   the operator's technical access to the servers is governed by [agreement].
 - Fleet, the inventory component, runs as a part of Paddock on the operator's servers; it is not a separate
   recipient.
@@ -93,7 +94,7 @@ devices, users or the organization. Transfer to a third country: [none unless th
 
 | Data | Retention |
 | --- | --- |
-| Audit events (actions, device events, tamper events, logins of the local administrator, update runs, revocation results) | `PADDOCK_AUDIT_RETENTION_DAYS` from the recording day, at least 400 days: [configured days]; cannot be deleted earlier |
+| Audit events (actions, device events, tamper events, logins of the local administrator, update runs, revocation results) | `PADDOCK_AUDIT_RETENTION_DAYS` from the recording day, at least 400 days: [configured days]; cannot be deleted earlier. The searchable copy (audit index and `action`) is kept for `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, never less: [configured days] |
 | Your last login per device (`device_user_seen`) | 365 days after your last login on that device |
 | Login history (`device_login_event`) | `login_history_days` after the login (7–365, default 90): [configured days | switched off]; switching it off deletes every entry at once |
 | Inventory of a retired device (packages, vulnerabilities, check results, hardware facts, the host in Fleet) | `retired_inventory_days` after retirement (1–365, default 30): [configured days] |
@@ -125,7 +126,7 @@ log, according to [Organization]'s privacy settings. Evidence exports for audito
 
 The dead man's switch is [enabled, period: n days | disabled]. When it is enabled, your device locks itself
 after the period of uptime in which it never reached Paddock, also when Paddock itself is unreachable for that long.
-The device warns you [3 and 1] days before. Powered-off time does not count. Restoring a locked device needs
+The device warns you 3 and 1 days before. Powered-off time does not count. Restoring a locked device needs
 [contact].
 
 ## Login history

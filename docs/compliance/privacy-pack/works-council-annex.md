@@ -123,8 +123,8 @@ Persons holding each role: [list or reference to the role concept]. Role changes
 
 | Switch | Where | Default | Agreed value |
 | --- | --- | --- | --- |
-| `audit_search_recorded`: every search of the audit log is recorded as `audit.searched` | *Privacy* (`settings.privacy`) | off | [ ] |
-| `inventory_view_recorded`: reading a device's inventory is recorded as `device.inventory_viewed`, per administrator, device and day | *Privacy* (`settings.privacy`) | off | [ ] |
+| `audit_search_recorded`: the first search of the audit log per administrator and hour is recorded as `audit.searched` with its filters (range, codes, outcomes, actor types, target device) and whether a free-text term was used, not the term itself; further searches in the same hour are not recorded | *Privacy* (`settings.privacy`) | off | [ ] |
+| `inventory_view_recorded`: views of a device's *Software* and *Vulnerabilities* tabs are recorded as `device.inventory_viewed`, once per administrator, device and day; the device overview (hardware facts, serial number), the device's logins and the organization-wide *Software* and *Vulnerabilities* pages are not recorded | *Privacy* (`settings.privacy`) | off | [ ] |
 | `retired_inventory_days`: days after retirement until the inventory of a device is deleted (1–365) | *Privacy* (`settings.privacy`) | 30 | [ ] |
 | `login_history_enabled`: record every session start of a directory user | *Login & privileges* → *Login history* (`settings.login`) | off | [ ] |
 | `login_history_days`: days the login history is kept (7–365) | *Login & privileges* → *Login history* (`settings.login`) | 90 | [ ] |
@@ -134,7 +134,8 @@ Persons holding each role: [list or reference to the role concept]. Role changes
 
 | Data | Deleted after |
 | --- | --- |
-| Audit events (WORM store, audit index, `action`) | `PADDOCK_AUDIT_RETENTION_DAYS` (at least 400) from the recording day: [configured days]; erasure requests are answered by restriction |
+| Audit events in the WORM store | `PADDOCK_AUDIT_RETENTION_DAYS` (at least 400) from the recording day: [configured days]; erasure requests are answered by restriction |
+| Audit index and `action` (searchable copy of the audit events) | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` (default = WORM retention, never less): [configured days]; erasure requests are answered by restriction |
 | Last login per user and device (`device_user_seen`) | 365 days after the last login |
 | Login history (`device_login_event`) | `login_history_days` after the login (7–365, default 90); at once when switched off |
 | Inventory of a retired device, its hardware facts and its Fleet host | `retired_inventory_days` after retirement (default 30, 1–365) |
@@ -157,7 +158,7 @@ on request.
   agreement].
 - Paddock records every change of the switches as an audit event: `settings.privacy_changed` (privacy settings),
   `settings.login_changed` (login history), `settings.dms_changed` (dead man's switch). [Organization] gives the
-  works council [the list of these events every [period] | access on request].
+  works council [the list of these events every n months | access on request].
 - A Paddock update that adds a data category or an evaluation is installed only after this annex has been updated;
   the changelog and [privacy.md](../privacy.md) of the new version name the change.
 
