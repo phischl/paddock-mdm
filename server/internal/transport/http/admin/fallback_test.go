@@ -154,3 +154,40 @@ func TestSignInWithoutFallback(t *testing.T) {
 		}
 	})
 }
+
+// TestSignInRecordsAFailedFallbackLookup: when the organization lookup of a two-role sign-in fails, the attempt is
+// refused with login_failed and leaves exactly one failed admin.login (PDK-508). The lookup fails because the test
+// replaces the slug function with one that raises; the test binary has its own database and runs its tests serially.
+func TestSignInRecordsAFailedFallbackLookup(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	ctx := context.Background()
+	var original string
+	if err := w.e.super.QueryRow(ctx, "SELECT pg_get_functiondef('paddock_org_id_by_slug(text)'::regprocedure)").Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	restore := func() {
+		if _, err := w.e.super.Exec(ctx, original); err != nil {
+			t.Errorf("restore paddock_org_id_by_slug: %v", err)
+		}
+	}
+	if _, err := w.e.super.Exec(ctx, `CREATE OR REPLACE FUNCTION paddock_org_id_by_slug(p_slug text) RETURNS uuid
+		LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS
+		$$ BEGIN RAISE EXCEPTION 'injected lookup failure'; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+
+	u := newTwoRoles(w)
+	res := w.login(ctx, u.both())
+	restore()
+	if res.Code != http.StatusFound || res.Header().Get("Location") != "/login-denied?reason=login_failed" || cookieFrom(res) != nil {
+		t.Fatalf("sign-in with a failing lookup: %d %s", res.Code, res.Header().Get("Location"))
+	}
+	if got := u.fallbacks(); len(got) != 1 || got[0] != uuid.Nil.String()+"|failure|-|-|-" {
+		t.Fatalf("sign-in events %v", got)
+	}
+	if n, outcome, errCode, reason, channel := w.loginEvents(u.username); n != 1 || outcome != "failure" ||
+		errCode != "login_failed" || reason != "login_failed" || channel != "portal" {
+		t.Fatalf("audit: %d events, outcome %q, error code %q, reason %q, channel %q", n, outcome, errCode, reason, channel)
+	}
+}

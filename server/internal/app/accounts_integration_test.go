@@ -378,3 +378,55 @@ func TestMCPWriteOptInRefusesMCPChannel(t *testing.T) {
 		}
 	}
 }
+
+// TestLoginRecordsAFailedOrganizationLookup: when the organization lookup of a login fails (here: PostgreSQL rejects
+// the NUL byte of the slug), the attempt still leaves exactly one failed admin.login in its channel (PDK-508).
+func TestLoginRecordsAFailedOrganizationLookup(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	org, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(org.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	accounts := app.NewAccounts(app.NewActionRunner(org, platform, httpx.RequestID), org, platform, nil)
+	for name, channel := range map[string]principal.Channel{"portal": "", "mcp": principal.ChannelMCP} {
+		t.Run(name, func(t *testing.T) {
+			username := "lookup-" + uuid.NewString() + "@acme.test"
+			opened := false
+			_, err := accounts.Login(ctx, app.LoginIdentity{Subject: uuid.NewString(), Username: username, IP: "192.0.2.7",
+				Channel: channel, OpenSession: func(context.Context, principal.Principal) error { opened = true; return nil }},
+				app.LoginRole{Slug: "broken\x00slug", Role: principal.RoleOrgAdmin})
+			if err == nil || errors.Is(err, problem.Forbidden) || opened {
+				t.Fatalf("login with a failing lookup: %v, session opened %v", err, opened)
+			}
+			var n int
+			var outcome, errCode, reason, gotChannel, org, ip string
+			if err := super.QueryRow(ctx, `SELECT count(*), max(outcome), coalesce(max(error_code), ''),
+				coalesce(max(params->>'reason'), ''), coalesce(max(params->>'channel'), ''), max(organization_id::text),
+				coalesce(max(actor->>'ip'), '') FROM action WHERE code = 'admin.login' AND actor->>'display' = $1`,
+				username).Scan(&n, &outcome, &errCode, &reason, &gotChannel, &org, &ip); err != nil {
+				t.Fatal(err)
+			}
+			want := "portal"
+			if channel != "" {
+				want = string(channel)
+			}
+			if n != 1 || outcome != "failure" || errCode != app.ReasonLoginFailed || reason != app.ReasonLoginFailed ||
+				gotChannel != want || org != audit.PlatformOrganizationID.String() || ip != "192.0.2.7" {
+				t.Fatalf("audit: %d events, outcome %q, error code %q, reason %q, channel %q, organization %s, ip %q",
+					n, outcome, errCode, reason, gotChannel, org, ip)
+			}
+		})
+	}
+}
