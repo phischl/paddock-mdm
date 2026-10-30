@@ -173,7 +173,7 @@ func TestIPAllowlist(t *testing.T) {
 	if r.Status != http.StatusForbidden || r.ProblemCode() != "ip_not_allowed" {
 		t.Fatalf("api token from 192.0.2.9: HTTP %d %s", r.Status, r.Body)
 	}
-	first := expectOneIndexEvent(t, idx, platformOrg, denialWhere(since), "192.0.2.9", "platform.ip_allowlist_denied", "denied", 10*time.Second)
+	first := expectOneIndexEvent(t, idx, platformOrg, denialWhere(since), "192.0.2.9", "platform.ip_allowlist_denied", "denied", auditPollTimeout)
 	if first.Params["count"] != float64(1) || first.Params["aggregated"] != false {
 		t.Fatalf("first denial: %v", first.Params)
 	}
@@ -203,6 +203,8 @@ func TestIPAllowlist(t *testing.T) {
 	}
 	var summary *env.IndexEvent
 	for deadline := time.Now().Add(40 * time.Second); summary == nil; {
+		// The deadline is checked against the poll's start, as in expectOneIndexEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		events, err := idx.Events(ctx, platformOrg, denialWhere(since), "192.0.2.9")
 		if err != nil {
 			t.Fatal(err)
@@ -212,7 +214,7 @@ func TestIPAllowlist(t *testing.T) {
 				summary = &e
 			}
 		}
-		if summary == nil && time.Now().After(deadline) {
+		if summary == nil && polled.After(deadline) {
 			t.Fatalf("no summary event of 192.0.2.9 within 40 s: %v", events)
 		}
 		time.Sleep(time.Second)

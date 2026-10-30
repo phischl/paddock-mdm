@@ -63,11 +63,13 @@ func revokedEvents(t *testing.T, idx *env.AuditIndex, org uuid.UUID, username st
 	t.Helper()
 	ctx := testContext(t, time.Minute)
 	for deadline := time.Now().Add(auditPollTimeout); ; time.Sleep(time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneIndexEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		events, err := idx.Events(ctx, org, "code = 'admin.sessions_revoked' AND target->>'display' = $1", username)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(events) > 0 || time.Now().After(deadline) {
+		if len(events) > 0 || polled.After(deadline) {
 			return events
 		}
 	}
@@ -330,6 +332,8 @@ func TestAPITokenCreatorInactive(t *testing.T) {
 	}
 	waitUnauthenticated(t, token, accountRoundTimeout)
 	for deadline := time.Now().Add(auditPollTimeout); ; time.Sleep(time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneIndexEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		events, err := idx.Events(testContext(t, time.Minute), org, "code = 'api_token.use_denied' AND target->>'id' = $1", created.Token.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -337,7 +341,7 @@ func TestAPITokenCreatorInactive(t *testing.T) {
 		if len(events) > 0 && events[len(events)-1].Params["reason"] == "creator_inactive" {
 			return
 		}
-		if time.Now().After(deadline) {
+		if polled.After(deadline) {
 			t.Fatalf("use_denied events %+v, want reason creator_inactive", events)
 		}
 	}
