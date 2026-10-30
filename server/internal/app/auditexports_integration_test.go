@@ -154,6 +154,16 @@ func TestAuditExportRequestRefusals(t *testing.T) {
 			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\x00audit"}, problem.InvalidRequest, audit.OutcomeFailure},
 		{"purpose with escape", auditor,
 			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\x1baudit"}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"purpose with C1 control", auditor,
+			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\u0085audit"}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"purpose with last C1 control", auditor,
+			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\u009faudit"}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"purpose with right-to-left override", auditor,
+			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\u202eaudit"}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"purpose with bidi embedding", auditor,
+			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\u202aaudit"}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"purpose with bidi isolate", auditor,
+			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\u2066audit\u2069"}, problem.InvalidRequest, audit.OutcomeFailure},
 		{"missing days", auditor,
 			app.AuditExportRequest{Purpose: "p"}, problem.InvalidRequest, audit.OutcomeFailure},
 		{"missing to_day", auditor,
@@ -172,6 +182,22 @@ func TestAuditExportRequestRefusals(t *testing.T) {
 				t.Fatalf("exports after the refusal: %+v, %v", list, err)
 			}
 		})
+	}
+}
+
+// TestAuditExportPurposeKeepsLineBreaks: tab, newline and carriage return stay allowed in the purpose, and so do the
+// characters next to the refused C1 and bidi ranges.
+func TestAuditExportPurposeKeepsLineBreaks(t *testing.T) {
+	h := newExportHarness(t)
+	day := exportDay(1)
+	h.seal(t, day)
+	purpose := "ISO 27001\r\nsurveillance\taudit \u00a0\u2029\u2065\u206a"
+	got, err := h.exports.Request(h.steppedUp(principal.RoleOrgAuditor), app.AuditExportRequest{FromDay: day, ToDay: day, Purpose: purpose})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Purpose != purpose {
+		t.Fatalf("purpose = %q, want %q", got.Purpose, purpose)
 	}
 }
 

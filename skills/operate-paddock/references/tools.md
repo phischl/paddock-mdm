@@ -223,7 +223,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `confirmManagedFileSensitive` | managed-config | Confirms a managed file on a sensitive path that existed before the path tiers; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `confirmPermissionProfileRootGrant` | privileges | Confirms an effectively Full profile that existed before the step-up rule covered it; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `createApiToken` | api-tokens | The role may not be above the creator's: org_admin creates any organization role, org_operator creates org_operator and org_auditor (403 forbidden). |
-| `createAuditExport` | audit | Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters: 400 invalid_request). |
+| `createAuditExport` | audit | Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). |
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |

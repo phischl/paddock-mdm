@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -436,8 +437,9 @@ func TestAuditReaderSeesOnlyItsChainStatus(t *testing.T) {
 	}
 }
 
-// TestAuditReaderExports: the reader inserts and reads the evidence exports of its own organization only and can
-// neither change nor delete one (plan M10 §6.2, decision 29).
+// TestAuditReaderExports: the reader inserts pending requests and reads the evidence exports of its own organization
+// only; it can neither change nor delete one nor insert one that is not pending or carries builder columns (plan M10
+// §6.2, decision 29, amendment 2026-10-30).
 func TestAuditReaderExports(t *testing.T) {
 	env := sharedAudit(t)
 	ctx := context.Background()
@@ -502,6 +504,30 @@ func TestAuditReaderExports(t *testing.T) {
 		"DELETE FROM audit_export",
 		"INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES (gen_random_uuid(), gen_random_uuid(), 0, '')",
 		"INSERT INTO audit_signing_key (key_version, public_key) VALUES (99, decode(repeat('00', 32), 'hex'))",
+	} {
+		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgA.String()); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, stmt)
+			return err
+		})
+		expectPermissionDenied(t, "paddock_audit_reader: "+stmt, err)
+	}
+
+	const insertOwn = "INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose, requested_by, " +
+		"correlation_id%s) VALUES (gen_random_uuid(), current_setting('paddock.org_id')::uuid, '%s', current_date, " +
+		"current_date, 'rls', '{}', 'rls'%s)"
+	for _, stmt := range []string{
+		fmt.Sprintf(insertOwn, "", "ready", ""),
+		fmt.Sprintf(insertOwn, "", "running", ""),
+		fmt.Sprintf(insertOwn, ", started_at", "pending", ", now()"),
+		fmt.Sprintf(insertOwn, ", ready_at, expires_at", "pending", ", now(), now()"),
+		fmt.Sprintf(insertOwn, ", event_count, object_count, size", "pending", ", 1, 1, 1"),
+		fmt.Sprintf(insertOwn, ", package_sha256, signature, key_version", "pending", ", '\\x00', 'sig', 1"),
+		fmt.Sprintf(insertOwn, ", verify_ok", "pending", ", true"),
+		fmt.Sprintf(insertOwn, ", verify_problems", "pending", ", '[]'"),
+		fmt.Sprintf(insertOwn, ", error", "pending", ", 'x'"),
 	} {
 		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgA.String()); err != nil {

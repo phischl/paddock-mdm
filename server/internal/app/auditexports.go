@@ -74,7 +74,7 @@ func (a *AuditExports) Request(ctx context.Context, req AuditExportRequest) (aud
 			return problem.InvalidRequest.WithDetail(fmt.Sprintf("purpose must have 1 to %d characters", maxExportPurpose))
 		}
 		if hasControls(purpose) {
-			return problem.InvalidRequest.WithDetail("purpose must not contain control characters")
+			return problem.InvalidRequest.WithDetail("purpose must not contain control or bidi control characters")
 		}
 		rec.SetParam("export_id", id.String())
 		rec.SetParam("from_day", from.Format(time.DateOnly))
@@ -185,9 +185,16 @@ func (a *AuditExports) List(ctx context.Context, f AuditExportQuery) (Listed[aud
 }
 
 // hasControls reports C0 control characters other than tab, newline and carriage return: PostgreSQL rejects NUL in
-// jsonb, so such a purpose would fail the action's audit record (see boundedString).
+// jsonb, so such a purpose would fail the action's audit record (see boundedString). C1 and bidi controls are refused
+// too, because the evidence package and the portal show the purpose to auditors and a direction override could
+// disguise it (plan M10, amendment 2026-10-30 for PDK-142).
 func hasControls(s string) bool {
-	return s != stripControls(s)
+	if s != stripControls(s) {
+		return true
+	}
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return (r >= 0x80 && r <= 0x9f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
+	})
 }
 
 func utcDay(t time.Time) time.Time {

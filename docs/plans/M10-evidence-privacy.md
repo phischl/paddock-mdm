@@ -1625,3 +1625,31 @@ Architect decisions on reviews 1 and 2 of PDK-140. They amend decision 22 and th
 
 `audit_ensure_partition` keeps its `search_path` weakness for now; it is fixed in audit migration `00009` (PDK-558),
 not here.
+
+### Amendment 2026-10-30 (PDK-142)
+
+Architect decisions on the review of PDK-142 (stubs PDK-580 and PDK-581, folded into PDK-142). Audit migration
+`00008_audit_exports.sql` was not yet on `main` and implements them; it is the binding text from now on.
+
+1. **Reader inserts only pending requests (§6.2 corrected).** The `reader` policy on `audit_export` pins the status and
+   the builder's columns on insert, so no SQL path running as `paddock_audit_reader` can insert an export that looks
+   built or verified. The §6.2 text of that policy reads:
+
+   ```sql
+   CREATE POLICY reader ON audit_export TO paddock_audit_reader
+     USING (organization_id = current_setting('paddock.org_id')::uuid)
+     WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid AND status = 'pending'
+       AND started_at IS NULL AND ready_at IS NULL AND expires_at IS NULL AND event_count IS NULL
+       AND object_count IS NULL AND size IS NULL AND package_sha256 IS NULL AND verify_ok IS NULL
+       AND verify_problems IS NULL AND signature IS NULL AND key_version IS NULL AND error IS NULL);
+   ```
+
+   A test asserts that the reader cannot insert a row with another status or with any builder column set.
+2. **Decision 29: `InOrgWrite` ratified.** `external` runs the checks and `InsertAuditExport` in one
+   `reader.InOrgWrite` transaction (read-write, same organization context and RLS as `reader.InOrg`), since a
+   `READ ONLY` transaction cannot insert. `Get`, `List` and the download keep `reader.InOrg`. `docs/architecture.md`
+   §4.1 carries a dated note that the reader also inserts pending export requests.
+3. **Purpose characters (decision 29).** Besides C0 controls other than tab, newline and carriage return, `prepare`
+   refuses C1 controls (U+0080–U+009F) and bidi controls (U+202A–U+202E, U+2066–U+2069) in `purpose` with
+   `400 invalid_request` before any parameter is set, because the evidence package and the portal show the purpose to
+   auditors. Tab, newline and carriage return stay allowed.

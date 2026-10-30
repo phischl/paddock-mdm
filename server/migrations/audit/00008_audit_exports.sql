@@ -45,9 +45,14 @@ CREATE TABLE audit_signing_key (
 );
 
 ALTER TABLE audit_export ENABLE ROW LEVEL SECURITY; ALTER TABLE audit_export FORCE ROW LEVEL SECURITY;
+-- The reader only requests exports: a row it inserts is pending and carries none of the builder's columns, so no SQL
+-- path running as the reader can present an export as built or verified (plan M10, amendment 2026-10-30 for PDK-142).
 CREATE POLICY reader ON audit_export TO paddock_audit_reader
   USING (organization_id = current_setting('paddock.org_id')::uuid)
-  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid AND status = 'pending'
+    AND started_at IS NULL AND ready_at IS NULL AND expires_at IS NULL AND event_count IS NULL
+    AND object_count IS NULL AND size IS NULL AND package_sha256 IS NULL AND verify_ok IS NULL
+    AND verify_problems IS NULL AND signature IS NULL AND key_version IS NULL AND error IS NULL);
 CREATE POLICY writer ON audit_export TO paddock_audit_writer USING (true) WITH CHECK (true);
 ALTER TABLE audit_export_chunk ENABLE ROW LEVEL SECURITY; ALTER TABLE audit_export_chunk FORCE ROW LEVEL SECURITY;
 CREATE POLICY reader ON audit_export_chunk TO paddock_audit_reader
