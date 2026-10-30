@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +19,9 @@ func TestShapeAndLatest(t *testing.T) {
 		{"v4.92.3", []string{"4.93.0", "v4.93.0", "v4.92.4"}, "v4.93.0"},
 		{"1.27.2-trixie", []string{"1.27.3-bookworm", "1.27.3-trixie", "1.28rc1-trixie"}, "1.27.3-trixie"},
 		{"2.11.6", []string{"latest", "alpine"}, ""},
+		{"8.4.11", InLine([]string{"8.4.13", "9.7.4", "26.10.0", "8.4.12"}, "8.4."), "8.4.13"},
+		{"8.4.11", []string{"8.4.13", "9.7.4", "26.10.0", "8.4.12"}, "26.10.0"},
+		{"8.4.11", InLine([]string{"9.7.4", "26.10.0", "8.40.1"}, "8.4."), ""},
 	}
 	for _, c := range cases {
 		if got := Latest(c.pinned, c.tags); got != c.want {
@@ -26,6 +30,19 @@ func TestShapeAndLatest(t *testing.T) {
 	}
 	if re := Shape("v4.92.3"); re.String() != `^v\d+\.\d+\.\d+$` {
 		t.Errorf("Shape = %s", re)
+	}
+}
+
+func TestInLine(t *testing.T) {
+	tags := []string{"8.4.13", "9.7.4", "26.10.0", "8.4.12"}
+	if got := InLine(tags, ""); strings.Join(got, " ") != "8.4.13 9.7.4 26.10.0 8.4.12" {
+		t.Errorf("InLine without line = %v", got)
+	}
+	if got := InLine(tags, "8.4."); strings.Join(got, " ") != "8.4.13 8.4.12" {
+		t.Errorf("InLine 8.4. = %v", got)
+	}
+	if got := InLine(tags, "10."); len(got) != 0 {
+		t.Errorf("InLine 10. = %v", got)
 	}
 }
 
@@ -38,6 +55,8 @@ func TestCompareTagsNumeric(t *testing.T) {
 func TestClassify(t *testing.T) {
 	cases := []struct{ pinned, latest, want string }{
 		{"2.11.6", "2.11.7", ClassPatch},
+		{"8.4.11", "8.4.13", ClassPatch},
+		{"8.4.11", "26.10.0", ClassMajor},
 		{"2.11.6", "2.12.0", ClassMinor},
 		{"2.11.6", "3.0.0", ClassMajor},
 		{"2.11.6", "2.11.6", ClassOK},

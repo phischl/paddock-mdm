@@ -81,6 +81,20 @@ func Latest(pinned string, tags []string) string {
 	return best
 }
 
+// InLine returns the tags that start with line; every tag when line is empty.
+func InLine(tags []string, line string) []string {
+	if line == "" {
+		return tags
+	}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if strings.HasPrefix(t, line) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // Classify names the step from pinned to latest: patch when only the last numeric field grew, major when the first,
 // minor when one in between; ok when latest is not newer.
 func Classify(pinned, latest string) string {

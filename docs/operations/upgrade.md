@@ -127,8 +127,9 @@ demand) compares each of them with upstream (ADR 0037 amendment 2026-10-17):
 - **What it checks.** Images: the registry's tag list (Docker Hub API; ghcr.io, gcr.io and mcr.microsoft.com through
   the anonymous OCI distribution API). The latest tag is the highest tag of the same shape as the pin (`2.11.6` only
   compares with `x.y.z`, `4.3.6-management` with `x.y.z-management`). The floating `nonroot` tag of `RUNTIME_IMAGE` is
-  compared by manifest digest. Himmelblau: the directory listing of `packages.himmelblau-idm.org/stable/`. Fleet NVD:
-  the latest release of `fleetdm/nvd`. Each pin is classified `patch`, `minor`, `major`, `digest`, `ok` or `unknown`
+  compared by manifest digest. A pin can follow one line only (`Line` in `tools/upstreamwatch/pins.go`, today Fleet's
+  MySQL on `8.4.`); newer lines are not reported for it. Himmelblau: the directory listing of
+  `packages.himmelblau-idm.org/stable/`. Fleet NVD: the latest release of `fleetdm/nvd`. Each pin is classified `patch`, `minor`, `major`, `digest`, `ok` or `unknown`
   (a lookup failed; printed in the job log, never an issue).
 - **The label.** Every outdated pin gets exactly one open issue with the label `upstream` and the title
   `upstream: <name> <pinned> → <latest>`. The body names the pinned line, the latest version, the classification,
