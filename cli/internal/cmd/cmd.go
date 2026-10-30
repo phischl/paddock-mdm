@@ -42,6 +42,8 @@ commands:
                                 show the plan of a configuration and apply it; deletions need --yes
   devices list [--page N] [--page-size 10|25|50|100] [--sort <field>] [-q <text>] [--state <s>]...
                [--device-group-id <uuid>] [--disk-state <s>]... [-o table|json]
+  audit verify-export <file> [--fingerprint <hex>] [-o text|json]
+                                verify an audit evidence package offline; needs no configuration, token or network
   mcp login [--no-browser] [--platform]
                                 sign in for the MCP server through the browser (password and second factor);
                                 --platform signs in with the platform role of an identity that has both
@@ -73,6 +75,11 @@ func usagef(format string, a ...any) error { return &usageError{msg: fmt.Sprintf
 type refusedError struct{ msg string }
 
 func (e *refusedError) Error() string { return e.msg }
+
+// verifyFailedError is a package with problems (exit 1); the problems are already on stdout.
+type verifyFailedError struct{}
+
+func (verifyFailedError) Error() string { return "the evidence package has problems" }
 
 // globals are the flags every API command accepts.
 type globals struct {
@@ -166,6 +173,11 @@ func dispatch(ctx context.Context, e Env) error {
 			return usagef("usage: paddockctl devices list [flags]")
 		}
 		return runDevicesList(ctx, e, args[2:])
+	case "audit":
+		if len(args) < 2 || args[1] != "verify-export" {
+			return usagef("usage: paddockctl audit verify-export <file> [--fingerprint <hex>] [-o text|json]")
+		}
+		return runAuditVerifyExport(e, args[2:])
 	case "mcp":
 		return runMCP(ctx, e, args[1:])
 	}
@@ -178,9 +190,12 @@ func report(e Env, err error) int {
 	var cerr *cfg.Error
 	var refused *refusedError
 	var problem *client.Problem
+	var failed verifyFailedError
 	switch {
 	case err == nil:
 		return ExitOK
+	case errors.As(err, &failed):
+		return ExitError
 	case errors.As(err, &uerr):
 		fmt.Fprintf(e.Stderr, "error: %s\n\n%s", uerr.msg, usage)
 		return ExitUsage
