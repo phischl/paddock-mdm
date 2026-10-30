@@ -14,6 +14,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const auditPartitionExists = `-- name: AuditPartitionExists :one
+SELECT (to_regclass('public.' || quote_ident($1::text)) IS NOT NULL)::boolean AS exists
+`
+
+// Whether a partition of audit_event still exists, after a purge whose COMMIT outcome is unknown (PDK-140).
+func (q *Queries) AuditPartitionExists(ctx context.Context, name string) (bool, error) {
+	row := q.db.QueryRow(ctx, auditPartitionExists, name)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const auditPartitionStats = `-- name: AuditPartitionStats :one
 SELECT count(*) AS events, COALESCE(max(recorded_at), 'epoch')::timestamptz AS newest FROM audit_event
 WHERE occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz

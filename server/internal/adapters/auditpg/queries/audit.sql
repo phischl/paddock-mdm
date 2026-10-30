@@ -227,6 +227,10 @@ SELECT set_config('lock_timeout', '5s', true);
 SELECT p.dropped::boolean AS dropped, p.events::bigint AS events, p.reason::text AS reason
 FROM audit_purge_partition(@month::date, @cutoff::timestamptz) AS p;
 
+-- name: AuditPartitionExists :one
+-- Whether a partition of audit_event still exists, after a purge whose COMMIT outcome is unknown (PDK-140).
+SELECT (to_regclass('public.' || quote_ident(@name::text)) IS NOT NULL)::boolean AS exists;
+
 -- name: TryAuditPurgeLock :one
 SELECT pg_try_advisory_lock(hashtext('audit-purge')) AS locked;
 

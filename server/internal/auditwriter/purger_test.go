@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
@@ -392,6 +395,211 @@ func TestWriterHasNoDeleteOnAuditEvent(t *testing.T) {
 	if !canPurge {
 		t.Error("paddock_audit_writer cannot execute audit_purge_partition")
 	}
+}
+
+// TestPurgePartitionRefusesCutoffWithinRetention (PDK-140 review): the writer role calling audit_purge_partition
+// directly cannot drop a partition with a cutoff inside the 400-day WORM retention; just past it, it can.
+func TestPurgePartitionRefusesCutoffWithinRetention(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	m := month(2001, time.July)
+	s.writeBackdated(t, uuid.Must(uuid.NewV7()), m, 1)
+	purge := func(cutoff time.Time) (auditstore.PurgeAuditPartitionRow, error) {
+		var row auditstore.PurgeAuditPartitionRow
+		err := s.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+			var err error
+			row, err = q.PurgeAuditPartition(ctx, auditstore.PurgeAuditPartitionParams{Month: m, Cutoff: cutoff})
+			return err
+		})
+		return row, err
+	}
+	for name, cutoff := range map[string]time.Time{
+		"now":       time.Now(),
+		"399 days":  time.Now().AddDate(0, 0, -399),
+		"far ahead": time.Now().AddDate(100, 0, 0),
+	} {
+		if _, err := purge(cutoff); err == nil || !strings.Contains(err.Error(), "minimum retention of 400 days") {
+			t.Errorf("cutoff %s: err = %v, want the retention floor", name, err)
+		}
+		if !s.partitionExists(t, "audit_event_2001_07") {
+			t.Fatalf("cutoff %s dropped the partition", name)
+		}
+	}
+	row, err := purge(time.Now().AddDate(0, 0, -401))
+	if err != nil || !row.Dropped || row.Events != 1 {
+		t.Fatalf("cutoff 401 days ago = %+v, %v, want dropped with 1 event", row, err)
+	}
+}
+
+// TestPurgePartitionFloorMatchesMinRetentionDays guards against drift between the database floor of
+// audit_purge_partition and auditwriter.MinRetentionDays.
+func TestPurgePartitionFloorMatchesMinRetentionDays(t *testing.T) {
+	s := newStack(t)
+	var def string
+	if err := s.super.QueryRow(context.Background(),
+		"SELECT pg_get_functiondef('public.audit_purge_partition(date, timestamptz)'::regprocedure)").Scan(&def); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("now() - interval '%d days'", auditwriter.MinRetentionDays); !strings.Contains(def, want) {
+		t.Errorf("audit_purge_partition has no floor %q:\n%s", want, def)
+	}
+}
+
+// TestPurgePartitionExecuteGrantees: besides its owner, only paddock_audit_writer, the role that purges, may execute
+// audit_purge_partition.
+func TestPurgePartitionExecuteGrantees(t *testing.T) {
+	s := newStack(t)
+	rows, err := s.super.Query(context.Background(),
+		`SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
+		 FROM pg_proc p, aclexplode(p.proacl) a
+		 WHERE p.oid = 'public.audit_purge_partition(date, timestamptz)'::regprocedure
+		   AND a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantees, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grantees) != 1 || grantees[0] != "paddock_audit_writer" {
+		t.Errorf("EXECUTE grantees besides the owner = %v, want [paddock_audit_writer]", grantees)
+	}
+}
+
+// TestPurgePartitionIgnoresTemporaryShadow (PDK-140 review): a temporary table of the writer's session named like a
+// partition is never resolved by the SECURITY DEFINER function. The writer has no TEMPORARY privilege today; the test
+// grants it, so the function's own search_path stays covered if that ever changes.
+func TestPurgePartitionIgnoresTemporaryShadow(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	if _, err := s.super.Exec(ctx, "GRANT TEMPORARY ON DATABASE paddock_audit TO paddock_audit_writer"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := s.super.Exec(context.Background(), "REVOKE TEMPORARY ON DATABASE paddock_audit FROM paddock_audit_writer"); err != nil {
+			t.Error(err)
+		}
+	})
+	if s.partitionExists(t, "audit_event_2001_08") {
+		t.Fatal("audit_event_2001_08 exists; this test needs the month without a partition")
+	}
+	var row auditstore.PurgeAuditPartitionRow
+	conn := writerSession(t)
+	if _, err := conn.Exec(ctx, "CREATE TEMPORARY TABLE audit_event_2001_08 (recorded_at timestamptz)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, "SELECT dropped, events, reason FROM audit_purge_partition($1, $2)",
+		month(2001, time.August), time.Now().AddDate(0, 0, -401)).Scan(&row.Dropped, &row.Events, &row.Reason); err != nil {
+		t.Fatal(err)
+	}
+	if row.Dropped || row.Reason != "no such partition" {
+		t.Errorf("purge with a temporary shadow = %+v, want no such partition", row)
+	}
+	var exists bool
+	if err := conn.QueryRow(ctx, "SELECT to_regclass('pg_temp.audit_event_2001_08') IS NOT NULL").Scan(&exists); err != nil || !exists {
+		t.Errorf("temporary table gone (%v)", err)
+	}
+}
+
+// TestPurgerRecordsDropWithUnknownCommitOutcome (PDK-140 review): when the purge transaction of a partition returns
+// an error or is cancelled although its COMMIT went through, the purger finds the partition gone and records the
+// drop as retention.purged success, without a deleted count, instead of a failure or nothing.
+func TestPurgerRecordsDropWithUnknownCommitOutcome(t *testing.T) {
+	for name, m := range map[string]time.Time{"error": month(2001, time.September), "cancelled": month(2001, time.October)} {
+		t.Run(name, func(t *testing.T) {
+			s := newStack(t)
+			s.writeBackdated(t, uuid.Must(uuid.NewV7()), m, 1)
+			partition := "audit_event_" + m.Format("2006_01")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			purger := auditwriter.NewPurger(s.pool, s.writer, 400)
+			auditwriter.SetPurgeCommitted(purger, func(_ context.Context, err error) error {
+				if err != nil || s.partitionExists(t, partition) {
+					return err
+				}
+				if name == "cancelled" {
+					cancel()
+					return context.Canceled
+				}
+				return errors.New("unexpected EOF")
+			})
+
+			report, err := purger.Run(ctx, time.Now(), false)
+			if name == "error" && err != nil {
+				t.Fatalf("Run = %v, want nil", err)
+			}
+			if p := partitionOf(t, report, partition); !p.Dropped || p.Failed || p.Reason != auditwriter.PurgeReasonDropped {
+				t.Errorf("partition = %+v, want dropped", p)
+			}
+			if s.partitionExists(t, partition) {
+				t.Fatal("partition still exists")
+			}
+			recorded := s.purgedEvents(t, partition)
+			if len(recorded) != 1 || recorded[0].Outcome != string(audit.OutcomeSuccess) {
+				t.Fatalf("recorded = %+v, want one success", recorded)
+			}
+			var params map[string]any
+			if err := json.Unmarshal(recorded[0].Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := params["deleted"]; ok || params["partition"] != partition {
+				t.Errorf("params = %v, want the partition and no deleted count", params)
+			}
+		})
+	}
+}
+
+// TestWriterRetriesWhenPurgeDropsPartition (PDK-140 review): when the index purge drops the month's partition between
+// ensurePartitions and the insert, the writer retries the transaction, which creates the partition again, instead of
+// failing the batch with "no partition".
+func TestWriterRetriesWhenPurgeDropsPartition(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	m := month(2001, time.November)
+	s.writeBackdated(t, org, m, 1)
+	writer, err := auditwriter.NewWriter(s.pool, s.store, 400)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := otherSession(t)
+	attempts := 0
+	auditwriter.SetPartitionsEnsured(writer, func() {
+		attempts++
+		if attempts > 1 {
+			return
+		}
+		if _, err := other.Exec(ctx, "SET lock_timeout = '5s'"); err != nil {
+			t.Error(err)
+		}
+		if _, err := other.Exec(ctx, "ALTER TABLE audit_event DETACH PARTITION audit_event_2001_11"); err != nil {
+			t.Errorf("detach: %v", err)
+		}
+		if _, err := other.Exec(ctx, "DROP TABLE audit_event_2001_11"); err != nil {
+			t.Errorf("drop: %v", err)
+		}
+	})
+	late := event(org, m.AddDate(0, 0, 20), audit.CodeDeviceGroupUpdated)
+	if written, err := writer.WriteBatch(ctx, []audit.Event{late}); err != nil || written != 1 {
+		t.Fatalf("WriteBatch = %d, %v, want 1 written after a retry", written, err)
+	}
+	if attempts != 2 {
+		t.Errorf("%d transactions, want 2", attempts)
+	}
+	if n := s.count(t, "SELECT count(*) FROM audit_event_2001_11 WHERE event_id = $1", late.EventID); n != 1 {
+		t.Errorf("late event indexed %d times, want 1", n)
+	}
+}
+
+// writerSession opens a session of paddock_audit_writer of its own, outside the writer pool.
+func writerSession(t *testing.T) *pgx.Conn {
+	t.Helper()
+	conn, err := pgx.Connect(context.Background(), pgtest.SharedAudit(t).Writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	return conn
 }
 
 // otherSession opens a superuser session of its own, for a concurrent transaction or lock.

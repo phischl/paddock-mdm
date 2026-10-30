@@ -1524,3 +1524,37 @@ TestAuditEvidenceExport|TestLoginHistory'`. No VM system test (nothing on the ag
 - A residual-risk number RR-94 to RR-96 exists on main when PDK-135 starts.
 - `audit.Actor` or `audit.Event` gained a field that changes the stored event JSON of existing objects
   (`events.jsonl` must stay byte-identical to the WORM objects).
+
+### Amendment 2026-10-30 (PDK-140, audit index purge)
+
+Architect decisions on review 1 of PDK-140. They amend decision 22 and the `audit_purge_partition` text of §6.2;
+audit migration `00007_index_purge.sql` implements them and is the binding text from now on.
+
+1. **Retention floor in the database.** `audit_purge_partition` raises an exception (SQLSTATE `22023`) when
+   `p_cutoff` is `NULL` or later than `now() - interval '400 days'`, before it looks at any partition. The 400 days are
+   hardcoded: they are a safety net under the Go checks (`Purger.Run`, `loadAuditDeps`) at the privilege boundary, not
+   configuration, so a `paddock_audit_writer` session calling the function directly cannot drop events within the
+   WORM retention. A Go test asserts that the function's floor equals `auditwriter.MinRetentionDays`; EXECUTE is
+   granted only to `paddock_audit_writer`, the role that purges.
+2. **Pinned search path.** The function is `SET search_path = pg_catalog, public, pg_temp` and qualifies every name
+   with `public.` (also in the `format` calls: `public.%I`), so no temporary table can shadow a partition, as in audit
+   migration `00006`.
+3. **Lock before the count (ratified deviation from §6.2 verbatim).** The function takes
+   `LOCK TABLE ONLY public.audit_event, public.<partition> IN ACCESS EXCLUSIVE MODE` before it counts and drops.
+   Without it, an event committed between the count and the `DETACH` would be dropped although it was recorded within
+   the retention. A regression test pins this.
+4. **Scan under the lock, with a sizing note.** `recorded_at` has no index on the partitions (audit migrations
+   `00001`–`00006`), so the cheap locked re-check of an unlocked pre-read is not available, and `00007` creates no new
+   index. The `count(*)`/`max(recorded_at)` scan stays under the lock (option a). Sizing: while it runs, every insert
+   and read of `audit_event` waits. `lock_timeout` (5 s) bounds only the wait for the lock; the scan itself is bounded
+   by the writer transaction timeout. A monthly partition whose sequential scan approaches that timeout fails as
+   `purge_failed` every night and raises `PaddockAuditIndexPurgeStale`; operators with such volumes need an index on
+   `recorded_at` first (a later audit migration, architect decision).
+5. **Unknown commit outcome and the no-partition race.** When a drop's transaction ends with an error other than a lock
+   timeout, or is cancelled, the purger checks in a new session whether the partition still exists; if it is gone, it
+   records `retention.purged` success without `deleted`, since the count was lost with the result. A writer
+   transaction whose insert finds no partition (SQLSTATE `23514`, the purge dropped the month after
+   `ensurePartitions`) is retried like the sealed-day refusal (`PA422`), and the retry creates the partition again.
+
+`audit_ensure_partition` keeps its `search_path` weakness for now; it is fixed in audit migration `00009` (PDK-558),
+not here.

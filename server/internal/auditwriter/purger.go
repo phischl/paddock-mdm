@@ -43,6 +43,7 @@ const (
 	// one is done, so both report a success instead of the loser raising PaddockAuditIndexPurgeStale.
 	purgeLockedAttempts = 10
 	purgeLockedRetry    = time.Minute
+	purgeRecheckLimit   = 30 * time.Second
 )
 
 // ErrPurgeLocked means another replica is purging the audit index.
@@ -96,6 +97,7 @@ type Purger struct {
 	retentionDays int
 	now           func() time.Time
 	after         func(time.Duration) <-chan time.Time
+	committed     func(ctx context.Context, err error) error // nil; tests turn a committed drop into an unknown outcome
 }
 
 // NewPurger creates the index purge. indexRetentionDays below the writer's WORM retention makes every Run fail.
@@ -206,6 +208,17 @@ func (p *Purger) purge(ctx context.Context, part *PurgedPartition, cutoff time.T
 		row, err = q.PurgeAuditPartition(ctx, auditstore.PurgeAuditPartitionParams{Month: part.Month, Cutoff: cutoff})
 		return err
 	})
+	if p.committed != nil {
+		err = p.committed(ctx, err)
+	}
+	if err != nil && !db.IsLockTimeout(err) && p.droppedAnyway(ctx, part.Name) {
+		// The COMMIT reached the server although the client saw an error or a cancellation: the drop is final and the
+		// next night no longer lists the partition, so its evidence has to be recorded now. The event count died with
+		// the transaction's result.
+		part.Dropped, part.Reason = true, PurgeReasonDropped
+		slog.WarnContext(ctx, "audit index purge: drop committed despite an error", "partition", part.Name, "error", err)
+		return p.recordDrop(ctx, part, cutoff, false)
+	}
 	switch {
 	case db.IsLockTimeout(err):
 		part.Reason = PurgeReasonLockTimeout
@@ -218,7 +231,7 @@ func (p *Purger) purge(ctx context.Context, part *PurgedPartition, cutoff time.T
 	case err != nil:
 		part.Failed, part.Reason = true, err.Error()
 		slog.ErrorContext(ctx, "audit index purge failed", "partition", part.Name, "error", err)
-		return errors.Join(fmt.Errorf("auditwriter: purge %s: %w", part.Name, err), p.record(ctx, *part, cutoff, err))
+		return errors.Join(fmt.Errorf("auditwriter: purge %s: %w", part.Name, err), p.record(ctx, *part, cutoff, err, true))
 	}
 	part.Dropped, part.Events, part.Reason = row.Dropped, row.Events, row.Reason
 	if !row.Dropped {
@@ -226,10 +239,16 @@ func (p *Purger) purge(ctx context.Context, part *PurgedPartition, cutoff time.T
 			"reason", row.Reason)
 		return nil
 	}
+	return p.recordDrop(ctx, part, cutoff, true)
+}
+
+// recordDrop counts a dropped partition and records its retention.purged; countKnown is false when the drop's own
+// result was lost, so the event leaves out deleted instead of claiming 0.
+func (p *Purger) recordDrop(ctx context.Context, part *PurgedPartition, cutoff time.Time, countKnown bool) error {
 	metricPartitionsDropped.Inc()
-	slog.InfoContext(ctx, "audit index partition dropped", "partition", part.Name, "events", row.Events,
+	slog.InfoContext(ctx, "audit index partition dropped", "partition", part.Name, "events", part.Events,
 		"cutoff", cutoff.Format(time.RFC3339Nano))
-	if err := p.record(ctx, *part, cutoff, nil); err != nil {
+	if err := p.record(ctx, *part, cutoff, nil, countKnown); err != nil {
 		part.Failed = true
 		return fmt.Errorf("auditwriter: %s dropped (%d events), but its retention.purged was not recorded: %w",
 			part.Name, part.Events, err)
@@ -237,8 +256,26 @@ func (p *Purger) purge(ctx context.Context, part *PurgedPartition, cutoff time.T
 	return nil
 }
 
+// droppedAnyway reports whether the partition is gone after its purge transaction returned an error. A failed check
+// counts as "still there", which keeps the error path.
+func (p *Purger) droppedAnyway(ctx context.Context, name string) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), purgeRecheckLimit)
+	defer cancel()
+	var exists bool
+	err := p.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		exists, err = q.AuditPartitionExists(ctx, name)
+		return err
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "audit index purge: re-check of the partition failed", "partition", name, "error", err)
+		return false
+	}
+	return !exists
+}
+
 // record writes retention.purged for a dropped partition, or its failure when purgeErr is set (plan M10 decision 22).
-func (p *Purger) record(ctx context.Context, part PurgedPartition, cutoff time.Time, purgeErr error) error {
+func (p *Purger) record(ctx context.Context, part PurgedPartition, cutoff time.Time, purgeErr error, countKnown bool) error {
 	// The drop is already committed and irreversible: a shutdown must not cost its evidence.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), purgeRecordLimit)
 	defer cancel()
@@ -249,6 +286,9 @@ func (p *Purger) record(ctx context.Context, part PurgedPartition, cutoff time.T
 			"store": storeAuditIndex, "partition": part.Name, "deleted": part.Events,
 			"cutoff": cutoff.Format(time.RFC3339Nano),
 		},
+	}
+	if !countKnown {
+		delete(ev.Params, "deleted")
 	}
 	if purgeErr != nil {
 		ev.Outcome, ev.ErrorCode, ev.Params["deleted"] = audit.OutcomeFailure, errorPurgeFailed, 0

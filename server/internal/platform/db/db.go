@@ -376,6 +376,13 @@ func IsLockTimeout(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
 }
 
+// IsNoPartition reports whether err is an insert into a partitioned table without a partition for the row (SQLSTATE
+// 23514 without a constraint name), e.g. an audit_event month the index purge dropped concurrently.
+func IsNoPartition(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == ""
+}
+
 // IsCheckViolation reports whether err is a check constraint violation.
 func IsCheckViolation(err error) bool {
 	var pgErr *pgconn.PgError
