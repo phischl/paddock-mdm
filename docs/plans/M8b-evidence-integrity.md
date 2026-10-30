@@ -1121,3 +1121,19 @@ on 2026-10-30: the platform path reuses the PDK-424 probe.
   OIDC groups claim. This gap is inherited unchanged from the PDK-424 probe. Using a non-empty superuser listing as an
   additional sign that the token can see the directory is left to follow-up ticket PDK-547.
 - No migration.
+
+## Amendment 2026-10-30 (PDK-535, main as architect lead)
+
+**Reason.** An audit-writer replica that starts while another replica runs its nightly cycle seeded both gauges once
+from the rows recorded so far, a mix of that night's and the previous night's results, and kept them until its own
+next cycle, up to 24 h. During that time `paddock_audit_verify_failed_organizations` could raise a false
+`PaddockAuditChainBroken` or hide a real one. The amendment 2026-10-29 (PDK-421) closed the same gap only for a
+replica that loses the `audit-verify` lock.
+
+- **Decision 27, start-up seed (option a):** after the first successful seed (at start or on a later retry while the
+  read failed), the writer re-reads both gauges every minute until the next cycle is due, exactly as a locked replica
+  does (amendment 2026-10-29, PDK-421), then runs that cycle as usual. The re-reads use the locked-replica rules: with
+  no recorded nightly run they leave both gauges as they are while some organization has a sealable day.
+- **Unchanged:** the start-up seed itself keeps the start-time fallback when no nightly row exists (amendment
+  2026-10-25), and a failed read still leaves both gauges unset and is retried every minute. A start outside another
+  replica's cycle only re-reads unchanged rows. The alert rules are unchanged; no migration.
