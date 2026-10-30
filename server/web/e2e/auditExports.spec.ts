@@ -25,6 +25,7 @@ test('auditor opens the evidence exports, the dialog validates and starts the st
     await expect(list.getByTestId('list-page-size')).toBeVisible()
     await expect(page.getByTestId('audit-keys').getByRole('heading', { level: 2, name: 'Signing keys' })).toBeVisible()
     await expect(page.getByTestId('audit-keys')).toContainText('Compare with the fingerprint your ISMS recorded')
+    await expect(page.getByTestId('audit-key').first()).toContainText(/[0-9a-f]{64}/)
     await expectAccessible(page)
 
     await page.getByTestId('new-export').click()

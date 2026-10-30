@@ -2084,7 +2084,7 @@
     },
     "dialog": {
       "title": "New evidence export",
-      "explanation": "The request needs a recent confirmation of your identity and is recorded in the audit log. Both days must be sealed; the range covers at most 400 days.",
+      "explanation": "The request needs a recent confirmation of your identity and is recorded in the audit log. Both days must be sealed; the last day is at most 400 days after the first.",
       "from": "From day",
       "to": "To day",
       "purposeHint": "Why you need the package, for example the audit it is for.",

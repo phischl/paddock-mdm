@@ -2084,7 +2084,7 @@
     },
     "dialog": {
       "title": "Neuer Nachweis-Export",
-      "explanation": "Die Anforderung braucht eine aktuelle Bestätigung Ihrer Identität und wird im Audit-Log aufgezeichnet. Beide Tage müssen versiegelt sein; der Zeitraum umfasst höchstens 400 Tage.",
+      "explanation": "Die Anforderung braucht eine aktuelle Bestätigung Ihrer Identität und wird im Audit-Log aufgezeichnet. Beide Tage müssen versiegelt sein; der letzte Tag liegt höchstens 400 Tage nach dem ersten.",
       "from": "Erster Tag",
       "to": "Letzter Tag",
       "purposeHint": "Wofür Sie das Paket brauchen, zum Beispiel das Audit, für das es bestimmt ist.",
