@@ -385,7 +385,7 @@ func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, re
 	for _, ev := range events {
 		entry, ok := eventEntry(deviceID, ev, receivedAt)
 		if ev.Type == protocol.EventSessionLogin {
-			entry, ok = sessionLoginEntry(deviceID, ev, d.now())
+			entry, ok = sessionLoginEntry(deviceID, ev, receivedAt, d.now()), true
 		}
 		if ok {
 			entries = append(entries, entry)
@@ -489,34 +489,31 @@ func droppedRange(eventType string, eventSeq int64, params map[string]any) (from
 }
 
 // recordSessionLogin notes that a user logged in on a device (device_user_seen, plan M3a decision 10); logins are not
-// audited (privacy, volume), and a redelivered event only repeats the same upsert. A malformed event is ignored.
+// audited (privacy, volume). Its number is claimed like that of every other event, so a redelivered event changes
+// nothing and a malformed one only claims its number.
 func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UUID, ev protocol.Event) error {
-	entry, ok := sessionLoginEntry(deviceID, ev, d.now())
-	if !ok {
-		return nil
-	}
+	now := d.now()
+	entry := sessionLoginEntry(deviceID, ev, now, now)
 	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		_, err := entry.Claim(ctx, q)
 		return err
 	})
 }
 
-// sessionLoginEntry is the unaudited batch entry of a session login (an upsert of device_user_seen and, while the
-// organization records its login history, a device_login_event row; plan M8d decision 16); false for a malformed
-// event, including a username with control characters. The login time comes from the device: it is capped at the
+// sessionLoginEntry is the unaudited batch entry of a session login received by the gateway at receivedAt: the claim
+// of its (device, event_seq), so gap detection sees its number (plan M8b decision 20, PDK-476), and, only when the
+// claim is new and the event well-formed, an upsert of device_user_seen and, while the organization records its login
+// history, a device_login_event row (plan M8d decision 16). A malformed event, including a username with control
+// characters, claims its number only. The login time comes from the device: it is capped at the
 // server's time plus protocol.MaxClockSkew, so retention can delete every row (PDK-223 review 1 finding 4). The
 // setting is read in the inserting transaction under the shared login history lock, so a switch-off that commits
 // first prevents the insert and one that commits later deletes the row (finding 3); a login before the switch-on, or
 // older than the retention window, is not stored (finding 13).
-func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event, now time.Time) (OnceEntry, bool) {
+func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt, now time.Time) OnceEntry {
 	var login protocol.SessionLogin
-	if json.Unmarshal(ev.Data, &login) != nil {
-		return OnceEntry{}, false
-	}
+	valid := json.Unmarshal(ev.Data, &login) == nil
 	username := strings.ToLower(strings.TrimSpace(login.Username))
-	if username == "" || len(username) > maxParamString || stripControls(username) != username {
-		return OnceEntry{}, false
-	}
+	valid = valid && username != "" && len(username) <= maxParamString && stripControls(username) == username
 	at := login.At
 	if at.IsZero() || at.After(ev.OccurredAt.Add(time.Minute)) {
 		at = ev.OccurredAt
@@ -525,6 +522,12 @@ func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event, now time.Time) (On
 		at = latest
 	}
 	return OnceEntry{Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		n, err := q.InsertDeviceEventSeen(ctx, pgstore.InsertDeviceEventSeenParams{
+			DeviceID: deviceID, EventSeq: ev.EventSeq, OrganizationID: mustOrg(ctx), ReceivedAt: &receivedAt,
+		})
+		if err != nil || n != 1 || !valid {
+			return false, err
+		}
 		if err := q.UpsertDeviceUserSeen(ctx, pgstore.UpsertDeviceUserSeenParams{
 			OrganizationID: mustOrg(ctx), DeviceID: deviceID, Username: username, LastSeenAt: at.UTC(),
 		}); err != nil {
@@ -544,7 +547,7 @@ func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event, now time.Time) (On
 		return false, q.InsertDeviceLoginEvent(ctx, pgstore.InsertDeviceLoginEventParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: mustOrg(ctx), DeviceID: deviceID, Username: username, At: at.UTC(),
 		})
-	}}, true
+	}}
 }
 
 // loginStateArea is the area of device_status.login_state an event updates: "login" for login.*, "sudo" for
