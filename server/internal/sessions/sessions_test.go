@@ -2,8 +2,12 @@ package sessions_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,9 +163,18 @@ func TestStoreMCPBinding(t *testing.T) {
 	c := srv.Client(t)
 	s := sessions.NewStore(c)
 	account := uuid.Must(uuid.NewV7())
-	b := sessions.Binding{AccountID: account, Kind: "admin", Role: "org_admin", Org: uuid.Must(uuid.NewV7()), Client: "Claude Code"}
+	b := sessions.Binding{AccountID: account, Kind: "admin", Role: "org_admin", Org: uuid.Must(uuid.NewV7()), Client: "Claude Code",
+		PasskeyVerified: true}
+	rec := sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin", Channel: "mcp"}
+	login := func(sid, sub string, authTime int64) string {
+		t.Helper()
+		if _, err := s.CreateMCP(ctx, sid, rec, time.Hour, sessions.Chain{Sub: sub, AuthTime: authTime, TTL: time.Hour}); err != nil {
+			t.Fatal(err)
+		}
+		return sid
+	}
 
-	if _, err := s.Bind(ctx, "sub-a", 100, b, time.Hour); err != nil {
+	if _, err := s.Bind(ctx, login("mcp:"+strings.Repeat("a1", 32), "sub-a", 100), "sub-a", 100, b, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	got, gen, found, err := s.Binding(ctx, "sub-a", 100)
@@ -176,8 +189,17 @@ func TestStoreMCPBinding(t *testing.T) {
 			t.Errorf("%s: found %v %v", name, found, err)
 		}
 	}
-	if _, err := s.Bind(ctx, "sub-a", 1, b, 0); err == nil {
+	if _, err := s.Bind(ctx, "mcp:"+strings.Repeat("a1", 32), "sub-a", 1, b, 0); err == nil {
 		t.Fatal("a binding without lifetime was written")
+	}
+
+	// A binding written before PDK-531 has no passkey_verified and reads as unmarked.
+	legacy := `{"account_id":"` + account.String() + `","kind":"admin","role":"org_admin","org":"` + uuid.Nil.String() + `","gen":0}`
+	if err := c.Do(ctx, c.B().Set().Key(bindingKeyOf("sub-l", 100)).Value(legacy).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, found, err := s.Binding(ctx, "sub-l", 100); err != nil || !found || got.PasskeyVerified || got.AccountID != account {
+		t.Fatalf("legacy binding: %+v found %v %v", got, found, err)
 	}
 
 	if _, err := s.EndAll(ctx); err != nil {
@@ -194,7 +216,7 @@ func TestStoreMCPBinding(t *testing.T) {
 		t.Fatalf("after unbind: found %v %v", found, err)
 	}
 
-	if _, err := s.Bind(ctx, "sub-a", 200, b, 50*time.Millisecond); err != nil {
+	if _, err := s.Bind(ctx, login("mcp:"+strings.Repeat("a2", 32), "sub-a", 200), "sub-a", 200, b, 50*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -202,11 +224,10 @@ func TestStoreMCPBinding(t *testing.T) {
 		t.Fatalf("expired binding: found %v %v", found, err)
 	}
 
-	if _, err := s.Bind(ctx, "sub-a", 300, b, time.Hour); err != nil {
+	if err := s.Delete(ctx, "mcp:"+strings.Repeat("a2", 32), account); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Create(ctx, "mcp:"+strings.Repeat("cd", 32), sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin",
-		Channel: "mcp"}, time.Hour); err != nil {
+	if _, err := s.Bind(ctx, login("mcp:"+strings.Repeat("cd", 32), "sub-a", 300), "sub-a", 300, b, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.RevokeAccount(ctx, account); err != nil || n != 1 {
@@ -240,5 +261,208 @@ func TestStoreUseLoginToken(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 	if first, err := s.UseLoginToken(ctx, "id-token-c", time.Hour); err != nil || !first {
 		t.Fatalf("after expiry: %v %v", first, err)
+	}
+}
+
+// bindingKeyOf is the key of a login binding, as the store names it.
+func bindingKeyOf(sub string, authTime int64) string {
+	return "mcp-bind:" + strings.TrimPrefix(chainKeyOf(sub, authTime), "mcp-chain:")
+}
+
+// chainKeyOf is the key of the set of a binding's MCP session records, as the store names it.
+func chainKeyOf(sub string, authTime int64) string {
+	sum := sha256.Sum256([]byte(sub))
+	return "mcp-chain:" + hex.EncodeToString(sum[:]) + ":" + strconv.FormatInt(authTime, 10)
+}
+
+// TestStoreMCPChain covers the set of a binding's MCP session records (PDK-468): every record joins it, its lifetime
+// covers the binding and only grows, a renewal without a binding writes nothing, and Unbind and RevokeAccount end
+// every record of the chain while other sessions of the account stay.
+func TestStoreMCPChain(t *testing.T) {
+	ctx := context.Background()
+	srv := valkeytest.Start(t)
+	c := srv.Client(t)
+	s := sessions.NewStore(c)
+	account := uuid.Must(uuid.NewV7())
+	b := sessions.Binding{AccountID: account, Kind: "admin", Role: "org_admin", Org: uuid.Must(uuid.NewV7())}
+	rec := sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin", Org: b.Org, Channel: "mcp", Subject: "sub-a"}
+	sid := func(i int) string { return "mcp:" + strings.Repeat(strconv.Itoa(i), 64) }
+	chainTTL := func(sub string, authTime int64) time.Duration {
+		t.Helper()
+		ms, err := c.Do(ctx, c.B().Pttl().Key(chainKeyOf(sub, authTime)).Build()).AsInt64()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return time.Duration(ms) * time.Millisecond
+	}
+	exists := func(id string) bool {
+		t.Helper()
+		_, _, found, err := s.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+
+	if _, err := s.CreateMCP(ctx, sid(1), rec, 30*time.Minute, sessions.Chain{Sub: "sub-a", AuthTime: 100, TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if ttl := chainTTL("sub-a", 100); ttl <= 59*time.Minute || ttl > time.Hour {
+		t.Fatalf("chain lifetime after the login record: %s", ttl)
+	}
+	if _, err := s.Bind(ctx, sid(1), "sub-a", 100, b, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateMCP(ctx, sid(2), rec, 30*time.Minute,
+		sessions.Chain{Sub: "sub-a", AuthTime: 100, TTL: 2 * time.Hour, Renewal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if ttl := chainTTL("sub-a", 100); ttl <= 119*time.Minute || ttl > 2*time.Hour {
+		t.Fatalf("chain lifetime not refreshed by a renewal: %s", ttl)
+	}
+	if _, err := s.CreateMCP(ctx, sid(3), rec, 20*time.Minute,
+		sessions.Chain{Sub: "sub-a", AuthTime: 100, TTL: 10 * time.Minute, Renewal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if ttl := chainTTL("sub-a", 100); ttl <= 119*time.Minute {
+		t.Fatalf("a shorter renewal shortened the chain lifetime: %s", ttl)
+	}
+
+	if _, err := s.CreateMCP(ctx, sid(4), rec, 30*time.Minute,
+		sessions.Chain{Sub: "sub-b", AuthTime: 100, TTL: time.Hour, Renewal: true}); !errors.Is(err, sessions.ErrNoBinding) {
+		t.Fatalf("renewal without a binding: %v", err)
+	}
+	if exists(sid(4)) || chainTTL("sub-b", 100) != -2*time.Millisecond {
+		t.Fatal("a renewal without a binding wrote its record or chain")
+	}
+
+	portal := sessions.NewID()
+	if _, err := s.Create(ctx, portal, sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin", Org: b.Org},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Unbind(ctx, "sub-a", 100, account); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		if exists(sid(i)) {
+			t.Fatalf("record %d of the chain survived the end of its binding", i)
+		}
+	}
+	if chainTTL("sub-a", 100) != -2*time.Millisecond {
+		t.Fatal("the chain's set survived the end of its binding")
+	}
+	if n, err := s.CountAccount(ctx, account); err != nil || n != 1 || !exists(portal) {
+		t.Fatalf("sessions of the account after unbind: %d %v", n, err)
+	}
+
+	if _, err := s.CreateMCP(ctx, sid(6), rec, 30*time.Minute, sessions.Chain{Sub: "sub-a", AuthTime: 300, TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Bind(ctx, sid(6), "sub-a", 300, b, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateMCP(ctx, sid(5), rec, 30*time.Minute,
+		sessions.Chain{Sub: "sub-a", AuthTime: 300, TTL: time.Hour, Renewal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.RevokeAccount(ctx, account); err != nil || n != 3 {
+		t.Fatalf("revoke: %d %v", n, err)
+	}
+	if exists(sid(5)) || exists(sid(6)) || chainTTL("sub-a", 300) != -2*time.Millisecond {
+		t.Fatal("RevokeAccount left a record or the chain's set")
+	}
+}
+
+// TestStoreMCPChainRacingUnbind: a renewal racing the end of its binding never leaves a record behind, whichever runs
+// first.
+func TestStoreMCPChainRacingUnbind(t *testing.T) {
+	ctx := context.Background()
+	srv := valkeytest.Start(t)
+	s := sessions.NewStore(srv.Client(t))
+	account := uuid.Must(uuid.NewV7())
+	b := sessions.Binding{AccountID: account, Kind: "admin", Role: "org_admin", Org: uuid.Must(uuid.NewV7())}
+	rec := sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin", Org: b.Org, Channel: "mcp", Subject: "sub-r"}
+	refused := 0
+	for i := range 100 {
+		authTime := int64(1000 + i)
+		login := "mcp:login-" + strconv.Itoa(i)
+		if _, err := s.CreateMCP(ctx, login, rec, 30*time.Minute,
+			sessions.Chain{Sub: "sub-r", AuthTime: authTime, TTL: time.Hour}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Bind(ctx, login, "sub-r", authTime, b, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		id := "mcp:" + strconv.Itoa(i)
+		var wg sync.WaitGroup
+		var createErr, unbindErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, createErr = s.CreateMCP(ctx, id, rec, 30*time.Minute,
+				sessions.Chain{Sub: "sub-r", AuthTime: authTime, TTL: time.Hour, Renewal: true})
+		}()
+		go func() {
+			defer wg.Done()
+			unbindErr = s.Unbind(ctx, "sub-r", authTime, account)
+		}()
+		wg.Wait()
+		if unbindErr != nil || (createErr != nil && !errors.Is(createErr, sessions.ErrNoBinding)) {
+			t.Fatalf("round %d: create %v, unbind %v", i, createErr, unbindErr)
+		}
+		if createErr != nil {
+			refused++
+		}
+		if _, _, found, err := s.Get(ctx, id); err != nil || found {
+			t.Fatalf("round %d: the renewal's record survived the end of its binding (found %v %v)", i, found, err)
+		}
+	}
+	t.Logf("renewals refused because the binding ended first: %d of 100", refused)
+}
+
+// TestStoreMCPBindAfterChainEnd: a first login's binding is written only while its record exists and is in the chain's
+// set (PDK-546); after a logout (Unbind), a revocation or a deleted record, and for a record of another chain, Bind
+// writes nothing and fails with ErrNoBinding.
+func TestStoreMCPBindAfterChainEnd(t *testing.T) {
+	ctx := context.Background()
+	srv := valkeytest.Start(t)
+	c := srv.Client(t)
+	s := sessions.NewStore(c)
+	account := uuid.Must(uuid.NewV7())
+	b := sessions.Binding{AccountID: account, Kind: "admin", Role: "org_admin", Org: uuid.Must(uuid.NewV7())}
+	rec := sessions.Record{AccountID: account, Kind: "admin", Role: "org_admin", Org: b.Org, Channel: "mcp", Subject: "sub-e"}
+	for i, tc := range []struct {
+		name string
+		end  func(sid string, authTime int64) error
+		// bindAt is the auth_time Bind names; 0 is the login's own.
+		bindAt int64
+	}{
+		{name: "logout", end: func(_ string, authTime int64) error { return s.Unbind(ctx, "sub-e", authTime, account) }},
+		{name: "revocation", end: func(string, int64) error { _, err := s.RevokeAccount(ctx, account); return err }},
+		{name: "deleted record", end: func(sid string, _ int64) error { return s.Delete(ctx, sid, account) }},
+		{name: "record of another chain", end: func(string, int64) error { return nil }, bindAt: 1},
+	} {
+		authTime := int64(100 + i)
+		sid := "mcp:" + strings.Repeat(strconv.Itoa(i), 64)
+		if _, err := s.CreateMCP(ctx, sid, rec, 30*time.Minute, sessions.Chain{Sub: "sub-e", AuthTime: authTime, TTL: time.Hour}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tc.end(sid, authTime); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		bindAt := authTime
+		if tc.bindAt != 0 {
+			bindAt = tc.bindAt
+		}
+		if _, err := s.Bind(ctx, sid, "sub-e", bindAt, b, time.Hour); !errors.Is(err, sessions.ErrNoBinding) {
+			t.Fatalf("%s: bind %v, want ErrNoBinding", tc.name, err)
+		}
+		if _, _, found, err := s.Binding(ctx, "sub-e", bindAt); err != nil || found {
+			t.Fatalf("%s: binding written (found %v %v)", tc.name, found, err)
+		}
+		if n, err := c.Do(ctx, c.B().Exists().Key("acct-mcp-bind:"+account.String()).Build()).AsInt64(); err != nil || n != 0 {
+			t.Fatalf("%s: the account's set of bindings names a binding (%d %v)", tc.name, n, err)
+		}
 	}
 }

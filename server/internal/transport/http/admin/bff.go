@@ -245,6 +245,23 @@ var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFAReq
 var errPasskeyRequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonPasskeyRequired,
 	Status: http.StatusForbidden}, problem.Forbidden)
 
+// loginFactorDenial is the sign-in policy of the portal and the MCP login (ADR 0034 amendment 2026-10-29, PDK-531),
+// the one place that decides which factors a role needs: it returns the denial reason and audit error of a login whose
+// ID token lacks one, "" when the factors suffice. Every login needs "mfa" in amr; every role also needs a validated
+// WebAuthn authenticator, and a token without the claim (mapping missing) fails closed. Groups that grant no role keep
+// their own denial reason. optional is the development switch PADDOCK_LOGIN_MFA_OPTIONAL.
+func loginFactorDenial(c idClaims, res organization.RoleResolution, optional bool) (string, error) {
+	switch {
+	case optional:
+		return "", nil
+	case !c.hasMFA():
+		return app.ReasonMFARequired, errMFARequired
+	case !res.Denied && !c.hasPasskey():
+		return app.ReasonPasskeyRequired, errPasskeyRequired
+	}
+	return "", nil
+}
+
 // callback completes the login: state check, code exchange with PKCE, ID token verification (issuer, audience,
 // nonce, expiry), role resolution from the groups claim, admin.login audit event and session cookie.
 func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
@@ -306,21 +323,13 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = claims.Email
 	}
-	if !b.loginMFAOptional && !claims.hasMFA() {
-		slog.WarnContext(ctx, "ID token without a second factor refused")
-		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonMFARequired, "", errMFARequired)
-		denied(w, r, app.ReasonMFARequired)
-		return
-	}
 	res := organization.ResolveRole(claims.Groups)
-	// Every portal role requires a passkey (ADR 0034 amendment 2026-10-29). The check precedes the choice of the active
-	// role, so it holds for a role switch (which runs this callback with a new ID token) and for any later fallback
-	// between the roles; a token without the claim (mapping missing) fails closed. Groups that grant no role keep
-	// their own denial reason.
-	if !b.loginMFAOptional && !res.Denied && !claims.hasPasskey() {
-		slog.WarnContext(ctx, "ID token without a validated WebAuthn authenticator refused", "mfa_classes", claims.MFAClasses)
-		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonPasskeyRequired, "", errPasskeyRequired)
-		denied(w, r, app.ReasonPasskeyRequired)
+	// The check precedes the choice of the active role, so it holds for a role switch (which runs this callback with a
+	// new ID token) and for any later fallback between the roles.
+	if reason, cause := loginFactorDenial(claims, res, b.loginMFAOptional); reason != "" {
+		slog.WarnContext(ctx, "ID token refused for its sign-in factors", "reason", reason, "mfa_classes", claims.MFAClasses)
+		b.accounts.RecordLoginFailure(ctx, ip, username, reason, "", cause)
+		denied(w, r, reason)
 		return
 	}
 	// A switch state sealed for another user is a plain sign-in: it never ends a session or picks the role.

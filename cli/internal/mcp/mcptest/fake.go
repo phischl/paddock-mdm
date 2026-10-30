@@ -52,6 +52,8 @@ type Fake struct {
 	BigBody int
 	// Platform answers /api/v1/me as a platform administrator.
 	Platform bool
+	// Off answers /api/v1/mcp/access as without a saved policy: enabled false, nothing allowed.
+	Off bool
 
 	issued int
 	valid  map[string]bool
@@ -164,7 +166,7 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch route {
 	case "GET /api/auth/mcp/config":
 		writeJSON(w, http.StatusOK, map[string]any{"issuer": f.Srv.URL + "/idp/", "client_id": "paddock-mcp",
-			"scopes":                        []string{"openid", "profile", "email", "groups", "offline_access"},
+			"scopes":                        []string{"openid", "profile", "email", "groups", "offline_access", "paddock_mfa"},
 			"device_authorization_endpoint": f.Srv.URL + "/idp/device", "token_endpoint": f.Srv.URL + "/idp/token",
 			"revocation_endpoint": f.Srv.URL + "/idp/revoke"})
 		return
@@ -202,6 +204,12 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = io.WriteString(w, `{"username":"alice","display_name":"alice","role":"org_admin","organization":{"slug":"acme","name":"Acme"}}`)
 	case route == "GET /api/v1/mcp/access":
+		if f.Off {
+			writeJSON(w, http.StatusOK, map[string]any{"scope": "organization", "channel": "mcp", "enabled": false,
+				"write_enabled": false, "write_opted_in": false, "write_effective": false, "allowed_operations": []string{},
+				"catalog_version": "x"})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"scope": "organization", "channel": "mcp", "enabled": true,
 			"write_enabled": true, "write_opted_in": true, "write_effective": true, "allowed_operations": f.Allowed,
 			"catalog_version": "x"})

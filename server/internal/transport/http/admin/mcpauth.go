@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -47,16 +46,18 @@ const (
 	mcpLoginHint = "run paddockctl mcp login"
 )
 
-// MCPScopes are the scopes paddockctl requests on the device authorization grant (ADR 0044 amendment A1).
-var MCPScopes = []string{"openid", "profile", "email", "groups", "offline_access"}
+// MCPScopes are the scopes paddockctl requests on the device authorization grant (ADR 0044 amendment A1); paddock_mfa
+// carries paddock_mfa_classes, which a first login must name a WebAuthn authenticator in (PDK-531).
+var MCPScopes = []string{"openid", "profile", "email", "groups", "offline_access", "paddock_mfa"}
 
 // MCPSessionStore keeps the MCP session records and the login bindings of their renewals (sessions.Store).
 type MCPSessionStore interface {
 	SessionStore
 	RevokeAccount(ctx context.Context, accountID uuid.UUID) (int, error)
-	Bind(ctx context.Context, sub string, authTime int64, b sessions.Binding, ttl time.Duration) (sessions.Binding, error)
+	Bind(ctx context.Context, sid, sub string, authTime int64, b sessions.Binding, ttl time.Duration) (sessions.Binding, error)
 	Binding(ctx context.Context, sub string, authTime int64) (b sessions.Binding, gen int64, found bool, err error)
 	Unbind(ctx context.Context, sub string, authTime int64, accountID uuid.UUID) error
+	CreateMCP(ctx context.Context, sid string, rec sessions.Record, ttl time.Duration, ch sessions.Chain) (sessions.Record, error)
 	UseLoginToken(ctx context.Context, identity string, ttl time.Duration) (bool, error)
 }
 
@@ -67,7 +68,8 @@ type MCPAuth struct {
 	sessions MCPSessionStore
 	accounts *app.Accounts
 	now      func() time.Time
-	// loginMFAOptional accepts an ID token without "mfa" in amr (development only, PADDOCK_LOGIN_MFA_OPTIONAL).
+	// loginMFAOptional accepts an ID token without "mfa" in amr and without a validated WebAuthn authenticator
+	// (development only, PADDOCK_LOGIN_MFA_OPTIONAL).
 	loginMFAOptional bool
 }
 
@@ -174,9 +176,10 @@ var errBindingMismatch = errors.New("admin: renewal of another account than its 
 
 // OpenSession serves POST /api/auth/mcp/session (plan M14 §3.3 item 13, ADR 0044 amendment 2026-10-28): it verifies
 // the ID and the access token with the provider's verifier, resolves the role from the ID token's groups as the portal
-// login does and opens the MCP session record of the access token. An ID token with amr is a login and must prove the
-// second factor; its (sub, auth_time) is bound for renewals. An ID token without amr (Authentik's refreshed ID tokens
-// carry none) is a renewal and is accepted only for a live binding of its sub and auth_time.
+// login does and opens the MCP session record of the access token. An ID token with amr is a login and must satisfy
+// the portal's sign-in policy (loginFactorDenial, PDK-531); its (sub, auth_time) is bound for renewals. An ID token
+// without amr (Authentik's refreshed ID tokens carry none) is a renewal and is accepted only for a live binding of its
+// sub and auth_time whose login satisfied that policy.
 func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 	if m == nil {
 		httpx.WriteProblem(w, r, problem.NotFound)
@@ -251,6 +254,13 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 		refuse(username, app.ReasonLoginFailed, bad, bad)
 		return
 	}
+	// The record's chain is keyed on the ID token's auth_time and logout uses the access token's (PDK-546); Authentik
+	// keeps the login's auth_time in refreshed tokens, so a legitimate pair always matches.
+	if access.AuthTime != claims.AuthTime {
+		bad := problem.InvalidRequest.WithDetail("the tokens belong to different logins")
+		refuse(username, app.ReasonLoginFailed, bad, bad)
+		return
+	}
 	remaining := at.Expiry.Sub(now)
 	if remaining > mcpMaxTokenLife {
 		bad := problem.InvalidRequest.WithDetail("the access token lives longer than an MCP session may")
@@ -272,6 +282,7 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 	bindingLeft := time.Unix(claims.AuthTime, 0).Add(mcpRefreshLifetime).Sub(now)
 	methods, hasAMR := claims.amr()
 	renewal := !hasAMR
+	res := organization.ResolveRole(claims.Groups)
 	var binding sessions.Binding
 	if renewal {
 		b, gen, found, err := m.sessions.Binding(ctx, claims.Subject, claims.AuthTime)
@@ -280,15 +291,25 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 			refuse(username, app.ReasonLoginFailed, err, problem.SessionStoreUnavailable)
 			return
 		}
-		if !found || b.Gen < gen || bindingLeft <= 0 {
+		if found && b.Gen < gen {
+			// End all sessions already invalidated the chain's records; this removes them and the stale binding.
+			if err := m.sessions.Unbind(ctx, claims.Subject, claims.AuthTime, b.AccountID); err != nil {
+				slog.WarnContext(ctx, "stale MCP login binding not deleted", "error", err)
+			}
+		}
+		// A binding written before PDK-531 does not say its login validated a passkey: its user signs in once more.
+		if !found || b.Gen < gen || bindingLeft <= 0 || !b.PasskeyVerified {
 			refuse(username, app.ReasonMCPLoginRequired, problem.MCPLoginRequired, problem.MCPLoginRequired.WithDetail(mcpLoginHint))
 			return
 		}
 		binding = b
 	} else {
-		if !m.loginMFAOptional && !slices.Contains(methods, "mfa") {
-			slog.WarnContext(ctx, "MCP ID token without a second factor refused")
-			refuse(username, app.ReasonMFARequired, errMFARequired, problem.Unauthenticated.WithDetail(app.ReasonMFARequired))
+		// claims.AMR stays empty: RawAMR shadows it.
+		factors := claims.idClaims
+		factors.AMR = methods
+		if reason, cause := loginFactorDenial(factors, res, m.loginMFAOptional); reason != "" {
+			slog.WarnContext(ctx, "MCP ID token refused for its sign-in factors", "reason", reason, "mfa_classes", claims.MFAClasses)
+			refuse(username, reason, cause, problem.Unauthenticated.WithDetail(reason))
 			return
 		}
 		if bindingLeft <= 0 {
@@ -297,7 +318,6 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	res := organization.ResolveRole(claims.Groups)
 	choice := req.Role
 	if choice == "" && len(res.Choices) > 0 {
 		choice = organization.ChoiceOrganization
@@ -343,9 +363,10 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 		}
 		// Set before the write: a reply lost after Create or Bind wrote still leaves discard something to delete.
 		opened = p.ID
-		rec, err := m.sessions.Create(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
+		rec, err := m.sessions.CreateMCP(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
 			Org: p.OrganizationID, CreatedAt: now.Unix(), Channel: string(principal.ChannelMCP), Display: username,
-			Subject: claims.Subject}, remaining)
+			Subject: claims.Subject}, remaining,
+			sessions.Chain{Sub: claims.Subject, AuthTime: claims.AuthTime, TTL: bindingLeft, Renewal: renewal})
 		if err != nil {
 			return err
 		}
@@ -357,8 +378,8 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		bound = true
-		b, err := m.sessions.Bind(ctx, claims.Subject, claims.AuthTime, sessions.Binding{AccountID: p.ID, Kind: string(p.Kind),
-			Role: string(p.Role), Org: p.OrganizationID, Client: client}, bindingLeft)
+		b, err := m.sessions.Bind(ctx, sid, claims.Subject, claims.AuthTime, sessions.Binding{AccountID: p.ID, Kind: string(p.Kind),
+			Role: string(p.Role), Org: p.OrganizationID, Client: client, PasskeyVerified: true}, bindingLeft)
 		if err != nil {
 			return err
 		}
@@ -394,6 +415,12 @@ func (m *MCPAuth) OpenSession(w http.ResponseWriter, r *http.Request) {
 		discard()
 		httpx.WriteProblem(w, r, problem.Forbidden.WithDetail(denialReason(role, err)))
 		return
+	case errors.Is(err, sessions.ErrNoBinding):
+		// A logout or revocation ended the binding during the renewal, or the first login's record before its binding:
+		// it stands, nothing else needs ending.
+		discard()
+		httpx.WriteProblem(w, r, problem.MCPLoginRequired.WithDetail(mcpLoginHint))
+		return
 	case errors.Is(err, errBindingMismatch):
 		discard()
 		if renewal {
@@ -428,7 +455,8 @@ func (m *MCPAuth) renewalMatches(ctx context.Context, b sessions.Binding, role o
 }
 
 // CloseSession serves POST /api/auth/mcp/logout: it deletes the session record of the bearer's access token and the
-// login binding of its renewals. A token without a record is already signed out.
+// login binding of its renewals with every session record of their refresh chain (PDK-468). A token without a record
+// is already signed out.
 func (m *MCPAuth) CloseSession(w http.ResponseWriter, r *http.Request) {
 	if m == nil {
 		httpx.WriteProblem(w, r, problem.NotFound)
@@ -447,13 +475,20 @@ func (m *MCPAuth) CloseSession(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	sid := mcpSessionID(token)
 	rec, _, found, err := m.sessions.Get(ctx, sid)
+	var account uuid.UUID
 	if err == nil && found && rec.Channel == string(principal.ChannelMCP) {
+		account = rec.AccountID
 		err = m.sessions.Delete(ctx, sid, rec.AccountID)
 	}
 	if err == nil {
 		var b sessions.Binding
-		if b, _, found, err = m.sessions.Binding(ctx, claims.Subject, claims.AuthTime); err == nil && found {
-			err = m.sessions.Unbind(ctx, claims.Subject, claims.AuthTime, b.AccountID)
+		if b, _, found, err = m.sessions.Binding(ctx, claims.Subject, claims.AuthTime); err == nil {
+			if found {
+				account = b.AccountID
+			}
+			// Also without a binding: one that expired at auth_time + 8 h leaves the records of its last renewals alive
+			// for up to 30 minutes, and the chain's set still names them.
+			err = m.sessions.Unbind(ctx, claims.Subject, claims.AuthTime, account)
 		}
 	}
 	if err != nil {
