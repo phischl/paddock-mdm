@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "979d01ac97333301b05d064fe203f9c5574afeafa48616d2b2c494641fa59097"
+const Version = "abc79214c0249f98ec15af2326771478967c9120c95bfc7a7d5d952a62cdbaf2"
 
 var tools = []Tool{
 	{
@@ -2147,7 +2147,7 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "agent_release.published",
 		Summary:     "",
-		Description: "Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable. Refused with invalid_state while a file of the release is being uploaded or when a stored file does not match its checksum (PDK-496); upstream_unavailable when the artifact store cannot be read.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"version\":{\"description\":\"Semantic version of an agent release.\",\"maxLength\":64,\"pattern\":\"^[0-9]+\\\\.[0-9]+\\\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\\\+[0-9A-Za-z.-]+)?$\",\"type\":\"string\"}},\"required\":[\"version\"],\"type\":\"object\"}"),
 	},
 	{

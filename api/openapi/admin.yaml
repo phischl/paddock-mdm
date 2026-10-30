@@ -4078,7 +4078,7 @@ paths:
     post:
       operationId: publishAgentRelease
       tags: [platform]
-      description: "Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable."
+      description: "Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable. Refused with invalid_state while a file of the release is being uploaded or when a stored file does not match its checksum (PDK-496); upstream_unavailable when the artifact store cannot be read."
       x-paddock-audit: agent_release.published
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -4093,6 +4093,7 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases/{version}/rollout:
     parameters:
       - $ref: "#/components/parameters/Version"

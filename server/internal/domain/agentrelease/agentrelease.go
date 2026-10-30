@@ -42,6 +42,14 @@ const (
 	// CurrentReleaseWindow is the sliding window over which the failures and offered devices of a completed
 	// rollout (the current release) are counted (plan M2.1 decision 1).
 	CurrentReleaseWindow = 7 * 24 * time.Hour
+	// UploadStoreTimeout bounds the object store write of an uploaded release file (PDK-496).
+	UploadStoreTimeout = 5 * time.Minute
+	// UploadLeaseTTL is how long an upload holds the lease on the object of its file. It exceeds UploadStoreTimeout
+	// by a margin for the clock difference between server and database, so the write ends before the lease does.
+	UploadLeaseTTL = 2 * UploadStoreTimeout
+	// PublishVerifyTimeout bounds the checksum verification of a release's stored files, which a publish runs under
+	// the release's row lock (PDK-496).
+	PublishVerifyTimeout = 2 * time.Minute
 )
 
 // Validation errors.
