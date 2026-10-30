@@ -179,8 +179,11 @@ func change(acc pgstore.AdminAccount, u *directoryUser) (reason string, newRole 
 // ReconcilePlatform ends the portal sessions of every platform administrator whom the directory no longer lists, active,
 // in paddock.platform.admins as listed in groups (PDK-185). A platform administrator has no account state to change: the next login is
 // refused by the groups claim. One admin.sessions_revoked is recorded in the platform pseudo-organization when sessions
-// were ended, none when there were none, so a removed administrator is recorded once. A failing listing, a missing
-// group or an empty listing while platform administrators exist change nothing.
+// were ended, none when there were none, so a removed administrator is recorded once. A failing listing or a missing
+// group change nothing. A listing without a member while platform administrators exist is compared only when the
+// directory probe proves it real (RoleGroups.DirectoryVisible, PDK-534): the last platform administrators then left the
+// group and lose their sessions as usual; otherwise the round fails with ErrDirectoryEmpty, since a service token that
+// may no longer see users must not end every platform administrator's sessions.
 func (a *AdminAccounts) ReconcilePlatform(ctx context.Context, groups *RoleGroups) error {
 	var admins []pgstore.PlatformAdmin
 	if err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -195,12 +198,16 @@ func (a *AdminAccounts) ReconcilePlatform(ctx context.Context, groups *RoleGroup
 	if err != nil {
 		return fmt.Errorf("role group %s: %w", group, err)
 	}
-	if len(members) == 0 {
-		return fmt.Errorf("%w: %s lists no members while %d platform administrators exist", ErrDirectoryEmpty, group, len(admins))
-	}
 	users := map[string]*directoryUser{}
 	if directoryByUID(users, group, members) == 0 {
-		return fmt.Errorf("%w: %s lists no member with a UID while %d platform administrators exist", ErrDirectoryEmpty, group, len(admins))
+		visible, err := groups.DirectoryVisible(ctx)
+		if err != nil {
+			return fmt.Errorf("%s lists no member with a UID while %d platform administrators exist: %w", group, len(admins), err)
+		}
+		if !visible {
+			return fmt.Errorf("%w: %s lists no member with a UID while %d platform administrators exist, and the directory "+
+				"probe does not show that the service token sees them", ErrDirectoryEmpty, group, len(admins))
+		}
 	}
 	var errs []error
 	for _, adm := range admins {

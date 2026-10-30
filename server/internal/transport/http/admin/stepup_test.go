@@ -53,6 +53,7 @@ func newFakeStepUpIdP(t *testing.T) *fakeStepUpIdP {
 			"issuer": f.URL, "authorization_endpoint": f.URL + "/authorize", "token_endpoint": f.URL + "/token",
 			"jwks_uri": f.URL + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256"},
 			"device_authorization_endpoint": f.URL + "/device", "revocation_endpoint": f.URL + "/revoke",
+			"end_session_endpoint": f.URL + "/application/o/paddock-portal/end-session/",
 		})
 	})
 	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, _ *http.Request) {

@@ -150,6 +150,8 @@ func (g gapDevice) waitAttention(want ...string) {
 func (g gapDevice) events(code string, want int) []env.AuditEvent {
 	g.t.Helper()
 	for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		all, err := g.alice.AuditEvents(testContext(g.t, time.Minute), code)
 		if err != nil {
 			g.t.Fatal(err)
@@ -163,7 +165,7 @@ func (g gapDevice) events(code string, want int) []env.AuditEvent {
 		if len(mine) == want {
 			return mine
 		}
-		if len(mine) > want || time.Now().After(deadline) {
+		if len(mine) > want || polled.After(deadline) {
 			g.t.Fatalf("%d %s for %s, want %d", len(mine), code, g.d.DeviceID, want)
 		}
 	}
@@ -248,6 +250,8 @@ func TestEventGap(t *testing.T) {
 func (g gapDevice) appliedEvents(seq int64, want int) []env.AuditEvent {
 	g.t.Helper()
 	for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		var out []env.AuditEvent
 		all, err := g.alice.AuditEvents(testContext(g.t, time.Minute), "device.bundle_applied")
 		if err != nil {
@@ -258,7 +262,7 @@ func (g gapDevice) appliedEvents(seq int64, want int) []env.AuditEvent {
 				out = append(out, e)
 			}
 		}
-		if len(out) >= want || time.Now().After(deadline) {
+		if len(out) >= want || polled.After(deadline) {
 			return out
 		}
 	}

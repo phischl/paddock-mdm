@@ -81,7 +81,7 @@ func TestIPAllowlistBreakGlass(t *testing.T) {
 	if out := runAdmin(t, "allowlist", "disable"); !strings.Contains(out, "ip allowlist: already off") {
 		t.Fatalf("second disable: %s", out)
 	}
-	time.Sleep(5 * time.Second)
+	waitAuditPast(t, root, idx)
 	events, err := idx.Events(testContext(t, time.Minute), platformOrg, "code = 'platform.ip_allowlist_disabled' AND occurred_at >= $1", since)
 	if err != nil || len(events) != 0 {
 		t.Fatalf("a disable of an empty list records nothing: %v %v", events, err)

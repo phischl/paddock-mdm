@@ -198,30 +198,42 @@ func TestUninstall(t *testing.T) {
 	}
 
 	// A Lock cancels a pending removal in the same request and records it on its one event; the pending Lock then
-	// refuses the removal of its device; another organization finds neither route.
+	// refuses the removal of its device; another organization finds neither route. The Lock runs in an organization
+	// of its own: ADR 0014 limits an organization's revocations per 24 h, and repeated runs must not exhaust acme's.
+	slug, _ := gateOrganization(t)
+	locker := steppedUpTempUser(t, "uninstall-lock", env.RoleGroup(slug, "admins"))
 	other := "a8l-" + uniqueSuffix()
-	locked := activeDevice(t, alice, "", other)
-	other = getDevice(t, alice, locked.DeviceID).Hostname
-	res = steppedUpPost("/api/v1/devices/"+locked.DeviceID+"/uninstall", uninstallBody(locked, other, "leave", nil))
+	locked := activeDevice(t, locker.Portal, "", other)
+	other = getDevice(t, locker.Portal, locked.DeviceID).Hostname
+	locker.stepUp(t)
+	res = call(t, locker.Portal, http.MethodPost, "/api/v1/devices/"+locked.DeviceID+"/uninstall", uninstallBody(locked, other, "leave", nil))
 	expectStatus(t, res, http.StatusOK, "")
-	lockedCmd := uninstallOf(t, alice, locked.DeviceID).Uninstall.CommandID
-	res = steppedUpPost("/api/v1/devices/"+locked.DeviceID+"/lock",
+	lockedCmd := uninstallOf(t, locker.Portal, locked.DeviceID).Uninstall.CommandID
+	res = call(t, locker.Portal, http.MethodPost, "/api/v1/devices/"+locked.DeviceID+"/lock",
 		map[string]any{"confirm_hostname": other, "reason": "gate A8"})
 	expectStatus(t, res, http.StatusCreated, "")
 	var lock struct {
+		ID                 string `json:"id"`
 		UninstallCancelled string `json:"uninstall_cancelled"`
 	}
 	if err := res.JSON(&lock); err != nil || lock.UninstallCancelled != "before_delivery" {
 		t.Fatalf("lock response %s (%v), want uninstall_cancelled before_delivery", res.Body, err)
 	}
-	ev = expectOneEvent(t, alice, res.RequestID, "revocation.requested", "success")
+	ev = expectOneEvent(t, locker.Portal, res.RequestID, "revocation.requested", "success")
 	if ev.Params["uninstall_cancelled"] != "before_delivery" || ev.Params["uninstall_command_id"] != lockedCmd || ev.Params["action"] != "lock" {
 		t.Fatalf("revocation.requested params %v", ev.Params)
 	}
-	if s := uninstallOf(t, alice, locked.DeviceID); s.Uninstall != nil {
+	if s := uninstallOf(t, locker.Portal, locked.DeviceID); s.Uninstall != nil {
 		t.Fatalf("uninstall after the lock: %+v", s.Uninstall)
 	}
-	res = steppedUpPost("/api/v1/devices/"+locked.DeviceID+"/uninstall", uninstallBody(locked, other, "leave", nil))
+	// The issuer judges the limits after the 201; a rejected Lock is no longer pending, so the refusal below would
+	// pass the removal and fail with a misleading message.
+	if r := waitRevocation(t, locker.Portal, lock.ID, time.Minute, "issued", "delivered", "rejected"); r.Status == "rejected" {
+		t.Fatalf("lock %s rejected by the issuer: %s", lock.ID, r.Rejection)
+	}
+	// The audit and issuer waits above can outlast the dev stack's 30 s step-up window.
+	locker.stepUp(t)
+	res = call(t, locker.Portal, http.MethodPost, "/api/v1/devices/"+locked.DeviceID+"/uninstall", uninstallBody(locked, other, "leave", nil))
 	expectStatus(t, res, http.StatusConflict, "invalid_state")
 	if detail := problemDetail(t, res); detail != "a lock or destroy is pending for this device" {
 		t.Fatalf("pending lock: %q", detail)

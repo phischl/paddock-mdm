@@ -591,7 +591,8 @@ var registry = map[Code]Definition{
 	CodeAgentReleasePublished: {
 		Code: CodeAgentReleasePublished, Emitted: true,
 		Description: "A platform administrator published an agent release; it can now be rolled out.",
-		Params:      []string{"version", "arches"},
+		Params:      []string{"version", "arches", "mismatched_objects"},
+		Note:        "mismatched_objects lists the object keys of stored release files that do not match their recorded checksums; it is set on a failed publish refused for that reason (PDK-496).",
 		Outcomes:    adminOutcomes,
 	},
 	CodeAgentReleaseImported: {

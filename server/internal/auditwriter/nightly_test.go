@@ -248,7 +248,8 @@ func runNightly(t *testing.T, index *auditwriter.FakeIndex, now func() time.Time
 }
 
 // TestNightlyRetriesLastRun: while the last nightly run cannot be read, the gauge stays unset and the read is retried
-// every minute; once it succeeds, the gauge is set and RunNightly waits for the next cycle.
+// every minute; once it succeeds, the gauge is set and RunNightly keeps re-reading every minute until the next cycle
+// is due, as after any successful start-up seed (PDK-535).
 func TestNightlyRetriesLastRun(t *testing.T) {
 	start := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	latest := time.Date(2026, 10, 19, 0, 46, 0, 0, time.UTC)
@@ -267,8 +268,8 @@ func TestNightlyRetriesLastRun(t *testing.T) {
 		}
 		timer.fire <- start
 	}
-	if d := <-timer.waits; d != 12*time.Hour+45*time.Minute {
-		t.Fatalf("wait after a successful read = %s, want the next cycle at 00:45 UTC", d)
+	if d := <-timer.waits; d != time.Minute {
+		t.Fatalf("wait after a successful read = %s, want 1m until the next cycle", d)
 	}
 	if got := gaugeValue(t, "paddock_audit_verify_last_run_timestamp_seconds"); got != float64(latest.Unix()) {
 		t.Errorf("last run after the retry = %v, want %d", got, latest.Unix())
@@ -387,6 +388,48 @@ func TestNightlyLockedWithoutRecordedRun(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestNightlyStartFollowsRecordedRun: a replica that starts between two recorded rows of another replica's cycle
+// seeds a mix of that night's and the previous night's results and re-reads both gauges every minute until its own
+// cycle is due, so it reaches the holder's complete result instead of keeping the mix for a day (PDK-535).
+func TestNightlyStartFollowsRecordedRun(t *testing.T) {
+	clock := time.Date(2026, 10, 20, 0, 50, 0, 0, time.UTC)
+	first, second := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	recorded := time.Date(2026, 10, 20, 0, 49, 0, 0, time.UTC)
+	index := &auditwriter.FakeIndex{Latest: recorded, Failed: []uuid.UUID{first}}
+	timer := runNightly(t, index, func() time.Time { return clock })
+
+	if d := <-timer.waits; d != time.Minute {
+		t.Fatalf("wait after the start-up seed = %s, want 1m until the next cycle", d)
+	}
+	if lastRun, failed := gauges(t); lastRun != float64(recorded.Unix()) || failed != 1 {
+		t.Fatalf("gauges after the start-up seed = %v, %v, want %d, 1", lastRun, failed, recorded.Unix())
+	}
+	complete := time.Date(2026, 10, 20, 0, 51, 0, 0, time.UTC)
+	index.Latest, index.Failed = complete, []uuid.UUID{first, second}
+	for range 2 {
+		clock = clock.Add(time.Minute)
+		timer.fire <- clock
+		if d := <-timer.waits; d != time.Minute {
+			t.Fatalf("wait while following = %s, want 1m until the next cycle", d)
+		}
+		if lastRun, failed := gauges(t); lastRun != float64(complete.Unix()) || failed != 2 {
+			t.Fatalf("gauges after the holder's last record = %v, %v, want the complete %d, 2", lastRun, failed, complete.Unix())
+		}
+	}
+
+	clock = time.Date(2026, 10, 21, 0, 44, 30, 0, time.UTC)
+	timer.fire <- clock
+	if d := <-timer.waits; d != 30*time.Second {
+		t.Fatalf("wait before the replica's own cycle = %s, want 30s", d)
+	}
+	index.Failed = nil
+	clock = clock.Add(30 * time.Second)
+	timer.fire <- clock
+	if d := <-timer.waits; d != 24*time.Hour {
+		t.Fatalf("wait after the replica's own cycle = %s, want the next cycle without re-reads", d)
 	}
 }
 

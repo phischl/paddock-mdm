@@ -202,3 +202,11 @@ detail of a 5xx problem to the client (`httpx.WriteProblem`), so the client rece
 without the reset time; the portal shows the generic text of the problem code and the api log keeps the reset time
 (PDK-427, accepted by the architect lead). Raw source errors are never returned to the client. A structured, safe
 problem extension for the reset time (e.g. `retry_after`) is a follow-up.
+
+## Amendment 2026-10-30 (PDK-496, main as architect lead)
+
+The import uploads every file and publishes through the same use cases as the platform API (decision 1), so it is
+bound by the upload lease of plan M2b, amendment 2026-10-30. Each file takes a lease on its object for the duration
+of its write. The publish refuses while a lease is unexpired, and it verifies every stored object against its
+SHA-256 within a 2-minute bound. Only a 4xx on a write's only attempt counts as a definitive rejection. An import
+that meets a running upload of the same version therefore fails with `invalid_state` and can be repeated after it.
