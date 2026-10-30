@@ -17,8 +17,10 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
 // storeExport inserts an export of organization org as the audit writer would leave it, with the given chunks, and
@@ -196,4 +198,44 @@ func TestAuditExportDownloadDetectsDamagedChunks(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	expectOne(t, h.harness, audit.OutcomeSuccess, "")
+}
+
+// TestAuditExportDownloadReleasesReaderBetweenChunks: with a single audit reader connection, a second download
+// completes while the first waits on a client that does not read, because no reader transaction is held while a chunk
+// is written.
+func TestAuditExportDownloadReleasesReaderBetweenChunks(t *testing.T) {
+	h := newExportHarness(t)
+	reader, err := db.NewAuditReader(context.Background(), pgtest.SharedAudit(t).Reader, db.Options{MaxConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reader.Close)
+	exports := app.NewAuditExports(h.runner, reader)
+	id, _ := h.storeExport(t, h.org, "ready", time.Now().Add(time.Hour), []byte("one,"), []byte("two,"), []byte("three"))
+
+	writing, release := make(chan struct{}), make(chan struct{})
+	slow := make(chan error, 1)
+	go func() {
+		first := true
+		slow <- exports.Download(h.admin(principal.RoleOrgAuditor), id, func(app.ExportPackage) {}, func([]byte) error {
+			if first {
+				first = false
+				close(writing)
+				<-release
+			}
+			return nil
+		})
+	}()
+	<-writing
+	ctx, cancel := context.WithTimeout(h.admin(principal.RoleOrgAuditor), 10*time.Second)
+	defer cancel()
+	var body bytes.Buffer
+	err = exports.Download(ctx, id, func(app.ExportPackage) {}, func(c []byte) error { body.Write(c); return nil })
+	close(release)
+	if err != nil || body.String() != "one,two,three" {
+		t.Fatalf("second download while the first is writing: %q, %v", body.String(), err)
+	}
+	if err := <-slow; err != nil {
+		t.Fatalf("first download: %v", err)
+	}
 }

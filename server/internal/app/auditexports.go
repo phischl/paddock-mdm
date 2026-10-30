@@ -135,18 +135,20 @@ type ExportPackage struct {
 	Filename string
 }
 
-// Download records audit.export_downloaded, then calls begin once and stream once per chunk in sequence order inside
-// one reader transaction, so at most one chunk is in memory. begin runs before the first chunk, after the export
-// was confirmed ready again, so a caller can send headers; a failure before begin leaves the response untouched. The
-// event is recorded before the first byte is sent and is not repeated when the transfer breaks later (exactly one
-// event per attempt, root CLAUDE.md); such a failure is returned for the caller to log.
+// Download records audit.export_downloaded, then calls begin once and stream once per chunk in sequence order, so at
+// most one chunk is in memory. begin runs before the first chunk with the export row the event was recorded for, so a
+// caller can send headers; a failure before begin leaves the response untouched. The event is recorded before the
+// first byte is sent and is not repeated when the transfer breaks later (exactly one event per attempt, root
+// CLAUDE.md); such a failure is returned for the caller to log.
 func (a *AuditExports) Download(ctx context.Context, id uuid.UUID, begin func(ExportPackage), stream func(chunk []byte) error) error {
+	// Read before the action's transaction opens: that transaction would otherwise hold a main-pool connection while
+	// it waits for an audit reader connection. The lookup's error is recorded by the action.
+	export, lookupErr := a.Get(ctx, id)
 	var slug string
 	err := a.runner.RunTx(ctx, ScopeOrg, SpecAuditExportDownload, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		rec.SetParam("export_id", id.String())
-		export, err := a.Get(ctx, id)
-		if err != nil {
-			return err
+		if lookupErr != nil {
+			return lookupErr
 		}
 		if err := requireDownloadable(export, time.Now()); err != nil {
 			return err
@@ -165,39 +167,40 @@ func (a *AuditExports) Download(ctx context.Context, id uuid.UUID, begin func(Ex
 	if err != nil {
 		return err
 	}
-	return a.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
-		export, err := q.GetAuditExport(ctx, id)
+	begin(ExportPackage{Export: export, Filename: exportFilename(slug, export)})
+	sum := sha256.New()
+	var sent int64
+	for seq := int32(0); ; seq++ {
+		data, err := a.chunk(ctx, id, seq)
 		if db.IsNoRows(err) {
-			return problem.NotFound
+			break
 		}
 		if err != nil {
-			return fmt.Errorf("get export: %w", err)
+			return fmt.Errorf("read chunk %d: %w", seq, err)
 		}
-		if err := requireDownloadable(export, time.Now()); err != nil {
-			return err
+		sum.Write(data)
+		sent += int64(len(data))
+		if err := stream(data); err != nil {
+			return fmt.Errorf("send chunk %d: %w", seq, err)
 		}
-		begin(ExportPackage{Export: export, Filename: exportFilename(slug, export)})
-		sum := sha256.New()
-		var sent int64
-		for seq := int32(0); ; seq++ {
-			data, err := q.GetAuditExportChunk(ctx, auditstore.GetAuditExportChunkParams{ExportID: id, Seq: seq})
-			if db.IsNoRows(err) {
-				break
-			}
-			if err != nil {
-				return fmt.Errorf("read chunk %d: %w", seq, err)
-			}
-			sum.Write(data)
-			sent += int64(len(data))
-			if err := stream(data); err != nil {
-				return fmt.Errorf("send chunk %d: %w", seq, err)
-			}
-		}
-		if sent != *export.Size || !bytes.Equal(sum.Sum(nil), export.PackageSha256) {
-			return fmt.Errorf("stored chunks of export %s are %d bytes with a different checksum, want %d", id, sent, *export.Size)
-		}
-		return nil
+	}
+	if sent != *export.Size || !bytes.Equal(sum.Sum(nil), export.PackageSha256) {
+		return fmt.Errorf("stored chunks of export %s are %d bytes with a different checksum, want %d", id, sent, *export.Size)
+	}
+	return nil
+}
+
+// chunk reads one chunk of a package in its own reader transaction, so a slow client holds no audit reader connection
+// while its chunk is written. The chunks of a ready export do not change until its expiry removes them; a chunk
+// removed during a transfer ends it like any read failure, caught by the size and checksum check at the latest.
+func (a *AuditExports) chunk(ctx context.Context, id uuid.UUID, seq int32) ([]byte, error) {
+	var data []byte
+	err := a.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		data, err = q.GetAuditExportChunk(ctx, auditstore.GetAuditExportChunkParams{ExportID: id, Seq: seq})
+		return err
 	})
+	return data, err
 }
 
 // requireDownloadable refuses an export that is not ready or past its expiry; the audit writer's expiry job may lag

@@ -75,22 +75,41 @@ func (h *handlers) GetAuditExport(ctx context.Context, req adminapi.GetAuditExpo
 	return adminapi.GetAuditExport200JSONResponse(out), nil
 }
 
-// exportChunkDeadline bounds the write of each piece of a package download in place of the server's write timeout
-// (plan M8s decision 33): a slow but moving client finishes a package of any size, and a stalled one ends the transfer
-// and releases its reader connection within this bound.
-const exportChunkDeadline = 60 * time.Second
+// The bounds of a package download, in place of the server's write timeout (plan M8s decision 33). Every write of the
+// body (up to 32 KiB, the size io.Copy hands over) gets exportWriteDeadline, so a stalled client ends the transfer
+// within that bound. The whole transfer gets max(exportMinTransfer, size / exportMinRate per second), so a client
+// that keeps reading a few bytes at a time cannot hold the download forever; 64 KiB/s still moves a 1 GiB package in
+// under five hours.
+const (
+	exportWriteDeadline = 60 * time.Second
+	exportMinTransfer   = 10 * time.Minute
+	exportMinRate       = 64 << 10
+)
+
+// transferBounds limit how long a package download may write each piece of its body and how long it may take in all.
+type transferBounds struct {
+	write    time.Duration
+	minTotal time.Duration
+	minRate  int64
+}
+
+// total is how long the transfer of a package of size bytes may take in all.
+func (b transferBounds) total(size int64) time.Duration {
+	return max(b.minTotal, time.Duration(size/b.minRate)*time.Second)
+}
 
 // DownloadAuditExport streams the package through a pipe: the use case writes each chunk as it reads it, and the
 // response body reads from the pipe, so the package is never held in memory (plan M10 decision 35).
 func (h *handlers) DownloadAuditExport(ctx context.Context, req adminapi.DownloadAuditExportRequestObject) (adminapi.DownloadAuditExportResponseObject, error) {
-	return streamExport(ctx, req.Id, h.exports.Download, exportChunkDeadline)
+	return streamExport(ctx, req.Id, h.exports.Download,
+		transferBounds{write: exportWriteDeadline, minTotal: exportMinTransfer, minRate: exportMinRate})
 }
 
 // exportDownload is the use case behind a package download (app.AuditExports.Download).
 type exportDownload func(ctx context.Context, id uuid.UUID, begin func(app.ExportPackage), stream func(chunk []byte) error) error
 
 // streamExport runs download in its own goroutine because the headers need the export row it reads first.
-func streamExport(ctx context.Context, id uuid.UUID, download exportDownload, chunkDeadline time.Duration) (adminapi.DownloadAuditExportResponseObject, error) {
+func streamExport(ctx context.Context, id uuid.UUID, download exportDownload, bounds transferBounds) (adminapi.DownloadAuditExportResponseObject, error) {
 	type started struct {
 		pkg app.ExportPackage
 		err error
@@ -115,9 +134,8 @@ func streamExport(ctx context.Context, id uuid.UUID, download exportDownload, ch
 		switch {
 		case !begun:
 			first <- started{err: err}
-		case errors.Is(err, io.ErrClosedPipe):
-			slog.InfoContext(ctx, "audit export download ended by the client", "export_id", id, "error", err)
-		case err != nil:
+		case err != nil && !errors.Is(err, io.ErrClosedPipe):
+			// A closed pipe means the response side ended the transfer; exportStream logs that with its cause.
 			slog.WarnContext(ctx, "audit export download broke off", "export_id", id, "error", err)
 		}
 		// A reader that is closed already makes this a no-op; a broken transfer ends the body early, which the client
@@ -136,39 +154,51 @@ func streamExport(ctx context.Context, id uuid.UUID, download exportDownload, ch
 			Body: pr, ContentLength: *res.pkg.Export.Size,
 			Headers: adminapi.DownloadAuditExport200ResponseHeaders{ContentDisposition: &disposition, XPaddockPackageSHA256: &sum},
 		},
-		chunkDeadline: chunkDeadline,
+		ctx: ctx, id: id, bounds: bounds,
 	}, nil
 }
 
-// exportStream is the 200 answer of a package download with a rolling write deadline per piece of the body.
+// exportStream is the 200 answer of a package download with a rolling write deadline per piece of the body, capped by
+// the transfer's overall deadline.
 type exportStream struct {
-	res           adminapi.DownloadAuditExport200ApplicationxTarResponse
-	chunkDeadline time.Duration
+	res    adminapi.DownloadAuditExport200ApplicationxTarResponse
+	ctx    context.Context
+	id     uuid.UUID
+	bounds transferBounds
 }
 
 // VisitDownloadAuditExportResponse never returns an error: once the 200 headers are out, the strict handler's problem
 // answer would only append JSON to the package. The body ends early instead, and net/http closes the connection
 // because fewer bytes than Content-Length were written.
 func (s exportStream) VisitDownloadAuditExportResponse(w http.ResponseWriter) error {
-	s.res.Body = &deadlineReader{r: s.res.Body, rc: http.NewResponseController(w), bound: s.chunkDeadline}
+	s.res.Body = &deadlineReader{
+		r: s.res.Body, rc: http.NewResponseController(w), bound: s.bounds.write,
+		end: time.Now().Add(s.bounds.total(s.res.ContentLength)),
+	}
 	if err := s.res.VisitDownloadAuditExportResponse(w); err != nil {
-		slog.Info("audit export download ended early", "error", err)
+		slog.InfoContext(s.ctx, "audit export download ended early", "export_id", s.id, "error", err)
 	}
 	return nil
 }
 
-// deadlineReader extends the write deadline each time it hands a piece of the body to the response writer.
+// deadlineReader extends the write deadline each time it hands a piece of the body to the response writer, but never
+// past end.
 type deadlineReader struct {
 	r     io.Reader
 	rc    *http.ResponseController
 	bound time.Duration
+	end   time.Time
 }
 
 func (d *deadlineReader) Read(p []byte) (int, error) {
 	n, err := d.r.Read(p)
 	if n > 0 {
-		// A writer without deadline support (HTTP/2 streams, tests) has no connection timeout to extend either.
-		_ = d.rc.SetWriteDeadline(time.Now().Add(d.bound))
+		deadline := time.Now().Add(d.bound)
+		if deadline.After(d.end) {
+			deadline = d.end
+		}
+		// A writer without deadline support (a test recorder) has no connection timeout to extend either.
+		_ = d.rc.SetWriteDeadline(deadline)
 	}
 	return n, err
 }

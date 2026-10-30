@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -214,6 +215,18 @@ func TestAuditExportDownload(t *testing.T) {
 		t.Fatalf("operator download: %d %s", op.status, op.body)
 	}
 	e.expectEvent(op, "audit.export_downloaded:denied:forbidden")
+
+	// HEAD would run the download for a body that is never sent; it is refused before the use case, as one event. The
+	// contract has no HEAD operation, so the request bypasses e.do's contract check.
+	req := httptest.NewRequest(http.MethodHead, "https://admin.test"+path, nil)
+	req.AddCookie(e.session(e.acme, principal.RoleOrgAuditor))
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+	head := result{status: rec.Code, header: rec.Header(), body: rec.Body.Bytes()}
+	if head.status != http.StatusMethodNotAllowed || head.header.Get("Allow") != "GET" || bytes.Contains(head.body, pkg) {
+		t.Fatalf("HEAD download: %d %v %s", head.status, head.header, head.body)
+	}
+	e.expectEvent(head, "audit.export_downloaded:failure:invalid_request")
 
 	for _, status := range []string{"pending", "failed", "expired"} {
 		notReady, _ := storeExport(t, e, e.acme, status, pkg)
