@@ -181,8 +181,24 @@ func TestIPAllowlist(t *testing.T) {
 		denied(sessionWith(t, root, foreign), "/api/v1/me")
 		sent++
 	}
-	time.Sleep(5 * time.Second)
-	if events, err := idx.Events(ctx, platformOrg, denialWhere(since), "192.0.2.9"); err != nil || len(events) != 1 {
+	// A fixed settle passes falsely on a loaded host (PDK-572). The marker is the first denial of another address: Note
+	// runs before the 403 is sent and the per-replica recorder records its queue serially in order, so an event
+	// wrongly queued for one of the 20 denials is recorded before the marker — with an earlier occurred_at and an
+	// earlier outbox id, which the audit pipeline keeps in order; expectOneIndexEvent's settle covers its retry
+	// reordering (as in PDK-569). The summary of 192.0.2.9 is only queued when the window ends, after the marker as
+	// long as the marker shares the window, so the check counts the events recorded up to the marker.
+	// The ordering proof of the denial marker holds for one IPDenials recorder only; each api replica has its own.
+	requireSingleService(t, ctx, "paddock-api")
+	r = denied(sessionWith(t, root, map[string]string{"X-Forwarded-For": "192.0.2.10"}), "/api/v1/me")
+	if r.Status != http.StatusForbidden || r.ProblemCode() != "ip_not_allowed" {
+		t.Fatalf("marker from 192.0.2.10: HTTP %d %s", r.Status, r.Body)
+	}
+	marker := expectOneIndexEvent(t, idx, platformOrg, denialWhere(since), "192.0.2.10", "platform.ip_allowlist_denied", "denied", auditPollTimeout)
+	if want := strings.TrimSuffix(first.CorrelationID, "192.0.2.9") + "192.0.2.10"; marker.CorrelationID != want {
+		t.Fatalf("the denial window ended before the marker (correlation %s, want %s): the absence check needs both in one window", marker.CorrelationID, want)
+	}
+	upToMarker := denialWhere(since) + fmt.Sprintf(" AND occurred_at <= (SELECT occurred_at FROM audit_event WHERE event_id = '%s')", marker.EventID)
+	if events, err := idx.Events(ctx, platformOrg, upToMarker, "192.0.2.9"); err != nil || len(events) != 1 {
 		t.Fatalf("further denials within the window are counted, not recorded: %v %v", events, err)
 	}
 	var summary *env.IndexEvent
