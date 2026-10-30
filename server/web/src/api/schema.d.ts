@@ -2601,7 +2601,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable. */
+        /** @description Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable. Refused with invalid_state while a file of the release is being uploaded or when a stored file does not match its checksum (PDK-496); upstream_unavailable when the artifact store cannot be read. */
         post: operations["publishAgentRelease"];
         delete?: never;
         options?: never;
@@ -10053,6 +10053,7 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     startAgentRollout: {

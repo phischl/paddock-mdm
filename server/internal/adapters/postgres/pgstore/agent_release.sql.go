@@ -112,6 +112,17 @@ func (q *Queries) CountAgentReleases(ctx context.Context, arg CountAgentReleases
 	return count, err
 }
 
+const countAgentUploadLeases = `-- name: CountAgentUploadLeases :one
+SELECT count(*) FROM agent_upload_lease WHERE version = $1 AND expires_at > now()
+`
+
+func (q *Queries) CountAgentUploadLeases(ctx context.Context, version string) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgentUploadLeases, version)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const currentAgentRollout = `-- name: CurrentAgentRollout :one
 SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since FROM agent_rollout
 ORDER BY (status = 'running') DESC, started_at DESC
@@ -162,6 +173,28 @@ func (q *Queries) CurrentReleaseStats(ctx context.Context, arg CurrentReleaseSta
 	var i CurrentReleaseStatsRow
 	err := row.Scan(&i.Offered, &i.Failed)
 	return i, err
+}
+
+const deleteExpiredAgentUploadLeases = `-- name: DeleteExpiredAgentUploadLeases :exec
+DELETE FROM agent_upload_lease WHERE version = $1 AND expires_at <= now()
+`
+
+func (q *Queries) DeleteExpiredAgentUploadLeases(ctx context.Context, version string) error {
+	_, err := q.db.Exec(ctx, deleteExpiredAgentUploadLeases, version)
+	return err
+}
+
+const dropAgentUploadLease = `-- name: DropAgentUploadLease :one
+DELETE FROM agent_upload_lease WHERE id = $1
+RETURNING expires_at > now() AS valid
+`
+
+// Drops the lease of an upload and returns whether it was still valid; a commit after expiry is refused.
+func (q *Queries) DropAgentUploadLease(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, dropAgentUploadLease, id)
+	var valid bool
+	err := row.Scan(&valid)
+	return valid, err
 }
 
 const fleetdPackage = `-- name: FleetdPackage :many
@@ -551,6 +584,26 @@ func (q *Queries) ListRunningAgentRollouts(ctx context.Context) ([]AgentRollout,
 	return items, nil
 }
 
+const lockAgentRelease = `-- name: LockAgentRelease :one
+SELECT version, status, created_by, created_at, published_at, version_key FROM agent_release WHERE version = $1 FOR UPDATE
+`
+
+// A release under its row lock: publishing waits for every upload that holds the draft (FOR SHARE) and blocks new
+// leases until it commits (PDK-496).
+func (q *Queries) LockAgentRelease(ctx context.Context, version string) (AgentRelease, error) {
+	row := q.db.QueryRow(ctx, lockAgentRelease, version)
+	var i AgentRelease
+	err := row.Scan(
+		&i.Version,
+		&i.Status,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.VersionKey,
+	)
+	return i, err
+}
+
 const lockAgentRollout = `-- name: LockAgentRollout :one
 SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since FROM agent_rollout WHERE version = $1 FOR UPDATE
 `
@@ -755,6 +808,45 @@ func (q *Queries) SupervisorPackages(ctx context.Context) ([]SupervisorPackagesR
 		return nil, err
 	}
 	return items, nil
+}
+
+const takeAgentUploadLease = `-- name: TakeAgentUploadLease :one
+INSERT INTO agent_upload_lease (id, version, object_key, expires_at)
+SELECT $1::uuid, r.version, $2::text, now() + make_interval(secs => $3::int)
+FROM agent_release r
+WHERE r.version = $4 AND r.status = 'draft'
+FOR SHARE
+ON CONFLICT (version, object_key) DO UPDATE
+  SET id = EXCLUDED.id, expires_at = EXCLUDED.expires_at, created_at = now()
+  WHERE agent_upload_lease.expires_at <= now()
+RETURNING id, version, object_key, expires_at, created_at
+`
+
+type TakeAgentUploadLeaseParams struct {
+	ID           uuid.UUID
+	ObjectKey    string
+	LeaseSeconds int32
+	Version      string
+}
+
+// Upload leases (PDK-496). No row when the release is not a draft (locked as UpsertAgentArtifact, PDK-432) or when an
+// unexpired lease on the object exists; an expired lease is taken over.
+func (q *Queries) TakeAgentUploadLease(ctx context.Context, arg TakeAgentUploadLeaseParams) (AgentUploadLease, error) {
+	row := q.db.QueryRow(ctx, takeAgentUploadLease,
+		arg.ID,
+		arg.ObjectKey,
+		arg.LeaseSeconds,
+		arg.Version,
+	)
+	var i AgentUploadLease
+	err := row.Scan(
+		&i.ID,
+		&i.Version,
+		&i.ObjectKey,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const upsertAgentArtifact = `-- name: UpsertAgentArtifact :one

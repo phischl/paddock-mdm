@@ -58,6 +58,35 @@ ON CONFLICT (version, arch) DO UPDATE
       created_at = now()
 RETURNING *;
 
+-- name: LockAgentRelease :one
+-- A release under its row lock: publishing waits for every upload that holds the draft (FOR SHARE) and blocks new
+-- leases until it commits (PDK-496).
+SELECT * FROM agent_release WHERE version = @version FOR UPDATE;
+
+-- Upload leases (PDK-496). No row when the release is not a draft (locked as UpsertAgentArtifact, PDK-432) or when an
+-- unexpired lease on the object exists; an expired lease is taken over.
+-- name: TakeAgentUploadLease :one
+INSERT INTO agent_upload_lease (id, version, object_key, expires_at)
+SELECT @id::uuid, r.version, @object_key::text, now() + make_interval(secs => @lease_seconds::int)
+FROM agent_release r
+WHERE r.version = @version AND r.status = 'draft'
+FOR SHARE
+ON CONFLICT (version, object_key) DO UPDATE
+  SET id = EXCLUDED.id, expires_at = EXCLUDED.expires_at, created_at = now()
+  WHERE agent_upload_lease.expires_at <= now()
+RETURNING *;
+
+-- Drops the lease of an upload and returns whether it was still valid; a commit after expiry is refused.
+-- name: DropAgentUploadLease :one
+DELETE FROM agent_upload_lease WHERE id = @id
+RETURNING expires_at > now() AS valid;
+
+-- name: DeleteExpiredAgentUploadLeases :exec
+DELETE FROM agent_upload_lease WHERE version = @version AND expires_at <= now();
+
+-- name: CountAgentUploadLeases :one
+SELECT count(*) FROM agent_upload_lease WHERE version = @version AND expires_at > now();
+
 -- name: ListAgentArtifacts :many
 SELECT * FROM agent_artifact WHERE version = @version ORDER BY arch;
 
