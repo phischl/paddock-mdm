@@ -212,7 +212,9 @@ variables; a variable set in the environment wins over `.env`, as it does for Co
 `PADDOCK_INSTANCE=2 make down` in the first stack's checkout does nothing. The hostnames stay `*.paddock.localhost`
 and only the port differs; browsers share cookies across ports, so use a separate browser profile per stack.
 `docker compose -p paddock2 …` addresses the second stack directly. The system gates on the VMs (`make system-test`)
-still expect the first stack.
+run against the stack of the checkout they are started from. The test VMs exist once per host: a second checkout uses
+the VM secrets of the main checkout (`test/vms/virtualbox/.secrets` becomes a symlink to it on first use) and never
+creates VM credentials of its own; two `make system-test` runs must not use the same VM at the same time.
 
 ## Useful commands
 
