@@ -459,7 +459,7 @@ func setDMS(t *testing.T, s *Stack, enabled bool) {
 // blockStack makes the stack unreachable for the guest — the stack seen from the device is down — while SSH, which
 // comes in through the NAT port forward, keeps working.
 func blockStack(d *Device, on bool) {
-	rule := "OUTPUT -d 10.0.2.2 -p tcp --dport 8443 -j REJECT"
+	rule := "OUTPUT -d 10.0.2.2 -p tcp --dport " + portal.HTTPSPort() + " -j REJECT"
 	if on {
 		d.Must("sudo iptables -I " + rule)
 		return

@@ -638,9 +638,12 @@ for kind in multi-line single-line dotted inline mixed-case no-rules; do
   fi
 done
 
-# The canary through its test seam: a configuration whose default has no rules, or whose default still skips
-# node_modules/, fails; one with a GitHub token rule and no path allowlist passes.
-for kind in no-rules node-modules-skipped token-rule; do
+# The canary through its test seam: a configuration whose default has no rules, whose default still skips
+# node_modules/, or whose global allowlist drops every GitHub token, fails; one with a GitHub token rule and no path
+# allowlist passes, also next to a value allowlist like the default's (PDK-388). Each value-based entry of the
+# default's global allowlist needs an l, so the stopword "l" stands in for all of them: before PDK-388 a canary token
+# held an l in about 97 of 100 runs and this case failed.
+for kind in no-rules node-modules-skipped tokens-allowed token-rule value-allowlist; do
   dir="$work/canary-$kind"
   mkdir -p "$dir"
   printf '[extend]\npath = "%s/default.toml"\n' "$dir" >"$dir/gitleaks.toml"
@@ -648,13 +651,17 @@ for kind in no-rules node-modules-skipped token-rule; do
   case $kind in
     no-rules) printf 'title = "no rules"\n' >"$dir/default.toml" ;;
     node-modules-skipped) printf '[allowlist]\npaths = [%s]\n\n%s\n' "'''node_modules'''" "$rule" >"$dir/default.toml" ;;
+    tokens-allowed) printf '[allowlist]\nregexes = [%s]\n\n%s\n' "'''^ghp_'''" "$rule" >"$dir/default.toml" ;;
     token-rule) printf '%s\n' "$rule" >"$dir/default.toml" ;;
+    value-allowlist) printf '[allowlist]\nstopwords = ["l"]\n\n%s\n' "$rule" >"$dir/default.toml" ;;
   esac
+  want=fail
+  case $kind in token-rule | value-allowlist) want=pass ;; esac
   rc=0
   out="$(make --no-print-directory -C "$root" scan-secrets-canary GITLEAKS_CANARY_DIR="$dir" 2>&1)" || rc=$?
-  if [[ "$kind" == token-rule ]] && ((rc == 0)) && grep -qF "the canary was reported" <<<"$out"; then
+  if [[ "$want" == pass ]] && ((rc == 0)) && grep -qF "the canary was reported" <<<"$out"; then
     echo "ok   the canary with a default of kind $kind (pass)"
-  elif [[ "$kind" != token-rule ]] && ((rc != 0)) && grep -qF "lost its rules or path coverage" <<<"$out"; then
+  elif [[ "$want" == fail ]] && ((rc != 0)) && grep -qF "lost its rules or path coverage" <<<"$out"; then
     echo "ok   the canary with a default of kind $kind (fail)"
   else
     echo "FAIL the canary with a default of kind $kind: exit $rc"

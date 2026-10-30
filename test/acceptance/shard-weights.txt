@@ -1,107 +1,137 @@
 # Measured duration in seconds per acceptance gate, input of `make acceptance SHARD=i/n`
 # (test/acceptance/cmd/acceptanceshard). Format: <seconds> <test> [group]. Tests of one group stay in one shard; a
 # group weighs as much as its slowest member because its tests run in parallel (PDK-189). A test missing here still
-# runs with the default weight of 60 s; a stale line is ignored. Source: the `--- PASS` lines of the acceptance job of
-# PR #118 (2026-10-21, GitHub ubuntu-24.04 runner); refresh from a recent CI log when the shards drift apart.
-600 TestRoleMembership
-383 TestAuditExactlyOnce
-275 TestSupervisorPackage
-229 TestStalenessGate
-175 TestStalenessGroups
-170 TestAuditExternalFailures
-168 TestRevocationLimits
-165 TestComponentTargets
-158 TestObservability
-152 TestOSVO1Severity
-137 TestCurrentReleaseAutoStop
-137 TestManagedFileTiers
-132 TestUpdateNow
-131 TestAgentUpdatePolicy
-116 TestRevocationLockAndDestroy
-113 TestCombinedRootGrant
-103 TestEffectiveStepUp
-102 TestDeviceName
-98 TestIPAllowlist
-90 TestAgentReleaseImport
-85 TestStepUp
-81 TestDeclarativeConfig
-81 TestDiskEscrowVolumes
-79 TestRevocationDisabled
-77 TestAPITokens
-77 TestEffectiveProfileGate
-77 TestSessionsRoleChange sessions-parallel
-76 TestSessionsDeactivation sessions-parallel
-70 TestAPITokenCreatorInactive sessions-parallel
-70 TestUnlockMode
-68 TestIdentitySync
-68 TestInventoryF3SoftwareAndVulnerabilities
-65 TestAutoUnsealAcknowledgement
-63 TestComponentVersions
-58 TestLoginHistory
-58 TestUninstall
-56 TestInventoryHardware
-55 TestLoginGate
-53 TestDeviceOwners
-53 TestEscrowReaderIsolation
-53 TestIdentitySyncDomainMatch
-52 TestDiskRecovery
-51 TestIdentityLockAuthentik
-45 TestTokenCannotGrantRoot
-38 TestCommands
-32 TestAdminCommands
-30 TestStepUpHeldAuthorizeURL
-29 TestDiskEscrow
-28 TestEscrowUploadBound
-28 TestOrganizationIsolation
-27 TestSecurityReview
-26 TestIPAllowlistBreakGlass
-25 TestIdentityAuthentikProvisioning
-20 TestAutoinstallGenerator
+# runs with the default weight of 60 s; a stale line is ignored. Tests that do not run in a shard (the disruptive
+# gates, which skip there, and the unit tests of the helper packages and of acceptanceshard itself) weigh 0.
+#
+# Source (PDK-361, 2026-10-29): median of the `--- PASS` lines of eight green three-shard CI runs (GitHub
+# ubuntu-24.04 runners; runs 40869667619, 40865665108, 40851337671, 40848641268, 40840086050, 40839685286,
+# 40833670439, 40829886532). Refresh from recent CI logs when the shards drift apart.
+#
+# A test with t.Parallel() subtests needs its wall time, not its `--- PASS` time: go test reports a parent's duration
+# before its parallel subtests run, so the `--- PASS` line holds only the sequential part. Measure it as the package
+# time (`ok .../test/acceptance <s>`) minus the sum of the other top-level tests of that shard. TestAuditExactlyOnce
+# reports ~400 s but costs ~1730 s that way.
+1733 TestAuditExactlyOnce
+381 TestRoleMembership
+235 TestStalenessGate
+209 TestDiskConversionUninstall
+196 TestSupervisorPackage
+194 TestRevocationLimits
+191 TestAuditExternalFailures
+184 TestStalenessGroups
+167 TestUpdateNow
+166 TestOSVO1Severity
+148 TestCurrentReleaseAutoStop
+144 TestManagedFileTiers
+144 TestObservability
+134 TestComponentTargets
+130 TestCombinedRootGrant
+119 TestEffectiveStepUp
+115 TestRevocationLockAndDestroy
+113 TestLoginGate
+112 TestAgentUpdatePolicy
+110 TestDeviceName
+104 TestDiskConversion
+103 TestEventGap
+103 TestIPAllowlist
+90 TestDeclarativeConfig
+88 TestRevocationDisabled
+87 TestStepUp
+83 TestAPITokens
+82 TestDiskEscrowVolumes
+79 TestListContractM8e
+77 TestAutoUnsealAcknowledgement
+75 TestUnlockMode
+74 TestAgentRolloutFromHost
+72 TestAgentReleaseImport
+71 TestEffectiveProfileGate
+69 TestUninstall
+69 TestComponentVersions
+67 TestSessionsDeactivation sessions-parallel
+66 TestSessionsRoleChange sessions-parallel
+64 TestSessionsPlatformAdminRemoved sessions-parallel
+62 TestDeviceOwners
+61 TestInventoryF3SoftwareAndVulnerabilities
+60 TestDiskConversionLockAndRetire
+59 TestLoginHistory
+59 TestAPITokenCreatorInactive sessions-parallel
+55 TestIdentityLockAuthentik
+52 TestIdentitySync
+52 TestTokenCannotGrantRoot
+51 TestDiskRecovery
+48 TestInventoryHardware
+45 TestCommands
+41 TestEscrowReaderIsolation
+38 TestIdentitySyncDomainMatch
+37 TestOrganizationIsolation
+34 TestSecurityReview
+33 TestAdminCommands
+33 TestDiskConversionAbort
+33 TestIdentityAuthentikProvisioning
+30 TestDiskConversionAdoption
+30 TestIPAllowlistBreakGlass
+30 TestEscrowUploadBound
+29 TestAuditIntegrity
+27 TestDiskEscrow
+27 TestAutoinstallGenerator
+24 TestDeviceProtocol
+21 TestStepUpHeldAuthorizeURL
+20 TestPaddockctl
 20 TestBodyLimits
 19 TestAgentEnrollmentAndCheckin
-19 TestSessionsPlatformAdminRemoved sessions-parallel
-18 TestStepUpFactorClaim
-16 TestProdCheckAutoUnseal
-15 TestDeviceProtocol
-15 TestNoSynchronousDatabasePath
-14 TestAuditChain
-13 TestIdentityBundles
-13 TestPaddockctl
-12 TestSessionsStepUpMismatch
-11 TestCloneDetection
-9 TestDeviceSecurity
-9 TestRollbackPendingAttention
-6 TestEscrowEndpoints
-6 TestListContract
-4 TestEdgeClientIP
-4 TestInstallNowRefusesHeldPackages
-4 TestM3bAgentAcceptsBundleKeys
-4 TestOverviewGate
-3 TestAttentionDevicesGate
-3 TestRootEquivalenceGate
-2 TestAttentionAgentNotRunning
-2 TestAttentionConfigBehind
-2 TestAuthentikBrandFlows
-2 TestMeOrganizationDomains
-2 TestStepUpValidUntilInMe
-1 TestAgentPackagesPublic
+18 TestNoSynchronousDatabasePath
+17 TestDiskConversionBundle
+16 TestSessionsStepUpMismatch
+16 TestIdentityBundles
+16 TestAuditChain
+13 TestRollbackPendingAttention
+12 TestClockDrift
+12 TestCloneDetection
+11 TestDeviceSecurity
+11 TestStepUpFactorClaim
+8 TestProdCheckAutoUnseal
+8 TestListContract
+8 TestProdCheckEdgeClientIP
+7 TestRootEquivalenceGate
+7 TestEdgeClientIP
+7 TestEscrowEndpoints
+6 TestStepUpValidUntilInMe
+6 TestInstallNowRefusesHeldPackages
+5 TestM3bAgentAcceptsBundleKeys
+5 TestAuthentikBrandFlows
+5 TestOverviewGate
+5 TestAttentionDevicesGate
+4 TestAttentionAgentNotRunning
+3 TestAttentionConfigBehind
+3 TestMeOrganizationDomains
+3 TestMeServerVersion
+3 TestOverviewNoRecentContact
+3 TestStepUpFactor
+3 TestEnrollRightAfterTokenCreation
+2 TestAgentPackagesPublic
+2 TestSessionsLogout
+2 TestPlatformEndpointsForbiddenForOrganizations
+1 TestLoginMFAPath
 1 TestDoRepeatsAuthentikStarting
-1 TestEnrollRightAfterTokenCreation
-1 TestOverviewNoRecentContact
-1 TestPlatformEndpointsForbiddenForOrganizations
-1 TestSessionsLogout
-1 TestStepUpFactor
-0 TestAutoUnsealRestart
+1 TestWaitReady
 0 TestDeviceLoginThrottle
 0 TestInventoryF0FleetNotPublic
-0 TestLoginMFAPath
-0 TestProdCheckEdgeClientIP
-0 TestSessionsEndAll
-0 TestWaitBlueprintsSucceedsOnceAllAreApplied
-0 TestWaitBlueprintsTimeoutKeepsLastAPIError
 0 TestWaitBlueprintsTimeoutNamesPendingBlueprints
-0 TestWaitBrandFlowsFailsWhileUnset
 0 TestWaitBrandFlowsSucceedsOnceSet
-0 TestWaitReady
-0 TestWithoutOwnFailedAttempts
+0 TestWaitBlueprintsSucceedsOnceAllAreApplied
 0 TestWORM
+0 TestWaitBlueprintsTimeoutKeepsLastAPIError
+0 TestWaitBrandFlowsFailsWhileUnset
+0 TestAutoUnsealRestart
+0 TestWithoutOwnFailedAttempts
+0 TestSessionsEndAll
+0 TestUnknownTestRunsInExactlyOneShard
+0 TestUnparsableTestNameFailsInsteadOfDropping
+0 TestAssignIsDeterministic
+0 TestVerifyRejectsBrokenShards
+0 TestAssignBalancesAndKeepsGroupsTogether
+0 TestRunRejectsInvalidInput
+0 TestEveryTestRunsInExactlyOneShard
+0 TestVerifyMode
+0 TestParseWeightsRejectsMalformedLines

@@ -240,9 +240,9 @@ func withBackup(args []string, getenv func(string) string, configFiles []string)
 	return append(slices.Clone(args), "BACKUP=1")
 }
 
-// runningComposeFiles are the Compose files of the project paddock's containers (empty when there are none).
+// runningComposeFiles are the Compose files of the containers of this checkout's project (empty when there are none).
 func runningComposeFiles(ctx context.Context) []string {
-	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label=com.docker.compose.project=paddock",
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label=com.docker.compose.project="+portal.Project(),
 		"--format", `{{.Label "com.docker.compose.project.config_files"}}`).Output()
 	if err != nil {
 		return nil
