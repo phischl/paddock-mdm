@@ -226,3 +226,10 @@ disappear while the index still shows them. The escrow of retired devices stays 
   The period (90 days) and the event (`retention.purged`, store `change_set_before`) are unchanged.
 - Decision 6: "the version the `server` module already pins" is binding, not the number quoted (v1.20.3 on
   2026-10-29).
+
+## Amendment 2026-10-30 (plan M10, index purge time)
+
+- Decision 1, row "Audit index" and decision 3: the audit writer drops index partitions nightly at **01:15 UTC**, not
+  00:45 UTC. Plan M10 decision 23 schedules the purge after the seal (00:15 UTC) and the nightly chain verification
+  (00:45 UTC); that later decision is binding.
+  `docs/compliance/retention.md` and `docs/operations/audit-bucket.md` state 01:15 UTC.

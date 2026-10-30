@@ -13,7 +13,7 @@ job that deletes and the audit event that proves it. "Now" means configurable pe
 | Store | Data class | Content (personal data) | Retention | Legal basis (GDPR) | Purge (role, event) | Configurable |
 | --- | --- | --- | --- | --- | --- | --- |
 | WORM bucket `paddock-audit`: objects, manifests | Evidence | Audit events: actor display name, IP, step-up; usernames, hostnames; never secrets | WORM retention from recording day; Object Lock COMPLIANCE; expiry by the operator's lifecycle rule | Art. 6(1)(c) with A.5.33/A.8.15 duties, Art. 6(1)(f); Art. 17(3)(b) and (e): erasure requests are answered by **restriction**, not deletion | Never by Paddock (lifecycle rule of the operator) | Platform-wide now; per-organization extend-only **later** |
-| Audit index `paddock_audit.audit_event` (monthly partitions by `occurred_at`) | Evidence (copy) | Same as WORM | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` (default = WORM retention; must be ≥ it); a partition is dropped only when **every** event in it was recorded more than that many days ago | As above | Audit writer, nightly 00:45 UTC; `retention.purged` (store `audit_index`, platform pseudo-organization) | Platform-wide |
+| Audit index `paddock_audit.audit_event` (monthly partitions by `occurred_at`) | Evidence (copy) | Same as WORM | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` (default = WORM retention; must be ≥ it); a partition is dropped only when **every** event in it was recorded more than that many days ago | As above | Audit writer, nightly 01:15 UTC; `retention.purged` (store `audit_index`, platform pseudo-organization) | Platform-wide |
 | `paddock_audit.audit_object`, `audit_manifest`, `audit_signing_key` | Evidence metadata | Object keys, hashes, signatures; no personal data | Unlimited (the chain index) | — | None | — |
 | Audit evidence exports (`audit_export`, `audit_export_chunk`) | Evidence (derived copy) | Package with events, objects, manifests; requester identity, purpose | 7 days after `ready`; failed and expired rows keep metadata (no package) for the WORM retention | Art. 6(1)(c)/(f) (A.5.28 evidence collection) | Audit writer, nightly; `retention.purged` (store `audit_exports`) | — |
 | `device_user_seen` | Employee login trace | Username, device, last login | **365 days** after the last login = `app.SeenWindow`; deletion is per row | Art. 6(1)(f): lock coverage of cached credentials (plan M3a decision 10); Art. 32 | Worker, every 6 h; `retention.purged` (store `device_user_seen`, per organization, only when rows were deleted) | Fixed by code |
@@ -59,7 +59,8 @@ Every purge leaves an audit event in the same WORM chain as every other event, r
 - **`retention.purged`**: one event per run, organization and store when at least one row was deleted (or when the
   purge failed). Parameters: `store` (`device_login_event`, `device_user_seen`, `read_audit_window`, `audit_index`,
   `audit_exports`, and the stores of ADR 0032 amendment 2026-10-18: `action`, `device_command`, `device_alert`,
-  `revocation_request`, `role_member_snapshot`, `device_event_gap`), `deleted` (number of rows), `cutoff` (RFC 3339;
+  `revocation_request`, `role_member_snapshot`, `device_event_gap`; `change_set_before` only once M11 (PDK-154) adds
+  that pass), `deleted` (number of rows), `cutoff` (RFC 3339;
   rows older than it were deleted) and, for the audit index, `partition` (one event per dropped partition, recorded in the
   platform pseudo-organization); an expired export carries `export_id` and is recorded in its organization.
 - **`device.inventory_purged`**: one event per retired device whose inventory was deleted, in Paddock and in Fleet
