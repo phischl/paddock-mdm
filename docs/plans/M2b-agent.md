@@ -336,3 +336,10 @@ cleanup is the agent's:
 - A release the supervisor ignored is staged again when the server still offers it (the agent treats "no request, no
   result" as not staged), as before; the sweep costs no additional download, because `Stage` wrote the files again
   anyway.
+
+## Amendment 2026-10-30 (PDK-480) — accepted residual in the update flow
+A supervisor restart that finds `request.json` without `staging/<version>/` (a crash between the two cleanup removals,
+microseconds wide) writes `signature_invalid`. The reported failure code is wrong, the device counts as
+one failure toward the release's rollout halt rate and skips the release until a newer one; nothing is activated,
+updates do not wedge, and the agent marks the release as failed. Accepted by the architect so that the supervisor stays
+unchanged (design contract 1); see the amendment in ADR 0024.
