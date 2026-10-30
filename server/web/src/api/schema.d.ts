@@ -5427,7 +5427,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Session ended. The client navigates to end_session_url to end the Authentik session. */
+            /** @description Session ended. The client navigates to end_session_url, Authentik's brand invalidation flow on the issuer's origin, to end the Authentik session (the portal's address when the issuer is unknown). */
             200: {
                 headers: {
                     [name: string]: unknown;

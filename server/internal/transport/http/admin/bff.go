@@ -438,9 +438,9 @@ func denialReason(res organization.RoleResolution, err error) string {
 	return app.ReasonNotAuthorized
 }
 
-// logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. It reads the
-// cookie itself, so it also signs the browser out while the session store is unreachable; the record then expires on
-// its own (plan M8s decision 15).
+// logout ends the session on the server, clears the cookie and returns the URL that ends the Authentik session. It
+// reads the cookie itself, so it also signs the browser out while the session store is unreachable; the record then
+// expires on its own (plan M8s decision 15).
 func (b *bff) logout(publicURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sess Session
@@ -451,12 +451,20 @@ func (b *bff) logout(publicURL string) http.HandlerFunc {
 		}
 		http.SetCookie(w, sessionCookie("", -1))
 		_, _, endSession := b.oidc.snapshot()
-		target := publicURL + "/"
-		if endSession != "" {
-			target = endSession + "?" + url.Values{"post_logout_redirect_uri": {publicURL + "/"}}.Encode()
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": target})
+		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": identityProviderLogout(endSession, publicURL)})
 	}
+}
+
+// identityProviderLogout is the brand invalidation flow on the origin of the issuer's end-session endpoint, or the
+// portal when the issuer is unknown (PDK-532). Not the end-session endpoint itself: Authentik refuses its
+// post_logout_redirect_uri without an id_token_hint, and the provider's invalidation flow has no logout stage, so it
+// ends the application only and leaves the Authentik session, which the next sign-in would reuse.
+func identityProviderLogout(endSession, publicURL string) string {
+	u, err := url.Parse(endSession)
+	if endSession == "" || err != nil || u.Scheme == "" || u.Host == "" {
+		return publicURL + "/"
+	}
+	return u.Scheme + "://" + u.Host + "/flows/-/default/invalidation/"
 }
 
 // switchRequest is the body of POST /api/auth/switch (schema RoleSwitch).

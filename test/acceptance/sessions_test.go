@@ -94,6 +94,95 @@ func TestSessionsLogout(t *testing.T) {
 	}
 }
 
+// authentikUser is the username of the Authentik session in p's cookie jar, "" when Authentik answers that the request
+// is not authenticated.
+func authentikUser(t *testing.T, p *env.Portal) string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(testContext(t, time.Minute), http.MethodGet, stack.AuthURL()+"/api/v3/core/users/me/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := authflow.Do(p.Client, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var body struct {
+		User struct {
+			Username string `json:"username"`
+		} `json:"user"`
+	}
+	switch {
+	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
+		return ""
+	case res.StatusCode != http.StatusOK:
+		t.Fatalf("GET /api/v3/core/users/me/: HTTP %d", res.StatusCode)
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.User.Username
+}
+
+// TestSessionsLogoutEndsAuthentikSession (PDK-532): the logout's end_session_url is Authentik's brand invalidation
+// flow, and running it ends the Authentik session of the browser, so the next sign-in asks for credentials again
+// instead of reusing it.
+func TestSessionsLogoutEndsAuthentikSession(t *testing.T) {
+	alice := login(t, env.Alice)
+	if user := authentikUser(t, alice); user != env.Alice {
+		t.Fatalf("Authentik session before logout: %q, want %s", user, env.Alice)
+	}
+	res := call(t, alice, http.MethodPost, "/api/auth/logout", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var body struct {
+		EndSessionURL string `json:"end_session_url"`
+	}
+	if err := res.JSON(&body); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := url.Parse(stack.AuthURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := url.Parse(body.EndSessionURL)
+	if err != nil || next.Scheme != auth.Scheme || next.Host != auth.Host || next.Path != "/flows/-/default/invalidation/" {
+		t.Fatalf("end_session_url %q, want the brand invalidation flow on %s", body.EndSessionURL, auth.Host)
+	}
+
+	// The browser follows the redirects to the flow page, whose flow the executor API then runs.
+	ctx := testContext(t, time.Minute)
+	for hop := 0; !strings.HasPrefix(next.Path, "/if/flow/"); hop++ {
+		if hop == 5 {
+			t.Fatalf("no flow page after %d redirects from %s", hop, body.EndSessionURL)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, next.String(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := authflow.Do(alice.Client, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = r.Body.Close()
+		loc, err := r.Location()
+		if r.StatusCode < 300 || r.StatusCode >= 400 || err != nil {
+			t.Fatalf("GET %s: HTTP %d %v", next, r.StatusCode, err)
+		}
+		next = loc
+	}
+	if _, err := authflow.RunFlow(ctx, alice.Client, next.String(), "", "", nil); err != nil {
+		t.Fatalf("invalidation flow %s: %v", next, err)
+	}
+
+	if user := authentikUser(t, alice); user != "" {
+		t.Fatalf("Authentik session after logout: %q, want none", user)
+	}
+	if status := meStatus(t, alice); status != http.StatusUnauthorized {
+		t.Fatalf("portal session after logout: %d, want 401", status)
+	}
+}
+
 // TestSessionsStepUpMismatch is gate S10: an administrator removed from the admins group fails the next step-up, every
 // session of the account ends and the revocation is recorded with reason step_up_role_mismatch.
 func TestSessionsStepUpMismatch(t *testing.T) {
