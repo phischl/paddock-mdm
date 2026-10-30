@@ -230,7 +230,7 @@
     "forbidden": "Dazu sind Sie nicht berechtigt.",
     "not_found": "Dieser Eintrag existiert nicht mehr.",
     "upstream_unavailable": "Der Identitätsanbieter ist nicht erreichbar. Die Organisation wurde gespeichert und kann erneut eingerichtet werden.",
-    "range_too_large": "Der Zeitraum darf höchstens 92 Tage umfassen.",
+    "range_too_large": "Der Zeitraum ist zu groß.",
     "day_not_sealed": "Ein Tag des Zeitraums ist noch nicht versiegelt. Exporte umfassen nur versiegelte Aufzeichnungstage.",
     "too_many_exports": "Es laufen bereits zwei Exporte oder warten auf ihre Erstellung. Warten Sie, bis einer davon abgeschlossen ist.",
     "export_not_ready": "Der Export steht noch nicht zum Herunterladen bereit.",

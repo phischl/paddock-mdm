@@ -230,7 +230,7 @@
     "forbidden": "You are not allowed to do this.",
     "not_found": "This item no longer exists.",
     "upstream_unavailable": "The identity provider is not reachable. The organization was saved and can be provisioned again.",
-    "range_too_large": "The time range may span at most 92 days.",
+    "range_too_large": "The time range is too large.",
     "day_not_sealed": "A day of the range is not sealed yet. Exports cover sealed recording days only.",
     "too_many_exports": "Two exports are already pending or running. Wait until one of them is finished.",
     "export_not_ready": "The export is not ready for download yet.",

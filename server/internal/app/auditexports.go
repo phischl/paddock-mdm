@@ -61,6 +61,9 @@ func (a *AuditExports) Request(ctx context.Context, req AuditExportRequest) (aud
 	from, to := utcDay(req.FromDay), utcDay(req.ToDay)
 	purpose := strings.TrimSpace(req.Purpose)
 	prepare := func(_ context.Context, _ *pgstore.Queries, rec Recorder) error {
+		if req.FromDay.IsZero() || req.ToDay.IsZero() {
+			return problem.InvalidRequest.WithDetail("from_day and to_day are required")
+		}
 		if to.Before(from) {
 			return problem.InvalidRequest.WithDetail("from_day must not be after to_day")
 		}
@@ -69,6 +72,9 @@ func (a *AuditExports) Request(ctx context.Context, req AuditExportRequest) (aud
 		}
 		if n := utf8.RuneCountInString(purpose); n < 1 || n > maxExportPurpose {
 			return problem.InvalidRequest.WithDetail(fmt.Sprintf("purpose must have 1 to %d characters", maxExportPurpose))
+		}
+		if hasControls(purpose) {
+			return problem.InvalidRequest.WithDetail("purpose must not contain control characters")
 		}
 		rec.SetParam("export_id", id.String())
 		rec.SetParam("from_day", from.Format(time.DateOnly))
@@ -83,6 +89,9 @@ func (a *AuditExports) Request(ctx context.Context, req AuditExportRequest) (aud
 			return fmt.Errorf("encode requester: %w", err)
 		}
 		return a.reader.InOrgWrite(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+			if err := q.LockAuditExportRequests(ctx); err != nil {
+				return fmt.Errorf("lock export requests: %w", err)
+			}
 			for _, day := range []time.Time{to, from} {
 				if _, err := q.GetAuditManifest(ctx, auditstore.GetAuditManifestParams{OrganizationID: p.OrganizationID, Day: day}); db.IsNoRows(err) {
 					return problem.DayNotSealed.WithDetail(day.Format(time.DateOnly) + " is not sealed yet")
@@ -173,6 +182,12 @@ func (a *AuditExports) List(ctx context.Context, f AuditExportQuery) (Listed[aud
 		return nil
 	})
 	return out, err
+}
+
+// hasControls reports C0 control characters other than tab, newline and carriage return: PostgreSQL rejects NUL in
+// jsonb, so such a purpose would fail the action's audit record (see boundedString).
+func hasControls(s string) bool {
+	return s != stripControls(s)
 }
 
 func utcDay(t time.Time) time.Time {

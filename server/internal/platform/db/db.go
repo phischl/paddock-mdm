@@ -281,7 +281,8 @@ func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- st
 	})
 }
 
-// AuditReader is the read-only pool of role paddock_audit_reader, with the same InOrg semantics as OrgPool.
+// AuditReader is the pool of role paddock_audit_reader, with the same InOrg semantics as OrgPool. It reads the
+// organization's audit data; its only write is InOrgWrite's insert of an evidence export request.
 type AuditReader struct{ pool }
 
 // NewAuditReader opens the paddock_audit_reader pool.

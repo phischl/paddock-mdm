@@ -367,9 +367,12 @@ func TestAuditReaderIsolation(t *testing.T) {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	// The reader may read audit_object of its organization since audit migration 00008 (plan M10 §6.2); without an
-	// organization context the policy fails closed.
-	if _, err = conn.Exec(ctx, "SELECT * FROM audit_object"); err == nil {
-		t.Error("paddock_audit_reader SELECT audit_object without organization context succeeded")
+	// organization context the policy fails closed on the unset paddock.org_id, not on a missing grant.
+	insertAuditObject(t, env.Writer, orgA)
+	_, err = conn.Exec(ctx, "SELECT * FROM audit_object")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42704" {
+		t.Errorf("paddock_audit_reader SELECT audit_object without organization context: got %v, want 42704", err)
 	}
 	if err := reader.InOrg(context.Background(), func(context.Context, *auditstore.Queries) error { return nil }); !errors.Is(err, db.ErrNoOrganization) {
 		t.Fatalf("AuditReader.InOrg without principal: got %v", err)
@@ -508,6 +511,74 @@ func TestAuditReaderExports(t *testing.T) {
 			return err
 		})
 		expectPermissionDenied(t, "paddock_audit_reader: "+stmt, err)
+	}
+}
+
+// TestAuditReaderSeesOnlyItsObjectsAndChunks: the reader of an organization reads its own audit objects and export
+// chunks and none of another organization's (plan M10 §6.2).
+func TestAuditReaderSeesOnlyItsObjectsAndChunks(t *testing.T) {
+	env := sharedAudit(t)
+	ctx := context.Background()
+	orgA, orgB := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, org := range []uuid.UUID{orgA, orgB} {
+		insertAuditObject(t, env.Writer, org)
+		insertExportChunk(t, env.Writer, org)
+	}
+	conn, err := pgx.Connect(ctx, env.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	for _, table := range []string{"audit_object", "audit_export_chunk"} {
+		var orgs []uuid.UUID
+		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgA.String()); err != nil {
+				return err
+			}
+			rows, err := tx.Query(ctx, "SELECT organization_id FROM "+table+" WHERE organization_id = ANY($1)", []uuid.UUID{orgA, orgB})
+			if err != nil {
+				return err
+			}
+			orgs, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+			return err
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", table, err)
+		}
+		if len(orgs) != 1 || orgs[0] != orgA {
+			t.Errorf("reader of org A sees %s rows of %v, want only org A", table, orgs)
+		}
+	}
+}
+
+// insertAuditObject stores one audit object of org through the writer role.
+func insertAuditObject(t *testing.T, writerDSN string, org uuid.UUID) {
+	t.Helper()
+	execAsWriter(t, writerDSN,
+		"INSERT INTO audit_object (object_key, organization_id, day, event_count, sha256) VALUES ($1, $2, current_date, 1, $3)",
+		"org/"+org.String()+"/objects/"+uuid.NewString()+".jsonl", org, make([]byte, 32))
+}
+
+// insertExportChunk stores one export of org with one chunk through the writer role.
+func insertExportChunk(t *testing.T, writerDSN string, org uuid.UUID) {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	execAsWriter(t, writerDSN,
+		`INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose, requested_by, correlation_id)
+		 VALUES ($1, $2, 'pending', current_date, current_date, 'rls', '{}', 'rls')`, id, org)
+	execAsWriter(t, writerDSN, "INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, 0, $3)", id, org, []byte{0})
+}
+
+func execAsWriter(t *testing.T, writerDSN, stmt string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, writerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if _, err := conn.Exec(ctx, stmt, args...); err != nil {
+		t.Fatalf("%s: %v", stmt, err)
 	}
 }
 

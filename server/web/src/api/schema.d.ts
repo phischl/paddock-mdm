@@ -410,10 +410,11 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, org_auditor, with a step-up within the last 300 s (403 step_up_required). Requests a signed
-         *     evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; at most
-         *     400 days: 400 range_too_large; from_day after to_day or an empty purpose: 400 invalid_request). At most two
-         *     exports of the organization may be pending or running (409 too_many_exports). The audit writer builds the
-         *     package on the audit host; it is ready within minutes for small ranges and expires 7 days after it is ready.
+         *     evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at
+         *     most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose
+         *     or one with control characters: 400 invalid_request). At most two exports of the organization may be pending
+         *     or running (409 too_many_exports). The audit writer builds the package on the audit host; it is ready within
+         *     minutes for small ranges and expires 7 days after it is ready.
          *     Recorded as audit.export_requested; every download as audit.export_downloaded.
          */
         post: operations["createAuditExport"];

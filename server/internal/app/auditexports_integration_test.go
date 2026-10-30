@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -149,6 +150,14 @@ func TestAuditExportRequestRefusals(t *testing.T) {
 			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "   "}, problem.InvalidRequest, audit.OutcomeFailure},
 		{"purpose too long", auditor,
 			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: strings.Repeat("ä", 501)}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"purpose with NUL", auditor,
+			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\x00audit"}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"purpose with escape", auditor,
+			app.AuditExportRequest{FromDay: sealed, ToDay: sealed, Purpose: "ISO\x1baudit"}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"missing days", auditor,
+			app.AuditExportRequest{Purpose: "p"}, problem.InvalidRequest, audit.OutcomeFailure},
+		{"missing to_day", auditor,
+			app.AuditExportRequest{FromDay: sealed, Purpose: "p"}, problem.InvalidRequest, audit.OutcomeFailure},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newExportHarness(t)
@@ -201,6 +210,55 @@ func TestAuditExportTooManyOpen(t *testing.T) {
 	}
 	if _, err := h.exports.Request(ctx, app.AuditExportRequest{FromDay: day, ToDay: day, Purpose: "p"}); err != nil {
 		t.Fatalf("request after one export failed: %v", err)
+	}
+}
+
+// TestAuditExportConcurrentRequests: parallel requests cannot pass the open-export limit together, and every one is
+// recorded exactly once.
+func TestAuditExportConcurrentRequests(t *testing.T) {
+	h := newExportHarness(t)
+	day := exportDay(1)
+	h.seal(t, day)
+	const n = 5
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for range n {
+		wg.Go(func() {
+			_, err := h.exports.Request(h.steppedUp(principal.RoleOrgAuditor), app.AuditExportRequest{FromDay: day, ToDay: day, Purpose: "p"})
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	succeeded, refused := 0, 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, problem.TooManyExports):
+			refused++
+		default:
+			t.Fatalf("Request = %v", err)
+		}
+	}
+	if succeeded != app.MaxOpenExports || refused != n-app.MaxOpenExports {
+		t.Fatalf("%d succeeded, %d refused; want %d and %d", succeeded, refused, app.MaxOpenExports, n-app.MaxOpenExports)
+	}
+	actions, events := h.recorded(t, "corr-"+t.Name())
+	if len(actions) != n || len(events) != n {
+		t.Fatalf("want %d actions and events, got %d actions, %d events", n, len(actions), len(events))
+	}
+	outcomes := map[string]int{}
+	for _, ev := range events {
+		outcomes[string(ev.Outcome)+"/"+ev.ErrorCode]++
+	}
+	if outcomes[string(audit.OutcomeSuccess)+"/"] != app.MaxOpenExports ||
+		outcomes[string(audit.OutcomeFailure)+"/"+problem.TooManyExports.Code] != n-app.MaxOpenExports {
+		t.Fatalf("event outcomes = %v", outcomes)
+	}
+	list, err := h.exports.List(h.steppedUp(principal.RoleOrgAuditor), app.AuditExportQuery{Page: app.ListPage{Sort: "-requested_at", Limit: 10}})
+	if err != nil || list.Count != app.MaxOpenExports {
+		t.Fatalf("stored exports: %+v, %v", list, err)
 	}
 }
 

@@ -36,3 +36,8 @@ SELECT count(*) FROM (
 
 -- name: CountOpenAuditExports :one
 SELECT count(*) FROM audit_export WHERE status IN ('pending', 'running');
+
+-- name: LockAuditExportRequests :exec
+-- Serializes the export requests of the transaction's organization so the count of open exports and the insert are
+-- atomic (PDK-142 review); released at the end of the transaction. pg_advisory_xact_lock needs no grant.
+SELECT pg_advisory_xact_lock(hashtextextended('audit_export:' || current_setting('paddock.org_id'), 0));
