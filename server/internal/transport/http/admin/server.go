@@ -188,6 +188,7 @@ var privileged = map[string]struct {
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
 	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
+	"GET /api/v1/audit/exports/{id}/download":                              {app.ScopeOrg, app.SpecAuditExportDownload},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
 	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
 	"DELETE /api/v1/package-holds/{id}":                                    {app.ScopeOrg, app.SpecPackageHoldDelete},

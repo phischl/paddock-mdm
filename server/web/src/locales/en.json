@@ -314,7 +314,8 @@
       "chain_verified": "The audit hash chain was verified for {from_day} to {to_day} ({days, number} days, {objects, number} objects, {trigger})",
       "chain_verification_failed": "The audit hash chain verification found {problem_count, plural, one {# problem} other {# problems}} for {from_day} to {to_day} ({trigger})",
       "export_requested": "{actor} requested an evidence export of {from_day} to {to_day}",
-      "export_completed": "The audit writer processed the evidence export of {from_day} to {to_day} ({events, number} events, {objects, number} objects)"
+      "export_completed": "The audit writer processed the evidence export of {from_day} to {to_day} ({events, number} events, {objects, number} objects)",
+      "export_downloaded": "{actor} downloaded the evidence export of {from_day} to {to_day} ({size, number} bytes)"
     },
     "organization": {
       "created": "{actor} created the organization {slug}",

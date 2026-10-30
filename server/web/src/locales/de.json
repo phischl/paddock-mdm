@@ -314,7 +314,8 @@
       "chain_verified": "Die Hash-Kette des Audit-Protokolls wurde für {from_day} bis {to_day} geprüft ({days, number} Tage, {objects, number} Objekte, {trigger})",
       "chain_verification_failed": "Der Prüflauf der Hash-Kette des Audit-Protokolls fand {problem_count, plural, one {# Problem} other {# Probleme}} für {from_day} bis {to_day} ({trigger})",
       "export_requested": "{actor} hat einen Nachweis-Export für {from_day} bis {to_day} angefordert",
-      "export_completed": "Der Audit-Writer hat den Nachweis-Export für {from_day} bis {to_day} verarbeitet ({events, number} Ereignisse, {objects, number} Objekte)"
+      "export_completed": "Der Audit-Writer hat den Nachweis-Export für {from_day} bis {to_day} verarbeitet ({events, number} Ereignisse, {objects, number} Objekte)",
+      "export_downloaded": "{actor} hat den Nachweis-Export für {from_day} bis {to_day} heruntergeladen ({size, number} Bytes)"
     },
     "organization": {
       "created": "{actor} hat die Organisation {slug} angelegt",

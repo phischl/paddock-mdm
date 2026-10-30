@@ -23,6 +23,7 @@ export const auditCodes = [
   'audit.chain_verification_failed',
   'audit.chain_verified',
   'audit.export_completed',
+  'audit.export_downloaded',
   'audit.export_requested',
   'autoinstall.generated',
   'config.applied',

@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -20,6 +23,10 @@ import (
 
 // SpecAuditExportRequest is the request of an evidence export (plan M10 decision 29).
 var SpecAuditExportRequest = ActionSpec{Code: audit.CodeAuditExportRequested, AllowedRoles: RolesAudit, RequiresStepUp: true}
+
+// SpecAuditExportDownload is the download of a ready evidence export (plan M10 decision 35). Every download is a data
+// egress and is recorded, so it is audited like any privileged action; no step-up is required.
+var SpecAuditExportDownload = ActionSpec{Code: audit.CodeAuditExportDownloaded, AllowedRoles: RolesAudit}
 
 // MaxExportDays is the largest difference between to_day and from_day of one export (plan M10 decision 29).
 const MaxExportDays = 400
@@ -119,6 +126,94 @@ func (a *AuditExports) Request(ctx context.Context, req AuditExportRequest) (aud
 	finalize := func(context.Context, *pgstore.Queries, Recorder, error) error { return nil }
 	err := a.runner.RunExternal(ctx, ScopeOrg, SpecAuditExportRequest, prepare, external, finalize)
 	return out, err
+}
+
+// ExportPackage is what Download knows about a package before its first byte: the export row and the file name the
+// download is offered as.
+type ExportPackage struct {
+	Export   auditstore.AuditExport
+	Filename string
+}
+
+// Download records audit.export_downloaded, then calls begin once and stream once per chunk in sequence order inside
+// one reader transaction, so at most one chunk is in memory. begin runs before the first chunk, after the export
+// was confirmed ready again, so a caller can send headers; a failure before begin leaves the response untouched. The
+// event is recorded before the first byte is sent and is not repeated when the transfer breaks later (exactly one
+// event per attempt, root CLAUDE.md); such a failure is returned for the caller to log.
+func (a *AuditExports) Download(ctx context.Context, id uuid.UUID, begin func(ExportPackage), stream func(chunk []byte) error) error {
+	var slug string
+	err := a.runner.RunTx(ctx, ScopeOrg, SpecAuditExportDownload, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		rec.SetParam("export_id", id.String())
+		export, err := a.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := requireDownloadable(export, time.Now()); err != nil {
+			return err
+		}
+		org, err := q.GetOrganization(ctx, mustOrg(ctx))
+		if err != nil {
+			return fmt.Errorf("get organization: %w", err)
+		}
+		slug = org.Slug
+		rec.SetParam("from_day", export.FromDay.Format(time.DateOnly))
+		rec.SetParam("to_day", export.ToDay.Format(time.DateOnly))
+		rec.SetParam("size", *export.Size)
+		rec.SetParam("package_sha256", hex.EncodeToString(export.PackageSha256))
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return a.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		export, err := q.GetAuditExport(ctx, id)
+		if db.IsNoRows(err) {
+			return problem.NotFound
+		}
+		if err != nil {
+			return fmt.Errorf("get export: %w", err)
+		}
+		if err := requireDownloadable(export, time.Now()); err != nil {
+			return err
+		}
+		begin(ExportPackage{Export: export, Filename: exportFilename(slug, export)})
+		sum := sha256.New()
+		var sent int64
+		for seq := int32(0); ; seq++ {
+			data, err := q.GetAuditExportChunk(ctx, auditstore.GetAuditExportChunkParams{ExportID: id, Seq: seq})
+			if db.IsNoRows(err) {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("read chunk %d: %w", seq, err)
+			}
+			sum.Write(data)
+			sent += int64(len(data))
+			if err := stream(data); err != nil {
+				return fmt.Errorf("send chunk %d: %w", seq, err)
+			}
+		}
+		if sent != *export.Size || !bytes.Equal(sum.Sum(nil), export.PackageSha256) {
+			return fmt.Errorf("stored chunks of export %s are %d bytes with a different checksum, want %d", id, sent, *export.Size)
+		}
+		return nil
+	})
+}
+
+// requireDownloadable refuses an export that is not ready or past its expiry; the audit writer's expiry job may lag
+// behind expires_at, and the chunks of an expired package must not be offered.
+func requireDownloadable(e auditstore.AuditExport, now time.Time) error {
+	if e.Status != "ready" || e.Size == nil || len(e.PackageSha256) == 0 || (e.ExpiresAt != nil && !e.ExpiresAt.After(now)) {
+		return problem.ExportNotReady.WithDetail("the export is " + e.Status)
+	}
+	return nil
+}
+
+// exportFilename is the file name of the package (plan M10 decision 35). The organization slug is lowercase ASCII
+// letters, digits and hyphens, so the name needs no quoting or encoding in Content-Disposition.
+func exportFilename(slug string, e auditstore.AuditExport) string {
+	return fmt.Sprintf("paddock-audit-export-%s-%s_%s-%s.tar", slug, e.FromDay.Format(time.DateOnly),
+		e.ToDay.Format(time.DateOnly), hex.EncodeToString(e.ID[:4]))
 }
 
 // exportRequester is the requesting principal as audit actor without the client address (plan M10 decision 29); the

@@ -444,6 +444,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit/exports/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_auditor. Streams the package (a tar archive) of a ready export; 409 export_not_ready
+         *     while it is pending, running, failed or expired, 404 for an unknown export or one of another organization.
+         *     The response carries Content-Length (the package size), Content-Disposition (paddock-audit-export-<organization
+         *     slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar) and X-Paddock-Package-SHA256 (the lowercase hex SHA-256
+         *     of the body). Recorded as audit.export_downloaded before the first byte is sent; a transfer that breaks later
+         *     is not recorded again. No range requests.
+         */
+        get: operations["downloadAuditExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/device-groups/{id}/devices": {
         parameters: {
             query?: never;
@@ -6224,6 +6250,34 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    downloadAuditExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The package. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    "X-Paddock-Package-SHA256"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-tar": string;
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     listDeviceGroupDevices: {

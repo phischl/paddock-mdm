@@ -144,6 +144,23 @@ func (q *Queries) GetAuditExport(ctx context.Context, id uuid.UUID) (AuditExport
 	return i, err
 }
 
+const getAuditExportChunk = `-- name: GetAuditExportChunk :one
+SELECT data FROM audit_export_chunk WHERE export_id = $1 AND seq = $2
+`
+
+type GetAuditExportChunkParams struct {
+	ExportID uuid.UUID
+	Seq      int32
+}
+
+// One chunk per call keeps at most one 8 MiB row in memory while the package streams.
+func (q *Queries) GetAuditExportChunk(ctx context.Context, arg GetAuditExportChunkParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getAuditExportChunk, arg.ExportID, arg.Seq)
+	var data []byte
+	err := row.Scan(&data)
+	return data, err
+}
+
 const insertAuditExport = `-- name: InsertAuditExport :one
 INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose, requested_by, correlation_id)
 VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7)

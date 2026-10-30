@@ -1,7 +1,12 @@
 package acceptance
 
 import (
+	"archive/tar"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -26,21 +31,23 @@ type auditExport struct {
 		IP      *string `json:"ip"`
 		StepUp  bool    `json:"step_up"`
 	} `json:"requested_by"`
-	EventCount  *int64  `json:"event_count"`
-	ObjectCount *int    `json:"object_count"`
-	Size        *int64  `json:"size"`
-	VerifyOK    *bool   `json:"verify_ok"`
-	KeyVersion  *int    `json:"key_version"`
-	ExpiresAt   *string `json:"expires_at"`
-	Error       *string `json:"error"`
+	EventCount    *int64  `json:"event_count"`
+	ObjectCount   *int    `json:"object_count"`
+	Size          *int64  `json:"size"`
+	PackageSHA256 *string `json:"package_sha256"`
+	VerifyOK      *bool   `json:"verify_ok"`
+	KeyVersion    *int    `json:"key_version"`
+	ExpiresAt     *string `json:"expires_at"`
+	Error         *string `json:"error"`
 }
 
 // TestAuditEvidenceExport covers the evidence export gates of plan M10 §9. E1 (PDK-142): an auditor of a fresh
 // organization requests an export of a sealed day only after a step-up, every request is recorded as
 // audit.export_requested, the refusals carry their problem codes, and another organization does not see the export.
 // E2 (PDK-143): the audit writer builds the package without operator action; it holds exactly the events the
-// organization had when its day was sealed (plan M10 amendment A7) and its chain verifies. E3–E4 (download, offline
-// verification) follow in this function with PDK-144 and PDK-146.
+// organization had when its day was sealed (plan M10 amendment A7) and its chain verifies. E3 (PDK-144): the auditor downloads the ready package with the
+// headers and checksum of plan M10 decision 35, a not-ready export is refused, another organization gets 404 and
+// every attempt is recorded. E4 (offline verification) follows in this function with PDK-146.
 //
 // Like TestAuditIntegrity it uses a fresh organization so the development-only `audit seal --day --org` can seal today
 // without sealing other organizations' days early.
@@ -157,6 +164,56 @@ func TestAuditEvidenceExport(t *testing.T) {
 	if leaked := containsAny(res.Body, []string{first.ID, org.String()}); leaked != "" {
 		t.Fatalf("E1 globex list contains %s: %s", leaked, res.Body)
 	}
+
+	// E3: the download is the package of the ready export: size, checksum and file name as announced, a tar with the
+	// files of plan M10 §6.5, and one audit.export_downloaded event with the export's range, size and checksum.
+	downloadPath := "/api/v1/audit/exports/" + first.ID + "/download"
+	res = call(t, auditor.Portal, http.MethodGet, downloadPath, nil)
+	expectStatus(t, res, http.StatusOK, "")
+	sum := sha256.Sum256(res.Body)
+	wantName := fmt.Sprintf(`attachment; filename="paddock-audit-export-%s-%s_%s-%s.tar"`, body["slug"], today, today, first.ID[:8])
+	if res.Header.Get("Content-Type") != "application/x-tar" || res.Header.Get("Content-Length") != fmt.Sprint(*ready.Size) ||
+		int64(len(res.Body)) != *ready.Size || res.Header.Get("Content-Disposition") != wantName ||
+		res.Header.Get("X-Paddock-Package-SHA256") != hex.EncodeToString(sum[:]) ||
+		ready.PackageSHA256 == nil || *ready.PackageSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("E3 download headers %v (%d bytes, export %+v)", res.Header, len(res.Body), ready)
+	}
+	files := map[string]bool{}
+	for r := tar.NewReader(bytes.NewReader(res.Body)); ; {
+		h, err := r.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("E3 tar: %v", err)
+		}
+		files[h.Name] = true
+	}
+	for _, name := range []string{"README.md", "events.jsonl", "export.json", "export.sig"} {
+		if !files[name] {
+			t.Fatalf("E3 package lacks %s: %v", name, files)
+		}
+	}
+	downloaded := expectOneEventOfCode(t, auditor.Portal, res.RequestID, "audit.export_downloaded", "success")
+	if downloaded.Params["export_id"] != first.ID || downloaded.Params["from_day"] != today || downloaded.Params["to_day"] != today ||
+		downloaded.Params["size"] != float64(*ready.Size) || downloaded.Params["package_sha256"] != hex.EncodeToString(sum[:]) {
+		t.Fatalf("E3 event params: %+v", downloaded.Params)
+	}
+
+	// E3: an export that is not ready is refused with a recorded failure; another organization and an operator get no package.
+	res = call(t, auditor.Portal, http.MethodGet, "/api/v1/audit/exports?status=failed&page_size=10", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var failed struct {
+		Items []auditExport `json:"items"`
+	}
+	if err := res.JSON(&failed); err != nil || len(failed.Items) == 0 {
+		t.Fatalf("E3 failed exports: %v %s", err, res.Body)
+	}
+	res = call(t, auditor.Portal, http.MethodGet, "/api/v1/audit/exports/"+failed.Items[0].ID+"/download", nil)
+	expectStatus(t, res, http.StatusConflict, "export_not_ready")
+	expectOneEventOfCode(t, auditor.Portal, res.RequestID, "audit.export_downloaded", "failure")
+	expectStatus(t, call(t, carol, http.MethodGet, downloadPath, nil), http.StatusNotFound, "not_found")
+	expectStatus(t, call(t, operatorUser(t).Portal, http.MethodGet, downloadPath, nil), http.StatusForbidden, "forbidden")
 }
 
 // auditTotalSince is the total the audit log lists for the viewer's organization from 00:00 UTC of day.

@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "48730200e657e4837068212ebfaa5b5b06b516433632d326f3702d1515697f83"
+const Version = "8b381dbdb6f7213ca7e432dc81f38fa360fbddea8fe19bee20b84de38836e458"
 
 var tools = []Tool{
 	{
@@ -655,6 +655,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, platform_admin. Disables MCP write access for the caller's own account; no step-up is needed. 403 forbidden for org_auditor, for API tokens and for MCP sessions. Every attempt is audited.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "downloadAuditExport",
+		Method:      "GET",
+		Path:        "/api/v1/audit/exports/{id}/download",
+		Pattern:     "GET /api/v1/audit/exports/{id}/download",
+		Tag:         "audit",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "audit.export_downloaded",
+		Summary:     "",
+		Description: "Roles: org_admin, org_auditor. Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. The response carries Content-Length (the package size), Content-Disposition (paddock-audit-export-<organization slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar) and X-Paddock-Package-SHA256 (the lowercase hex SHA-256 of the body). Recorded as audit.export_downloaded before the first byte is sent; a transfer that breaks later is not recorded again. No range requests.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "downloadDeviceHeader",

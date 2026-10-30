@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
@@ -65,6 +67,43 @@ func (h *handlers) GetAuditExport(ctx context.Context, req adminapi.GetAuditExpo
 		return nil, err
 	}
 	return adminapi.GetAuditExport200JSONResponse(out), nil
+}
+
+// DownloadAuditExport streams the package through a pipe: the use case writes each chunk as it reads it, and the
+// response body reads from the pipe, so the package is never held in memory (plan M10 decision 35). The use case runs
+// in its own goroutine because the headers need the export row it reads first.
+func (h *handlers) DownloadAuditExport(ctx context.Context, req adminapi.DownloadAuditExportRequestObject) (adminapi.DownloadAuditExportResponseObject, error) {
+	type started struct {
+		pkg app.ExportPackage
+		err error
+	}
+	pr, pw := io.Pipe()
+	first := make(chan started, 1)
+	go func() {
+		begun := false
+		err := h.exports.Download(ctx, req.Id,
+			func(pkg app.ExportPackage) { begun = true; first <- started{pkg: pkg} },
+			func(chunk []byte) error { _, err := pw.Write(chunk); return err })
+		if !begun {
+			first <- started{err: err}
+		} else if err != nil {
+			slog.WarnContext(ctx, "audit export download broke off", "export_id", req.Id, "error", err)
+		}
+		// A reader that is closed already makes this a no-op; a broken transfer ends the body early, which the client
+		// sees as fewer bytes than Content-Length.
+		pw.CloseWithError(err)
+	}()
+	res := <-first
+	if res.err != nil {
+		pr.Close()
+		return nil, res.err
+	}
+	disposition := `attachment; filename="` + res.pkg.Filename + `"`
+	sum := hex.EncodeToString(res.pkg.Export.PackageSha256)
+	return adminapi.DownloadAuditExport200ApplicationxTarResponse{
+		Body: pr, ContentLength: *res.pkg.Export.Size,
+		Headers: adminapi.DownloadAuditExport200ResponseHeaders{ContentDisposition: &disposition, XPaddockPackageSHA256: &sum},
+	}, nil
 }
 
 // toAuditExport maps an export row to the API; requested_by is stored as an audit actor, verify_problems as a JSON
