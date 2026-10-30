@@ -688,6 +688,14 @@ type ProfileAssignment struct {
 	CreatedAt      time.Time
 }
 
+type RetentionInventoryHold struct {
+	DeviceID        uuid.UUID
+	OrganizationID  uuid.UUID
+	LastAnswer      string
+	UnchangedRounds int32
+	LastEventAt     time.Time
+}
+
 type RevocationApproval struct {
 	RequestID      uuid.UUID
 	OrganizationID uuid.UUID

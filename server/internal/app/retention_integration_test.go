@@ -28,13 +28,27 @@ type retentionWorld struct {
 }
 
 // fakeInventoryAdmin is Fleet's host deletion; err makes every deletion fail, failing makes the deletion of those hosts
-// fail with their error; calls counts every deletion asked for.
+// fail with their error; calls counts every deletion asked for. seen is the last check-in of those hosts (the zero time
+// for the others), seenErr fails the check-in lookup of those hosts; lookups counts every lookup.
 type fakeInventoryAdmin struct {
 	mu      sync.Mutex
 	deleted []ports.HostRef
 	err     error
 	failing map[ports.HostRef]error
 	calls   int
+	seen    map[ports.HostRef]time.Time
+	seenErr map[ports.HostRef]error
+	lookups int
+}
+
+func (f *fakeInventoryAdmin) HostSeenAt(_ context.Context, ref ports.HostRef) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lookups++
+	if err := f.seenErr[ref]; err != nil {
+		return time.Time{}, err
+	}
+	return f.seen[ref], nil
 }
 
 // fleetDown is the error of a Fleet that is down (ports.InventoryAdmin: upstream_unavailable).

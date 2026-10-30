@@ -1718,12 +1718,14 @@ differ.
 
 - **Breaker counts only transient Fleet failures.** `ports.InventoryAdmin.DeleteHost` classifies its errors: Fleet
   failing or unreachable (5xx, timeout, connection error, and statuses that concern Fleet or the way to it rather than
-  the host: 401, 403, a 404 without Fleet's own error body, 408, 429, 3xx) is `upstream_unavailable`; Fleet refusing
-  this one host (any other 4xx) or an invalid host reference is `invalid_state`. Both fail the device with one
+  the host: 401, 403, a 404 without Fleet's own error body, 408, 429) is `upstream_unavailable`; Fleet refusing
+  this one host or an invalid host reference is `invalid_state`. Round 2 below narrows the refusal and covers
+  redirects. Both fail the device with one
   `device.inventory_purged` failure event and keep its rows. Only `upstream_unavailable` counts toward the round's
   breaker; a refusal neither counts nor resets the count, a successful deletion resets it. Permanently refused hosts at
   the head of one organization therefore no longer skip the retired inventory of every organization.
-- **A persisting `'hardware'` answer records no event.** Before starting a device's action, the pass reads the
+- **A persisting `'hardware'` answer records no event.** (Replaced by round 2 below: the derived "unchanged" check
+  missed a first sight and a change from a failure.) Before starting a device's action, the pass reads the
   device's remaining inventory; when nothing but the host reference is left and the host check answers `'hardware'`,
   the pass starts no action and only logs. The round that purged the other rows recorded the answer; the next event
   follows when the answer changes to `'ref'` or `'none'` and the reference is deleted. No new column: "unchanged" is
@@ -1733,4 +1735,47 @@ differ.
   re-checks under the row lock and records the outcome), so the one-event-per-attempt rule holds: a skipped device is
   no attempt. `paddock_retention_deleted_total{store="retired_inventory"}` therefore counts only devices whose rows
   were deleted.
-- Open, not decided: x3 (two Fleet hosts of the same hardware) and x4 (no event for a pass-level failure).
+- Open, not decided: x3 (two Fleet hosts of the same hardware) and x4 (no event for a pass-level failure). Both are
+  decided in round 2 below.
+
+### Amendment 2026-10-30 (PDK-583 round 2, review 1 of the leftovers)
+
+Architect decisions on review 1 of PDK-583. They amend the amendment above where they differ.
+
+- **B1: only Fleet's own refusal is `invalid_state`.** A 4xx is Fleet's refusal of this one host only when it carries
+  Fleet's JSON error body (`{"message": ..., "errors": [...]}`, the same check that makes a 404 "already gone") and
+  is not 401, 403, 404, 408 or 429. Any other 4xx (a proxy or ingress in front of Fleet answering 405, 407, 421, or 400
+  without Fleet's body) fails every host alike and is `upstream_unavailable`, so it trips the breaker.
+- **Redirects (PDK-586, folded in).** The Fleet client does not follow redirects (`CheckRedirect` returns
+  `http.ErrUseLastResponse`): Go would turn a redirected DELETE into a GET whose 200 reads as a deleted host. Every 3xx
+  is `upstream_unavailable`.
+- **A canceled context** (shutdown) is neither `upstream_unavailable` nor `invalid_state` and does not count toward
+  the breaker.
+- **x3: a host still checking in is kept.** When the host check answers `'none'`, the device's action first reads
+  Fleet's last check-in of the host (`ports.InventoryAdmin.HostSeenAt`, the host detail without software). A host
+  seen **after the device's retirement and within 7 retention days of now** is still in use, by fleetd still running
+  on the retired machine or by a successor without a reference of its own. It is kept with the retired device's
+  reference like `'hardware'`; the other Paddock rows go. The event records `fleet_host_kept` `seen_recently` and
+  `fleet_host_seen_at`. A host seen only before the retirement or longer ago, never seen, or no longer known is
+  deleted, so gate R2 (host seen just before the retirement) stays deterministic. A failing lookup fails closed: no
+  deletion, all rows kept, one failure event; an `upstream_unavailable` lookup failure counts toward the breaker like a
+  failed deletion. The 7 days are retention days (`PADDOCK_RETENTION_UNIT`).
+- **M1: the kept answer is persisted.** Paddock migration 00079 adds `retention_inventory_hold` (`device_id` primary
+  key referencing `device` with `ON DELETE CASCADE`, `organization_id`, `last_answer` `'hardware'` or
+  `'seen_recently'`, `unchanged_rounds`, `last_event_at`; ENABLE and FORCE row level security, the organization policy
+  without `missing_ok`, granted to `paddock_worker` only). A successful action that keeps the host stores its answer
+  (`fleet_host_kept`) with zero rounds. Before a listed device's action, the pass compares: when the device has a held
+  answer, nothing but the host reference is left and the current answer (the host check and, on `'none'`, the
+  check-in lookup) equals the held one, the pass starts no action, counts the unchanged round and logs. Otherwise it
+  drops the held answer and the action runs, so every change of answer records one event: a first sight, a change from
+  a failure or `'none'` to a kept answer, between `'hardware'` and `'seen_recently'`, and from a kept answer to the
+  host's deletion. An action that fails therefore leaves no held answer, and the next kept answer is recorded again.
+  A skip is no attempt and starts no action, so the one-event-per-attempt rule holds. The row goes when the answer
+  changes and with the device.
+- **Bound: one notice after 30 unchanged rounds.** The round that reaches 30 unchanged rounds of a held answer
+  records one `device.inventory_host_kept` success event (new code; `fleet_host_kept`, `rounds`) in the same
+  transaction as the count, and deletes nothing. Later unchanged rounds record no further notice; a change of answer
+  starts over. It is a notice in the audit trail, no alert.
+- **x4: a pass-level failure records one event.** A failure loading the organization's privacy settings or listing
+  the first page of its retired devices records one `retention.purged` failure (`store` `retired_inventory`) for the
+  organization and round, through `RunTx` like the breaker skip.

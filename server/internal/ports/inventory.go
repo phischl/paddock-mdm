@@ -88,4 +88,7 @@ type InventoryAdmin interface {
 	// problem.UpstreamUnavailable means the inventory system failed or could not be reached; problem.InvalidState means
 	// it refused this one host.
 	DeleteHost(ctx context.Context, ref HostRef) error
+	// HostSeenAt returns when the host last checked in; the zero time for a host that never did or no longer exists.
+	// Its errors are classified like DeleteHost's.
+	HostSeenAt(ctx context.Context, ref HostRef) (time.Time, error)
 }

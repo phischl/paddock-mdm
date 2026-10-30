@@ -115,29 +115,40 @@ func TestDeleteHostForeign404(t *testing.T) {
 	}
 }
 
-// TestDeleteHostErrorClass (plan M10 amendment 2026-10-30, PDK-583): Fleet's refusal of the one host is
-// invalid_state; a failure of Fleet itself or of the way to it is upstream_unavailable, the only class the retention
-// round's Fleet breaker counts.
+// fleetError is Fleet's own JSON error body.
+const fleetError = `{"message":"refused","errors":[{"name":"base","reason":"refused"}]}`
+
+// TestDeleteHostErrorClass (plan M10 amendments 2026-10-30, PDK-583): Fleet's refusal of the one host, a 4xx with
+// Fleet's own error body, is invalid_state; a failure of Fleet itself or of the way to it, including a 4xx a proxy
+// answers for every host alike, is upstream_unavailable, the only class the retention round's Fleet breaker counts.
 func TestDeleteHostErrorClass(t *testing.T) {
-	for code, want := range map[int]error{
-		http.StatusBadRequest:          problem.InvalidState,
-		http.StatusConflict:            problem.InvalidState,
-		http.StatusUnprocessableEntity: problem.InvalidState,
-		http.StatusUnauthorized:        problem.UpstreamUnavailable,
-		http.StatusForbidden:           problem.UpstreamUnavailable,
-		http.StatusRequestTimeout:      problem.UpstreamUnavailable,
-		http.StatusTooManyRequests:     problem.UpstreamUnavailable,
-		http.StatusInternalServerError: problem.UpstreamUnavailable,
-		http.StatusBadGateway:          problem.UpstreamUnavailable,
+	for _, c := range []struct {
+		code int
+		body string
+		want error
+	}{
+		{http.StatusBadRequest, fleetError, problem.InvalidState},
+		{http.StatusConflict, fleetError, problem.InvalidState},
+		{http.StatusUnprocessableEntity, fleetError, problem.InvalidState},
+		{http.StatusMethodNotAllowed, "405 Not Allowed", problem.UpstreamUnavailable},
+		{http.StatusBadRequest, "<html><body>400 Request Header Or Cookie Too Large</body></html>", problem.UpstreamUnavailable},
+		{http.StatusBadRequest, `{"message":"bad request"}`, problem.UpstreamUnavailable},
+		{http.StatusMisdirectedRequest, "", problem.UpstreamUnavailable},
+		{http.StatusUnauthorized, fleetError, problem.UpstreamUnavailable},
+		{http.StatusForbidden, fleetError, problem.UpstreamUnavailable},
+		{http.StatusRequestTimeout, fleetError, problem.UpstreamUnavailable},
+		{http.StatusTooManyRequests, fleetError, problem.UpstreamUnavailable},
+		{http.StatusInternalServerError, fleetError, problem.UpstreamUnavailable},
+		{http.StatusBadGateway, fleetError, problem.UpstreamUnavailable},
 	} {
-		t.Run(fmt.Sprint(code), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%d %.12s", c.code, c.body), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(code)
-				_, _ = w.Write([]byte(`{"message":"refused","errors":[{"name":"base","reason":"refused"}]}`))
+				w.WriteHeader(c.code)
+				_, _ = w.Write([]byte(c.body))
 			}))
 			t.Cleanup(srv.Close)
-			if err := client(srv.URL).DeleteHost(context.Background(), "1"); !errors.Is(err, want) {
-				t.Fatalf("HTTP %d: %v, want %v", code, err, want)
+			if err := client(srv.URL).DeleteHost(context.Background(), "1"); !errors.Is(err, c.want) {
+				t.Fatalf("HTTP %d %q: %v, want %v", c.code, c.body, err, c.want)
 			}
 		})
 	}
@@ -145,6 +156,83 @@ func TestDeleteHostErrorClass(t *testing.T) {
 	srv.Close()
 	if err := client(srv.URL).DeleteHost(context.Background(), "1"); !errors.Is(err, problem.UpstreamUnavailable) {
 		t.Fatalf("connection refused: %v, want upstream_unavailable", err)
+	}
+}
+
+// TestDeleteHostRedirect (PDK-583): a redirect is not followed, so a DELETE never turns into a GET whose 200 would read
+// as a deleted host; it is upstream_unavailable.
+func TestDeleteHostRedirect(t *testing.T) {
+	var gets int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gets++
+			return
+		}
+		http.Redirect(w, r, "/moved"+r.URL.Path, http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+	if err := client(srv.URL).DeleteHost(context.Background(), "1"); !errors.Is(err, problem.UpstreamUnavailable) || gets != 0 {
+		t.Fatalf("301: %v after %d GETs, want upstream_unavailable and none", err, gets)
+	}
+}
+
+// TestDeleteHostCanceled (PDK-583): a canceled context is neither upstream_unavailable nor invalid_state, so a shutdown
+// does not count toward the retention round's Fleet breaker.
+func TestDeleteHostCanceled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := client(srv.URL).DeleteHost(ctx, "1")
+	if err == nil || errors.Is(err, problem.UpstreamUnavailable) || errors.Is(err, problem.InvalidState) {
+		t.Fatalf("canceled: %v, want an unclassified error", err)
+	}
+}
+
+// TestHostSeenAt (plan M10 amendment 2026-10-30, PDK-583): the host's last check-in from its detail without software;
+// a host Fleet no longer knows or that never checked in reports the zero time; failures are classified like
+// DeleteHost's.
+func TestHostSeenAt(t *testing.T) {
+	seen := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name string
+		code int
+		body string
+		want time.Time
+		err  error
+	}{
+		{"seen", http.StatusOK, `{"host":{"id":1,"seen_time":"2026-10-29T08:00:00Z"}}`, seen, nil},
+		{"never seen", http.StatusOK, `{"host":{"id":1,"seen_time":null}}`, time.Time{}, nil},
+		{"gone", http.StatusNotFound, fleetError, time.Time{}, nil},
+		{"foreign 404", http.StatusNotFound, "404 page not found", time.Time{}, problem.UpstreamUnavailable},
+		{"refused", http.StatusBadRequest, fleetError, time.Time{}, problem.InvalidState},
+		{"down", http.StatusServiceUnavailable, "", time.Time{}, problem.UpstreamUnavailable},
+		{"redirect", http.StatusFound, "", time.Time{}, problem.UpstreamUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var asked string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				asked = r.Method + " " + r.URL.RequestURI()
+				if c.code == http.StatusFound {
+					w.Header().Set("Location", "/elsewhere")
+				}
+				w.WriteHeader(c.code)
+				_, _ = w.Write([]byte(c.body))
+			}))
+			t.Cleanup(srv.Close)
+			got, err := client(srv.URL).HostSeenAt(context.Background(), "1")
+			if !got.Equal(c.want) || (c.err == nil) != (err == nil) || c.err != nil && !errors.Is(err, c.err) {
+				t.Fatalf("seen %v, %v; want %v, %v", got, err, c.want, c.err)
+			}
+			if want := "GET /api/v1/fleet/hosts/1?exclude_software=true"; asked != want {
+				t.Fatalf("asked %q, want %q", asked, want)
+			}
+		})
+	}
+	if _, err := client("http://127.0.0.1:1").HostSeenAt(context.Background(), "../config"); !errors.Is(err, problem.InvalidState) {
+		t.Fatalf("invalid host reference: %v", err)
 	}
 }
 

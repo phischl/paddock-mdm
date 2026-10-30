@@ -91,6 +91,25 @@ func (q *Queries) CountDeviceVulnerabilities(ctx context.Context, arg CountDevic
 	return count, err
 }
 
+const countInventoryHoldRound = `-- name: CountInventoryHoldRound :one
+UPDATE retention_inventory_hold SET unchanged_rounds = unchanged_rounds + 1
+WHERE device_id = $1 AND last_answer = $2
+RETURNING unchanged_rounds
+`
+
+type CountInventoryHoldRoundParams struct {
+	DeviceID   uuid.UUID
+	LastAnswer string
+}
+
+// Counts one more round without a change of the held answer and returns the rounds counted.
+func (q *Queries) CountInventoryHoldRound(ctx context.Context, arg CountInventoryHoldRoundParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countInventoryHoldRound, arg.DeviceID, arg.LastAnswer)
+	var unchanged_rounds int32
+	err := row.Scan(&unchanged_rounds)
+	return unchanged_rounds, err
+}
+
 const countSoftware = `-- name: CountSoftware :one
 SELECT count(*) FROM (
   SELECT 1 FROM installed_software s JOIN device d ON d.id = s.device_id AND d.state IN ('active','quarantined')
@@ -197,6 +216,15 @@ func (q *Queries) DeleteDeviceInventory(ctx context.Context, arg DeleteDeviceInv
 		&i.Refs,
 	)
 	return i, err
+}
+
+const deleteInventoryHold = `-- name: DeleteInventoryHold :exec
+DELETE FROM retention_inventory_hold WHERE device_id = $1
+`
+
+func (q *Queries) DeleteInventoryHold(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteInventoryHold, deviceID)
+	return err
 }
 
 const deleteMissingFindings = `-- name: DeleteMissingFindings :exec
@@ -377,6 +405,25 @@ func (q *Queries) InventoryDevices(ctx context.Context, uuids []string) ([]Inven
 		return nil, err
 	}
 	return items, nil
+}
+
+const inventoryHold = `-- name: InventoryHold :one
+SELECT coalesce((SELECT h.last_answer FROM retention_inventory_hold h WHERE h.device_id = $1), '')::text AS last_answer,
+       coalesce((SELECT h.unchanged_rounds FROM retention_inventory_hold h WHERE h.device_id = $1), 0)::int AS unchanged_rounds
+`
+
+type InventoryHoldRow struct {
+	LastAnswer      string
+	UnchangedRounds int32
+}
+
+// The answer the retention round last recorded an event for while it keeps a retired device's Fleet host, ” without
+// one (plan M10 amendment 2026-10-30, PDK-583 round 2).
+func (q *Queries) InventoryHold(ctx context.Context, deviceID uuid.UUID) (InventoryHoldRow, error) {
+	row := q.db.QueryRow(ctx, inventoryHold, deviceID)
+	var i InventoryHoldRow
+	err := row.Scan(&i.LastAnswer, &i.UnchangedRounds)
+	return i, err
 }
 
 const listAgentNotRunning = `-- name: ListAgentNotRunning :many
@@ -833,6 +880,22 @@ type MarkAgentNotRunningReportedParams struct {
 
 func (q *Queries) MarkAgentNotRunningReported(ctx context.Context, arg MarkAgentNotRunningReportedParams) error {
 	_, err := q.db.Exec(ctx, markAgentNotRunningReported, arg.DeviceID, arg.PolicyKey)
+	return err
+}
+
+const setInventoryHold = `-- name: SetInventoryHold :exec
+INSERT INTO retention_inventory_hold (device_id, organization_id, last_answer, unchanged_rounds, last_event_at)
+SELECT d.id, d.organization_id, $1, 0, now() FROM device d WHERE d.id = $2
+ON CONFLICT (device_id) DO UPDATE SET last_answer = excluded.last_answer, unchanged_rounds = 0, last_event_at = now()
+`
+
+type SetInventoryHoldParams struct {
+	LastAnswer string
+	DeviceID   uuid.UUID
+}
+
+func (q *Queries) SetInventoryHold(ctx context.Context, arg SetInventoryHoldParams) error {
+	_, err := q.db.Exec(ctx, setInventoryHold, arg.LastAnswer, arg.DeviceID)
 	return err
 }
 

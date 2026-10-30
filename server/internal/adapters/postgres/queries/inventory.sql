@@ -272,6 +272,26 @@ WITH s AS (DELETE FROM installed_software x WHERE x.device_id = @device_id RETUR
 SELECT (SELECT count(*) FROM s)::bigint AS software, (SELECT count(*) FROM f)::bigint AS findings,
        (SELECT count(*) FROM p)::bigint AS policy_results, (SELECT count(*) FROM r)::bigint AS refs;
 
+-- The answer the retention round last recorded an event for while it keeps a retired device's Fleet host, '' without
+-- one (plan M10 amendment 2026-10-30, PDK-583 round 2).
+-- name: InventoryHold :one
+SELECT coalesce((SELECT h.last_answer FROM retention_inventory_hold h WHERE h.device_id = @device_id), '')::text AS last_answer,
+       coalesce((SELECT h.unchanged_rounds FROM retention_inventory_hold h WHERE h.device_id = @device_id), 0)::int AS unchanged_rounds;
+
+-- Counts one more round without a change of the held answer and returns the rounds counted.
+-- name: CountInventoryHoldRound :one
+UPDATE retention_inventory_hold SET unchanged_rounds = unchanged_rounds + 1
+WHERE device_id = @device_id AND last_answer = @last_answer
+RETURNING unchanged_rounds;
+
+-- name: SetInventoryHold :exec
+INSERT INTO retention_inventory_hold (device_id, organization_id, last_answer, unchanged_rounds, last_event_at)
+SELECT d.id, d.organization_id, @last_answer, 0, now() FROM device d WHERE d.id = @device_id
+ON CONFLICT (device_id) DO UPDATE SET last_answer = excluded.last_answer, unchanged_rounds = 0, last_event_at = now();
+
+-- name: DeleteInventoryHold :exec
+DELETE FROM retention_inventory_hold WHERE device_id = @device_id;
+
 -- Whether a device of any organization other than retired_device still uses the Fleet host ('ref') or may use it
 -- through the retired device's hardware ('hardware'), or neither ('none') (platform pool, plan M10 amendments
 -- 2026-10-30): never another organization's rows.
