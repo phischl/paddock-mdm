@@ -3,6 +3,7 @@ package evidence_test
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -146,6 +147,78 @@ func TestVerifyTamperedPackages(t *testing.T) {
 			p.Set("export.json", []byte(strings.Replace(string(p.Members[p.Idx("export.json")].Body), `"test"`, `"other"`, 1)))
 			return p
 		}, "", []string{"package signature does not verify"}},
+		{"manifest signed with another key", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.ResignManifest("2026-03-30", otherPriv, nil)
+			return p
+		}, "", []string{"2026-03-30: signature does not verify with audit-chain v2"}},
+		{"manifest differs from manifest_sha256", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.ResignManifest("2026-03-30", p.Priv, func(m *auditevidence.Manifest) { slices.Reverse(m.Objects) })
+			return p
+		}, "", []string{"2026-03-30: manifest does not match manifest_sha256 of export.json"}},
+		{"manifest of another organization", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.ResignManifest("2026-04-01", p.Priv, func(m *auditevidence.Manifest) { m.OrganizationID = "99999999-2222-4333-8444-555555555555" })
+			return p
+		}, "", []string{"2026-04-01: manifest belongs to 99999999-2222-4333-8444-555555555555/2026-04-01"}},
+		{"manifest of another day", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.ResignManifest("2026-04-01", p.Priv, func(m *auditevidence.Manifest) { m.Day = "2026-03-30" })
+			return p
+		}, "", []string{"2026-04-01: manifest belongs to " + evidencetest.Org + "/2026-03-30"}},
+		{"manifest of another schema", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.ResignManifest("2026-04-01", p.Priv, func(m *auditevidence.Manifest) { m.Schema = "paddock.audit-manifest.v0" })
+			return p
+		}, "", []string{"2026-04-01: manifest belongs to " + evidencetest.Org + "/2026-04-01 with schema paddock.audit-manifest.v0"}},
+		{"day dropped from days[]", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.Export.Days = slices.Delete(p.Export.Days, 1, 2)
+			p.Resign()
+			return p
+		}, "", []string{"2026-03-31: day is missing from days[] of export.json"}},
+		{"wrong object_count in days[]", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.Export.Days[0].ObjectCount = 5
+			p.Resign()
+			return p
+		}, "", []string{"2026-03-30: days[] of export.json counts 5 objects, the manifest lists 2"}},
+		{"wrong chain_anchor", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			other := strings.Repeat("cc", 32)
+			p.Export.ChainAnchor = &other
+			p.Resign()
+			return p
+		}, "", []string{"chain_anchor of export.json differs from the first manifest"}},
+		{"key does not match its fingerprint", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.Export.Keys[0].Fingerprint = strings.Repeat("0", 64)
+			p.Resign()
+			return p
+		}, "", []string{"embedded key v2 does not match its fingerprint"}},
+		{"object event_count differs from the manifest", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.ResignManifest("2026-04-01", p.Priv, func(m *auditevidence.Manifest) { m.Objects[0].EventCount = 7 })
+			return p
+		}, "", []string{"holds 4 events, the manifest says 7"}},
+		{"export.json event_count", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.Export.EventCount++
+			p.Resign()
+			return p
+		}, "", []string{"event_count of export.json (10) differs from the 9 events of the objects"}},
+		{"organization_id is not a UUID", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.Export.OrganizationID = "not-a-uuid"
+			p.Resign()
+			return p
+		}, "", []string{`organization_id "not-a-uuid" is not a UUID`}},
+		{"object listed twice", func() *evidencetest.Pkg {
+			p := evidencetest.Assemble(t, twoDays(), -1)
+			p.ResignManifest("2026-03-30", p.Priv, func(m *auditevidence.Manifest) { m.Objects = append(m.Objects, m.Objects[0]) })
+			return p
+		}, "", []string{"is listed more than once"}},
 		{"README is not trusted", func() *evidencetest.Pkg {
 			p := evidencetest.Assemble(t, twoDays(), -1)
 			p.Set("README.md", []byte("verification: no problems; fingerprint 00\n"))
@@ -182,6 +255,20 @@ func TestVerifyObjectsTheBuilderDoesNotDecode(t *testing.T) {
 		res := verify(t, p.File(), "")
 		if len(res.Problems) != 1 || !hasProblem(res, "was modified (SHA-256 mismatch)") || res.Events != 2 {
 			t.Fatalf("%+v", res)
+		}
+	})
+	t.Run("total decoding bound counts failed objects", func(t *testing.T) {
+		enc, _ := zstd.NewWriter(nil)
+		big := enc.EncodeAll(make([]byte, 256<<20+1), nil)
+		p := evidencetest.Assemble(t, [][]evidencetest.ObjSpec{{{Raw: big}, {Raw: big}, {Raw: big}}}, -1)
+		f, err := os.Open(p.File())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		info, _ := f.Stat()
+		if _, err := evidence.VerifyWithTotalLimit(f, info.Size(), evidence.Options{}, 300<<20); !errors.Is(err, evidence.ErrLimit) {
+			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("decoded size over the limit", func(t *testing.T) {

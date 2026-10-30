@@ -91,6 +91,8 @@ func (v *verifier) decodeInto(name string, h hash.Hash) (int, error) {
 	}
 	lc := &lineCounter{}
 	n, err := io.Copy(io.MultiWriter(h, lc), &io.LimitedReader{R: v.dec, N: maxDecodedObject + 1})
+	// Counted on the error path too, or objects that fail after a lot of output would escape the total bound.
+	v.decoded += n
 	if err == nil && n > maxDecodedObject {
 		err = fmt.Errorf("decoded size exceeds %d bytes", int64(maxDecodedObject))
 	}
@@ -100,7 +102,6 @@ func (v *verifier) decodeInto(name string, h hash.Hash) (int, error) {
 		}
 		return 0, err
 	}
-	v.decoded += n
 	return lc.n, nil
 }
 
@@ -133,12 +134,12 @@ func (v *verifier) checkObject(org, dayName string, o auditevidence.ManifestObje
 		return obj, nil
 	}
 	lines, err := v.decodeInto(path, eventsH)
+	if v.decoded > v.maxTotal {
+		return obj, fmt.Errorf("%w: more than %d decoded bytes", ErrLimit, v.maxTotal)
+	}
 	if err != nil {
 		v.add("%s: object %s cannot be decoded", dayName, o.Key)
 		return obj, nil
-	}
-	if v.decoded > maxDecodedTotal {
-		return obj, fmt.Errorf("%w: more than %d decoded bytes", ErrLimit, int64(maxDecodedTotal))
 	}
 	obj.EventCount = lines
 	if lines != o.EventCount {

@@ -99,11 +99,11 @@ func Assemble(t *testing.T, days [][]ObjSpec, breakLink int) *Pkg {
 			for _, l := range s.Lines {
 				plain = append(plain, l+"\n"...)
 			}
-			Body := enc.EncodeAll(plain, nil)
+			body := enc.EncodeAll(plain, nil)
 			if s.Raw != nil {
-				Body = s.Raw
+				body = s.Raw
 			}
-			sum := sha256.Sum256(Body)
+			sum := sha256.Sum256(body)
 			key := fmt.Sprintf("org/%s/%s/%02d-ev%d.jsonl.zst", Org, start.AddDate(0, 0, i).Format("2006/01/02"), j, j)
 			path, err := auditevidence.ObjectPath(Org, key)
 			if err != nil {
@@ -119,9 +119,9 @@ func Assemble(t *testing.T, days [][]ObjSpec, breakLink int) *Pkg {
 				events.Write(plain)
 			}
 			if s.Tamper {
-				Body = append(append([]byte{}, Body...), 0)
-				Body[len(Body)-1] ^= 1
-				sum = sha256.Sum256(Body)
+				body = append(append([]byte{}, body...), 0)
+				body[len(body)-1] ^= 1
+				sum = sha256.Sum256(body)
 				count = 0
 				doc.Verification.OK = false
 				doc.Verification.Problems = append(doc.Verification.Problems,
@@ -129,7 +129,7 @@ func Assemble(t *testing.T, days [][]ObjSpec, breakLink int) *Pkg {
 				events.Truncate(events.Len() - len(plain))
 			}
 			packed = append(packed, auditevidence.Object{Key: key, Path: path, SHA256: hex.EncodeToString(sum[:]), EventCount: count})
-			objects = append(objects, TarMember{Name: path, Body: Body})
+			objects = append(objects, TarMember{Name: path, Body: body})
 			dayEvents += count
 		}
 		wantPrev := prev
@@ -137,12 +137,12 @@ func Assemble(t *testing.T, days [][]ObjSpec, breakLink int) *Pkg {
 			bad := hex.EncodeToString(bytes.Repeat([]byte{0xbb}, 32))
 			wantPrev = &bad
 		}
-		Raw, err := json.Marshal(auditevidence.Manifest{Schema: auditevidence.ManifestSchema, OrganizationID: Org, Day: name,
+		rawManifest, err := json.Marshal(auditevidence.Manifest{Schema: auditevidence.ManifestSchema, OrganizationID: Org, Day: name,
 			Objects: append([]auditevidence.ManifestObject{}, listed...), PrevManifestSHA256: wantPrev})
 		if err != nil {
 			t.Fatal(err)
 		}
-		canonical, err := canonicaljson.Transform(Raw)
+		canonical, err := canonicaljson.Transform(rawManifest)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -169,7 +169,7 @@ func Assemble(t *testing.T, days [][]ObjSpec, breakLink int) *Pkg {
 	return p
 }
 
-// Resign rewrites Export.json and Export.sig from p.Export.
+// Resign rewrites export.json and export.sig from p.Export.
 func (p *Pkg) Resign() {
 	p.t.Helper()
 	canonical, err := canonicaljson.Marshal(p.Export)
@@ -183,6 +183,40 @@ func (p *Pkg) Resign() {
 	}
 	p.Set("export.json", canonical)
 	p.Set("export.sig", sig)
+}
+
+// ResignManifest rewrites the manifest of day with mutate applied (nil keeps it), signed by signer, and returns the
+// hex SHA-256 of its canonical form. export.json is not touched.
+func (p *Pkg) ResignManifest(day string, signer ed25519.PrivateKey, mutate func(*auditevidence.Manifest)) string {
+	p.t.Helper()
+	name := "manifests/" + day + ".json"
+	var file auditevidence.ManifestFile
+	var m auditevidence.Manifest
+	if err := json.Unmarshal(p.Members[p.Idx(name)].Body, &file); err != nil {
+		p.t.Fatal(err)
+	}
+	if err := json.Unmarshal(file.Manifest, &m); err != nil {
+		p.t.Fatal(err)
+	}
+	if mutate != nil {
+		mutate(&m)
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	canonical, err := canonicaljson.Transform(raw)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	sum := sha256.Sum256(canonical)
+	file.Manifest, file.Signature = canonical, sign(signer, 2, sum[:])
+	body, err := json.Marshal(file)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	p.Set(name, body)
+	return hex.EncodeToString(sum[:])
 }
 
 func (p *Pkg) Idx(name string) int {
@@ -204,24 +238,24 @@ func (p *Pkg) Remove(name string) {
 
 func (p *Pkg) Fingerprint() string { return auditevidence.Fingerprint(p.Pub) }
 
-// file writes the tar to a temp file and returns its path.
+// File writes the tar to a temp file and returns its path.
 func (p *Pkg) File() string {
 	p.t.Helper()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, m := range p.Members {
-		Typ := m.Typ
-		if Typ == 0 {
-			Typ = tar.TypeReg
+		typ := m.Typ
+		if typ == 0 {
+			typ = tar.TypeReg
 		}
-		h := &tar.Header{Name: m.Name, Typeflag: Typ, Mode: 0o644, Size: int64(len(m.Body))}
-		if Typ != tar.TypeReg {
+		h := &tar.Header{Name: m.Name, Typeflag: typ, Mode: 0o644, Size: int64(len(m.Body))}
+		if typ != tar.TypeReg {
 			h.Size, h.Linkname = 0, "/etc/passwd"
 		}
 		if err := tw.WriteHeader(h); err != nil {
 			p.t.Fatal(err)
 		}
-		if _, err := tw.Write(m.Body); err != nil && Typ == tar.TypeReg {
+		if _, err := tw.Write(m.Body); err != nil && typ == tar.TypeReg {
 			p.t.Fatal(err)
 		}
 	}

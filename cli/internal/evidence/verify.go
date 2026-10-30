@@ -95,6 +95,7 @@ type verifier struct {
 	order    []string
 	total    int
 	decoded  int64
+	maxTotal int64
 	dec      *zstd.Decoder
 	exportBy []byte
 	sigBy    []byte
@@ -106,7 +107,12 @@ type verifier struct {
 // Verify checks the package in ra (size bytes). Problems of the package are in Result.Problems; the error is only
 // for a file that is no tar archive or that exceeds a limit of the verifier.
 func Verify(ra io.ReaderAt, size int64, opts Options) (*Result, error) {
-	v := &verifier{ra: ra, res: &Result{Problems: []string{}, Server: Server{Problems: []string{}}}, members: map[string]member{}}
+	return verify(ra, size, opts, maxDecodedTotal)
+}
+
+// verify takes the total decoding bound as a parameter so a test can reach it without decoding 64 GiB.
+func verify(ra io.ReaderAt, size int64, opts Options, maxTotal int64) (*Result, error) {
+	v := &verifier{maxTotal: maxTotal, ra: ra, res: &Result{Problems: []string{}, Server: Server{Problems: []string{}}}, members: map[string]member{}}
 	// A streaming decoder bounded in memory: the window of an untrusted frame must not size an allocation.
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxDecodedObject),
 		zstd.WithDecoderMaxWindow(maxDecodedObject))

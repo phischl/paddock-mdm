@@ -193,16 +193,18 @@ that the key is not authenticated. The manifests and the key versions they use a
 `README.md` in the package is informational: it is not covered by the signature and the verifier takes every fact
 from `export.json`. Members with an unsafe name (`..`, absolute, backslash, empty or `.` segments), duplicates,
 members that are not regular files and members no package contains are reported as problems. The verifier bounds
-memory and decompression (256 MiB per object); a package beyond its limits is refused with exit code 2.
+memory and decompression (256 MiB per object); a package beyond its size limits is refused with exit code 2, and a recording range of more than 36 600
+days is reported as a problem (exit code 1).
 
 Output: `OK <organization_id> <from>..<to>: <days> days, <objects> objects, <events> events; signed with audit-chain
 v<N> (fingerprint <hex>); chain anchor <hex|none>` or one `FAIL <problem>` line per problem and a `NOT OK` summary.
 `-o json` prints `ok`, `organization_id`, `from_day`, `to_day`, `days`, `objects`, `events`, `key_version`,
 `fingerprint`, `fingerprint_checked`, `chain_anchor`, `server_verification` (`ok`, `problems`, `runs`,
-`runs_with_problems`) and `problems`.
+`runs_with_problems`) and `problems`. `ok` authenticates nothing unless `fingerprint_checked` is true: without
+`--fingerprint` it only says the package is consistent with the key it embeds.
 
 | Exit code | Meaning |
 | --- | --- |
 | 0 | The package verifies. |
 | 1 | The package has problems; they are printed. |
-| 2 | Usage error, an unreadable file, a file that is not a tar archive, or a package beyond the verifier's limits. |
+| 2 | Usage error, an unreadable file, a file that is not a tar archive, or a package beyond the verifier's size limits. |
