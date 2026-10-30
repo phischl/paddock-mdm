@@ -27,14 +27,24 @@ type retentionWorld struct {
 	super     *pgx.Conn
 }
 
-// fakeInventoryAdmin is Fleet's host deletion; err makes every deletion fail, failing makes the deletion of that host
-// fail; calls counts every deletion asked for.
+// fakeInventoryAdmin is Fleet's host deletion; err makes every deletion fail, failing makes the deletion of those hosts
+// fail with their error; calls counts every deletion asked for.
 type fakeInventoryAdmin struct {
 	mu      sync.Mutex
 	deleted []ports.HostRef
 	err     error
-	failing ports.HostRef
+	failing map[ports.HostRef]error
 	calls   int
+}
+
+// fleetDown is the error of a Fleet that is down (ports.InventoryAdmin: upstream_unavailable).
+func fleetDown() error {
+	return fmt.Errorf("%w: fleet: HTTP 503: unavailable", problem.UpstreamUnavailable)
+}
+
+// fleetRefused is the error of Fleet refusing the one host (ports.InventoryAdmin: invalid_state).
+func fleetRefused(ref ports.HostRef) error {
+	return fmt.Errorf("%w: fleet: HTTP 422: host %s refused", problem.InvalidState, ref)
 }
 
 func (f *fakeInventoryAdmin) DeleteHost(_ context.Context, ref ports.HostRef) error {
@@ -44,8 +54,8 @@ func (f *fakeInventoryAdmin) DeleteHost(_ context.Context, ref ports.HostRef) er
 	if f.err != nil {
 		return f.err
 	}
-	if ref == f.failing {
-		return fmt.Errorf("fleet: HTTP 422: host %s refused", ref)
+	if err := f.failing[ref]; err != nil {
+		return err
 	}
 	f.deleted = append(f.deleted, ref)
 	return nil

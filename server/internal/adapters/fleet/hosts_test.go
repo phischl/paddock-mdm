@@ -2,6 +2,8 @@ package fleet_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // TestListHostsChangedSince: the host list is filtered by the newest of the hosts' update times; the zero time lists
@@ -64,7 +67,8 @@ func TestHostInventory(t *testing.T) {
 }
 
 // TestDeleteHost (plan M10 decision 17): the host is deleted through Fleet's API; a host Fleet no longer knows counts
-// as deleted; an unavailable Fleet is an error after the retries; an invalid reference never reaches Fleet.
+// as deleted; an unavailable Fleet is upstream_unavailable after the retries; an invalid reference never reaches Fleet
+// and is invalid_state.
 func TestDeleteHost(t *testing.T) {
 	ctx := context.Background()
 	f, srv := newFake(t)
@@ -76,11 +80,11 @@ func TestDeleteHost(t *testing.T) {
 		t.Fatalf("delete of a deleted host: %v, want nil", err)
 	}
 	f.failNext = 4
-	if err := c.DeleteHost(ctx, "2"); err == nil || f.deletedHosts["2"] {
+	if err := c.DeleteHost(ctx, "2"); !errors.Is(err, problem.UpstreamUnavailable) || f.deletedHosts["2"] {
 		t.Fatalf("delete while Fleet answers 503: %v, deleted %v", err, f.deletedHosts)
 	}
 	requests := len(f.requests)
-	if err := c.DeleteHost(ctx, "../config"); err == nil || len(f.requests) != requests {
+	if err := c.DeleteHost(ctx, "../config"); !errors.Is(err, problem.InvalidState) || len(f.requests) != requests {
 		t.Fatalf("invalid host reference: %v, %d requests sent", err, len(f.requests)-requests)
 	}
 	if want := "DELETE /api/v1/fleet/hosts/1"; f.requests[0] != want {
@@ -89,7 +93,8 @@ func TestDeleteHost(t *testing.T) {
 }
 
 // TestDeleteHostForeign404 (plan M10 amendment 2026-10-30): only Fleet's own JSON error body makes a 404 "already
-// gone"; a 404 from anything else between Paddock and Fleet is a failure, so no deletion is recorded.
+// gone"; a 404 from anything else between Paddock and Fleet is an upstream_unavailable failure, so no deletion is
+// recorded.
 func TestDeleteHostForeign404(t *testing.T) {
 	for name, body := range map[string]string{
 		"proxy text":          "404 page not found",
@@ -103,10 +108,43 @@ func TestDeleteHostForeign404(t *testing.T) {
 				_, _ = w.Write([]byte(body))
 			}))
 			t.Cleanup(srv.Close)
-			if err := client(srv.URL).DeleteHost(context.Background(), "1"); err == nil {
-				t.Fatal("foreign 404 counted as a deleted host")
+			if err := client(srv.URL).DeleteHost(context.Background(), "1"); !errors.Is(err, problem.UpstreamUnavailable) {
+				t.Fatalf("foreign 404: %v, want upstream_unavailable", err)
 			}
 		})
+	}
+}
+
+// TestDeleteHostErrorClass (plan M10 amendment 2026-10-30, PDK-583): Fleet's refusal of the one host is
+// invalid_state; a failure of Fleet itself or of the way to it is upstream_unavailable, the only class the retention
+// round's Fleet breaker counts.
+func TestDeleteHostErrorClass(t *testing.T) {
+	for code, want := range map[int]error{
+		http.StatusBadRequest:          problem.InvalidState,
+		http.StatusConflict:            problem.InvalidState,
+		http.StatusUnprocessableEntity: problem.InvalidState,
+		http.StatusUnauthorized:        problem.UpstreamUnavailable,
+		http.StatusForbidden:           problem.UpstreamUnavailable,
+		http.StatusRequestTimeout:      problem.UpstreamUnavailable,
+		http.StatusTooManyRequests:     problem.UpstreamUnavailable,
+		http.StatusInternalServerError: problem.UpstreamUnavailable,
+		http.StatusBadGateway:          problem.UpstreamUnavailable,
+	} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(code)
+				_, _ = w.Write([]byte(`{"message":"refused","errors":[{"name":"base","reason":"refused"}]}`))
+			}))
+			t.Cleanup(srv.Close)
+			if err := client(srv.URL).DeleteHost(context.Background(), "1"); !errors.Is(err, want) {
+				t.Fatalf("HTTP %d: %v, want %v", code, err, want)
+			}
+		})
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.Close()
+	if err := client(srv.URL).DeleteHost(context.Background(), "1"); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("connection refused: %v, want upstream_unavailable", err)
 	}
 }
 

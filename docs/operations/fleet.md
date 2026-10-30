@@ -107,10 +107,13 @@ devices). The admin API offers the same as read-only list endpoints: `GET /api/v
 organization-wide views and the tile count active and quarantined devices only; a retired device keeps its last
 inventory on its own tabs until the worker's retention round deletes it, together with its host in Fleet,
 `retired_inventory_days` after retirement (privacy settings, default 30; one `device.inventory_purged` event per device).
-While Fleet is unavailable the inventory stays and the device is retried in the next round (after three Fleet
-failures in a row the round stops asking Fleet until the next round); a host that a device of any organization still
-references stays in Fleet, and while a device of the same hardware is enrolled again but has not synced its inventory
-yet, the host stays and the retired device is checked again every round (`fleet_host_in_use` in the event). The
+While Fleet is unavailable the inventory stays and the device is retried in the next round (after three failures in
+a row of Fleet itself, `upstream_unavailable`: server errors, timeouts, connection errors, the round stops asking
+Fleet until the next round); when Fleet refuses to delete one host (`invalid_state`, a 4xx about that host), only that
+device fails and is retried. A host that a device of any organization still references stays in Fleet, and while a
+device of the same hardware is enrolled again but has not synced its inventory yet, the host stays and the retired
+device is checked again every round (`fleet_host_in_use` in the event); only the round that purges its other rows
+records an event, later rounds with the same answer only log `retired device keeps its Fleet host`. The
 lists show the state of the last inventory round, so a package change on a device appears after fleetd's next
 software report (hourly by default) and the next round.
 

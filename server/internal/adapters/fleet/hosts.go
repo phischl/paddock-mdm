@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/phischl/paddock-mdm/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 var (
@@ -149,20 +150,40 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 
 // DeleteHost implements ports.InventoryAdmin: the host leaves Fleet with its software, vulnerabilities and policy
 // results (retention of retired devices, ADR 0032). A host Fleet no longer knows counts as deleted; only a 404 with
-// Fleet's own error body says so (isFleetNotFound).
+// Fleet's own error body says so (isFleetNotFound). Fleet's refusal of this one host (hostRefused) and an invalid
+// reference are problem.InvalidState; every other failure (5xx, timeout, connection error) is
+// problem.UpstreamUnavailable, and only those count toward the retention round's Fleet breaker (plan M10 amendment
+// 2026-10-30, PDK-583).
 func (c *Client) DeleteHost(ctx context.Context, ref ports.HostRef) error {
 	id, err := strconv.Atoi(string(ref))
 	if err != nil {
-		return fmt.Errorf("fleet: invalid host reference %q", ref)
+		return fmt.Errorf("%w: fleet: invalid host reference %q", problem.InvalidState, ref)
 	}
 	err = c.do(ctx, http.MethodDelete, "/api/v1/fleet/hosts/"+strconv.Itoa(id), nil, nil)
-	if st := (*errStatus)(nil); errors.As(err, &st) && st.code == http.StatusNotFound && isFleetNotFound(st.body) {
+	st := (*errStatus)(nil)
+	switch {
+	case err == nil:
 		return nil
-	}
-	if err != nil {
+	case errors.As(err, &st) && st.code == http.StatusNotFound && isFleetNotFound(st.body):
+		return nil
+	case errors.As(err, &st) && hostRefused(st.code):
+		return fmt.Errorf("%w: delete fleet host %d: %w", problem.InvalidState, id, err)
+	case errors.Is(err, context.Canceled):
 		return fmt.Errorf("delete fleet host %d: %w", id, err)
+	default:
+		return fmt.Errorf("%w: delete fleet host %d: %w", problem.UpstreamUnavailable, id, err)
 	}
-	return nil
+}
+
+// hostRefused reports whether a status is Fleet's answer about this one host rather than about Fleet or the way to it:
+// a 4xx other than 401 and 403 (Paddock's token, every host fails alike), 404 (Fleet's own 404 means deleted, any other
+// a wrong base URL or proxy), 408 and 429 (Fleet is slow or throttling).
+func hostRefused(code int) bool {
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return false
+	}
+	return code >= 400 && code < 500
 }
 
 // isFleetNotFound reports whether a 404 body is Fleet's JSON error body, {"message": ..., "errors": [...]}. A 404 from

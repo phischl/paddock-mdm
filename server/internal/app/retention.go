@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -160,11 +161,16 @@ pages:
 				errs = append(errs, r.recordFleetSkipped(ctx, cutoff))
 				break pages
 			}
-			attempted++
-			if err := r.purgeDeviceInventory(ctx, d, cutoff, round); err != nil {
-				failed = append(failed, fmt.Errorf("device %s: %w", d.ID, err))
+			if r.heldForHardware(ctx, d) {
+				slog.InfoContext(ctx, "retired device keeps its Fleet host for a device of the same hardware; nothing left to purge",
+					"device", d.ID)
 			} else {
-				purged++
+				attempted++
+				if err := r.purgeDeviceInventory(ctx, d, cutoff, round); err != nil {
+					failed = append(failed, fmt.Errorf("device %s: %w", d.ID, err))
+				} else {
+					purged++
+				}
 			}
 			if ctx.Err() != nil || time.Since(start) >= r.budget {
 				break pages
@@ -199,6 +205,25 @@ func (r *Retention) listRetired(ctx context.Context, cutoff time.Time, after pgs
 	return devices, err
 }
 
+// heldForHardware reports whether a listed device has nothing left but the host reference that a device of the same
+// hardware may still use (db.FleetHostUsedByHardware). The pass then starts no action for it: the answer has not
+// changed since the round that purged its other rows, and an event with nothing deleted every round would be noise
+// (plan M10 amendment 2026-10-30, PDK-583). Any error reports false, so the action re-checks under the row lock and
+// records the failure.
+func (r *Retention) heldForHardware(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow) bool {
+	var held pgstore.CountDeviceInventoryRow
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		held, err = q.CountDeviceInventory(ctx, d.ID)
+		return err
+	})
+	if err != nil || held.ExternalID == "" || held.Software+held.Findings+held.PolicyResults != 0 {
+		return false
+	}
+	use, err := r.hosts.FleetHostInUse(ctx, d.ID, held.ExternalID)
+	return err == nil && use == db.FleetHostUsedByHardware
+}
+
 // recordFleetSkipped records the one retention.purged failure of an organization whose retired devices the round no
 // longer offers to Fleet, and returns its error.
 func (r *Retention) recordFleetSkipped(ctx context.Context, cutoff time.Time) error {
@@ -217,7 +242,9 @@ func (r *Retention) recordFleetSkipped(ctx context.Context, cutoff time.Time) er
 // hardware has no reference yet, the host is kept and so is the retired device's reference, so later rounds list the
 // device again and decide once that device has synced or is gone (plan M10 amendments 2026-10-30); fleet_host_in_use
 // records the answer. When that check fails, nothing is deleted. cutoff is the one the device was listed with; a
-// device no longer retired before it is refused under the row lock. round counts the Fleet step's consecutive failures.
+// device no longer retired before it is refused under the row lock. round counts the Fleet step's consecutive
+// upstream_unavailable failures; Fleet's refusal of this one host (invalid_state) fails the device without counting
+// (plan M10 amendment 2026-10-30, PDK-583).
 func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow, cutoff time.Time,
 	round *RetentionRound) error {
 	spec := SpecDeviceInventoryPurged
@@ -228,7 +255,8 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 	}
 	var held pgstore.CountDeviceInventoryRow
 	var use string
-	var hostDeleted, fleetCalled bool
+	var hostDeleted bool
+	var fleetErr error
 	err := r.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 			if err := r.lockDevice(ctx, q, d.ID, cutoff); err != nil {
@@ -256,9 +284,8 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 			}
 			ctx, cancel := context.WithTimeout(ctx, fleetDeleteTimeout)
 			defer cancel()
-			fleetCalled = true
-			if err := r.inventory.DeleteHost(ctx, ports.HostRef(held.ExternalID)); err != nil {
-				return fmt.Errorf("%w: delete the Fleet host: %w", problem.UpstreamUnavailable, err)
+			if fleetErr = r.inventory.DeleteHost(ctx, ports.HostRef(held.ExternalID)); fleetErr != nil {
+				return fmt.Errorf("delete the Fleet host: %w", fleetErr)
 			}
 			hostDeleted = true
 			return nil
@@ -289,12 +316,11 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 			rec.SetParam("policy_results", n.PolicyResults)
 			return nil
 		})
-	if fleetCalled {
-		if hostDeleted {
-			round.fleetFailures = 0
-		} else {
-			round.fleetFailures++
-		}
+	switch {
+	case hostDeleted:
+		round.fleetFailures = 0
+	case errors.Is(fleetErr, problem.UpstreamUnavailable):
+		round.fleetFailures++
 	}
 	return err
 }

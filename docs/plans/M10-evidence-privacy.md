@@ -1710,3 +1710,27 @@ Architect decisions on the review of PDK-142 (stubs PDK-580 and PDK-581, folded 
    refuses C1 controls (U+0080–U+009F) and bidi controls (U+202A–U+202E, U+2066–U+2069) in `purpose` with
    `400 invalid_request` before any parameter is set, because the evidence package and the portal show the purpose to
    auditors. Tab, newline and carriage return stay allowed.
+
+### Amendment 2026-10-30 (PDK-583, review leftovers of the retired inventory)
+
+Architect decisions on the non-blocking findings of PDK-138's third review. They amend the amendment above where they
+differ.
+
+- **Breaker counts only transient Fleet failures.** `ports.InventoryAdmin.DeleteHost` classifies its errors: Fleet
+  failing or unreachable (5xx, timeout, connection error, and statuses that concern Fleet or the way to it rather than
+  the host: 401, 403, a 404 without Fleet's own error body, 408, 429, 3xx) is `upstream_unavailable`; Fleet refusing
+  this one host (any other 4xx) or an invalid host reference is `invalid_state`. Both fail the device with one
+  `device.inventory_purged` failure event and keep its rows. Only `upstream_unavailable` counts toward the round's
+  breaker; a refusal neither counts nor resets the count, a successful deletion resets it. Permanently refused hosts at
+  the head of one organization therefore no longer skip the retired inventory of every organization.
+- **A persisting `'hardware'` answer records no event.** Before starting a device's action, the pass reads the
+  device's remaining inventory; when nothing but the host reference is left and the host check answers `'hardware'`,
+  the pass starts no action and only logs. The round that purged the other rows recorded the answer; the next event
+  follows when the answer changes to `'ref'` or `'none'` and the reference is deleted. No new column: "unchanged" is
+  derived from the remaining rows, since `'hardware'` is the only answer that leaves the reference without other
+  rows. A device that had nothing but the reference when it was first listed records no event until the answer
+  changes, because nothing is deleted. The check is read-only and fail-safe (an error starts the action, which
+  re-checks under the row lock and records the outcome), so the one-event-per-attempt rule holds: a skipped device is
+  no attempt. `paddock_retention_deleted_total{store="retired_inventory"}` therefore counts only devices whose rows
+  were deleted.
+- Open, not decided: x3 (two Fleet hosts of the same hardware) and x4 (no event for a pass-level failure).

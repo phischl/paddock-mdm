@@ -208,7 +208,7 @@ func TestRetentionPurgeRetiredInventoryFleetUnavailable(t *testing.T) {
 	org := w.emptyOrganization(t)
 	first := w.inventoried(t, org, "retired", now.Add(-400*time.Second), "41", 2, 1, 0)
 	second := w.inventoried(t, org, "retired", now.Add(-399*time.Second), "42", 1, 0, 0)
-	w.fleet.err = errors.New("fleet: HTTP 503: unavailable")
+	w.fleet.err = fleetDown()
 
 	n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound())
 	if !errors.Is(err, problem.UpstreamUnavailable) || !strings.Contains(err.Error(), "2 of 2 devices failed") || n != 0 {
@@ -243,7 +243,7 @@ func TestRetentionPurgeRetiredInventoryPoisonDevice(t *testing.T) {
 	org := w.emptyOrganization(t)
 	poison := w.inventoried(t, org, "retired", now.Add(-400*time.Second), "71", 1, 0, 0)
 	next := w.inventoried(t, org, "retired", now.Add(-399*time.Second), "72", 1, 0, 0)
-	w.fleet.failing = "71"
+	w.fleet.failing = map[ports.HostRef]error{"71": fleetRefused("71")}
 
 	n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound())
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 devices failed") || n != 1 {
@@ -325,8 +325,9 @@ func TestRetentionPurgeRetiredInventoryHostInUse(t *testing.T) {
 }
 
 // TestRetentionPurgeRetiredInventoryHardwareRetried (plan M10 amendments 2026-10-30): a device kept for 'hardware'
-// is listed and checked again in every pass; once the device of the same hardware has its own, different reference
-// or is gone (rejected), the retired device's host is deleted and its reference goes.
+// is listed and checked again in every pass; the pass that purges its other rows records the event, later passes with
+// the same answer record none and count no device (PDK-583); once the device of the same hardware has its own,
+// different reference or is gone (rejected), the retired device's host is deleted and its reference goes.
 func TestRetentionPurgeRetiredInventoryHardwareRetried(t *testing.T) {
 	w := newRetentionWorld(t)
 	now := time.Now().UTC()
@@ -341,18 +342,18 @@ func TestRetentionPurgeRetiredInventoryHardwareRetried(t *testing.T) {
 	pending := w.inventoried(t, org, "pending", now, "", 0, 0, 0)
 	w.hardware(t, pending, "abcd-63")
 
-	for pass := 1; pass <= 2; pass++ {
-		if n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound()); err != nil || n != 2 {
-			t.Fatalf("pass %d purged %d devices (%v), want 2", pass, n, err)
+	for pass, want := range []int{2, 0, 0} {
+		if n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound()); err != nil || n != want {
+			t.Fatalf("pass %d purged %d devices (%v), want %d", pass+1, n, err, want)
 		}
 		if w.fleet.calls != 0 || w.inventoryRows(t, synced) != 1 || w.inventoryRows(t, gone) != 1 {
-			t.Fatalf("pass %d: %d Fleet calls, rows left %d and %d; want 0, 1 and 1", pass, w.fleet.calls,
+			t.Fatalf("pass %d: %d Fleet calls, rows left %d and %d; want 0, 1 and 1", pass+1, w.fleet.calls,
 				w.inventoryRows(t, synced), w.inventoryRows(t, gone))
 		}
 	}
 	events := w.inventoryPurgedEvents(t, org)
-	if len(events) != 4 || events[0].params["software"] != float64(2) || events[2].params["software"] != float64(0) {
-		t.Fatalf("events %+v, want two per device", events)
+	if len(events) != 2 || events[0].params["software"] != float64(2) || events[1].params["software"] != float64(1) {
+		t.Fatalf("events %+v, want one per device", events)
 	}
 	for i, ev := range events {
 		if ev.outcome != "success" || ev.params["fleet_host_in_use"] != "hardware" || ev.params["fleet_host_deleted"] != false {
@@ -368,19 +369,19 @@ func TestRetentionPurgeRetiredInventoryHardwareRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound()); err != nil || n != 2 {
-		t.Fatalf("pass 3 purged %d devices (%v), want 2", n, err)
+		t.Fatalf("pass 4 purged %d devices (%v), want 2", n, err)
 	}
 	if !slices.Equal(w.fleet.deleted, []ports.HostRef{"61", "63"}) || w.inventoryRows(t, synced) != 0 || w.inventoryRows(t, gone) != 0 {
 		t.Fatalf("Fleet hosts deleted %v, rows left %d and %d; want [61 63], 0 and 0", w.fleet.deleted,
 			w.inventoryRows(t, synced), w.inventoryRows(t, gone))
 	}
 	events = w.inventoryPurgedEvents(t, org)
-	if len(events) != 6 || events[4].params["fleet_host_in_use"] != "none" || events[4].params["fleet_host_deleted"] != true ||
-		events[5].params["fleet_host_in_use"] != "none" {
-		t.Fatalf("events after the successors changed %+v", events[4:])
+	if len(events) != 4 || events[2].params["fleet_host_in_use"] != "none" || events[2].params["fleet_host_deleted"] != true ||
+		events[3].params["fleet_host_in_use"] != "none" {
+		t.Fatalf("events after the successors changed %+v", events[2:])
 	}
 	if n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound()); err != nil || n != 0 {
-		t.Fatalf("pass 4 purged %d devices (%v), want 0", n, err)
+		t.Fatalf("pass 5 purged %d devices (%v), want 0", n, err)
 	}
 }
 
@@ -401,6 +402,29 @@ func TestRetentionPurgeRetiredInventoryHostCheckFails(t *testing.T) {
 	}
 	if len(w.fleet.deleted) != 0 || w.inventoryRows(t, dev) != 4 {
 		t.Fatalf("deleted although the check failed: hosts %v, %d rows left", w.fleet.deleted, w.inventoryRows(t, dev))
+	}
+	events := w.inventoryPurgedEvents(t, org)
+	if len(events) != 1 || events[0].outcome != "failure" || events[0].target != dev.String() ||
+		events[0].params["fleet_host_deleted"] != false {
+		t.Fatalf("events %+v, want one failure", events)
+	}
+}
+
+// TestRetentionPurgeRetiredInventoryUnknownAnswer (PDK-583): an answer of the host check other than ref, hardware or
+// none fails closed: no Fleet call, no Paddock row deleted, one failure event.
+func TestRetentionPurgeRetiredInventoryUnknownAnswer(t *testing.T) {
+	w := newRetentionWorld(t)
+	now := time.Now().UTC()
+	org := w.emptyOrganization(t)
+	dev := w.inventoried(t, org, "retired", now.Add(-400*time.Second), "92", 2, 1, 0)
+	w.retention.SetHostUsers(func(context.Context, uuid.UUID, string) (string, error) { return "maybe", nil })
+
+	n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound())
+	if err == nil || n != 0 {
+		t.Fatalf("purged %d (%v), want a failure and nothing", n, err)
+	}
+	if w.fleet.calls != 0 || w.inventoryRows(t, dev) != 4 {
+		t.Fatalf("%d Fleet calls, %d rows left; want 0 and 4", w.fleet.calls, w.inventoryRows(t, dev))
 	}
 	events := w.inventoryPurgedEvents(t, org)
 	if len(events) != 1 || events[0].outcome != "failure" || events[0].target != dev.String() ||
@@ -562,7 +586,7 @@ func TestRetentionPurgeRetiredInventoryFleetBreaker(t *testing.T) {
 	for i := range 2 {
 		devsB = append(devsB, w.inventoried(t, orgB, "retired", now.Add(time.Duration(i-400)*time.Second), "c"+string(rune('1'+i)), 1, 0, 0))
 	}
-	w.fleet.err = errors.New("fleet: HTTP 503: unavailable")
+	w.fleet.err = fleetDown()
 	round := app.NewRetentionRound()
 
 	n, err := w.retention.PurgeRetiredInventory(systemCtx(orgA), now, round)
@@ -603,6 +627,74 @@ func TestRetentionPurgeRetiredInventoryFleetBreaker(t *testing.T) {
 	w.fleet.err = nil
 	if n, err := w.retention.PurgeRetiredInventory(systemCtx(orgB), now, app.NewRetentionRound()); err != nil || n != 2 {
 		t.Fatalf("next round purged %d devices of organization B (%v), want 2", n, err)
+	}
+}
+
+// TestRetentionPurgeRetiredInventoryBreakerResets (PDK-583): a successful Fleet deletion resets the round's count, so
+// failures that alternate with successes never trip the breaker and every device is attempted.
+func TestRetentionPurgeRetiredInventoryBreakerResets(t *testing.T) {
+	w := newRetentionWorld(t)
+	now := time.Now().UTC()
+	org := w.emptyOrganization(t)
+	w.fleet.failing = map[ports.HostRef]error{}
+	for i := range 6 {
+		ref := ports.HostRef("r" + string(rune('1'+i)))
+		w.inventoried(t, org, "retired", now.Add(time.Duration(i-400)*time.Second), string(ref), 1, 0, 0)
+		if i%2 == 0 {
+			w.fleet.failing[ref] = fleetDown()
+		}
+	}
+
+	n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound())
+	if !errors.Is(err, problem.UpstreamUnavailable) || !strings.Contains(err.Error(), "3 of 6 devices failed") || n != 3 {
+		t.Fatalf("purged %d (%v), want 3 and 3 of 6 failed", n, err)
+	}
+	if w.fleet.calls != 6 || !slices.Equal(w.fleet.deleted, []ports.HostRef{"r2", "r4", "r6"}) {
+		t.Fatalf("%d Fleet calls, deleted %v; want 6 and [r2 r4 r6]", w.fleet.calls, w.fleet.deleted)
+	}
+	if skips := w.retiredInventorySkips(t, org); len(skips) != 0 {
+		t.Fatalf("skip events %v, want none", skips)
+	}
+}
+
+// TestRetentionPurgeRetiredInventoryRefusalsDoNotTrip (plan M10 amendment 2026-10-30, PDK-583): Fleet refusing single
+// hosts (invalid_state, a permanent 4xx) fails those devices but does not count toward the breaker, so three refused
+// hosts at the head of one organization neither stop the devices behind them nor the next organization.
+func TestRetentionPurgeRetiredInventoryRefusalsDoNotTrip(t *testing.T) {
+	w := newRetentionWorld(t)
+	now := time.Now().UTC()
+	orgA, orgB := w.emptyOrganization(t), w.emptyOrganization(t)
+	w.fleet.failing = map[ports.HostRef]error{}
+	for i := range 3 {
+		ref := ports.HostRef("p" + string(rune('1'+i)))
+		w.inventoried(t, orgA, "retired", now.Add(time.Duration(i-400)*time.Second), string(ref), 1, 0, 0)
+		w.fleet.failing[ref] = fleetRefused(ref)
+	}
+	behind := w.inventoried(t, orgA, "retired", now.Add(-390*time.Second), "q1", 1, 0, 0)
+	other := w.inventoried(t, orgB, "retired", now.Add(-400*time.Second), "q2", 1, 0, 0)
+	round := app.NewRetentionRound()
+
+	n, err := w.retention.PurgeRetiredInventory(systemCtx(orgA), now, round)
+	if !errors.Is(err, problem.InvalidState) || !strings.Contains(err.Error(), "3 of 4 devices failed") || n != 1 {
+		t.Fatalf("organization A purged %d (%v), want 1 and 3 of 4 failed with invalid_state", n, err)
+	}
+	if n, err := w.retention.PurgeRetiredInventory(systemCtx(orgB), now, round); err != nil || n != 1 {
+		t.Fatalf("organization B purged %d (%v), want 1", n, err)
+	}
+	if !slices.Equal(w.fleet.deleted, []ports.HostRef{"q1", "q2"}) || w.inventoryRows(t, behind) != 0 || w.inventoryRows(t, other) != 0 {
+		t.Fatalf("Fleet hosts deleted %v, want [q1 q2] and their rows gone", w.fleet.deleted)
+	}
+	events := w.inventoryPurgedEvents(t, orgA)
+	if len(events) != 4 {
+		t.Fatalf("organization A has %d device events, want 4", len(events))
+	}
+	for _, ev := range events[:3] {
+		if ev.outcome != "failure" || ev.errorCode != "invalid_state" || ev.params["software"] != float64(1) {
+			t.Fatalf("refused device event %+v, want failure invalid_state with its rows kept", ev)
+		}
+	}
+	if skips := append(w.retiredInventorySkips(t, orgA), w.retiredInventorySkips(t, orgB)...); len(skips) != 0 {
+		t.Fatalf("skip events %v, want none", skips)
 	}
 }
 
