@@ -342,6 +342,9 @@ func (s *server) session(next http.Handler) http.Handler {
 		if sess.AltRole != "" {
 			ctx = context.WithValue(ctx, alternateRoleKey{}, alternateRole{role: sess.AltRole, slug: sess.AltSlug})
 		}
+		if sess.Fallback != "" {
+			ctx = context.WithValue(ctx, roleFallbackKey{}, sess.Fallback)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

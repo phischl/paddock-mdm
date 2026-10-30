@@ -29,6 +29,9 @@ type DeviceReports struct {
 	runner *ActionRunner
 	org    *db.OrgPool
 	now    func() time.Time
+	// afterClockRead runs in the clock drift claim after it read the clock state and before it updates the episode
+	// (tests of the race with a concurrent check-in, PDK-418).
+	afterClockRead func(ctx context.Context) error
 }
 
 // NewDeviceReports creates the use cases.
@@ -158,7 +161,8 @@ func clockTransition(clock pgstore.GetDeviceClockStateRow) (raise, clear bool) {
 
 // recordClockDrift opens (device.clock_drift) or closes (device.clock_drift_cleared) the clock drift episode of a
 // device, recorded once: the claim re-reads the clock state in the event's transaction and records nothing when
-// another delivery got there first or a newer check-in changed the offset meanwhile. Only an active device raises an
+// another delivery got there first or a newer check-in changed the offset meanwhile; the update re-checks the offset,
+// so a check-in that commits between the read and the update cannot open or close the episode on a stale offset. Only an active device raises an
 // episode; an open one is closed in every state, so a device that was quarantined while drifting does not keep it.
 func (d *DeviceReports) recordClockDrift(ctx context.Context, deviceID uuid.UUID, raise bool) error {
 	spec := ActionSpec{Code: audit.CodeDeviceClockDriftCleared, Target: &audit.Target{Type: "device", ID: deviceID.String()}}
@@ -174,12 +178,17 @@ func (d *DeviceReports) recordClockDrift(ctx context.Context, deviceID uuid.UUID
 		if up != raise || down == raise {
 			return false, nil
 		}
+		if d.afterClockRead != nil {
+			if err := d.afterClockRead(ctx); err != nil {
+				return false, err
+			}
+		}
 		offset := *clock.ClockOffsetS
 		rec.SetParam("offset_s", offset)
 		if !raise {
 			rec.SetParam("threshold_s", int64(device.DriftClearThreshold/time.Second))
 			rec.SetParam("since", audit.Timestamp(*clock.ClockDriftSince).Format(time.RFC3339Nano))
-			n, err := q.ClearClockDrift(ctx, deviceID)
+			n, err := q.ClearClockDrift(ctx, pgstore.ClearClockDriftParams{DeviceID: deviceID, ThresholdS: int64(device.DriftClearThreshold / time.Second)})
 			return n == 1, err
 		}
 		dev, err := q.GetDevice(ctx, deviceID)
@@ -191,7 +200,7 @@ func (d *DeviceReports) recordClockDrift(ctx context.Context, deviceID uuid.UUID
 			rec.SetParam("last_contact_at", audit.Timestamp(*clock.LastContactAt).Format(time.RFC3339Nano))
 		}
 		now := d.now()
-		n, err := q.SetClockDrift(ctx, pgstore.SetClockDriftParams{Now: &now, DeviceID: deviceID})
+		n, err := q.SetClockDrift(ctx, pgstore.SetClockDriftParams{Now: &now, DeviceID: deviceID, ThresholdS: int64(device.DriftThreshold / time.Second)})
 		return n == 1, err
 	})
 	return err

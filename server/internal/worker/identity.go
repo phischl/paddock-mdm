@@ -7,6 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
@@ -30,6 +34,16 @@ const (
 // create in the portal waited 2–6 s per request behind the round (PDK-392). No one waits for the round, so it sends
 // one request at a time and leaves Authentik's capacity to the interactive calls of the API.
 const ReconcileAuthentikConcurrency = 1
+
+// refusedRepeatedly is the number of consecutive refused admin-accounts rounds of an organization from which each
+// further refusal is logged as a repeated one (PDK-424).
+const refusedRepeatedly = 3
+
+var metricDirectoryRefusals = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "paddock_identity_directory_refusals_total",
+	Help: "Organization rounds of admin-accounts refused because every role group listing was empty and the directory " +
+		"probe did not show that the service token sees the directory (app.ErrDirectoryEmpty, PDK-424).",
+})
 
 // BrandFlows keeps the platform-wide flows of the identity provider's default brand (authentik.Client).
 type BrandFlows interface {
@@ -61,13 +75,16 @@ type Identity struct {
 
 	mu        sync.Mutex
 	conflicts map[string]time.Time // username → skipped until
+	// refused counts the consecutive refused admin-accounts rounds per organization. It lives in this process only; the
+	// metric, not this count, is what survives a change of the replica holding the round's lock.
+	refused map[uuid.UUID]int
 }
 
 // NewIdentity creates the identity rounds.
 func NewIdentity(s *app.IdentitySync, accounts *app.AdminAccounts, roles *app.RoleMembership, brand BrandFlows, org *db.OrgPool,
 	platform *db.PlatformPool, syncEvery, reconcile time.Duration) *Identity {
 	return &Identity{sync: s, accounts: accounts, roles: roles, brand: brand, brandRetry: brandRetryInterval, org: org, platform: platform,
-		syncEvery: syncEvery, reconcile: reconcile, now: time.Now, conflicts: map[string]time.Time{}}
+		syncEvery: syncEvery, reconcile: reconcile, now: time.Now, conflicts: map[string]time.Time{}, refused: map[uuid.UUID]int{}}
 }
 
 // RunBrandFlows ensures the default brand's recovery and device-code flows at start and then every reconcile interval
@@ -99,13 +116,40 @@ func (i *Identity) RunAdminAccounts(ctx context.Context) error {
 	return i.every(ctx, i.syncEvery, identityAdminAccountsLockKey, "admin-accounts", i.adminAccounts)
 }
 
-// adminAccounts lists an organization's role groups once for both consumers of the round.
+// adminAccounts lists an organization's role groups once for both consumers of the round. A round refused because the
+// directory looks empty to the service token (app.ErrDirectoryEmpty) is counted once, whichever consumer refused it.
 func (i *Identity) adminAccounts(ctx context.Context) error {
 	groups, err := i.roles.OrganizationRoleGroups(ctx)
 	if err != nil || groups == nil {
 		return err
 	}
-	return errors.Join(i.accounts.Reconcile(ctx, groups), i.roles.SyncOrganization(ctx, groups))
+	err = errors.Join(i.accounts.Reconcile(ctx, groups), i.roles.SyncOrganization(ctx, groups))
+	i.noteRefusal(ctx, err)
+	return err
+}
+
+// noteRefusal counts a refused round of the caller's organization and warns from refusedRepeatedly consecutive
+// refusals on: role changes of the organization are not recorded and its administrator accounts are not followed
+// until an operator restores the service token's view (docs/operations/monitoring.md). A successful round ends the
+// streak; a round failing otherwise (Authentik unreachable) neither counts nor ends it.
+func (i *Identity) noteRefusal(ctx context.Context, err error) {
+	p, _ := principal.From(ctx)
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	switch {
+	case err == nil:
+		delete(i.refused, p.OrganizationID)
+		return
+	case !errors.Is(err, app.ErrDirectoryEmpty):
+		return
+	}
+	metricDirectoryRefusals.Inc()
+	i.refused[p.OrganizationID]++
+	if n := i.refused[p.OrganizationID]; n >= refusedRepeatedly {
+		slog.WarnContext(ctx, "the identity provider's directory looked empty to the service token in consecutive rounds; "+
+			"the organization's role changes are not recorded and its administrator accounts are not followed",
+			"organization_id", p.OrganizationID, "rounds", n)
+	}
 }
 
 // RunPlatformAdmins ends the sessions of platform administrators the directory no longer lists (PDK-185) and records

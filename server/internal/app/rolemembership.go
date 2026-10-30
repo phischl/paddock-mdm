@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 
@@ -20,7 +21,15 @@ import (
 // and hand the listing to every consumer (AdminAccounts, RoleMembership), so a group is not polled twice per round
 // (PDK-111).
 type RoleGroups struct {
+	dir    ports.UserDirectory
 	listed map[string]roleGroupListing
+	// probed holds the round's directory probe once it ran, so its consumers ask the identity provider once.
+	probed *directoryProbe
+}
+
+type directoryProbe struct {
+	visible bool
+	err     error
 }
 
 type roleGroupListing struct {
@@ -31,7 +40,7 @@ type roleGroupListing struct {
 // ListRoleGroups lists every group of names once (ports.UserDirectory.RoleGroupUsers); a failing listing is kept as
 // that group's error and does not stop the others.
 func ListRoleGroups(ctx context.Context, dir ports.UserDirectory, names ...string) *RoleGroups {
-	g := &RoleGroups{listed: make(map[string]roleGroupListing, len(names))}
+	g := &RoleGroups{dir: dir, listed: make(map[string]roleGroupListing, len(names))}
 	for _, name := range names {
 		members, err := dir.RoleGroupUsers(ctx, name)
 		g.listed[name] = roleGroupListing{members: members, err: err}
@@ -47,6 +56,40 @@ func (g *RoleGroups) Members(name string) ([]ports.IdentityUser, error) {
 		return nil, fmt.Errorf("app: role group %s was not listed this round", name)
 	}
 	return l.members, l.err
+}
+
+// DirectoryVisible proves that listings of the round that came back empty are real (PDK-424, architect decision
+// 2026-10-29): every group the round listed without an error is readable by name, and a user listing returns at least
+// one user who is not a service account. A service token that lost its view permissions passes the group filter of
+// a listing and gets an empty answer, not an error; it fails this probe. The probe runs once per round; a failed read
+// is returned as error and proves nothing.
+func (g *RoleGroups) DirectoryVisible(ctx context.Context) (bool, error) {
+	if g.probed == nil {
+		visible, err := g.probe(ctx)
+		g.probed = &directoryProbe{visible: visible, err: err}
+	}
+	return g.probed.visible, g.probed.err
+}
+
+func (g *RoleGroups) probe(ctx context.Context) (bool, error) {
+	names := slices.Sorted(maps.Keys(g.listed))
+	for _, name := range names {
+		if g.listed[name].err != nil {
+			continue
+		}
+		readable, err := g.dir.GroupReadable(ctx, name)
+		if err != nil {
+			return false, fmt.Errorf("probe: read role group %s: %w", name, err)
+		}
+		if !readable {
+			return false, nil
+		}
+	}
+	visible, err := g.dir.UsersVisible(ctx)
+	if err != nil {
+		return false, fmt.Errorf("probe: list users: %w", err)
+	}
+	return visible, nil
 }
 
 // organizationRoles maps the roles of an organization to the suffixes of the role groups that grant them.
@@ -66,9 +109,10 @@ const RoleSuperuser = "authentik_superuser"
 // the members of every role group and the superusers as last seen and records every difference as admin.role_granted
 // or admin.role_revoked. The first successful comparison of each role records its members as baseline. A read error
 // must never look like a revocation: a listing that fails changes nothing for its role; listings that are all empty
-// while members are recorded (an organization's role groups, or the superusers on the platform) change nothing in the
-// scope; and a member is revoked only when two consecutive successful listings miss it (a paged listing can skip a
-// member whose page shifted).
+// while members are recorded change nothing in the scope unless the directory probe proves them real (an
+// organization's role groups, RoleGroups.DirectoryVisible) — an empty superuser listing on the platform is never real;
+// and a member is revoked only when two consecutive successful listings miss it (a paged listing can skip a member
+// whose page shifted).
 type RoleMembership struct {
 	runner   *ActionRunner
 	org      *db.OrgPool
@@ -112,9 +156,11 @@ func (r *RoleMembership) PlatformRoleGroups(ctx context.Context) *RoleGroups {
 
 // SyncOrganization records the changes of the caller's organization's role groups as listed in groups (active
 // organizations only). A missing role group is skipped with a warning; a failing listing skips its role, keeps its rows
-// and fails the round. When every listing read is empty while members of those roles are recorded, nothing is recorded
-// and the round fails with ErrDirectoryEmpty (as AdminAccounts.Reconcile); a single emptied role is compared as usual,
-// so its last holder is revoked once confirmed. Each role's baseline ends with its own first successful comparison.
+// and fails the round. When every listing read is empty while members of those roles are recorded, the directory probe
+// (RoleGroups.DirectoryVisible) decides: when it proves the token sees the groups and users, the organization really
+// lost its last role holders and the listings are compared as usual, so each one is revoked once two rounds miss it
+// (PDK-424); otherwise nothing is recorded and the round fails with ErrDirectoryEmpty (as AdminAccounts.Reconcile). A
+// single emptied role is compared as usual. Each role's baseline ends with its own first successful comparison.
 func (r *RoleMembership) SyncOrganization(ctx context.Context, groups *RoleGroups) error {
 	var o pgstore.Organization
 	var stored []pgstore.OrganizationRoleMember
@@ -163,7 +209,14 @@ func (r *RoleMembership) SyncOrganization(ctx context.Context, groups *RoleGroup
 		listings = append(listings, l)
 	}
 	if read, recorded := emptyReads(listings); read > 0 && recorded > 0 {
-		return fmt.Errorf("%w: the role groups of %s list no members while %d are recorded", ErrDirectoryEmpty, o.Slug, recorded)
+		visible, err := groups.DirectoryVisible(ctx)
+		if err != nil {
+			return fmt.Errorf("the role groups of %s list no members while %d are recorded: %w", o.Slug, recorded, err)
+		}
+		if !visible {
+			return fmt.Errorf("%w: the role groups of %s list no members while %d are recorded, and the directory probe "+
+				"does not show that the service token sees them", ErrDirectoryEmpty, o.Slug, recorded)
+		}
 	}
 	return r.compareAll(ctx, scope, listings)
 }

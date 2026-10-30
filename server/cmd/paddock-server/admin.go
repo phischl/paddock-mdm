@@ -26,15 +26,15 @@ import (
 )
 
 // adminCommand is a parsed paddock-server admin command line (plan M6c decision 20; allowlist: plan M7a decision 21;
-// agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8; agent-rollout, agent-rollout-halt: ADR 0034
-// amendment 2026-10-26).
+// agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8; agent-rollout, agent-rollout-halt,
+// agent-rollout-resume: ADR 0034 amendment 2026-10-26).
 type adminCommand struct {
-	name    string             // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | security-review | end-sessions | auto-unseal
+	name    string             // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal
 	by      int64              // bump-bundle-seq only
 	sub     string             // allowlist: show | disable | add; auto-unseal: show | verify | disable
 	cidr    string             // allowlist add
 	label   string             // allowlist add
-	version string             // agent-release, agent-rollout, agent-rollout-halt
+	version string             // agent-release, agent-rollout, agent-rollout-halt, agent-rollout-resume
 	dir     string             // agent-release
 	rollout app.RolloutOptions // agent-rollout
 }
@@ -115,7 +115,7 @@ func parseAdmin(args []string) (adminCommand, error) {
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || cmd.version == "" {
 			return adminCommand{}, errUsage
 		}
-	case "agent-rollout-halt":
+	case "agent-rollout-halt", "agent-rollout-resume":
 		fs.Func("version", "", onceFlag(&cmd.version))
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || cmd.version == "" {
 			return adminCommand{}, errUsage
@@ -136,7 +136,7 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 	switch cmd.name {
 	case "agent-release":
 		return runAgentRelease(ctx, l, cmd, os.Stdout)
-	case "agent-rollout", "agent-rollout-halt":
+	case "agent-rollout", "agent-rollout-halt", "agent-rollout-resume":
 		return runAgentRollout(ctx, l, cmd, os.Stdout)
 	}
 	dsn := l.SecretFile("PADDOCK_DB_WORKER_URL_FILE")

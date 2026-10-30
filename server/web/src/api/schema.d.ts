@@ -2852,6 +2852,13 @@ export interface components {
             /** @description The role this identity may switch to (ADR 0045); null for a single-role identity, API tokens and MCP sessions. */
             alternate_role: components["schemas"]["MeAlternateRole"] | null;
             /**
+             * @description Set when a plain sign-in of an identity with the platform role and an organization role entered the
+             *     platform role because the organization is unknown or not active (ADR 0045 amendment 2026-10-29); absent
+             *     otherwise. The portal shows a notice while it is set.
+             * @enum {string}
+             */
+            role_fallback?: "organization_inactive";
+            /**
              * @description How this request authenticated (ADR 0044): portal for a portal session, api for an API token, mcp for an
              *     MCP session opened with paddockctl mcp login.
              * @enum {string}

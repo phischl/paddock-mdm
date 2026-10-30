@@ -9,8 +9,8 @@ description = "oapi-codegen embeds the OpenAPI spec as gzip+base64 chunks; they 
 paths = ['''^(b/)?server/internal/transport/http/admin/adminapi/adminapi\.gen\.go$''']
 
 [[allowlists]]
-description = "Go module checksums: generated lock files whose hashes are not secrets (ADR 0026)"
-paths = ['''^(b/)?(?:.+/)?go\.sum$''']
+description = "Go module checksums (go.sum, go.work.sum): generated lock files whose hashes are not secrets (ADR 0026)"
+paths = ['''^(b/)?(?:.+/)?go\.(work\.)?sum$''']
 
 [[allowlists]]
 description = "Portal npm lock file: generated integrity hashes are not secrets (ADR 0026)"

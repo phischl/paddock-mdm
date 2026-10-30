@@ -135,3 +135,28 @@ describe('role switch in the user menu (ADR 0045 decision 3)', () => {
     expect(query('switch-role-failed')).toBeNull()
   })
 })
+
+describe('sign-in fallback to the platform role (ADR 0045 amendment 2026-10-29)', () => {
+  const fallback: Me = {
+    ...platform, role_fallback: 'organization_inactive', alternate_role: { role: 'org_admin', organization_slug: 'acme' },
+  }
+
+  it('tells the administrator why the session is in the platform role', async () => {
+    const w = await mountApp(fallback)
+    expect(w.text()).toContain('Your organization is not active; you are signed in as platform administrator.')
+  })
+
+  it('says so in German', async () => {
+    const w = await mountApp({ ...fallback, locale: 'de' }, 'de')
+    expect(w.text()).toContain('Ihre Organisation ist nicht aktiv; Sie sind als Plattformadministrator angemeldet.')
+  })
+
+  it('shows no notice without a fallback', async () => {
+    for (const me of [platform, admin, { ...platform, alternate_role: { role: 'org_admin' as const, organization_slug: 'acme' } }]) {
+      const w = await mountApp(me)
+      expect(w.text()).not.toContain('Your organization is not active')
+      w.unmount()
+      wrapper = null
+    }
+  })
+})

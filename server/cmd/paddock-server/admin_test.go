@@ -34,6 +34,7 @@ func TestParseAdmin(t *testing.T) {
 		{[]string{"agent-rollout", "--version", "1.2.0", "--waves", "50,10"}, adminCommand{name: "agent-rollout", version: "1.2.0",
 			rollout: app.RolloutOptions{Waves: []int{50, 10}}}},
 		{[]string{"agent-rollout-halt", "--version", "0.1.0-alpha.6"}, adminCommand{name: "agent-rollout-halt", version: "0.1.0-alpha.6"}},
+		{[]string{"agent-rollout-resume", "--version=0.1.0-alpha.6"}, adminCommand{name: "agent-rollout-resume", version: "0.1.0-alpha.6"}},
 		{[]string{"auto-unseal", "show"}, adminCommand{name: "auto-unseal", sub: "show"}},
 		{[]string{"auto-unseal", "verify"}, adminCommand{name: "auto-unseal", sub: "verify"}},
 		{[]string{"auto-unseal", "disable"}, adminCommand{name: "auto-unseal", sub: "disable"}},
@@ -60,6 +61,8 @@ func TestParseAdmin(t *testing.T) {
 		{"agent-rollout-halt", "--version", "1.2.0", "--waves", "100"},
 		{"agent-rollout", "--version", "1.2.3", "--version", "9.9.9"}, {"agent-rollout", "--version=1.2.3", "--waves", "100", "--version=9.9.9"},
 		{"agent-rollout", "--version", "", "--version", "9.9.9"}, {"agent-rollout-halt", "--version", "1.2.3", "--version", "9.9.9"},
+		{"agent-rollout-resume"}, {"agent-rollout-resume", "1.2.0"}, {"agent-rollout-resume", "--version", "1.2.0", "extra"},
+		{"agent-rollout-resume", "--version", "1.2.0", "--waves", "100"}, {"agent-rollout-resume", "--version", "1.2.3", "--version", "9.9.9"},
 		{"auto-unseal"}, {"auto-unseal", "enable"}, {"auto-unseal", "show", "x"}, {"auto-unseal", "--force"},
 	} {
 		if _, err := parseAdmin(args); !errors.Is(err, errUsage) {

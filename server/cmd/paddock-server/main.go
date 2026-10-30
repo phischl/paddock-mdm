@@ -40,6 +40,7 @@ commands:
   admin agent-rollout --version <x.y.z> [--waves 1,10,50,100] [--min-wave-minutes N]
         [--failure-threshold-percent P] [--failure-threshold-min M]
   admin agent-rollout-halt --version <x.y.z>
+  admin agent-rollout-resume --version <x.y.z>
   backup openbao
   backup decrypt <in> <out|->
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json

@@ -90,6 +90,8 @@ func TestUninstall(t *testing.T) {
 	expectStatus(t, call(t, withoutStepUp(t, admin), http.MethodPost, path, uninstallBody(d, hostname, "leave", nil)),
 		http.StatusForbidden, "step_up_required")
 	expectStatus(t, call(t, login(t, env.Bob), http.MethodPost, path, uninstallBody(d, hostname, "leave", nil)), http.StatusForbidden, "")
+	// The dev stack's step-up window is 30 s; the device setup and the sign-ins above can outlast it.
+	admin.stepUp(t)
 	expectStatus(t, call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, "other", "leave", nil)),
 		http.StatusUnprocessableEntity, "invalid_request")
 	expectStatus(t, call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", map[string]any{"clear_tpm": true})),
@@ -118,6 +120,8 @@ func TestUninstall(t *testing.T) {
 	if err := cmds.JSON(&page); err != nil || len(page.Items) != 1 || page.Items[0].Type != "uninstall" || page.Items[0].ID != s.Uninstall.CommandID {
 		t.Fatalf("commands %s (%v)", cmds.Body, err)
 	}
+	// The audit wait above can outlast the dev stack's 30 s step-up window.
+	admin.stepUp(t)
 	res = call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", nil))
 	expectStatus(t, res, http.StatusConflict, "invalid_state")
 	if detail := problemDetail(t, res); detail != "an uninstall is already requested" {
@@ -216,6 +220,8 @@ func TestUninstall(t *testing.T) {
 	if s := uninstallOf(t, alice, locked.DeviceID); s.Uninstall != nil {
 		t.Fatalf("uninstall after the lock: %+v", s.Uninstall)
 	}
+	// The audit wait above can outlast the dev stack's 30 s step-up window.
+	admin.stepUp(t)
 	res = call(t, admin.Portal, http.MethodPost, "/api/v1/devices/"+locked.DeviceID+"/uninstall", uninstallBody(locked, other, "leave", nil))
 	expectStatus(t, res, http.StatusConflict, "invalid_state")
 	if detail := problemDetail(t, res); detail != "a lock or destroy is pending for this device" {
