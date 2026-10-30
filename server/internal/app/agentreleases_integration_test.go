@@ -3,9 +3,12 @@ package app_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -27,6 +30,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
@@ -37,19 +41,37 @@ type fakeArtifactStore struct {
 	puts  map[string][]byte
 	fail  error
 	onPut func()
+	// hang makes Put and SHA256 wait for the end of their context, as a store that does not answer.
+	hang bool
 }
 
-func (f *fakeArtifactStore) Put(_ context.Context, key, _, _ string, body []byte) error {
+func (f *fakeArtifactStore) Put(ctx context.Context, key, _, _ string, body []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.onPut != nil {
 		f.onPut()
+	}
+	if f.hang {
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	if f.fail != nil {
 		return f.fail
 	}
 	f.puts[key] = body
 	return nil
+}
+
+func (f *fakeArtifactStore) SHA256(ctx context.Context, key string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hang {
+		<-ctx.Done()
+		return "", false, ctx.Err()
+	}
+	b, ok := f.puts[key]
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), ok, nil
 }
 
 type releaseHarness struct {
@@ -1020,4 +1042,223 @@ func TestConcurrentRolloutHaltAndResume(t *testing.T) {
 		return err
 	})
 	h.expectOneSuccess(t, errs, problem.InvalidState, v, "agent_rollout.resumed")
+}
+
+// draftWithArtifact creates a draft release with an amd64 binary and returns its version and the stored artifact.
+func (h releaseHarness) draftWithArtifact(t *testing.T) (string, pgstore.AgentArtifact) {
+	t.Helper()
+	ctx := platformAdmin()
+	v := uniqueVersion()
+	if _, err := h.releases.Create(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	bin := []byte("paddockd " + v)
+	art, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v, art
+}
+
+func (h releaseHarness) leases(t *testing.T, version string) int {
+	t.Helper()
+	var n int
+	if err := h.super.QueryRow(context.Background(), "SELECT count(*) FROM agent_upload_lease WHERE version = $1", version).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestPublishWaitsForUploadLease publishes while an upload of different, validly signed bytes stores the object of a
+// file (PDK-496): the upload's lease refuses the publish, and so does a second upload of the same file; once the
+// upload has recorded its file, the release publishes with the object matching its row.
+func TestPublishWaitsForUploadLease(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v, _ := h.draftWithArtifact(t)
+	other := []byte("paddockd rebuilt " + v)
+	third := []byte("paddockd third " + v)
+	var publishErr, secondErr error
+	var once sync.Once
+	h.store.onPut = func() {
+		once.Do(func() {
+			h.store.mu.Unlock()
+			defer h.store.mu.Lock()
+			_, publishErr = h.releases.Publish(ctx, v)
+			_, secondErr = h.releases.UploadArtifact(ctx, v, "amd64", third, h.signBinary(third, v, "amd64"))
+		})
+	}
+	stored, err := h.releases.UploadArtifact(ctx, v, "amd64", other, h.signBinary(other, v, "amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectProblem(t, publishErr, problem.InvalidState)
+	expectProblem(t, secondErr, problem.InvalidState)
+	if n := h.leases(t, v); n != 0 {
+		t.Fatalf("leases after the upload = %d, want 0", n)
+	}
+
+	h.store.onPut = nil
+	if _, err := h.releases.Publish(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	d, err := h.releases.Get(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Release.Status != agentrelease.StatusPublished || len(d.Artifacts) != 1 || d.Artifacts[0].Sha256 != stored.Sha256 ||
+		string(h.store.puts[stored.ObjectKey]) != string(other) {
+		t.Fatalf("published release %+v, object %q", d, h.store.puts[stored.ObjectKey])
+	}
+}
+
+// TestLateUploadCommitIsRefused lets an upload's lease expire while it stores (PDK-496): its commit is refused and the
+// row keeps the first file; the object the store completed no longer matches, so publishing refuses and audits the
+// object until the file is uploaded again. Publishing cleans up the expired lease.
+func TestLateUploadCommitIsRefused(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v, first := h.draftWithArtifact(t)
+	var once sync.Once
+	h.store.onPut = func() {
+		once.Do(func() {
+			if _, err := h.super.Exec(context.Background(),
+				"UPDATE agent_upload_lease SET expires_at = now() - interval '1 second' WHERE version = $1", v); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	other := []byte("paddockd rebuilt " + v)
+	_, err := h.releases.UploadArtifact(ctx, v, "amd64", other, h.signBinary(other, v, "amd64"))
+	expectProblem(t, err, problem.InvalidState)
+	d, err := h.releases.Get(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Artifacts) != 1 || d.Artifacts[0].Sha256 != first.Sha256 {
+		t.Fatalf("a late commit changed the artifact: %+v", d.Artifacts)
+	}
+	if n := h.leases(t, v); n != 1 {
+		t.Fatalf("leases after the refused commit = %d, want the expired one", n)
+	}
+
+	h.store.onPut = nil
+	_, err = h.releases.Publish(ctx, v)
+	expectProblem(t, err, problem.InvalidState)
+	var mismatched string
+	if err := h.super.QueryRow(context.Background(),
+		"SELECT params->>'mismatched_objects' FROM action WHERE code = $1 AND outcome = 'failure' AND error_code = 'invalid_state' AND params->>'version' = $2",
+		app.SpecAgentReleasePublish.Code, v).Scan(&mismatched); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mismatched, first.ObjectKey) {
+		t.Fatalf("audited mismatched objects %s, want %s", mismatched, first.ObjectKey)
+	}
+
+	bin := []byte("paddockd " + v)
+	if _, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.releases.Publish(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.leases(t, v); n != 0 {
+		t.Fatalf("leases after publishing = %d, want 0", n)
+	}
+}
+
+// TestInterruptedUploadKeepsLease fails an upload's object store write (PDK-496): only a write the store rejected
+// drops the lease; after a transport error the store may still complete the write, so the lease stays and refuses the
+// publish and a second upload of the file until it expires.
+func TestInterruptedUploadKeepsLease(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v, _ := h.draftWithArtifact(t)
+	bin := []byte("paddockd " + v)
+
+	h.store.fail = fmt.Errorf("%w: access denied", objectstore.ErrRejected)
+	if _, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64")); err == nil {
+		t.Fatal("a failed write succeeded")
+	}
+	if n := h.leases(t, v); n != 0 {
+		t.Fatalf("leases after a rejected write = %d, want 0", n)
+	}
+
+	for _, fail := range []error{errors.New("read tcp: connection reset by peer"), errors.New("api error InternalError: 500")} {
+		h.store.fail = fail
+		_, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
+		expectProblem(t, err, problem.UpstreamUnavailable)
+		if n := h.leases(t, v); n != 1 {
+			t.Fatalf("leases after %q = %d, want 1", fail, n)
+		}
+		h.store.fail = nil
+		_, err = h.releases.Publish(ctx, v)
+		expectProblem(t, err, problem.InvalidState)
+		_, err = h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
+		expectProblem(t, err, problem.InvalidState)
+		h.expireLeases(t, v)
+	}
+	if _, err := h.releases.Publish(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (h releaseHarness) expireLeases(t *testing.T, version string) {
+	t.Helper()
+	if _, err := h.super.Exec(context.Background(),
+		"UPDATE agent_upload_lease SET expires_at = now() - interval '1 second' WHERE version = $1", version); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestUploadWriteDeadlineKeepsLease lets an upload's object store write run into its deadline (PDK-496): the write is
+// cut off at the deadline, the upload fails as upstream_unavailable and its lease stays until it expires.
+func TestUploadWriteDeadlineKeepsLease(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v, _ := h.draftWithArtifact(t)
+	h.releases.SetStoreTimeouts(200*time.Millisecond, time.Minute)
+	h.store.hang = true
+	bin := []byte("paddockd " + v)
+	started := time.Now()
+	_, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
+	expectProblem(t, err, problem.UpstreamUnavailable)
+	if took := time.Since(started); took > 30*time.Second {
+		t.Fatalf("the write was not cut off at its deadline: %v", took)
+	}
+	if n := h.leases(t, v); n != 1 {
+		t.Fatalf("leases after a write past its deadline = %d, want 1", n)
+	}
+	h.store.hang = false
+	_, err = h.releases.Publish(ctx, v)
+	expectProblem(t, err, problem.InvalidState)
+	h.expireLeases(t, v)
+	if _, err := h.releases.Publish(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPublishVerificationIsBounded publishes while the object store does not answer (PDK-496): the checksum
+// verification ends at its deadline as upstream_unavailable and releases the row lock, so the release stays a draft
+// that takes uploads.
+func TestPublishVerificationIsBounded(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v, _ := h.draftWithArtifact(t)
+	h.releases.SetStoreTimeouts(time.Minute, 200*time.Millisecond)
+	h.store.hang = true
+	started := time.Now()
+	_, err := h.releases.Publish(ctx, v)
+	expectProblem(t, err, problem.UpstreamUnavailable)
+	if took := time.Since(started); took > 30*time.Second {
+		t.Fatalf("the verification was not bounded: %v", took)
+	}
+	h.store.hang = false
+	bin := []byte("paddockd again " + v)
+	if _, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.releases.Publish(ctx, v); err != nil {
+		t.Fatal(err)
+	}
 }

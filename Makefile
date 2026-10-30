@@ -446,7 +446,7 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 # STACK_PREFLIGHT stops acceptance, system-test and e2e up front when the checkout lacks deploy/compose/.env or the
 # secrets, instead of minutes in (PDK-353).
 STACK_PREFLIGHT = @bash test/stack-preflight.sh $(COMPOSE_DIR) $(SECRETS_DIR)
-acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_GO_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
+acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_GO_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll, TestSessionsPlatformEmptied and TestAutoUnsealRestart)
 	$(STACK_PREFLIGHT)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
 	@set -eo pipefail; run='$(value T)'; \

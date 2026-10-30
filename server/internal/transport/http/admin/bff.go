@@ -235,9 +235,6 @@ func (c idClaims) hasPasskey() bool {
 	return slices.Contains(c.MFAClasses, StepUpWebAuthnClass)
 }
 
-// errLoginFailed is the audit error code of logins that fail after the state check (code exchange, ID token).
-var errLoginFailed = &problem.Error{Code: app.ReasonLoginFailed, Status: http.StatusBadGateway}
-
 // errMFARequired is the audit error code of a login whose ID token carried no second factor. It also wraps
 // problem.Forbidden, so that the runner records the refusal as denied rather than failed.
 var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFARequired, Status: http.StatusForbidden},
@@ -286,7 +283,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	token, err := oauth.Exchange(exchangeContext(ctx), q.Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		slog.WarnContext(ctx, "code exchange failed", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", app.ErrLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -301,7 +298,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || claims.Subject == "" {
 		slog.WarnContext(ctx, "ID token rejected", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", app.ErrLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -343,6 +340,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		orgID, err := b.accounts.OrganizationID(ctx, res.Slug)
 		if err != nil {
 			slog.ErrorContext(ctx, "login failed", "error", err)
+			b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonLoginFailed, "", app.ErrLoginFailed)
 			denied(w, r, app.ReasonLoginFailed)
 			return
 		}
@@ -437,9 +435,9 @@ func denialReason(res organization.RoleResolution, err error) string {
 	return app.ReasonNotAuthorized
 }
 
-// logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. It reads the
-// cookie itself, so it also signs the browser out while the session store is unreachable; the record then expires on
-// its own (plan M8s decision 15).
+// logout ends the session on the server, clears the cookie and returns the URL that ends the Authentik session. It
+// reads the cookie itself, so it also signs the browser out while the session store is unreachable; the record then
+// expires on its own (plan M8s decision 15).
 func (b *bff) logout(publicURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sess Session
@@ -450,12 +448,20 @@ func (b *bff) logout(publicURL string) http.HandlerFunc {
 		}
 		http.SetCookie(w, sessionCookie("", -1))
 		_, _, endSession := b.oidc.snapshot()
-		target := publicURL + "/"
-		if endSession != "" {
-			target = endSession + "?" + url.Values{"post_logout_redirect_uri": {publicURL + "/"}}.Encode()
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": target})
+		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": identityProviderLogout(endSession, publicURL)})
 	}
+}
+
+// identityProviderLogout is the brand invalidation flow on the origin of the issuer's end-session endpoint, or the
+// portal when the issuer is unknown (PDK-532). Not the end-session endpoint itself: Authentik refuses its
+// post_logout_redirect_uri without an id_token_hint, and the provider's invalidation flow has no logout stage, so it
+// ends the application only and leaves the Authentik session, which the next sign-in would reuse.
+func identityProviderLogout(endSession, publicURL string) string {
+	u, err := url.Parse(endSession)
+	if endSession == "" || err != nil || u.Scheme == "" || u.Host == "" {
+		return publicURL + "/"
+	}
+	return u.Scheme + "://" + u.Host + "/flows/-/default/invalidation/"
 }
 
 // switchRequest is the body of POST /api/auth/switch (schema RoleSwitch).

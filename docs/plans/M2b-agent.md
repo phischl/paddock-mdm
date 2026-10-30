@@ -336,3 +336,37 @@ cleanup is the agent's:
 - A release the supervisor ignored is staged again when the server still offers it (the agent treats "no request, no
   result" as not staged), as before; the sweep costs no additional download, because `Stage` wrote the files again
   anyway.
+
+## Amendment 2026-10-30 (PDK-496, main as architect lead) — release files are immutable once published
+
+Decisions 19 and 20 are extended by an upload lease. Since PDK-432 the database refuses to record a file for a
+release that was published after the upload's draft check. The object store write, however, runs between the two
+transactions of the upload, under a deterministic object key. Without the lease, an upload that was still writing when
+the release was published could overwrite the published object. Object keys stay unchanged, because deployed agents
+validate the package path.
+
+- **Lease.** Every write path for a release file (artifact and package upload, and through them the host command
+  and the import of ADR 0043) takes a lease on `(version, object_key)` in its first transaction (table
+  `agent_upload_lease`, migration 00077). It takes the lease in the same statement as the PDK-432 draft guard
+  (`FOR SHARE` on a draft release). The lease lasts `agentrelease.UploadLeaseTTL` (10 min). An unexpired lease on the
+  same object refuses a second upload with `invalid_state`; an expired lease is taken over. A new write path for
+  release files must take the lease as well.
+- **Write deadline.** The object store write runs under a deadline of `agentrelease.UploadStoreTimeout` (5 min),
+  measured from when the lease is taken. The margin to the lease absorbs clock skew between server and database, so
+  the write ends before the lease does.
+- **Commit.** The second transaction records the file through the guarded upsert and drops the lease. If the lease
+  has expired or been taken over, the commit is refused with `invalid_state` and rolled back, so a late commit never
+  records a file.
+- **Failed write.** Only a write the store answered with a 4xx on its only attempt is a definitive rejection
+  (`objectstore.ErrRejected`), and only that drops the lease at once. Every other failure keeps the lease until it
+  expires, because the store may still complete the write: a timeout, a cancel, a transport error, a 5xx, or a 4xx
+  after an SDK retry.
+- **Publish.** Publish locks the release `FOR UPDATE` and deletes its expired leases. While an unexpired lease exists,
+  it refuses with `invalid_state`. It then hashes every stored artifact and package object as it streams and compares
+  the SHA-256 with the row. This verification is bounded by `agentrelease.PublishVerifyTimeout` (2 min) because it
+  runs under the row lock; a timeout or store error returns `upstream_unavailable`. A missing or mismatched object
+  refuses with `invalid_state`, and the failed `agent_release.published` event lists the objects in
+  `mismatched_objects`.
+- **Residual risk.** A store-side write that completes more than the lease lifetime after its upload gave up, and
+  after the publish, is not detected. Devices refuse such an object by its SHA-256 (fail safe) until the release is
+  replaced.

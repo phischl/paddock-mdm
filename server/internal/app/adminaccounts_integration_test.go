@@ -437,3 +437,80 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 		}
 	}
 }
+
+// TestAdminAccountsPlatformEmptied covers PDK-534: an empty listing of paddock.platform.admins while platform
+// administrators exist ends the sessions of the last ones only when the directory probe proves it real; a blind service
+// token (group unreadable or no user visible) changes nothing and fails the round with ErrDirectoryEmpty, a failing
+// probe fails it otherwise. The ended sessions are recorded once, however many rounds follow.
+func TestAdminAccountsPlatformEmptied(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	worker, err := db.NewOrgPool(ctx, env.Worker, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(worker.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	id, name := uuid.Must(uuid.NewV7()), "last-"+uuid.NewString()[:8]
+	if _, err := super.Exec(ctx, `INSERT INTO platform_admin (id, authentik_sub, username, display_name) VALUES ($1, $2, $3, $3)`,
+		id, "uid-"+name, name); err != nil {
+		t.Fatal(err)
+	}
+	group := organization.PlatformAdminsGroup()
+	dir := newDirectory()
+	dir.roleGroups = map[string][]ports.IdentityUser{group: nil}
+	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{id: 2}}
+	corr := "corr-" + t.Name()
+	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, platform, dir, sessions)
+	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"}), corr)
+	events := func() []string {
+		rows, err := super.Query(ctx, `SELECT outcome || ' ' || (params->>'reason') || ' ' || (params->>'sessions')
+			FROM action WHERE code = 'admin.sessions_revoked' AND organization_id = $2 AND target->>'id' = $1`, id.String(), uuid.Nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name               string
+		readable           bool
+		visible            bool
+		probeFail          error
+		wantDirectoryEmpty bool
+	}{
+		{name: "group unreadable", visible: true, wantDirectoryEmpty: true},
+		{name: "no user visible", readable: true, wantDirectoryEmpty: true},
+		{name: "probe fails", readable: true, visible: true, probeFail: errors.New("authentik: HTTP 503")},
+	} {
+		dir.readable, dir.usersVisible, dir.probeFail = map[string]bool{group: c.readable}, c.visible, c.probeFail
+		err := accounts.ReconcilePlatform(sys, app.ListRoleGroups(sys, dir, group))
+		if err == nil || errors.Is(err, app.ErrDirectoryEmpty) != c.wantDirectoryEmpty {
+			t.Fatalf("%s: round error %v, want ErrDirectoryEmpty %v", c.name, err, c.wantDirectoryEmpty)
+		}
+		if sessions.revoked[id] != 0 || len(events()) != 0 || dir.directReads["uid-"+name] != 0 {
+			t.Fatalf("%s: sessions ended or the administrator was read", c.name)
+		}
+	}
+	dir.readable, dir.usersVisible, dir.probeFail = map[string]bool{group: true}, true, nil
+	for round := 1; round <= 2; round++ {
+		if err := accounts.ReconcilePlatform(sys, app.ListRoleGroups(sys, dir, group)); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+	}
+	if got := events(); sessions.revoked[id] != 1 || !slices.Equal(got, []string{"success removed 2"}) {
+		t.Fatalf("%d revocations, events %v, want the sessions ended and recorded once", sessions.revoked[id], got)
+	}
+}
