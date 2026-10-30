@@ -72,8 +72,12 @@ func newStack(t *testing.T) stack {
 	return stack{
 		pool: pool, super: super, store: store, rustfs: rfs, bao: client, writer: writer,
 		verifier: auditwriter.NewVerifier(pool, store, keys),
-		sealer:   auditwriter.NewSealer(pool, writer, client),
+		sealer:   auditwriter.NewSealer(pool, writer, client, auditwriter.NewKeyPublisher(keys)),
 	}
+}
+
+func (s stack) publicKeys(ctx context.Context) (map[int][]byte, error) {
+	return s.bao.PublicKeys(ctx, auditwriter.SigningKey)
 }
 
 func event(org uuid.UUID, at time.Time, code audit.Code) audit.Event {
@@ -333,7 +337,7 @@ func TestSealRejectsKeyVersionOutOfRange(t *testing.T) {
 		org := uuid.Must(uuid.NewV7())
 		day := time.Now().UTC().AddDate(0, 0, -2).Truncate(24 * time.Hour)
 		s.historicObject(t, org, day.Add(time.Hour), event(org, day.Add(time.Hour), audit.CodeDeviceGroupCreated))
-		sealer := auditwriter.NewSealer(s.pool, s.writer, fixedVersionSigner{version: version})
+		sealer := auditwriter.NewSealer(s.pool, s.writer, fixedVersionSigner{version: version}, auditwriter.NewKeyPublisher(s.publicKeys))
 		if _, err := sealer.SealOrganizationThrough(ctx, org, day); !errors.Is(err, auditwriter.ErrKeyVersion) {
 			t.Fatalf("key version %d: seal = %v, want ErrKeyVersion", version, err)
 		}

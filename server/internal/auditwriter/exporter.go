@@ -550,6 +550,12 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 	if err != nil {
 		return built{}, err
 	}
+	err = e.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		return ensureSigningKey(ctx, q, sig.KeyVersion, keys[sig.KeyVersion])
+	})
+	if err != nil {
+		return built{}, err
+	}
 	readme := renderReadme(doc, sig.KeyVersion, auditevidence.Fingerprint(keys[sig.KeyVersion]))
 
 	cw := newChunkWriter(e.chunkSize, func(seq int32, data []byte) error {

@@ -317,6 +317,10 @@ var isolationFixtures = map[string]isolationFixture{
 		finishOpenExports(t, orgOf(t, w.alice))
 		return "/api/v1/audit/exports", map[string]string{"from_day": day, "to_day": day, "purpose": "acme isolation gate"}
 	}},
+	// Signing keys (plan M10 decision 36) are the audit chain's public keys, shared by every organization.
+	"GET /api/v1/audit/keys": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/audit/keys", nil
+	}},
 	"GET /api/v1/audit/exports/{id}": {kind: isoItem, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		seedGlobexExport(t, w)
 		return "/api/v1/audit/exports/" + w.globexExport, nil

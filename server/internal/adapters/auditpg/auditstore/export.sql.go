@@ -111,6 +111,23 @@ func (q *Queries) DeleteEndedAuditExportChunks(ctx context.Context, exportID uui
 	return result.RowsAffected(), nil
 }
 
+const ensureAuditSigningKey = `-- name: EnsureAuditSigningKey :exec
+INSERT INTO audit_signing_key (key_version, public_key) VALUES ($1, $2)
+ON CONFLICT (key_version) DO NOTHING
+`
+
+type EnsureAuditSigningKeyParams struct {
+	KeyVersion int32
+	PublicKey  []byte
+}
+
+// Insert-only: a published key is never changed, so the first public key seen for a version stays the one auditors
+// compare against (plan M10 decision 36).
+func (q *Queries) EnsureAuditSigningKey(ctx context.Context, arg EnsureAuditSigningKeyParams) error {
+	_, err := q.db.Exec(ctx, ensureAuditSigningKey, arg.KeyVersion, arg.PublicKey)
+	return err
+}
+
 const getAuditExport = `-- name: GetAuditExport :one
 SELECT id, organization_id, status, from_day, to_day, purpose, requested_by, requested_at, started_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, signature, key_version, error, correlation_id FROM audit_export WHERE id = $1
 `
@@ -284,6 +301,30 @@ func (q *Queries) ListAuditExports(ctx context.Context, arg ListAuditExportsPara
 			&i.Error,
 			&i.CorrelationID,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditSigningKeys = `-- name: ListAuditSigningKeys :many
+SELECT key_version, public_key, first_seen_at FROM audit_signing_key ORDER BY key_version
+`
+
+func (q *Queries) ListAuditSigningKeys(ctx context.Context) ([]AuditSigningKey, error) {
+	rows, err := q.db.Query(ctx, listAuditSigningKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditSigningKey{}
+	for rows.Next() {
+		var i AuditSigningKey
+		if err := rows.Scan(&i.KeyVersion, &i.PublicKey, &i.FirstSeenAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

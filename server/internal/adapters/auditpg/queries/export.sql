@@ -83,3 +83,12 @@ WHERE c.export_id = e.id AND e.status IN ('failed', 'expired')
 -- name: OldestPendingAuditExportAge :one
 SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(requested_at)), 0)::float8 AS age_seconds
 FROM audit_export WHERE status = 'pending';
+
+-- name: EnsureAuditSigningKey :exec
+-- Insert-only: a published key is never changed, so the first public key seen for a version stays the one auditors
+-- compare against (plan M10 decision 36).
+INSERT INTO audit_signing_key (key_version, public_key) VALUES (@key_version, @public_key)
+ON CONFLICT (key_version) DO NOTHING;
+
+-- name: ListAuditSigningKeys :many
+SELECT * FROM audit_signing_key ORDER BY key_version;

@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 )
@@ -103,5 +105,26 @@ func TestPrintPurgeReport(t *testing.T) {
 		if out.String() != tc.want {
 			t.Errorf("%s: got\n%s\nwant\n%s", tc.name, out.String(), tc.want)
 		}
+	}
+}
+
+func TestPrintAuditKeys(t *testing.T) {
+	var out bytes.Buffer
+	printAuditKeys(&out, map[int][]byte{2: []byte("second"), 1: []byte("first")})
+	want := "audit-chain v1 " + auditevidence.Fingerprint([]byte("first")) + "\n" +
+		"audit-chain v2 " + auditevidence.Fingerprint([]byte("second")) + "\n"
+	if out.String() != want {
+		t.Fatalf("printAuditKeys = %q, want %q", out.String(), want)
+	}
+	out.Reset()
+	printAuditKeys(&out, nil)
+	if out.Len() != 0 {
+		t.Fatalf("no keys printed %q", out.String())
+	}
+}
+
+func TestAuditKeysRejectsArguments(t *testing.T) {
+	if err := runAudit(context.Background(), config.NewLoaderFrom(nil), config.Common{}, []string{"keys", "extra"}); !errors.Is(err, errUsage) {
+		t.Fatalf("audit keys extra = %v, want usage error", err)
 	}
 }

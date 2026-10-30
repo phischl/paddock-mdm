@@ -229,7 +229,7 @@ func TestSealerRefusesOpenDay(t *testing.T) {
 	ctx := context.Background()
 	// A day long before any test data, so sealing it touches no organization.
 	d := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	sealer := auditwriter.NewSealer(s.pool, s.writer, s.bao)
+	sealer := auditwriter.NewSealer(s.pool, s.writer, s.bao, auditwriter.NewKeyPublisher(s.publicKeys))
 	for _, now := range []time.Time{d.Add(12 * time.Hour), d.AddDate(0, 0, 1).Add(15*time.Minute - time.Millisecond)} {
 		auditwriter.SetSealerClock(sealer, func() time.Time { return now })
 		if _, err := sealer.SealThrough(ctx, d); !errors.Is(err, auditwriter.ErrDayOpen) {

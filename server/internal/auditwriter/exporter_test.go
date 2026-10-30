@@ -86,7 +86,7 @@ func newExportEnv(t *testing.T) exportEnv {
 	verifier := auditwriter.NewVerifier(pool, store, keyFn)
 	return exportEnv{
 		pool: pool, super: super, store: store, writer: writer, keys: keys,
-		sealer:   auditwriter.NewSealer(pool, writer, signer),
+		sealer:   auditwriter.NewSealer(pool, writer, signer, auditwriter.NewKeyPublisher(keyFn)),
 		exporter: auditwriter.NewExporter(pool, writer, store, signer, keyFn, verifier, "test-1.2.3", time.Second),
 	}
 }
