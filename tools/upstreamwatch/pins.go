@@ -31,10 +31,12 @@ const (
 )
 
 // PinInfo is the table row of one pin: its reported name, the GitHub repository whose releases carry the release
-// notes ("" when none) and the gates to run before the bump.
+// notes ("" when none), the line the pin stays on ("" when any newer tag counts; a tag prefix such as "8.4." when
+// only that line is followed, plan M6d decision 10) and the gates to run before the bump.
 type PinInfo struct {
 	Name   string
 	GitHub string
+	Line   string
 	Gates  []string
 }
 
@@ -52,7 +54,7 @@ func imagePins() map[string]PinInfo {
 		"VALKEY_IMAGE":           {Name: "valkey", GitHub: "valkey-io/valkey", Gates: acc},
 		"FLEET_IMAGE":            {Name: "fleet", GitHub: "fleetdm/fleet", Gates: []string{gateFleet}},
 		"FLEETCTL_IMAGE":         {Name: "fleetctl", GitHub: "fleetdm/fleet", Gates: []string{gateFleet}},
-		"FLEET_MYSQL_IMAGE":      {Name: "fleet_mysql", Gates: []string{gateFleet}},
+		"FLEET_MYSQL_IMAGE":      {Name: "fleet_mysql", Line: "8.4.", Gates: []string{gateFleet}},
 		"AWS_CLI_IMAGE":          {Name: "aws_cli", Gates: acc},
 		"RC_IMAGE":               {Name: "rc", Gates: []string{gateWORM, gateAcceptance}},
 		"PROMETHEUS_IMAGE":       {Name: "prometheus", GitHub: "prometheus/prometheus", Gates: acc},

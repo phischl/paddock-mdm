@@ -116,7 +116,7 @@ services:
       - db_paddock_revocation_password
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     networks: [cp]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d paddock"]
@@ -210,7 +210,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/authentik_postgres_password
     secrets: [authentik_postgres_password]
     volumes:
-      - authentik-postgres-data:/var/lib/postgresql/data
+      - authentik-postgres-data:/var/lib/postgresql
     networks: [cp]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]

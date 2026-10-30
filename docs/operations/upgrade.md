@@ -47,8 +47,21 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   more than 60 s off appear on the attention list as `clock_drift`, and the nightly audit chain verification starts
   (alerts `PaddockAuditChainBroken`, `PaddockAuditVerifyStale`). Schema: migrations 00068–00071 and audit migrations
   00004–00006 (new tables and columns only; no data rewrite).
+- **From 0.1.0-alpha.7: no upgrade path.** This release moves PostgreSQL to 18 (new data directory layout), Valkey
+  to 9 and RabbitMQ to 4.4. None of them opens the data of the previous release, and this release ships no
+  migration. Install it fresh: in the old bundle directory `./paddock down --volumes` (deletes every volume of the
+  project: the databases, OpenBao with its keys, the object stores, Fleet), then follow `docs/operations/install.md`
+  for the new release and enrol every device again (`docs/operations/uninstall.md` for the device side). Escrowed
+  recovery keys of the old installation are lost with it: before you take it down, make sure no device still needs
+  one. A backup bucket may be kept on purpose: until the stanzas are upgraded, `pgbackrest` and
+  `pgbackrest-authentik` refuse the old stanzas, log why and take no backup. Once the new installation runs, upgrade
+  them once with `./paddock compose run --rm --no-deps pgbackrest stanza-upgrade` and `./paddock compose run --rm
+  --no-deps pgbackrest-authentik stanza-upgrade`; the old backups expire with retention and cannot be restored into
+  the new clusters. Fleet's MySQL stays on the 8.4 line.
 
 ## Upgrade (each host)
+
+This section does not apply to the move to 0.1.0-alpha.7, which is a fresh installation ("Before you start").
 
 1. Download the bundle of B and its `.sigstore.json` and verify them as `docs/operations/install.md` section 3
    describes. Extract it next to the running bundle directory, for example `/opt/paddock/paddock-deploy-<B>/` beside
@@ -127,8 +140,9 @@ demand) compares each of them with upstream (ADR 0037 amendment 2026-10-17):
 - **What it checks.** Images: the registry's tag list (Docker Hub API; ghcr.io, gcr.io and mcr.microsoft.com through
   the anonymous OCI distribution API). The latest tag is the highest tag of the same shape as the pin (`2.11.6` only
   compares with `x.y.z`, `4.3.6-management` with `x.y.z-management`). The floating `nonroot` tag of `RUNTIME_IMAGE` is
-  compared by manifest digest. Himmelblau: the directory listing of `packages.himmelblau-idm.org/stable/`. Fleet NVD:
-  the latest release of `fleetdm/nvd`. Each pin is classified `patch`, `minor`, `major`, `digest`, `ok` or `unknown`
+  compared by manifest digest. A pin can follow one line only (`Line` in `tools/upstreamwatch/pins.go`, today Fleet's
+  MySQL on `8.4.`); newer lines are not reported for it. Himmelblau: the directory listing of
+  `packages.himmelblau-idm.org/stable/`. Fleet NVD: the latest release of `fleetdm/nvd`. Each pin is classified `patch`, `minor`, `major`, `digest`, `ok` or `unknown`
   (a lookup failed; printed in the job log, never an issue).
 - **The label.** Every outdated pin gets exactly one open issue with the label `upstream` and the title
   `upstream: <name> <pinned> → <latest>`. The body names the pinned line, the latest version, the classification,
