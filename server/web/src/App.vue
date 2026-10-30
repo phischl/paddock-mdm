@@ -7,6 +7,7 @@ import { useSessionStore } from './stores/session'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ShortcutHelpDialog from './components/ShortcutHelpDialog.vue'
+import McpWriteDialog from './components/McpWriteDialog.vue'
 import PdIcon from './components/PdIcon'
 import { pendingConfirm, settleConfirm, useConfirm } from './composables/useConfirm'
 import { modifierLabel, useShortcuts } from './composables/useShortcuts'
@@ -230,6 +231,9 @@ function leaveOrgTip(e: MouseEvent): void {
 // The command palette and the shortcut help (plan M7c decisions 16–18).
 const paletteOpen = ref(false)
 const helpOpen = ref(false)
+// The account's own MCP write access (plan M14 §3.6 item 32); an auditor can never change data, so it has no entry.
+const mcpWriteOpen = ref(false)
+const showMcpWrite = computed(() => showChrome.value && session.role !== 'org_auditor')
 let ignoreFieldFocusUntil = 0
 function openPalette(): void {
   paletteOpen.value = true
@@ -530,6 +534,16 @@ onBeforeUnmount(() => observer.disconnect())
                   </v-list-item>
                 </v-list>
               </v-menu>
+              <v-list-item
+                v-if="showMcpWrite"
+                data-testid="mcp-write-menu"
+                @click="mcpWriteOpen = true"
+              >
+                <v-list-item-title>{{ t('mcp.write.menu') }}</v-list-item-title>{{ ' ' }}
+                <v-list-item-subtitle data-testid="mcp-write-menu-state">
+                  {{ t(session.mcpWriteEnabled ? 'mcp.write.menuOn' : 'mcp.write.menuOff') }}
+                </v-list-item-subtitle>
+              </v-list-item>
               <v-menu submenu>
                 <template #activator="{ props: densityMenu }">
                   <v-list-item
@@ -687,6 +701,16 @@ onBeforeUnmount(() => observer.disconnect())
         id="main"
         :inert="modalOpen"
       >
+        <!-- Not dismissible: the administrator must not act in the platform role without knowing why (PDK-458). -->
+        <v-alert
+          v-if="session.roleFallback === 'organization_inactive'"
+          type="warning"
+          variant="tonal"
+          rounded="0"
+          data-testid="role-fallback"
+        >
+          {{ t('app.roleFallbackOrganizationInactive') }}
+        </v-alert>
         <RouterView />
       </v-main>
       <v-snackbar
@@ -709,6 +733,10 @@ onBeforeUnmount(() => observer.disconnect())
       <ShortcutHelpDialog
         v-if="showChrome"
         v-model="helpOpen"
+      />
+      <McpWriteDialog
+        v-if="showMcpWrite"
+        v-model="mcpWriteOpen"
       />
       <ConfirmDialog
         v-if="pendingConfirm"

@@ -195,3 +195,17 @@ func TestParseWeightsRejectsMalformedLines(t *testing.T) {
 		}
 	}
 }
+
+func TestUnparsableTestNameFailsInsteadOfDropping(t *testing.T) {
+	for _, name := range []string{"TestÄnderung", "TestA-B", "Example_x.y", "FuzzA B"} {
+		t.Run(name, func(t *testing.T) {
+			for _, args := range [][]string{{"-verify", "2"}, {"-shard", "1/2"}} {
+				var out bytes.Buffer
+				err := run(args, strings.NewReader(goTestList+name+"\n"), &out)
+				if err == nil || !strings.Contains(err.Error(), name) {
+					t.Errorf("run %v with listed test %q: err %v, want an error naming the test", args, name, err)
+				}
+			}
+		})
+	}
+}

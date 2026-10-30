@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -102,6 +103,10 @@ func TestLoginGate(t *testing.T) {
 
 	t.Run("platform admin with an organization role signs in to the organization and switches", func(t *testing.T) {
 		testRoleSwitch(t, idx)
+	})
+
+	t.Run("platform admin whose organization is not active falls back to the platform role", func(t *testing.T) {
+		testSignInFallback(t, idx)
 	})
 
 	t.Run("platform admin has no organization data", func(t *testing.T) {
@@ -313,6 +318,44 @@ func testRoleSwitch(t *testing.T, idx *env.AuditIndex) {
 		if len(events) != 0 {
 			t.Fatalf("admin.sessions_revoked of %s in %s: %+v", u.username, org, events)
 		}
+	}
+}
+
+// testSignInFallback is the fallback case of gate A4 (ADR 0045 amendment 2026-10-29): a plain sign-in of a two-role
+// identity whose organization group names no active organization enters the platform role, records admin.login with
+// fallback organization_inactive and answers role_fallback on GET /api/v1/me.
+func testSignInFallback(t *testing.T, idx *env.AuditIndex) {
+	ctx := testContext(t, time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := env.RoleGroup("gone-"+uuid.NewString()[:8], "admins")
+	pk, err := ak.EnsureGroup(ctx, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ak.Delete(context.Background(), "/core/groups/"+pk+"/") })
+	user, pw := tempUser(t, "fallback", "paddock.platform.admins", stale)
+	p, err := loginAs(t, user, pw)
+	if err != nil || p == nil || p.Final != "/" {
+		t.Fatalf("login = %v (final %q), want a platform session", err, finalOf(p))
+	}
+	res := call(t, p, http.MethodGet, "/api/v1/me", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var m struct {
+		Role         string  `json:"role"`
+		RoleFallback *string `json:"role_fallback"`
+	}
+	if err := res.JSON(&m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Role != "platform_admin" || m.RoleFallback == nil || *m.RoleFallback != "organization_inactive" {
+		t.Fatalf("me after the fallback: role %s, role_fallback %v", m.Role, m.RoleFallback)
+	}
+	ev := expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", p.LoginRequestID, "admin.login", "success", auditPollTimeout)
+	if ev.Params["fallback"] != "organization_inactive" || ev.Params["role"] != "platform_admin" {
+		t.Fatalf("fallback event params %v, want role platform_admin and fallback organization_inactive", ev.Params)
 	}
 }
 

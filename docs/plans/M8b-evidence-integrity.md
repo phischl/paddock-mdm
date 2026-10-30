@@ -987,3 +987,109 @@ raised `PaddockAuditChainBroken`.
 - **Gates:** V1–V5 and A5 stay as written; their verification events now land in the following day, so the
   organizations they leave behind verify in the next nightly run. The isolation gate searches the manifests list
   again: it seals globex's current day before the search (the PDK-110 exception is removed).
+
+## Amendment 2026-10-29 (PDK-419)
+
+**Reason.** Decision 20.2 reads the delivered numbers above `event_seq_contiguous` with `LIMIT 10000` and caps the
+hole bound at the last number read. A gap that never fills pins the pointer below it, so once such a device delivered
+more than 10 000 further events, every round re-read the same window: a later hole above it was never opened or
+reported, and the device cost a 10 000-row read each round without progress.
+
+- **Decision 17/18:** migration `00073_event_seq_scanned.sql` adds `device_status.event_seq_scanned bigint NOT NULL
+  DEFAULT 0` (existing rows start at their `event_seq_contiguous`). Invariant: every number up to it was delivered,
+  declared dropped or lies in an open gap row.
+- **Decision 20.2/20.3:** the round reads `ListDeviceEventSeenAbove` above `max(event_seq_scanned,
+  event_seq_contiguous)` and looks for holes there (`device.Scan`: `Holes` from the scan position; the new position
+  is the advanced pointer or the hole bound, whichever is higher). `SetEventSeqScanned` only raises it. The window
+  advances every round, so the read stays bounded and moves on.
+- **Decision 20.4:** the contiguous pointer is derived, not read: the scan position, or one below the lowest gap row
+  still open after this round (`device.Contiguous`); it still only rises. It no longer advances partly into an open
+  row; it follows once the whole row is covered.
+- **Decision 20.6/20.7:** an open row is covered when, outside `1..c` and the dropped ranges, the count of delivered
+  numbers in each remaining part equals the part's length; one statement counts all parts of the rows a round checks
+  (`CountDeviceEventSeenInRanges`). A round checks at most `app.GapCheckLimit` (500) open rows, unreported ones first,
+  then by `from_seq`; a row not checked counts as still open and is neither filled nor reported in that round. The
+  counts do not depend on the scan position, so rows opened before migration 00073 above it are checked the same way.
+- **Decision 22:** `ResetEventSeq` sets `event_seq_scanned = 0` together with the pointer.
+
+## Amendment 2026-10-29 (PDK-420, main as architect lead)
+
+**Reason.** Decision 27 seeds only `paddock_audit_verify_last_run_timestamp_seconds` at start (amendment
+2026-10-25). `paddock_audit_verify_failed_organizations` started at 0 in every new process, so a restart of the audit
+writer (deploy, OOM kill) cleared an active critical `PaddockAuditChainBroken` until the next 00:45 UTC cycle,
+although the chain was still broken.
+
+- **Decision 27, failed-organizations gauge at start (option A):** together with the last-run gauge, the writer sets
+  `paddock_audit_verify_failed_organizations` from `audit_verification_run` (`ListLatestNightlyFailedOrganizations`):
+  an organization counts as failed when its newest `nightly` row or its newest `sample` row has `ok = false`
+  (newest by `finished_at`, then by the UUIDv7 run ID). `cli` rows do not count, as they do not feed the gauge after a
+  cycle either. A verification that errored writes no row, so the seed counts only recorded failures; the next cycle
+  sets the exact value.
+- **Read error:** the writer sets neither gauge unless both reads succeed and retries both every minute, as the
+  amendment 2026-10-25 prescribes for the last-run gauge; the unset 0 of the last-run gauge lets
+  `PaddockAuditVerifyStale` fire.
+- The alert rules and their promtool tests stay unchanged.
+
+## Amendment 2026-10-29 (PDK-421, main as architect lead)
+
+**Reason.** `Nightly.Cycle` returns `ErrVerifyLocked` before it sets the gauges, so an audit-writer replica that loses
+the `audit-verify` lock kept its start-up values. `PaddockAuditVerifyStale` (decision 29) evaluates per instance:
+with two or more replicas, one that lost the lock two nights in a row fired a false warning although the chain was
+verified, and since PDK-420 it also kept its start-up value of `paddock_audit_verify_failed_organizations`.
+
+- **Decision 27, gauges on a locked replica (option B):** after `ErrVerifyLocked` the replica reads
+  `LatestNightlyRunFinished` and `ListLatestNightlyFailedOrganizations` and sets both gauges as at start (amendments
+  2026-10-25 and 2026-10-29, PDK-420: neither unless both reads succeed). It re-reads every minute until the next
+  cycle is due, then runs that cycle as usual. The lock holder records organization by organization (nightly window,
+  then sample day) and writes no end-of-cycle marker, so no single read proves its cycle complete: the first nightly
+  row of the night appears while the failures of the other organizations are still those of the previous night.
+  Re-reading until the next cycle reaches the holder's complete result within one minute of its last record, as long
+  as its cycle ends before the next one is due. A failed read is logged once per locked cycle and retried; the gauges
+  stay as they are.
+- **No recorded nightly run on a locked replica:** while no `nightly` row exists and some organization has a day up to
+  `LastSealableDay`, the locked replica leaves both gauges as they are, so a holder that records nothing does not
+  keep `PaddockAuditVerifyStale` silent on the locked instance. When no organization has such a day (no audit data
+  yet, or only today's), the holder's cycle records no run by design and sets its gauge to its end; the locked
+  replica then sets the last-run gauge to the read time and the failed gauge from the recorded failures, as at start,
+  so it does not warn while the holder is healthy.
+- **Retry at the due time:** a re-read (at start or after a locked cycle) that ends at or after the due time, through a
+  slow read or a late timer, runs that night's cycle at once instead of scheduling the next day's.
+- **Limit:** the locked replica sees only recorded rows. An organization whose verification errored (no row) or whose
+  run could not be recorded counts in the holder's `paddock_audit_verify_failed_organizations`, but not in the locked
+  replica's; a cycle in which every organization errors writes no row, so the locked replica's last-run gauge does not
+  advance and it warns after 36 h while the holder does not. In both cases the holder's own gauge raises the critical
+  `PaddockAuditChainBroken`.
+- **Decision 29:** the rule stays per instance (`time() - paddock_audit_verify_last_run_timestamp_seconds > 36 * 3600`);
+  no aggregation over replicas and no per-replica scrape targets. promtool cases: two replicas, the locked one
+  following 5 minutes later, do not warn; a replica that does not advance warns on its own.
+
+## Amendment 2026-10-29 (PDK-424, main as architect lead)
+
+**Reason.** The scope-level guard of the PDK-111 addendum (review 2) refuses an organization's round whenever every role
+listing comes back empty while members are stored. It cannot tell a service token that lost its view of users from an
+organization whose last role holders really left. In the second case no `admin.role_revoked` was ever recorded, the
+round failed every interval, and the A.5.18 record had a gap. The architect decision of 2026-10-29 chose option A,
+a precise probe.
+
+- **Probe (decisions 35 and 36).** `ports.UserDirectory` gains `GroupReadable(ctx, groupName)` and
+  `UsersVisible(ctx)`. `RoleGroups.DirectoryVisible(ctx)` runs both once per round and shares the result between
+  `AdminAccounts.Reconcile` and `RoleMembership.SyncOrganization`. The probe holds when (1) every role group the round
+  listed without an error can be read by name (`GET /core/groups/?name=`), and (2) a user listing filtered to
+  `type=internal,external` returns at least one user. The paddock-service account is a `service_account`, so a token
+  that sees only itself does not pass. Authentik validates the `groups_by_name` filter against every group,
+  whatever the token may see, so a blind token gets an empty listing without an error; this is why the group must be
+  read on its own.
+- **Probe holds.** The emptying is real. `SyncOrganization` compares the listings as usual: the first round marks
+  every member and the second records one `admin.role_revoked` each. `AdminAccounts.Reconcile` confirms each enabled
+  account with the direct read of decision 22 (M8s) and disables it as removed, ending its sessions. The second
+  consumer follows the same logic as the first: a probe that proves the token sees the directory also makes that
+  direct read meaningful, and refusing would keep the sessions of administrators who were really removed.
+- **Probe fails.** The scope is refused as before with `ErrDirectoryEmpty`, and nothing is recorded, marked or
+  disabled. A failed probe read is a plain round error: it proves nothing and is not counted as a refusal.
+- **Metric and warning.** The worker counts each refused organization round once in
+  `paddock_identity_directory_refusals_total`, even when both consumers refused it. From three consecutive refusals
+  of the same organization it logs a warning naming the organization; a successful round ends the streak. The alert
+  `PaddockRoleDirectoryRefused` (warning) fires when refusals continue for 15 minutes.
+- **Unchanged.** The platform scope keeps its rule: an empty superuser listing refuses it. `ReconcilePlatform` keeps
+  its refusal of an empty `paddock.platform.admins` while platform administrators exist (follow-up ticket). No
+  migration.

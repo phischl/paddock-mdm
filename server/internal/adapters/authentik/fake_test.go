@@ -1,6 +1,7 @@
 package authentik_test
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,6 +40,8 @@ type fakeAuthentik struct {
 
 	brands   []map[string]any
 	requests []string // "METHOD path" of every request
+	// longestURI is the length of the longest request target (path and query) served.
+	longestURI int
 	// failNext makes the next n requests answer with failStatus.
 	failNext   int
 	failStatus int
@@ -60,6 +63,11 @@ type fakeAuthentik struct {
 	// response is lost or the client times out after Authentik committed; lostCreates records the paths done.
 	loseCreateAnswers bool
 	lostCreates       map[string]bool
+	// blind answers as to a token that lost its view permissions: user and group listings are empty, while the
+	// groups_by_name filter is still validated against every group (PDK-424).
+	blind bool
+	// unnamedGroupRefusal refuses an unknown groups_by_name without naming the group (another wording).
+	unnamedGroupRefusal bool
 }
 
 type fakeGroup struct {
@@ -75,6 +83,8 @@ type fakeUser struct {
 	inactive              bool
 	// superuser makes the user a member of a group with superuser rights (filter is_superuser).
 	superuser bool
+	// typ is the user's type; empty is the fixture's internal.
+	typ string
 }
 
 func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
@@ -168,6 +178,9 @@ func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any
 	j["is_active"] = !u.inactive
 	j["uid"] = "uid-" + strconv.Itoa(u.pk)
 	j["groups_obj"] = nil
+	if u.typ != "" {
+		j["type"] = u.typ
+	}
 	if includeGroups {
 		objs := []map[string]any{}
 		for _, pk := range u.groups {
@@ -242,6 +255,7 @@ func (f *fakeAuthentik) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
+	f.longestURI = max(f.longestURI, len(r.RequestURI))
 	var body map[string]any
 	if r.Body != nil && r.ContentLength != 0 {
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -267,6 +281,9 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 	case p == "/api/v3/core/groups/" && r.Method == http.MethodGet:
 		var items []map[string]any
 		for _, g := range f.sortedGroups() {
+			if f.blind {
+				break
+			}
 			if name := q.Get("name"); name == "" || g.name == name {
 				items = append(items, f.groupJSON(g))
 			}
@@ -525,13 +542,26 @@ func intOf(v any) int {
 }
 
 func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
-	// Authentik validates groups_by_name against the existing groups.
-	if name := first(q["groups_by_name"]); name != "" && f.groupByName(name) == nil {
-		return http.StatusBadRequest, map[string]any{"groups_by_name": []string{"Select a valid choice. " + name + " is not one of the available choices."}}
+	// Authentik validates every groups_by_name against the existing groups and matches a member of any of them, each
+	// user once.
+	names := q["groups_by_name"]
+	for _, name := range names {
+		if f.groupByName(name) == nil && f.unnamedGroupRefusal {
+			return http.StatusBadRequest, map[string]any{"groups_by_name": []string{"Select a valid choice."}}
+		}
+		if f.groupByName(name) == nil {
+			return http.StatusBadRequest, map[string]any{"groups_by_name": []string{"Select a valid choice. " + name + " is not one of the available choices."}}
+		}
 	}
 	var match []*fakeUser
 	for _, u := range f.users {
-		if name := first(q["groups_by_name"]); name != "" && !slices.ContainsFunc(u.groups, func(pk string) bool { return f.groups[pk] != nil && f.groups[pk].name == name }) {
+		if f.blind {
+			break
+		}
+		if types := q["type"]; len(types) > 0 && !slices.Contains(types, cmp.Or(u.typ, "internal")) {
+			continue
+		}
+		if len(names) > 0 && !slices.ContainsFunc(u.groups, func(pk string) bool { return f.groups[pk] != nil && slices.Contains(names, f.groups[pk].name) }) {
 			continue
 		}
 		if pk := first(q["groups_by_pk"]); pk != "" && !slices.Contains(u.groups, pk) {

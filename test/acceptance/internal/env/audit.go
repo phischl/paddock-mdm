@@ -25,10 +25,14 @@ type AuditEvent struct {
 	ErrorCode     string         `json:"error_code"`
 	CorrelationID string         `json:"correlation_id"`
 	Params        map[string]any `json:"params"`
+	Source        string         `json:"source"`
 	Actor         struct {
 		Type    string `json:"type"`
+		ID      string `json:"id"`
 		Display string `json:"display"`
 		StepUp  bool   `json:"step_up"`
+		// Client is the MCP client's name on events of an MCP session (ADR 0044).
+		Client string `json:"client"`
 	} `json:"actor"`
 	Target *struct {
 		Type string `json:"type"`
@@ -39,11 +43,20 @@ type AuditEvent struct {
 // AuditEvents returns all events of the last 7 days visible to the portal session, newest first (at most the
 // 10 000 the list contract can page through).
 func (p *Portal) AuditEvents(ctx context.Context, code string) ([]AuditEvent, error) {
+	return p.AuditEventsSince(ctx, code, time.Time{})
+}
+
+// AuditEventsSince is AuditEvents limited to events that occurred at or after from; the zero time means the list's
+// default of 7 days.
+func (p *Portal) AuditEventsSince(ctx context.Context, code string, from time.Time) ([]AuditEvent, error) {
 	var all []AuditEvent
 	for page := 1; ; page++ {
 		q := url.Values{"page_size": {"100"}, "page": {strconv.Itoa(page)}}
 		if code != "" {
 			q.Set("code", code)
+		}
+		if !from.IsZero() {
+			q.Set("from", from.UTC().Format(time.RFC3339))
 		}
 		res, err := p.Do(ctx, http.MethodGet, "/api/v1/audit-events?"+q.Encode(), nil)
 		if err != nil {

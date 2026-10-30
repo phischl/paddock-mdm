@@ -58,6 +58,7 @@
     "switchRoleConfirmMessage": "Your current session ends and privileged actions need a new step-up.",
     "switchRoleConfirm": "Switch",
     "switchRoleFailed": "The role could not be switched. Please try again.",
+    "roleFallbackOrganizationInactive": "Your organization is not active; you are signed in as platform administrator.",
     "stepUpValidUntil": "Identity confirmed until {time}",
     "stepUpNone": "No current identity confirmation",
     "stepUpChip": "Confirmed until {time}"
@@ -75,6 +76,7 @@
     "ipAllowlist": "IP allow list",
     "sessions": "Sessions",
     "openbao": "OpenBao",
+    "platformMcp": "MCP policy",
     "users": "Users",
     "userGroups": "Groups",
     "permissionProfiles": "Permission profiles",
@@ -103,7 +105,8 @@
     "attentionPill": "{count, plural, one {# needs attention} other {# need attention}}",
     "shortcut": "Shortcut: {keys}",
     "securityReview": "Security review",
-    "operatorRoots": "Operator roots"
+    "operatorRoots": "Operator roots",
+    "mcpSettings": "MCP"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -245,7 +248,12 @@
     "release_source_unavailable": "The release source did not answer. Check the connection and try again.",
     "release_not_newer": "This version is not newer than the newest published release.",
     "release_incomplete": "The release on the source lacks a required file or signature.",
-    "release_signature_mismatch": "A file of the release does not match the release public key; nothing was stored."
+    "release_signature_mismatch": "A file of the release does not match the release public key; nothing was stored.",
+    "mcp_disabled": "The MCP is disabled for this scope.",
+    "mcp_tool_not_allowed": "This operation is not allowed through the MCP.",
+    "mcp_write_not_enabled": "Changes through the MCP are not enabled.",
+    "mcp_login_required": "Sign in again with paddockctl mcp login.",
+    "rate_limited": "Too many requests. Try again shortly."
   },
   "audit": {
     "retention": {
@@ -278,7 +286,9 @@
       "login": "{actor} signed in",
       "sessions_revoked": "{reason, select, step_up_role_mismatch {The sessions of {target} were ended: the role at the step-up did not match} role_changed {The sessions of {target} were ended: the role changed from {old_role} to {new_role}} deactivated {The sessions of {target} were ended: the account was deactivated} other {The sessions of {target} were ended: the account no longer has a role}}",
       "role_granted": "{username} became {role, select, org_admin {organization administrator} org_operator {operator} org_auditor {auditor} platform_admin {platform administrator} authentik_superuser {Authentik superuser} other {{role}}}",
-      "role_revoked": "{username} is no longer {role, select, org_admin {organization administrator} org_operator {operator} org_auditor {auditor} platform_admin {platform administrator} authentik_superuser {Authentik superuser} other {{role}}}"
+      "role_revoked": "{username} is no longer {role, select, org_admin {organization administrator} org_operator {operator} org_auditor {auditor} platform_admin {platform administrator} authentik_superuser {Authentik superuser} other {{role}}}",
+      "mcp_write_enabled": "{actor} enabled MCP write access for their account",
+      "mcp_write_disabled": "{actor} disabled MCP write access for their account"
     },
     "audit": {
       "chain_verified": "The audit hash chain was verified for {from_day} to {to_day} ({days, number} days, {objects, number} objects, {trigger})",
@@ -288,7 +298,8 @@
       "created": "{actor} created the organization {slug}",
       "domains_changed": "{actor} set the domains of {slug}",
       "recompile_requested": "{actor} requested a new bundle for every device (restore)",
-      "security_review_required": "A security review is required: {root_grant_profiles, number} root grants, {sensitive_files, number} sensitive files and {denied_files, number} files on denied paths"
+      "security_review_required": "A security review is required: {root_grant_profiles, number} root grants, {sensitive_files, number} sensitive files and {denied_files, number} files on denied paths",
+      "mcp_policy_changed": "{actor} changed the MCP policy of the organization: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -409,7 +420,8 @@
       "sessions_ended": "{actor} ended every portal session",
       "auto_unseal_enabled": "{actor} enabled automatic unseal of OpenBao and acknowledged the disclaimer {disclaimer_version}",
       "auto_unseal_disabled": "{method, select, cli {Automatic unseal of OpenBao was disabled on the host} other {{actor} disabled automatic unseal of OpenBao}}",
-      "openbao_auto_unsealed": "{failures, plural, =0 {The unsealer unsealed OpenBao automatically ({unseals, number} times since the last report)} other {The unsealer failed to unseal OpenBao ({failures, number} failures, last reason {last_failure_reason})}}"
+      "openbao_auto_unsealed": "{failures, plural, =0 {The unsealer unsealed OpenBao automatically ({unseals, number} times since the last report)} other {The unsealer failed to unseal OpenBao ({failures, number} failures, last reason {last_failure_reason})}}",
+      "mcp_policy_changed": "{actor} changed the MCP policy of the platform: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -487,7 +499,8 @@
       "actor_ip": "IP address",
       "step_up": "Step-up",
       "error_code": "Error code"
-    }
+    },
+    "sourceMcp": "MCP"
   },
   "organizations": {
     "title": "Organizations",
@@ -500,6 +513,7 @@
     "editDomains": "Domains",
     "editDomainsTitle": "Domains of {name}",
     "createdWithoutDomains": "The organization was created, but its domains were not saved. Save them with \"Domains\" in the list.",
+    "provisioning": "Setting up the identity provider… This can take up to a minute.",
     "statuses": {
       "provisioning": "Provisioning",
       "active": "Active",
@@ -602,13 +616,15 @@
     "not_authorized": "Your account is not authorized for the Paddock portal. Ask your administrator to add you to exactly one Paddock administrator group.",
     "login_failed": "The sign-in could not be completed.",
     "mfa_required": "Your sign-in did not include a second factor. Sign in again: the portal asks for your password and your authenticator.",
+    "passkey_required": "Your sign-in did not use a passkey, and every Paddock portal role requires one (a security key or the authenticator built into your device). Sign out of the identity provider, then sign in again and confirm with your passkey. If you have no passkey yet, the sign-in asks you to set one up.",
     "key_store_sealed": "The server's key store is sealed, so the portal cannot start sessions. An operator must unseal OpenBao (docs/operations/openbao.md, section 2). Devices keep working.",
     "no_role": "Your account is not in any Paddock role group. Ask your administrator to add you to exactly one of the groups paddock.'<organization>'.admins, .operators or .auditors.",
     "multiple_organizations": "Your account holds roles in several organizations. One account belongs to exactly one organization; ask your administrator to remove the other memberships or to create separate accounts.",
     "multiple_roles": "Your account holds several roles in one organization (administrator, operator or auditor). Ask your administrator to keep exactly one of the memberships.",
     "role_not_granted": "The role you chose is no longer granted to your account. Your current session is unchanged; sign in again to continue.",
     "organization_inactive": "Your organization is not active. Ask a platform administrator.",
-    "retry": "Sign in again"
+    "retry": "Sign in again",
+    "signOutIdentityProvider": "Sign out of the identity provider"
   },
   "notFound": {
     "title": "Page not found",
@@ -2160,5 +2176,67 @@
     "confirmFile": "Confirm that {name} may stay managed on a sensitive path? You confirm your identity next.",
     "deniedIntro": "Paddock no longer manages these paths. Agents of this release or newer keep the files on the devices unchanged; an older agent deletes an unchanged file once it is no longer shipped. Delete the definitions you no longer need.",
     "deleteDefinition": "Delete definition"
+  },
+  "mcp": {
+    "title": "AI assistants (MCP)",
+    "intro": "Administrators sign in to the MCP with their Paddock account (paddockctl mcp login) and act with their own role. This policy limits what every MCP session of this {scope} may do. Changes additionally need the administrator's own write access.",
+    "connectHint": "To connect an assistant, run paddockctl mcp login and add paddockctl mcp to your MCP client. See the operations guide.",
+    "enabled": "MCP enabled",
+    "writeEnabled": "Allow changes through the MCP",
+    "mode": {
+      "all": "All tools the API offers",
+      "selected": "Selected tools only"
+    },
+    "tools": "Tools",
+    "filter": "Filter tools",
+    "selectHint": "Select at least one tool.",
+    "class": {
+      "read": "read",
+      "write": "write"
+    },
+    "portalOnly": "portal only (step-up)",
+    "defaultsHint": "No policy saved yet: the MCP is switched off for this {scope}. Enable it and save the policy to let MCP sessions in.",
+    "disabledHint": "The MCP is switched off: every MCP session of this {scope} is refused.",
+    "save": "Save policy",
+    "saved": "MCP policy saved.",
+    "confirm": {
+      "title": "Save MCP policy?",
+      "message": "{count} tools will be available to MCP sessions of this {scope}; changes {writes, select, allowed {stay possible} other {are refused}}."
+    },
+    "scope": {
+      "platform": "platform",
+      "organization": "organization"
+    },
+    "guide": "Operations guide: MCP",
+    "legend": "MCP policy",
+    "selectAtLeastOne": "Select at least one tool, or allow all tools.",
+    "write": {
+      "menu": "AI assistant (MCP)",
+      "menuOn": "Write access enabled",
+      "menuOff": "Read only",
+      "title": "AI assistant write access",
+      "explain": "Your MCP sessions can read what your role reads. To let them change data as well, enable write access here. The MCP policy of your {scope} must allow changes too. You can switch it off at any time without a step-up.",
+      "connect": "To connect an assistant, run paddockctl mcp login and add paddockctl mcp to your MCP client.",
+      "state": {
+        "on": "Write access is enabled since {time}.",
+        "onUnknown": "Write access is enabled.",
+        "off": "Write access is disabled."
+      },
+      "enable": "Enable write access",
+      "disable": "Disable write access",
+      "close": "Close",
+      "confirmEnable": {
+        "title": "Enable write access for AI assistants?",
+        "message": "Your MCP sessions may then change data within your role and the MCP policy. A step-up follows."
+      },
+      "confirmDisable": {
+        "title": "Disable write access for AI assistants?",
+        "message": "Your MCP sessions can then only read data; the change applies to their next request."
+      },
+      "scope": {
+        "organization": "organization",
+        "platform": "platform"
+      }
+    }
   }
 }

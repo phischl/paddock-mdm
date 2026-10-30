@@ -56,6 +56,15 @@ func SecretsDir() (string, error) { return stack.SecretsDir() }
 // RepoRoot is the repository root.
 func RepoRoot() (string, error) { return stack.RepoRoot() }
 
+// Project is the Compose project of this checkout's development stack (default paddock).
+func Project() string { return stack.Project() }
+
+// FleetAdminURL is Fleet's API on the development host of this checkout's stack (default http://127.0.0.1:8412).
+func FleetAdminURL() string { return stack.FleetAdminURL() }
+
+// HTTPSPort is the host port of this checkout's Caddy, which a guest reaches as 10.0.2.2 (default 8443).
+func HTTPSPort() string { return stack.HTTPSPort() }
+
 // Authentik is the Authentik admin API with the bootstrap token.
 type Authentik = env.Authentik
 

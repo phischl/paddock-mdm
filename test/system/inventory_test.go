@@ -72,7 +72,7 @@ func gateF1(t *testing.T, d *Device, fleetd string) {
 		t.Errorf("fleetd files: %q", out)
 	}
 	if env := d.Must("sudo cat /etc/paddock/orbit.env"); !strings.Contains(env, "ORBIT_DISABLE_UPDATES=true") ||
-		!strings.Contains(env, "ORBIT_ENABLE_SCRIPTS=false") || !strings.Contains(env, "ORBIT_FLEET_URL=https://fleet.paddock.localhost:8443") {
+		!strings.Contains(env, "ORBIT_ENABLE_SCRIPTS=false") || !strings.Contains(env, "ORBIT_FLEET_URL=https://fleet.paddock.localhost:"+portal.HTTPSPort()) {
 		t.Errorf("orbit.env:\n%s", env)
 	}
 	uuid := d.Must("sudo cat /sys/class/dmi/id/product_uuid")
@@ -219,7 +219,7 @@ type fleetHost struct {
 	OrbitVersion   string `json:"orbit_version"`
 }
 
-// fleetAPI sends a request to Fleet's API on the development host (127.0.0.1:8412) as Paddock's API-only user; the
+// fleetAPI sends a request to Fleet's API on the development host (portal.FleetAdminURL) as Paddock's API-only user; the
 // caller closes the response.
 func fleetAPI(t *testing.T, method, path string, body io.Reader) (*http.Response, error) {
 	t.Helper()
@@ -233,7 +233,7 @@ func fleetAPI(t *testing.T, method, path string, body io.Reader) (*http.Response
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
-	req, err := http.NewRequestWithContext(ctx, method, "http://127.0.0.1:8412"+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, portal.FleetAdminURL()+path, body)
 	if err != nil {
 		t.Fatal(err)
 	}

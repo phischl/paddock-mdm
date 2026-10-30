@@ -21,8 +21,8 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
-// runAgentRollout starts (agent-rollout) or halts (agent-rollout-halt) the staged rollout of a published release with
-// the api role's configuration and the system actor of the host commands (ADR 0034 amendment 2026-10-26): in the
+// runAgentRollout starts (agent-rollout), halts (agent-rollout-halt) or resumes (agent-rollout-resume) the staged
+// rollout of a published release with the api role's configuration and the system actor of the host commands (ADR 0034 amendment 2026-10-26): in the
 // Compose stack as docker compose … run --rm --no-deps paddock-api admin agent-rollout --version <v>. It prints the
 // rollout as JSON; a refusal names the API's problem code on stderr.
 func runAgentRollout(ctx context.Context, l *config.Loader, cmd adminCommand, stdout io.Writer) error {
@@ -51,8 +51,11 @@ func runAgentRollout(ctx context.Context, l *config.Loader, cmd adminCommand, st
 	run := func() (pgstore.AgentRollout, error) {
 		return releases.StartRolloutFromHost(ctx, cmd.version, cmd.rollout)
 	}
-	if cmd.name == "agent-rollout-halt" {
+	switch cmd.name {
+	case "agent-rollout-halt":
 		run = func() (pgstore.AgentRollout, error) { return releases.HaltFromHost(ctx, cmd.version) }
+	case "agent-rollout-resume":
+		run = func() (pgstore.AgentRollout, error) { return releases.ResumeFromHost(ctx, cmd.version) }
 	}
 	r, err := run()
 	if err != nil {

@@ -18,7 +18,8 @@ const admin: Me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice Admin',
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: ['acme.test'] },
   locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
-  server_version: '0.1.0-alpha.6', alternate_role: null, channel: 'portal',
+  server_version: '0.1.0-alpha.6', alternate_role: null, channel: 'portal', mcp_write_enabled: false,
+  mcp_write_enabled_at: null,
 }
 const platform: Me = { ...admin, role: 'platform_admin', organization: null }
 
@@ -46,7 +47,11 @@ async function mountApp(me: Me, locale: PortalLocale = 'en'): Promise<VueWrapper
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:path(.*)*', component: { render: () => null } }] })
   await router.push('/')
   await router.isReady()
-  wrapper = mount(App, { global: { plugins: [createPortalI18n(locale), vuetify, router, pinia] }, attachTo: document.body })
+  wrapper = mount(App, {
+    // Vuetify 4.3 wraps VAlert in a transition; the default stub would carry the alert's attributes instead of the alert.
+    global: { plugins: [createPortalI18n(locale), vuetify, router, pinia], stubs: { transition: false } },
+    attachTo: document.body,
+  })
   await flushPromises()
   return wrapper
 }
@@ -129,5 +134,30 @@ describe('role switch in the user menu (ADR 0045 decision 3)', () => {
     await vi.waitFor(() => expect(query('switch-role-failed')).toBeNull())
     await openMenu(w)
     expect(query('switch-role-failed')).toBeNull()
+  })
+})
+
+describe('sign-in fallback to the platform role (ADR 0045 amendment 2026-10-29)', () => {
+  const fallback: Me = {
+    ...platform, role_fallback: 'organization_inactive', alternate_role: { role: 'org_admin', organization_slug: 'acme' },
+  }
+
+  it('tells the administrator why the session is in the platform role', async () => {
+    const w = await mountApp(fallback)
+    expect(w.text()).toContain('Your organization is not active; you are signed in as platform administrator.')
+  })
+
+  it('says so in German', async () => {
+    const w = await mountApp({ ...fallback, locale: 'de' }, 'de')
+    expect(w.text()).toContain('Ihre Organisation ist nicht aktiv; Sie sind als Plattformadministrator angemeldet.')
+  })
+
+  it('shows no notice without a fallback', async () => {
+    for (const me of [platform, admin, { ...platform, alternate_role: { role: 'org_admin' as const, organization_slug: 'acme' } }]) {
+      const w = await mountApp(me)
+      expect(w.text()).not.toContain('Your organization is not active')
+      w.unmount()
+      wrapper = null
+    }
   })
 })

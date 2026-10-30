@@ -12,9 +12,10 @@ SELECT * FROM agent_release WHERE version = @version;
 -- The published release with the highest SemVer precedence, the bar a release import must pass (ADR 0043 decision 3).
 SELECT * FROM agent_release WHERE status = 'published' ORDER BY version_key DESC LIMIT 1;
 
+-- No row when the release is not a draft: published releases are immutable (PDK-432).
 -- name: PublishAgentRelease :one
 UPDATE agent_release SET status = 'published', published_at = now()
-WHERE version = @version
+WHERE version = @version AND status = 'draft'
 RETURNING *;
 
 -- List queries (ADR 0018): see device_group.sql.
@@ -44,9 +45,14 @@ SELECT count(*) FROM (
   LIMIT @count_limit
 ) matching;
 
+-- No row when the release is not a draft (PDK-432). FOR SHARE holds the draft until commit, so a concurrent
+-- PublishAgentRelease waits for this upsert, and an upsert waiting for a publish re-checks the published row.
 -- name: UpsertAgentArtifact :one
 INSERT INTO agent_artifact (version, arch, sha256, size, minisig, object_key)
-VALUES (@version, @arch, @sha256, @size, @minisig, @object_key)
+SELECT r.version, @arch::text, @sha256::text, @size::bigint, @minisig::text, @object_key::text
+FROM agent_release r
+WHERE r.version = @version AND r.status = 'draft'
+FOR SHARE
 ON CONFLICT (version, arch) DO UPDATE
   SET sha256 = EXCLUDED.sha256, size = EXCLUDED.size, minisig = EXCLUDED.minisig, object_key = EXCLUDED.object_key,
       created_at = now()
@@ -64,6 +70,10 @@ RETURNING *;
 
 -- name: GetAgentRollout :one
 SELECT * FROM agent_rollout WHERE version = @version;
+
+-- name: LockAgentRollout :one
+-- A rollout under its row lock, so that concurrent halts and resumes see each other's status change (PDK-452).
+SELECT * FROM agent_rollout WHERE version = @version FOR UPDATE;
 
 -- name: SetAgentRolloutStatus :one
 UPDATE agent_rollout SET status = @status, halted_reason = sqlc.narg(halted_reason), updated_at = now()
@@ -114,9 +124,14 @@ ON CONFLICT DO NOTHING;
 
 -- Debian packages of a release (plan M4b decision 1).
 
+-- No row when the release is not a draft; locked as UpsertAgentArtifact (PDK-432).
 -- name: UpsertAgentPackage :one
 INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key, package_version)
-VALUES (@version, @name, @arch, @sha256, @size, @minisig, @object_key, sqlc.narg(package_version))
+SELECT r.version, @name::text, @arch::text, @sha256::text, @size::bigint, @minisig::text, @object_key::text,
+       sqlc.narg(package_version)::text
+FROM agent_release r
+WHERE r.version = @version AND r.status = 'draft'
+FOR SHARE
 ON CONFLICT (version, name, arch) DO UPDATE
   SET sha256 = EXCLUDED.sha256, size = EXCLUDED.size, minisig = EXCLUDED.minisig, object_key = EXCLUDED.object_key,
       package_version = EXCLUDED.package_version, created_at = now()

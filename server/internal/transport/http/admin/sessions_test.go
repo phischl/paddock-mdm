@@ -146,6 +146,10 @@ func (f *fakeIdentitySessions) PortalUsers(context.Context) ([]ports.IdentityUse
 	return []ports.IdentityUser{{PK: "1", Username: "root"}, {PK: "2", Username: "alice@acme.test"}}, nil
 }
 
+func (f *fakeIdentitySessions) CountUserSessions(_ context.Context, pks []string) (int, error) {
+	return len(pks), nil
+}
+
 func (f *fakeIdentitySessions) EndUserSessions(_ context.Context, pks []string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

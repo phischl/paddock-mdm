@@ -1,14 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import LoginDenied from '../views/LoginDenied.vue'
 import { createPortalI18n, type PortalLocale } from '../i18n'
 
+const POST = vi.fn()
+vi.mock('../api/client', () => ({ api: { POST: (...a: unknown[]) => POST(...a) } }))
+
 let wrapper: VueWrapper | null = null
+const original = window.location
 
 afterEach(() => {
   wrapper?.unmount()
   wrapper = null
+  POST.mockReset()
+  Object.defineProperty(window, 'location', { value: original, writable: true })
 })
 
 async function mountView(reason: string, locale: PortalLocale = 'en'): Promise<VueWrapper> {
@@ -48,6 +54,51 @@ describe('login denied', () => {
   ])('names the denial reason %s (plan M8x decision 32)', async (reason, text) => {
     const w = await mountView(reason)
     expect(w.get('[data-testid="login-denied-message"]').text()).toContain(text)
+  })
+
+  it('explains the passkey and offers to sign out of the identity provider (ADR 0034 amendment 2026-10-29)', async () => {
+    const w = await mountView('passkey_required')
+    expect(w.get('[data-testid="login-denied-message"]').text()).toBe(
+      'Your sign-in did not use a passkey, and every Paddock portal role requires one (a security key or the ' +
+      'authenticator built into your device). Sign out of the identity provider, then sign in again and confirm with ' +
+      'your passkey. If you have no passkey yet, the sign-in asks you to set one up.')
+    expect(w.get('button').text()).toBe('Sign out of the identity provider')
+    expect(w.get('a').attributes('href')).toBe('/api/auth/login')
+  })
+
+  it('explains the passkey in German', async () => {
+    const w = await mountView('passkey_required', 'de')
+    expect(w.get('[data-testid="login-denied-message"]').text()).toContain(
+      'Melden Sie sich beim Identitätsanbieter ab, melden Sie sich dann erneut an und bestätigen Sie mit Ihrem Passkey.')
+    expect(w.get('button').text()).toBe('Beim Identitätsanbieter abmelden')
+  })
+
+  it('ends the portal session and runs the identity provider\'s invalidation flow on its origin', async () => {
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', { value: { ...original, origin: 'https://admin.test', assign }, writable: true })
+    POST.mockResolvedValue({
+      data: { end_session_url: 'https://auth.test/application/o/paddock-portal/end-session/?post_logout_redirect_uri=x' },
+    })
+    const w = await mountView('passkey_required')
+    await w.get('button').trigger('click')
+    await flushPromises()
+    expect(POST).toHaveBeenCalledWith('/api/auth/logout', { params: { header: { 'X-Paddock-CSRF': '1' } } })
+    expect(assign).toHaveBeenCalledWith('https://auth.test/flows/-/default/invalidation/')
+  })
+
+  it('returns to the portal when the identity provider is unknown', async () => {
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', { value: { ...original, origin: 'https://admin.test', assign }, writable: true })
+    POST.mockResolvedValue({ data: { end_session_url: 'https://admin.test/' } })
+    const w = await mountView('passkey_required')
+    await w.get('button').trigger('click')
+    await flushPromises()
+    expect(assign).toHaveBeenCalledWith('/')
+  })
+
+  it('offers the identity provider sign-out only for a missing passkey', async () => {
+    const w = await mountView('mfa_required')
+    expect(w.find('button').exists()).toBe(false)
   })
 
   it('falls back to the generic text for an unknown reason', async () => {

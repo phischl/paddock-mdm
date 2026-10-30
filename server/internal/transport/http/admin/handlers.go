@@ -63,6 +63,9 @@ type handlers struct {
 	overview    *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
+	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).
+	mcpSettings *app.MCPSettings
+	mcpAccess   *app.MCPAccessService
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).
@@ -99,6 +102,19 @@ func (h *handlers) alternateRole(ctx context.Context) *adminapi.MeAlternateRole 
 	return out
 }
 
+// roleFallbackKey carries the session's sign-in fallback (ADR 0045 amendment 2026-10-29) to GET and PATCH /api/v1/me.
+type roleFallbackKey struct{}
+
+// roleFallback is the role_fallback of GET and PATCH /api/v1/me; nil without one.
+func roleFallback(ctx context.Context) *adminapi.MeRoleFallback {
+	f, ok := ctx.Value(roleFallbackKey{}).(string)
+	if !ok || f == "" {
+		return nil
+	}
+	out := adminapi.MeRoleFallback(f)
+	return &out
+}
+
 var _ adminapi.StrictServerInterface = (*handlers)(nil)
 
 func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (adminapi.GetMeResponseObject, error) {
@@ -112,6 +128,7 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
+	out.RoleFallback = roleFallback(ctx)
 	if h.stepUpTiming != nil {
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
@@ -147,6 +164,7 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
+	out.RoleFallback = roleFallback(ctx)
 	return adminapi.UpdateMe200JSONResponse(out), nil
 }
 
@@ -178,7 +196,7 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 	out := adminapi.Me{
 		Id: me.ID, Username: me.Username, DisplayName: me.DisplayName, Role: adminapi.MeRole(me.Role),
 		Locale: adminapi.MeLocale(me.Locale), Theme: adminapi.MeTheme(me.Theme), RevocationEnabled: h.revocations.Enabled(),
-		ServerVersion: h.serverVersion,
+		ServerVersion: h.serverVersion, McpWriteEnabled: me.MCPWriteEnabled,
 	}
 	if me.Organization != nil {
 		domains := me.Organization.Domains
@@ -187,6 +205,10 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 		}
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name,
 			Domains: domains}
+	}
+	if me.MCPWriteEnabledAt != nil {
+		at := me.MCPWriteEnabledAt.UTC()
+		out.McpWriteEnabledAt = &at
 	}
 	if me.APIToken != nil {
 		out.ApiToken = &adminapi.MeApiToken{Id: me.APIToken.ID, Name: me.APIToken.Name, ExpiresAt: me.APIToken.ExpiresAt.UTC()}

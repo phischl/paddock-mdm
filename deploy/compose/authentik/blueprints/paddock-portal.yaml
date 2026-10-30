@@ -54,7 +54,9 @@ entries:
   # Stage B: the step-up accepts WebAuthn only, so an administrator who has just proven TOTP (or entered a recovery
   # code) in stage A and has no WebAuthn device enrols one now. The policy on its binding skips it for an account with
   # a WebAuthn device, because the MFA cookie is bound to the stage that set it and a last_auth_threshold would ask a
-  # WebAuthn user twice.
+  # WebAuthn user twice. This flow is also the default brand's authentication flow, which the device-code page runs
+  # for every device user; a second policy limits the enrolment to members of Paddock administrator groups (ADR 0034
+  # amendment 2026-10-29, PDK-498).
   - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
     id: mfa-webauthn
     identifiers:
@@ -72,6 +74,42 @@ entries:
     attrs:
       expression: |
         return not ak_user_has_authenticator(request.user, "webauthn")
+
+  # The administrator groups are the portal's role groups: paddock.platform.admins and paddock.<slug>.admins,
+  # .operators and .auditors. Operators step up too (API tokens), and every portal role keeps the passkey enrolment it
+  # had before (ADR 0034 decision F2, decision 4). Direct memberships only, as in the portal's groups claim.
+  - model: authentik_policies_expression.expressionpolicy
+    id: webauthn-administrator
+    identifiers:
+      name: paddock-admin-login-webauthn-administrator
+    attrs:
+      expression: |
+        return any(
+            len(p) == 3 and p[0] == "paddock" and p[2] in ("admins", "operators", "auditors")
+            for p in (g.name.split(".") for g in request.user.groups.all())
+        )
+
+  # Stage C (ADR 0034 amendment 2026-10-29, PDK-500): the portal accepts only a login that validated a WebAuthn
+  # authenticator (paddock_mfa_classes), and Authentik records no device for an enrolment. An administrator who enrolled
+  # in stage A or B, or proved TOTP in stage A although a passkey exists, confirms the passkey here once, so that the
+  # first portal sign-in after an enrolment is not refused. Deny: stage B has left every administrator a WebAuthn device.
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa-webauthn-confirm
+    identifiers:
+      name: paddock-admin-login-webauthn-confirm
+    attrs:
+      device_classes: [webauthn]
+      not_configured_action: deny
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: webauthn-unconfirmed
+    identifiers:
+      name: paddock-admin-login-webauthn-unconfirmed
+    attrs:
+      # The validated devices of this flow execution, as in paddock-default-login-mfa-missing; an enrolment adds none.
+      expression: |
+        method_args = request.context.get("auth_method_args") or {}
+        return not any(d.__class__.__name__ == "WebAuthnDevice" for d in method_args.get("mfa_devices") or [])
 
   - model: authentik_stages_user_login.userloginstage
     id: login
@@ -119,6 +157,42 @@ entries:
       order: 0
     attrs:
       target: !KeyOf mfa-webauthn-binding
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-administrator
+      order: 1
+    attrs:
+      target: !KeyOf mfa-webauthn-binding
+      # Authentik's default failure result (false) would skip the enrolment for an administrator if the expression
+      # raised; true fails closed.
+      failure_result: true
+  # Re-evaluated when stage C is reached, after stages A and B; "all": administrators only (end users would be denied,
+  # which breaks the device-code sign-in), and the development blueprint skips it like stage B.
+  - model: authentik_flows.flowstagebinding
+    id: mfa-webauthn-confirm-binding
+    identifiers:
+      target: !KeyOf login-flow
+      stage: !KeyOf mfa-webauthn-confirm
+      order: 32
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-administrator
+      order: 2
+    attrs:
+      target: !KeyOf mfa-webauthn-confirm-binding
+      # Fails closed for an administrator if the expression raised (see stage B).
+      failure_result: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-unconfirmed
+      order: 0
+    attrs:
+      target: !KeyOf mfa-webauthn-confirm-binding
+      failure_result: true
   # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17, plan M8x decision 5):
   # every sign-in validates a WebAuthn or TOTP device; a user without one enrols one here. The policy below skips this
   # stage only when Authentik's own stage at order 30 has just validated a WebAuthn or TOTP device in this flow
@@ -186,6 +260,28 @@ entries:
       expression: |
         return {"groups": [g.name for g in request.user.groups.all()]}
 
+  # --- Authenticator classes claim ---
+  # The portal sign-in requires a validated WebAuthn authenticator (ADR 0034 amendment 2026-10-29). Authentik's amr says
+  # "mfa" for WebAuthn and TOTP alike; this mapping names the classes of the authenticators the session's login
+  # validated, from the login event Authentik uses for amr (providers/oauth2/id_token.py), like the step-up's mapping.
+  - model: authentik_providers_oauth2.scopemapping
+    id: scope-mfa
+    identifiers:
+      managed: io.paddock/scope-login-mfa
+    attrs:
+      name: "Paddock: sign-in authenticator classes"
+      scope_name: paddock_mfa
+      description: Authenticator classes of the sign-in
+      expression: |
+        from authentik.events.signals import get_login_event
+        classes = []
+        event = get_login_event(token.session) if token and token.session else None
+        if event:
+            for device in (event.context.get("auth_method_args") or {}).get("mfa_devices") or []:
+                if isinstance(device, dict) and device.get("app") and device.get("model_name"):
+                    classes.append(f"{device['app']}.{device['model_name']}")
+        return {"paddock_mfa_classes": classes}
+
   # --- OIDC provider and application ---
   - model: authentik_providers_oauth2.oauth2provider
     id: provider
@@ -216,6 +312,7 @@ entries:
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
         - !KeyOf scope-groups
+        - !KeyOf scope-mfa
 
   - model: authentik_core.application
     id: application

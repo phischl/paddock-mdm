@@ -48,6 +48,19 @@ fail() {
 cp_paddock() { (cd "$W/cp" && PADDOCK_COMPOSE_EXTRA="$ci_overlay" ./paddock "$@"); }
 audit_paddock() { (cd "$W/audit" && ./paddock "$@"); }
 
+# wait_unsealed polls for up to 60 s: OpenBao reports sealed for a moment after the last share while it becomes active.
+# The output is captured before grep searches it: under pipefail, a `grep -q` on a live pipe exits at the first match
+# and the writer's SIGPIPE turns that match into a failure (PDK-544).
+wait_unsealed() {
+  local status
+  for _ in $(seq 1 30); do
+    status="$(cp_paddock bao status </dev/null 2>/dev/null || true)"
+    grep -Eq '^Sealed +false' <<<"$status" && return 0
+    sleep 2
+  done
+  return 1
+}
+
 # Logs of both projects, then both projects down with their volumes; also after a failure.
 finish() {
   local rc=$?
@@ -141,7 +154,7 @@ mapfile -t shares < <(awk '/"unseal_keys_b64"/ { f = 1; next } f && /\]/ { f = 0
 ((${#shares[@]} == 3)) || fail "no unseal shares in the OpenBao init output"
 # Shares on stdin, never on a command line.
 for share in "${shares[@]}"; do printf '%s' "$share" | cp_paddock bao write sys/unseal key=- >/dev/null; done
-cp_paddock bao status </dev/null | grep -Eq '^Sealed +false' || fail "OpenBao is still sealed"
+wait_unsealed || fail "OpenBao is still sealed 60 s after the last unseal share"
 export BAO_TOKEN="$root_token"
 cp_paddock bootstrap openbao
 unset BAO_TOKEN

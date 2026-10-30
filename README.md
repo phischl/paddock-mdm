@@ -112,6 +112,16 @@ Passwords are generated per checkout; read them from `deploy/compose/.secrets/`.
 The Authentik admin interface is at <https://auth.paddock.localhost:8443/if/admin/> (user `akadmin`, password in
 `authentik_bootstrap_password`).
 
+## AI assistants (MCP)
+
+`paddockctl mcp` lets an AI assistant such as Claude Code or Claude Desktop operate Paddock on behalf of a signed-in
+administrator: `paddockctl mcp login` signs in through Authentik (password and second factor in the browser), and
+`paddockctl mcp` serves the admin API as MCP tools over stdio, with the administrator's own role. The MCP is off until
+an administrator saves a policy, changes additionally need each administrator's own opt-in, and step-up actions such as
+Lock, Destroy or reveals stay in the portal. Setup, the three switches and the residual risks:
+[docs/operations/mcp.md](docs/operations/mcp.md). The Claude skill
+[`skills/operate-paddock`](skills/operate-paddock/SKILL.md) teaches the assistant the runbooks.
+
 ## Make targets
 
 | Target | Purpose |

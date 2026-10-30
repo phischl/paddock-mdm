@@ -362,3 +362,72 @@ func TestRejectsPathItemAnnotations(t *testing.T) {
 		t.Errorf("a foreign path-item extension was refused: %v", err)
 	}
 }
+
+// TestSkillGolden: the skill reference for the fixture contract is byte-identical to testdata/tools.golden.md.
+// Regenerate after an intended change with
+// `go run ../../cmd/mcpgen -spec testdata/admin.yaml -skill testdata/tools.golden.md`.
+func TestSkillGolden(t *testing.T) {
+	got, err := Skill(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("testdata/tools.golden.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Error("generated skill reference differs from testdata/tools.golden.md")
+	}
+}
+
+// TestSkillSections: exposed tools sit in their tag's table, step-up operations only in the hand-over list, the other
+// unexposed operations only in the last list, and the BFF tag auth nowhere.
+func TestSkillSections(t *testing.T) {
+	got, err := Skill(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(got)
+	tags, stepUp, ok1 := strings.Cut(doc, "## Step-up operations")
+	stepUp, hidden, ok2 := strings.Cut(stepUp, "## Other operations")
+	if !ok1 || !ok2 {
+		t.Fatalf("sections missing:\n%s", doc)
+	}
+	for _, c := range []struct {
+		section, name string
+		want          bool
+	}{
+		{tags, "## things", true},
+		{tags, "| `listThings` | read | no | List things |", true},
+		{tags, "| `deleteThing` | write | yes |", true},
+		{tags, "`lockThing`", false},
+		{tags, "`updateMe`", false},
+		{stepUp, "| `lockThing` | things |", true},
+		{stepUp, "`updateMe`", false},
+		{hidden, "| `updateMe` | me |", true},
+		{hidden, "| `exportThing` | things |", true},
+		{hidden, "`lockThing`", false},
+		{doc, "`login`", false},
+	} {
+		if strings.Contains(c.section, c.name) != c.want {
+			t.Errorf("contains %q = %v, want %v", c.name, !c.want, c.want)
+		}
+	}
+}
+
+func TestSkillSummary(t *testing.T) {
+	for _, c := range []struct{ desc, want string }{
+		{"List things\n\nRead-only.", "List things"},
+		{"Roles: org_admin. Adds a user. More text.\n\nChanges data; needs your MCP write access.", "Adds a user."},
+		{"Roles: org_admin, org_operator.\n\nRead-only.", "GET /api/v1/x"},
+		{"Roles: org_admin. confirm_hostname must match.\n\nChanges data; needs your MCP write access.", "GET /api/v1/x"},
+		{"Read-only.", "GET /api/v1/x"},
+	} {
+		if got := skillSummary(Tool{Method: "GET", Path: "/api/v1/x", Description: c.desc}); got != c.want {
+			t.Errorf("skillSummary(%q) = %q, want %q", c.desc, got, c.want)
+		}
+	}
+	if got := cell("a | b"); got != `a \| b` {
+		t.Errorf("cell = %q", got)
+	}
+}

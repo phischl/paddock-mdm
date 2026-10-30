@@ -14,10 +14,20 @@ ORDER BY s.device_id;
 -- Locks a device's event numbering for one evaluation or reset, so the round and a reset never interleave
 -- (PDK-108 review 1, B1); no row when the device never checked in.
 -- name: LockDeviceEventSeq :one
-SELECT event_seq_contiguous, event_seq_high, last_seq, last_contact_at FROM device_status WHERE device_id = @device_id FOR UPDATE;
+SELECT event_seq_contiguous, event_seq_scanned, event_seq_high, last_seq, last_contact_at FROM device_status WHERE device_id = @device_id FOR UPDATE;
 
 -- name: ListDeviceEventSeenAbove :many
 SELECT event_seq FROM device_event_seen WHERE device_id = @device_id AND event_seq > @above ORDER BY event_seq LIMIT 10000;
+
+-- The number of delivered events of a device in each closed range @from_seqs[i]..@to_seqs[i], in one statement for all
+-- parts of the open gap rows one round checks (PDK-419): a part is covered when its count equals its length.
+-- name: CountDeviceEventSeenInRanges :many
+SELECT i::bigint AS idx,
+       (SELECT count(*) FROM device_event_seen e
+        WHERE e.device_id = @device_id
+          AND e.event_seq BETWEEN (@from_seqs::bigint[])[i] AND (@to_seqs::bigint[])[i])::bigint AS seen
+FROM generate_subscripts(@from_seqs::bigint[], 1) AS i
+ORDER BY i;
 
 -- name: ListDeviceEventDroppedAbove :many
 SELECT from_seq, to_seq FROM device_event_dropped WHERE device_id = @device_id AND to_seq > @above ORDER BY from_seq;
@@ -35,6 +45,9 @@ SELECT coalesce((SELECT event_seq FROM device_event_seen
 
 -- name: SetEventSeqContiguous :exec
 UPDATE device_status SET event_seq_contiguous = @value WHERE device_id = @device_id AND event_seq_contiguous < @value;
+
+-- name: SetEventSeqScanned :exec
+UPDATE device_status SET event_seq_scanned = @value WHERE device_id = @device_id AND event_seq_scanned < @value;
 
 -- name: InsertDeviceEventGap :exec
 INSERT INTO device_event_gap (id, organization_id, device_id, from_seq, to_seq, first_seen_at, first_seen_last_seq)
@@ -61,4 +74,4 @@ DELETE FROM device_event_dropped WHERE device_id = @device_id;
 UPDATE device_event_gap SET filled_at = @now WHERE device_id = @device_id AND filled_at IS NULL;
 
 -- name: ResetEventSeq :exec
-UPDATE device_status SET event_seq_contiguous = 0, event_seq_high = @high WHERE device_id = @device_id;
+UPDATE device_status SET event_seq_contiguous = 0, event_seq_scanned = 0, event_seq_high = @high WHERE device_id = @device_id;

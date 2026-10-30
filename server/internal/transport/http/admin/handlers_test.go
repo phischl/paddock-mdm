@@ -177,6 +177,14 @@ func (f *fakeIdP) Superusers(context.Context) ([]ports.IdentityUser, error) {
 	return nil, f.err()
 }
 
+func (f *fakeIdP) GroupReadable(context.Context, string) (bool, error) {
+	return false, f.err()
+}
+
+func (f *fakeIdP) UsersVisible(context.Context) (bool, error) {
+	return false, f.err()
+}
+
 func (f *fakeIdP) UserMembership(context.Context, string, string) (ports.IdentityUser, []string, bool, error) {
 	return ports.IdentityUser{}, nil, false, f.err()
 }
@@ -402,6 +410,8 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Attention:      app.NewAttention(orgPool),
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),
+		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),
+		MCPAccess:      app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
 		Runner:         runner,
 		Keys:           keys,
 		OIDC:           admin.NewOIDC(admin.OIDCConfig{}),

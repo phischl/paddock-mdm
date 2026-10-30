@@ -19,6 +19,12 @@ import (
 // decision 17): they give event batches that arrived out of order time to be recorded.
 const gapReportCheckins = 2
 
+// GapCheckLimit is the number of open gap rows of a device one round checks for coverage (PDK-419 review 1, B1): the
+// scan position moves on every round, so a device that delivers sparse numbers can open many rows; checking all of
+// them every round under the device's lock would grow without bound. A row that is not checked counts as still open
+// and is neither filled nor reported in that round.
+const GapCheckLimit = 500
+
 // EventGaps finds holes in the event numbering of devices, reports those that stay open as device.event_gap and
 // those that close later as device.event_gap_filled (plan M8b decision 20, worker).
 type EventGaps struct {
@@ -37,10 +43,12 @@ func NewEventGaps(runner *ActionRunner, org *db.OrgPool) *EventGaps {
 // gapState is what one evaluation knows about a device's numbering, read under the lock of its status row.
 type gapState struct {
 	pgstore.LockDeviceEventSeqRow
-	seen    []int64
-	dropped []device.SeqRange
-	open    []pgstore.DeviceEventGap
-	high    int64
+	// scanFrom is the scan position the delivered numbers in seen lie above (PDK-419).
+	scanFrom int64
+	seen     []int64
+	dropped  []device.SeqRange
+	open     []pgstore.DeviceEventGap
+	high     int64
 }
 
 // Evaluate checks every active device of the context's organization whose numbering may hold a hole. A device whose
@@ -81,24 +89,18 @@ func (g *EventGaps) evaluate(ctx context.Context, deviceID uuid.UUID, now time.T
 		if st, err = read(ctx, q, deviceID); err != nil {
 			return err
 		}
-		contiguous, holes := device.Holes(st.EventSeqContiguous, st.high, st.seen, st.dropped)
-		// Numbers above the last one read are unknown when the read hit the limit: their rows wait for a later round.
-		known := func(r pgstore.DeviceEventGap) bool {
-			return len(st.seen) < device.SeenLimit || r.ToSeq <= st.seen[len(st.seen)-1]
-		}
-		// Every number up to the pointer the evaluation started from was delivered or dropped; it was not read again.
+		scanned, holes := device.Scan(st.scanFrom, st.high, st.seen, st.dropped)
+		// Every number up to the pointer the evaluation started from was delivered or dropped.
 		settled := append([]device.SeqRange{{From: 1, To: st.EventSeqContiguous}}, st.dropped...)
 		org, err := orgOf(ctx)
 		if err != nil {
-			return err
-		}
-		if err := q.SetEventSeqContiguous(ctx, pgstore.SetEventSeqContiguousParams{Value: contiguous, DeviceID: deviceID}); err != nil {
 			return err
 		}
 		openRanges := make([]device.SeqRange, 0, len(st.open))
 		for _, r := range st.open {
 			openRanges = append(openRanges, device.SeqRange{From: r.FromSeq, To: r.ToSeq})
 		}
+		var stillOpen []device.SeqRange
 		for _, h := range holes {
 			for _, part := range device.Uncovered(h, openRanges) {
 				if err := q.InsertDeviceEventGap(ctx, pgstore.InsertDeviceEventGapParams{
@@ -107,24 +109,35 @@ func (g *EventGaps) evaluate(ctx context.Context, deviceID uuid.UUID, now time.T
 				}); err != nil {
 					return err
 				}
+				stillOpen = append(stillOpen, part)
 			}
 		}
-		for _, r := range st.open {
+		coverage, err := covered(ctx, q, deviceID, openRanges, checkOrder(st.open), settled)
+		if err != nil {
+			return err
+		}
+		for i, r := range st.open {
+			filled, checked := coverage[i]
 			switch {
-			case !known(r):
-			case device.Covered(device.SeqRange{From: r.FromSeq, To: r.ToSeq}, st.seen, settled):
-				if r.ReportedAt != nil {
-					filledReported = append(filledReported, r)
-					continue
-				}
+			case !checked:
+				stillOpen = append(stillOpen, openRanges[i])
+			case filled && r.ReportedAt != nil:
+				filledReported = append(filledReported, r)
+			case filled:
 				if _, err := q.FillDeviceEventGap(ctx, pgstore.FillDeviceEventGapParams{Now: &now, ID: r.ID}); err != nil {
 					return err
 				}
-			case r.ReportedAt == nil && st.LastSeq >= r.FirstSeenLastSeq+gapReportCheckins:
-				toReport = append(toReport, r)
+			default:
+				stillOpen = append(stillOpen, openRanges[i])
+				if r.ReportedAt == nil && st.LastSeq >= r.FirstSeenLastSeq+gapReportCheckins {
+					toReport = append(toReport, r)
+				}
 			}
 		}
-		return nil
+		if err := q.SetEventSeqScanned(ctx, pgstore.SetEventSeqScannedParams{Value: scanned, DeviceID: deviceID}); err != nil {
+			return err
+		}
+		return q.SetEventSeqContiguous(ctx, pgstore.SetEventSeqContiguousParams{Value: device.Contiguous(scanned, stillOpen), DeviceID: deviceID})
 	})
 	if err != nil {
 		return err
@@ -142,7 +155,7 @@ func (g *EventGaps) evaluate(ctx context.Context, deviceID uuid.UUID, now time.T
 	return nil
 }
 
-// read locks the device's status row and loads the delivered numbers above its pointer, its dropped ranges and open
+// read locks the device's status row and loads the delivered numbers above its scan position, its dropped ranges and open
 // gaps, and the highest number the device claimed: the one of its last check-in, or a delivered one the gateway
 // received before that check-in. A number received after the check-in is no evidence of a hole below it yet
 // (amendment 2026-10-24).
@@ -151,12 +164,11 @@ func read(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID) (gapState
 	if err != nil {
 		return gapState{}, err
 	}
-	st := gapState{LockDeviceEventSeqRow: locked, high: locked.EventSeqHigh}
-	above := locked.EventSeqContiguous
-	if st.seen, err = q.ListDeviceEventSeenAbove(ctx, pgstore.ListDeviceEventSeenAboveParams{DeviceID: deviceID, Above: above}); err != nil {
+	st := gapState{LockDeviceEventSeqRow: locked, high: locked.EventSeqHigh, scanFrom: max(locked.EventSeqScanned, locked.EventSeqContiguous)}
+	if st.seen, err = q.ListDeviceEventSeenAbove(ctx, pgstore.ListDeviceEventSeenAboveParams{DeviceID: deviceID, Above: st.scanFrom}); err != nil {
 		return st, err
 	}
-	dropped, err := q.ListDeviceEventDroppedAbove(ctx, pgstore.ListDeviceEventDroppedAboveParams{DeviceID: deviceID, Above: above})
+	dropped, err := q.ListDeviceEventDroppedAbove(ctx, pgstore.ListDeviceEventDroppedAboveParams{DeviceID: deviceID, Above: locked.EventSeqContiguous})
 	if err != nil {
 		return st, err
 	}
@@ -174,6 +186,50 @@ func read(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID) (gapState
 		st.high = max(st.high, before)
 	}
 	return st, nil
+}
+
+// covered determines which of the open gap rows at the indices check are covered: every number delivered or in
+// settled. It counts the delivered numbers of all their remaining parts in one statement instead of reading them, so a
+// row far below the scan position costs no window of delivered numbers (PDK-419). The result holds an entry for every
+// checked index only.
+func covered(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, ranges []device.SeqRange, check []int, settled []device.SeqRange) (map[int]bool, error) {
+	out := make(map[int]bool, len(check))
+	var froms, tos []int64
+	var owner []int
+	for _, i := range check {
+		out[i] = true
+		for _, part := range device.Uncovered(ranges[i], settled) {
+			froms, tos, owner = append(froms, part.From), append(tos, part.To), append(owner, i)
+		}
+	}
+	if len(froms) == 0 {
+		return out, nil
+	}
+	counts, err := q.CountDeviceEventSeenInRanges(ctx, pgstore.CountDeviceEventSeenInRangesParams{DeviceID: deviceID, FromSeqs: froms, ToSeqs: tos})
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range counts {
+		k := c.Idx - 1
+		if c.Seen < tos[k]-froms[k]+1 {
+			out[owner[k]] = false
+		}
+	}
+	return out, nil
+}
+
+// checkOrder returns the indices of the open rows one round checks: at most GapCheckLimit, the unreported ones first
+// because their report is still due, each group in ascending order (the order of open).
+func checkOrder(open []pgstore.DeviceEventGap) []int {
+	var unreported, reported []int
+	for i, r := range open {
+		if r.ReportedAt == nil {
+			unreported = append(unreported, i)
+		} else {
+			reported = append(reported, i)
+		}
+	}
+	return append(unreported, reported...)[:min(len(open), GapCheckLimit)]
 }
 
 // recordGap reports an open gap once: the claim marks it reported unless another round did or it was closed meanwhile.

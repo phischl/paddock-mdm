@@ -551,6 +551,33 @@ func (q *Queries) ListRunningAgentRollouts(ctx context.Context) ([]AgentRollout,
 	return items, nil
 }
 
+const lockAgentRollout = `-- name: LockAgentRollout :one
+SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since FROM agent_rollout WHERE version = $1 FOR UPDATE
+`
+
+// A rollout under its row lock, so that concurrent halts and resumes see each other's status change (PDK-452).
+func (q *Queries) LockAgentRollout(ctx context.Context, version string) (AgentRollout, error) {
+	row := q.db.QueryRow(ctx, lockAgentRollout, version)
+	var i AgentRollout
+	err := row.Scan(
+		&i.Version,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.Status,
+		&i.HaltedReason,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+		&i.EvaluationSince,
+	)
+	return i, err
+}
+
 const newestPublishedAgentRelease = `-- name: NewestPublishedAgentRelease :one
 SELECT version, status, created_by, created_at, published_at, version_key FROM agent_release WHERE status = 'published' ORDER BY version_key DESC LIMIT 1
 `
@@ -572,10 +599,11 @@ func (q *Queries) NewestPublishedAgentRelease(ctx context.Context) (AgentRelease
 
 const publishAgentRelease = `-- name: PublishAgentRelease :one
 UPDATE agent_release SET status = 'published', published_at = now()
-WHERE version = $1
+WHERE version = $1 AND status = 'draft'
 RETURNING version, status, created_by, created_at, published_at, version_key
 `
 
+// No row when the release is not a draft: published releases are immutable (PDK-432).
 func (q *Queries) PublishAgentRelease(ctx context.Context, version string) (AgentRelease, error) {
 	row := q.db.QueryRow(ctx, publishAgentRelease, version)
 	var i AgentRelease
@@ -731,7 +759,10 @@ func (q *Queries) SupervisorPackages(ctx context.Context) ([]SupervisorPackagesR
 
 const upsertAgentArtifact = `-- name: UpsertAgentArtifact :one
 INSERT INTO agent_artifact (version, arch, sha256, size, minisig, object_key)
-VALUES ($1, $2, $3, $4, $5, $6)
+SELECT r.version, $1::text, $2::text, $3::bigint, $4::text, $5::text
+FROM agent_release r
+WHERE r.version = $6 AND r.status = 'draft'
+FOR SHARE
 ON CONFLICT (version, arch) DO UPDATE
   SET sha256 = EXCLUDED.sha256, size = EXCLUDED.size, minisig = EXCLUDED.minisig, object_key = EXCLUDED.object_key,
       created_at = now()
@@ -739,22 +770,24 @@ RETURNING version, arch, sha256, size, minisig, object_key, created_at
 `
 
 type UpsertAgentArtifactParams struct {
-	Version   string
 	Arch      string
 	Sha256    string
 	Size      int64
 	Minisig   string
 	ObjectKey string
+	Version   string
 }
 
+// No row when the release is not a draft (PDK-432). FOR SHARE holds the draft until commit, so a concurrent
+// PublishAgentRelease waits for this upsert, and an upsert waiting for a publish re-checks the published row.
 func (q *Queries) UpsertAgentArtifact(ctx context.Context, arg UpsertAgentArtifactParams) (AgentArtifact, error) {
 	row := q.db.QueryRow(ctx, upsertAgentArtifact,
-		arg.Version,
 		arg.Arch,
 		arg.Sha256,
 		arg.Size,
 		arg.Minisig,
 		arg.ObjectKey,
+		arg.Version,
 	)
 	var i AgentArtifact
 	err := row.Scan(
@@ -772,7 +805,11 @@ func (q *Queries) UpsertAgentArtifact(ctx context.Context, arg UpsertAgentArtifa
 const upsertAgentPackage = `-- name: UpsertAgentPackage :one
 
 INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key, package_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+SELECT r.version, $1::text, $2::text, $3::text, $4::bigint, $5::text, $6::text,
+       $7::text
+FROM agent_release r
+WHERE r.version = $8 AND r.status = 'draft'
+FOR SHARE
 ON CONFLICT (version, name, arch) DO UPDATE
   SET sha256 = EXCLUDED.sha256, size = EXCLUDED.size, minisig = EXCLUDED.minisig, object_key = EXCLUDED.object_key,
       package_version = EXCLUDED.package_version, created_at = now()
@@ -780,7 +817,6 @@ RETURNING version, name, arch, sha256, size, minisig, object_key, created_at, pa
 `
 
 type UpsertAgentPackageParams struct {
-	Version        string
 	Name           string
 	Arch           string
 	Sha256         string
@@ -788,12 +824,13 @@ type UpsertAgentPackageParams struct {
 	Minisig        string
 	ObjectKey      string
 	PackageVersion *string
+	Version        string
 }
 
 // Debian packages of a release (plan M4b decision 1).
+// No row when the release is not a draft; locked as UpsertAgentArtifact (PDK-432).
 func (q *Queries) UpsertAgentPackage(ctx context.Context, arg UpsertAgentPackageParams) (AgentPackage, error) {
 	row := q.db.QueryRow(ctx, upsertAgentPackage,
-		arg.Version,
 		arg.Name,
 		arg.Arch,
 		arg.Sha256,
@@ -801,6 +838,7 @@ func (q *Queries) UpsertAgentPackage(ctx context.Context, arg UpsertAgentPackage
 		arg.Minisig,
 		arg.ObjectKey,
 		arg.PackageVersion,
+		arg.Version,
 	)
 	var i AgentPackage
 	err := row.Scan(

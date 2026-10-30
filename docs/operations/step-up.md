@@ -83,21 +83,34 @@ tokens cannot complete a step-up`, recorded as one denied audit event. The GitOp
 everything else; an administrator applies root-equivalent changes from the portal (`docs/operations/paddockctl.md`).
 
 **Factor.** The shipped step-up flow accepts WebAuthn authenticators only (security key or platform authenticator).
-The portal sign-in makes sure that every administrator has a WebAuthn authenticator, in two stages of the flow
-`paddock-admin-login`:
+The portal sign-in requires a passkey: the api accepts a sign-in of any portal role (platform administrator,
+organization administrator, operator, auditor) only when the login validated a WebAuthn authenticator (claim
+`paddock_mfa_classes` of the portal's ID token, emitted by the mapping `io.paddock/scope-login-mfa` under the scope
+`paddock_mfa`), and refuses every other sign-in, a role switch included, with `/login-denied?reason=passkey_required`
+and one denied `admin.login` event (error code `passkey_required`; ADR 0034 amendment 2026-10-29). Three stages of the
+flow `paddock-admin-login` give every administrator such a login:
 
 - Order 30, `paddock-admin-login-mfa`: the administrator proves an existing authenticator (WebAuthn or TOTP). Authentik
   counts one of the account's recovery codes as the TOTP factor and accepts it here as well. Only an account with no
   WebAuthn or TOTP authenticator enrols a WebAuthn authenticator here, after the password (residual risk RR-62).
 - Order 31, `paddock-admin-login-webauthn`: runs only for an account without a WebAuthn device (policy
-  `paddock-admin-login-webauthn-missing`). An administrator with TOTP only has just proven the TOTP code or entered a
+  `paddock-admin-login-webauthn-missing`) that is a direct member of a portal role group, `paddock.platform.admins`
+  or an organization's `admins`, `operators` or `auditors` group (policy
+  `paddock-admin-login-webauthn-administrator`, ADR 0034 amendment 2026-10-29): the flow is also the brand's
+  sign-in of the device-code page, where end users are not asked to enrol a passkey. An administrator with TOTP only has just proven the TOTP code or entered a
   recovery code and enrols a WebAuthn authenticator now; the password alone never enrols a key for an account with
   TOTP or WebAuthn, but the password and one recovery code do (RR-62: keep administrators' recovery codes in custody).
+- Order 32, `paddock-admin-login-webauthn-confirm`: validates WebAuthn only and runs for members of the same groups
+  when no WebAuthn authenticator was validated earlier in this sign-in (policy
+  `paddock-admin-login-webauthn-unconfirmed`). Authentik records no authenticator for an enrolment, so an administrator
+  who has just enrolled at order 30 or 31, or proved TOTP at order 30 although a passkey exists, confirms the passkey
+  here once. An administrator who used the passkey at order 30 is not asked again.
 
-A TOTP authenticator stays usable for Authentik's own interfaces and the device login. A TOTP-only administrator who
-reaches the portal through an existing Authentik session (Authentik's default sign-in) never passes these stages and
-is refused at every step-up: sign out of Authentik (`https://auth.<domain>/if/user/` → Sign out) and sign in once
-through the portal's own sign-in to enrol the passkey. Paddock checks the
+A TOTP authenticator stays usable for Authentik's own interfaces and the device login. An administrator who reaches
+the portal through an existing Authentik session whose login validated no passkey (Authentik's default sign-in with
+TOTP, or a device-code sign-in) never passes these stages: the portal refuses the sign-in with `passkey_required`, and
+the denial page offers *Sign out of the identity provider* (Authentik's default invalidation flow). Signing in again
+through the portal then runs `paddock-admin-login` and enrols or confirms the passkey. Paddock checks the
 authenticator classes the step-up validated (claim `paddock_mfa_classes` of the step-up token, emitted by the mapping
 `io.paddock/scope-stepup-mfa`) and refuses every step-up without a WebAuthn authenticator; `amr` alone does not tell
 WebAuthn from TOTP (residual risk RR-38). The api logs a refused class list as "step-up rejected … the step-up did not
@@ -126,6 +139,11 @@ validate the required authenticator class" with the classes, never the token.
   administrator signs in again with the current role. A token without `groups`, or a platform session whose groups
   name an organization, is only refused.
 - A role switch (user menu) is a new sign-in: the new session starts without a step-up.
+- **MCP sessions never step up** (ADR 0044, [mcp.md](mcp.md)). A session of `paddockctl mcp login` has no step-up and
+  cannot get one: `/api/auth/stepup` and its callback refuse an MCP access token (403), operations that always need a
+  step-up are not offered to the MCP (403 `mcp_tool_not_allowed`), and a change that needs one in a given case answers
+  403 `step_up_required` with the detail `this change needs an interactive administrator in the portal: MCP sessions
+  cannot complete a step-up`, recorded as denied.
 
 The portal shows how long the last step-up stays valid: a chip *Confirmed until …* in the app bar and the line
 *Identity confirmed until …* in the user menu (*No current identity confirmation* otherwise), from
@@ -194,9 +212,11 @@ In the development stack `make dev-seed` gives the test users TOTP authenticator
 blueprint format cannot set an authenticator's key, so the seeder writes them through Authentik's shell. Because the
 shipped flow validates WebAuthn only, the development blueprint `authentik/dev/paddock-dev.yaml` (mounted by
 `compose.dev.yaml` only) skips the WebAuthn stage at order 30 with the policy `paddock-dev-skip-stepup-webauthn` and
-binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. It also skips both portal sign-in stages
-(`paddock-admin-login` orders 30 and 31) with the policy `paddock-dev-skip-mfa`; the binding at order 31 evaluates its
-policies in mode *all*, so the skip wins over the WebAuthn-missing policy. Production carries neither. `compose.dev.yaml` sets
+binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. It also skips the portal sign-in stages
+(`paddock-admin-login` orders 30, 31 and 32) with the policy `paddock-dev-skip-mfa`; the bindings at orders 31 and 32
+evaluate their policies in mode *all*, so the skip wins over the shipped policies. `compose.dev.yaml` sets
+`PADDOCK_LOGIN_MFA_OPTIONAL=true`, so the api accepts the development users' sign-ins without a second factor or a
+passkey. Production carries neither. `compose.dev.yaml` sets
 `PADDOCK_STEPUP_MFA_CLASS=authentik_stages_authenticator_totp.totpdevice` on `paddock-api`, so the api accepts the
 development users' TOTP step-ups; the variable is development-only and fails `./paddock check` and the api's start in
 production.

@@ -502,6 +502,19 @@ func (r *ActionRunner) RecordRejected(ctx context.Context, scope Scope, spec Act
 	return r.RunTx(ctx, scope, spec, func(context.Context, *pgstore.Queries, Recorder) error { return rejection })
 }
 
+// RecordRefusal records a privileged action refused before its use case ran by a check that precedes the role and
+// step-up checks (the MCP guard, plan M14 §3.4 item 20): exactly one event with the refusal's own outcome and code,
+// so that an MCP session asking for a step-up action learns that the MCP never offers it rather than that a step-up
+// is missing. It returns the refusal.
+func (r *ActionRunner) RecordRefusal(ctx context.Context, scope Scope, spec ActionSpec, refusal error) error {
+	p, ok := principal.From(ctx)
+	if !ok {
+		return problem.Unauthenticated
+	}
+	r.recordFinal(ctx, p, scope, r.newRecorder(ctx, p, scope, spec), refusal)
+	return refusal
+}
+
 // recordPanic records a panicking use case as failure (error_code internal) and re-panics for the HTTP recovery
 // middleware, so even a crash inside a request leaves exactly one event.
 func (r *ActionRunner) recordPanic(ctx context.Context, p principal.Principal, scope Scope, rec *recorder) {

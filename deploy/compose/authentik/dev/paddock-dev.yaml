@@ -49,6 +49,14 @@ entries:
       order: 2
     attrs:
       target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 31]]
+  # Stage C (the passkey confirmation after an enrolment) would deny the test users, who have no WebAuthn device; the
+  # api accepts their sign-in without a passkey through PADDOCK_LOGIN_MFA_OPTIONAL.
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-mfa
+      order: 3
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 32]]
 
   # The step-up validates with WebAuthn only; the test users have scripted TOTP authenticators. The WebAuthn stage at
   # order 30 is skipped like the login's, and a stage that also accepts TOTP takes its place at order 31.
@@ -135,16 +143,3 @@ entries:
       email: carol@globex.test
       type: internal
       password: !Env DEV_CAROL_PASSWORD
-
-  # MCP login (plan M14 §3.3 item 11): one-minute access tokens, so that the expiry gate need not wait 30 minutes.
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-mcp.yaml
-      required: true
-
-  - model: authentik_providers_oauth2.oauth2provider
-    identifiers:
-      name: paddock-mcp
-    attrs:
-      access_token_validity: minutes=1

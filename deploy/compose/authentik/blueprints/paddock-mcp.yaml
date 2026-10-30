@@ -43,7 +43,13 @@ entries:
       # The portal's sub, so that an MCP login reaches the same admin_account row.
       sub_mode: hashed_user_id
       issuer_mode: per_provider
-      access_token_validity: minutes=30
+      # The device code lives ten minutes like the device logins' (adapters/authentik/devicelogin.go): Authentik's
+      # default access_code_validity of one minute expires before a person finishes password and MFA.
+      access_code_validity: minutes=10
+      # Development sets PADDOCK_MCP_ACCESS_TOKEN_VALIDITY=minutes=1 on the Authentik containers (compose.dev.yaml), so
+      # that the expiry gate need not wait 30 minutes; production never sets it (bundle test). One value in one
+      # blueprint: a second blueprint overriding it lost whenever Authentik applied this one later (PDK-467).
+      access_token_validity: !Env [PADDOCK_MCP_ACCESS_TOKEN_VALIDITY, minutes=30]
       # The portal's absolute session lifetime.
       refresh_token_validity: hours=8
       property_mappings:

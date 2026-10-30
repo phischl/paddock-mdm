@@ -292,8 +292,119 @@ func TestStepUpFactor(t *testing.T) {
 		}
 	}
 	slices.Sort(policies)
-	if fmt.Sprint(policies) != "[paddock-admin-login-webauthn-missing paddock-dev-skip-mfa]" {
-		t.Errorf("paddock-admin-login order 31 policies %v, want the WebAuthn-missing policy and the development skip", policies)
+	if fmt.Sprint(policies) != "[paddock-admin-login-webauthn-administrator paddock-admin-login-webauthn-missing paddock-dev-skip-mfa]" {
+		t.Errorf("paddock-admin-login order 31 policies %v, want the administrator and WebAuthn-missing policies and the development skip", policies)
+	}
+}
+
+// TestPortalLoginPasskeyEnrolmentScope (ADR 0034 amendment 2026-10-29, PDK-498): paddock-admin-login is also the
+// default brand's authentication flow, which the device-code page runs for every device user, so its passkey
+// enrolment (stage B at order 31) applies only to members of Paddock administrator groups. The development blueprint
+// skips stage B for everybody, so the gate evaluates the shipped policies of the binding (all except the development
+// skip; the binding's mode is "all") through Authentik's policy test endpoint for users without a WebAuthn device.
+func TestPortalLoginPasskeyEnrolmentScope(t *testing.T) {
+	ctx := testContext(t, 2*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flows struct {
+		Results []struct {
+			PK string `json:"pk"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/instances/?slug=paddock-admin-login", &flows); err != nil || len(flows.Results) != 1 {
+		t.Fatalf("flow paddock-admin-login: %+v %v", flows, err)
+	}
+	var bindings struct {
+		Results []struct {
+			Order      int    `json:"order"`
+			PolicyPK   string `json:"policybindingmodel_ptr_id"`
+			EngineMode string `json:"policy_engine_mode"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	target := ""
+	for _, b := range bindings.Results {
+		if b.Order == 31 {
+			if b.EngineMode != "all" {
+				t.Fatalf("paddock-admin-login order 31 policy engine mode %q, want all", b.EngineMode)
+			}
+			target = b.PolicyPK
+		}
+	}
+	if target == "" {
+		t.Fatalf("paddock-admin-login has no stage binding at order 31: %+v", bindings.Results)
+	}
+	var pb struct {
+		Results []struct {
+			Policy        string `json:"policy"`
+			Enabled       bool   `json:"enabled"`
+			Negate        bool   `json:"negate"`
+			FailureResult bool   `json:"failure_result"`
+			PolicyObj     struct {
+				Name string `json:"name"`
+			} `json:"policy_obj"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/policies/bindings/?target="+target, &pb); err != nil {
+		t.Fatal(err)
+	}
+	var shipped, names []string
+	for _, p := range pb.Results {
+		if p.PolicyObj.Name == "paddock-dev-skip-mfa" {
+			continue
+		}
+		if !p.Enabled || p.Negate {
+			t.Errorf("policy binding of %s: enabled %v, negate %v", p.PolicyObj.Name, p.Enabled, p.Negate)
+		}
+		if p.PolicyObj.Name == "paddock-admin-login-webauthn-administrator" && !p.FailureResult {
+			t.Error("paddock-admin-login-webauthn-administrator does not fail closed (failure_result false)")
+		}
+		shipped = append(shipped, p.Policy)
+		names = append(names, p.PolicyObj.Name)
+	}
+	slices.Sort(names)
+	if fmt.Sprint(names) != "[paddock-admin-login-webauthn-administrator paddock-admin-login-webauthn-missing]" {
+		t.Fatalf("shipped policies of paddock-admin-login order 31: %v", names)
+	}
+	enrols := func(t *testing.T, username string) bool {
+		t.Helper()
+		pk, err := ak.UserPK(ctx, username)
+		if err != nil || pk == 0 {
+			t.Fatalf("user %s: pk %d, %v", username, pk, err)
+		}
+		for _, policy := range shipped {
+			pass, err := ak.TestPolicy(ctx, policy, pk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !pass {
+				return false
+			}
+		}
+		return true
+	}
+	for _, c := range []struct {
+		name   string
+		groups []string
+		want   bool
+	}{
+		{"device user, no Paddock group", nil, false},
+		{"device user, organization member", []string{env.RootGroup("acme")}, false},
+		{"organization administrator", []string{env.RootGroup("acme"), env.RoleGroup("acme", "admins")}, true},
+		{"organization operator", []string{env.RoleGroup("acme", "operators")}, true},
+		{"organization auditor", []string{env.RoleGroup("acme", "auditors")}, true},
+		{"platform administrator", []string{"paddock.platform.admins"}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			user, _ := tempUser(t, "pdk498", c.groups...)
+			if got := enrols(t, user); got != c.want {
+				t.Errorf("stage B (passkey enrolment) runs for %s without a WebAuthn device: %v, want %v", c.name, got, c.want)
+			}
+		})
 	}
 }
 
@@ -394,5 +505,126 @@ func TestStepUpHeldAuthorizeURL(t *testing.T) {
 	}
 	if fmt.Sprint(s.MFAClasses) != "["+totpClass+"]" {
 		t.Fatalf("step_up.mfa_classes %v, want [%s]", s.MFAClasses, totpClass)
+	}
+}
+
+// TestPortalLoginPasskeyConfirmationScope (ADR 0034 amendment 2026-10-29, PDK-500): the api accepts a portal sign-in
+// only with a validated WebAuthn authenticator, and Authentik records none for an enrolment, so stage C at order 32 of
+// paddock-admin-login confirms the passkey after an enrolment. It validates WebAuthn with deny, so it must never run
+// for an end user (the device-code page runs this flow) and must not run after a WebAuthn validation in the same
+// flow. The development blueprint skips stage C, so the gate checks the stage and evaluates the shipped policies of
+// its binding (mode "all") through Authentik's policy test endpoint, whose empty context has no validated device.
+func TestPortalLoginPasskeyConfirmationScope(t *testing.T) {
+	ctx := testContext(t, 2*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stage struct {
+		Results []struct {
+			DeviceClasses       []string `json:"device_classes"`
+			NotConfiguredAction string   `json:"not_configured_action"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/stages/authenticator/validate/?name=paddock-admin-login-webauthn-confirm", &stage); err != nil ||
+		len(stage.Results) != 1 {
+		t.Fatalf("stage paddock-admin-login-webauthn-confirm: %+v %v", stage, err)
+	}
+	if s := stage.Results[0]; fmt.Sprint(s.DeviceClasses) != "[webauthn]" || s.NotConfiguredAction != "deny" {
+		t.Errorf("stage C: %+v, want [webauthn] and deny", s)
+	}
+	var flows struct {
+		Results []struct {
+			PK string `json:"pk"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/instances/?slug=paddock-admin-login", &flows); err != nil || len(flows.Results) != 1 {
+		t.Fatalf("flow paddock-admin-login: %+v %v", flows, err)
+	}
+	var bindings struct {
+		Results []struct {
+			Order      int    `json:"order"`
+			PolicyPK   string `json:"policybindingmodel_ptr_id"`
+			EngineMode string `json:"policy_engine_mode"`
+			StageObj   struct {
+				Name string `json:"name"`
+			} `json:"stage_obj"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	target := ""
+	for _, b := range bindings.Results {
+		if b.Order == 32 {
+			if b.StageObj.Name != "paddock-admin-login-webauthn-confirm" || b.EngineMode != "all" {
+				t.Fatalf("paddock-admin-login order 32: %+v, want paddock-admin-login-webauthn-confirm in mode all", b)
+			}
+			target = b.PolicyPK
+		}
+	}
+	if target == "" {
+		t.Fatalf("paddock-admin-login has no stage binding at order 32: %+v", bindings.Results)
+	}
+	var pb struct {
+		Results []struct {
+			Policy        string `json:"policy"`
+			Enabled       bool   `json:"enabled"`
+			Negate        bool   `json:"negate"`
+			FailureResult bool   `json:"failure_result"`
+			PolicyObj     struct {
+				Name string `json:"name"`
+			} `json:"policy_obj"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/policies/bindings/?target="+target, &pb); err != nil {
+		t.Fatal(err)
+	}
+	var shipped, names []string
+	for _, p := range pb.Results {
+		if p.PolicyObj.Name == "paddock-dev-skip-mfa" {
+			continue
+		}
+		if !p.Enabled || p.Negate || !p.FailureResult {
+			t.Errorf("policy binding of %s: enabled %v, negate %v, failure_result %v", p.PolicyObj.Name, p.Enabled, p.Negate,
+				p.FailureResult)
+		}
+		shipped = append(shipped, p.Policy)
+		names = append(names, p.PolicyObj.Name)
+	}
+	slices.Sort(names)
+	if fmt.Sprint(names) != "[paddock-admin-login-webauthn-administrator paddock-admin-login-webauthn-unconfirmed]" {
+		t.Fatalf("shipped policies of paddock-admin-login order 32: %v", names)
+	}
+	for _, c := range []struct {
+		name   string
+		groups []string
+		want   bool
+	}{
+		{"device user, no Paddock group", nil, false},
+		{"device user, organization member", []string{env.RootGroup("acme")}, false},
+		{"organization administrator", []string{env.RootGroup("acme"), env.RoleGroup("acme", "admins")}, true},
+		{"organization operator", []string{env.RoleGroup("acme", "operators")}, true},
+		{"organization auditor", []string{env.RoleGroup("acme", "auditors")}, true},
+		{"platform administrator", []string{"paddock.platform.admins"}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			user, _ := tempUser(t, "pdk500", c.groups...)
+			pk, err := ak.UserPK(ctx, user)
+			if err != nil || pk == 0 {
+				t.Fatalf("user %s: pk %d, %v", user, pk, err)
+			}
+			runs := true
+			for _, policy := range shipped {
+				pass, err := ak.TestPolicy(ctx, policy, pk)
+				if err != nil {
+					t.Fatal(err)
+				}
+				runs = runs && pass
+			}
+			if runs != c.want {
+				t.Errorf("stage C (passkey confirmation) runs for %s without a validated WebAuthn device: %v, want %v", c.name, runs, c.want)
+			}
+		})
 	}
 }

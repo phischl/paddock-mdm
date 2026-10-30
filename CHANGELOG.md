@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Entries of merged changes that are not released yet are in `changelog.d/`.
+
 ### Added
 
+- A second development stack on the same host (PDK-519): `PADDOCK_INSTANCE=2 make dev-secrets` in a second checkout
+  writes a `.env` with its own Compose project (`paddock2`), image tags and host ports (every port 100 higher: HTTPS
+  `8543`), and every `make` target and acceptance and end-to-end gate of that checkout then reaches that stack. The
+  loopback ports of the development stack are settings (`PADDOCK_DEV_*_PORT`); unset, nothing changes. A command with
+  a `PADDOCK_INSTANCE` other than the checkout's is refused. See "Running a second dev stack" in
+  `docs/operations/local-dev.md`.
+- The system gates on the test VMs run against the stack of their checkout (PDK-525): from a second development
+  stack's checkout they use its Compose project and HTTPS port, e.g. when they cut a device off from the server.
 - MCP tool catalog generated from the admin API contract (ADR 0044, PDK-434): `make gen` derives one tool per admin
   API operation (outside the login tag) from `api/openapi/admin.yaml`, classified as read or write, with scope,
   destructive and idempotent hints and a self-contained input schema. The contract gains the extensions
@@ -38,17 +48,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel `mcp`; logout, *End all sessions*, deactivation and a role change end it, the latter two also at the next
   request. Refused `admin.login` attempts of the portal now carry `channel: portal` as well. New metric
   `paddock_mcp_auth_total{result}`. The step-up routes refuse an MCP access token (403).
+- MCP policies and the personal MCP write opt-in (ADR 0044, PDK-437): `GET`/`PUT /api/v1/settings/mcp` (organization)
+  and `GET`/`PUT /api/platform/v1/settings/mcp` (platform) hold whether the MCP is enabled, whether it may change
+  data, and whether all or only selected tools are allowed. Without a saved policy the MCP is off. Changing a policy
+  needs an organization or platform administrator with a step-up and is audited as `organization.mcp_policy_changed`
+  or `platform.mcp_policy_changed`; selected tools must be offered MCP tools that need no step-up (at most 500).
+  `POST /api/v1/me/mcp-write/enable` (step-up) and `…/disable` let administrators and operators opt their own account
+  in to or out of MCP write access, audited as `admin.mcp_write_enabled` and `admin.mcp_write_disabled`; auditors, API
+  tokens and MCP sessions are refused (403 `forbidden`). `GET /api/v1/me` answers `mcp_write_enabled`. The policies
+  are not enforced yet.
+- MCP policies are enforced (ADR 0044, PDK-438): every admin API request of an MCP session is checked before it runs
+  against the shared tool catalog, the policy of its scope and the account's write opt-in, and refused with 403
+  `mcp_disabled`, `mcp_tool_not_allowed` (also for every operation the MCP never offers, such as step-up actions and
+  the MCP settings themselves) or `mcp_write_not_enabled`; a refused change is audited once as denied with
+  `source: mcp`, a refused read is not. MCP sessions are limited to 120 reads and 30 changes per account and minute
+  per api replica (429 `rate_limited` with `Retry-After`); portal sessions and API tokens are neither checked nor
+  limited. `GET /api/v1/me`, `GET /api/v1/mcp/access` (what the caller's MCP sessions may do) and
+  `GET /api/v1/mcp/catalog` (the tool catalog) always answer. New metric `paddock_mcp_requests_total{class, result}`.
+  An MCP session calling `POST /api/v1/me/mcp-write/enable` or `…/disable` now gets 403 `mcp_tool_not_allowed`.
 
 ### Changed
 
+- CI: the acceptance gates run in four parallel shards (was three), balanced by the median durations of eight recent
+  CI runs, so a pull request waits about 41 instead of up to 75 minutes for its slowest acceptance job. The gates
+  themselves are unchanged. The shard check now fails on a listed test it cannot parse instead of leaving it out, and
+  a failed disruptive/e2e job prints Fleet's full log again (PDK-361). No operator step.
+- CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
+  weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
+  tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the
+  cluster branch goes to main. The required check `acceptance` still fails on a pull request to main unless every
+  gate passed (PDK-526).
+- Portal: while a new organization is being created, the *New organization* dialog says that the identity provider
+  is being set up and that this can take up to a minute (the create waits for that setup, bounded at 60 s); the
+  *Create* button stays disabled meanwhile (PDK-407).
+- Lab smoke test: runs against nginx 1.31.8 (was 1.28.3) and from now on follows the nginx mainline line (ADR 0029
+  amendment 2026-10-28). No operator step: the image is a tooling image, is not part of the operator bundle, and the
+  shipped reference configuration `nginx/paddock.conf.example` is unchanged (PDK-347).
 - Portal: when *End all sessions* ends the portal sessions but the identity provider's sessions cannot be ended (502
   `upstream_unavailable`), the page now says so and asks to run *End all sessions* again (PDK-321).
+- The portal is built and tested with Node 26 (image `node:26.12.1-trixie-slim`, was `24.21.0`); Node 26 is the Active
+  LTS line since 2026-10-28 (ADR 0015 amendment 2026-10-28). No operator step: Node is a build and tooling image and is
+  not part of the operator bundle. `engines.node` stays `>=24` because the Playwright image runs the end-to-end tests
+  on Node 24 (PDK-346).
+- Minor and patch updates of libraries: the portal uses Vuetify 4.3.0 (was 4.2.6) and is linted with ESLint 10.13.0
+  and typescript-eslint 8.72.0 (were 10.12.0 and 8.71.2); the server validates requests against the API contract with
+  kin-openapi 0.152.0 (was 0.151.0) and uses the oapi-codegen runtime 1.8.0 (was 1.7.0). Schema: unchanged.
 - Linter pinned to golangci-lint v2.15.0 (PDK-348). The supervisor now logs the agent's exit status
   (`agent stopped`, with `killed: true` when the agent ignored SIGTERM for 10 seconds) when it stops the agent for a
   switch, a rollback or shutdown.
 
 ### Fixed
 
+- Device login (PDK-498, ADR 0034 amendment 2026-10-29): approving a device sign-in on a second device no longer asks
+  every user to enrol a passkey. The device-code page signs users in with the portal's sign-in, whose passkey
+  enrolment now applies only to members of Paddock's administrator groups (platform administrators and the
+  administrators, operators and auditors of every organization). End users approve with password and TOTP; the
+  portal sign-in is unchanged for administrators. The Authentik blueprint `paddock-portal.yaml` gains the policy
+  `paddock-admin-login-webauthn-administrator`, applied automatically on upgrade.
+- Event gap detection (PDK-419): a device with a reported event gap that never fills no longer hides later gaps.
+  Before, once such a device had delivered more than 10 000 further events, every worker round re-read the same
+  window and a second gap above it was never reported as `device.event_gap`. The round now keeps a scan position per
+  device (migration `00073_event_seq_scanned`) and reads one bounded window above it, moving on every round.
+- Production and lab installations (PDK-492): the api now finds the MCP login provider at
+  `https://auth.<domain>/application/o/paddock-mcp/`. Before, it looked for it at the development port, never became
+  ready and the installation or upgrade stopped at `./paddock start`. The bundle test refuses an OIDC issuer with an
+  explicit port.
+- MCP login (`paddockctl mcp login`, PDK-489): the device code of the Authentik provider `paddock-mcp` now lives ten
+  minutes, as the device logins' do. With Authentik's default of one minute, a sign-in with password and second factor
+  could expire before it was confirmed.
 - Portal: a focused input field (number, text, time, text area) shows a single focus indicator, the field's own
   outline. A second ring inside it no longer crosses the field label.
 
@@ -71,54 +138,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   language, theme and density entries and the action buttons of the attention list and the overview now begin with
   their visible text and still name the target, e.g. "Retire, lock or keep — acme-lt-0142", so speech-input users can
   activate them by saying what they see. The portal's accessibility check runs with axe-core 4.14.
-
-### Fixed
-
-- A device that refuses the removal of Paddock because the request itself is invalid no longer leaves the request
-  open: it ends at once, with one audit event by the device, so an administrator can request it again. A refusal that
-  clears up (an in-place encryption or a Lock or Destroy pending) keeps the request open, and the device page and the
-  admin API now show why the device refused (PDK-403).
-- `make system-test` and `make acceptance` fail with `no test ran` when the test filter `T` matches no test instead of
-  reporting the empty run as passed (PDK-339), and pass `T` to `go test -run` verbatim, so a `$` anchor no longer gets
-  lost in make's variable expansion (`T='^TestIdentityGates$/.*/^L1_login$'`); `$$` keeps working.
-- `make system-test`, `make acceptance` and `make e2e` check up front that the checkout has `deploy/compose/.env` and
-  the development secrets and stop with a clear message, instead of failing minutes into a run with "couldn't find env
-  file" (PDK-353). `make e2e` from a worktree whose `.secrets` is a symlink to another checkout no longer fails every
-  login and every certificate check: the resolved secrets directory is mounted into the Playwright container and also
-  handed to the device simulator and the release helper.
-- Uninstall (PDK-357): when cancelling an uninstall, or requesting a new one over an overdue request, fails after the
-  server had already reserved the device's command result, the reservation is now released. Before, the device's
-  later result was refused as a conflict although the command was still open, so the removal never started and the
-  request only ended when it expired.
-- A corrupt or unreadable supervisor-upgrade marker no longer keeps a device out of every agent and supervisor
-  rollout (PDK-337): like the removal of Paddock, an agent update and a further supervisor upgrade wait for such a
-  marker only until its modification time is older than 30 minutes, then go ahead and log a warning.
-- Agent updates (PDK-372): a supervisor stopped or restarted while a new agent release runs its self-test no longer
-  can report that release as `self_test_failed`. The interrupted update stays pending and the restarted supervisor
-  runs the self-test again, so a host shutdown or a supervisor restart during an update no longer counts as a failure
-  against the rollout.
-- Agent updates (PDK-469): the supervisor removes a finished release's staged files before its update request, so the
-  agent can no longer stage a new release into the moment between the two and lose its files to the old cleanup.
-- Clone detection: a device is no longer quarantined as a suspected clone after its check-ins failed on the server
-  side, for example while the ingest queue was full or the server was slow to accept the check-in. A failed check-in
-  no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
-  behind". The rule itself is unchanged: a device that sends a sequence number older than the one before the last
-  issued one is still quarantined.
-- Retiring a device no longer leaves its in-place encryption open on the server (PDK-396): a conversion the device
-  had already prepared, or one whose cancellation was on its way, is now closed as cancelled, and a cancellation the
-  device has not yet received is withdrawn. The retirement's audit event records the closure.
-- In-place encryption: when a bootable kernel's initrd in `/boot` was a symbolic link to a temporary initrd left by
-  an interrupted agent run, the initrd regeneration and the cleanup stayed pending with
-  `key_material_shared_bootable` until an administrator stepped in. The agent now rebuilds that kernel's initrd into
-  a regular file first and then overwrites and removes the temporary file; the kernel keeps booting throughout.
-- Device removal: a removal that does not run (withdrawn, failed to start, or given up on an unreadable plan) no
-  longer leaves its plan, its program copy or an empty `/root/paddock-uninstall/` directory on the device. The
-  uninstall runbook lists what may remain there.
+- Role membership audit (PDK-423): when the worker fails to clear the "missing" mark of a role holder who reappeared
+  in the identity provider, the next listing that misses that holder no longer records `admin.role_revoked`; the
+  revocation needs two consecutive misses after a successful mark. The worker process remembers the failure until its
+  next successful round for that role.
 
 ### Security
 
+- Agent releases (PDK-432): the database now enforces that a published release cannot change. An upload, host
+  command or import that stores a file of a release which another administrator published in the meantime is refused
+  with 409 `invalid_state` and keeps the recorded checksums of the release; a second concurrent publish is refused
+  the same way. A release import refuses a release with more than one fleetd package for the same architecture
+  (`invalid_request`), and `PADDOCK_AGENT_RELEASE_SOURCE_REPO` no longer accepts an owner or repository of only dots
+  such as `..`.
 - go-jose v4.1.6 in the server (was v4.1.4; CVE-2026-116587, high): parsing a JSON Web Key Set with crafted RSA keys
   could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
+- undici 6.29.1 in the portal's build tooling (was 6.29.0; CVE-2026-109383, CVE-2026-87018 and CVE-2026-109869, high;
+  CVE-2026-109932, medium). undici is only used while the portal is built and never ships with the server.
 
 ## [0.1.0-alpha.6] - 2026-10-27
 

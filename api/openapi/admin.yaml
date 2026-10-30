@@ -24,6 +24,9 @@ info:
       `auth`, named by its `operationId`. `x-paddock-mcp: { expose: false }` keeps an operation from being offered as
       a tool; `x-paddock-mcp: { bootstrap: true }` lets an MCP session call it without consulting the MCP policy.
       Step-up operations, non-JSON request bodies and success responses without JSON content are never exposed.
+      Any operation may refuse a request of an MCP session before its use case runs: 403 `mcp_disabled`,
+      `mcp_tool_not_allowed` or `mcp_write_not_enabled`, or 429 `rate_limited` with `Retry-After` (120 reads and 30
+      writes per account and minute); a refused audited operation records one denied event.
     - Every collection `GET` implements the list contract (ADR 0018): `page`, `page_size` (10, 25, 50, 100),
       `sort` (allow list, `-` prefix = descending, the primary key is appended as tie-breaker), `q`
       (case-insensitive substring search, 2–100 characters) and the documented filters; enum filters are
@@ -54,6 +57,7 @@ tags:
   - name: updates
   - name: audit
   - name: platform
+  - name: mcp
 paths:
   /api/auth/login:
     get:
@@ -284,6 +288,87 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/me/mcp-write/enable:
+    post:
+      operationId: enableMcpWrite
+      x-paddock-step-up: true
+      x-paddock-mcp: { expose: false }
+      tags: [mcp]
+      description: |
+        Roles: org_admin, org_operator, platform_admin. Enables MCP write access for the caller's own account (ADR 0044
+        amendment 2026-10-25): their MCP sessions may change data where the scope's MCP policy allows it. Needs a
+        step-up within the last 5 minutes (403 step_up_required); 403 forbidden for org_auditor, for API tokens and
+        for MCP sessions. Every attempt is audited.
+      x-paddock-audit: admin.mcp_write_enabled
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The administrator with mcp_write_enabled true.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/me/mcp-write/disable:
+    post:
+      operationId: disableMcpWrite
+      x-paddock-mcp: { expose: false }
+      tags: [mcp]
+      description: |
+        Roles: org_admin, org_operator, platform_admin. Disables MCP write access for the caller's own account; no
+        step-up is needed. 403 forbidden for org_auditor, for API tokens and for MCP sessions. Every attempt is
+        audited.
+      x-paddock-audit: admin.mcp_write_disabled
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The administrator with mcp_write_enabled false.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/mcp/catalog:
+    get:
+      operationId: getMcpCatalog
+      x-paddock-mcp: { bootstrap: true, expose: false }
+      tags: [mcp]
+      description: |
+        Roles: every administrator. The MCP tool catalog shared by paddockctl mcp and the server's MCP guard: one
+        entry per admin API operation outside the tag auth, with its class, scope and whether the MCP offers it at all
+        (ADR 0044 decision 5). An MCP session may call it whatever its scope's MCP policy says.
+      responses:
+        "200":
+          description: The catalog.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpCatalog" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /api/v1/mcp/access:
+    get:
+      operationId: getMcpAccess
+      x-paddock-mcp: { bootstrap: true, expose: false }
+      tags: [mcp]
+      description: |
+        Roles: every administrator. What the caller's MCP sessions may do under the MCP policy of its scope (the
+        organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools
+        without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and
+        write_enabled, and the account opted in) and the caller's role may perform them. Without a saved policy enabled
+        is false and allowed_operations empty. An MCP session may call it whatever the policy says.
+      responses:
+        "200":
+          description: The caller's MCP access.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpAccess" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
 
   /api/v1/device-groups:
     get:
@@ -2154,6 +2239,50 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/settings/mcp:
+    get:
+      operationId: getMcpSettings
+      x-paddock-mcp: { expose: false }
+      tags: [mcp]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The MCP policy of the organization (ADR 0044 decision 5). Without a saved policy the MCP is
+        off: enabled false, write_enabled false, mode all, no allowed operations, updated_at and updated_by null.
+      responses:
+        "200":
+          description: The MCP policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpSettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateMcpSettings
+      x-paddock-step-up: true
+      x-paddock-mcp: { expose: false }
+      tags: [mcp]
+      description: |
+        Roles: org_admin. Replaces the MCP policy of the organization. mode all requires an empty allowed_operations;
+        mode selected requires 1 to 500 distinct operation ids of exposed MCP tools that need no step-up (400
+        invalid_request naming the offending id). Needs a step-up within the last 5 minutes (403 step_up_required);
+        API tokens and MCP sessions cannot satisfy it. Every attempt is audited.
+      x-paddock-audit: organization.mcp_policy_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/McpSettingsInput" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpSettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /api/v1/settings/updates:
     get:
@@ -4113,6 +4242,50 @@ paths:
               schema: { $ref: "#/components/schemas/AutoUnsealStatus" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/settings/mcp:
+    get:
+      operationId: getPlatformMcpSettings
+      x-paddock-mcp: { expose: false }
+      tags: [mcp]
+      description: |
+        Roles: platform_admin. The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). Without a saved policy the MCP is
+        off: enabled false, write_enabled false, mode all, no allowed operations, updated_at and updated_by null.
+      responses:
+        "200":
+          description: The MCP policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpSettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updatePlatformMcpSettings
+      x-paddock-step-up: true
+      x-paddock-mcp: { expose: false }
+      tags: [mcp]
+      description: |
+        Roles: platform_admin. Replaces the MCP policy of the platform (platform administrators' MCP sessions). mode all requires an empty allowed_operations;
+        mode selected requires 1 to 500 distinct operation ids of exposed MCP tools that need no step-up (400
+        invalid_request naming the offending id). Needs a step-up within the last 5 minutes (403 step_up_required);
+        API tokens and MCP sessions cannot satisfy it. Every attempt is audited.
+      x-paddock-audit: platform.mcp_policy_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/McpSettingsInput" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpSettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
   /api/platform/v1/agent-releases/{version}/rollout/resume:
     parameters:
       - $ref: "#/components/parameters/Version"
@@ -4510,7 +4683,7 @@ components:
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
-        step_up_valid_until, server_version, alternate_role, channel]
+        step_up_valid_until, server_version, alternate_role, channel, mcp_write_enabled, mcp_write_enabled_at]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -4557,12 +4730,30 @@ components:
           allOf: [ { $ref: "#/components/schemas/MeAlternateRole" } ]
           nullable: true
           description: The role this identity may switch to (ADR 0045); null for a single-role identity, API tokens and MCP sessions.
+        role_fallback:
+          type: string
+          enum: [organization_inactive]
+          description: |
+            Set when a plain sign-in of an identity with the platform role and an organization role entered the
+            platform role because the organization is unknown or not active (ADR 0045 amendment 2026-10-29); absent
+            otherwise. The portal shows a notice while it is set.
         channel:
           type: string
           enum: [portal, api, mcp]
           description: |
             How this request authenticated (ADR 0044): portal for a portal session, api for an API token, mcp for an
             MCP session opened with paddockctl mcp login.
+        mcp_write_enabled:
+          type: boolean
+          description: |
+            Whether the account opted in to MCP write access (ADR 0044 amendment 2026-10-25); false for API tokens.
+        mcp_write_enabled_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Since when the account's MCP write access is enabled (plan M14 §6.6 amendment 2026-10-29); null while it is
+            disabled and for API tokens. The portal shows it in the account menu's MCP dialog.
     MeAlternateRole:
       type: object
       required: [role]
@@ -5906,6 +6097,70 @@ components:
           type: array
           maxItems: 5
           items: { type: integer, minimum: 1 }
+    McpSettings:
+      type: object
+      required: [enabled, write_enabled, mode, allowed_operations, updated_at, updated_by]
+      properties:
+        enabled: { type: boolean, description: Whether MCP sessions of this scope may call any tool. }
+        write_enabled: { type: boolean, description: Whether MCP sessions of this scope may change data. }
+        mode:
+          type: string
+          enum: [all, selected]
+          description: all allows every exposed tool of the scope; selected only the tools in allowed_operations.
+        allowed_operations:
+          type: array
+          items: { type: string }
+        updated_at: { type: string, format: date-time, nullable: true }
+        updated_by: { type: string, format: uuid, nullable: true }
+    McpSettingsInput:
+      type: object
+      required: [enabled, write_enabled, mode, allowed_operations]
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        write_enabled: { type: boolean }
+        mode: { type: string, enum: [all, selected] }
+        allowed_operations:
+          type: array
+          maxItems: 500
+          uniqueItems: true
+          items: { type: string, maxLength: 100 }
+    McpCatalog:
+      type: object
+      required: [version, tools]
+      properties:
+        version: { type: string, description: SHA-256 of the generated catalog; changes with every contract change. }
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/McpTool" }
+    McpTool:
+      type: object
+      required: [operation_id, method, path, tag, scope, class, step_up, destructive, exposed, summary]
+      properties:
+        operation_id: { type: string }
+        method: { type: string }
+        path: { type: string }
+        tag: { type: string }
+        scope: { type: string, enum: [organization, platform, any] }
+        class: { type: string, enum: [read, write] }
+        step_up: { type: boolean }
+        destructive: { type: boolean }
+        exposed: { type: boolean, description: Whether the MCP offers the operation as a tool at all. }
+        summary: { type: string }
+    McpAccess:
+      type: object
+      required: [scope, channel, enabled, write_enabled, write_opted_in, write_effective, allowed_operations, catalog_version]
+      properties:
+        scope: { type: string, enum: [organization, platform] }
+        channel: { type: string, enum: [portal, api, mcp] }
+        enabled: { type: boolean }
+        write_enabled: { type: boolean }
+        write_opted_in: { type: boolean, description: Whether the caller's account opted in to MCP write access. }
+        write_effective: { type: boolean, description: enabled and write_enabled and write_opted_in. }
+        allowed_operations:
+          type: array
+          items: { type: string }
+        catalog_version: { type: string }
     ManagedFileSettings:
       type: object
       required: [operator_roots]

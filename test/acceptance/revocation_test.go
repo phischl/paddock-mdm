@@ -290,7 +290,7 @@ func escrowVersions(t *testing.T, prefix string) int {
 	creds := mustSecret(t, "rustfs_root_user") + "\n" + mustSecret(t, "rustfs_root_password") + "\n"
 	script := `read -r AWS_ACCESS_KEY_ID; read -r AWS_SECRET_ACCESS_KEY; export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; ` +
 		`aws --endpoint-url http://rustfs:9000 s3api list-object-versions --bucket paddock-escrow --prefix "$1" --output json`
-	out, err := stack.Docker(testContext(t, 2*time.Minute), strings.NewReader(creds), "run", "--rm", "-i", "--network", "paddock_cp",
+	out, err := stack.Docker(testContext(t, 2*time.Minute), strings.NewReader(creds), "run", "--rm", "-i", "--network", stack.Network("cp"),
 		"-e", "AWS_DEFAULT_REGION=us-east-1", "-e", "AWS_PAGER=", "--entrypoint", "sh", image, "-c", script, "sh", prefix)
 	if err != nil {
 		t.Fatalf("list object versions: %v %s", err, out)
@@ -358,12 +358,17 @@ func TestRevocationLimits(t *testing.T) {
 	forge := func(token, jti string, approvedAt time.Time) string {
 		dev := activeDevice(t, a1.portal, "", "rv-"+uniqueSuffix())
 		id := uuid.Must(uuid.NewV7()).String()
-		if _, err := db.Exec(ctx, `INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by, approved_at)
-			VALUES ($1, $2, $3, 'lock', 'approved', $4, $5)`, id, org, dev.DeviceID, a1ID, approvedAt); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(ctx, `INSERT INTO revocation_approval (request_id, organization_id, role, admin_id, subject, stepup_jti,
-			stepup_id_token, approved_at) VALUES ($1, $2, 'requester', $3, $4, $5, $6, $7)`, id, org, a1ID, realSubject, jti, token, approvedAt); err != nil {
+		// One transaction: an issuer round between the two inserts would see an approved request without approvals and
+		// reject it as approvals_invalid instead of judging the forged step-up token.
+		if err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by, approved_at)
+				VALUES ($1, $2, $3, 'lock', 'approved', $4, $5)`, id, org, dev.DeviceID, a1ID, approvedAt); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO revocation_approval (request_id, organization_id, role, admin_id, subject, stepup_jti,
+				stepup_id_token, approved_at) VALUES ($1, $2, 'requester', $3, $4, $5, $6, $7)`, id, org, a1ID, realSubject, jti, token, approvedAt)
+			return err
+		}); err != nil {
 			t.Fatal(err)
 		}
 		return id
@@ -465,6 +470,11 @@ func TestRevocationDisabled(t *testing.T) {
 	if r := waitRevocation(t, a1.portal, id, 3*time.Minute, "rejected", "issued"); r.Status != "rejected" || r.Rejection != "revocation_disabled" {
 		t.Fatalf("issuer with the flag off: %+v", r)
 	}
+	// The restarted compiler's first reconcile recompiles every organization oldest first (UUIDv7), so this newest
+	// one comes last and the wait would grow with the stack's fleet; a change of the device has its organization
+	// compiled at once. TestReconcileDeliversRevocationFlag covers the reconcile itself.
+	expectStatus(t, call(t, a1.portal, http.MethodPut, "/api/v1/devices/"+d.DeviceID+"/name", map[string]any{"name": "rv-" + uniqueSuffix()}),
+		http.StatusOK, "")
 	if b := latestBundle(t, d, 3*time.Minute, func(b *bundle.Bundle) bool { return b.Revocation != nil && !b.Revocation.Enabled }); b == nil {
 		t.Fatal("no bundle with revocation.enabled=false")
 	}

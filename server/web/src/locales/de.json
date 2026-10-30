@@ -58,6 +58,7 @@
     "switchRoleConfirmMessage": "Ihre aktuelle Sitzung endet, und privilegierte Aktionen brauchen eine neue Step-up-Anmeldung.",
     "switchRoleConfirm": "Wechseln",
     "switchRoleFailed": "Die Rolle konnte nicht gewechselt werden. Bitte versuchen Sie es erneut.",
+    "roleFallbackOrganizationInactive": "Ihre Organisation ist nicht aktiv; Sie sind als Plattformadministrator angemeldet.",
     "stepUpValidUntil": "Identität bestätigt bis {time}",
     "stepUpNone": "Keine aktuelle Identitätsbestätigung",
     "stepUpChip": "Bestätigt bis {time}"
@@ -75,6 +76,7 @@
     "ipAllowlist": "IP-Freigabeliste",
     "sessions": "Sitzungen",
     "openbao": "OpenBao",
+    "platformMcp": "MCP-Richtlinie",
     "users": "Benutzer",
     "userGroups": "Gruppen",
     "permissionProfiles": "Berechtigungsprofile",
@@ -103,7 +105,8 @@
     "attentionPill": "{count, plural, one {# braucht Aufmerksamkeit} other {# brauchen Aufmerksamkeit}}",
     "shortcut": "Tastenkürzel: {keys}",
     "securityReview": "Sicherheitsprüfung",
-    "operatorRoots": "Freigegebene Verzeichnisse"
+    "operatorRoots": "Freigegebene Verzeichnisse",
+    "mcpSettings": "MCP"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -245,7 +248,12 @@
     "release_source_unavailable": "Die Release-Quelle hat nicht geantwortet. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
     "release_not_newer": "Diese Version ist nicht neuer als das neueste veröffentlichte Release.",
     "release_incomplete": "Dem Release in der Quelle fehlt eine erforderliche Datei oder Signatur.",
-    "release_signature_mismatch": "Eine Datei des Releases passt nicht zum öffentlichen Release-Schlüssel; nichts wurde gespeichert."
+    "release_signature_mismatch": "Eine Datei des Releases passt nicht zum öffentlichen Release-Schlüssel; nichts wurde gespeichert.",
+    "mcp_disabled": "Der MCP ist für diesen Bereich ausgeschaltet.",
+    "mcp_tool_not_allowed": "Diese Operation ist über den MCP nicht erlaubt.",
+    "mcp_write_not_enabled": "Änderungen über den MCP sind nicht freigegeben.",
+    "mcp_login_required": "Melde dich erneut mit paddockctl mcp login an.",
+    "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal."
   },
   "audit": {
     "retention": {
@@ -278,7 +286,9 @@
       "login": "{actor} hat sich angemeldet",
       "sessions_revoked": "{reason, select, step_up_role_mismatch {Die Sitzungen von {target} wurden beendet: die Rolle bei der Identitätsbestätigung stimmte nicht überein} role_changed {Die Sitzungen von {target} wurden beendet: die Rolle hat sich von {old_role} zu {new_role} geändert} deactivated {Die Sitzungen von {target} wurden beendet: das Konto wurde deaktiviert} other {Die Sitzungen von {target} wurden beendet: das Konto hat keine Rolle mehr}}",
       "role_granted": "{username} wurde {role, select, org_admin {Organisationsadministrator} org_operator {Operator} org_auditor {Auditor} platform_admin {Plattformadministrator} authentik_superuser {Authentik-Superuser} other {{role}}}",
-      "role_revoked": "{username} ist nicht mehr {role, select, org_admin {Organisationsadministrator} org_operator {Operator} org_auditor {Auditor} platform_admin {Plattformadministrator} authentik_superuser {Authentik-Superuser} other {{role}}}"
+      "role_revoked": "{username} ist nicht mehr {role, select, org_admin {Organisationsadministrator} org_operator {Operator} org_auditor {Auditor} platform_admin {Plattformadministrator} authentik_superuser {Authentik-Superuser} other {{role}}}",
+      "mcp_write_enabled": "{actor} hat den MCP-Schreibzugriff für das eigene Konto aktiviert",
+      "mcp_write_disabled": "{actor} hat den MCP-Schreibzugriff für das eigene Konto deaktiviert"
     },
     "audit": {
       "chain_verified": "Die Hash-Kette des Audit-Protokolls wurde für {from_day} bis {to_day} geprüft ({days, number} Tage, {objects, number} Objekte, {trigger})",
@@ -288,7 +298,8 @@
       "created": "{actor} hat die Organisation {slug} angelegt",
       "domains_changed": "{actor} hat die Domains von {slug} festgelegt",
       "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)",
-      "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden"
+      "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden",
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Organisation geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
     },
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
@@ -409,7 +420,8 @@
       "sessions_ended": "{actor} hat alle Portal-Sitzungen beendet",
       "auto_unseal_enabled": "{actor} hat das automatische Entsiegeln von OpenBao aktiviert und den Hinweis {disclaimer_version} bestätigt",
       "auto_unseal_disabled": "{method, select, cli {Das automatische Entsiegeln von OpenBao wurde auf dem Host deaktiviert} other {{actor} hat das automatische Entsiegeln von OpenBao deaktiviert}}",
-      "openbao_auto_unsealed": "{failures, plural, =0 {Der Unsealer hat OpenBao automatisch entsiegelt ({unseals, number} Mal seit dem letzten Bericht)} other {Der Unsealer konnte OpenBao nicht entsiegeln ({failures, number} Fehlversuche, letzter Grund {last_failure_reason})}}"
+      "openbao_auto_unsealed": "{failures, plural, =0 {Der Unsealer hat OpenBao automatisch entsiegelt ({unseals, number} Mal seit dem letzten Bericht)} other {Der Unsealer konnte OpenBao nicht entsiegeln ({failures, number} Fehlversuche, letzter Grund {last_failure_reason})}}",
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Plattform geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -487,7 +499,8 @@
       "actor_ip": "IP-Adresse",
       "step_up": "Identitätsbestätigung",
       "error_code": "Fehlercode"
-    }
+    },
+    "sourceMcp": "MCP"
   },
   "organizations": {
     "title": "Organisationen",
@@ -500,6 +513,7 @@
     "editDomains": "Domains",
     "editDomainsTitle": "Domains von {name}",
     "createdWithoutDomains": "Die Organisation wurde angelegt, ihre Domains wurden aber nicht gespeichert. Speichern Sie sie über „Domains“ in der Liste.",
+    "provisioning": "Der Identitätsanbieter wird eingerichtet … Das kann bis zu einer Minute dauern.",
     "statuses": {
       "provisioning": "Wird eingerichtet",
       "active": "Aktiv",
@@ -602,13 +616,15 @@
     "not_authorized": "Ihr Konto ist für das Paddock-Portal nicht berechtigt. Bitten Sie Ihren Administrator, Sie genau einer Paddock-Administratorgruppe hinzuzufügen.",
     "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
     "mfa_required": "Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.",
+    "passkey_required": "Ihre Anmeldung wurde nicht mit einem Passkey bestätigt, und jede Rolle im Paddock-Portal erfordert einen (einen Sicherheitsschlüssel oder den eingebauten Authenticator Ihres Geräts). Melden Sie sich beim Identitätsanbieter ab, melden Sie sich dann erneut an und bestätigen Sie mit Ihrem Passkey. Haben Sie noch keinen Passkey, richtet die Anmeldung einen ein.",
     "key_store_sealed": "Der Schlüsselspeicher des Servers ist versiegelt, deshalb kann das Portal keine Sitzungen starten. Ein Operator muss OpenBao entsiegeln (docs/operations/openbao.md, Abschnitt 2). Geräte arbeiten weiter.",
     "no_role": "Ihr Konto ist in keiner Paddock-Rollengruppe. Bitten Sie Ihren Administrator, Sie genau einer der Gruppen paddock.'<Organisation>'.admins, .operators oder .auditors hinzuzufügen.",
     "multiple_organizations": "Ihr Konto hat Rollen in mehreren Organisationen. Ein Konto gehört zu genau einer Organisation; bitten Sie Ihren Administrator, die übrigen Mitgliedschaften zu entfernen oder getrennte Konten anzulegen.",
     "multiple_roles": "Ihr Konto hat mehrere Rollen in einer Organisation (Administrator, Operator oder Auditor). Bitten Sie Ihren Administrator, genau eine der Mitgliedschaften zu behalten.",
     "role_not_granted": "Die gewählte Rolle ist Ihrem Konto nicht mehr zugewiesen. Ihre aktuelle Sitzung bleibt unverändert; melden Sie sich erneut an, um fortzufahren.",
     "organization_inactive": "Ihre Organisation ist nicht aktiv. Wenden Sie sich an einen Plattformadministrator.",
-    "retry": "Erneut anmelden"
+    "retry": "Erneut anmelden",
+    "signOutIdentityProvider": "Beim Identitätsanbieter abmelden"
   },
   "notFound": {
     "title": "Seite nicht gefunden",
@@ -2160,5 +2176,67 @@
     "confirmFile": "Bestätigen, dass {name} auf einem sensiblen Pfad verwaltet bleiben darf? Anschließend bestätigen Sie Ihre Identität.",
     "deniedIntro": "Paddock verwaltet diese Pfade nicht mehr. Agents dieses Releases oder neuer lassen die Dateien auf den Geräten unverändert; ein älterer Agent löscht eine unveränderte Datei, sobald sie nicht mehr verteilt wird. Löschen Sie die Definitionen, die Sie nicht mehr brauchen.",
     "deleteDefinition": "Definition löschen"
+  },
+  "mcp": {
+    "title": "KI-Assistenten (MCP)",
+    "intro": "Administratoren melden sich mit ihrem Paddock-Konto beim MCP an (paddockctl mcp login) und handeln mit ihrer eigenen Rolle. Diese Richtlinie begrenzt, was jede MCP-Sitzung dieser {scope} tun darf. Änderungen brauchen zusätzlich den eigenen Schreibzugriff des Administrators.",
+    "connectHint": "Um einen Assistenten anzubinden, führen Sie paddockctl mcp login aus und tragen paddockctl mcp in Ihrem MCP-Client ein. Details stehen im Betriebshandbuch.",
+    "enabled": "MCP eingeschaltet",
+    "writeEnabled": "Änderungen über den MCP erlauben",
+    "mode": {
+      "all": "Alle Werkzeuge, die die API anbietet",
+      "selected": "Nur ausgewählte Werkzeuge"
+    },
+    "tools": "Werkzeuge",
+    "filter": "Werkzeuge filtern",
+    "selectHint": "Wählen Sie mindestens ein Werkzeug aus.",
+    "class": {
+      "read": "lesen",
+      "write": "schreiben"
+    },
+    "portalOnly": "nur im Portal (Step-up)",
+    "defaultsHint": "Noch keine Richtlinie gespeichert: Der MCP ist für diese {scope} ausgeschaltet. Schalten Sie ihn ein und speichern Sie die Richtlinie, um MCP-Sitzungen zuzulassen.",
+    "disabledHint": "Der MCP ist ausgeschaltet: Jede MCP-Sitzung dieser {scope} wird abgewiesen.",
+    "save": "Richtlinie speichern",
+    "saved": "MCP-Richtlinie gespeichert.",
+    "confirm": {
+      "title": "MCP-Richtlinie speichern?",
+      "message": "{count} Werkzeuge stehen MCP-Sitzungen dieser {scope} zur Verfügung; Änderungen {writes, select, allowed {bleiben möglich} other {werden abgewiesen}}."
+    },
+    "scope": {
+      "platform": "Plattform",
+      "organization": "Organisation"
+    },
+    "guide": "Betriebshandbuch: MCP",
+    "legend": "MCP-Richtlinie",
+    "selectAtLeastOne": "Wählen Sie mindestens ein Werkzeug aus oder erlauben Sie alle Werkzeuge.",
+    "write": {
+      "menu": "KI-Assistent (MCP)",
+      "menuOn": "Schreibzugriff aktiviert",
+      "menuOff": "Nur lesen",
+      "title": "Schreibzugriff für KI-Assistenten",
+      "explain": "Ihre MCP-Sitzungen können lesen, was Ihre Rolle lesen darf. Damit sie auch Daten ändern dürfen, aktivieren Sie hier den Schreibzugriff. Zusätzlich muss die MCP-Richtlinie Ihrer {scope} Änderungen erlauben. Sie können ihn jederzeit ohne Identitätsbestätigung wieder abschalten.",
+      "connect": "Um einen Assistenten zu verbinden, führen Sie paddockctl mcp login aus und tragen paddockctl mcp in Ihrem MCP-Client ein.",
+      "state": {
+        "on": "Schreibzugriff ist aktiviert seit {time}.",
+        "onUnknown": "Schreibzugriff ist aktiviert.",
+        "off": "Schreibzugriff ist deaktiviert."
+      },
+      "enable": "Schreibzugriff aktivieren",
+      "disable": "Schreibzugriff deaktivieren",
+      "close": "Schließen",
+      "confirmEnable": {
+        "title": "Schreibzugriff für KI-Assistenten aktivieren?",
+        "message": "Ihre MCP-Sitzungen dürfen dann Daten ändern, im Rahmen Ihrer Rolle und der MCP-Richtlinie. Anschließend folgt eine Identitätsbestätigung."
+      },
+      "confirmDisable": {
+        "title": "Schreibzugriff für KI-Assistenten deaktivieren?",
+        "message": "Ihre MCP-Sitzungen können dann nur noch Daten lesen; das gilt ab ihrer nächsten Anfrage."
+      },
+      "scope": {
+        "organization": "Organisation",
+        "platform": "Plattform"
+      }
+    }
   }
 }

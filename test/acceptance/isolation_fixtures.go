@@ -20,6 +20,9 @@ type isolationWorld struct {
 	top          *testing.T
 	alice, carol *env.Portal
 	globexIDs    []string // every ID of globex the acme session must never see
+	// ownActors are the actor ids of the acme administrators and API tokens this gate sends globex IDs with; their
+	// failed or denied attempts are acme's own records of those requests (withoutOwnFailedAttempts).
+	ownActors    []string
 	globexGroups []string
 	// Globex device control plane resources (seedGlobexDevices).
 	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
@@ -238,8 +241,8 @@ type isolationFixture struct {
 	kind isolationKind
 	// request returns the concrete path and body for alice; item fixtures create the globex resource first.
 	request func(t *testing.T, w *isolationWorld) (path string, body any)
-	// ownAttempts marks the audit-event list: alice's own failed or denied attempts are left out of the leak check
-	// (withoutOwnFailedAttempts), because the item checks record them with the globex ID alice sent.
+	// ownAttempts marks the audit-event list: the failed or denied attempts of the gate's own actors are left out of the
+	// leak check (withoutOwnFailedAttempts), because the item checks record them with the globex ID the gate sent.
 	ownAttempts bool
 }
 
@@ -449,6 +452,29 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"PUT /api/v1/settings/dms": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/settings/dms", map[string]any{"enabled": false, "period_days": 30, "warn_days": []int{3, 1}}
+	}},
+	"GET /api/v1/settings/mcp": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/mcp", nil
+	}},
+	// The MCP gates rely on acme's policy: the PUT writes the current one back.
+	"PUT /api/v1/settings/mcp": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/mcp", currentMCPPolicy(t, w.alice, "/api/v1/settings/mcp")
+	}},
+	// alice's MCP write opt-in is withdrawn again when the enable sub-test ends.
+	"POST /api/v1/me/mcp-write/enable": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		t.Cleanup(func() {
+			expectStatus(t, call(t, w.alice, http.MethodPost, "/api/v1/me/mcp-write/disable", nil), http.StatusOK, "")
+		})
+		return "/api/v1/me/mcp-write/enable", nil
+	}},
+	"POST /api/v1/me/mcp-write/disable": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/me/mcp-write/disable", nil
+	}},
+	"GET /api/v1/mcp/catalog": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/mcp/catalog", nil
+	}},
+	"GET /api/v1/mcp/access": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/mcp/access", nil
 	}},
 
 	"POST /api/v1/devices/{id}/lock": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/lock" },
@@ -759,4 +785,17 @@ var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Value
 			return url.Values{"target_id": {w.globexDevice}, "outcome": {"success"}, "page_size": {"100"}}
 		},
 	},
+}
+
+// currentMCPPolicy reads the MCP policy at path as an McpSettingsInput, so that writing it back changes nothing.
+func currentMCPPolicy(t *testing.T, p *env.Portal, path string) map[string]any {
+	t.Helper()
+	res := call(t, p, http.MethodGet, path, nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var cur map[string]any
+	if err := res.JSON(&cur); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{"enabled": cur["enabled"], "write_enabled": cur["write_enabled"], "mode": cur["mode"],
+		"allowed_operations": cur["allowed_operations"]}
 }

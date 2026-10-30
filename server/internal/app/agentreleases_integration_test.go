@@ -22,6 +22,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/pkg/semver"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -32,14 +33,18 @@ import (
 )
 
 type fakeArtifactStore struct {
-	mu   sync.Mutex
-	puts map[string][]byte
-	fail error
+	mu    sync.Mutex
+	puts  map[string][]byte
+	fail  error
+	onPut func()
 }
 
 func (f *fakeArtifactStore) Put(_ context.Context, key, _, _ string, body []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onPut != nil {
+		f.onPut()
+	}
 	if f.fail != nil {
 		return f.fail
 	}
@@ -828,4 +833,191 @@ func TestSupervisorFailureHaltsTheRollout(t *testing.T) {
 	if d.Rollout.Status != agentrelease.RolloutHalted || d.Stats.Failed != 1 {
 		t.Fatalf("rollout %+v stats %+v", d.Rollout, d.Stats)
 	}
+}
+
+// TestPublishedBetweenCheckAndUpsert publishes the release while an upload stores its file, after the upload's draft
+// check (PDK-432): the guarded upsert refuses with invalid_state and the published rows stay as they were.
+func TestPublishedBetweenCheckAndUpsert(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := uniqueVersion()
+	if _, err := h.releases.Create(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	bin := []byte("paddockd " + v)
+	first, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deb := []byte("supervisor " + v)
+	firstPkg, err := h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", deb,
+		base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	h.store.onPut = func() {
+		once.Do(func() {
+			if _, err := h.super.Exec(context.Background(),
+				"UPDATE agent_release SET status = 'published', published_at = now() WHERE version = $1", v); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	other := []byte("paddockd rebuilt " + v)
+	_, err = h.releases.UploadArtifact(ctx, v, "amd64", other, h.signBinary(other, v, "amd64"))
+	expectProblem(t, err, problem.InvalidState)
+	newArch := []byte("paddockd arm64 " + v)
+	once = sync.Once{}
+	if _, err := h.super.Exec(context.Background(), "UPDATE agent_release SET status = 'draft' WHERE version = $1", v); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.releases.UploadArtifact(ctx, v, "arm64", newArch, h.signBinary(newArch, v, "arm64"))
+	expectProblem(t, err, problem.InvalidState)
+	once = sync.Once{}
+	if _, err := h.super.Exec(context.Background(), "UPDATE agent_release SET status = 'draft' WHERE version = $1", v); err != nil {
+		t.Fatal(err)
+	}
+	otherDeb := []byte("supervisor rebuilt " + v)
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", otherDeb,
+		base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, otherDeb)))
+	expectProblem(t, err, problem.InvalidState)
+
+	d, err := h.releases.Get(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Artifacts) != 1 || d.Artifacts[0].Sha256 != first.Sha256 || !d.Artifacts[0].CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("artifacts of the published release changed: %+v", d.Artifacts)
+	}
+	if len(d.Packages) != 1 || d.Packages[0].Sha256 != firstPkg.Sha256 || !d.Packages[0].CreatedAt.Equal(firstPkg.CreatedAt) {
+		t.Fatalf("packages of the published release changed: %+v", d.Packages)
+	}
+	var failures int
+	if err := h.super.QueryRow(context.Background(),
+		"SELECT count(*) FROM action WHERE code = $1 AND outcome = 'failure' AND error_code = 'invalid_state' AND params->>'version' = $2",
+		app.SpecAgentReleaseUpload.Code, v).Scan(&failures); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 3 {
+		t.Fatalf("failed upload actions = %d, want 3", failures)
+	}
+}
+
+// TestPublishAgentReleaseOnlyFromDraft runs the publish query on a published release (PDK-432): no row, so a
+// concurrent second publish cannot move published_at.
+func TestPublishAgentReleaseOnlyFromDraft(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := h.published(t)
+	before, err := h.releases.Get(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = h.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		_, err := q.PublishAgentRelease(ctx, v)
+		return err
+	})
+	if !db.IsNoRows(err) {
+		t.Fatalf("publishing a published release: %v, want no rows", err)
+	}
+	after, err := h.releases.Get(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Release.PublishedAt == nil || !after.Release.PublishedAt.Equal(*before.Release.PublishedAt) {
+		t.Fatalf("published_at moved: %v -> %v", before.Release.PublishedAt, after.Release.PublishedAt)
+	}
+}
+
+// concurrently runs fn n times at once and returns the errors. It first opens n platform connections: without them
+// the first call wins while the pool still dials, and the calls run one after another instead of racing.
+func (h releaseHarness) concurrently(t *testing.T, n int, fn func() error) []error {
+	t.Helper()
+	var warm sync.WaitGroup
+	for range n {
+		warm.Go(func() {
+			if err := h.platform.InPlatform(platformAdmin(), func(context.Context, *pgstore.Queries) error {
+				time.Sleep(50 * time.Millisecond)
+				return nil
+			}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	warm.Wait()
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			<-start
+			errs[i] = fn()
+		})
+	}
+	close(start)
+	wg.Wait()
+	return errs
+}
+
+// expectOneSuccess checks that exactly one of errs is nil and every other one is the problem want, and that the
+// release has exactly one successful audit event of code.
+func (h releaseHarness) expectOneSuccess(t *testing.T, errs []error, want *problem.Error, version, code string) {
+	t.Helper()
+	ok := 0
+	for _, err := range errs {
+		if err == nil {
+			ok++
+			continue
+		}
+		expectProblem(t, err, want)
+	}
+	if ok != 1 {
+		t.Errorf("%d of %d concurrent calls succeeded, want 1", ok, len(errs))
+	}
+	if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1 AND code = $2 AND outcome = 'success'`,
+		version, code); n != 1 {
+		t.Errorf("%d successful %s events, want 1", n, code)
+	}
+	if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1 AND code = $2 AND outcome = 'failure'`,
+		version, code); n != len(errs)-1 {
+		t.Errorf("%d failed %s events, want %d", n, code, len(errs)-1)
+	}
+}
+
+// TestConcurrentRolloutStart: concurrent starts of the same release start it once; the others are refused with
+// already_exists, not with the raw primary key violation (PDK-452).
+func TestConcurrentRolloutStart(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	t.Cleanup(func() { h.haltAll(t) })
+	v := h.published(t)
+	errs := h.concurrently(t, 8, func() error {
+		_, err := h.releases.StartRollout(platformAdmin(), v, app.RolloutOptions{})
+		return err
+	})
+	h.expectOneSuccess(t, errs, problem.AlreadyExists, v, "agent_rollout.started")
+}
+
+// TestConcurrentRolloutHaltAndResume: concurrent halts (and resumes) change the rollout once and record one successful
+// event; the others are refused with invalid_state (PDK-452).
+func TestConcurrentRolloutHaltAndResume(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	t.Cleanup(func() { h.haltAll(t) })
+	v := h.published(t)
+	if _, err := h.releases.StartRollout(platformAdmin(), v, app.RolloutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	errs := h.concurrently(t, 8, func() error {
+		_, err := h.releases.Halt(platformAdmin(), v)
+		return err
+	})
+	h.expectOneSuccess(t, errs, problem.InvalidState, v, "agent_rollout.halted")
+	errs = h.concurrently(t, 8, func() error {
+		_, err := h.releases.Resume(platformAdmin(), v)
+		return err
+	})
+	h.expectOneSuccess(t, errs, problem.InvalidState, v, "agent_rollout.resumed")
 }

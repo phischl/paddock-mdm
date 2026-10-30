@@ -99,6 +99,22 @@ func TestLiveAuthentik(t *testing.T) {
 	if err != nil || len(supers) == 0 || slices.ContainsFunc(supers, func(u ports.IdentityUser) bool { return u.PK == pk }) {
 		t.Fatalf("Superusers: %+v, %v", supers, err)
 	}
+	// Several role groups in one listing (PDK-501): Authentik ORs the names, and a group it does not know is skipped.
+	adminsPK, err := c.FindGroup(ctx, organization.RoleGroup(slug, organization.GroupAdmins))
+	if err != nil || adminsPK == "" {
+		t.Fatalf("FindGroup admins: %q, %v", adminsPK, err)
+	}
+	if err := c.AddMember(ctx, adminsPK, pk); err != nil {
+		t.Fatal(err)
+	}
+	roleGroups := []string{organization.RoleGroup(slug, organization.GroupOperators), organization.RoleGroup("missing-"+slug, organization.GroupAdmins),
+		organization.RoleGroup(slug, organization.GroupAdmins), organization.RoleGroup(slug, organization.GroupAuditors)}
+	if members, err := c.RoleGroupsUsers(ctx, roleGroups); err != nil || len(members) != 1 || members[0].PK != pk {
+		t.Fatalf("RoleGroupsUsers: %+v, %v", members, err)
+	}
+	if err := c.RemoveMember(ctx, adminsPK, pk); err != nil {
+		t.Fatal(err)
+	}
 
 	groupName := organization.LocalUserGroup(slug, "live")
 	gpk, err := c.EnsureGroup(ctx, slug, groupName)

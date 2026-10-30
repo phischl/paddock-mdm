@@ -202,6 +202,8 @@ func TestDiskConversion(t *testing.T) {
 
 	expectStatus(t, call(t, withoutStepUp(t, admin), http.MethodPost, encrypt, s.encryptBody()), http.StatusForbidden, "step_up_required")
 	expectStatus(t, call(t, operatorUser(t).Portal, http.MethodPost, encrypt, s.encryptBody()), http.StatusForbidden, "forbidden")
+	// The dev stack's step-up window is 30 s; the device setup and the operator's sign-in above can outlast it.
+	admin.stepUp(t)
 	bad := s.encryptBody()
 	bad["confirm_hostname"] = "other"
 	expectDetail(t, call(t, admin.Portal, http.MethodPost, encrypt, bad), http.StatusUnprocessableEntity, "invalid_request",
@@ -223,6 +225,8 @@ func TestDiskConversion(t *testing.T) {
 		!strings.Contains(string(cmds[0].Params), `"conversion_id": "`+c.ID+`"`) && !strings.Contains(string(cmds[0].Params), `"conversion_id":"`+c.ID+`"`) {
 		t.Fatalf("commands %+v", cmds)
 	}
+	// The audit wait above can outlast the dev stack's 30 s step-up window.
+	admin.stepUp(t)
 	expectDetail(t, call(t, admin.Portal, http.MethodPost, encrypt, s.encryptBody()), http.StatusConflict, "invalid_state",
 		"a conversion is already open")
 
@@ -339,6 +343,8 @@ func TestDiskConversionAbort(t *testing.T) {
 	if aborts := commandsOfType(t, alice, s.DeviceID, "encrypt_disk_abort"); len(aborts) != 1 || !strings.Contains(string(aborts[0].Params), c.ID) {
 		t.Fatalf("abort commands %+v", aborts)
 	}
+	// The audit wait above can outlast the dev stack's 30 s step-up window.
+	admin.stepUp(t)
 	expectDetail(t, call(t, admin.Portal, http.MethodPost, cancel, s.cancelBody()), http.StatusConflict, "invalid_state",
 		"a cancellation is already on its way")
 	s.post(t, protocol.EventDiskConversionAborted, map[string]any{"conversion_id": c.ID, "by": "admin"})

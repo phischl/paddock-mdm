@@ -174,11 +174,17 @@ troubleshooting workflows to the assistant.
       `paddock/paddock-mcp.yaml` and `access_token_validity: minutes=1` for the provider (the gate for an expired
       token needs it; production keeps 30 minutes). No TOTP swap is needed: the login flow's dev bindings already
       apply.
+      *Amendment 2026-10-29 (PDK-467):* the dev access-token validity comes from `PADDOCK_MCP_ACCESS_TOKEN_VALIDITY`
+      (`compose.dev.yaml`, `minutes=1`); production keeps `minutes=30`; the overlay override is removed.
 12. **api configuration**: `PADDOCK_OIDC_MCP_ISSUER` (required when MCP is to be offered; empty = MCP login
     disabled and `/api/auth/mcp/*` answers 404) and `PADDOCK_OIDC_MCP_CLIENT_ID` (default `paddock-mcp`);
     `compose.yaml` sets the issuer to `https://auth.${PADDOCK_DOMAIN}:${PADDOCK_HTTPS_PORT}/application/o/paddock-mcp/`
     for `paddock-api`; `deploy/bundle` carries no new secret (public client). `admin.OIDCConfig` for the MCP
     provider has no client secret; `admin.OIDC.Discover` loads its JWKS like the other two.
+    *Amendment 2026-10-29 (PDK-492):* `compose.yaml` keeps the development form with the HTTPS port;
+    `compose.prod.yaml` overrides `PADDOCK_OIDC_MCP_ISSUER` without a port
+    (`https://auth.<domain>/application/o/paddock-mcp/`), like the portal and step-up issuers; `bundle_test` refuses
+    issuers with an explicit port in every production/lab render.
 13. **Endpoints** (BFF, hand-written, tag `auth`, `security: []`, excluded from code generation like the other
     `/api/auth/*` routes), §6.1:
     - `GET /api/auth/mcp/config` → `{issuer, client_id, scopes: ["openid","profile","email","groups","offline_access"],
@@ -272,6 +278,11 @@ troubleshooting workflows to the assistant.
     privileged routes and none for reads. A policy lookup error is a database error and answers 500 `internal`; it
     is never treated as "allowed". The CSRF header is still required for mutating MCP requests (`paddockctl`
     sends it).
+    *Amendment 2026-10-29 (PDK-443, PDK-438 review):* `refuse` records through `ActionRunner.RecordRefusal(ctx, scope,
+    spec, refusal)`, not `s.rejected`: `s.rejected` runs the role and step-up checks first and would answer
+    `forbidden`/`step_up_required` instead of the guard's `mcp_*` code. `RecordRefusal` records exactly one event with
+    the refusal's own outcome and code, with the same `privileged` lookup and scope rules (privileged routes only;
+    reads none).
 21. Rate limiter (`mcplimit.go`): fixed one-minute windows per account id and class, in memory per api replica;
     `MCPReadLimitPerMinute = 120`, `MCPWriteLimitPerMinute = 30`; entries idle for 10 minutes are dropped; metric
     `paddock_mcp_requests_total{class, result}` with `result ∈ {ok, denied, rate_limited}` counted in the guard.
@@ -769,13 +780,16 @@ every `action` row it inserts; the outbox reaper uses the stored value and deriv
 | `problems.mcp_login_required` | Sign in again with paddockctl mcp login. |
 | `problems.rate_limited` | Too many requests. Try again shortly. |
 
+Amendment 2026-10-29 (PDK-442): Me gains nullable mcp_write_enabled_at so the portal can show since when write access is
+enabled.
+
 ### 6.7 Residual risks (`docs/compliance/residual-risks.md`, new section "AI assistants (M14)"; RR-85 to RR-89)
 
 | ID | Risk | Mitigation in Paddock | Record in the ISMS |
 | --- | --- | --- | --- |
 | RR-85 | **Prompt injection through data.** Hostnames, device names, managed-file contents, package names and audit parameters are written by device users or administrators and read by the assistant; whoever controls such a string can address the model. | Authority is bound to the signed-in administrator's session and enforced on the server; step-up actions are not reachable; no raw-request or policy tool; results are wrapped as data with a fixed notice; destructive tools are flagged; per-account rate limit; revocation through logout, role change, deactivation, end-all and the policy switch. | Who may enable write access; whether writes through the MCP are allowed at all. |
 | RR-86 | **Channel bypass with an API token.** An administrator can wire an `api` token into any MCP client; the MCP policy and the opt-in do not apply, the person's own role does. | The audit trail shows `source: api` for such calls; the policy page says so; API tokens are created with a step-up and the role ceiling. | How sparingly API tokens are granted. |
-| RR-87 | **Refresh token on a workstation.** `paddockctl mcp login` stores an Authentik refresh token (valid 8 hours, rotated on use) and a 30-minute access token in a 0600 file; a copy works until the refresh token expires or the user is deactivated or signs out. | Short lifetimes; `paddockctl mcp logout` revokes at Authentik and on the api; deactivation and role change end the session within one reconcile interval, a role mismatch at the next request; *End all sessions* ends MCP sessions too; no API token is involved; a renewal is accepted only for the (`sub`, `auth_time`) binding of an MFA-checked login, which logout, deactivation, role change and *End all sessions* end (amendment 2026-10-28); single-use login tokens (a Valkey marker on the verified token identity (`iss`, `sub`, `jti`; the payload bytes if `jti` is absent) for its remaining lifetime plus 60 s; non-canonical (non-strict base64url) tokens are refused before verification) prevent reopening a session with a captured token after logout. | The workstation baseline (disk encryption, screen lock) of administrators who use the MCP; the OS-keyring option when it exists. |
+| RR-87 | **Refresh token on a workstation.** `paddockctl mcp login` stores an Authentik refresh token (valid 8 hours, rotated on use) and a 30-minute access token in a 0600 file; a copy works until the refresh token expires or the user is deactivated or signs out. | Short lifetimes; `paddockctl mcp logout` revokes at Authentik and on the api; deactivation and role change end the session within one reconcile interval, a role mismatch at the next request; *End all sessions* ends MCP sessions too; no API token is involved; a renewal is accepted only for the (`sub`, `auth_time`) binding of an MFA-checked login, which logout, deactivation, role change and *End all sessions* end (amendment 2026-10-28); single-use login tokens (a Valkey marker on the verified token identity (`iss`, `sub`, `jti`; the payload bytes if `jti` is absent) for its remaining lifetime plus 60 s; non-canonical (non-strict base64url) tokens are refused before verification) prevent reopening a session with a captured token after logout. *Amendment 2026-10-29 (PDK-443, PDK-436 review):* Logout ends the session record of the access token it presents and the binding; records of earlier access tokens of the same sign-in stay valid until those tokens expire (at most 30 minutes; PDK-468). | The workstation baseline (disk encryption, screen lock) of administrators who use the MCP; the OS-keyring option when it exists. |
 | RR-88 | **Step-up actions are only refused, never staged.** The assistant can advise on a Lock, Destroy, reveal or rollout halt but cannot prepare it. | The error names the portal path; the skill tells the assistant to hand over. | None; a future human-in-the-loop design is a separate decision. |
 | RR-89 | **Reads are not audited per call.** An MCP read leaves a metric, not an event. | Same as portal reads today; PDK-139 (M10) adds opt-in recording of sensitive views for every channel. | Whether read logging is required before auditors use the MCP. |
 

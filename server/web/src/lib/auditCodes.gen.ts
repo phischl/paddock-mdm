@@ -3,6 +3,8 @@
 /** The codes of the closed audit registry that are emitted as events, sorted. */
 export const auditCodes = [
   'admin.login',
+  'admin.mcp_write_disabled',
+  'admin.mcp_write_enabled',
   'admin.role_granted',
   'admin.role_revoked',
   'admin.sessions_revoked',
@@ -110,6 +112,7 @@ export const auditCodes = [
   'managed_unit.updated',
   'organization.created',
   'organization.domains_changed',
+  'organization.mcp_policy_changed',
   'organization.recompile_requested',
   'organization.security_review_required',
   'package_hold.created',
@@ -126,6 +129,7 @@ export const auditCodes = [
   'platform.ip_allowlist_changed',
   'platform.ip_allowlist_denied',
   'platform.ip_allowlist_disabled',
+  'platform.mcp_policy_changed',
   'platform.openbao_auto_unsealed',
   'platform.osv_imported',
   'platform.osv_stale',

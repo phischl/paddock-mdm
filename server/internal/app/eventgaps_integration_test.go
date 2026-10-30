@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
@@ -432,5 +433,127 @@ func TestEventSeqNoResetForLaterEventsAfterRound(t *testing.T) {
 	w.round(t)
 	if rows := w.gapRows(t); len(rows) != 0 {
 		t.Fatalf("gap rows %+v, want none", rows)
+	}
+}
+
+// seenRange records the delivered numbers from..to as received now, directly in device_event_seen: the round reads
+// nothing else of them, and recording more than device.SeenLimit events through the gateway path is slow.
+func (w *gapWorld) seenRange(t *testing.T, from, to int64) {
+	t.Helper()
+	if _, err := w.super.Exec(context.Background(), `INSERT INTO device_event_seen (device_id, event_seq, organization_id, received_at)
+		SELECT $1, n, $2, $3 FROM generate_series($4::bigint, $5::bigint) n`, w.dev, w.org, w.tick(), from, to); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (w *gapWorld) scanned(t *testing.T) int64 {
+	t.Helper()
+	var s int64
+	if err := w.super.QueryRow(context.Background(), "SELECT event_seq_scanned FROM device_status WHERE device_id = $1", w.dev).Scan(&s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TestEventGapAbovePermanentGap (PDK-419): a reported gap that never fills pins the contiguous pointer, but the scan
+// position moves past it, one bounded window per round, so a second hole more than device.SeenLimit numbers above it
+// is still opened and reported.
+func TestEventGapAbovePermanentGap(t *testing.T) {
+	w := newGapWorld(t)
+	w.events(t, 1, 2, 4)
+	w.checkin(t, 4)
+	w.round(t)
+	w.checkin(t, 4)
+	w.checkin(t, 4)
+	w.round(t)
+	if n := w.count(t, "device.event_gap"); n != 1 {
+		t.Fatalf("setup: %d device.event_gap, want 1", n)
+	}
+
+	second := int64(5 + device.SeenLimit + 6)
+	w.seenRange(t, 5, second-1)
+	w.seenRange(t, second+1, second+9)
+	w.checkin(t, second+9)
+	w.round(t)
+	if s := w.scanned(t); s != 4+device.SeenLimit {
+		t.Fatalf("event_seq_scanned %d after the first window, want %d", s, 4+device.SeenLimit)
+	}
+	w.round(t)
+	if s := w.scanned(t); s != second+9 {
+		t.Fatalf("event_seq_scanned %d after the second window, want %d", s, second+9)
+	}
+	if c, _, _ := w.status(t); c != 2 {
+		t.Fatalf("event_seq_contiguous %d, want 2 below the permanent gap", c)
+	}
+	rows := w.gapRows(t)
+	if len(rows) != 2 || rows[0].from != 3 || rows[0].to != 3 || !rows[0].reported || rows[1].from != second || rows[1].to != second {
+		t.Fatalf("gap rows %+v, want 3-3 reported and %d-%d", rows, second, second)
+	}
+	w.checkin(t, second+9)
+	w.checkin(t, second+9)
+	w.round(t)
+	if n := w.count(t, "device.event_gap"); n != 2 {
+		t.Fatalf("%d device.event_gap, want 2", n)
+	}
+	if rows := w.gapRows(t); len(rows) != 2 || !rows[1].reported || rows[1].filled {
+		t.Fatalf("gap rows after the report: %+v", rows)
+	}
+}
+
+// TestEventGapFillAdvancesPointer (PDK-419): once the permanent gap fills, the pointer follows the scan position over
+// every number above it in one round.
+func TestEventGapFillAdvancesPointer(t *testing.T) {
+	w := newGapWorld(t)
+	w.events(t, 1, 2, 4, 5, 6)
+	w.checkin(t, 6)
+	w.round(t)
+	if c, _, _ := w.status(t); c != 2 || w.scanned(t) != 6 {
+		t.Fatalf("setup: contiguous %d, scanned %d; want 2 and 6", c, w.scanned(t))
+	}
+	w.events(t, 3)
+	w.round(t)
+	if c, _, _ := w.status(t); c != 6 {
+		t.Fatalf("event_seq_contiguous %d after the fill, want 6", c)
+	}
+	if rows := w.gapRows(t); len(rows) != 1 || !rows[0].filled {
+		t.Fatalf("gap rows %+v, want one closed", rows)
+	}
+}
+
+// TestEventGapCheckBounded (PDK-419 review 1, B1): a round checks at most app.GapCheckLimit open rows of a device; the
+// rows it did not check stay open, hold the pointer below them and are checked by a later round.
+func TestEventGapCheckBounded(t *testing.T) {
+	w := newGapWorld(t)
+	last := int64(app.GapCheckLimit + 6)
+	w.seenRange(t, 1, last)
+	w.checkin(t, last)
+	if _, err := w.super.Exec(context.Background(), `INSERT INTO device_event_gap (id, organization_id, device_id, from_seq, to_seq, first_seen_at, first_seen_last_seq)
+		SELECT gen_random_uuid(), $1, $2, n, n, now(), $3 FROM generate_series(2::bigint, $4::bigint) n`, w.org, w.dev, w.seq, last); err != nil {
+		t.Fatal(err)
+	}
+	open := func() (n int) {
+		for _, r := range w.gapRows(t) {
+			if !r.filled {
+				n++
+			}
+		}
+		return n
+	}
+	w.round(t)
+	if n := open(); n != 5 {
+		t.Fatalf("%d open rows after one round, want 5 (%d checked of %d)", n, app.GapCheckLimit, app.GapCheckLimit+5)
+	}
+	if c, _, _ := w.status(t); c != app.GapCheckLimit+1 {
+		t.Fatalf("event_seq_contiguous %d, want %d below the unchecked rows", c, app.GapCheckLimit+1)
+	}
+	w.round(t)
+	if n := open(); n != 0 {
+		t.Fatalf("%d open rows after the second round, want 0", n)
+	}
+	if c, _, _ := w.status(t); c != last {
+		t.Fatalf("event_seq_contiguous %d, want %d", c, last)
+	}
+	if n := w.count(t, "device.event_gap"); n != 0 {
+		t.Fatalf("%d device.event_gap for rows that filled", n)
 	}
 }

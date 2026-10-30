@@ -206,6 +206,87 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	}
 }
 
+// TestAdminAccountsOrganizationEmptied (PDK-424): three empty role group listings while accounts are enabled. A blind
+// token (groups unreadable or no user visible) changes nothing and fails the round with ErrDirectoryEmpty; a failing
+// probe changes nothing either. When the probe proves the listings real, the organization lost its last role holders:
+// each account is confirmed by a direct read and disabled once, with its sessions ended.
+func TestAdminAccountsOrganizationEmptied(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	worker, err := db.NewOrgPool(ctx, env.Worker, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(worker.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	org := uuid.Must(uuid.NewV7())
+	slug := "ae" + org.String()[25:]
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Emptied', 'active')", org, slug); err != nil {
+		t.Fatal(err)
+	}
+	var ids []uuid.UUID
+	for _, a := range []struct{ username, role string }{{"alice@acme.test", "org_admin"}, {"bob@acme.test", "org_operator"}} {
+		id := uuid.Must(uuid.NewV7())
+		if _, err := super.Exec(ctx, `INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role)
+			VALUES ($1, $2, $3, $4, $4, $5)`, id, org, "uid-"+a.username+"-"+org.String(), a.username, a.role); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	admins := organization.RoleGroup(slug, organization.GroupAdmins)
+	operators := organization.RoleGroup(slug, organization.GroupOperators)
+	auditors := organization.RoleGroup(slug, organization.GroupAuditors)
+	dir := newDirectory()
+	dir.roleGroups = map[string][]ports.IdentityUser{}
+	sessions := &revoker{revoked: map[uuid.UUID]int{}}
+	corr := "corr-" + t.Name()
+	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, platform, dir, sessions)
+	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker", OrganizationID: org}), corr)
+	disabled := func() int {
+		return countRows(t, super, "SELECT count(*) FROM admin_account WHERE organization_id = $1 AND disabled_at IS NOT NULL", org)
+	}
+	events := func() int {
+		return countRows(t, super, "SELECT count(*) FROM action WHERE code = 'admin.sessions_revoked' AND organization_id = $1", org)
+	}
+	readable := map[string]bool{admins: true, operators: true, auditors: true}
+	for _, c := range []struct {
+		name               string
+		readable           map[string]bool
+		visible            bool
+		probeFail          error
+		wantDirectoryEmpty bool
+	}{
+		{name: "groups unreadable", readable: map[string]bool{admins: true, operators: true}, visible: true, wantDirectoryEmpty: true},
+		{name: "no user visible", readable: readable, wantDirectoryEmpty: true},
+		{name: "probe fails", readable: readable, visible: true, probeFail: errors.New("authentik: HTTP 503")},
+	} {
+		dir.readable, dir.usersVisible, dir.probeFail = c.readable, c.visible, c.probeFail
+		err := accounts.Reconcile(sys, app.ListRoleGroups(sys, dir, admins, operators, auditors))
+		if err == nil || errors.Is(err, app.ErrDirectoryEmpty) != c.wantDirectoryEmpty {
+			t.Fatalf("%s: round error %v, want ErrDirectoryEmpty %v", c.name, err, c.wantDirectoryEmpty)
+		}
+		if len(sessions.revoked) != 0 || disabled() != 0 || events() != 0 {
+			t.Fatalf("%s: accounts changed", c.name)
+		}
+	}
+	dir.readable, dir.usersVisible, dir.probeFail = readable, true, nil
+	if err := accounts.Reconcile(sys, app.ListRoleGroups(sys, dir, admins, operators, auditors)); err != nil {
+		t.Fatal(err)
+	}
+	if disabled() != 2 || events() != 2 || sessions.revoked[ids[0]] != 1 || sessions.revoked[ids[1]] != 1 {
+		t.Fatalf("%d disabled, %d events, revocations %v, want both accounts disabled once", disabled(), events(), sessions.revoked)
+	}
+}
+
 // TestPlatformRevocationWaitsForLogin: the worker's revocation locks the platform administrator's row first, so it
 // waits for a running login that holds the row while it opens its session (PDK-185).
 func TestPlatformRevocationWaitsForLogin(t *testing.T) {
