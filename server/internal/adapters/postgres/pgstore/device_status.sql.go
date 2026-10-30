@@ -14,12 +14,19 @@ import (
 )
 
 const clearClockDrift = `-- name: ClearClockDrift :execrows
-UPDATE device_status SET clock_drift_since = NULL WHERE device_id = $1 AND clock_drift_since IS NOT NULL
+UPDATE device_status SET clock_drift_since = NULL
+WHERE device_id = $1 AND clock_drift_since IS NOT NULL AND abs(clock_offset_s) <= $2::bigint
 `
 
-// Closes the clock drift episode; no row when none is open (the claim of device.clock_drift_cleared).
-func (q *Queries) ClearClockDrift(ctx context.Context, deviceID uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, clearClockDrift, deviceID)
+type ClearClockDriftParams struct {
+	DeviceID   uuid.UUID
+	ThresholdS int64
+}
+
+// Closes the clock drift episode; no row when none is open or the offset is no longer within the threshold (the claim
+// of device.clock_drift_cleared, re-checked like SetClockDrift).
+func (q *Queries) ClearClockDrift(ctx context.Context, arg ClearClockDriftParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearClockDrift, arg.DeviceID, arg.ThresholdS)
 	if err != nil {
 		return 0, err
 	}
@@ -127,17 +134,20 @@ func (q *Queries) ListDeviceSeqs(ctx context.Context) ([]ListDeviceSeqsRow, erro
 }
 
 const setClockDrift = `-- name: SetClockDrift :execrows
-UPDATE device_status SET clock_drift_since = $1 WHERE device_id = $2 AND clock_drift_since IS NULL
+UPDATE device_status SET clock_drift_since = $1
+WHERE device_id = $2 AND clock_drift_since IS NULL AND abs(clock_offset_s) > $3::bigint
 `
 
 type SetClockDriftParams struct {
-	Now      *time.Time
-	DeviceID uuid.UUID
+	Now        *time.Time
+	DeviceID   uuid.UUID
+	ThresholdS int64
 }
 
-// Opens a clock drift episode; no row when one is open already (the claim of device.clock_drift).
+// Opens a clock drift episode; no row when one is open already or the offset is no longer beyond the threshold (the
+// claim of device.clock_drift): the update re-checks the offset a check-in committed after the claim read it (PDK-418).
 func (q *Queries) SetClockDrift(ctx context.Context, arg SetClockDriftParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setClockDrift, arg.Now, arg.DeviceID)
+	result, err := q.db.Exec(ctx, setClockDrift, arg.Now, arg.DeviceID, arg.ThresholdS)
 	if err != nil {
 		return 0, err
 	}

@@ -181,4 +181,20 @@ func TestAgentRolloutFromHost(t *testing.T) {
 	}
 	_, err = h.releases.HaltFromHost(ctx, v)
 	expectProblem(t, err, problem.InvalidState)
+
+	// Resume only continues a started and halted rollout (PDK-452).
+	_, err = h.releases.ResumeFromHost(ctx, h.published(t))
+	expectProblem(t, err, problem.NotFound)
+	r, err = h.releases.ResumeFromHost(ctx, v)
+	if err != nil || r.Status != agentrelease.RolloutRunning || r.HaltedReason != nil || r.CurrentWaveIndex != 0 {
+		t.Fatalf("resume: %+v, %v", r, err)
+	}
+	if n := hostEvents("agent_rollout.resumed", "success"); n != 1 {
+		t.Errorf("%d agent_rollout.resumed events of the host actor, want 1", n)
+	}
+	_, err = h.releases.ResumeFromHost(ctx, v)
+	expectProblem(t, err, problem.InvalidState)
+	if n := hostEvents("agent_rollout.resumed", "failure"); n != 2 {
+		t.Errorf("%d failed agent_rollout.resumed events of the host actor, want 2", n)
+	}
 }

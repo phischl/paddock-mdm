@@ -687,6 +687,16 @@ onBeforeUnmount(() => observer.disconnect())
         id="main"
         :inert="modalOpen"
       >
+        <!-- Not dismissible: the administrator must not act in the platform role without knowing why (PDK-458). -->
+        <v-alert
+          v-if="session.roleFallback === 'organization_inactive'"
+          type="warning"
+          variant="tonal"
+          rounded="0"
+          data-testid="role-fallback"
+        >
+          {{ t('app.roleFallbackOrganizationInactive') }}
+        </v-alert>
         <RouterView />
       </v-main>
       <v-snackbar

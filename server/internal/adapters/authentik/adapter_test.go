@@ -3,6 +3,8 @@ package authentik_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -544,6 +546,78 @@ func TestRoleGroupUsers(t *testing.T) {
 	}
 }
 
+// TestRoleGroupsUsersManyOrganizations (PDK-501): the members of the role groups of 150 organizations come from a
+// handful of listings, not one per group, with request targets far below the limit of a request head; the groups of
+// organizations not provisioned yet are skipped, and any other error fails the listing.
+func TestRoleGroupsUsersManyOrganizations(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	group := func(name string) string {
+		pk := uuid.NewString()
+		f.groups[pk] = &fakeGroup{pk: pk, name: name}
+		return pk
+	}
+	everywhere := &fakeUser{pk: 100, username: "root"}
+	f.users[100] = everywhere
+	everywhere.groups = append(everywhere.groups, group("paddock.platform.admins"))
+	names := []string{"paddock.platform.admins"}
+	want := map[string]bool{"100": true}
+	for i := range 150 {
+		slug := fmt.Sprintf("organization-with-a-long-slug-%03d", i)
+		for j, role := range []string{"admins", "operators", "auditors"} {
+			name := "paddock." + slug + "." + role
+			names = append(names, name)
+			if i%50 == 7 {
+				continue
+			}
+			pk := group(name)
+			member := 1000 + 3*i + j
+			f.users[member] = &fakeUser{pk: member, username: name, groups: []string{pk}}
+			want[strconv.Itoa(member)] = true
+			if j == 0 {
+				everywhere.groups = append(everywhere.groups, pk)
+			}
+		}
+	}
+	f.users[99] = &fakeUser{pk: 99, username: "no-role", groups: []string{group("paddock.organization-with-a-long-slug-000")}}
+	f.requests = nil
+	users, err := c.RoleGroupsUsers(ctx, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	distinct := func(users []ports.IdentityUser) map[string]bool {
+		out := map[string]bool{}
+		for _, u := range users {
+			out[u.PK] = true
+		}
+		return out
+	}
+	if got := distinct(users); !maps.Equal(got, want) {
+		t.Fatalf("%d distinct members, want %d", len(got), len(want))
+	}
+	// About 60 names fit one listing; each of the 9 missing groups costs one listing more.
+	if n := f.count("GET /api/v3/core/users/"); n > 20 {
+		t.Fatalf("%d listings for %d role groups, want a handful", n, len(names))
+	}
+	if f.longestURI > 8192 {
+		t.Fatalf("a request target of %d bytes", f.longestURI)
+	}
+	// A refusal that does not name the missing group halves the batch until the group is found.
+	f.unnamedGroupRefusal, f.requests = true, nil
+	if users, err = c.RoleGroupsUsers(ctx, names); err != nil || !maps.Equal(distinct(users), want) {
+		t.Fatalf("%d distinct members, %v", len(distinct(users)), err)
+	}
+	if n := f.count("GET /api/v3/core/users/"); n >= len(names) {
+		t.Fatalf("%d listings for %d role groups when the refusal names no group", n, len(names))
+	}
+	f.unnamedGroupRefusal = false
+	f.failOnce = map[string]int{"GET /api/v3/core/users/": http.StatusForbidden}
+	if _, err := c.RoleGroupsUsers(ctx, names); err == nil || errors.Is(err, ports.ErrGroupNotFound) {
+		t.Fatalf("a refused listing: %v", err)
+	}
+}
+
 // TestRoleGroupUsersSettles: a member leaving during a numbered listing would shift the next page and hide another
 // member; the listing is repeated until the total holds, and fails when it never does.
 func TestRoleGroupUsersSettles(t *testing.T) {
@@ -605,6 +679,51 @@ func TestSuperusers(t *testing.T) {
 	f.failNext, f.failStatus = 10, http.StatusServiceUnavailable
 	if _, err := c.Superusers(ctx); !errors.Is(err, problem.UpstreamUnavailable) {
 		t.Fatalf("Authentik down: %v", err)
+	}
+}
+
+// TestDirectoryProbe (PDK-424): a role group is readable when the token reads it by name; users are visible when a
+// listing returns an internal or external user, never only service accounts; a blind token, whose role group listings
+// come back empty without an error, fails both; a failed read is an error, never a verdict.
+func TestDirectoryProbe(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	f.users[700] = &fakeUser{pk: 700, username: "paddock-service", typ: "service_account"}
+	if ok, err := c.GroupReadable(ctx, "paddock.acme.admins"); err != nil || !ok {
+		t.Fatalf("readable group: %v %v", ok, err)
+	}
+	if ok, err := c.GroupReadable(ctx, "paddock.globex.admins"); err != nil || ok {
+		t.Fatalf("missing group: %v %v", ok, err)
+	}
+	if ok, err := c.UsersVisible(ctx); err != nil || ok {
+		t.Fatalf("only the service account: %v %v", ok, err)
+	}
+	f.users[701] = &fakeUser{pk: 701, username: "carol@acme.test", typ: "external"}
+	if ok, err := c.UsersVisible(ctx); err != nil || !ok {
+		t.Fatalf("an external user: %v %v", ok, err)
+	}
+	f.blind = true
+	if users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins"); err != nil || len(users) != 0 {
+		t.Fatalf("blind listing: %+v %v, want empty without an error", users, err)
+	}
+	if ok, err := c.GroupReadable(ctx, "paddock.acme.admins"); err != nil || ok {
+		t.Fatalf("blind group read: %v %v", ok, err)
+	}
+	if ok, err := c.UsersVisible(ctx); err != nil || ok {
+		t.Fatalf("blind user listing: %v %v", ok, err)
+	}
+	f.blind = false
+	f.failNext, f.failStatus = 10, http.StatusServiceUnavailable
+	if _, err := c.UsersVisible(ctx); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("Authentik down, users: %v", err)
+	}
+	f.failNext = 10
+	if _, err := c.GroupReadable(ctx, "paddock.acme.admins"); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("Authentik down, group: %v", err)
 	}
 }
 
@@ -855,5 +974,94 @@ func TestEndUserSessions(t *testing.T) {
 	status = http.StatusForbidden
 	if _, err := client(srv).EndUserSessions(ctx, []string{"7"}); !errors.Is(err, problem.UpstreamUnavailable) || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("403: %v", err)
+	}
+}
+
+// TestCountUserSessions (PDK-342): the sessions of the users are counted over every page of the session listing; a
+// pk that is not an integer is refused before any request, a failing listing is upstream_unavailable.
+func TestCountUserSessions(t *testing.T) {
+	var requests []string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		w.WriteHeader(status)
+		switch {
+		case status != http.StatusOK:
+		case r.URL.Query().Get("page") == "1":
+			_, _ = w.Write([]byte(`{"pagination": {"next": 2}, "results": [{"user": 7}, {"user": 8}, {"user": 12}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"pagination": {"next": 0}, "results": [{"user": 12}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	n, err := client(srv).CountUserSessions(ctx, []string{"7", "12"})
+	if err != nil || n != 3 {
+		t.Fatalf("CountUserSessions: %d %v, want 3", n, err)
+	}
+	want := []string{
+		"GET /api/v3/core/authenticated_sessions/?page=1&page_size=500",
+		"GET /api/v3/core/authenticated_sessions/?page=2&page_size=500",
+	}
+	if !slices.Equal(requests, want) {
+		t.Fatalf("requests %v, want %v", requests, want)
+	}
+	requests = nil
+	if n, err := client(srv).CountUserSessions(ctx, nil); err != nil || n != 0 || len(requests) != 0 {
+		t.Fatalf("no users: %d %v after %d requests", n, err, len(requests))
+	}
+	if _, err := client(srv).CountUserSessions(ctx, []string{"7", "x"}); err == nil || len(requests) != 0 {
+		t.Fatalf("a pk that is not an integer: %v after %d requests", err, len(requests))
+	}
+	status = http.StatusForbidden
+	if _, err := client(srv).CountUserSessions(ctx, []string{"7"}); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("403: %v", err)
+	}
+}
+
+// TestEndUserSessionsAfterRetryReportsWhatWasLeft documents the Authentik behaviour behind PDK-342: the first bulk
+// delete ends the sessions but its response is lost (a 5xx, like a client timeout), and the retry reports 0 deleted;
+// only the count before the delete has the sessions that ended.
+func TestEndUserSessionsAfterRetryReportsWhatWasLeft(t *testing.T) {
+	sessions := []int{7, 12, 12, 9}
+	deletes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			var b strings.Builder
+			for i, u := range sessions {
+				if i > 0 {
+					b.WriteString(",")
+				}
+				fmt.Fprintf(&b, `{"user": %d}`, u)
+			}
+			_, _ = fmt.Fprintf(w, `{"pagination": {"next": 0}, "results": [%s]}`, b.String())
+			return
+		}
+		deletes++
+		deleted := 0
+		kept := sessions[:0]
+		for _, u := range sessions {
+			if u == 7 || u == 12 {
+				deleted++
+				continue
+			}
+			kept = append(kept, u)
+		}
+		sessions = kept
+		if deletes == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"deleted": %d}`, deleted)
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	counted, err := client(srv).CountUserSessions(ctx, []string{"7", "12"})
+	if err != nil || counted != 3 {
+		t.Fatalf("CountUserSessions: %d %v, want 3", counted, err)
+	}
+	n, err := client(srv).EndUserSessions(ctx, []string{"7", "12"})
+	if err != nil || n != 0 || deletes != 2 {
+		t.Fatalf("EndUserSessions: %d %v after %d deletes, want 0 after 2", n, err, deletes)
 	}
 }

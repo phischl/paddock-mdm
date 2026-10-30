@@ -333,7 +333,10 @@ Only one rollout runs at a time.
 
 - A device belongs to a wave by its rollout bucket, `FNV-1a(device ID) mod 100`; the gateway offers the release at
   check-in to active devices whose bucket is below the current wave's percentage and that report another agent
-  version and an architecture with an artifact.
+  version and an architecture with an artifact. The buckets do not depend on the fleet's size, so a small fleet can
+  have no device in the first waves: a one-device lab is reached by the 1 % wave only if its device's bucket is 0, and
+  otherwise waits `min_wave_minutes` per wave. Start a small fleet's rollout with `waves` `[100]` (`--waves 100` on the
+  host) or a short list such as `[50,100]`.
 - The worker evaluates every 60 seconds: devices that reported `agent.update_failed` (except `downgrade_refused`;
   including `rollback_failed`) or `agent.rolled_back` for the version count as failed, each device once. Reaching the threshold halts the rollout (audit `agent_rollout.halted`, actor system) and
   stops the offer immediately. Otherwise the rollout advances after `min_wave_minutes` (`agent_rollout.advanced`)
@@ -344,22 +347,25 @@ Only one rollout runs at a time.
 
 ### From the control-plane host
 
-The host operator can start and halt a rollout in the bundle directory of the control plane (or a lab host) without a
-portal account (ADR 0034 amendment 2026-10-26):
+The host operator can start, halt and resume a rollout in the bundle directory of the control plane (or a lab host)
+without a portal account (ADR 0034 amendment 2026-10-26):
 
 ```sh
 ./paddock agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P] [--failure-threshold-min M]
 ./paddock agent-rollout-halt <version>
+./paddock agent-rollout-resume <version>
 ```
 
-They run `paddock-server admin agent-rollout` and `admin agent-rollout-halt` in the `paddock-api` service: the same
-use cases, defaults, validation and audit codes (`agent_rollout.started`, `agent_rollout.halted`) as *Start rollout*
-and *Halt*, with the system actor `paddock-server admin`. Without options the defaults above apply. They print the
+They run `paddock-server admin agent-rollout`, `admin agent-rollout-halt` and `admin agent-rollout-resume` in the
+`paddock-api` service: the same use cases, defaults, validation and audit codes (`agent_rollout.started`,
+`agent_rollout.halted`, `agent_rollout.resumed`) as *Start rollout*, *Halt* and *Resume*, with the system actor
+`paddock-server admin`. Resume only continues a rollout that was started and halted; it keeps the rollout's waves and
+thresholds (a release that already has a rollout cannot be started again with other waves). Without options the defaults above apply. They print the
 rollout as JSON; a refusal exits with status 1 and names the API's problem code on stderr, e.g.
 `agent-rollout 1.2.0: refused: problem invalid_state: only published releases can be rolled out` (`invalid_state`
-also for another running rollout or a halt of a rollout that does not run, `already_exists` for a release that
-already has a rollout, `invalid_request` for invalid waves or bounds, `not_found` for an unknown release). A usage
-error exits with status 2. *Resume* stays in the portal.
+also for another running rollout, a halt of a rollout that does not run or a resume of a rollout that is not halted,
+`already_exists` for a release that already has a rollout, `invalid_request` for invalid waves or bounds, `not_found`
+for an unknown release or a resume of a release without a rollout). A usage error exits with status 2.
 
 The commands skip the portal's sign-in, second factor and step-up: whoever can run commands in the `paddock-api`
 container on the control-plane host can roll any published release out to every device (residual risk RR-90).

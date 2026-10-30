@@ -24,13 +24,17 @@ WHERE device_status.last_contact_at IS NULL OR device_status.last_contact_at <= 
 -- name: GetDeviceClockState :one
 SELECT clock_offset_s, clock_drift_since, last_contact_at FROM device_status WHERE device_id = @device_id;
 
--- Opens a clock drift episode; no row when one is open already (the claim of device.clock_drift).
+-- Opens a clock drift episode; no row when one is open already or the offset is no longer beyond the threshold (the
+-- claim of device.clock_drift): the update re-checks the offset a check-in committed after the claim read it (PDK-418).
 -- name: SetClockDrift :execrows
-UPDATE device_status SET clock_drift_since = @now WHERE device_id = @device_id AND clock_drift_since IS NULL;
+UPDATE device_status SET clock_drift_since = @now
+WHERE device_id = @device_id AND clock_drift_since IS NULL AND abs(clock_offset_s) > @threshold_s::bigint;
 
--- Closes the clock drift episode; no row when none is open (the claim of device.clock_drift_cleared).
+-- Closes the clock drift episode; no row when none is open or the offset is no longer within the threshold (the claim
+-- of device.clock_drift_cleared, re-checked like SetClockDrift).
 -- name: ClearClockDrift :execrows
-UPDATE device_status SET clock_drift_since = NULL WHERE device_id = @device_id AND clock_drift_since IS NOT NULL;
+UPDATE device_status SET clock_drift_since = NULL
+WHERE device_id = @device_id AND clock_drift_since IS NOT NULL AND abs(clock_offset_s) <= @threshold_s::bigint;
 
 -- name: ListDeviceSeqs :many
 SELECT device_id, last_seq FROM device_status WHERE last_seq > 0 ORDER BY device_id;

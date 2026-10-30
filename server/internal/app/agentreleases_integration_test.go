@@ -930,3 +930,94 @@ func TestPublishAgentReleaseOnlyFromDraft(t *testing.T) {
 		t.Fatalf("published_at moved: %v -> %v", before.Release.PublishedAt, after.Release.PublishedAt)
 	}
 }
+
+// concurrently runs fn n times at once and returns the errors. It first opens n platform connections: without them
+// the first call wins while the pool still dials, and the calls run one after another instead of racing.
+func (h releaseHarness) concurrently(t *testing.T, n int, fn func() error) []error {
+	t.Helper()
+	var warm sync.WaitGroup
+	for range n {
+		warm.Go(func() {
+			if err := h.platform.InPlatform(platformAdmin(), func(context.Context, *pgstore.Queries) error {
+				time.Sleep(50 * time.Millisecond)
+				return nil
+			}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	warm.Wait()
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			<-start
+			errs[i] = fn()
+		})
+	}
+	close(start)
+	wg.Wait()
+	return errs
+}
+
+// expectOneSuccess checks that exactly one of errs is nil and every other one is the problem want, and that the
+// release has exactly one successful audit event of code.
+func (h releaseHarness) expectOneSuccess(t *testing.T, errs []error, want *problem.Error, version, code string) {
+	t.Helper()
+	ok := 0
+	for _, err := range errs {
+		if err == nil {
+			ok++
+			continue
+		}
+		expectProblem(t, err, want)
+	}
+	if ok != 1 {
+		t.Errorf("%d of %d concurrent calls succeeded, want 1", ok, len(errs))
+	}
+	if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1 AND code = $2 AND outcome = 'success'`,
+		version, code); n != 1 {
+		t.Errorf("%d successful %s events, want 1", n, code)
+	}
+	if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1 AND code = $2 AND outcome = 'failure'`,
+		version, code); n != len(errs)-1 {
+		t.Errorf("%d failed %s events, want %d", n, code, len(errs)-1)
+	}
+}
+
+// TestConcurrentRolloutStart: concurrent starts of the same release start it once; the others are refused with
+// already_exists, not with the raw primary key violation (PDK-452).
+func TestConcurrentRolloutStart(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	t.Cleanup(func() { h.haltAll(t) })
+	v := h.published(t)
+	errs := h.concurrently(t, 8, func() error {
+		_, err := h.releases.StartRollout(platformAdmin(), v, app.RolloutOptions{})
+		return err
+	})
+	h.expectOneSuccess(t, errs, problem.AlreadyExists, v, "agent_rollout.started")
+}
+
+// TestConcurrentRolloutHaltAndResume: concurrent halts (and resumes) change the rollout once and record one successful
+// event; the others are refused with invalid_state (PDK-452).
+func TestConcurrentRolloutHaltAndResume(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	t.Cleanup(func() { h.haltAll(t) })
+	v := h.published(t)
+	if _, err := h.releases.StartRollout(platformAdmin(), v, app.RolloutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	errs := h.concurrently(t, 8, func() error {
+		_, err := h.releases.Halt(platformAdmin(), v)
+		return err
+	})
+	h.expectOneSuccess(t, errs, problem.InvalidState, v, "agent_rollout.halted")
+	errs = h.concurrently(t, 8, func() error {
+		_, err := h.releases.Resume(platformAdmin(), v)
+		return err
+	})
+	h.expectOneSuccess(t, errs, problem.InvalidState, v, "agent_rollout.resumed")
+}

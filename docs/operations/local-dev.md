@@ -137,6 +137,23 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
   `paddock-dev-stepup-mfa` (WebAuthn or TOTP), so the test users complete step-ups with their seeded TOTP keys
   (`docs/operations/step-up.md`, "Development stack").
 
+## Acceptance gates on a long-lived stack
+
+The acceptance gates (`make acceptance`) run against this stack and leave their data behind: every run creates new
+`gate-*` organizations, enrolled devices, tokens and audit events, and none of it is removed. Organizations cannot be
+deleted (the admin API has no delete operation for organizations), so there is no cleanup after a gate. A gate must
+therefore not depend on the number of organizations, devices or any other state that accumulates across runs: it asserts
+on the objects it created itself, scopes its lists and audit queries to them, and does not size a timeout on how fast
+the stack works through all organizations or devices. A gate that passes on a fresh stack and fails on a long-used one
+breaks this rule.
+
+When a stack has grown so large that the worker's rounds over all organizations slow it down, start over with an
+empty stack:
+
+```sh
+make down V=1 && make up dev-seed
+```
+
 ## Running the acceptance gates locally
 
 The acceptance gates in `test/acceptance/` run against the running stack. There are two ways to run the whole suite:
