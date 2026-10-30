@@ -62,7 +62,11 @@ How it works:
 1. `.secrets/` is created on first run: a dedicated ed25519 key and
    `credentials.env` (`PADDOCK_USER`, `PADDOCK_PASSWORD`,
    `PADDOCK_LUKS_PASSPHRASE`, alphanumeric so they can be typed via
-   `keyboardputstring`). Both VMs share these secrets.
+   `keyboardputstring`). Both VMs share these secrets. Only the repository's
+   main checkout creates them: in a linked `git worktree` (e.g. a second
+   development stack) the scripts make `.secrets` a symlink to the main
+   checkout's directory, and refuse when the main checkout has none or the
+   worktree holds secrets of its own, which would not match the VMs.
 2. The template is rendered to `work/<vm>/autoinstall.yaml` and a copy of the
    ISO is remastered with `xorriso` (original ISO untouched): `/autoinstall.yaml`
    is added at the ISO root and `autoinstall` is added to the GRUB kernel
@@ -85,6 +89,14 @@ prompt). Headless:
 ```sh
 ./start-vm.sh paddock-u2404        # starts, unlocks, waits for SSH, prints ssh command
 ```
+
+`start-vm.sh` clears the prompt with Backspaces and types the passphrase one
+character at a time (`PADDOCK_VM_KEY_DELAY`, default 0.15 s between keys), as
+one `keyboardputstring` of the whole passphrase lost keystrokes under host load.
+After a successful unlock it records a short hash of the passphrase in the VM's
+extradata (`paddock/luks-passphrase-sha256`); secrets whose passphrase does not
+match stop the start at once. Each failed attempt (at most 5) saves a console
+screenshot under `work/<vm>/console-*.png`, whose path is logged.
 
 Manually:
 

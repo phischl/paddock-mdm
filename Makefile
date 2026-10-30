@@ -224,6 +224,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
 	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
+	bash test/vms/virtualbox/lib_test.sh
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
