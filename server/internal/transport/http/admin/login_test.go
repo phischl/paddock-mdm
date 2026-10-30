@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -88,6 +89,43 @@ func (w *loginWorld) adminClaims(username string, amr []string) map[string]any {
 		c["amr"] = amr
 	}
 	return c
+}
+
+// TestLogoutEndsTheIdentityProviderSession (PDK-532): the logout answers the brand invalidation flow on the issuer's
+// origin, which ends the Authentik session, not the provider's end-session endpoint; without a known issuer it answers
+// the portal.
+func TestLogoutEndsTheIdentityProviderSession(t *testing.T) {
+	logout := func(e *env, c *http.Cookie) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "https://admin.test/api/auth/logout", nil)
+		req.Header.Set("X-Paddock-CSRF", "1")
+		if c != nil {
+			req.AddCookie(c)
+		}
+		rec := httptest.NewRecorder()
+		e.handler.ServeHTTP(rec, req)
+		var body struct {
+			EndSessionURL string `json:"end_session_url"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); rec.Code != http.StatusOK || err != nil {
+			t.Fatalf("logout: %d %s", rec.Code, rec.Body)
+		}
+		return body.EndSessionURL
+	}
+
+	w := newLoginWorld(t, nil)
+	res := w.login(context.Background(), w.adminClaims("erin@acme.test", []string{"pwd", "mfa"}))
+	session := cookieOf(res, admin.SessionCookie)
+	if res.Code != http.StatusFound || session == nil {
+		t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+	}
+	if got, want := logout(w.e, session), w.idp.URL+"/flows/-/default/invalidation/"; got != want {
+		t.Errorf("end_session_url = %q, want %q", got, want)
+	}
+
+	if got := logout(newEnv(t), nil); got != "https://admin.test/" {
+		t.Errorf("end_session_url without a known issuer = %q, want the portal", got)
+	}
 }
 
 // TestLoginDiscardsTheSessionOfAFailedLogin: when a login fails after its session record was created (here: the

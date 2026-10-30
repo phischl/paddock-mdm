@@ -109,6 +109,7 @@
 3 TestOverviewNoRecentContact
 3 TestStepUpFactor
 3 TestEnrollRightAfterTokenCreation
+3 TestSessionsLogoutEndsAuthentikSession
 2 TestAgentPackagesPublic
 2 TestSessionsLogout
 2 TestPlatformEndpointsForbiddenForOrganizations

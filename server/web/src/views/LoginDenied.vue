@@ -13,16 +13,15 @@ const signingOut = ref(false)
 
 /**
  * Ends the identity provider's session, so that the next sign-in runs the login flow again instead of reusing the
- * session that was refused (ADR 0034 amendment 2026-10-29). Authentik's end-session endpoint of the portal ends the
- * application only, so the browser goes to Authentik's default invalidation flow on the issuer's origin.
+ * session that was refused (ADR 0034 amendment 2026-10-29). The logout's end_session_url is Authentik's brand
+ * invalidation flow, which ends that session (PDK-532).
  */
 async function signOutOfIdentityProvider(): Promise<void> {
   signingOut.value = true
   let target = '/'
   try {
     const { data } = await api.POST('/api/auth/logout', { params: { header: { 'X-Paddock-CSRF': '1' } } })
-    const origin = new URL(data?.end_session_url ?? '/', window.location.origin).origin
-    if (origin !== window.location.origin) target = origin + '/flows/-/default/invalidation/'
+    target = data?.end_session_url ?? '/'
   } catch {
     target = '/'
   }
