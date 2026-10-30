@@ -18,7 +18,6 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
-	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -478,7 +477,8 @@ func (a *Agent) runConversions(ctx context.Context) {
 			// No initrd work while a supervisor upgrade runs: its rollback restarts the supervisor and kills the agent and
 			// its dracut (review 7, X1; amendment 2026-10-21, items 17 and 18). The next full pass retries, without a
 			// backoff.
-			due = !a.d.Now().Before(a.initrdRetryAt) && !a.supervisorMarkerFresh()
+			held, _ := a.supervisorUpgradeHolds()
+			due = !a.d.Now().Before(a.initrdRetryAt) && !held
 			switch c := a.st.Conversion; {
 			case c != nil && c.Phase == state.ConversionPreparing:
 				p = a.preparer(ctx)
@@ -709,12 +709,11 @@ func (a *Agent) preparer(ctx context.Context) *encrypt.Preparer {
 }
 
 // holdForSupervisor returns once no supervisor upgrade runs (plan M8e decision 37): it waits while
-// supervisor-upgrade.json exists, at most supervisorpkg.StaleAfter from the marker's start (its mtime when it is
-// unreadable).
+// supervisor-upgrade.json holds (supervisorUpgradeHolds), at most supervisorpkg.StaleAfter.
 func (a *Agent) holdForSupervisor(ctx context.Context) error {
 	logged := false
 	for {
-		if !a.supervisorMarkerFresh() {
+		if held, _ := a.supervisorUpgradeHolds(); !held {
 			return nil
 		}
 		if !logged {
@@ -725,26 +724,6 @@ func (a *Agent) holdForSupervisor(ctx context.Context) error {
 			return err
 		}
 	}
-}
-
-// supervisorMarkerFresh reports whether supervisor-upgrade.json exists and is younger than supervisorpkg.StaleAfter
-// from the marker's start (its mtime when it is unreadable).
-func (a *Agent) supervisorMarkerFresh() bool {
-	marker, err := supervisorpkg.ReadMarker(a.d.Layout)
-	var started time.Time
-	switch {
-	case marker != nil:
-		started = marker.StartedAt
-	case err == nil:
-		return false
-	default:
-		info, serr := os.Stat(a.d.Layout.SupervisorUpgrade())
-		if serr != nil {
-			return false
-		}
-		started = info.ModTime()
-	}
-	return a.d.Now().Sub(started) < supervisorpkg.StaleAfter
 }
 
 // sleepCtx waits d or until ctx ends.
