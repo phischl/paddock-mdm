@@ -52,6 +52,19 @@ fail() {
 # reach (and in the trap tear down) the default project, which may be a development stack on the same host.
 lab_paddock() { (cd "$W/lab" && PADDOCK_PROJECT=paddock-lab PADDOCK_COMPOSE_EXTRA="$ci_overlay" ./paddock "$@"); }
 
+# Command output is captured before grep searches it: under pipefail, a `grep -q` on a live pipe exits at the first
+# match and the writer's SIGPIPE turns that match into a failure (PDK-544).
+# wait_unsealed polls for up to 60 s: OpenBao reports sealed for a moment after the last share while it becomes active.
+wait_unsealed() {
+  local status
+  for _ in $(seq 1 30); do
+    status="$(lab_paddock bao status </dev/null 2>/dev/null || true)"
+    grep -Eq '^Sealed +false' <<<"$status" && return 0
+    sleep 2
+  done
+  return 1
+}
+
 # Logs of the project and of Nginx, then Nginx and the project with its volumes removed; also after a failure.
 finish() {
   local rc=$?
@@ -135,7 +148,7 @@ mapfile -t shares < <(awk '/"unseal_keys_b64"/ { f = 1; next } f && /\]/ { f = 0
 ((${#shares[@]} == 3)) || fail "no unseal shares in the OpenBao init output"
 # Non-interactive form of `./paddock bao operator unseal`: the shares on stdin, never on a command line.
 for share in "${shares[@]}"; do printf '%s' "$share" | lab_paddock bao write sys/unseal key=- >/dev/null; done
-lab_paddock bao status </dev/null | grep -Eq '^Sealed +false' || fail "OpenBao is still sealed"
+wait_unsealed || fail "OpenBao is still sealed 60 s after the last unseal share"
 export BAO_TOKEN="$root_token"
 lab_paddock bootstrap openbao
 lab_paddock bao token revoke -self </dev/null
@@ -262,8 +275,9 @@ expect 200 "GET https://auth.$domain/api/v3/core/brands/ as the api, through Ngi
 step "10 certificate probe of the worker"
 sleep 90
 # The full log, not ./paddock logs' last 300 lines, so an early probe failure cannot scroll out of view.
-if lab_paddock compose logs --no-color paddock-worker | grep -q 'TLS probe failed'; then
-  lab_paddock compose logs --no-color paddock-worker | grep 'TLS probe failed' | tail -5 >&2
+worker_log="$(lab_paddock compose logs --no-color paddock-worker)"
+if grep -q 'TLS probe failed' <<<"$worker_log"; then
+  grep 'TLS probe failed' <<<"$worker_log" | tail -5 >&2
   fail "the worker's certificate probe failed"
 fi
 echo "no TLS probe failure in the worker's log"
@@ -292,16 +306,10 @@ grep -q '^PASS  openbao auto-unseal$' "$W/check-auto-unseal-on.txt" ||
   fail "./paddock check does not pass openbao auto-unseal with automatic unseal on"
 grep -q 'RR-43' "$W/check-auto-unseal-on.txt" || fail "./paddock check does not name RR-43 on the lab host"
 lab_paddock compose restart openbao </dev/null 2>&1 | tee -a "$au_log"
-unsealed=""
-for _ in $(seq 1 30); do
-  if lab_paddock bao status </dev/null 2>/dev/null | grep -Eq '^Sealed +false'; then
-    unsealed=1
-    break
-  fi
-  sleep 2
-done
-[[ -n "$unsealed" ]] || fail "OpenBao is not unsealed automatically within 60 s of a restart"
-lab_paddock auto-unseal status </dev/null 2>&1 | tee -a "$au_log" | grep -q '^shares file: present$' ||
+wait_unsealed || fail "OpenBao is not unsealed automatically within 60 s of a restart"
+au_status="$(lab_paddock auto-unseal status </dev/null 2>&1)"
+printf '%s\n' "$au_status" | tee -a "$au_log"
+grep -q '^shares file: present$' <<<"$au_status" ||
   fail "./paddock auto-unseal status does not report the shares file"
 # The disable below removes the unsealer's container and with it its log, so the log is captured here.
 lab_paddock logs paddock-unsealer >"$W/auto-unseal-unsealer.log" 2>&1 </dev/null
@@ -310,12 +318,12 @@ grep -q 'OpenBao unsealed automatically' "$W/auto-unseal-unsealer.log" ||
 lab_paddock auto-unseal disable </dev/null 2>&1 | tee -a "$au_log"
 [[ ! -e "$W/lab/.secrets/openbao/auto-unseal-shares" ]] || fail "the shares file is still on the host after disable"
 grep -q '^PADDOCK_AUTO_UNSEAL=no$' "$W/lab/.env" || fail ".env does not set PADDOCK_AUTO_UNSEAL=no after disable"
-if lab_paddock ps --format '{{.Service}}' </dev/null | grep -qx paddock-unsealer; then
+if grep -qx paddock-unsealer <<<"$(lab_paddock ps --format '{{.Service}}' </dev/null)"; then
   fail "paddock-unsealer still runs after disable"
 fi
 check_with_warning "$W/check-auto-unseal-off.txt"
 cat "$W/check-auto-unseal-off.txt" >>"$au_log"
-grep -A1 '^PASS  openbao auto-unseal$' "$W/check-auto-unseal-off.txt" | grep -q 'automatic unseal is off' ||
+grep -q 'automatic unseal is off' <<<"$(grep -A1 '^PASS  openbao auto-unseal$' "$W/check-auto-unseal-off.txt")" ||
   fail "./paddock check does not report automatic unseal as off"
 lab_paddock logs >"$W/auto-unseal-compose.log" 2>&1 </dev/null
 for share in "${shares[@]}"; do

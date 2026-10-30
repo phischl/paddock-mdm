@@ -8,8 +8,14 @@ license (plan M6b decision 3, concept C8 "Licensing").
 `make lint-licenses` (part of `make lint`, so CI runs it on every pull request) fails with the package name on any
 dependency whose license is not in the allow list:
 
-`MIT`, `ISC`, `BSD-2-Clause`, `BSD-3-Clause`, `Apache-2.0`, `MPL-2.0`, `BlueOak-1.0.0`, `0BSD`, `CC0-1.0`,
+`MIT`, `MIT-0`, `ISC`, `BSD-2-Clause`, `BSD-3-Clause`, `Apache-2.0`, `MPL-2.0`, `BlueOak-1.0.0`, `0BSD`, `CC0-1.0`,
 `Python-2.0`, `Unlicense`
+
+One module is exempt from the Go check because go-licenses cannot classify its license: `github.com/segmentio/asm`
+(v1.2.1) is `MIT-0` (MIT No Attribution, OSI-approved, more permissive than MIT; approved by the maintainer on
+2026-10-28). `paddockctl` links it through `github.com/modelcontextprotocol/go-sdk` → `github.com/segmentio/encoding`;
+goose raises it to v1.2.1 in workspace mode. The exemption is `GO_LICENSES_IGNORE` in the `Makefile`; no other module
+is ignored.
 
 | Scope | Checked by | Covers |
 | --- | --- | --- |
@@ -22,6 +28,14 @@ or `npx license-checker-rseidelsohn --production` in `server/web` for the full p
 The agent binaries (`paddockd`, `paddock-supervisor`, `paddock-revoke`) link only `aead.dev/minisign` (MIT),
 `github.com/godbus/dbus/v5` (BSD-2-Clause), `github.com/gowebpki/jcs` (Apache-2.0) and the Go extended libraries
 `golang.org/x/crypto` and `golang.org/x/sys` (BSD-3-Clause), besides the Go standard library (BSD-3-Clause).
+
+Direct dependencies of `paddockctl` beyond the Go standard library and the shared `pkg` module:
+
+| Module | Version | License | Use |
+| --- | --- | --- | --- |
+| `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | MIT / Apache-2.0 (the repository's documentation: CC-BY-4.0, not linked) | stdio MCP server of `paddockctl mcp` (ADR 0044) |
+| `github.com/google/jsonschema-go` | v0.4.3 | MIT | input schemas of the MCP tools (part of the SDK's tree) |
+| `golang.org/x/oauth2` | v0.35.0 (v0.37.0 in the workspace build) | BSD-3-Clause | device authorization grant and token refresh of `paddockctl mcp login` |
 
 ## Bundled services: separate processes, not linked
 

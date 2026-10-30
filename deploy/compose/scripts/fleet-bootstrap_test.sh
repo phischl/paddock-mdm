@@ -2,6 +2,8 @@
 # Tests of the token decision of fleet-bootstrap.sh (`make test`, PDK-024 review 1): only a stored token that Fleet
 # rejects with 401 replaces the API-only user; no answer or any other status fails without a change. Review 2: a token
 # file that cannot be read fails instead of counting as "no token", and the /me probe gives up after its timeout.
+# PDK-517: the readiness probe on /healthz needs no login and is bounded, and retry repeats a failed step a bounded
+# number of times.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -101,7 +103,21 @@ if command -v python3 >/dev/null && command -v timeout >/dev/null; then
   check "probe of a Fleet that never answers gives up after its timeout" test $((SECONDS - start)) -le 3
   check "probe of a closed port: no status (-> fail)" test -z "$(fleet_me_status 1 2)"
   unset TOKEN
-  check "three listeners are tracked for cleanup" test "${#listeners[@]}" -eq 3
+  listen $'HTTP/1.0 200 OK\r\n\r\n'
+  check "healthz probe reads the status (200)" test "$(fleet_healthz_status "$port" 5)" = 200
+  check "Fleet answering /healthz with 200 is ready at the first poll" fleet_wait_healthy "$port" 5 1
+  listen $'HTTP/1.0 503 Service Unavailable\r\n\r\n'
+  check "healthz probe reads the status (503)" test "$(fleet_healthz_status "$port" 5)" = 503
+  check "Fleet answering /healthz with 503 is not ready" eval '! fleet_wait_healthy "$port" 2 1'
+  check "healthz probe of a closed port: no status" test -z "$(fleet_healthz_status 1 2)"
+  start=$SECONDS
+  check "Fleet that is not listening is not ready" eval '! fleet_wait_healthy 1 3 1'
+  check "readiness polling of a closed port stops at its deadline" test $((SECONDS - start)) -le 5
+  listen ""
+  start=$SECONDS
+  check "Fleet that accepts connections and never answers is not ready" eval '! fleet_wait_healthy "$port" 3 1'
+  check "readiness polling of a hung Fleet stops at its deadline" test $((SECONDS - start)) -le 5
+  check "six listeners are tracked for cleanup" test "${#listeners[@]}" -eq 6
   for pid in "${listeners[@]}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
   alive=0
   for pid in "${listeners[@]}"; do kill -0 "$pid" 2>/dev/null && alive=$((alive + 1)); done
@@ -109,6 +125,26 @@ if command -v python3 >/dev/null && command -v timeout >/dev/null; then
 else
   echo "skip probe tests (python3 or timeout missing)"
 fi
+
+# fails_until <n>: fails the first <n> - 1 calls and succeeds from call <n> on; counts its calls in $tmp/calls.
+fails_until() {
+  local calls
+  calls=$(($(cat "$tmp/calls" 2>/dev/null || echo 0) + 1))
+  echo "$calls" >"$tmp/calls"
+  ((calls >= $1))
+}
+calls() { cat "$tmp/calls"; }
+
+rm -f "$tmp/calls"
+check "retry: a step that succeeds runs once" retry 3 0 "step" fails_until 1
+check "retry: ... exactly once" test "$(calls)" = 1
+rm -f "$tmp/calls"
+check "retry: a step that fails once succeeds at the second attempt" retry 3 0 "step" fails_until 2
+check "retry: ... after two calls" test "$(calls)" = 2
+rm -f "$tmp/calls"
+check "retry: a step that keeps failing fails" eval '! retry 3 0 "the initial setup of Fleet" fails_until 99 2>"$tmp/err"'
+check "retry: ... after exactly its attempts" test "$(calls)" = 3
+check "retry: ... naming what failed" grep -q "fleet: the initial setup of Fleet failed 3 times, 0 s apart; giving up" "$tmp/err"
 
 if ((failures > 0)); then
   echo "fleet-bootstrap: $failures failure(s)"

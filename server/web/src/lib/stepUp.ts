@@ -42,7 +42,14 @@ export type Resumed<T> = { failed: false; payload: T } | { failed: true }
  * the server refused the step-up, null when there is none (or it is stale, or for another page).
  */
 export function resumeStepUp<T>(action: string, target: string): Resumed<T> | null {
-  const raw = sessionStorage.getItem(storageKey)
+  let raw: string | null
+  try {
+    raw = sessionStorage.getItem(storageKey)
+  } catch {
+    // Blocked site data makes the storage throw; without it no step-up can be pending, and components in the
+    // application shell (McpWriteDialog) call this on every page.
+    return null
+  }
   if (!raw) return null
   let pending: Pending
   try {

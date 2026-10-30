@@ -15,10 +15,16 @@ COPY server/web/ ./
 COPY docs/assets/logo/ /src/docs/assets/logo/
 RUN npm run build
 
+# Go module downloads in the proxy layout (GOMODCACHE/cache/download). Empty here; CI replaces this stage with the
+# runner's module cache through the named build context `gomodcache` (compose.ci-gomodcache.yaml), so that a warm cache
+# never contacts proxy.golang.org (PDK-540). Every module from it is still verified against go.sum.
+FROM scratch AS gomodcache
+
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
-ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-trimpath
+# A module missing in /gomodcache (always, without the named context) falls through to the image's default proxy list.
+ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-trimpath GOPROXY=file:///gomodcache,https://proxy.golang.org,direct
 COPY go.work go.work.sum ./
 COPY agent/go.mod agent/go.sum agent/
 COPY cli/go.mod cli/go.sum cli/
@@ -28,7 +34,8 @@ COPY test/acceptance/go.mod test/acceptance/go.sum test/acceptance/
 COPY test/load/go.mod test/load/
 COPY test/system/go.mod test/system/go.sum test/system/
 COPY tools/upstreamwatch/go.mod tools/upstreamwatch/
-RUN --mount=type=cache,target=/go/pkg/mod cd server && go mod download
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=bind,from=gomodcache,target=/gomodcache \
+    cd server && go mod download
 COPY pkg/ pkg/
 COPY server/ server/
 COPY --from=web /src/server/web/dist/ server/web/dist/

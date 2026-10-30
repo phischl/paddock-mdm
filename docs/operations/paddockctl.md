@@ -43,6 +43,10 @@ cannot be allow-listed. A refused request is `403 ip_not_allowed`.
 | `paddockctl schema` | Prints the JSON Schema of `paddock.yml` (`api/schema/paddock.v1.json`), for editors and validators. |
 | `paddockctl get config [-o yaml\|json]` | Exports the configuration with every section, in the order of the schema. |
 | `paddockctl apply -f <file\|-> [--dry-run] [--yes] [-o text\|json]` | Reads YAML or JSON and prints the plan. With `--dry-run` it stops there. Without `--yes` a plan that deletes something is refused (exit code 3; paddockctl never asks). Otherwise it applies exactly the plan it showed: the apply carries the plan's SHA-256 (`expected_plan`), and if the configuration changed in between, the server applies nothing and paddockctl exits with code 3; run it again to review the new plan. On success it prints `Applied change set <id>`, or `No changes`. |
+| `paddockctl mcp login [--no-browser] [--platform]` | Signs an administrator in to the MCP through Authentik (device authorization grant, password and second factor in the browser) and writes the session file `$XDG_STATE_HOME/paddockctl/mcp-session.json` (0600). No token file: [mcp.md](mcp.md). |
+| `paddockctl mcp` | The stdio MCP server for an MCP client such as Claude Code: the admin API operations the session may call as tools, with the administrator's role ([mcp.md](mcp.md)). |
+| `paddockctl mcp tools [-o table\|json]` | Lists the tools the MCP session is offered now. |
+| `paddockctl mcp logout` | Ends the MCP session, revokes its refresh token and deletes the session file. |
 | `paddockctl devices list [--page N] [--page-size 10\|25\|50\|100] [--sort <field>] [-q <text>] [--state <s>]… [--device-group-id <uuid>] [--disk-state <s>]… [-o table\|json]` | Lists devices with the parameters of the admin API's list contract; `-o json` prints the API's answer unchanged. |
 
 A plan shows one line per created (`+`) and deleted (`-`) item and one line per changed field (`~ settings.login
@@ -50,6 +54,10 @@ hello_enabled: false -> true`), then `Plan: N to create, M to update, K to delet
 JSON array of its parts: `+ managed_files [null,"/etc/motd"]` (`null` = every device), `- package_holds
 ["kiosks","firefox"]`, `+ profile_assignments ["laptops","ops","group","devs"]`. Every part is quoted, so names may
 contain any character. File contents appear only as their SHA-256 and length.
+
+The `mcp` commands authenticate with the MCP session of `paddockctl mcp login`, never with the token file;
+`--token-file` and `PADDOCK_TOKEN_FILE` are ignored there, and `paddockctl mcp` and `paddockctl mcp tools` without a
+session exit with code 2 (`not signed in: run paddockctl mcp login`).
 
 **Exit codes:** 0 success; 1 API or network error, printed as `error: <code>: <detail> (request <id>)`; 2 usage or
 configuration error; 3 apply refused because the plan deletes resources and `--yes` is missing, or because the
