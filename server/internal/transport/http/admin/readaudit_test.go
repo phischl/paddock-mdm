@@ -16,8 +16,8 @@ import (
 
 // TestReadAccessRecording (plan M10 decision 20): with the organization's switches on, the audit log list records
 // audit.searched before it lists and the software and vulnerability lists of a device record device.inventory_viewed,
-// each once per window; an operator's search is recorded as denied and refused; with the switches off no list read
-// records anything.
+// each once per window; a refused read (missing device, bad input) is recorded as failure; an operator's search is
+// recorded as denied and refused; with the switches off no list read, refused or not, records anything.
 func TestReadAccessRecording(t *testing.T) {
 	e := newEnv(t)
 	org := e.org("reads")
@@ -54,8 +54,8 @@ func TestReadAccessRecording(t *testing.T) {
 	}
 	reads()
 	reads()
-	if s, v := count("audit.searched"), count("device.inventory_viewed"); s != 1 || v != 1 {
-		t.Fatalf("switches on: %d searches, %d views recorded, want one each", s, v)
+	if s, v := count("audit.searched"), count("device.inventory_viewed"); s != 2 || v != 1 {
+		t.Fatalf("switches on: %d searches, %d views recorded, want a search without and one with a search text and one view", s, v)
 	}
 
 	operator := e.session(org, principal.RoleOrgOperator)
@@ -66,8 +66,34 @@ func TestReadAccessRecording(t *testing.T) {
 	e.expectEvent(r, "audit.searched:denied:forbidden")
 
 	missing := e.do(call{method: http.MethodGet, path: "/api/v1/devices/" + uuid.NewString() + "/software", cookie: alice})
-	if missing.status != http.StatusNotFound || len(e.events(missing.header.Get(httpx.HeaderRequestID))) != 0 {
-		t.Fatalf("missing device: %d, events %v", missing.status, e.events(missing.header.Get(httpx.HeaderRequestID)))
+	if missing.status != http.StatusNotFound {
+		t.Fatalf("missing device: %d %s", missing.status, missing.body)
+	}
+	e.expectEvent(missing, "device.inventory_viewed:failure:not_found")
+	for path, want := range map[string]string{
+		"/api/v1/audit-events?page=101&page_size=100":                                 "audit.searched:failure:page_out_of_range",
+		"/api/v1/audit-events?from=2099-01-01T00:00:00Z":                              "audit.searched:failure:invalid_request",
+		"/api/v1/devices/" + dev.String() + "/vulnerabilities?page=101&page_size=100": "device.inventory_viewed:failure:page_out_of_range",
+	} {
+		r := e.do(call{method: http.MethodGet, path: path, cookie: alice})
+		if r.status != http.StatusBadRequest {
+			t.Fatalf("GET %s: %d %s", path, r.status, r.body)
+		}
+		e.expectEvent(r, want)
+	}
+
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization_privacy_settings
+		SET audit_search_recorded = false, inventory_view_recorded = false WHERE organization_id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/audit-events?page=101&page_size=100", "/api/v1/devices/" + uuid.NewString() + "/software"} {
+		r := e.do(call{method: http.MethodGet, path: path, cookie: alice})
+		if r.status != http.StatusBadRequest && r.status != http.StatusNotFound {
+			t.Fatalf("switches off, GET %s: %d %s", path, r.status, r.body)
+		}
+		if ev := e.events(r.header.Get(httpx.HeaderRequestID)); len(ev) != 0 {
+			t.Fatalf("switches off, GET %s recorded %v", path, ev)
+		}
 	}
 }
 

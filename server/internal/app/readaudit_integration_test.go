@@ -16,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -121,6 +122,10 @@ func claimWindow(org uuid.UUID, actor string, err error) func(context.Context, *
 	}
 }
 
+// switchedOn and switchedOff are the enabled step of RecordReadOnce.
+func switchedOn(context.Context, *pgstore.Queries) (bool, error)  { return true, nil }
+func switchedOff(context.Context, *pgstore.Queries) (bool, error) { return false, nil }
+
 func expectRecorded(t *testing.T, recorded bool, err error, want bool) {
 	t.Helper()
 	if err != nil || recorded != want {
@@ -130,7 +135,9 @@ func expectRecorded(t *testing.T, recorded bool, err error, want bool) {
 
 // TestRecordReadOnce (plan M10 decision 18): a claim that reports an existing window inserts no action and no outbox
 // row; a fresh claim inserts its window row, the action and the outbox row in one transaction; a claim error rolls
-// the window row back and is recorded as failure; a denied role is recorded as denied without running the claim.
+// the window row back and is recorded as failure; a denied role is recorded as denied without running the claim; with
+// the switch off the claim does not run and nothing is recorded. A cancellation before the switch is read records
+// nothing, one after it is a claim error (amendment 2026-10-30, PDK-139 round 2).
 func TestRecordReadOnce(t *testing.T) {
 	h := newHarness(t)
 	ctx := h.admin(principal.RoleOrgAdmin)
@@ -139,13 +146,13 @@ func TestRecordReadOnce(t *testing.T) {
 		return func(context.Context, *pgstore.Queries, app.Recorder) (bool, error) { return fresh, nil }
 	}
 
-	recorded, err := h.runner.RecordReadOnce(ctx, app.SpecAuditSearched, claim(false))
+	recorded, err := h.runner.RecordReadOnce(ctx, app.SpecAuditSearched, switchedOn, claim(false))
 	expectRecorded(t, recorded, err, false)
 	if actions, events := h.recorded(t, corr); len(actions) != 0 || len(events) != 0 {
 		t.Fatalf("an existing window recorded %d actions, %d outbox rows", len(actions), len(events))
 	}
 
-	recorded, err = h.runner.RecordReadOnce(ctx, app.SpecAuditSearched, claimWindow(h.org, "fresh", nil))
+	recorded, err = h.runner.RecordReadOnce(ctx, app.SpecAuditSearched, switchedOn, claimWindow(h.org, "fresh", nil))
 	expectRecorded(t, recorded, err, true)
 	ev := expectOne(t, h, audit.OutcomeSuccess, "")
 	if ev.Code != audit.CodeAuditSearched {
@@ -159,7 +166,7 @@ func TestRecordReadOnce(t *testing.T) {
 
 	t.Run("claim error", func(t *testing.T) {
 		h := newHarness(t)
-		_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgAdmin), app.SpecAuditSearched,
+		_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgAdmin), app.SpecAuditSearched, switchedOn,
 			claimWindow(h.org, "broken", errors.New("claim broke")))
 		if err == nil {
 			t.Fatal("a claim error was not returned")
@@ -172,28 +179,79 @@ func TestRecordReadOnce(t *testing.T) {
 	t.Run("denied", func(t *testing.T) {
 		h := newHarness(t)
 		called := false
-		_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgOperator), app.SpecAuditSearched,
+		_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgOperator), app.SpecAuditSearched, switchedOn,
 			func(context.Context, *pgstore.Queries, app.Recorder) (bool, error) { called = true; return true, nil })
 		if !errors.Is(err, app.ErrForbidden) || called {
 			t.Fatalf("operator: %v, claim called %v", err, called)
 		}
 		expectOne(t, h, audit.OutcomeDenied, "forbidden")
 	})
+	t.Run("switched off", func(t *testing.T) {
+		h := newHarness(t)
+		recorded, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgAdmin), app.SpecAuditSearched, switchedOff,
+			claimWindow(h.org, "off", errors.New("claim ran")))
+		expectRecorded(t, recorded, err, false)
+		if actions, events := h.recorded(t, "corr-"+t.Name()); len(actions) != 0 || len(events) != 0 {
+			t.Fatalf("switched off: %d actions, %d outbox rows", len(actions), len(events))
+		}
+	})
+	t.Run("canceled before the switch", func(t *testing.T) {
+		h := newHarness(t)
+		for name, enabled := range map[string]func(context.Context, *pgstore.Queries) (bool, error){
+			"before the transaction": switchedOn,
+			"while reading the switch": func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+				_, err := q.HasExpiredReadAuditWindows(ctx, time.Now())
+				return true, err
+			},
+		} {
+			ctx, cancel := context.WithCancel(h.admin(principal.RoleOrgAdmin))
+			if name == "before the transaction" {
+				cancel()
+			}
+			read := enabled
+			enabled = func(ctx context.Context, q *pgstore.Queries) (bool, error) { cancel(); return read(ctx, q) }
+			_, err := h.runner.RecordReadOnce(ctx, app.SpecAuditSearched, enabled, claimWindow(h.org, name, nil))
+			cancel()
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s: %v, want canceled", name, err)
+			}
+		}
+		if actions, events := h.recorded(t, "corr-"+t.Name()); len(actions) != 0 || len(events) != 0 {
+			t.Fatalf("canceled before the switch: %d actions, %d outbox rows", len(actions), len(events))
+		}
+	})
+	t.Run("canceled after the switch", func(t *testing.T) {
+		h := newHarness(t)
+		ctx, cancel := context.WithCancel(h.admin(principal.RoleOrgAdmin))
+		defer cancel()
+		_, err := h.runner.RecordReadOnce(ctx, app.SpecAuditSearched, switchedOn,
+			func(ctx context.Context, q *pgstore.Queries, rec app.Recorder) (bool, error) {
+				cancel()
+				return claimWindow(h.org, "late", nil)(ctx, q, rec)
+			})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("%v, want canceled", err)
+		}
+		expectOne(t, h, audit.OutcomeFailure, "canceled")
+		if n := countRows(t, h.super, "SELECT count(*) FROM read_audit_window WHERE organization_id = $1", h.org); n != 0 {
+			t.Fatalf("a canceled claim left %d window rows", n)
+		}
+	})
 }
 
-// TestReadAuditSearched (plan M10 decision 19): one audit.searched per actor and clock hour with the filters of the
-// effective range and whether a search text was used, never the text; the next hour records again.
+// TestReadAuditSearched (plan M10 decision 19): one audit.searched per actor, clock hour and set of filters with the
+// filters of the effective range and whether a search text was used, never the text; the next hour records again.
 func TestReadAuditSearched(t *testing.T) {
 	w := newReadWorld(t, true, false)
 	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Display: "alice"})
-	target := uuid.Must(uuid.NewV7())
+	target := w.device(t, w.org, "ws-target")
 	pattern := "%secret%"
 	q := app.AuditQuery{Codes: []string{"device.retired"}, TargetID: &target, Page: app.ListPage{QPattern: &pattern}}
 
-	recorded, err := w.reads.AuditSearched(alice, q)
+	recorded, err := w.reads.AuditSearched(alice, q, nil)
 	expectRecorded(t, recorded, err, true)
 	w.now = w.now.Add(40 * time.Minute)
-	recorded, err = w.reads.AuditSearched(alice, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(alice, q, nil)
 	expectRecorded(t, recorded, err, false)
 
 	events := w.events(t, w.org, audit.CodeAuditSearched)
@@ -202,7 +260,8 @@ func TestReadAuditSearched(t *testing.T) {
 	}
 	p := events[0].Params
 	if p["from"] != "2026-10-23T10:15:00Z" || p["to"] != "2026-10-30T10:15:00Z" || p["q_used"] != true ||
-		p["window_start"] != "2026-10-30T10:00:00Z" || p["target_id"] != target.String() || p["outcomes"] != nil {
+		p["window_start"] != "2026-10-30T10:00:00Z" || p["target_id"] != target.String() || p["outcomes"] != nil ||
+		p["target_id_used"] != nil {
 		t.Fatalf("params %v", p)
 	}
 	if codes, _ := p["codes"].([]any); len(codes) != 1 || codes[0] != "device.retired" {
@@ -217,10 +276,95 @@ func TestReadAuditSearched(t *testing.T) {
 	}
 
 	w.now = w.now.Add(10 * time.Minute)
-	recorded, err = w.reads.AuditSearched(alice, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(alice, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, true)
 	if p := w.events(t, w.org, audit.CodeAuditSearched)[1].Params; p["q_used"] != false || p["codes"] != nil || p["target_id"] != nil {
 		t.Fatalf("params of the second hour %v", p)
+	}
+}
+
+// TestReadAuditSearchedFilters (plan M10 amendment 2026-10-30, PDK-139 round 2): the window is keyed by actor, hour
+// and the normalized filters. Different filters in one hour record one event each; the same filters in another order,
+// with duplicates or with another search text record none, so the events cannot tell search texts apart; a search
+// with the default range keeps its key while the clock moves within the hour.
+func TestReadAuditSearchedFilters(t *testing.T) {
+	w := newReadWorld(t, true, false)
+	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7())})
+	from := w.now.Add(-48 * time.Hour)
+	first, second := "%first%", "%second%"
+	searches := []struct {
+		name string
+		q    app.AuditQuery
+		want bool
+	}{
+		{"defaults", app.AuditQuery{}, true},
+		{"defaults later in the hour", app.AuditQuery{Now: w.now.Add(30 * time.Minute)}, false},
+		{"two codes", app.AuditQuery{Codes: []string{"device.retired", "audit.searched"}}, true},
+		{"the codes reordered and repeated", app.AuditQuery{Codes: []string{"audit.searched", "device.retired", "audit.searched"}}, false},
+		{"an outcome", app.AuditQuery{Outcomes: []string{"failure"}}, true},
+		{"an actor type", app.AuditQuery{ActorTypes: []string{"admin"}}, true},
+		{"a from", app.AuditQuery{From: &from}, true},
+		{"the same from", app.AuditQuery{From: &from}, false},
+		{"a search text", app.AuditQuery{Page: app.ListPage{QPattern: &first}}, true},
+		{"another search text", app.AuditQuery{Page: app.ListPage{QPattern: &second}}, false},
+	}
+	want := 0
+	for _, s := range searches {
+		recorded, err := w.reads.AuditSearched(alice, s.q, nil)
+		if err != nil || recorded != s.want {
+			t.Fatalf("%s: recorded %v (%v), want %v", s.name, recorded, err, s.want)
+		}
+		if s.want {
+			want++
+		}
+	}
+	if n := len(w.events(t, w.org, audit.CodeAuditSearched)); n != want {
+		t.Fatalf("%d events, want %d", n, want)
+	}
+	if n := countRows(t, w.super, "SELECT count(*) FROM read_audit_window WHERE organization_id = $1 AND code = 'audit.searched'", w.org); n != want {
+		t.Fatalf("%d windows, want %d", n, want)
+	}
+	if n := countRows(t, w.super, `SELECT count(*) FROM read_audit_window WHERE organization_id = $1
+		AND target_id !~ '^[0-9a-f]{64}$'`, w.org); n != 0 {
+		t.Fatalf("%d window keys hold filter values instead of a hash", n)
+	}
+}
+
+// TestReadAuditSearchedTarget (plan M10 amendment 2026-10-30, PDK-139 round 2): a target_id is recorded only when it
+// is a device of the caller's organization; another organization's device or an unknown ID is recorded as
+// target_id_used only, never appears in the event, and shares one window, so the events do not tell such IDs apart.
+func TestReadAuditSearchedTarget(t *testing.T) {
+	w := newReadWorld(t, true, false)
+	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7())})
+	own := w.device(t, w.org, "own-1")
+	foreign := w.device(t, w.otherOrg(t), "globex-1")
+	unknown := uuid.Must(uuid.NewV7())
+	for target, want := range map[uuid.UUID]bool{own: true, foreign: true} {
+		recorded, err := w.reads.AuditSearched(alice, app.AuditQuery{TargetID: &target}, nil)
+		expectRecorded(t, recorded, err, want)
+	}
+	recorded, err := w.reads.AuditSearched(alice, app.AuditQuery{TargetID: &unknown}, nil)
+	expectRecorded(t, recorded, err, false)
+
+	events := w.events(t, w.org, audit.CodeAuditSearched)
+	if len(events) != 2 {
+		t.Fatalf("%d events, want 2", len(events))
+	}
+	var ownSeen, outsideSeen bool
+	for _, ev := range events {
+		raw, _ := json.Marshal(ev)
+		switch p := ev.Params; {
+		case p["target_id"] == own.String() && p["target_id_used"] == nil:
+			ownSeen = true
+		case p["target_id"] == nil && p["target_id_used"] == true &&
+			!strings.Contains(string(raw), foreign.String()) && !strings.Contains(string(raw), unknown.String()):
+			outsideSeen = true
+		default:
+			t.Fatalf("event %s", raw)
+		}
+	}
+	if !ownSeen || !outsideSeen {
+		t.Fatalf("own device recorded %v, outside target recorded %v", ownSeen, outsideSeen)
 	}
 }
 
@@ -230,7 +374,7 @@ func TestReadAuditSearchedUnknownCodes(t *testing.T) {
 	w := newReadWorld(t, true, false)
 	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Display: "alice"})
 	long := strings.Repeat("leak", 4096)
-	recorded, err := w.reads.AuditSearched(alice, app.AuditQuery{Codes: []string{"not.registered", "device.retired", long}})
+	recorded, err := w.reads.AuditSearched(alice, app.AuditQuery{Codes: []string{"not.registered", "device.retired", long}}, nil)
 	expectRecorded(t, recorded, err, true)
 
 	p := w.events(t, w.org, audit.CodeAuditSearched)[0].Params
@@ -245,7 +389,7 @@ func TestReadAuditSearchedUnknownCodes(t *testing.T) {
 	}
 
 	w.now = w.now.Add(time.Hour)
-	recorded, err = w.reads.AuditSearched(alice, app.AuditQuery{Codes: []string{"not.registered"}})
+	recorded, err = w.reads.AuditSearched(alice, app.AuditQuery{Codes: []string{"not.registered"}}, nil)
 	expectRecorded(t, recorded, err, true)
 	if p := w.events(t, w.org, audit.CodeAuditSearched)[1].Params; p["codes"] != nil || p["codes_unknown"] != float64(1) {
 		t.Fatalf("only unregistered codes: params %v", p)
@@ -257,7 +401,7 @@ func TestReadAuditSearchedUnknownCodes(t *testing.T) {
 func TestReadAuditSearchedSwitchedOff(t *testing.T) {
 	w := newReadWorld(t, false, true)
 	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7())})
-	recorded, err := w.reads.AuditSearched(alice, app.AuditQuery{})
+	recorded, err := w.reads.AuditSearched(alice, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, false)
 	if n := len(w.events(t, w.org, audit.CodeAuditSearched)); n != 0 {
 		t.Fatalf("%d events with the switch off", n)
@@ -267,7 +411,7 @@ func TestReadAuditSearchedSwitchedOff(t *testing.T) {
 	}
 
 	operator := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Role: principal.RoleOrgOperator})
-	if _, err := w.reads.AuditSearched(operator, app.AuditQuery{}); !errors.Is(err, app.ErrForbidden) {
+	if _, err := w.reads.AuditSearched(operator, app.AuditQuery{}, nil); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("operator search: %v, want forbidden", err)
 	}
 	events := w.events(t, w.org, audit.CodeAuditSearched)
@@ -277,11 +421,72 @@ func TestReadAuditSearchedSwitchedOff(t *testing.T) {
 
 	auditor := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Role: principal.RoleOrgAuditor})
 	w.switches(t, w.org, true, true)
-	recorded, err = w.reads.AuditSearched(auditor, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(auditor, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, true)
-	from := w.now.Add(time.Hour)
-	recorded, err = w.reads.AuditSearched(auditor, app.AuditQuery{From: &from})
+	recorded, err = w.reads.AuditSearched(auditor, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, false)
+}
+
+// TestReadAuditRefused (plan M10 amendment 2026-10-30, PDK-139 round 2): with the switches on, a refused read records
+// one failure with the reason and claims no window, so the next valid read is still recorded; with the switches off a
+// refused read records nothing.
+func TestReadAuditRefused(t *testing.T) {
+	w := newReadWorld(t, true, true)
+	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7())})
+	late := w.now.Add(time.Hour)
+	early := w.now.Add(-100 * 24 * time.Hour)
+	missing := uuid.Must(uuid.NewV7())
+	foreign := w.device(t, w.otherOrg(t), "globex-2")
+	dev := w.device(t, w.org, "ws-9")
+	bad := problem.InvalidRequest.WithDetail("unknown outcome")
+	cases := []struct {
+		name   string
+		read   func() (bool, error)
+		code   audit.Code
+		reason string
+	}{
+		{"from after to", func() (bool, error) { return w.reads.AuditSearched(alice, app.AuditQuery{From: &late}, nil) }, audit.CodeAuditSearched, "invalid_request"},
+		{"range over 92 days", func() (bool, error) { return w.reads.AuditSearched(alice, app.AuditQuery{From: &early}, nil) }, audit.CodeAuditSearched, "range_too_large"},
+		{"bad search input", func() (bool, error) { return w.reads.AuditSearched(alice, app.AuditQuery{}, bad) }, audit.CodeAuditSearched, "invalid_request"},
+		{"missing device", func() (bool, error) {
+			return w.reads.InventoryViewed(alice, missing, app.InventoryViewSoftware, nil)
+		}, audit.CodeDeviceInventoryViewed, "not_found"},
+		{"foreign device", func() (bool, error) {
+			return w.reads.InventoryViewed(alice, foreign, app.InventoryViewSoftware, nil)
+		}, audit.CodeDeviceInventoryViewed, "not_found"},
+		{"bad view input", func() (bool, error) { return w.reads.InventoryViewed(alice, dev, app.InventoryViewSoftware, bad) }, audit.CodeDeviceInventoryViewed, "invalid_request"},
+	}
+	for _, c := range cases {
+		before := len(w.events(t, w.org, c.code))
+		recorded, err := c.read()
+		if recorded || err == nil {
+			t.Fatalf("%s: recorded %v (%v), want refused", c.name, recorded, err)
+		}
+		events := w.events(t, w.org, c.code)
+		if len(events) != before+1 {
+			t.Fatalf("%s: %d new events, want 1", c.name, len(events)-before)
+		}
+		if ev := events[before]; ev.Outcome != audit.OutcomeFailure || ev.ErrorCode != c.reason {
+			t.Fatalf("%s: %s/%s, want failure/%s", c.name, ev.Outcome, ev.ErrorCode, c.reason)
+		}
+	}
+	if n := countRows(t, w.super, "SELECT count(*) FROM read_audit_window WHERE organization_id = $1", w.org); n != 0 {
+		t.Fatalf("refused reads claimed %d windows", n)
+	}
+	recorded, err := w.reads.AuditSearched(alice, app.AuditQuery{}, nil)
+	expectRecorded(t, recorded, err, true)
+	recorded, err = w.reads.InventoryViewed(alice, dev, app.InventoryViewSoftware, nil)
+	expectRecorded(t, recorded, err, true)
+
+	w.switches(t, w.org, false, false)
+	for _, c := range cases {
+		before := len(w.events(t, w.org, c.code))
+		recorded, err := c.read()
+		expectRecorded(t, recorded, err, false)
+		if n := len(w.events(t, w.org, c.code)); n != before {
+			t.Fatalf("%s with the switches off: %d new events", c.name, n-before)
+		}
+	}
 }
 
 // TestReadAuditActorKey (plan M10 amendment A5): an API token is coalesced by its token ID, not by the account that
@@ -295,15 +500,15 @@ func TestReadAuditActorKey(t *testing.T) {
 	apiToken := as(w.org, principal.Principal{ID: account, APITokenID: token, APITokenName: "sweep"})
 	otherToken := as(w.org, principal.Principal{ID: account, APITokenID: uuid.Must(uuid.NewV7()), APITokenName: "other"})
 
-	recorded, err := w.reads.AuditSearched(mcp, app.AuditQuery{})
+	recorded, err := w.reads.AuditSearched(mcp, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, true)
-	recorded, err = w.reads.AuditSearched(portal, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(portal, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, false)
-	recorded, err = w.reads.AuditSearched(apiToken, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(apiToken, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, true)
-	recorded, err = w.reads.AuditSearched(apiToken, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(apiToken, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, false)
-	recorded, err = w.reads.AuditSearched(otherToken, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(otherToken, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, true)
 
 	events := w.events(t, w.org, audit.CodeAuditSearched)
@@ -318,9 +523,9 @@ func TestReadAuditActorKey(t *testing.T) {
 	}
 
 	w.now = w.now.Add(time.Hour)
-	recorded, err = w.reads.AuditSearched(portal, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(portal, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, true)
-	recorded, err = w.reads.AuditSearched(mcp, app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(mcp, app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, false)
 }
 
@@ -338,13 +543,13 @@ func TestReadAuditConcurrent(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			ok, err := w.reads.AuditSearched(alice, app.AuditQuery{})
+			ok, err := w.reads.AuditSearched(alice, app.AuditQuery{}, nil)
 			results <- ok
 			errs <- err
 		}()
 		go func() {
 			defer wg.Done()
-			ok, err := w.reads.InventoryViewed(alice, dev, app.InventoryViewSoftware)
+			ok, err := w.reads.InventoryViewed(alice, dev, app.InventoryViewSoftware, nil)
 			results <- ok
 			errs <- err
 		}()
@@ -369,17 +574,18 @@ func TestReadAuditConcurrent(t *testing.T) {
 }
 
 // TestReadAuditInventoryViewed (plan M10 decisions 19–20): the software and then the vulnerabilities of one device on
-// one UTC day record one device.inventory_viewed with the first view; the next day records again; a missing device,
-// another organization's device and the switch off record nothing.
+// one UTC day record one device.inventory_viewed with the first view; the next day records again; another
+// organization's device is refused and recorded as failure only in the caller's organization; the switch off records
+// nothing.
 func TestReadAuditInventoryViewed(t *testing.T) {
 	w := newReadWorld(t, false, true)
 	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Role: principal.RoleOrgOperator})
 	dev := w.device(t, w.org, "ws-17")
 
-	recorded, err := w.reads.InventoryViewed(alice, dev, app.InventoryViewSoftware)
+	recorded, err := w.reads.InventoryViewed(alice, dev, app.InventoryViewSoftware, nil)
 	expectRecorded(t, recorded, err, true)
 	w.now = w.now.Add(13 * time.Hour)
-	recorded, err = w.reads.InventoryViewed(alice, dev, app.InventoryViewVulnerabilities)
+	recorded, err = w.reads.InventoryViewed(alice, dev, app.InventoryViewVulnerabilities, nil)
 	expectRecorded(t, recorded, err, false)
 	events := w.events(t, w.org, audit.CodeDeviceInventoryViewed)
 	if len(events) != 1 {
@@ -392,25 +598,24 @@ func TestReadAuditInventoryViewed(t *testing.T) {
 	}
 
 	w.now = w.now.Add(time.Hour)
-	recorded, err = w.reads.InventoryViewed(alice, dev, app.InventoryViewVulnerabilities)
+	recorded, err = w.reads.InventoryViewed(alice, dev, app.InventoryViewVulnerabilities, nil)
 	expectRecorded(t, recorded, err, true)
 
-	recorded, err = w.reads.InventoryViewed(alice, uuid.Must(uuid.NewV7()), app.InventoryViewSoftware)
-	expectRecorded(t, recorded, err, false)
 	other := w.otherOrg(t)
 	foreign := w.device(t, other, "globex-1")
-	recorded, err = w.reads.InventoryViewed(alice, foreign, app.InventoryViewSoftware)
-	expectRecorded(t, recorded, err, false)
+	if _, err = w.reads.InventoryViewed(alice, foreign, app.InventoryViewSoftware, nil); !errors.Is(err, problem.NotFound) {
+		t.Fatalf("view of a foreign device: %v, want not_found", err)
+	}
 	if n := len(w.events(t, other, audit.CodeDeviceInventoryViewed)); n != 0 {
 		t.Fatalf("a view of a foreign device recorded %d events in its organization", n)
 	}
-	if n := len(w.events(t, w.org, audit.CodeDeviceInventoryViewed)); n != 2 {
-		t.Fatalf("%d events, want 2", n)
+	if n := len(w.events(t, w.org, audit.CodeDeviceInventoryViewed)); n != 3 {
+		t.Fatalf("%d events, want two views and the refused one", n)
 	}
 
 	w.switches(t, w.org, false, false)
 	w.now = w.now.Add(24 * time.Hour)
-	recorded, err = w.reads.InventoryViewed(alice, dev, app.InventoryViewSoftware)
+	recorded, err = w.reads.InventoryViewed(alice, dev, app.InventoryViewSoftware, nil)
 	expectRecorded(t, recorded, err, false)
 }
 
@@ -422,9 +627,9 @@ func TestReadAuditOrganizations(t *testing.T) {
 	other := w.otherOrg(t)
 	account := uuid.Must(uuid.NewV7())
 
-	recorded, err := w.reads.AuditSearched(as(w.org, principal.Principal{ID: account}), app.AuditQuery{})
+	recorded, err := w.reads.AuditSearched(as(w.org, principal.Principal{ID: account}), app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, true)
-	recorded, err = w.reads.AuditSearched(as(other, principal.Principal{ID: account}), app.AuditQuery{})
+	recorded, err = w.reads.AuditSearched(as(other, principal.Principal{ID: account}), app.AuditQuery{}, nil)
 	expectRecorded(t, recorded, err, true)
 	for _, org := range []uuid.UUID{w.org, other} {
 		if n := len(w.events(t, org, audit.CodeAuditSearched)); n != 1 {

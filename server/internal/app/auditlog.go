@@ -43,6 +43,9 @@ type AuditQuery struct {
 	// TargetID selects the events of one target (for example a device), exact match on target.id.
 	TargetID *uuid.UUID
 	Page     ListPage
+	// Now is the clock the default range ends resolve against; zero means the use case's clock. A request sets it once
+	// so its recording and its list search the same range (PDK-139).
+	Now time.Time
 }
 
 // AuditDevice is the device an event concerns; Hostname is nil when the organization has no such device.
@@ -58,9 +61,12 @@ type AuditListed struct {
 	Count   int
 }
 
-// effectiveRange is the range the query searches at now: to defaults to now, from to DefaultAuditRange before to; an
+// effectiveRange is the range the query searches at now (or at f.Now when set): to defaults to now, from to DefaultAuditRange before to; an
 // empty or reversed range and one longer than MaxAuditRange are refused.
 func (f AuditQuery) effectiveRange(now time.Time) (from, to time.Time, err error) {
+	if !f.Now.IsZero() {
+		now = f.Now
+	}
 	to = now
 	if f.To != nil {
 		to = *f.To

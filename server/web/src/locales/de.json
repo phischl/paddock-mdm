@@ -9,7 +9,7 @@
     "days": "Tage",
     "recording": "Protokollierung von Zugriffen",
     "auditSearchRecorded": "Suchen im Audit-Protokoll protokollieren",
-    "auditSearchRecordedHint": "Jede Suche im Audit-Protokoll wird als Audit-Ereignis protokolliert, einmal pro Administrator und Stunde. Protokolliert werden die Filter, nie die Ergebnisse.",
+    "auditSearchRecordedHint": "Jede Suche im Audit-Protokoll wird als Audit-Ereignis protokolliert, einmal pro Administrator, Stunde und Filterkombination. Protokolliert werden die Filter, nie die Ergebnisse oder der Suchtext.",
     "inventoryViewRecorded": "Ansichten des Geräteinventars protokollieren",
     "inventoryViewRecordedHint": "Jede Ansicht der Software und Schwachstellen eines Geräts wird als Audit-Ereignis protokolliert, einmal pro Administrator, Gerät und Tag.",
     "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",

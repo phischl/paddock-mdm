@@ -1297,17 +1297,17 @@ var registry = map[Code]Definition{
 	},
 	CodeAuditSearched: {
 		Code: CodeAuditSearched, Emitted: true,
-		Description: "An administrator, auditor or API token searched the audit log; recorded once per actor and clock hour and only while the organization's audit_search_recorded setting is on. Filters are recorded, never results or the search text; codes outside this registry are only counted (codes_unknown).",
-		Params:      []string{"from", "to", "codes", "codes_unknown", "outcomes", "actor_types", "target_id", "q_used", "window_start"},
+		Description: "An administrator, auditor or API token searched the audit log; recorded once per actor, clock hour and set of filters (the search text is not part of the set) and only while the organization's audit_search_recorded setting is on. Filters are recorded, never results or the search text; codes outside this registry are only counted (codes_unknown); a target_id that is not a device of the organization is not recorded, only target_id_used.",
+		Params:      []string{"from", "to", "codes", "codes_unknown", "outcomes", "actor_types", "target_id", "target_id_used", "q_used", "window_start"},
 		Outcomes:    adminOutcomes,
-		Note:        "Denied with forbidden for operators whatever the setting. failure when the window could not be claimed; the search is then refused.",
+		Note:        "Denied with forbidden for operators whatever the setting. While the setting is on, failure for a refused search (invalid_request, range_too_large) or a window that could not be claimed; the search is then refused.",
 	},
 	CodeDeviceInventoryViewed: {
 		Code: CodeDeviceInventoryViewed, Emitted: true,
 		Description: "An organization member viewed the software or vulnerabilities of a device; recorded once per actor, device and UTC day and only while inventory_view_recorded is on. view is the first view of the day.",
 		Params:      []string{"hostname", "view", "window_start"},
 		Outcomes:    adminOutcomes,
-		Note:        "failure when the window could not be claimed; the view is then refused.",
+		Note:        "While the setting is on, failure for a refused view (not_found for a missing or foreign device, invalid_request) or a window that could not be claimed; the view is then refused.",
 	},
 	CodeAuditExportRequested: {
 		Code: CodeAuditExportRequested, Emitted: true,

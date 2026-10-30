@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "afa04571ab38bf23b8fd300e23b4c6bca3fa6635a1433c2e3321613d74d4fe4a"
+const Version = "03ef052604220252823c9aea9a2c4dc623ef408ef38190ddf4d2f56b0b1104ca"
 
 var tools = []Tool{
 	{
@@ -671,7 +671,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "audit.export_downloaded",
 		Summary:     "",
-		Description: "Roles: org_admin, org_auditor. Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. The response carries Content-Length (the package size), Content-Disposition (paddock-audit-export-<organization slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar) and X-Paddock-Package-SHA256 (the lowercase hex SHA-256 of the body). Recorded as audit.export_downloaded before the first byte is sent; a transfer that breaks later is not recorded again. No range requests. HEAD is refused with 405 (Allow: GET) and is audited as a rejected request; a transfer whose stored chunks are damaged ends without a body error, so the client detects it by the short body against Content-Length and X-Paddock-Package-SHA256.\n\nRead-only.",
+		Description: "Roles: org_admin, org_auditor. Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. The response carries Content-Length (the package size), Content-Disposition (paddock-audit-export-<organization slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar) and X-Paddock-Package-SHA256 (the lowercase hex SHA-256 of the body). Recorded as audit.export_downloaded before the first byte is sent; a transfer that breaks later is not recorded again. No range requests.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -2885,7 +2885,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "settings.privacy_changed",
 		Summary:     "",
-		Description: "Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator and hour) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"properties\":{\"audit_search_recorded\":{\"type\":\"boolean\"},\"inventory_view_recorded\":{\"type\":\"boolean\"},\"retired_inventory_days\":{\"maximum\":365,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"retired_inventory_days\",\"audit_search_recorded\",\"inventory_view_recorded\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{

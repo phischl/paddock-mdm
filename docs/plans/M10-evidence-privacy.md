@@ -1868,3 +1868,33 @@ the export" differ, this amendment wins.
    `TestAuditExportDownloadChunkRemovedMidStream`.
 5. **HEAD is refused with 405 (`Allow: GET`)** before the use case and audited as one rejected request, because
    net/http would otherwise run the download for a body that is never sent.
+### Amendment 2026-10-30 (PDK-139 round 2, read-access recording)
+
+Architect decisions after review 1 of PDK-139. Where this amendment and decisions 18–21, §6.4 or §6.6 differ, this
+amendment wins.
+
+1. **Accepted deviations.** (1) Both codes declare success, failure and denied (decision 18 emits failure).
+   (2) The development retention unit never purges a key younger than 24 hours; production keeps 48 hours.
+   (3) `PurgeReadWindows` deletes in batches of 1 000 like every other pass. (5) A denied role is recorded whatever
+   the switch, because authorization precedes the switch.
+2. **Deviation (4) changed: refused reads are recorded.** With the switch on, every authenticated attempt records
+   exactly one event. A refused read records `failure` with the problem code as reason: a range the list refuses
+   (`invalid_request` for from ≥ to, `range_too_large` beyond 92 days), handler input errors (`invalid_request`,
+   `page_out_of_range`) and a missing or foreign device (`not_found`, target the requested device ID, as for other
+   refused actions). A failure claims no window (the transaction rolls back). With the switch off nothing changes:
+   no event, the list refuses as before. Input the OpenAPI request validator rejects never reaches the handler and
+   records nothing.
+3. **(a) Cancellation.** `RecordReadOnce` reads the switch in its own step (`enabled`) before `claim`. A
+   `context.Canceled` before that step has read the switch records nothing; after it, the normal rules apply (switch
+   off: nothing; switch on: a claim error is recorded as failure with reason `canceled`).
+4. **(b) Foreign target IDs.** `audit.searched` records `target_id` only when it names a device of the caller's
+   organization (RLS-visible `GetDevice` in the claim transaction); otherwise `target_id` is omitted and
+   `target_id_used: true` is recorded (registry param). The isolation gate's globex `target_id` therefore never
+   enters acme's trail. Other object types (users, groups) are recorded as `target_id_used` only.
+5. **(c) Window key of `audit.searched` (amends decisions 19 and 20).** The key is `(actor key, "audit.searched",
+   filter hash, now.UTC().Truncate(time.Hour))`; the filter hash (SHA-256, hex, stored in the key's `target_id`
+   column) covers the normalized filters as recorded: the requested `from`/`to` (empty for a default end, so a default
+   range keeps its key within the hour), the registered codes and `codes_unknown`, outcomes and actor types (sorted,
+   without duplicates), the resolved `target_id` or `target_id_used`, and `q_used`. The search text never enters the
+   hash, so event counts cannot tell two texts apart. `device.inventory_viewed` keeps `(actor key, device ID, UTC
+   day)`. The list and the recording resolve default range ends against one clock (`AuditQuery.Now`).

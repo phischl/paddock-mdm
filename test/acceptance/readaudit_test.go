@@ -1,9 +1,12 @@
 package acceptance
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
@@ -11,11 +14,13 @@ import (
 // readAuditCodes are the read-access codes of plan M10 §6.4.
 var readAuditCodes = []string{"audit.searched", "device.inventory_viewed"}
 
-// TestReadAccessAudit is gate R3 of plan M10 (PDK-139): with the privacy switches off, searching the audit log and
-// viewing a device's software record nothing; with both on, two searches of one administrator within the hour record
-// exactly one audit.searched without the search text, the software and vulnerabilities of one device viewed twice
-// record exactly one device.inventory_viewed, an auditor's search records its own event, and another organization's
-// administrator sees none of them. The organization is fresh, so no other gate's reads fall into its windows.
+// TestReadAccessAudit is gate R3 of plan M10 (PDK-139, amendment 2026-10-30 round 2): with the privacy switches off,
+// searching the audit log and viewing a device's software record nothing; with both on, one audit.searched per
+// administrator, hour and set of filters is recorded, so two searches with the same filters and different search
+// texts record one event without the text; a target_id that is no device of the organization is recorded only as
+// target_id_used; the software and vulnerabilities of one device viewed twice record exactly one
+// device.inventory_viewed; a refused search and a view of a missing device record one failure each; an auditor's
+// search records its own event, and another organization's administrator sees none of them. The organization is fresh, so no other gate's reads fall into its windows.
 func TestReadAccessAudit(t *testing.T) {
 	slug, org := gateOrganization(t)
 	admin := tempPortal(t, "readaudit-admin", env.RoleGroup(slug, "admins"))
@@ -51,25 +56,46 @@ func TestReadAccessAudit(t *testing.T) {
 	awayFromHourBoundary(t)
 	get(admin, "/api/v1/audit-events")
 	get(admin, "/api/v1/audit-events?q=alice&outcome=denied")
+	get(admin, "/api/v1/audit-events?q=bob&outcome=denied")
+	get(admin, "/api/v1/audit-events?target_id="+uuid.NewString())
 	get(admin, software)
 	get(admin, "/api/v1/devices/"+d.DeviceID+"/vulnerabilities")
 	get(admin, software)
 	get(auditor, "/api/v1/audit-events")
+	expectStatus(t, call(t, admin, http.MethodGet, "/api/v1/audit-events?from=2099-01-01T00:00:00Z", nil), http.StatusBadRequest, "invalid_request")
+	expectStatus(t, call(t, admin, http.MethodGet, "/api/v1/devices/"+uuid.NewString()+"/software", nil), http.StatusNotFound, "not_found")
 
-	searched := expectOneIndexEvent(t, idx, org, "code = 'audit.searched' AND actor->>'id' = $1", adminID,
-		"audit.searched", "success", 30*time.Second)
+	searched := expectOneIndexEvent(t, idx, org, `code = 'audit.searched' AND outcome = 'success' AND actor->>'id' = $1
+		AND params->>'q_used' = 'false' AND NOT params ? 'target_id_used'`, adminID, "audit.searched", "success", 30*time.Second)
 	for _, key := range []string{"from", "to", "q_used", "window_start"} {
 		if _, ok := searched.Params[key]; !ok {
 			t.Errorf("audit.searched without %s: %v", key, searched.Params)
 		}
 	}
-	if _, ok := searched.Params["q"]; ok || searched.Params["q_used"] != false {
-		t.Errorf("audit.searched params %v: the first search of the hour had no search text, and q is never recorded", searched.Params)
+	withText := expectOneIndexEvent(t, idx, org, `code = 'audit.searched' AND outcome = 'success' AND actor->>'id' = $1
+		AND params->>'q_used' = 'true'`, adminID, "audit.searched", "success", 30*time.Second)
+	if _, ok := withText.Params["q"]; ok || containsAny([]byte(fmt.Sprint(withText.Params)), []string{"alice", "bob"}) != "" {
+		t.Errorf("audit.searched params %v: two search texts with the same filters record one event, and q is never recorded", withText.Params)
 	}
-	viewed := expectOneIndexEvent(t, idx, org, "code = 'device.inventory_viewed' AND target->>'id' = $1", d.DeviceID,
+	unknownTarget := expectOneIndexEvent(t, idx, org, `code = 'audit.searched' AND outcome = 'success' AND actor->>'id' = $1
+		AND params ? 'target_id_used'`, adminID, "audit.searched", "success", 30*time.Second)
+	if _, ok := unknownTarget.Params["target_id"]; ok {
+		t.Errorf("audit.searched records a target_id that is no device of the organization: %v", unknownTarget.Params)
+	}
+	refused := expectOneIndexEvent(t, idx, org, "code = 'audit.searched' AND outcome = 'failure' AND actor->>'id' = $1", adminID,
+		"audit.searched", "failure", 30*time.Second)
+	if refused.Params["error_code"] != "invalid_request" {
+		t.Errorf("refused search params %v, want error_code invalid_request", refused.Params)
+	}
+	viewed := expectOneIndexEvent(t, idx, org, "code = 'device.inventory_viewed' AND outcome = 'success' AND target->>'id' = $1", d.DeviceID,
 		"device.inventory_viewed", "success", 30*time.Second)
 	if viewed.Params["view"] != "software" {
 		t.Errorf("device.inventory_viewed params %v, want view software", viewed.Params)
+	}
+	missing := expectOneIndexEvent(t, idx, org, "code = 'device.inventory_viewed' AND outcome = 'failure' AND actor->>'id' = $1", adminID,
+		"device.inventory_viewed", "failure", 30*time.Second)
+	if missing.Params["error_code"] != "not_found" {
+		t.Errorf("refused view params %v, want error_code not_found", missing.Params)
 	}
 	expectOneIndexEvent(t, idx, org, "code = 'audit.searched' AND actor->>'type' = 'admin' AND actor->>'id' = $1", auditorID,
 		"audit.searched", "success", 30*time.Second)

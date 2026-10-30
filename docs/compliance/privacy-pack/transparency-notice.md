@@ -132,8 +132,8 @@ According to [Organization]'s privacy settings, Paddock records in the audit log
 
 - views of a device's *Software* and *Vulnerabilities* pages: [recorded, once per administrator, device and day |
   not recorded];
-- searches of the audit log: [recorded, the first search per administrator and hour, with its filters but without a
-  search term | not recorded].
+- searches of the audit log: [recorded, the first search per administrator, hour and set of filters, with its filters
+  but without a search term | not recorded].
 
 Other reads, for example of the device overview or of the logins on a device, are not recorded. Every request and
 every download of an evidence export for auditors is recorded.

@@ -405,10 +405,14 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 }
 
 // RecordReadOnce records a read of sensitive data at most once per window: authorization as in RunTx (a denied role
-// is recorded as denied), then claim runs inside the organization transaction; it returns false when the window key
-// existed, and then nothing is recorded (no action, no outbox row). true records outcome success in the same
-// transaction. A claim error rolls back and is recorded as failure (plan M10 decision 18).
+// is recorded as denied), then one organization transaction runs enabled and, when it reports the recording switched
+// on, claim. claim returns false when the window key existed, and then nothing is recorded (no action, no outbox
+// row); true records outcome success in the same transaction. A claim error (a refused read, a failed claim) rolls
+// back, so no window is claimed, and is recorded as failure (plan M10 decision 18, amendment 2026-10-30 PDK-139 round
+// 2). A cancellation before enabled has read the switch records nothing: whether the read was to be recorded is not
+// known then.
 func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
+	enabled func(ctx context.Context, q *pgstore.Queries) (bool, error),
 	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
 	p, ok := principal.From(ctx)
 	if !ok {
@@ -420,8 +424,16 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 		return false, err
 	}
 	defer r.recordPanic(ctx, p, ScopeOrg, rec)
-	recorded := false
+	recorded, switchRead := false, false
 	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		on, err := enabled(ctx, q)
+		if err != nil {
+			return err
+		}
+		switchRead = true
+		if !on {
+			return nil
+		}
 		fresh, err := claim(ctx, q, rec)
 		if err != nil || !fresh {
 			return err
@@ -430,6 +442,9 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 		return r.insertFinished(ctx, q, rec, nil)
 	})
 	if err != nil {
+		if !switchRead && errors.Is(err, context.Canceled) {
+			return false, err
+		}
 		r.recordFinal(ctx, p, ScopeOrg, rec, err)
 		return false, err
 	}

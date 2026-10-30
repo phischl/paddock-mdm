@@ -2,7 +2,8 @@
 
 -- name: ClaimReadAuditWindow :one
 -- Claims the window of one actor, code and target; no row comes back when the window was claimed before, so the read
--- records no event (ActionRunner.RecordReadOnce).
+-- records no event (ActionRunner.RecordReadOnce). target_id is the device of an inventory view and the filter hash of
+-- an audit search (plan M10 amendment 2026-10-30, PDK-139 round 2).
 INSERT INTO read_audit_window (organization_id, actor_id, code, target_id, window_start)
 VALUES (@organization_id, @actor_id, @code, @target_id, @window_start)
 ON CONFLICT DO NOTHING
