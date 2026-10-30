@@ -142,6 +142,8 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
 
 The dev stack also sets the operator variable `PADDOCK_RETENTION_INTERVAL` to `15s` (`15s` is the default when it is
 unset and the unit is `seconds`); outside development it must be at least `1m` (`docs/operations/monitoring.md`).
+It sets `PADDOCK_AUDIT_EXPORT_POLL_INTERVAL` of `paddock-audit-writer` to `2s` (default `30s`), so a requested evidence
+export is built within seconds.
 
 ## Acceptance gates on a long-lived stack
 

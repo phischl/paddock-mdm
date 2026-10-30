@@ -207,6 +207,7 @@ const (
 
 	// Evidence export (ADR 0032 §5, plan M10 §6.4).
 	CodeAuditExportRequested Code = "audit.export_requested"
+	CodeAuditExportCompleted Code = "audit.export_completed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1285,6 +1286,12 @@ var registry = map[Code]Definition{
 		Description: "An organization administrator or auditor requested a signed evidence package for a range of sealed recording days after a step-up; denied with step_up_required without one.",
 		Params:      []string{"export_id", "from_day", "to_day", "purpose"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeAuditExportCompleted: {
+		Code: CodeAuditExportCompleted, Emitted: true,
+		Description: "The audit writer finished building an evidence package (actor: system). verify_ok tells whether the chain of the range verified; a package with problems is still delivered so that the auditor sees them. failure carries the error and error_code export_failed.",
+		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

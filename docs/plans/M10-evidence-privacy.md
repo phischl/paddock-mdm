@@ -1710,3 +1710,18 @@ Architect decisions on the review of PDK-142 (stubs PDK-580 and PDK-581, folded 
    refuses C1 controls (U+0080–U+009F) and bidi controls (U+202A–U+202E, U+2066–U+2069) in `purpose` with
    `400 invalid_request` before any parameter is set, because the evidence package and the portal show the purpose to
    auditors. Tab, newline and carriage return stay allowed.
+
+### Amendment 2026-10-30 (PDK-143: no organization slug in the export)
+
+Architect decision during PDK-143. The audit domain has no source for an organization slug: `audit_export` has no
+slug column, the audit database has no organization table, and the audit writer has no access to the `paddock`
+database. Where this amendment and §6.5, §6.7 or decision 32 differ, this amendment wins.
+
+1. **`export.json` has no `organization_slug`.** The field is removed from the §6.5 example and from
+   `pkg/auditevidence.Export` (§6.7); it is not written as an empty string. A signed evidence file carries only what
+   the audit domain can vouch for, and a slug can change while the organization ID cannot.
+2. **The README names the organization by its ID only.** Its first sentence reads "Organization
+   `<organization_id>`, recording days `<from_day>` to `<to_day>`, …"; the rest of the §6.5 text is unchanged.
+3. **No migration, no change to the request API.** A slug snapshot taken at request time (an `audit_export` column
+   filled by PDK-142's request path) would need an audit migration and is not part of this milestone; it is recorded
+   as a low-priority follow-up stub.

@@ -185,6 +185,7 @@ services:
     build: *paddock-build
     environment:
       PADDOCK_ENV: development
+      PADDOCK_AUDIT_EXPORT_POLL_INTERVAL: ${PADDOCK_AUDIT_EXPORT_POLL_INTERVAL:-2s}
 
   # The development unsealer (plan M8u decision 14) talks plain HTTP to the development OpenBao, which has no internal
   # CA; its shares are the first three of .secrets/openbao/init.txt (openbao-bootstrap.sh).

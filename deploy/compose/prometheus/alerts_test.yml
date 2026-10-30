@@ -462,6 +462,55 @@ tests:
               summary: "The audit index was not purged for 48 hours"
               description: "The audit writer's last complete index purge finished 2d 1h 2m 0s ago; check the audit writer's log for the 01:15 UTC purge and run paddock-server audit purge --dry-run."
 
+  - name: a failed evidence export warns for an hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_export_total{result="failed", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x30 1x120"
+      - series: 'paddock_audit_export_total{result="ready", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0+1x150"
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: PaddockAuditExportFailed
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: PaddockAuditExportFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, result: failed, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "An evidence export failed"
+              description: "The audit writer marked an evidence export as failed in the last hour; the export's error and the audit writer's log (evidence export failed) name the cause."
+      - eval_time: 2h
+        alertname: PaddockAuditExportFailed
+        exp_alerts: []
+
+  - name: a pending evidence export warns after an hour and ten minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_export_pending_age_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0+60x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: PaddockAuditExportStuck
+        exp_alerts: []
+      - eval_time: 72m
+        alertname: PaddockAuditExportStuck
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "An evidence export has been pending for over an hour"
+              description: "The oldest pending evidence export has waited 1h 12m 0s; check that the audit writer runs and its log for evidence export errors."
+
+  - name: exports built within the poll interval do not warn
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_export_pending_age_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 30 0 45 0x200"
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: PaddockAuditExportStuck
+        exp_alerts: []
+
   - name: a daily index purge does not warn
     interval: 1m
     input_series:

@@ -132,3 +132,15 @@ func PoolIndex(pool *db.AuditWriterPool) (
 	p := poolIndex{pool}
 	return p.lockedOrganizations, p.latestNightlyRun, p.latestFailedOrganizations, p.organizations
 }
+
+// SetExporterClock replaces the exporter's clock.
+func SetExporterClock(e *Exporter, now func() time.Time) { e.now = now }
+
+// ChunkWriter is the exporter's chunk writer.
+type ChunkWriter = chunkWriter
+
+// NewChunkWriter creates a chunk writer that hands every row to flush.
+var NewChunkWriter = newChunkWriter
+
+// ExportReadme renders the README of a package.
+var ExportReadme = renderReadme

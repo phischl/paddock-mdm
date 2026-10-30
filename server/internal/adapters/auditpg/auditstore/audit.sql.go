@@ -882,6 +882,52 @@ func (q *Queries) ListAuditVerificationRuns(ctx context.Context, arg ListAuditVe
 	return items, nil
 }
 
+const listAuditVerificationRunsOverlapping = `-- name: ListAuditVerificationRunsOverlapping :many
+SELECT id, organization_id, trigger, from_day, to_day, started_at, finished_at, days, objects, ok, problems, event_id FROM audit_verification_run
+WHERE organization_id = $1 AND from_day <= $2 AND to_day >= $3
+ORDER BY started_at DESC LIMIT 100
+`
+
+type ListAuditVerificationRunsOverlappingParams struct {
+	OrganizationID uuid.UUID
+	ToDay          time.Time
+	FromDay        time.Time
+}
+
+// The recorded verification runs of an organization that covered days of an export's range (plan M10 amendment A6).
+func (q *Queries) ListAuditVerificationRunsOverlapping(ctx context.Context, arg ListAuditVerificationRunsOverlappingParams) ([]AuditVerificationRun, error) {
+	rows, err := q.db.Query(ctx, listAuditVerificationRunsOverlapping, arg.OrganizationID, arg.ToDay, arg.FromDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditVerificationRun{}
+	for rows.Next() {
+		var i AuditVerificationRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Trigger,
+			&i.FromDay,
+			&i.ToDay,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Days,
+			&i.Objects,
+			&i.Ok,
+			&i.Problems,
+			&i.EventID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLatestNightlyFailedOrganizations = `-- name: ListLatestNightlyFailedOrganizations :many
 SELECT organization_id FROM (
   SELECT DISTINCT ON (organization_id, trigger) organization_id, ok FROM audit_verification_run

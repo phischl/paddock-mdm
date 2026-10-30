@@ -49,6 +49,8 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockAuditChainBroken` | the last nightly chain verification found a broken or unreadable audit chain of at least one organization (`docs/operations/audit-bucket.md` section 3) | critical |
 | `PaddockAuditVerifyStale` | no nightly chain verification has finished for 36 hours, for one hour | warning |
 | `PaddockAuditIndexPurgeStale` | no complete audit index purge (01:15 UTC) has finished for 48 hours, for one hour; a purge with a failed or timed-out partition is not complete (`docs/operations/audit-bucket.md` section 4) | warning |
+| `PaddockAuditExportFailed` | an evidence export was marked failed in the last hour (the export's `error` and the audit writer's log name the cause; the requester requests again) | warning |
+| `PaddockAuditExportStuck` | the oldest pending evidence export has waited more than an hour, for 10 minutes: no audit writer builds exports | warning |
 | `PaddockAuditWriterTransactionSlow` | the audit writer's transaction p95 is above 5 s for 5 minutes (see [Attributing a slow audit writer](#attributing-a-slow-audit-writer)) | warning |
 | `PaddockCompileLatencyHigh` | bundle compilation p95 above 30 s for 10 minutes | warning |
 | `PaddockGateway5xx` | more than 5 % of the device API's responses are 5xx for 10 minutes | warning |
@@ -96,6 +98,7 @@ On a lab host (`docs/operations/lab-install.md`) the probe dials your TLS proxy 
 | `paddock_audit_verify_failed_organizations` | audit writer: organizations whose nightly verification (window or sample day) failed or could not run in the last cycle |
 | `paddock_audit_verify_last_run_timestamp_seconds` | audit writer: end of the last nightly cycle; at start the end of the last recorded nightly run, or the start time |
 | `paddock_audit_index_purge_last_success_timestamp_seconds` | audit writer: end of the last index purge in which no partition failed or hit the lock timeout; at start the start time |
+| `paddock_audit_export_total{result}`, `paddock_audit_export_pending_age_seconds`, `paddock_audit_export_build_seconds` | audit writer (M10): evidence exports of this process by `result` (`ready`, `failed`, `expired`), the age of the oldest pending export in seconds after every poll (0 when none is pending), and the duration of each successful build (buckets 0.1 s to about 55 min) |
 | `paddock_audit_index_partitions_dropped_total` | audit writer: monthly audit index partitions dropped by the nightly purge of this process |
 
 Both histograms use the buckets 5 ms to 41 s and carry no organization or other identifying labels.

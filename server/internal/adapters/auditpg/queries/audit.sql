@@ -247,3 +247,9 @@ SELECT pg_advisory_unlock(hashtext('audit-purge')) AS unlocked;
 -- Events and newest recorded_at (epoch when empty) of one month, read without a lock (dry run of the index purge).
 SELECT count(*) AS events, COALESCE(max(recorded_at), 'epoch')::timestamptz AS newest FROM audit_event
 WHERE occurred_at >= @month_start::timestamptz AND occurred_at < @month_end::timestamptz;
+
+-- name: ListAuditVerificationRunsOverlapping :many
+-- The recorded verification runs of an organization that covered days of an export's range (plan M10 amendment A6).
+SELECT * FROM audit_verification_run
+WHERE organization_id = @organization_id AND from_day <= @to_day AND to_day >= @from_day
+ORDER BY started_at DESC LIMIT 100;
