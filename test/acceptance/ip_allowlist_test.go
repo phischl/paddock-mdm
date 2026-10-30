@@ -52,11 +52,13 @@ func denialWhere(since time.Time) string {
 }
 
 // requireSingleAPI fails unless exactly one paddock-api container runs: the ordering proof of the denial marker
-// holds for one IPDenials recorder only, and each api replica has its own (PDK-572).
+// holds for one IPDenials recorder only, and each api replica has its own (PDK-572). One-off containers of
+// `compose run` serve no traffic and are not counted.
 func requireSingleAPI(t *testing.T, ctx context.Context) {
 	t.Helper()
 	out, err := stack.Docker(ctx, nil, "ps", "-q", "--filter", "status=running",
-		"--filter", "label=com.docker.compose.project="+stack.Project(), "--filter", "label=com.docker.compose.service=paddock-api")
+		"--filter", "label=com.docker.compose.project="+stack.Project(), "--filter", "label=com.docker.compose.service=paddock-api",
+		"--filter", "label=com.docker.compose.oneoff=False")
 	if err != nil {
 		t.Fatalf("counting the paddock-api containers: %v", err)
 	}
