@@ -10,6 +10,9 @@
 # PostgreSQL runs in its own image without pgBackRest: archive_command copies every WAL file into a spool volume that
 # the pgbackrest service pushes to the repository within seconds. The path contains "pgbackrest", which pgBackRest's
 # own check requires of archive_command.
+#
+# The data volumes follow the PostgreSQL 18 image layout (plan M6d decision 4): each is mounted at /var/lib/postgresql
+# and the cluster lives in /var/lib/postgresql/18/docker, the path run.sh gives pgBackRest.
 
 x-backup-s3: &backup-s3
   PADDOCK_BACKUP_S3_ENDPOINT: ${PADDOCK_BACKUP_S3_ENDPOINT:?set PADDOCK_BACKUP_S3_ENDPOINT (https URL of the backup S3 endpoint)}
@@ -58,7 +61,7 @@ services:
       PADDOCK_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
     secrets: [backup_pgbackrest_access_key, backup_pgbackrest_secret_key, backup_encryption_key]
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
       - postgres-socket:/var/run/postgresql
       - pgbackrest-spool-paddock:/pgbackrest-spool/paddock
       - pgbackrest-state-paddock:/var/lib/pgbackrest
@@ -75,7 +78,7 @@ services:
       # The superuser of the Authentik database (POSTGRES_USER of authentik-postgres).
       PADDOCK_BACKUP_PG_USER: authentik
     volumes:
-      - authentik-postgres-data:/var/lib/postgresql/data
+      - authentik-postgres-data:/var/lib/postgresql
       - authentik-postgres-socket:/var/run/postgresql
       - pgbackrest-spool-authentik:/pgbackrest-spool/authentik
       - pgbackrest-state-authentik:/var/lib/pgbackrest

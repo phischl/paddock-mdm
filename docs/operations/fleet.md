@@ -7,7 +7,7 @@ the portal shows its data from Paddock's own tables, isolated per organization.
 | Service | Image (`deploy/compose/versions.env`) | Networks | Purpose |
 | --- | --- | --- | --- |
 | `fleet` | `FLEET_IMAGE` | `cp`, `fleet` | Fleet server; migrates its database at every start (`fleet prepare db`) |
-| `fleet-mysql` | `FLEET_MYSQL_IMAGE` (MySQL 8.4) | `fleet` (internal) | Fleet's database (volume `fleet-mysql-data`) |
+| `fleet-mysql` | `FLEET_MYSQL_IMAGE` (MySQL 8.4 LTS line, Fleet's documented line; plan M6d decision 9) | `fleet` (internal) | Fleet's database (volume `fleet-mysql-data`) |
 | `fleet-redis` | `VALKEY_IMAGE` | `fleet` (internal) | Fleet's cache and live-query channel (Valkey speaks the Redis protocol) |
 
 Vulnerability feeds (NVD, OSV) are downloaded by Fleet into the volume `fleet-vulndb`, mounted on the home directory

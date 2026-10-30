@@ -49,8 +49,8 @@ func (u *Upstream) check(ctx context.Context, p Pin) Result {
 		}
 		var tags []string
 		if tags, err = u.Registries.Tags(ctx, p.Image); err == nil {
-			if latest = Latest(p.Pinned, tags); latest == "" {
-				err = fmt.Errorf("no tag of the shape %s", Shape(p.Pinned))
+			if latest = Latest(p.Pinned, InLine(tags, p.Info.Line)); latest == "" {
+				err = noTagError(p)
 			}
 		}
 	}
@@ -60,6 +60,13 @@ func (u *Upstream) check(ctx context.Context, p Pin) Result {
 	}
 	r.Latest, r.Class = latest, Classify(p.Pinned, latest)
 	return r
+}
+
+func noTagError(p Pin) error {
+	if p.Info.Line != "" {
+		return fmt.Errorf("no tag of the shape %s in line %s", Shape(p.Pinned), p.Info.Line)
+	}
+	return fmt.Errorf("no tag of the shape %s", Shape(p.Pinned))
 }
 
 func (u *Upstream) checkDigest(ctx context.Context, p Pin) Result {
