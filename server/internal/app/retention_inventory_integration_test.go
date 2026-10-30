@@ -335,6 +335,45 @@ func TestRetentionPurgeRetiredInventoryHostCheckFails(t *testing.T) {
 	}
 }
 
+// TestRetentionPurgeRetiredInventoryChangedAfterList (plan M10 decision 16): a listed device that was reactivated, or
+// reactivated and retired again, before its row lock is refused under the lock with one failure event each; neither
+// its Paddock rows nor its Fleet host are deleted.
+func TestRetentionPurgeRetiredInventoryChangedAfterList(t *testing.T) {
+	w := newRetentionWorld(t)
+	now := time.Now().UTC()
+	org := w.emptyOrganization(t)
+	first := w.inventoried(t, org, "retired", now.Add(-400*time.Second), "95", 1, 0, 0)
+	reRetired := w.inventoried(t, org, "retired", now.Add(-399*time.Second), "96", 2, 1, 0)
+	reactivated := w.inventoried(t, org, "retired", now.Add(-398*time.Second), "97", 1, 0, 0)
+	w.retention.SetHostUsers(func(ctx context.Context, _ uuid.UUID, _ string) (bool, error) {
+		if _, err := w.super.Exec(ctx, "UPDATE device SET state_changed_at = $2 WHERE id = $1", reRetired, now); err != nil {
+			return false, err
+		}
+		if _, err := w.super.Exec(ctx, "UPDATE device SET state = 'active', state_changed_at = $2 WHERE id = $1", reactivated, now); err != nil {
+			return false, err
+		}
+		return false, nil
+	})
+
+	n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now)
+	if err == nil || !strings.Contains(err.Error(), "2 of 3 devices failed") || n != 1 {
+		t.Fatalf("purged %d (%v), want 1 and 2 of 3 failed", n, err)
+	}
+	if !slices.Equal(w.fleet.deleted, []ports.HostRef{"95"}) {
+		t.Fatalf("Fleet hosts deleted %v, want only [95]", w.fleet.deleted)
+	}
+	if w.inventoryRows(t, first) != 0 || w.inventoryRows(t, reRetired) != 4 || w.inventoryRows(t, reactivated) != 2 {
+		t.Fatalf("rows left: first %d, retired again %d, reactivated %d; want 0, 4 and 2",
+			w.inventoryRows(t, first), w.inventoryRows(t, reRetired), w.inventoryRows(t, reactivated))
+	}
+	events := w.inventoryPurgedEvents(t, org)
+	if len(events) != 3 || events[0].outcome != "success" ||
+		events[1].outcome != "failure" || events[1].target != reRetired.String() || events[1].params["fleet_host_deleted"] != false ||
+		events[2].outcome != "failure" || events[2].target != reactivated.String() || events[2].errorCode != events[1].errorCode {
+		t.Fatalf("events %+v, want a success and one failure per changed device", events)
+	}
+}
+
 // TestRetentionPurgeRetiredInventoryLimits (plan M10 decision 16, amendment 2026-10-30): one pass purges at most 100
 // devices; a pass whose budget has elapsed stops after the device it finished.
 func TestRetentionPurgeRetiredInventoryLimits(t *testing.T) {

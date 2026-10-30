@@ -110,13 +110,15 @@ func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time) (i
 		return 0, problem.Unauthenticated
 	}
 	var devices []pgstore.ListRetiredDevicesWithInventoryRow
+	var cutoff time.Time
 	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		settings, err := LoadPrivacySettings(ctx, q)
 		if err != nil {
 			return err
 		}
+		cutoff = now.Add(-time.Duration(settings.RetiredInventoryDays) * r.unit)
 		devices, err = q.ListRetiredDevicesWithInventory(ctx, pgstore.ListRetiredDevicesWithInventoryParams{
-			Cutoff: now.Add(-time.Duration(settings.RetiredInventoryDays) * r.unit), MaxDevices: retiredInventoryDevices,
+			Cutoff: cutoff, MaxDevices: retiredInventoryDevices,
 		})
 		return err
 	})
@@ -128,7 +130,7 @@ func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time) (i
 	var errs []error
 	for _, d := range devices {
 		attempted++
-		if err := r.purgeDeviceInventory(ctx, d); err != nil {
+		if err := r.purgeDeviceInventory(ctx, d, cutoff); err != nil {
 			errs = append(errs, fmt.Errorf("device %s: %w", d.ID, err))
 		} else {
 			purged++
@@ -147,8 +149,9 @@ func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time) (i
 // device.inventory_purged action. When the Fleet deletion fails, the Paddock rows stay, so the next round finds the
 // device again and retries the host; a host Fleet no longer knows counts as deleted. The host is kept when a device of
 // any organization still uses it or the same hardware enrolled again (plan M10 §13, amendment 2026-10-30); the
-// retired device's Paddock rows go all the same. When that check fails, nothing is deleted.
-func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow) error {
+// retired device's Paddock rows go all the same. When that check fails, nothing is deleted. cutoff is the one the
+// device was listed with; a device no longer retired before it is refused under the row lock.
+func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow, cutoff time.Time) error {
 	spec := SpecDeviceInventoryPurged
 	spec.Target = &audit.Target{Type: "device", ID: d.ID.String(), Display: d.Hostname}
 	spec.Params = map[string]any{
@@ -159,7 +162,7 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 	var hostDeleted bool
 	return r.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
-			if err := r.lockDevice(ctx, q, d.ID); err != nil {
+			if err := r.lockDevice(ctx, q, d.ID, cutoff); err != nil {
 				return err
 			}
 			var err error
@@ -208,8 +211,9 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 		})
 }
 
-// lockDevice locks the retired device's row for the action's first transaction, waiting at most the lock timeout.
-func (r *Retention) lockDevice(ctx context.Context, q *pgstore.Queries, id uuid.UUID) error {
+// lockDevice locks the retired device's row for the action's first transaction, waiting at most the lock timeout, and
+// refuses a device that is no longer retired before cutoff.
+func (r *Retention) lockDevice(ctx context.Context, q *pgstore.Queries, id uuid.UUID, cutoff time.Time) error {
 	if err := r.setLockTimeout(ctx, q); err != nil {
 		return err
 	}
@@ -219,6 +223,10 @@ func (r *Retention) lockDevice(ctx context.Context, q *pgstore.Queries, id uuid.
 	}
 	if dev.State != "retired" {
 		return errors.New("the device is no longer retired")
+	}
+	// Reactivated and retired again between the list and the lock: its new retirement has not run the period yet.
+	if !dev.StateChangedAt.Before(cutoff) {
+		return errors.New("the device was retired again inside the retention period")
 	}
 	return nil
 }
