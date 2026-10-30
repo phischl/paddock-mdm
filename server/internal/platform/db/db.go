@@ -370,6 +370,12 @@ func IsAuditDaySealed(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "PA422"
 }
 
+// IsLockTimeout reports whether err is a lock wait that exceeded lock_timeout (SQLSTATE 55P03).
+func IsLockTimeout(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
+}
+
 // IsCheckViolation reports whether err is a check constraint violation.
 func IsCheckViolation(err error) bool {
 	var pgErr *pgconn.PgError

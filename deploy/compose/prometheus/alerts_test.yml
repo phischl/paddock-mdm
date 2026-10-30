@@ -441,6 +441,38 @@ tests:
               summary: "The audit chain was not verified for 36 hours"
               description: "The audit writer's last nightly chain verification finished 1d 13h 2m 0s ago; check the audit writer's log for the 00:45 UTC cycle."
 
+  - name: an index purge older than 48 hours warns after one more hour
+    interval: 1m
+    input_series:
+      # The last complete purge finished at the start of the test (timestamp 0) and none follows.
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x3000"
+    alert_rule_test:
+      - eval_time: 48h
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts: []
+      - eval_time: 48h59m
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts: []
+      - eval_time: 49h2m
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The audit index was not purged for 48 hours"
+              description: "The audit writer's last complete index purge finished 2d 1h 2m 0s ago; check the audit writer's log for the 01:15 UTC purge and run paddock-server audit purge --dry-run."
+
+  - name: a daily index purge does not warn
+    interval: 1m
+    input_series:
+      # A complete purge every 24 h.
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x1440 86400x1440 172800x1440"
+    alert_rule_test:
+      - eval_time: 71h
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts: []
+
   - name: a stale verification still warns after a writer restart that re-seeds the old last run
     interval: 1m
     input_series:

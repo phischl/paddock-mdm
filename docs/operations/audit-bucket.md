@@ -157,5 +157,16 @@ its log for the 00:45 UTC cycle.
   `PADDOCK_AUDIT_RETENTION_DAYS` (≥ 400). Raising the value extends retention for new objects only.
 - Expired objects are removed by a lifecycle rule that the operator adds once the retention period is known to
   be final; Paddock itself never deletes audit objects.
+- **Index purge.** The audit index (`paddock_audit.audit_event`, monthly partitions by occurrence time) is purged
+  by the audit writer at 01:15 UTC: a partition is dropped only when its month ended and **every** event in it was
+  recorded more than `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` ago (default and minimum: `PADDOCK_AUDIT_RETENTION_DAYS`,
+  so the index never goes ahead of the WORM retention). A partition with a later recorded event is kept until that
+  event expires too. Each drop is recorded as `retention.purged` (store `audit_index`, the partition and the number
+  of events) in the platform pseudo-organization, in the index and in the bucket. The purge waits at most 5 s for
+  the partition's lock; a partition it could not lock is retried the next night. It never deletes objects,
+  `audit_object` or `audit_manifest` rows. `paddock-server audit purge --dry-run` (in the audit-writer container)
+  prints `DROP`/`KEEP` per due partition or `nothing to purge`; without `--dry-run` it purges at once and exits 1
+  when a partition could not be dropped. `PaddockAuditIndexPurgeStale` warns when no complete purge finished for
+  48 hours.
 - `paddock-server audit verify --org <id> --from <day> --to <day>` (run in the audit-writer container) checks the
   signed manifest chain and every object hash of an organization.

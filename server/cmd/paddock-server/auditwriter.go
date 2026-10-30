@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"time"
@@ -21,12 +22,13 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 )
 
-// auditDeps are the dependencies shared by serve audit-writer, audit seal and audit verify.
+// auditDeps are the dependencies shared by serve audit-writer, audit seal, audit verify and audit purge.
 type auditDeps struct {
-	pool   *db.AuditWriterPool
-	store  *objectstore.Store
-	bao    *bao.Client
-	writer *auditwriter.Writer
+	pool           *db.AuditWriterPool
+	store          *objectstore.Store
+	bao            *bao.Client
+	writer         *auditwriter.Writer
+	indexRetention int
 }
 
 func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
@@ -39,6 +41,11 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 	retention := l.Int("PADDOCK_AUDIT_RETENTION_DAYS", auditwriter.MinRetentionDays)
 	if retention < auditwriter.MinRetentionDays {
 		l.Invalid("PADDOCK_AUDIT_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days", auditwriter.MinRetentionDays))
+	}
+	// The index is purged after, never ahead of, the WORM retention (ADR 0032, plan M10 decision 23).
+	indexRetention := l.Int("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", retention)
+	if indexRetention < retention {
+		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least PADDOCK_AUDIT_RETENTION_DAYS (%d days)", retention))
 	}
 	if err := l.Err(); err != nil {
 		return nil, err
@@ -58,7 +65,7 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &auditDeps{pool: pool, store: store, bao: baoClient, writer: writer}, nil
+	return &auditDeps{pool: pool, store: store, bao: baoClient, writer: writer, indexRetention: indexRetention}, nil
 }
 
 // verifier checks the hash chain with the audit-chain public keys from OpenBao.
@@ -84,6 +91,7 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 		return err
 	}
 	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
+	purger := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention)
 	slog.InfoContext(ctx, "audit-writer starting", "bucket", deps.store.Bucket())
 
 	return runAll(ctx,
@@ -99,10 +107,12 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 		func(ctx context.Context) error { return consumer.Run(ctx, deps.writer.Handle) },
 		func(ctx context.Context) error { sealer.RunDaily(ctx); return nil },
 		func(ctx context.Context) error { nightly.RunNightly(ctx); return nil },
+		func(ctx context.Context) error { purger.RunDaily(ctx); return nil },
 	)
 }
 
-// runAudit implements `audit seal [--day YYYY-MM-DD]` and `audit verify --org <id> --from <day> --to <day>`.
+// runAudit implements `audit seal [--day YYYY-MM-DD]`, `audit verify --org <id> --from <day> --to <day>` and
+// `audit purge [--dry-run]`.
 func runAudit(ctx context.Context, l *config.Loader, common config.Common, args []string) error {
 	if len(args) == 0 {
 		return errUsage
@@ -196,7 +206,46 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 			return fmt.Errorf("audit chain verified, but the run was not recorded: %w", recordErr)
 		}
 		return nil
+	case "purge":
+		fs := flag.NewFlagSet("audit purge", flag.ContinueOnError)
+		dryRun := fs.Bool("dry-run", false, "only report which partitions would be dropped")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+			return errUsage
+		}
+		deps, err := loadAuditDeps(ctx, l)
+		if err != nil {
+			return err
+		}
+		defer deps.pool.Close()
+		report, err := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention).Run(ctx, time.Now(), *dryRun)
+		if err == nil || len(report.Partitions) > 0 {
+			printPurgeReport(os.Stdout, report)
+		}
+		return err
 	default:
 		return errUsage
+	}
+}
+
+// printPurgeReport prints one line per partition that was due or unexpected (DROP, KEEP or FAIL), or
+// "nothing to purge" when there is none (plan M10 decision 23).
+func printPurgeReport(w io.Writer, report auditwriter.PurgeReport) {
+	printed := false
+	for _, p := range report.Partitions {
+		if !p.Due && p.Reason != auditwriter.PurgeReasonUnknownName {
+			continue
+		}
+		printed = true
+		switch {
+		case p.Failed:
+			fmt.Fprintf(w, "FAIL %s: %s\n", p.Name, p.Reason)
+		case p.Dropped:
+			fmt.Fprintf(w, "DROP %s: %d events\n", p.Name, p.Events)
+		default:
+			fmt.Fprintf(w, "KEEP %s: %s\n", p.Name, p.Reason)
+		}
+	}
+	if !printed {
+		fmt.Fprintln(w, "nothing to purge")
 	}
 }

@@ -24,6 +24,14 @@ func SetRowInserted(w *Writer, fn func(day time.Time)) { w.rowInserted = fn }
 // SetSealerClock replaces the sealer's clock.
 func SetSealerClock(s *Sealer, now func() time.Time) { s.now = now }
 
+// SetPurgerClock replaces the purger's clock and timer.
+func SetPurgerClock(p *Purger, now func() time.Time, after func(time.Duration) <-chan time.Time) {
+	p.now, p.after = now, after
+}
+
+// PartitionMonth parses the month of a partition name.
+var PartitionMonth = partitionMonth
+
 // EncodeObject renders events as a WORM object body.
 var EncodeObject = encodeObject
 
