@@ -37,6 +37,12 @@ endif
 # CI only (PDK-540): the workflow sets PADDOCK_CI_GOMODCACHE to the runner's module download cache, which the image
 # builds read instead of the module proxy; unset, as locally, the Compose files are unchanged.
 CI_GOMODCACHE_FILES := $(if $(PADDOCK_CI_GOMODCACHE),compose.ci-gomodcache.yaml,)
+# The same cache feeds the lint image builds as the named build context and govulncheck as a read-only file proxy
+# ahead of the default proxy list (PDK-516). Go checks every module from it against go.sum and go.work.sum, and a
+# module missing from it falls through to proxy.golang.org. Recursive, because comma is defined further down.
+CI_GOMODCACHE_BUILD = $(if $(PADDOCK_CI_GOMODCACHE),--build-context 'gomodcache=$(PADDOCK_CI_GOMODCACHE)',)
+CI_GOMODCACHE_RUN   = $(if $(PADDOCK_CI_GOMODCACHE),-v '$(PADDOCK_CI_GOMODCACHE):/gomodcache:ro' \
+	-e GOPROXY=file:///gomodcache$(comma)https://proxy.golang.org$(comma)direct,)
 
 # The stack of this checkout: deploy/compose/.env names its Compose project and host ports, so a second development
 # stack runs from a second checkout (docs/operations/local-dev.md, "Running a second dev stack"). The process
@@ -168,7 +174,7 @@ lint-tidy:
 .PHONY: lint-vuln
 lint-vuln:
 	docker run --rm -v $(CURDIR):/src -w /src/server \
-		-v paddock-gomod:/go/pkg/mod -v paddock-govulncheck-cache:/root/.cache \
+		-v paddock-gomod:/go/pkg/mod -v paddock-govulncheck-cache:/root/.cache $(CI_GOMODCACHE_RUN) \
 		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
 		$(GO_BUILD_IMAGE) sh -c 'set -e; \
 			for m in $(GO_MODULES); do echo "govulncheck $$m"; go tool govulncheck -test -C /src/$$m ./...; done'
@@ -181,7 +187,7 @@ lint-vuln:
 lint-image:
 	@for target in build compiler build/linux/arm64; do \
 		docker build --target $${target%%/*} $$(case $$target in */*) echo --platform $${target#*/};; esac) \
-			-f $(COMPOSE_DIR)/Dockerfile \
+			-f $(COMPOSE_DIR)/Dockerfile $(CI_GOMODCACHE_BUILD) \
 			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
 			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
 			--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) . || exit 1; \
