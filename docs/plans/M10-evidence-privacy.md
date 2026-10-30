@@ -1555,3 +1555,23 @@ Architect decision after the external review of PDK-137; it changes A3 and A8 wh
   expired rows; the pass then records a success event with `deleted` 0, which is truthful. Moving the check into the
   action's transaction does not remove it: an action that has started always records its event, and ending an action
   without recording it would need a new `ActionRunner` step outside its one-event-per-attempt contract.
+
+### Amendment 2026-10-30 (PDK-137 fix round 2, pass budget and locks)
+
+Architect decision after the second external review of PDK-137; it changes the amendment above where they differ.
+
+- **Time budget per pass.** A pass stops after the batch during which 5 minutes (`app.retentionPassBudget`) have
+  elapsed, comfortably below the outbox reaper's threshold (`outbox.DefaultReaperThreshold`, 10 minutes), and finishes
+  its action cleanly with outcome success and `deleted` = the rows committed so far; the rows left over follow in the
+  next round, with their own event. So every pass still records exactly one `retention.purged` event per organization,
+  store and round, now possibly with a partial count, and a large backlog (e.g. after lowering `login_history_days`)
+  never ends as an `unknown` action without `deleted`. Supersedes stub PDK-564.
+- **Both lock keys on one connection.** The round takes `retentionLockKey` and the legacy login history key on the same
+  connection (`db.PlatformPool.WithLeaderLocks`), instead of nesting a second `WithLeaderLock` that needed a second
+  pool connection without a timeout. When another session holds either key, the round purges nothing and the key it
+  got is released again.
+- **Upper bound of `PADDOCK_RETENTION_INTERVAL`.** Outside development the interval is at most 24 hours (besides the
+  1 minute minimum): `config.RetentionInterval` rejects a longer one naming the variable, and `paddock prodcheck` fails
+  on it. `docs/operations/install.md` lists the item.
+- **Residual race.** The architect accepts the pre-check race of the amendment above as an open point; no
+  `ActionRunner` extension.

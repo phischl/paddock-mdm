@@ -188,6 +188,32 @@ func TestRetentionPurgeUserSeen(t *testing.T) {
 	}
 }
 
+// TestRetentionPurgeUserSeenBudget (plan M10 amendment 2026-10-30): a pass whose budget has elapsed ends after the
+// committed batch with outcome success and that batch's rows; the next pass continues with the rest, each pass with
+// its own event.
+func TestRetentionPurgeUserSeenBudget(t *testing.T) {
+	w := newRetentionWorld(t)
+	now := time.Now().UTC()
+	org := w.organization(t, 1500, now.Add(-400*time.Second))
+	log := w.batchLog(t, org, 0)
+	w.retention.SetBudget(0)
+
+	if n, err := w.retention.PurgeUserSeen(systemCtx(org), now); err != nil || n != 1000 {
+		t.Fatalf("first pass purged %d (%v), want 1000", n, err)
+	}
+	if left := w.seen(t, org); left != 500 {
+		t.Fatalf("%d rows left after the first pass, want 500", left)
+	}
+	if n, err := w.retention.PurgeUserSeen(systemCtx(org), now); err != nil || n != 500 {
+		t.Fatalf("second pass purged %d (%v), want 500", n, err)
+	}
+	events := w.purgedEvents(t, org, log)
+	if len(events) != 2 || events[0].outcome != "success" || events[0].deleted != 1000 ||
+		events[1].outcome != "success" || events[1].deleted != 500 {
+		t.Fatalf("events %+v, want success 1000 then success 500", events)
+	}
+}
+
 // TestRetentionPurgeUserSeenNothingExpired: an organization without expired rows gets no event.
 func TestRetentionPurgeUserSeenNothingExpired(t *testing.T) {
 	w := newRetentionWorld(t)

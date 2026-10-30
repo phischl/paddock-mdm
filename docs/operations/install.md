@@ -193,7 +193,8 @@ tunnel.
 configuration. It prints one PASS/FAIL line per item and exits 1 on any FAIL. It refuses: `compose.dev.yaml` in the
 configuration; `PADDOCK_ENV` other than `production`; development-only variables (`PADDOCK_STEPUP_WINDOW`,
 `PADDOCK_STEPUP_MAX_AUTH_AGE`, `PADDOCK_STALENESS_UNIT`, `PADDOCK_RETENTION_UNIT`, `PADDOCK_REAPER_THRESHOLD`, `PADDOCK_OSV_SYNC_INTERVAL`,
-`PADDOCK_TEST_*`); `PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
+`PADDOCK_TEST_*`); a retention round interval (`PADDOCK_RETENTION_INTERVAL`) below 1 minute, above 24 hours, or
+unparsable; `PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
 missing, empty or readable by every user of the host (symbolic links resolved; `.secrets/` must stay 0700); a path
 below `/run/secrets/` that a service names (in a variable or as the `sslrootcert` of a DSN) without mounting that
 secret; 80/443 published by any service but Caddy, or another published port that is not bound to

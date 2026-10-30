@@ -92,10 +92,7 @@ func (r *Retention) Run(ctx context.Context) error {
 // last success is set only when its pass succeeded in every organization.
 func (r *Retention) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
-	_, err := r.platform.WithLeaderLock(sys, retentionLockKey, func(ctx context.Context) error {
-		_, err := r.platform.WithLeaderLock(ctx, legacyLoginHistoryLockKey, r.purge)
-		return err
-	})
+	_, err := r.platform.WithLeaderLocks(sys, []int64{retentionLockKey, legacyLoginHistoryLockKey}, r.purge)
 	return err
 }
 

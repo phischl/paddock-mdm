@@ -194,6 +194,10 @@ func TestRetentionInterval(t *testing.T) {
 		{"development", "15s", 15 * time.Second, false},
 		{"development", "0s", 0, true},
 		{"production", "-1h", -time.Hour, true},
+		{"production", "24h", 24 * time.Hour, false},
+		{"production", "24h1s", 24*time.Hour + time.Second, true},
+		{"production", "48h", 48 * time.Hour, true},
+		{"development", "48h", 48 * time.Hour, false},
 		{"production", "often", 6 * time.Hour, true},
 	} {
 		vars := map[string]string{}

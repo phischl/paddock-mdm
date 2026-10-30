@@ -460,9 +460,11 @@ func TestAllowlistBypass(t *testing.T) {
 // amendment 2026-10-30).
 func TestRetentionInterval(t *testing.T) {
 	for value, want := range map[string]string{
-		"15s":   "paddock-api: PADDOCK_RETENTION_INTERVAL=15s is not a duration of at least 1m0s",
+		"15s":   "paddock-api: PADDOCK_RETENTION_INTERVAL=15s is not a duration between 1m0s and 24h0m0s",
 		"59s":   "paddock-api: PADDOCK_RETENTION_INTERVAL=59s",
 		"often": "paddock-api: PADDOCK_RETENTION_INTERVAL=often",
+		"24h1s": "paddock-api: PADDOCK_RETENTION_INTERVAL=24h1s",
+		"48h":   "paddock-api: PADDOCK_RETENTION_INTERVAL=48h",
 	} {
 		f := newFixture(t)
 		f.setEnv("paddock-api", "PADDOCK_RETENTION_INTERVAL", value)
@@ -472,7 +474,7 @@ func TestRetentionInterval(t *testing.T) {
 		}
 		failLine(t, out, want)
 	}
-	for _, value := range []string{"1m", "12h"} {
+	for _, value := range []string{"1m", "12h", "24h"} {
 		f := newFixture(t)
 		f.setEnv("paddock-api", "PADDOCK_RETENTION_INTERVAL", value)
 		if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok {

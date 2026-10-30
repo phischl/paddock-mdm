@@ -1049,8 +1049,8 @@ func checkAllowlistBypass(c Config) Result {
 	return result("ip allow list bypass is off", f)
 }
 
-// checkRetentionInterval fails on a retention round shorter than the production minimum, which the worker would refuse
-// to start with (plan M10 amendment 2026-10-30).
+// checkRetentionInterval fails on a retention round shorter than the production minimum or longer than the maximum,
+// which the worker would refuse to start with (plan M10 amendment 2026-10-30).
 func checkRetentionInterval(c Config) Result {
 	var f []string
 	for _, name := range sortedServices(c) {
@@ -1058,9 +1058,9 @@ func checkRetentionInterval(c Config) Result {
 		if v == "" {
 			continue
 		}
-		if d, err := time.ParseDuration(v); err != nil || d < config.MinRetentionInterval {
-			f = append(f, fmt.Sprintf("%s: PADDOCK_RETENTION_INTERVAL=%s is not a duration of at least %s", name, v,
-				config.MinRetentionInterval))
+		if d, err := time.ParseDuration(v); err != nil || d < config.MinRetentionInterval || d > config.MaxRetentionInterval {
+			f = append(f, fmt.Sprintf("%s: PADDOCK_RETENTION_INTERVAL=%s is not a duration between %s and %s", name, v,
+				config.MinRetentionInterval, config.MaxRetentionInterval))
 		}
 	}
 	return result("retention round interval", f)

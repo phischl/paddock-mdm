@@ -294,8 +294,13 @@ func RetentionUnit(l *Loader, c Common) time.Duration {
 // 2026-10-30): a shorter round only adds load, the retention periods count days.
 const MinRetentionInterval = time.Minute
 
+// MaxRetentionInterval is the longest PADDOCK_RETENTION_INTERVAL outside development (plan M10 amendment 2026-10-30): a
+// longer round would keep expired rows beyond their retention period by more than a day.
+const MaxRetentionInterval = 24 * time.Hour
+
 // RetentionInterval reads PADDOCK_RETENTION_INTERVAL, the period of the worker's retention round (default def). It is
-// an operator setting; below MinRetentionInterval it is only allowed with PADDOCK_ENV=development.
+// an operator setting; below MinRetentionInterval or above MaxRetentionInterval it is only allowed with
+// PADDOCK_ENV=development.
 func RetentionInterval(l *Loader, c Common, def time.Duration) time.Duration {
 	d := l.Duration("PADDOCK_RETENTION_INTERVAL", def)
 	switch {
@@ -303,6 +308,8 @@ func RetentionInterval(l *Loader, c Common, def time.Duration) time.Duration {
 		l.Invalid("PADDOCK_RETENTION_INTERVAL", "must be positive")
 	case d < MinRetentionInterval && !c.Development():
 		l.Invalid("PADDOCK_RETENTION_INTERVAL", "must be at least 1m unless PADDOCK_ENV=development")
+	case d > MaxRetentionInterval && !c.Development():
+		l.Invalid("PADDOCK_RETENTION_INTERVAL", "must be at most 24h unless PADDOCK_ENV=development")
 	}
 	return d
 }

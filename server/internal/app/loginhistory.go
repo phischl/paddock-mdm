@@ -20,11 +20,13 @@ type LoginHistory struct {
 	org    *db.OrgPool
 	// day is the length of a day of login_history_days: 24 hours, a second in development (PADDOCK_RETENTION_UNIT).
 	day time.Duration
+	// budget bounds one purge pass (retentionPassBudget).
+	budget time.Duration
 }
 
 // NewLoginHistory creates the use cases.
 func NewLoginHistory(runner *ActionRunner, org *db.OrgPool, day time.Duration) *LoginHistory {
-	return &LoginHistory{runner: runner, org: org, day: day}
+	return &LoginHistory{runner: runner, org: org, day: day, budget: retentionPassBudget}
 }
 
 // LoginEventQuery selects a page of a device's login history; Username filters one user (exact, lower case).
@@ -80,7 +82,7 @@ func (h *LoginHistory) Purge(ctx context.Context, now time.Time) (int64, error) 
 	if err != nil || !expired {
 		return 0, err
 	}
-	return purgeBatches(ctx, h.runner, h.org, StoreDeviceLoginEvent, cutoff, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+	return purgeBatches(ctx, h.runner, h.org, StoreDeviceLoginEvent, cutoff, h.budget, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 		return q.PurgeDeviceLoginEvents(ctx, cutoff)
 	})
 }
