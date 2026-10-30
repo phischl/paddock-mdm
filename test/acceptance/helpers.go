@@ -118,6 +118,14 @@ func auditSettle(waited time.Duration) time.Duration {
 // requires exactly one event with code and outcome — also after the settle delay (auditSettle).
 func expectOneEvent(t *testing.T, viewer *env.Portal, requestID, code, outcome string) env.AuditEvent {
 	t.Helper()
+	ev, _ := expectOneEventWaited(t, viewer, requestID, code, outcome)
+	return ev
+}
+
+// expectOneEventWaited is expectOneEvent that also returns how long the event took to appear, for a later settle of
+// the same gate (auditSettle).
+func expectOneEventWaited(t *testing.T, viewer *env.Portal, requestID, code, outcome string) (env.AuditEvent, time.Duration) {
+	t.Helper()
 	ctx := testContext(t, 2*time.Minute)
 	from := time.Now().Add(-auditLookback)
 	var found []env.AuditEvent
@@ -155,7 +163,7 @@ func expectOneEvent(t *testing.T, viewer *env.Portal, requestID, code, outcome s
 	}
 	found = env.EventsFor(events, requestID)
 	check(fmt.Sprintf("%s later", settle))
-	return found[0]
+	return found[0], waited
 }
 
 func auditIndex(t *testing.T) *env.AuditIndex {

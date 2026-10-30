@@ -240,13 +240,15 @@ func TestAutoUnsealRestart(t *testing.T) {
 	}
 	var events []env.IndexEvent
 	for deadline := time.Now().Add(auditPollTimeout + 30*time.Second); ; time.Sleep(2 * time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneIndexEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		var err error
 		events, err = idx.Events(testContext(t, time.Minute), platformOrg,
 			"code = 'platform.openbao_auto_unsealed' AND outcome = 'success' AND occurred_at > $1", restartedAt)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(events) > 0 || time.Now().After(deadline) {
+		if len(events) > 0 || polled.After(deadline) {
 			break
 		}
 	}

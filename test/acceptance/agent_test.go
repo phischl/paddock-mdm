@@ -132,8 +132,13 @@ func TestAgentEnrollmentAndCheckin(t *testing.T) {
 	// below a test root the agent does not touch the host's services, so the time resource is reported as an
 	// error, but the bundle counts as applied.
 	deadline := time.Now().Add(time.Minute)
-	for eventCount(t, alice, "device.bundle_applied", pending.DeviceID) == 0 {
-		if time.Now().After(deadline) {
+	for {
+		// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+		polled := time.Now()
+		if eventCount(t, alice, "device.bundle_applied", pending.DeviceID) > 0 {
+			break
+		}
+		if polled.After(deadline) {
 			data, _ := os.ReadFile(logs.Name())
 			t.Fatalf("no device.bundle_applied audit event within a minute; agent log:\n%s", data)
 		}
