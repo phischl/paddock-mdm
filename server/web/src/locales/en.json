@@ -83,6 +83,7 @@
     "deviceGroups": "Device groups",
     "audit": "Audit log",
     "auditIntegrity": "Evidence integrity",
+    "auditExports": "Evidence exports",
     "organizations": "Organizations",
     "devices": "Devices",
     "enrollmentTokens": "Enrollment tokens",
@@ -2046,6 +2047,63 @@
   "time": {
     "never": "never",
     "now": "now"
+  },
+  "auditExports": {
+    "title": "Evidence exports",
+    "intro": "A signed package of the audit log for a range of sealed days, which you can verify without the platform operator. Every request and every download is recorded in the audit log.",
+    "new": "New export",
+    "requested": "The export was requested. It is built in the background and appears as ready when it can be downloaded.",
+    "requestedAt": "Requested",
+    "range": "Range",
+    "status": "Status",
+    "purpose": "Purpose",
+    "requestedBy": "Requested by",
+    "size": "Size",
+    "download": "Download",
+    "sha256": "Package SHA-256",
+    "counts": "Contents",
+    "countsValue": "{events, plural, one {# event} other {# events}} in {objects, plural, one {# object} other {# objects}}",
+    "keyVersion": "Signing key version",
+    "expiresAt": "Available until",
+    "error": "Error",
+    "statuses": {
+      "pending": "Pending",
+      "running": "Running",
+      "ready": "Ready",
+      "failed": "Failed",
+      "expired": "Expired"
+    },
+    "chain": {
+      "title": "Chain",
+      "intact": "Intact",
+      "problems": "Problems"
+    },
+    "empty": {
+      "title": "No evidence exports yet",
+      "description": "Request an export to obtain a signed package of the audit log."
+    },
+    "dialog": {
+      "title": "New evidence export",
+      "explanation": "The request needs a recent confirmation of your identity and is recorded in the audit log. Both days must be sealed; the last day is at most 400 days after the first.",
+      "from": "From day",
+      "to": "To day",
+      "purposeHint": "Why you need the package, for example the audit it is for.",
+      "submit": "Confirm identity and request"
+    },
+    "errors": {
+      "fromRequired": "Enter the first day.",
+      "toRequired": "Enter the last day.",
+      "order": "The last day must not be before the first day.",
+      "purposeRequired": "Enter the purpose."
+    },
+    "keys": {
+      "title": "Signing keys",
+      "hint": "Compare with the fingerprint your ISMS recorded. The fingerprint of a package must match one of these values.",
+      "none": "No signing key has been used yet.",
+      "version": "Version",
+      "fingerprint": "Fingerprint (SHA-256)",
+      "firstSeen": "First seen"
+    }
   },
   "auditIntegrity": {
     "title": "Evidence integrity",

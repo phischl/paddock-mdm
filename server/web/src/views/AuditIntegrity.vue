@@ -77,6 +77,14 @@ function short(hash: string): string {
       <p class="pd-muted">
         {{ t('auditIntegrity.intro') }}
       </p>
+      <p>
+        <RouterLink
+          :to="{ name: 'audit-exports' }"
+          data-testid="audit-exports-link"
+        >
+          {{ t('auditExports.title') }}
+        </RouterLink>
+      </p>
       <div data-testid="audit-integrity-kpis">
         <KpiStrip
           v-if="summary"

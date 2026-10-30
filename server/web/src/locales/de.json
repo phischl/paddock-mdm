@@ -83,6 +83,7 @@
     "deviceGroups": "Gerätegruppen",
     "audit": "Audit-Protokoll",
     "auditIntegrity": "Nachweisintegrität",
+    "auditExports": "Nachweis-Exporte",
     "organizations": "Organisationen",
     "devices": "Geräte",
     "enrollmentTokens": "Registrierungstoken",
@@ -2046,6 +2047,63 @@
   "time": {
     "never": "nie",
     "now": "jetzt"
+  },
+  "auditExports": {
+    "title": "Nachweis-Exporte",
+    "intro": "Ein signiertes Paket des Audit-Logs für einen Bereich versiegelter Tage, das Sie ohne den Plattformbetreiber prüfen können. Jede Anforderung und jeder Download wird im Audit-Log aufgezeichnet.",
+    "new": "Neuer Export",
+    "requested": "Der Export wurde angefordert. Er wird im Hintergrund erstellt und erscheint als bereit, sobald er heruntergeladen werden kann.",
+    "requestedAt": "Angefordert",
+    "range": "Zeitraum",
+    "status": "Status",
+    "purpose": "Zweck",
+    "requestedBy": "Angefordert von",
+    "size": "Größe",
+    "download": "Herunterladen",
+    "sha256": "SHA-256 des Pakets",
+    "counts": "Inhalt",
+    "countsValue": "{events, plural, one {# Ereignis} other {# Ereignisse}} in {objects, plural, one {# Objekt} other {# Objekten}}",
+    "keyVersion": "Version des Signaturschlüssels",
+    "expiresAt": "Verfügbar bis",
+    "error": "Fehler",
+    "statuses": {
+      "pending": "Ausstehend",
+      "running": "Läuft",
+      "ready": "Bereit",
+      "failed": "Fehlgeschlagen",
+      "expired": "Abgelaufen"
+    },
+    "chain": {
+      "title": "Kette",
+      "intact": "Intakt",
+      "problems": "Probleme"
+    },
+    "empty": {
+      "title": "Noch keine Nachweis-Exporte",
+      "description": "Fordern Sie einen Export an, um ein signiertes Paket des Audit-Logs zu erhalten."
+    },
+    "dialog": {
+      "title": "Neuer Nachweis-Export",
+      "explanation": "Die Anforderung braucht eine aktuelle Bestätigung Ihrer Identität und wird im Audit-Log aufgezeichnet. Beide Tage müssen versiegelt sein; der letzte Tag liegt höchstens 400 Tage nach dem ersten.",
+      "from": "Erster Tag",
+      "to": "Letzter Tag",
+      "purposeHint": "Wofür Sie das Paket brauchen, zum Beispiel das Audit, für das es bestimmt ist.",
+      "submit": "Identität bestätigen und anfordern"
+    },
+    "errors": {
+      "fromRequired": "Geben Sie den ersten Tag an.",
+      "toRequired": "Geben Sie den letzten Tag an.",
+      "order": "Der letzte Tag darf nicht vor dem ersten Tag liegen.",
+      "purposeRequired": "Geben Sie den Zweck an."
+    },
+    "keys": {
+      "title": "Signaturschlüssel",
+      "hint": "Vergleichen Sie mit dem Fingerabdruck, den Ihr ISMS festgehalten hat. Der Fingerabdruck eines Pakets muss mit einem dieser Werte übereinstimmen.",
+      "none": "Es wurde noch kein Signaturschlüssel verwendet.",
+      "version": "Version",
+      "fingerprint": "Fingerabdruck (SHA-256)",
+      "firstSeen": "Erstmals gesehen"
+    }
   },
   "auditIntegrity": {
     "title": "Nachweisintegrität",
