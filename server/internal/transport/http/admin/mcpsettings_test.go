@@ -223,6 +223,13 @@ func TestMCPWriteOptIn(t *testing.T) {
 		if r.status != http.StatusOK || got.McpWriteEnabled != want {
 			t.Fatalf("%s: %d %s, want mcp_write_enabled %v", name, r.status, r.body, want)
 		}
+		// The portal shows since when write access is enabled (plan M14 §6.6 amendment 2026-10-29).
+		if want != (got.McpWriteEnabledAt != nil) {
+			t.Fatalf("%s: mcp_write_enabled_at %v, want set %v", name, got.McpWriteEnabledAt, want)
+		}
+		if want && (got.McpWriteEnabledAt.Location() != time.UTC || time.Since(*got.McpWriteEnabledAt) > time.Hour) {
+			t.Fatalf("%s: mcp_write_enabled_at %v is not a recent UTC time", name, got.McpWriteEnabledAt)
+		}
 	}
 
 	for _, tc := range []struct {
@@ -234,6 +241,7 @@ func TestMCPWriteOptIn(t *testing.T) {
 		{principal.RoleOrgOperator, e.session(e.acme, principal.RoleOrgOperator), e.acme},
 		{principal.RolePlatform, e.platformSession(), audit.PlatformOrganizationID},
 	} {
+		me(string(tc.role)+" GET /api/v1/me before enable", e.do(call{method: "GET", path: "/api/v1/me", cookie: tc.cookie}), false)
 		r := post(enablePath, tc.cookie)
 		expectProblem(t, string(tc.role)+" without a step-up", r, http.StatusForbidden, "step_up_required")
 		e.expectEvent(r, "admin.mcp_write_enabled:denied:step_up_required")

@@ -413,7 +413,10 @@ const latestPublished = computed(() => {
                     />
                   </td>
                   <td class="pd-hide-sm">
-                    <ActorChip :actor="e.actor" />
+                    <ActorChip
+                      :actor="e.actor"
+                      :source="e.source"
+                    />
                   </td>
                   <td>{{ auditText(t, te, e) }}</td>
                   <td class="pd-hide-md mono">

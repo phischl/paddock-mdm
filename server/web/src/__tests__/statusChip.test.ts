@@ -39,13 +39,28 @@ describe('SeverityChip', () => {
 
 describe('ActorChip', () => {
   it('shows the type chip and the display name in mono; nothing for a system actor without one', () => {
-    const w = mountIn(ActorChip, { actor: { type: 'api_token', display: 'ci-inventory' } })
+    const w = mountIn(ActorChip, { actor: { type: 'api_token', display: 'ci-inventory' }, source: 'api' })
     expect(w.find('.pd-chip').text()).toBe('API token')
     expect(w.find('.pd-chip').classes()).toContain('pd-chip--info')
     expect(w.find('.mono').text()).toBe('ci-inventory')
-    const system = mountIn(ActorChip, { actor: { type: 'system', display: '' } })
+    const system = mountIn(ActorChip, { actor: { type: 'system', display: '' }, source: 'system' })
     expect(system.find('.pd-chip').text()).toBe('System')
     expect(system.find('.mono').exists()).toBe(false)
+  })
+
+  it('adds the MCP chip and the client name for an event of an MCP session only (ADR 0044)', () => {
+    const actor = { type: 'admin', display: 'alice@acme.test', client: 'claude-code' }
+    const mcp = mountIn(ActorChip, { actor, source: 'mcp' })
+    expect(mcp.findAll('.pd-chip').map((c) => c.text())).toEqual(['Administrator', 'MCP'])
+    expect(mcp.find('[data-testid="actor-source"]').classes()).toContain('pd-chip--info')
+    expect(mcp.find('[data-testid="actor-client"]').text()).toBe('claude-code')
+    expect(mcp.find('[data-testid="actor-client"]').classes()).toContain('mono')
+    const portal = mountIn(ActorChip, { actor: { type: 'admin', display: 'alice@acme.test' }, source: 'portal' })
+    expect(portal.findAll('.pd-chip').map((c) => c.text())).toEqual(['Administrator'])
+    expect(portal.find('[data-testid="actor-client"]').exists()).toBe(false)
+    const noClient = mountIn(ActorChip, { actor: { type: 'admin', display: 'alice@acme.test' }, source: 'mcp' })
+    expect(noClient.find('[data-testid="actor-source"]').text()).toBe('MCP')
+    expect(noClient.find('[data-testid="actor-client"]').exists()).toBe(false)
   })
 })
 

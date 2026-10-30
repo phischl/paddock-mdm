@@ -40,6 +40,48 @@ fleet_me_status() {
     head -1 <&3 | cut -d" " -f2' _ "$1" 2>/dev/null || true
 }
 
+# fleet_healthz_status <port> <timeout seconds>: the HTTP status of GET /healthz at 127.0.0.1:<port>, empty when there
+# is no answer within the timeout. It needs no login: `fleetctl api` refuses to run before `fleetctl login`, so the
+# earlier probe with it never succeeded and always waited its full 120 s (PDK-517).
+fleet_healthz_status() {
+  timeout "$2" bash -c '
+    exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 0
+    printf "GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3
+    head -1 <&3 | cut -d" " -f2' _ "$1" 2>/dev/null || true
+}
+
+# fleet_wait_healthy <port> <timeout seconds> <delay seconds>: polls /healthz until it answers 200, <delay> seconds
+# apart; fails once <timeout> seconds have passed. The deadline, not a poll count, bounds it, so a Fleet that accepts
+# connections and never answers cannot stretch the wait (PDK-517 review 1).
+fleet_wait_healthy() {
+  local deadline=$((SECONDS + $2)) left
+  while :; do
+    left=$((deadline - SECONDS))
+    ((left > 0)) || return 1
+    [[ "$(fleet_healthz_status "$1" $((left < 2 ? left : 2)))" == 200 ]] && return 0
+    left=$((deadline - SECONDS))
+    ((left > 0)) || return 1
+    sleep $((left < $3 ? left : $3))
+  done
+}
+
+# retry <attempts> <delay seconds> <description> <command…>: runs the command until it succeeds, at most <attempts>
+# times with <delay> seconds between, and then fails naming <description>. Bounded readiness polling for a Fleet that
+# serves /healthz before it accepts the setup or a login (PDK-517); never unbounded.
+retry() {
+  local attempts="$1" delay="$2" what="$3" i
+  shift 3
+  for ((i = 1; ; i++)); do
+    "$@" && return 0
+    if ((i >= attempts)); then
+      echo "fleet: $what failed $attempts times, ${delay} s apart; giving up" >&2
+      return 1
+    fi
+    echo "fleet: $what failed (attempt $i of $attempts); retrying in ${delay} s" >&2
+    sleep "$delay"
+  done
+}
+
 # Sourced by the test for the functions above only.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
 
@@ -62,14 +104,18 @@ fleetctl_sh() {
     --entrypoint sh "$FLEETCTL_IMAGE" -s
 }
 
-fleetctl_sh <<'SCRIPT'
+# The 120 s upper bound stays for a standalone `make fleet-bootstrap` right after Fleet started.
+if ! docker run --rm --network "container:$fleet" --entrypoint bash "$FLEETCTL_IMAGE" \
+  -c "$(declare -f fleet_healthz_status fleet_wait_healthy); fleet_wait_healthy 8080 120 2"; then
+  echo "fleet: Fleet did not answer GET /healthz with 200 within 120 s; nothing changed" >&2
+  exit 1
+fi
+
+fleet_setup() {
+  fleetctl_sh <<'SCRIPT'
 set -eu
 admin=admin@paddock-mdm.invalid
 fleetctl config set --address http://localhost:8080 >/dev/null
-for _ in $(seq 1 60); do
-  if fleetctl api /api/latest/fleet/version >/dev/null 2>&1 || fleetctl api /api/v1/setup >/dev/null 2>&1; then break; fi
-  sleep 2
-done
 if EMAIL="$admin" NAME="Paddock administrator" PASSWORD="$ADMIN_PASSWORD" ORG_NAME=Paddock fleetctl setup >/tmp/setup 2>&1; then
   echo "fleet: initial setup done" >&2
 elif ! grep -qi "already been set up\|already been setup" /tmp/setup; then
@@ -77,12 +123,19 @@ elif ! grep -qi "already been set up\|already been setup" /tmp/setup; then
   exit 1
 fi
 SCRIPT
+}
+retry 5 5 "the initial setup of Fleet" fleet_setup
 
-# The exact status of /me decides; a Fleet that accepts the connection and never answers fails after 10 seconds.
+# The exact status of /me decides; a Fleet that accepts the connection and never answers fails after 10 seconds. Only
+# a status that leads to keep or rotate ends the polling, so a Fleet still starting gets a few more seconds.
 status=
-if [[ -n "$TOKEN" ]]; then
+token_status_decides() {
   status="$(docker run --rm -i --network "container:$fleet" -e TOKEN --entrypoint bash "$FLEETCTL_IMAGE" \
     -c "$(declare -f fleet_me_status); fleet_me_status 8080 10" || true)"
+  [[ "$(fleet_token_action "$TOKEN" "$status")" != fail ]]
+}
+if [[ -n "$TOKEN" ]]; then
+  retry 5 5 "checking the stored API token" token_status_decides || true
 fi
 ACTION="$(fleet_token_action "$TOKEN" "$status")"
 export ACTION
@@ -95,7 +148,8 @@ case "$ACTION" in
     ;;
 esac
 
-out="$(fleetctl_sh <<'SCRIPT'
+fleet_users() {
+  fleetctl_sh <<'SCRIPT'
 set -eu
 admin=admin@paddock-mdm.invalid
 fleetctl config set --address http://localhost:8080 >/dev/null
@@ -123,8 +177,10 @@ printf 'apiVersion: v1\nkind: enroll_secret\nspec:\n  secrets:\n    - secret: "%
 fleetctl apply -f /tmp/enroll.yml >/dev/null
 echo "fleet: global enroll secret applied" >&2
 SCRIPT
-)"
-token="$(printf '%s\n' "$out" | sed -n 's/^TOKEN=//p')"
+}
+# A repeated attempt deletes the user an earlier failed attempt created, so only the last token printed is valid.
+out="$(retry 5 5 "setting up the API-only user paddock and the enroll secret" fleet_users)"
+token="$(printf '%s\n' "$out" | sed -n 's/^TOKEN=//p' | tail -n 1)"
 if [[ -n "$token" ]]; then
   printf '%s' "$token" >"$SECRETS_DIR/fleet_api_token"
   chmod 644 "$SECRETS_DIR/fleet_api_token"

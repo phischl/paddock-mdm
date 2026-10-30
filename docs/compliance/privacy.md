@@ -119,3 +119,16 @@ the retention of the WORM store (at least 400 days) and cannot be deleted earlie
 Paddock snapshots the membership of its portal role groups (`paddock.<slug>.admins`, `.operators`, `.auditors`,
 `paddock.platform.admins`) and the set of Authentik superusers every 5 minutes: user name and Authentik ID per role,
 and an audit event for every change.
+
+### AI assistants on the administrator's machine (MCP)
+
+An administrator who connects an AI assistant with `paddockctl mcp` (`docs/operations/mcp.md`) gives it what that
+administrator's role reads in the portal, limited by the MCP policy of the scope: device inventory, user and group
+names, managed-file contents, audit events and the other data of the admin API, including personal data of device
+users. The MCP server runs on the administrator's machine; Paddock sends the tool results only to that process, and they
+leave the administrator's machine only through the MCP client the administrator chose (for example to the model
+provider of a hosted assistant). Whether that is allowed is the organization's decision: keep the MCP switched off,
+or restrict it to *Selected tools only*, where it is not. Paddock stores of an MCP session the same as of a portal
+session (the session record in Valkey, `admin.login` with `channel: mcp`) plus the MCP client's name and version in the
+audit events of its changes (`actor.client`); reads through the MCP are not recorded per call (RR-89). The session
+file on the workstation holds Authentik tokens of the administrator, not data of devices or users.
