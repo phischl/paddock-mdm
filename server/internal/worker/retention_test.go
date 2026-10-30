@@ -65,7 +65,7 @@ func TestRetentionRound(t *testing.T) {
 	t.Cleanup(platform.Close)
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
-	r := NewRetention(app.NewRetention(runner, f.pool, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	r := NewRetention(app.NewRetention(runner, f.pool, &fakeSource{}, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
 
 	failing := newFixture(t).org
 	expired := time.Now().Add(-400 * day)
@@ -115,6 +115,54 @@ func TestRetentionRound(t *testing.T) {
 	}
 }
 
+// TestRetentionRoundRetiredInventory (plan M10 amendment A3): the round's third pass purges the inventory of a device
+// retired longer than the organization's period, with its Fleet host, and exports the store retired_inventory.
+func TestRetentionRoundRetiredInventory(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	day := 24 * time.Hour
+	fleet := &fakeSource{}
+	r := NewRetention(app.NewRetention(runner, f.pool, fleet, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	if len(r.passes) != 3 || r.passes[2].store != app.StoreRetiredInventory {
+		t.Fatalf("passes %+v, want retired_inventory third of 3", r.passes)
+	}
+	dev := uuid.Must(uuid.NewV7())
+	for _, stmt := range []string{
+		"INSERT INTO device (id, organization_id, hostname, state, state_changed_at) VALUES ($1, $2, 'gone', 'retired', now() - interval '400 days')",
+		"INSERT INTO device_inventory_ref (device_id, organization_id, external_id) VALUES ($1, $2, '77')",
+		"INSERT INTO installed_software (device_id, organization_id, name, version, source) VALUES ($1, $2, 'bash', '5.2', 'deb_packages')",
+	} {
+		if _, err := f.super.Exec(ctx, stmt, dev, f.org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lastSuccess := metricRetentionLastSuccess.WithLabelValues(app.StoreRetiredInventory)
+	lastSuccess.Set(0)
+	deletedBefore := testutil.ToFloat64(metricRetentionDeleted.WithLabelValues(app.StoreRetiredInventory))
+
+	if err := r.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "SELECT count(*) FROM installed_software WHERE device_id = $1", dev); n != 0 || len(fleet.deleted) != 1 || fleet.deleted[0] != "77" {
+		t.Fatalf("%d software rows left, Fleet hosts deleted %v", n, fleet.deleted)
+	}
+	if n := f.count(t, "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'device.inventory_purged' AND outcome = 'success'", f.org); n != 1 {
+		t.Fatalf("%d device.inventory_purged events, want 1", n)
+	}
+	if testutil.ToFloat64(lastSuccess) == 0 {
+		t.Fatal("retired_inventory has no last success")
+	}
+	if d := testutil.ToFloat64(metricRetentionDeleted.WithLabelValues(app.StoreRetiredInventory)) - deletedBefore; d != 2 {
+		t.Fatalf("deleted_total grew by %v, want 2", d)
+	}
+}
+
 // TestRetentionRoundWaitsForLegacyLock (plan M10 amendment 2026-10-30): while a worker of an earlier version holds the
 // login history round's lock, the retention round purges nothing, so a rolling upgrade never runs both purges at once.
 func TestRetentionRoundWaitsForLegacyLock(t *testing.T) {
@@ -127,7 +175,7 @@ func TestRetentionRoundWaitsForLegacyLock(t *testing.T) {
 	t.Cleanup(platform.Close)
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
-	r := NewRetention(app.NewRetention(runner, f.pool, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	r := NewRetention(app.NewRetention(runner, f.pool, &fakeSource{}, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
 	f.seenUsers(t, f.org, 2, time.Now().Add(-400*day))
 	seen := func() int {
 		return f.count(t, "SELECT count(*) FROM device_user_seen WHERE organization_id = $1", f.org)

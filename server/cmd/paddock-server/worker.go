@@ -118,8 +118,6 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
 		min(worker.StalenessInterval, stalenessUnit/4))
 	eventGaps := worker.NewEventGaps(app.NewEventGaps(runner, pool), pool, platformPool, min(worker.StalenessInterval, stalenessUnit/4))
-	retention := worker.NewRetention(app.NewRetention(runner, pool, retentionDay), app.NewLoginHistory(runner, pool, retentionDay),
-		pool, platformPool, retentionEvery)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	reconcileAK := authentik.New(authentikURL, authentikToken).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
@@ -127,6 +125,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), app.NewRoleMembership(runner, pool, platformPool, ak),
 		ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
+	retention := worker.NewRetention(app.NewRetention(runner, pool, fleetClient, retentionDay),
+		app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, retentionEvery)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
 		platformPool, inventoryEvery)
 	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)

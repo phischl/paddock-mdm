@@ -2,18 +2,35 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // StoreDeviceUserSeen is the store name of the users seen on devices in retention.purged (plan M10 decision 13).
 const StoreDeviceUserSeen = "device_user_seen"
+
+// StoreRetiredInventory is the store name of the retired devices' inventory in the round's metrics (plan M10 decision
+// 15); its evidence is device.inventory_purged per device.
+const StoreRetiredInventory = "retired_inventory"
+
+// retiredInventoryDevices bounds the devices of one organization whose inventory one pass purges (plan M10 decision
+// 16); the rest follow in the next round.
+const retiredInventoryDevices = 100
+
+// fleetDeleteTimeout bounds the deletion of one Fleet host including the adapter's retries, so a device's action
+// finishes well before the outbox reaper's threshold (outbox.DefaultReaperThreshold, 10 minutes) would record it as
+// unknown.
+const fleetDeleteTimeout = 3 * time.Minute
 
 // retentionBatch is the row limit of one deletion statement; every batch commits on its own, so it bounds how long the
 // rows stay locked (plan M10 amendment 2026-10-30).
@@ -30,10 +47,14 @@ const retentionLockTimeout = 30 * time.Second
 // SpecRetentionPurged records one retention pass over one store of an organization; system principal only.
 var SpecRetentionPurged = ActionSpec{Code: audit.CodeRetentionPurged}
 
+// SpecDeviceInventoryPurged records the inventory purge of one retired device; system principal only.
+var SpecDeviceInventoryPurged = ActionSpec{Code: audit.CodeDeviceInventoryPurged}
+
 // Retention deletes the expired rows of an organization's stores with deletion evidence (ADR 0032, plan M10 §3.3).
 type Retention struct {
-	runner *ActionRunner
-	org    *db.OrgPool
+	runner    *ActionRunner
+	org       *db.OrgPool
+	inventory ports.InventoryAdmin
 	// unit is the length of a retention day: 24 hours, a second in development (PADDOCK_RETENTION_UNIT).
 	unit time.Duration
 	// budget bounds one pass (retentionPassBudget).
@@ -43,8 +64,9 @@ type Retention struct {
 }
 
 // NewRetention creates the use cases.
-func NewRetention(runner *ActionRunner, org *db.OrgPool, unit time.Duration) *Retention {
-	return &Retention{runner: runner, org: org, unit: unit, budget: retentionPassBudget, lockTimeout: retentionLockTimeout}
+func NewRetention(runner *ActionRunner, org *db.OrgPool, inventory ports.InventoryAdmin, unit time.Duration) *Retention {
+	return &Retention{runner: runner, org: org, inventory: inventory, unit: unit, budget: retentionPassBudget,
+		lockTimeout: retentionLockTimeout}
 }
 
 // PurgeUserSeen deletes the users seen on the context's organization's devices whose last login is older than
@@ -67,6 +89,136 @@ func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, er
 	return purgeBatches(ctx, r.runner, r.org, StoreDeviceUserSeen, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 		return q.DeleteExpiredDeviceUserSeen(ctx, cutoff)
 	})
+}
+
+// PurgeRetiredInventory deletes the inventory of the context's organization's devices retired longer than the
+// organization's retired_inventory_days at now, in Paddock and in Fleet (system principal, plan M10 decision 16): one
+// device.inventory_purged action per device, at most retiredInventoryDevices per pass, longest retired first. It
+// returns the number of deleted Paddock rows. The pass starts no further device once the budget has elapsed, and ends
+// at the first device that fails: an unavailable Fleet fails every device alike, and the device is retried first in
+// the next round.
+func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time) (int64, error) {
+	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
+		return 0, problem.Unauthenticated
+	}
+	var devices []pgstore.ListRetiredDevicesWithInventoryRow
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		settings, err := LoadPrivacySettings(ctx, q)
+		if err != nil {
+			return err
+		}
+		devices, err = q.ListRetiredDevicesWithInventory(ctx, pgstore.ListRetiredDevicesWithInventoryParams{
+			Cutoff: now.Add(-time.Duration(settings.RetiredInventoryDays) * r.unit), MaxDevices: retiredInventoryDevices,
+		})
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list retired devices: %w", err)
+	}
+	start := time.Now()
+	var deleted int64
+	for _, d := range devices {
+		n, err := r.purgeDeviceInventory(ctx, d)
+		deleted += n
+		if err != nil {
+			return deleted, fmt.Errorf("purge inventory of device %s: %w", d.ID, err)
+		}
+		if time.Since(start) >= r.budget {
+			break
+		}
+	}
+	return deleted, nil
+}
+
+// purgeDeviceInventory deletes one retired device's Fleet host and then its Paddock inventory rows as one
+// device.inventory_purged action. When the Fleet deletion fails, the Paddock rows stay, so the next round finds the
+// device again and retries the host; a host Fleet no longer knows counts as deleted. The host is kept when an active or
+// quarantined device uses it too: the same hardware enrolled again (plan M10 §13).
+func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow) (int64, error) {
+	spec := SpecDeviceInventoryPurged
+	spec.Target = &audit.Target{Type: "device", ID: d.ID.String(), Display: d.Hostname}
+	spec.Params = map[string]any{
+		"hostname": d.Hostname, "retired_at": audit.Timestamp(d.StateChangedAt).Format(time.RFC3339Nano),
+		"software": int64(0), "findings": int64(0), "policy_results": int64(0), "fleet_host_deleted": false,
+	}
+	var held pgstore.CountDeviceInventoryRow
+	var deleteHost, hostDeleted bool
+	var rows int64
+	err := r.runner.RunExternal(ctx, ScopeOrg, spec,
+		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
+			if err := r.lockDevice(ctx, q, d.ID); err != nil {
+				return err
+			}
+			var err error
+			if held, err = q.CountDeviceInventory(ctx, d.ID); err != nil {
+				return err
+			}
+			if held.ExternalID == "" {
+				return nil
+			}
+			shared, err := q.CountInventoryRefsByExternalID(ctx, pgstore.CountInventoryRefsByExternalIDParams{
+				ExternalID: held.ExternalID, DeviceID: d.ID,
+			})
+			deleteHost = shared == 0
+			return err
+		},
+		func(ctx context.Context) error {
+			if !deleteHost {
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(ctx, fleetDeleteTimeout)
+			defer cancel()
+			if err := r.inventory.DeleteHost(ctx, ports.HostRef(held.ExternalID)); err != nil {
+				return fmt.Errorf("%w: delete the Fleet host: %w", problem.UpstreamUnavailable, err)
+			}
+			hostDeleted = true
+			return nil
+		},
+		func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error {
+			// A failed action records the rows it kept; the runner records these params when this transaction fails.
+			rec.SetParam("software", held.Software)
+			rec.SetParam("findings", held.Findings)
+			rec.SetParam("policy_results", held.PolicyResults)
+			rec.SetParam("fleet_host_deleted", hostDeleted)
+			if externalErr != nil {
+				return nil
+			}
+			if err := r.setLockTimeout(ctx, q); err != nil {
+				return err
+			}
+			n, err := q.DeleteDeviceInventory(ctx, d.ID)
+			if err != nil {
+				return err
+			}
+			rows = n.Software + n.Findings + n.PolicyResults + n.Refs
+			rec.SetParam("software", n.Software)
+			rec.SetParam("findings", n.Findings)
+			rec.SetParam("policy_results", n.PolicyResults)
+			return nil
+		})
+	if err != nil {
+		return 0, err
+	}
+	return rows, nil
+}
+
+// lockDevice locks the retired device's row for the action's first transaction, waiting at most the lock timeout.
+func (r *Retention) lockDevice(ctx context.Context, q *pgstore.Queries, id uuid.UUID) error {
+	if err := r.setLockTimeout(ctx, q); err != nil {
+		return err
+	}
+	dev, err := q.LockDevice(ctx, id)
+	if err != nil {
+		return err
+	}
+	if dev.State != "retired" {
+		return errors.New("the device is no longer retired")
+	}
+	return nil
+}
+
+func (r *Retention) setLockTimeout(ctx context.Context, q *pgstore.Queries) error {
+	return q.SetRetentionLockTimeout(ctx, fmt.Sprintf("%dms", r.lockTimeout.Milliseconds()))
 }
 
 // purgeBatches deletes a store's rows older than cutoff in batches of retentionBatch rows, each batch in its own

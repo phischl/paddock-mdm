@@ -105,7 +105,10 @@ devices). The admin API offers the same as read-only list endpoints: `GET /api/v
 `GET /api/v1/devices/{id}/vulnerabilities`, `GET /api/v1/software`, `GET /api/v1/vulnerabilities`,
 `GET /api/v1/vulnerabilities/{cve}/devices` and `GET /api/v1/vulnerabilities/summary`. Reads are not audited. The
 organization-wide views and the tile count active and quarantined devices only; a retired device keeps its last
-inventory on its own tabs. The
+inventory on its own tabs until the worker's retention round deletes it, together with its host in Fleet,
+`retired_inventory_days` after retirement (privacy settings, default 30; one `device.inventory_purged` event per device).
+While Fleet is unavailable the inventory stays and the device is retried in the next round; a host that an active
+device of the same hardware uses again stays in Fleet. The
 lists show the state of the last inventory round, so a package change on a device appears after fleetd's next
 software report (hourly by default) and the next round.
 

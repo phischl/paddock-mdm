@@ -239,3 +239,39 @@ FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN 
 
 -- name: DeviceExists :one
 SELECT EXISTS (SELECT 1 FROM device WHERE id = @id);
+
+-- Retention of retired devices' inventory (ADR 0032, plan M10 decision 16). The sync never writes the rows of a device
+-- that is not active or quarantined, so a retired device's rows only shrink.
+
+-- The retired devices of the organization whose retirement is older than cutoff and that still have inventory rows,
+-- longest retired first.
+-- name: ListRetiredDevicesWithInventory :many
+SELECT d.id, d.hostname, d.state_changed_at FROM device d
+WHERE d.state = 'retired' AND d.state_changed_at < @cutoff
+  AND (EXISTS (SELECT 1 FROM device_inventory_ref r WHERE r.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM installed_software s WHERE s.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM vulnerability_finding f WHERE f.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM inventory_policy_result p WHERE p.device_id = d.id))
+ORDER BY d.state_changed_at, d.id
+LIMIT @max_devices;
+
+-- The inventory rows of a device and its Fleet host reference ('' without one).
+-- name: CountDeviceInventory :one
+SELECT coalesce((SELECT r.external_id FROM device_inventory_ref r WHERE r.device_id = @device_id), '')::text AS external_id,
+       (SELECT count(*) FROM installed_software s WHERE s.device_id = @device_id)::bigint AS software,
+       (SELECT count(*) FROM vulnerability_finding f WHERE f.device_id = @device_id)::bigint AS findings,
+       (SELECT count(*) FROM inventory_policy_result p WHERE p.device_id = @device_id)::bigint AS policy_results;
+
+-- name: DeleteDeviceInventory :one
+WITH s AS (DELETE FROM installed_software x WHERE x.device_id = @device_id RETURNING 1),
+     f AS (DELETE FROM vulnerability_finding x WHERE x.device_id = @device_id RETURNING 1),
+     p AS (DELETE FROM inventory_policy_result x WHERE x.device_id = @device_id RETURNING 1),
+     r AS (DELETE FROM device_inventory_ref x WHERE x.device_id = @device_id RETURNING 1)
+SELECT (SELECT count(*) FROM s)::bigint AS software, (SELECT count(*) FROM f)::bigint AS findings,
+       (SELECT count(*) FROM p)::bigint AS policy_results, (SELECT count(*) FROM r)::bigint AS refs;
+
+-- The active or quarantined devices other than device_id whose inventory is the Fleet host external_id: the hardware
+-- of a retired device that enrolled again (plan M10 §13).
+-- name: CountInventoryRefsByExternalID :one
+SELECT count(*) FROM device_inventory_ref r JOIN device d ON d.id = r.device_id
+WHERE r.external_id = @external_id AND r.device_id <> @device_id AND d.state IN ('active','quarantined');

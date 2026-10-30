@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -16,7 +18,10 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 )
 
-var _ ports.Inventory = (*Client)(nil)
+var (
+	_ ports.Inventory      = (*Client)(nil)
+	_ ports.InventoryAdmin = (*Client)(nil)
+)
 
 // hostsPerPage is the page size of the host list.
 const hostsPerPage = 500
@@ -139,6 +144,23 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 		}
 	}
 	return inv, nil
+}
+
+// DeleteHost implements ports.InventoryAdmin: the host leaves Fleet with its software, vulnerabilities and policy
+// results (retention of retired devices, ADR 0032). A host Fleet no longer knows counts as deleted.
+func (c *Client) DeleteHost(ctx context.Context, ref ports.HostRef) error {
+	id, err := strconv.Atoi(string(ref))
+	if err != nil {
+		return fmt.Errorf("fleet: invalid host reference %q", ref)
+	}
+	err = c.do(ctx, http.MethodDelete, "/api/v1/fleet/hosts/"+strconv.Itoa(id), nil, nil)
+	if st := (*errStatus)(nil); errors.As(err, &st) && st.code == http.StatusNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete fleet host %d: %w", id, err)
+	}
+	return nil
 }
 
 // maxHardwareRunes bounds every hardware string Paddock stores (plan M8d decision 6).

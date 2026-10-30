@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -66,5 +67,62 @@ func TestAuditIndexPurge(t *testing.T) {
 	}
 	if nothing == (keep > 0) {
 		t.Errorf("want either \"nothing to purge\" or KEEP lines, got:\n%s", out)
+	}
+}
+
+// TestRetentionRetiredInventory is gate R2 of plan M10 (PDK-138): a device with software in Paddock and a host in
+// Fleet is retired in an organization that keeps a retired device's inventory for one day (a second on the development
+// stack); within the next rounds one device.inventory_purged success event (actor system) names the device and the
+// deleted rows, its software list is empty and Fleet's admin API no longer knows the host. The organization is fresh,
+// so its period does not touch other gates' retired devices.
+func TestRetentionRetiredInventory(t *testing.T) {
+	slug, org := gateOrganization(t)
+	user, password := tempUser(t, "retention", env.RoleGroup(slug, "admins"))
+	admin, err := loginAs(t, user, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := uniqueSuffix()
+	hostname := "r2-" + suffix
+	d := activeDevice(t, admin, "", hostname)
+	host := enrollFleetHost(t, d.HardwareUUID(), hostname, [][2]string{{"r2-package-" + suffix, "1.0"}})
+	if err := host.WaitAnswered(testContext(t, 2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	software := "/api/v1/devices/" + d.DeviceID + "/software"
+	for deadline := time.Now().Add(10 * time.Minute); listInventory(t, admin, software).Total == 0; time.Sleep(10 * time.Second) {
+		if time.Now().After(deadline) {
+			t.Fatal("no software stored within 10 minutes")
+		}
+		if _, err := host.Answer(testContext(t, time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !fleetHostExists(t, d.HardwareUUID()) {
+		t.Fatal("Fleet does not know the host before the purge")
+	}
+
+	res := call(t, admin, http.MethodPut, "/api/v1/settings/privacy", map[string]any{
+		"retired_inventory_days": 1, "audit_search_recorded": false, "inventory_view_recorded": false,
+	})
+	expectStatus(t, res, http.StatusOK, "")
+	res = call(t, admin, http.MethodPost, "/api/v1/devices/"+d.DeviceID+"/retire", nil)
+	expectStatus(t, res, http.StatusOK, "")
+
+	idx := auditIndex(t)
+	ev := expectOneIndexEvent(t, idx, org, "code = 'device.inventory_purged' AND target->>'id' = $1", d.DeviceID,
+		"device.inventory_purged", "success", 90*time.Second)
+	if n, _ := ev.Params["software"].(float64); n < 1 || ev.Params["fleet_host_deleted"] != true ||
+		ev.Params["hostname"] != hostname || ev.ActorDisplay != "worker" {
+		t.Fatalf("device.inventory_purged params %v, actor %q", ev.Params, ev.ActorDisplay)
+	}
+	if retired, _ := ev.Params["retired_at"].(string); retired == "" {
+		t.Fatalf("device.inventory_purged without retired_at: %v", ev.Params)
+	}
+	if left := listInventory(t, admin, software).Total; left != 0 {
+		t.Fatalf("%d packages listed after the purge", left)
+	}
+	if fleetHostExists(t, d.HardwareUUID()) {
+		t.Fatal("Fleet still knows the host after the purge")
 	}
 }

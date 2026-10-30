@@ -50,7 +50,8 @@ type retentionPass struct {
 }
 
 // Retention is the one retention round (plan M10 amendment A3): per organization it runs every store's pass in a
-// fixed order, each in its own transaction with its own retention.purged event.
+// fixed order, each with its own evidence: a retention.purged event per store, a device.inventory_purged event per
+// retired device whose inventory it deleted.
 type Retention struct {
 	passes   []retentionPass
 	pool     *db.OrgPool
@@ -66,6 +67,7 @@ func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool,
 		passes: []retentionPass{
 			{store: app.StoreDeviceLoginEvent, purge: history.Purge},
 			{store: app.StoreDeviceUserSeen, purge: a.PurgeUserSeen},
+			{store: app.StoreRetiredInventory, purge: a.PurgeRetiredInventory},
 		},
 		pool: pool, platform: platform, interval: interval, now: time.Now,
 	}

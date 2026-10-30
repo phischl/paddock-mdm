@@ -82,6 +82,7 @@ const (
 	CodeUserGroupMemberRemoved      Code = "user_group.member_removed"
 	CodeSettingsLoginChanged        Code = "settings.login_changed"
 	CodeRetentionPurged             Code = "retention.purged"
+	CodeDeviceInventoryPurged       Code = "device.inventory_purged"
 	CodeDeviceLoginAssignmentChange Code = "device.login_assignment_changed"
 	CodeDeviceLoginsSuspended       Code = "device.logins_suspended"
 	CodeDeviceLoginsResumed         Code = "device.logins_resumed"
@@ -716,6 +717,13 @@ var registry = map[Code]Definition{
 		Code: CodeRetentionPurged, Emitted: true,
 		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization) or audit_exports (one event per expired export, in its organization).",
 		Params:      []string{"store", "deleted", "cutoff", "partition", "export_id"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
+	},
+	CodeDeviceInventoryPurged: {
+		Code: CodeDeviceInventoryPurged, Emitted: true,
+		Description: "The retention job deleted the inventory of a retired device in Paddock and its host in Fleet, retired_inventory_days after retirement (actor: system). software, findings and policy_results are the deleted rows; fleet_host_deleted is false when the device had no Fleet host or an active device of the same hardware still uses it. failure with upstream_unavailable leaves the Paddock rows in place (the counts are the rows kept); the device is retried next round.",
+		Params:      []string{"hostname", "retired_at", "software", "findings", "policy_results", "fleet_host_deleted"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
 	},

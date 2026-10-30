@@ -65,6 +65,7 @@ type fakeSource struct {
 	read      []ports.HostRef
 	policies  int
 	vulnState string
+	deleted   []ports.HostRef
 }
 
 func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
@@ -80,6 +81,12 @@ func (s *fakeSource) ListHostsChangedSince(_ context.Context, since time.Time, c
 func (s *fakeSource) HostInventory(_ context.Context, ref ports.HostRef) (ports.HostInventory, error) {
 	s.read = append(s.read, ref)
 	return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Software: []ports.SoftwarePackage{{Name: "bash", Version: "5.2", Source: "deb_packages"}}}, nil
+}
+
+// DeleteHost records the deleted hosts (ports.InventoryAdmin of the retention round).
+func (s *fakeSource) DeleteHost(_ context.Context, ref ports.HostRef) error {
+	s.deleted = append(s.deleted, ref)
+	return nil
 }
 
 func (s *fakeSource) ApplyPolicies(_ context.Context, p []ports.PolicyDefinition) error {

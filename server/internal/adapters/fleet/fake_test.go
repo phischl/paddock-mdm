@@ -30,6 +30,8 @@ type fakeFleet struct {
 	vulnerableSoftware []map[string]any
 	// failNext makes the next n requests answer 503.
 	failNext int
+	// deletedHosts are the IDs of the recorded hosts (testdata/get_hosts.json) that DELETE removed.
+	deletedHosts map[string]bool
 }
 
 const fakeToken = "fake-token"
@@ -40,7 +42,7 @@ func newFake(t *testing.T) (*fakeFleet, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeFleet{t: t, queries: map[int]map[string]any{}, packs: map[int]string{}, nextID: 1}
+	f := &fakeFleet{t: t, queries: map[int]map[string]any{}, packs: map[int]string{}, nextID: 1, deletedHosts: map[string]bool{}}
 	if err := json.Unmarshal(data, &f.config); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +101,14 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.fixture(w, "testdata/get_hosts.json")
 	case r.Method == http.MethodGet && path == "/api/latest/fleet/hosts/1":
 		f.fixture(w, "testdata/get_host.json")
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/fleet/hosts/"):
+		id := strings.TrimPrefix(path, "/api/v1/fleet/hosts/")
+		if (id != "1" && id != "2") || f.deletedHosts[id] {
+			http.Error(w, `{"message":"Resource Not Found"}`, http.StatusNotFound)
+			return
+		}
+		f.deletedHosts[id] = true
+		f.write(w, map[string]any{})
 	case r.Method == http.MethodGet && path == "/api/latest/fleet/software/versions":
 		if r.URL.Query().Get("vulnerable") != "true" {
 			http.Error(w, "want vulnerable=true", http.StatusBadRequest)

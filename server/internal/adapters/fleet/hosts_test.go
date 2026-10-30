@@ -61,6 +61,31 @@ func TestHostInventory(t *testing.T) {
 	}
 }
 
+// TestDeleteHost (plan M10 decision 17): the host is deleted through Fleet's API; a host Fleet no longer knows counts
+// as deleted; an unavailable Fleet is an error after the retries; an invalid reference never reaches Fleet.
+func TestDeleteHost(t *testing.T) {
+	ctx := context.Background()
+	f, srv := newFake(t)
+	c := client(srv.URL)
+	if err := c.DeleteHost(ctx, "1"); err != nil || !f.deletedHosts["1"] {
+		t.Fatalf("delete: %v, deleted %v", err, f.deletedHosts)
+	}
+	if err := c.DeleteHost(ctx, "1"); err != nil {
+		t.Fatalf("delete of a deleted host: %v, want nil", err)
+	}
+	f.failNext = 4
+	if err := c.DeleteHost(ctx, "2"); err == nil || f.deletedHosts["2"] {
+		t.Fatalf("delete while Fleet answers 503: %v, deleted %v", err, f.deletedHosts)
+	}
+	requests := len(f.requests)
+	if err := c.DeleteHost(ctx, "../config"); err == nil || len(f.requests) != requests {
+		t.Fatalf("invalid host reference: %v, %d requests sent", err, len(f.requests)-requests)
+	}
+	if want := "DELETE /api/v1/fleet/hosts/1"; f.requests[0] != want {
+		t.Fatalf("first request %q, want %q", f.requests[0], want)
+	}
+}
+
 // TestApplyPolicies sends Paddock's policies as Fleet's policy spec for Linux hosts.
 func TestApplyPolicies(t *testing.T) {
 	f, srv := newFake(t)
