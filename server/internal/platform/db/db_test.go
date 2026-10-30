@@ -507,3 +507,50 @@ func TestLoginSettingsPerOrganization(t *testing.T) {
 		}
 	}
 }
+
+// TestWithLeaderLocks (plan M10 amendment 2026-10-30): all keys are taken on one connection, so a pool of one
+// connection suffices; when another session holds one key, fn does not run and the keys already taken are released.
+func TestWithLeaderLocks(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	one, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(one.Close)
+	other, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(other.Close)
+	first, second := int64(0x7465737431), int64(0x7465737432)
+
+	ran := false
+	ok, err := one.WithLeaderLocks(ctx, []int64{first, second}, func(context.Context) error {
+		ran = true
+		return nil
+	})
+	if err != nil || !ok || !ran {
+		t.Fatalf("one connection: ok %v, ran %v, err %v", ok, ran, err)
+	}
+
+	ok, err = other.WithLeaderLock(ctx, second, func(context.Context) error {
+		ran = false
+		got, err := one.WithLeaderLocks(ctx, []int64{first, second}, func(context.Context) error {
+			ran = true
+			return nil
+		})
+		if err != nil || got || ran {
+			t.Errorf("second key held elsewhere: ok %v, ran %v, err %v", got, ran, err)
+		}
+		return nil
+	})
+	if err != nil || !ok {
+		t.Fatalf("hold second key: ok %v, err %v", ok, err)
+	}
+	ok, err = other.WithLeaderLock(ctx, first, func(context.Context) error { return nil })
+	if err != nil || !ok {
+		t.Fatalf("first key not released after the failed attempt: ok %v, err %v", ok, err)
+	}
+}

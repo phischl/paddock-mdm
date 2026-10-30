@@ -153,6 +153,15 @@ groups:
         annotations:
           summary: "Ubuntu's vulnerability data is stale"
           description: "The OSV data has not been updated for 3 days (docs/operations/vulnerability-data.md)."
+      # ADR 0032: deletion that stops running keeps personal data beyond its retention period (GDPR Art. 5(1)(e)).
+      - alert: PaddockRetentionPurgeStale
+        expr: time() - max by (store) (paddock_retention_last_success_timestamp_seconds) > 48 * 3600
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "The retention purge of {{ $labels.store }} has not succeeded for 48 hours"
+          description: "The worker's retention round has not purged {{ $labels.store }} in every organization for 48 hours; check its log for the failing organization (docs/operations/monitoring.md)."
       - alert: PaddockIPAllowlistBypassed
         expr: max(paddock_ip_allowlist_bypass) == 1
         for: 15m
@@ -207,6 +216,14 @@ groups:
         annotations:
           summary: "The age of some backups is unknown"
           description: "The worker exports the age of fewer backup kinds than configured; check its log and its backup bucket credential."
+      - alert: PaddockRetentionPurgeMissing
+        expr: max(paddock_retention_stores) > (count(paddock_retention_last_success_timestamp_seconds) or vector(0))
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The retention purge of some stores never succeeded"
+          description: "The worker exports the last retention success of fewer stores than it purges; check its log."
       - alert: PaddockWALArchiveLagMissing
         expr: max(paddock_backup_wal_stanzas) > (count(paddock_backup_wal_last_archived_timestamp_seconds) or vector(0))
         for: 30m

@@ -19,6 +19,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/phischl/paddock-mdm/server/internal/config"
 )
 
 // Hosts of the two-host topology (architecture §4.1) and the single lab host (ADR 0029).
@@ -176,6 +179,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	}
 	if _, ok := c.Services["paddock-api"]; ok {
 		results = append(results, checkAllowlistBypass(c))
+	}
+	if usesAny(c, []string{"PADDOCK_RETENTION_INTERVAL"}) {
+		results = append(results, checkRetentionInterval(c))
 	}
 	if usesAny(c, releaseKeyVars) {
 		results = append(results, checkReleaseKeys(c, o))
@@ -1041,6 +1047,23 @@ func checkAllowlistBypass(c Config) Result {
 		f = append(f, "paddock-api: PADDOCK_IP_ALLOWLIST_BYPASS is true (break-glass; remove it once access is restored)")
 	}
 	return result("ip allow list bypass is off", f)
+}
+
+// checkRetentionInterval fails on a retention round shorter than the production minimum or longer than the maximum,
+// which the worker would refuse to start with (plan M10 amendment 2026-10-30).
+func checkRetentionInterval(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		v := env(c.Services[name], "PADDOCK_RETENTION_INTERVAL")
+		if v == "" {
+			continue
+		}
+		if d, err := time.ParseDuration(v); err != nil || d < config.MinRetentionInterval || d > config.MaxRetentionInterval {
+			f = append(f, fmt.Sprintf("%s: PADDOCK_RETENTION_INTERVAL=%s is not a duration between %s and %s", name, v,
+				config.MinRetentionInterval, config.MaxRetentionInterval))
+		}
+	}
+	return result("retention round interval", f)
 }
 
 func checkReleaseKeys(c Config, o Options) Result {

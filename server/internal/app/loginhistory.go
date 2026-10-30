@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
-	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
@@ -21,11 +20,13 @@ type LoginHistory struct {
 	org    *db.OrgPool
 	// day is the length of a day of login_history_days: 24 hours, a second in development (PADDOCK_RETENTION_UNIT).
 	day time.Duration
+	// budget bounds one purge pass (retentionPassBudget).
+	budget time.Duration
 }
 
 // NewLoginHistory creates the use cases.
 func NewLoginHistory(runner *ActionRunner, org *db.OrgPool, day time.Duration) *LoginHistory {
-	return &LoginHistory{runner: runner, org: org, day: day}
+	return &LoginHistory{runner: runner, org: org, day: day, budget: retentionPassBudget}
 }
 
 // LoginEventQuery selects a page of a device's login history; Username filters one user (exact, lower case).
@@ -64,9 +65,8 @@ func (h *LoginHistory) List(ctx context.Context, deviceID uuid.UUID, query Login
 	return out, err
 }
 
-// Purge deletes the logins of the context's organization older than login_history_days at now, in batches of 1 000
-// rows inside one transaction with its retention.purged event (system principal); without expired rows it records
-// nothing. It returns the number of deleted rows.
+// Purge deletes the logins of the context's organization older than login_history_days at now (system principal);
+// without expired rows it records nothing. It returns the number of deleted rows (purgeBatches).
 func (h *LoginHistory) Purge(ctx context.Context, now time.Time) (int64, error) {
 	var cutoff time.Time
 	var expired bool
@@ -82,23 +82,7 @@ func (h *LoginHistory) Purge(ctx context.Context, now time.Time) (int64, error) 
 	if err != nil || !expired {
 		return 0, err
 	}
-	var deleted int64
-	spec := ActionSpec{Code: audit.CodeRetentionPurged, Params: map[string]any{
-		"store": StoreDeviceLoginEvent, "cutoff": audit.Timestamp(cutoff).Format(time.RFC3339Nano),
-	}}
-	err = h.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		for {
-			n, err := q.PurgeDeviceLoginEvents(ctx, cutoff)
-			if err != nil {
-				return err
-			}
-			deleted += n
-			if n == 0 {
-				break
-			}
-		}
-		rec.SetParam("deleted", deleted)
-		return nil
+	return purgeBatches(ctx, h.runner, h.org, StoreDeviceLoginEvent, cutoff, h.budget, retentionLockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+		return q.PurgeDeviceLoginEvents(ctx, cutoff)
 	})
-	return deleted, err
 }
