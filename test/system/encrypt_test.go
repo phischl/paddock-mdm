@@ -624,8 +624,12 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 	_, conversionKey := w.newestRecoveryKey(t)
 
 	w.Must("sudo dpkg-divert --add --rename --divert /usr/bin/dracut.real /usr/bin/dracut >/dev/null && printf '#!/bin/sh\\nexit 1\\n' | sudo tee /usr/bin/dracut >/dev/null && sudo chmod 0755 /usr/bin/dracut")
+	// The stale initrd converts only when the abort could not neutralize it either (plan M8e amendment 2026-10-30): a
+	// directory at each temporary initrd path makes the neutralizing copy fail.
+	w.Must(blockNeutralize)
 	w.Must("sudo paddockd encrypt-abort")
 	w.WaitEvent(t, "device.disk_conversion_aborted", 5*time.Minute, func(p map[string]any) bool { return p["conversion_id"] == id && p["by"] == "operator" })
+	w.WaitEvent(t, "device.disk_conversion_neutralize_failed", 5*time.Minute, func(p map[string]any) bool { return p["conversion_id"] == id })
 	w.waitConversion(t, "cancelled", 5*time.Minute, func(c apiConversion) bool { return c.ID == id && c.Phase == "cancelled" })
 	h := w.waitHealth(t, "cleanup_pending", 5*time.Minute, func(h conversionHealth) bool {
 		c := h.Disk.Conversion
@@ -642,6 +646,9 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 	}
 	if out := w.Must("sudo lsinitrd /boot/initrd.img-$(uname -r) | grep -c usr/lib/systemd/system/paddock-encrypt-init.service || true"); out == "0" {
 		t.Fatal("the running kernel's initrd lost the module although the rebuild failed")
+	}
+	if w.neutralized(t) {
+		t.Fatal("the running kernel's initrd is neutralized although the copy could not be written")
 	}
 
 	// The server accepts the uninstall (the row is cancelled); the device refuses it, which ends the command but not the
@@ -671,7 +678,12 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 		t.Fatalf("an uninstall is still open after the cancel: %s", *u)
 	}
 
-	// The stale initrd still converts the disk at the next boot; the agent must adopt it (I2).
+	// The stale initrd still converts the disk at the next boot; the agent must adopt it (I2). The block goes only after
+	// the agent stopped, right before the power-off: every cleanup retry of the worker neutralizes the initrds again
+	// (amendment 2026-10-30), and the reinstall after the adoption needs the temporary paths. The supervisor stays
+	// enabled, so the agent starts again at the boot.
+	w.Must("sudo systemctl stop paddock-supervisor && ! pgrep -x paddockd")
+	w.Must(unblockNeutralize)
 	w.powerDown(t)
 	w.LimitDisk(t, ieDiskLimit)
 	w.powerOn(t)
@@ -681,10 +693,11 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 	w.requireRootReference(t, conv.Mapping)
 	w.logBootEvidence(t, "conversion through the stale initrd")
 	w.requireNoFailedEnrollment(t)
-	started := w.WaitEvent(t, "device.disk_conversion_started", 10*time.Minute, func(p map[string]any) bool {
-		return p["conversion_id"] == id && p["init_result"] == "ok"
+	// The adoption of the cancelled conversion has its own audit code (plan M8e amendment 2026-10-30).
+	started := w.WaitEvent(t, "device.disk_conversion_completed_after_cancel", 10*time.Minute, func(p map[string]any) bool {
+		return p["conversion_id"] == id && p["init_result"] == "ok" && p["after_cancel"] == true
 	})
-	t.Logf("%s: disk.conversion_started %v (init step of the conversion boot)", w.Name, started)
+	t.Logf("%s: disk.conversion_started after the cancel %v (init step of the conversion boot)", w.Name, started)
 	if s, _ := started["init_s"].(float64); s <= 0 || s > (10*time.Minute).Seconds() {
 		t.Fatalf("stop condition S10: init_s %v", started["init_s"])
 	}
@@ -737,4 +750,74 @@ func TestInPlaceEncryptionCleanupAdopt(t *testing.T) {
 	}
 	w.requireFinalDisk(t, partition, conv.LUKSUUID, conversionKey)
 	w.reboot(t)
+}
+
+// blockNeutralize puts a directory at every temporary initrd path, which neither the neutralizing copy nor the cleanup
+// may remove (rule B); unblockNeutralize removes them again.
+const (
+	blockNeutralize   = `for f in /boot/initrd.img-*; do sudo mkdir -p "/boot/.initrd.img-${f#/boot/initrd.img-}.paddock"; done`
+	unblockNeutralize = `for f in /boot/initrd.img-*; do sudo rmdir "/boot/.initrd.img-${f#/boot/initrd.img-}.paddock"; done`
+)
+
+// neutralized reports whether the running kernel's initrd ends with the override segment of an abort (PDK-482): its
+// invalid plan sits in the last bytes.
+func (w *ieWorld) neutralized(t *testing.T) bool {
+	t.Helper()
+	return w.Must("sudo tail -c 512 /boot/initrd.img-$(uname -r) | grep -ac PADDOCK_LAYOUT=cancelled || true") != "0"
+}
+
+// TestInPlaceEncryptionCancelBeforeReboot is the gate of PDK-482 (plan M8e item 18, amendment 2026-10-30): an
+// operator abort whose cleanup cannot rebuild the initrds (dracut fails) neutralizes them at once; a restart before the
+// cleanup finished boots unencrypted, the init step reporting plan_invalid, and the conversion stays cancelled. Once
+// dracut works again the cleanup of the neutralized initrds completes, and the device is eligible again after a
+// restart. It runs only with PADDOCK_SYSTEM_VMS=paddock-ie-2404.
+func TestInPlaceEncryptionCancelBeforeReboot(t *testing.T) {
+	w := newIEWorldTPMOnly(t, ieVM2404, "24.04")
+	w.waitHealth(t, "eligible with layout plain", 15*time.Minute, func(h conversionHealth) bool { return h.eligible("plain") })
+	id := w.requestEncryption(t)
+	w.waitPrepared(t, id, "plain")
+	w.requireInitrds(t, true, "")
+
+	w.Must("sudo dpkg-divert --add --rename --divert /usr/bin/dracut.real /usr/bin/dracut >/dev/null && printf '#!/bin/sh\\nexit 1\\n' | sudo tee /usr/bin/dracut >/dev/null && sudo chmod 0755 /usr/bin/dracut")
+	w.Must("sudo paddockd encrypt-abort")
+	w.WaitEvent(t, "device.disk_conversion_aborted", 5*time.Minute, func(p map[string]any) bool { return p["conversion_id"] == id && p["by"] == "operator" })
+	w.waitConversion(t, "cancelled", 5*time.Minute, func(c apiConversion) bool { return c.ID == id && c.Phase == "cancelled" })
+	w.waitHealth(t, "cleanup_pending", 5*time.Minute, func(h conversionHealth) bool {
+		return slices.Contains(h.reasons(), "cleanup_pending")
+	})
+	// The initrds still carry the module and the key (the rebuild failed), but end with the override.
+	w.requireInitrds(t, true, "")
+	if !w.neutralized(t) {
+		t.Fatal("the running kernel's initrd is not neutralized after the abort")
+	}
+	if ev := w.s.Events(t, "device.disk_conversion_neutralize_failed", w.ID); len(ev) != 0 {
+		t.Fatalf("the neutralization failed: %+v", ev)
+	}
+
+	// The restart before the cleanup finished: the init step finds the invalid plan and leaves the disk alone.
+	mark := w.rebootRequest(t)
+	w.waitSerial(t, "paddock-encrypt: result failed init plan_invalid", mark, 15*time.Minute)
+	Until(t, w.Name+" answers SSH after the neutralized init step", 15*time.Minute, 5*time.Second, nil, w.sshUp)
+	w.requireUnencrypted(t)
+	w.logBootEvidence(t, "restart with the neutralized initrd")
+	w.waitHealth(t, "cleanup still pending", 5*time.Minute, func(h conversionHealth) bool {
+		return slices.Contains(h.reasons(), "cleanup_pending")
+	})
+	if c := w.convState(t); c == nil || c.Phase != "cancelled" {
+		t.Fatalf("the conversion after the restart: %+v", c)
+	}
+	if ev := w.s.Events(t, "device.disk_conversion_completed_after_cancel", w.ID); len(ev) != 0 {
+		t.Fatalf("the cancelled conversion was adopted: %+v", ev)
+	}
+
+	// The cleanup of the neutralized initrds completes once dracut works again.
+	w.Must("sudo rm /usr/bin/dracut && sudo dpkg-divert --remove --rename /usr/bin/dracut >/dev/null && test -x /usr/bin/dracut")
+	w.waitAbortCleaned(t)
+	if w.neutralized(t) {
+		t.Fatal("the rebuilt initrd still ends with the override")
+	}
+	w.waitConversion(t, "cancelled", time.Minute, func(c apiConversion) bool { return c.ID == id && c.Phase == "cancelled" })
+	w.reboot(t)
+	w.requireUnencrypted(t)
+	w.waitHealth(t, "eligible after the cleanup", 10*time.Minute, func(h conversionHealth) bool { return h.eligible("plain") })
 }

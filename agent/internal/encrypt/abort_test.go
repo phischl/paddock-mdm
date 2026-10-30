@@ -35,7 +35,7 @@ var leftovers = []string{"/var/lib/paddock/install-passphrase", "/var/lib/paddoc
 func TestAbortPrepared(t *testing.T) {
 	f := preparedFixture(t)
 	f.dev.Write("/var/lib/paddock/encrypt/test-hooks", "")
-	aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false)
+	aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false, nil)
 	if !aborted || reason != "" {
 		t.Fatalf("abort %v %s", aborted, reason)
 	}
@@ -64,7 +64,7 @@ func TestAbortPrepared(t *testing.T) {
 func TestAbortCleanupOrder(t *testing.T) {
 	f := preparedFixture(t)
 	f.dev.set(func(d *device) { d.dracutExit = 1 })
-	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, conversionID, encrypt.ByAdmin, false); !aborted {
+	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, conversionID, encrypt.ByAdmin, false, nil); !aborted {
 		t.Fatal("not aborted")
 	}
 	pending := func(step string) {
@@ -121,7 +121,7 @@ func TestAbortRefused(t *testing.T) {
 		f := preparedFixture(t)
 		_ = f.store.Update(func(c *state.DiskConversion, _ *state.LUKS) { c.Phase = tc.phase })
 		f.dev.set(func(d *device) { d.luks = tc.luks })
-		aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, tc.id, encrypt.ByAdmin, false)
+		aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, tc.id, encrypt.ByAdmin, false, nil)
 		if aborted || reason != tc.want {
 			t.Fatalf("%s: %v %s", name, aborted, reason)
 		}
@@ -132,7 +132,7 @@ func TestAbortRefused(t *testing.T) {
 	}
 	f := newFixture(t)
 	f.store.c = nil
-	if aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false); aborted ||
+	if aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false, nil); aborted ||
 		reason != "unknown_conversion" {
 		t.Fatalf("without a conversion: %v %s", aborted, reason)
 	}
@@ -151,7 +151,7 @@ func TestAbortRefusedWhenLUKSUnknown(t *testing.T) {
 	} {
 		f := preparedFixture(t)
 		setup(f)
-		aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false)
+		aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false, nil)
 		if aborted || reason != "not_abortable" {
 			t.Fatalf("%s: %v %s", name, aborted, reason)
 		}
@@ -173,7 +173,7 @@ func TestCleanupWaitsForDracutStatus(t *testing.T) {
 	} {
 		f := preparedFixture(t)
 		f.dev.set(setup)
-		if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false); !aborted {
+		if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false, nil); !aborted {
 			t.Fatalf("%s: not aborted", name)
 		}
 		if c := f.conversion(); !c.CleanupPending {
@@ -200,7 +200,7 @@ func TestCleanupWaitsForDracutStatus(t *testing.T) {
 				d.packages["dracut"] = status
 			}
 		})
-		if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false); !aborted {
+		if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false, nil); !aborted {
 			t.Fatalf("dracut %q: not aborted", status)
 		}
 		f.dev.Write("/boot/initrd.img-"+runningKernel, "initramfs-tools image\n")
@@ -230,7 +230,7 @@ func TestCleanupWaitsForDracutStatus(t *testing.T) {
 func TestCleanupListsWithAnyTool(t *testing.T) {
 	f := preparedFixture(t)
 	f.dev.set(func(d *device) { d.missing = map[string]bool{"lsinitrd": true}; d.stale = true })
-	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false); !aborted {
+	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false, nil); !aborted {
 		t.Fatal("not aborted")
 	}
 	if !f.conversion().CleanupPending || !f.dev.Exists("/var/lib/paddock/install-passphrase") ||
@@ -343,7 +343,7 @@ func TestAbortClearsCleanupError(t *testing.T) {
 		c.CleanupError, c.PackagesBusySince = "an earlier reason", &since
 	})
 	f.store.goneAfter = func(c *state.DiskConversion) bool { return c.Phase == state.ConversionCancelled }
-	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false); !aborted {
+	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByOperator, false, nil); !aborted {
 		t.Fatal("not aborted")
 	}
 	if f.store.c.CleanupError != "" || !f.store.c.CleanupPending || f.store.c.PackagesBusySince != nil {

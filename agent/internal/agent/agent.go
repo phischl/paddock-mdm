@@ -147,6 +147,11 @@ type Agent struct {
 	// bootConverted is a boot result ok seen since the start: this boot opened the converted disk through the module,
 	// so no "not LUKS" answer leads to a cleanup until the next start (amendment 2026-10-21, item 13).
 	bootConverted bool
+	// neutralizeReported and restoreReported are the reasons of the last disk.conversion_neutralize_failed and
+	// disk.conversion_unlock_restore_failed emitted since the start; "" after a disarm or reinstall that succeeded
+	// (reportOnce, PDK-482). They are accessed on the run loop.
+	neutralizeReported string
+	restoreReported    string
 	// helperLaunched is a helper this start launched or saw running whose end the agent has not recorded yet: an end
 	// without a result counts as a failed run.
 	helperLaunched     bool

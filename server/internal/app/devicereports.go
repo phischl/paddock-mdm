@@ -355,6 +355,9 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventDiskConversionCompleted: audit.CodeDeviceDiskConversionCompleted,
 	protocol.EventDiskConversionFailed:    audit.CodeDeviceDiskConversionFailed,
 	protocol.EventDiskConversionAborted:   audit.CodeDeviceDiskConversionAborted,
+
+	protocol.EventDiskConversionNeutralizeFailed:    audit.CodeDeviceDiskConversionNeutralizeFailed,
+	protocol.EventDiskConversionUnlockRestoreFailed: audit.CodeDeviceDiskConversionUnlockRestoreFailed,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -409,6 +412,11 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 	}
 	if ev.Type == protocol.EventAgentSupervisorUpdated && params["outcome"] != protocol.SupervisorOutcomeUpdated {
 		code = audit.CodeDeviceSupervisorUpdateFailed
+	}
+	// The adoption of a cancelled conversion moves it like any start, but is recorded as such (plan M8e amendment
+	// 2026-10-30).
+	if ev.Type == protocol.EventDiskConversionStarted && params["after_cancel"] == true {
+		code = audit.CodeDeviceDiskConversionCompletedAfterCancel
 	}
 	spec := ActionSpec{
 		Code:   code,
@@ -678,7 +686,7 @@ func eventParams(ev protocol.Event) map[string]any {
 			params[key] = v
 		}
 	}
-	for _, key := range []string{"removed", "reboot_required"} {
+	for _, key := range []string{"removed", "reboot_required", "after_cancel"} {
 		if v, ok := data[key].(bool); ok {
 			params[key] = v
 		}

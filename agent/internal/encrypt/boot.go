@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Statuses of the init step's result (plan M8e decision 16).
@@ -106,6 +109,41 @@ func ModuleMissing(l paths.Layout) bool {
 		}
 	}
 	return false
+}
+
+// RestoreReason is the reason of disk.conversion_unlock_restore_failed, from the first of the joined errors:
+// kernel_not_buildable, no_bootable_kernel, boot_space_low (as for the initrd issue of the health), else the first
+// line of that error.
+func RestoreReason(err error) string {
+	for {
+		j, ok := err.(interface{ Unwrap() []error })
+		if !ok || len(j.Unwrap()) == 0 {
+			break
+		}
+		err = j.Unwrap()[0]
+	}
+	var notBuildable *KernelNotBuildableError
+	switch {
+	case errors.As(err, &notBuildable):
+		return IssueKernelNotBuildable
+	case errors.Is(err, ErrNoBootableKernel):
+		return IssueNoBootableKernel
+	}
+	return NeutralizeReason(err)
+}
+
+// ReportRestoreFailed emits disk.conversion_unlock_restore_failed for err, a failed RestoreModule: until the reinstall
+// succeeds, an initrd the disarm of a cancelled conversion neutralized cannot open the converted disk (plan M8e
+// amendment 2026-10-30, review 2 of PDK-482, X1). A failure to record the event is logged and returned.
+func ReportRestoreFailed(ctx context.Context, store Store, err error) error {
+	if terr := store.Transition(func(c *state.DiskConversion, _ *state.LUKS) *Event {
+		return &Event{protocol.EventDiskConversionUnlockRestoreFailed, map[string]any{"conversion_id": c.ID,
+			"reason": RestoreReason(err)}}
+	}); terr != nil {
+		slog.ErrorContext(ctx, "reporting the failed reinstall of the unlock path failed", "error", terr)
+		return terr
+	}
+	return nil
 }
 
 // RestoreModule reinstalls the unlock path of a converted disk after a cleanup had removed it (plan M8e decision 18,

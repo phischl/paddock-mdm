@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -102,6 +104,8 @@ func (d *convDevice) buildInitrd(path string, module bool) {
 		files = append(files, "etc/crypttab")
 	}
 	var b strings.Builder
+	// The magic of a zstd-compressed main archive, so that the neutralization appends to it (PDK-482, X2).
+	b.WriteString("\x28\xb5\x2f\xfd\n")
 	b.WriteString("Image: initrd\n====\nVersion: dracut-060\n\ndracut modules:\n" + modules + "====\n")
 	for _, f := range files {
 		b.WriteString("-rwxr-xr-x   1 root     root          123 Oct 21 10:00 " + f + "\n")
@@ -454,6 +458,25 @@ func TestEncryptDiskAbortCommand(t *testing.T) {
 	}
 }
 
+// TestAdoptAfterCancel: PDK-482 (plan M8e amendment 2026-10-30) — a cancelled conversion whose disk encrypted anyway
+// (a restart before its initrds were neutralized or rebuilt) is still adopted, its pending cleanup ends and the key
+// stays for the escrowed unlock path; disk.conversion_started carries after_cancel, which the server records as
+// device.disk_conversion_completed_after_cancel.
+func TestAdoptAfterCancel(t *testing.T) {
+	a, _, d := convAgent(t)
+	a.st.Conversion = &state.DiskConversion{ID: testConversionID, Phase: state.ConversionCancelled, Partition: testPartition,
+		LUKSUUID: "0e373e21-dd76-4f34-bdf4-c815419e5a55", CleanupPending: true}
+	d.setLUKS(true)
+	a.startConversion(context.Background())
+	if c := a.st.Conversion; c.Phase != state.ConversionEncrypting || c.CleanupPending {
+		t.Fatalf("conversion %+v", c)
+	}
+	events := spooled(t, a)
+	if len(events) != 1 || events[0].Type != protocol.EventDiskConversionStarted || eventData(t, events[0])["after_cancel"] != true {
+		t.Fatalf("events %+v", events)
+	}
+}
+
 // TestStartConversionAdopts: the I2 check at the start runs before the re-queue: a LUKS partition adopts the
 // conversion as encrypting and drops the preparation; otherwise the preparation is queued again.
 func TestStartConversionAdopts(t *testing.T) {
@@ -467,7 +490,8 @@ func TestStartConversionAdopts(t *testing.T) {
 		t.Fatalf("conversion %+v, queued %d", c, len(a.conversionJobs))
 	}
 	events := spooled(t, a)
-	if len(events) != 1 || events[0].Type != protocol.EventDiskConversionStarted || eventData(t, events[0])["init_result"] != "unknown" {
+	if len(events) != 1 || events[0].Type != protocol.EventDiskConversionStarted || eventData(t, events[0])["init_result"] != "unknown" ||
+		eventData(t, events[0])["after_cancel"] != nil {
 		t.Fatalf("events %+v", events)
 	}
 	if len(a.st.CommandResults) != 1 || string(a.st.CommandResults[0].Result) != `{"aborted":false,"reason":"not_abortable"}` {
@@ -651,9 +675,11 @@ func TestAbortCleanupInterruptedLeftToWorker(t *testing.T) {
 			}
 		})
 		abortPrepared(t, a, via)
+		// The prepared initrd stays, neutralized by the appended override of its plan (PDK-482).
 		initrd, _ := os.ReadFile(d.Path("/boot/initrd.img-" + testKernel))
 		if c := a.st.Conversion; c.Phase != state.ConversionCancelled || !c.CleanupPending ||
-			string(initrd) != string(prepared) || !d.Exists("/var/lib/paddock/install-passphrase") {
+			!strings.HasPrefix(string(initrd), string(prepared)) || !strings.Contains(string(initrd[len(prepared):]),
+			"PADDOCK_LAYOUT=cancelled") || !d.Exists("/var/lib/paddock/install-passphrase") {
 			t.Fatalf("%s: after the failed cleanup: %+v", via, c)
 		}
 		// A kill mid-rebuild leaves the temporary file behind; the agent's next start removes it (item 17).
@@ -679,6 +705,116 @@ func TestAbortCleanupInterruptedLeftToWorker(t *testing.T) {
 			d.Exists("/var/lib/paddock/install-passphrase") {
 			t.Fatalf("%s: the worker did not finish the cleanup: %+v", via, c)
 		}
+	}
+}
+
+// preparedConvAgent is a conversion agent whose conversion is prepared.
+func preparedConvAgent(t *testing.T) (*Agent, *convDevice) {
+	t.Helper()
+	a, _, d := convAgent(t)
+	a.encryptDiskCommand(context.Background(), encryptCmd(command.TypeEncryptDisk, "c-1", `{"conversion_id":"`+testConversionID+`"}`))
+	runWorker(t, a)
+	if a.st.Conversion.Phase != state.ConversionPrepared {
+		t.Fatalf("not prepared: %+v", a.st.Conversion)
+	}
+	return a, d
+}
+
+// neutralizedInitrd reports whether the initrd at path ends with the override segment (PDK-482): the cancelled plan,
+// then the cpio trailer and its padding.
+func neutralizedInitrd(d *convDevice, path string) bool {
+	raw, _ := os.ReadFile(d.Path(path))
+	_, tail, ok := strings.Cut(string(raw), "PADDOCK_LAYOUT=cancelled\n")
+	return ok && strings.HasSuffix(strings.TrimRight(tail, "\x00"), "TRAILER!!!")
+}
+
+// TestCancelledDisarmedByWorker: review 1 of PDK-482, B1 (architect decision 2026-10-30, (b)) — while a package run
+// holds dpkg's locks the abort cannot clean up; an initrd that run's dracut rebuilds with the module afterwards, and a
+// new kernel's initrd, are neutralized again at the worker's next cleanup retry, before the cleanup; once the locks
+// are free the cleanup completes.
+func TestCancelledDisarmedByWorker(t *testing.T) {
+	a, d := preparedConvAgent(t)
+	initrd := "/boot/initrd.img-" + testKernel
+	d.PackagesBusy = true
+	abortPrepared(t, a, "command")
+	if c := a.st.Conversion; c.Phase != state.ConversionCancelled || !c.CleanupPending || !neutralizedInitrd(d, initrd) ||
+		d.Exists(encrypt.ModuleDir) || d.Exists(encrypt.ModuleConf) || !d.Exists("/var/lib/paddock/encrypt/plan.env") {
+		t.Fatalf("after the abort: %+v", c)
+	}
+	const newKernel = "6.8.0-90-generic"
+	d.Write("/boot/vmlinuz-"+newKernel, "")
+	d.Write("/lib/modules/"+newKernel+"/modules.dep", "")
+	d.buildInitrd(d.Path(initrd), true)
+	d.buildInitrd(d.Path("/boot/initrd.img-"+newKernel), true)
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	if !neutralizedInitrd(d, initrd) || !neutralizedInitrd(d, "/boot/initrd.img-"+newKernel) || !a.st.Conversion.CleanupPending {
+		t.Fatalf("the rebuilt initrds are not neutralized: %+v", a.st.Conversion)
+	}
+	for _, e := range spooled(t, a) {
+		if e.Type == protocol.EventDiskConversionNeutralizeFailed {
+			t.Fatalf("neutralize failed: %s", e.Data)
+		}
+	}
+	d.PackagesBusy = false
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	for _, v := range []string{testKernel, newKernel} {
+		raw, _ := os.ReadFile(d.Path("/boot/initrd.img-" + v))
+		if strings.Contains(string(raw), "paddock-encrypt") || strings.Contains(string(raw), "PADDOCK_LAYOUT=cancelled") {
+			t.Fatalf("the initrd of %s still carries the module or the override", v)
+		}
+	}
+	if a.st.Conversion.CleanupPending || d.Exists("/var/lib/paddock/install-passphrase") {
+		t.Fatalf("the cleanup did not complete: %+v", a.st.Conversion)
+	}
+}
+
+// TestCancelledDisarmedAtStart: B1 (c) — an agent killed between recording the cancel and neutralizing the initrds
+// disarms them at its next start, before the worker runs: the module and its configuration are gone, the initrd is
+// neutralized, the key and plan.env stay for the cleanup.
+func TestCancelledDisarmedAtStart(t *testing.T) {
+	a, d := preparedConvAgent(t)
+	initrd := "/boot/initrd.img-" + testKernel
+	a.st.Conversion.Phase, a.st.Conversion.CleanupPending = state.ConversionCancelled, true
+	a.saveState()
+	d.PackagesBusy = true
+	a.startConversion(context.Background())
+	if !neutralizedInitrd(d, initrd) || d.Exists(encrypt.ModuleDir) || d.Exists(encrypt.ModuleConf) ||
+		!d.Exists("/var/lib/paddock/encrypt/plan.env") || !d.Exists("/var/lib/paddock/install-passphrase") {
+		t.Fatal("not disarmed at the start")
+	}
+	// Not on a partition that is LUKS or cannot be checked (invariant I1): a fresh prepared initrd stays as it is.
+	b, e := preparedConvAgent(t)
+	b.st.Conversion.Phase, b.st.Conversion.CleanupPending = state.ConversionCancelled, true
+	_ = os.Remove(e.Path(testPartition))
+	b.startConversion(context.Background())
+	if neutralizedInitrd(e, initrd) || !e.Exists(encrypt.ModuleConf) {
+		t.Fatal("disarmed on a partition that cannot be checked")
+	}
+}
+
+// TestAdoptAfterDisarm: B1 (a) — a cancelled conversion whose disk converted anyway after the abort removed the module
+// is adopted, and the worker reinstalls the module and its configuration from the kept plan.env, so the converted
+// disk's initrd carries the unlock path again.
+func TestAdoptAfterDisarm(t *testing.T) {
+	a, d := preparedConvAgent(t)
+	d.PackagesBusy = true
+	abortPrepared(t, a, "command")
+	if d.Exists(encrypt.ModuleDir) || !a.st.Conversion.CleanupPending {
+		t.Fatalf("not disarmed: %+v", a.st.Conversion)
+	}
+	d.PackagesBusy = false
+	d.setLUKS(true)
+	a.startConversion(context.Background())
+	if c := a.st.Conversion; c.Phase != state.ConversionEncrypting || c.CleanupPending || !c.ModuleRestorePending {
+		t.Fatalf("not adopted: %+v", c)
+	}
+	runWorker(t, a)
+	raw, _ := os.ReadFile(d.Path("/boot/initrd.img-" + testKernel))
+	if c := a.st.Conversion; c.ModuleRestorePending || !d.Exists(encrypt.ModuleDir) || !d.Exists(encrypt.ModuleConf) ||
+		!strings.Contains(string(raw), "etc/paddock/encrypt-key") || strings.Contains(string(raw), "PADDOCK_LAYOUT=cancelled") {
+		t.Fatalf("the unlock path was not reinstalled: %+v", c)
 	}
 }
 
@@ -972,5 +1108,136 @@ func TestRestartNotificationOnSessionPoll(t *testing.T) {
 	}
 	if st, _ := state.Load(a.d.Layout.State()); st.Conversion == nil || len(st.Conversion.Notified) != 1 {
 		t.Fatalf("notified not persisted: %+v", st.Conversion)
+	}
+}
+
+// countEvents counts the spooled events of type typ.
+func countEvents(t *testing.T, a *Agent, typ string) (n int, last map[string]any) {
+	t.Helper()
+	for _, e := range spooled(t, a) {
+		if e.Type == typ {
+			n, last = n+1, eventData(t, e)
+		}
+	}
+	return n, last
+}
+
+// lz4Initrd turns the fake initrd at path into one whose main archive is lz4-compressed, which the disarm refuses to
+// append to (PDK-482, X2).
+func lz4Initrd(d *convDevice, path string) {
+	raw, _ := os.ReadFile(d.Path(path))
+	d.Write(path, "\x02\x21\x4c\x18"+strings.TrimPrefix(string(raw), "\x28\xb5\x2f\xfd"))
+}
+
+// TestNeutralizeFailedReportedOnce: review 2 of PDK-482, X3 and m2 — a disarm that keeps failing for the same reason
+// is reported once: by the abort, and not again at the worker's next two cleanup retries. A disarm that succeeds
+// clears it, so a later failure is reported again.
+func TestNeutralizeFailedReportedOnce(t *testing.T) {
+	a, d := preparedConvAgent(t)
+	initrd := "/boot/initrd.img-" + testKernel
+	lz4Initrd(d, initrd)
+	d.PackagesBusy = true
+	abortPrepared(t, a, "command")
+	pass := func() {
+		a.tickConversion(context.Background())
+		runWorker(t, a)
+	}
+	pass()
+	pass()
+	if n, data := countEvents(t, a, protocol.EventDiskConversionNeutralizeFailed); n != 1 ||
+		!strings.Contains(fmt.Sprint(data["reason"]), "lz4-compressed") {
+		t.Fatalf("%d neutralize_failed events, last %v", n, data)
+	}
+	d.buildInitrd(d.Path(initrd), true)
+	pass()
+	if !neutralizedInitrd(d, initrd) || a.neutralizeReported != "" {
+		t.Fatalf("the rebuilt initrd is not neutralized (reported %q)", a.neutralizeReported)
+	}
+	d.buildInitrd(d.Path(initrd), true)
+	lz4Initrd(d, initrd)
+	pass()
+	if n, _ := countEvents(t, a, protocol.EventDiskConversionNeutralizeFailed); n != 2 {
+		t.Fatalf("%d neutralize_failed events after a new failure", n)
+	}
+}
+
+// TestReportOnceRecordsAfterStored: review 2 of PDK-482, X3 — a reason is recorded only once its event was stored: an
+// event that could not be stored is tried again at the next failure with that reason; a success clears the reason.
+func TestReportOnceRecordsAfterStored(t *testing.T) {
+	a, _, _ := convAgent(t)
+	store := a.directStore()
+	last, emitted, fail := "", 0, true
+	emit := func(context.Context, encrypt.Store, error) error {
+		emitted++
+		if fail {
+			return errors.New("the state cannot be saved")
+		}
+		return nil
+	}
+	reason := func(err error) string { return err.Error() }
+	failure := errors.New("busy")
+	reportOnce(context.Background(), store, &last, failure, reason, emit)
+	if emitted != 1 || last != "" {
+		t.Fatalf("emitted %d, recorded %q after a failed emit", emitted, last)
+	}
+	fail = false
+	reportOnce(context.Background(), store, &last, failure, reason, emit)
+	reportOnce(context.Background(), store, &last, failure, reason, emit)
+	if emitted != 2 || last != "busy" {
+		t.Fatalf("emitted %d, recorded %q", emitted, last)
+	}
+	reportOnce(context.Background(), store, &last, nil, reason, emit)
+	reportOnce(context.Background(), store, &last, failure, reason, emit)
+	if emitted != 3 {
+		t.Fatalf("emitted %d after a success and a new failure", emitted)
+	}
+}
+
+// TestCancelledNotDisarmedAfterConvertedBoot: review 2 of PDK-482, m2 — the start disarm does not run once this boot
+// opened the converted disk through the module (boot result ok, amendment item 13), even when the partition answers
+// "not LUKS".
+func TestCancelledNotDisarmedAfterConvertedBoot(t *testing.T) {
+	a, d := preparedConvAgent(t)
+	a.st.Conversion.Phase, a.st.Conversion.CleanupPending = state.ConversionCancelled, true
+	a.bootConverted = true
+	a.startConversion(context.Background())
+	if neutralizedInitrd(d, "/boot/initrd.img-"+testKernel) || !d.Exists(encrypt.ModuleConf) || !d.Exists(encrypt.ModuleDir) {
+		t.Fatal("disarmed after a boot that opened the converted disk")
+	}
+}
+
+// TestRestoreFailedReported: review 2 of PDK-482, X1 (architect decision 2026-10-30, option a) — after a cancelled
+// conversion was adopted, a reinstall of the unlock path that fails because a bootable kernel cannot be built is
+// reported with disk.conversion_unlock_restore_failed{kernel_not_buildable} once per reason and start, besides the
+// disk state's initrd issue; once the kernel is buildable the reinstall succeeds and clears the reason.
+func TestRestoreFailedReported(t *testing.T) {
+	a, d := preparedConvAgent(t)
+	d.PackagesBusy = true
+	abortPrepared(t, a, "command")
+	d.PackagesBusy = false
+	d.setLUKS(true)
+	a.startConversion(context.Background())
+	if c := a.st.Conversion; c.Phase != state.ConversionEncrypting || !c.ModuleRestorePending {
+		t.Fatalf("not adopted: %+v", c)
+	}
+	const notBuildable = "6.8.0-90-generic"
+	d.Write("/boot/vmlinuz-"+notBuildable, "")
+	d.Write("/lib/modules/"+notBuildable+"/modules.dep.bin", "")
+	pass := func() {
+		a.initrdRetryAt = time.Time{}
+		a.tickConversion(context.Background())
+		runWorker(t, a)
+	}
+	runWorker(t, a)
+	pass()
+	n, data := countEvents(t, a, protocol.EventDiskConversionUnlockRestoreFailed)
+	if c := a.st.Conversion; n != 1 || data["reason"] != encrypt.IssueKernelNotBuildable || data["conversion_id"] != testConversionID ||
+		!c.ModuleRestorePending || c.InitrdIssue != encrypt.IssueKernelNotBuildable {
+		t.Fatalf("%d unlock_restore_failed events, last %v, conversion %+v", n, data, c)
+	}
+	d.Write("/lib/modules/"+notBuildable+"/modules.dep", "")
+	pass()
+	if c := a.st.Conversion; c.ModuleRestorePending || a.restoreReported != "" {
+		t.Fatalf("not reinstalled (reported %q): %+v", a.restoreReported, c)
 	}
 }

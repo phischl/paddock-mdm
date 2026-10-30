@@ -108,6 +108,9 @@ type Preparer struct {
 	// TestHooks writes the marker that lets the init script honour the test delays (plan M8e decision 19); only a
 	// dev build (buildinfo.Dev) sets it.
 	TestHooks bool
+	// ReportNeutralize receives the outcome of the disarm of an abort requested while preparing (Abort); nil reports
+	// a failure itself.
+	ReportNeutralize NeutralizeReport
 	// Hold returns once no supervisor upgrade runs (plan M8e decision 37); nil holds nothing.
 	Hold  func(ctx context.Context) error
 	Now   func() time.Time
@@ -239,7 +242,7 @@ func (p *Preparer) retry(ctx context.Context, c state.DiskConversion, n int, cau
 
 // abort runs the abort requested while preparing (decision 27); Stopped when Abort refused, which the caller answers.
 func (p *Preparer) abort(ctx context.Context, c state.DiskConversion) Outcome {
-	if aborted, _ := Abort(ctx, p.Sys, p.Layout, p.State, c.ID, ByAdmin, true); aborted {
+	if aborted, _ := Abort(ctx, p.Sys, p.Layout, p.State, c.ID, ByAdmin, true, p.ReportNeutralize); aborted {
 		return Aborted
 	}
 	return Stopped
