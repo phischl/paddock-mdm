@@ -153,3 +153,6 @@ func SetExportMaxDecoded(e *Exporter, n uint64) { e.maxDecoded = n }
 func SetReadyCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
 	e.readyCommitted = fn
 }
+
+// SetKeyPublisherClock replaces the publisher's clock.
+func SetKeyPublisherClock(p *KeyPublisher, now func() time.Time) { p.now = now }

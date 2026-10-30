@@ -629,6 +629,24 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/audit/keys:
+    get:
+      operationId: listAuditEvidenceKeys
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor. The public keys the audit chain and the evidence packages are signed with, by
+        key version, with their SHA-256 fingerprints. A version appears after the first manifest or package signed
+        with it. Compare the fingerprint of a package with a value recorded independently, for example the output of
+        `paddock-server audit keys`.
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEvidenceKeys" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
   /api/v1/audit/exports:
     get:
       operationId: listAuditExports
@@ -5459,6 +5477,19 @@ components:
         from_day: { type: string, format: date }
         to_day: { type: string, format: date }
         purpose: { type: string, minLength: 1, maxLength: 500 }
+    AuditEvidenceKey:
+      type: object
+      required: [key_version, public_key, fingerprint, first_seen_at]
+      properties:
+        key_version: { type: integer }
+        public_key: { type: string, format: byte, description: Base64 of the raw 32-byte ed25519 public key. }
+        fingerprint: { type: string, description: Lowercase hex SHA-256 of the raw public key. }
+        first_seen_at: { type: string, format: date-time }
+    AuditEvidenceKeys:
+      type: object
+      required: [keys]
+      properties:
+        keys: { type: array, items: { $ref: "#/components/schemas/AuditEvidenceKey" } }
     AuditExport:
       type: object
       required: [id, status, from_day, to_day, purpose, requested_by, requested_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, key_version, error]

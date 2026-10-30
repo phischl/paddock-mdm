@@ -8,11 +8,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/config"
@@ -71,10 +73,12 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 
 // verifier checks the hash chain with the audit-chain public keys from OpenBao.
 func (d *auditDeps) verifier() *auditwriter.Verifier {
-	keys := func(ctx context.Context) (map[int][]byte, error) {
-		return d.bao.PublicKeys(ctx, auditwriter.SigningKey)
-	}
-	return auditwriter.NewVerifier(d.pool, d.store, keys)
+	return auditwriter.NewVerifier(d.pool, d.store, d.publicKeys)
+}
+
+// publicKeys reads the audit-chain public keys from OpenBao.
+func (d *auditDeps) publicKeys(ctx context.Context) (map[int][]byte, error) {
+	return d.bao.PublicKeys(ctx, auditwriter.SigningKey)
 }
 
 func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Common) error {
@@ -90,17 +94,14 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	defer deps.pool.Close()
 	consumer := mq.NewConsumer(mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password},
 		mq.QueueAudit, auditwriter.Prefetch)
-	sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao)
+	sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao, auditwriter.NewKeyPublisher(deps.publicKeys))
 	recorder := auditwriter.NewRecorder(deps.pool, deps.writer, time.Now)
 	if err := prometheus.Register(recorder.Collector()); err != nil {
 		return err
 	}
 	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
 	purger := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention)
-	keys := func(ctx context.Context) (map[int][]byte, error) {
-		return deps.bao.PublicKeys(ctx, auditwriter.SigningKey)
-	}
-	exporter := auditwriter.NewExporter(deps.pool, deps.writer, deps.store, deps.bao, keys, deps.verifier(),
+	exporter := auditwriter.NewExporter(deps.pool, deps.writer, deps.store, deps.bao, deps.publicKeys, deps.verifier(),
 		buildinfo.Version, poll)
 	slog.InfoContext(ctx, "audit-writer starting", "bucket", deps.store.Bucket())
 
@@ -123,7 +124,7 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 }
 
 // runAudit implements `audit seal [--day YYYY-MM-DD]`, `audit verify --org <id> --from <day> --to <day>` and
-// `audit purge [--dry-run]`.
+// `audit keys` and `audit purge [--dry-run]`.
 func runAudit(ctx context.Context, l *config.Loader, common config.Common, args []string) error {
 	if len(args) == 0 {
 		return errUsage
@@ -162,7 +163,7 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 			return err
 		}
 		defer deps.pool.Close()
-		sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao)
+		sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao, auditwriter.NewKeyPublisher(deps.publicKeys))
 		var n int
 		if only != uuid.Nil {
 			n, err = sealer.SealOrganizationThrough(ctx, only, last)
@@ -217,6 +218,24 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 			return fmt.Errorf("audit chain verified, but the run was not recorded: %w", recordErr)
 		}
 		return nil
+	case "keys":
+		if len(args) != 1 {
+			return errUsage
+		}
+		baoCfg := config.LoadOpenBao(l)
+		if err := l.Err(); err != nil {
+			return err
+		}
+		baoClient, err := bao.New(baoCfg.Addr, baoCfg.RoleID, baoCfg.SecretID)
+		if err != nil {
+			return err
+		}
+		keys, err := baoClient.PublicKeys(ctx, auditwriter.SigningKey)
+		if err != nil {
+			return err
+		}
+		printAuditKeys(os.Stdout, keys)
+		return nil
 	case "purge":
 		fs := flag.NewFlagSet("audit purge", flag.ContinueOnError)
 		dryRun := fs.Bool("dry-run", false, "only report which partitions would be dropped")
@@ -235,6 +254,19 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 		return err
 	default:
 		return errUsage
+	}
+}
+
+// printAuditKeys prints one line per audit-chain key version, the ISB's out-of-band copy of the fingerprints that the
+// auditor compares with the ones in an evidence package (plan M10 decision 36).
+func printAuditKeys(w io.Writer, keys map[int][]byte) {
+	versions := make([]int, 0, len(keys))
+	for v := range keys {
+		versions = append(versions, v)
+	}
+	slices.Sort(versions)
+	for _, v := range versions {
+		fmt.Fprintf(w, "%s v%d %s\n", auditwriter.SigningKey, v, auditevidence.Fingerprint(keys[v]))
 	}
 }
 

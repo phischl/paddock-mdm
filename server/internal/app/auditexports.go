@@ -158,6 +158,24 @@ func (a *AuditExports) Get(ctx context.Context, id uuid.UUID) (auditstore.AuditE
 	return out, err
 }
 
+// Keys returns every published audit-chain public key, oldest version first. The keys are not organization data (one
+// chain key signs every organization's days), so the read is not narrowed to an organization; the role check is.
+func (a *AuditExports) Keys(ctx context.Context) ([]auditstore.AuditSigningKey, error) {
+	if _, err := RequireOrg(ctx, RolesAudit); err != nil {
+		return nil, err
+	}
+	var out []auditstore.AuditSigningKey
+	err := a.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		out, err = q.ListAuditSigningKeys(ctx)
+		if err != nil {
+			return fmt.Errorf("list signing keys: %w", err)
+		}
+		return nil
+	})
+	return out, err
+}
+
 // List returns one page of the organization's exports and the capped number of matches (ADR 0018).
 func (a *AuditExports) List(ctx context.Context, f AuditExportQuery) (Listed[auditstore.AuditExport], error) {
 	var out Listed[auditstore.AuditExport]
