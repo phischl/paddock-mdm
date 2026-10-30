@@ -50,15 +50,19 @@ test('organization admin sets the MCP policy and their own write access', async 
   await page.goto('/settings/mcp')
   await expect(page.getByRole('heading', { name: 'AI assistants (MCP)' })).toBeVisible()
   await expect(page.getByTestId('mcp-connect-hint')).toContainText('paddockctl mcp login')
-  // Only an installation in which nobody saved a policy yet shows the defaults hint; the acceptance gates save one.
-  if (saved.updated_at === null) await expect(page.getByTestId('mcp-defaults-hint')).toBeVisible()
-  else {
-    await expect(page.getByTestId('mcp-defaults-hint')).toHaveCount(0)
-    test.info().annotations.push({ type: 'skip', description: 'defaults hint: acme already has a saved MCP policy (the acceptance gates save one)' })
+  // The two hints exclude each other: a never-saved policy (a fresh installation, CI) shows only the defaults hint; a
+  // saved policy never shows it and shows the switched-off hint exactly while the MCP is off. Every state gets a firm
+  // expectation; the end of this test saves the MCP off and checks the switched-off hint again.
+  const defaultsHint = page.getByTestId('mcp-defaults-hint')
+  const disabledHint = page.getByTestId('mcp-disabled-hint')
+  if (saved.updated_at === null) {
+    await expect(defaultsHint).toBeVisible()
+    await expect(disabledHint).toHaveCount(0)
+  } else {
+    await expect(defaultsHint).toHaveCount(0)
+    if (saved.enabled) await expect(disabledHint).toHaveCount(0)
+    else await expect(disabledHint).toBeVisible()
   }
-  // The switched-off hint replaces the defaults hint once a policy is saved; a never-saved policy shows only the
-  // defaults hint (fresh installations, CI).
-  if (!saved.enabled && saved.updated_at !== null) await expect(page.getByTestId('mcp-disabled-hint')).toBeVisible()
   await expectAccessible(page)
 
   await page.getByTestId('mcp-enabled').getByRole('checkbox').check()
