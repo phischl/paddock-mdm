@@ -154,11 +154,12 @@ func (a *Agent) startConversion(ctx context.Context) {
 	a.adoptConversion(ctx)
 	a.answerAbort()
 	c := a.st.Conversion
-	// Before the worker and the first restart notice (plan M8e amendment 2026-10-30, PDK-482): a kill between the cancel
-	// and the neutralization, or a dracut run that finished meanwhile, leaves an initrd that would still convert.
-	if c.Phase == state.ConversionCancelled && c.CleanupPending && !a.bootConverted {
+	// Before the worker and the first restart notice (plan M8e amendment 2026-10-30, PDK-482 and PDK-579): a kill
+	// between recording the cancel or the failure and the neutralization, or a dracut run that finished meanwhile,
+	// leaves an initrd that would still convert.
+	if (c.Phase == state.ConversionCancelled || c.Phase == state.ConversionFailed) && c.CleanupPending && !a.bootConverted {
 		if isLUKS, ok := encrypt.IsLUKS(ctx, a.d.Encrypt, a.d.Layout, encrypt.DiskOf(*c)); ok && !isLUKS {
-			a.disarmCancelled(context.WithoutCancel(ctx), a.directStore())
+			a.disarmPending(context.WithoutCancel(ctx), a.directStore())
 		}
 	}
 	if c.ResumeFailures != 0 {
@@ -237,9 +238,10 @@ func (a *Agent) adoptConversion(ctx context.Context) bool {
 	return true
 }
 
-// initFailed handles the init step's result on a partition that is not LUKS (plan M8e decision 18): a failed or
-// skipped init step fails a conversion waiting for its restart at stage init and starts the cleanup of invariant I3 —
-// CleanupPending, retried by the worker at every full pass. A conversion in another phase (a stale initrd ran during
+// initFailed handles the init step's result on a partition that is not LUKS (plan M8e decision 18): a failed or skipped
+// init step fails a conversion waiting for its restart at stage init, disarms its initrds (disarmPending: a skipped
+// step, on battery for one, would convert the disk at the next restart; PDK-579) and starts the cleanup of invariant I3
+// — CleanupPending, retried by the worker at every full pass. A conversion in another phase (a stale initrd ran during
 // an unfinished cleanup) keeps its phase; its cleanup goes on. Without a result nothing changes: the device has not
 // restarted yet, or it booted from an initrd without the module.
 func (a *Agent) initFailed(ctx context.Context, boot *encrypt.BootResult) {
@@ -267,6 +269,11 @@ func (a *Agent) initFailed(ctx context.Context, boot *encrypt.BootResult) {
 		"volume": c.LUKSUUID})
 	a.answerAbort()
 	a.saveState()
+	// adoptConversion found the partition not LUKS (invariant I1). initFailed runs on the run loop, or at the start
+	// before it runs, so the store is the direct one.
+	if !a.bootConverted {
+		a.disarmPending(context.WithoutCancel(ctx), a.directStore())
+	}
 }
 
 // notConverted is I2 for a conversion the state calls encrypting or completed (amendment 2026-10-21, items 11 and
@@ -632,23 +639,25 @@ func (a *Agent) revokedSince(ctx context.Context) bool {
 }
 
 // retryCleanup is the I3 retry of an unfinished cleanup on the worker — never while the partition is LUKS or its header
-// cannot be checked (invariant I1). A cancelled conversion's initrds are disarmed again first (disarmCancelled).
+// cannot be checked (invariant I1). A cancelled or failed conversion's initrds are disarmed again first
+// (disarmPending).
 func (a *Agent) retryCleanup(ctx context.Context, disk encrypt.Disk) (attempted, succeeded bool, err error) {
 	if isLUKS, ok := encrypt.IsLUKS(ctx, a.d.Encrypt, a.d.Layout, disk); isLUKS || !ok {
 		return false, false, nil
 	}
 	store := a.loopStore(ctx)
-	a.disarmCancelled(context.WithoutCancel(ctx), store)
+	a.disarmPending(context.WithoutCancel(ctx), store)
 	done, err := encrypt.RunCleanup(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, store)
 	// A package run holding dpkg's locks is no failure of the cleanup: it is retried at the next pass, not backed off.
 	return !errors.Is(err, encrypt.ErrPackagesBusy), done, err
 }
 
-// disarmCancelled runs encrypt.Disarm for a cancelled conversion whose cleanup is pending (plan M8e item 18, amendment
-// 2026-10-30, PDK-482): an initrd that a dracut run already under way at the abort built, or one a kill between the
-// cancel and its neutralization left, is neutralized before the next restart. A failure is reported through
-// neutralizeReport. The caller has checked that the partition is not LUKS (invariant I1).
-func (a *Agent) disarmCancelled(ctx context.Context, store agentStore) {
+// disarmPending runs encrypt.Disarm for a cancelled or failed conversion whose cleanup is pending (plan M8e item 18,
+// amendment 2026-10-30, PDK-482 and PDK-579): an initrd that a dracut run already under way at the abort or the
+// failure built, or one a kill between recording the phase and the neutralization left, is neutralized before the
+// next restart. A failure is reported through neutralizeReport. The caller has checked that the partition is not LUKS
+// (invariant I1).
+func (a *Agent) disarmPending(ctx context.Context, store agentStore) {
 	a.neutralizeReport(store)(ctx, encrypt.Disarm(ctx, a.d.Encrypt, a.d.Layout, store))
 }
 

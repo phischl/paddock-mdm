@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -261,11 +262,13 @@ func TestInPlaceEncryptionLVM(t *testing.T) {
 // 24.04 Desktop with ext4 directly on its root partition, the organization on tpm_only. Part A: the operator's abort
 // at the device and the administrator's cancel from the portal after the preparation each leave an unencrypted
 // device that boots and is eligible again; a skipped init step (resume= on the kernel command line) fails the
-// conversion and its cleanup finishes. Part B: the power is cut during the init delay after the shrink; the next boot
-// initialises LUKS2; no boot enrolls the TPM while the reencryption is unfinished (amendment item 22); the first boot
-// after completion enrolls it without a dialogue; while a package run holds the dpkg lock the agent defers the initrd
-// regeneration, apt refuses, and a kernel installed meanwhile gets a verified initrd; the device ends compliant with
-// [recovery, tpm2]. It runs only with PADDOCK_SYSTEM_VMS=paddock-ie-2404.
+// conversion, its initrds are disarmed while dracut cannot rebuild them, a restart without resume= then boots
+// unencrypted (plan_invalid, PDK-579), and the cleanup finishes once dracut works again. Part B: the power is cut
+// during the init delay after the shrink; the next boot initialises LUKS2; no boot enrolls the TPM while the
+// reencryption is unfinished (amendment item 22); the first boot after completion enrolls it without a dialogue; while
+// a package run holds the dpkg lock the agent defers the initrd regeneration, apt refuses, and a kernel installed
+// meanwhile gets a verified initrd; the device ends compliant with [recovery, tpm2]. It runs only with
+// PADDOCK_SYSTEM_VMS=paddock-ie-2404.
 func TestInPlaceEncryptionPlain(t *testing.T) {
 	w := newIEWorldTPMOnly(t, ieVM2404, "24.04")
 	w.logEvidence(t, "root reference (PDK-242)", "findmnt --fstab -no SOURCE /; grep -v '^#' /etc/fstab; cat /proc/cmdline")
@@ -341,10 +344,26 @@ func TestInPlaceEncryptionPlain(t *testing.T) {
 		t.FailNow()
 	}
 
-	if !t.Run("A3 skipped init step, cleanup finishes", func(t *testing.T) {
+	if !t.Run("A3 skipped init step, disarmed, cleanup finishes", func(t *testing.T) {
 		w.Bind(t)
 		id := w.requestEncryption(t)
 		w.waitPrepared(t, id, "plain")
+		// The cleanup cannot rebuild the initrds until dracut works again, so the restart below runs the initrds the
+		// failure disarmed (PDK-579).
+		w.Must("sudo dpkg-divert --add --rename --divert /usr/bin/dracut.real /usr/bin/dracut >/dev/null && printf '#!/bin/sh\\nexit 1\\n' | sudo tee /usr/bin/dracut >/dev/null && sudo chmod 0755 /usr/bin/dracut")
+		// A failure before the restore below must not leave the stub dracut for part B.
+		t.Cleanup(func() {
+			if !t.Failed() {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			undo := "if dpkg-divert --list /usr/bin/dracut | grep -q dracut.real; then " +
+				"sudo rm -f /usr/bin/dracut && sudo dpkg-divert --remove --rename /usr/bin/dracut >/dev/null; fi"
+			if out, err := w.SSH(ctx, nil, undo); err != nil {
+				t.Logf("%s: undo the dracut divert: %v: %s", w.Name, err, out)
+			}
+		})
 		w.kernelArg("resume=/dev/disk/by-partuuid/" + pu)
 		mark := w.rebootRequest(t)
 		w.waitSerial(t, "paddock-encrypt: result skipped init resume_set", mark, 15*time.Minute)
@@ -353,8 +372,52 @@ func TestInPlaceEncryptionPlain(t *testing.T) {
 		w.WaitEvent(t, "device.disk_conversion_failed", 10*time.Minute, func(p map[string]any) bool {
 			return p["conversion_id"] == id && p["stage"] == "init" && p["reason"] == "resume_set"
 		})
-		w.waitAbortCleaned(t)
+		w.waitHealth(t, "cleanup_pending", 5*time.Minute, func(h conversionHealth) bool {
+			return slices.Contains(h.reasons(), "cleanup_pending")
+		})
+		w.requireInitrds(t, true, "")
+		if !w.neutralized(t) {
+			t.Fatal("the running kernel's initrd is not neutralized after the skipped init step")
+		}
+		if ev := w.s.Events(t, "device.disk_conversion_neutralize_failed", w.ID); len(ev) != 0 {
+			t.Fatalf("the neutralization failed: %+v", ev)
+		}
+		// Without resume= the init step would convert the disk now, were it not disarmed.
 		w.dropKernelArg("resume=")
+		mark = w.rebootRequest(t)
+		w.waitSerial(t, "paddock-encrypt: result failed init plan_invalid", mark, 15*time.Minute)
+		Until(t, w.Name+" answers SSH after the disarmed init step", 15*time.Minute, 5*time.Second, nil, w.sshUp)
+		w.requireUnencrypted(t)
+		// The adoption would happen at the agent's start and be spooled then, so the checks below wait until the agent
+		// started after this boot and the server accepted everything it spooled.
+		w.waitHealth(t, "cleanup still pending after the disarmed init step", 5*time.Minute, func(h conversionHealth) bool {
+			return slices.Contains(h.reasons(), "cleanup_pending")
+		})
+		if c := w.convState(t); c == nil || c.Phase != "failed" {
+			t.Fatalf("the conversion after the restart: %+v", c)
+		}
+		w.Checkin()
+		Until(t, w.Name+": spool delivered after the disarmed init step", 5*time.Minute, 5*time.Second, nil, func() bool {
+			events, err := trySpooled(w.Device)
+			if err != nil {
+				t.Log(err)
+				return false
+			}
+			return len(events) == 0
+		})
+		if c := w.conversion(t); c.ID != id || c.Phase != "failed" {
+			t.Fatalf("the conversion in the API after the restart: %+v", c)
+		}
+		for _, e := range w.s.Events(t, "device.disk_conversion_started", w.ID) {
+			if e.Params["conversion_id"] == id {
+				t.Fatalf("the failed conversion was adopted: %+v", e)
+			}
+		}
+		w.Must("sudo rm /usr/bin/dracut && sudo dpkg-divert --remove --rename /usr/bin/dracut >/dev/null && test -x /usr/bin/dracut")
+		w.waitAbortCleaned(t)
+		if w.neutralized(t) {
+			t.Fatal("the rebuilt initrd still ends with the override")
+		}
 		w.reboot(t)
 		w.waitHealth(t, "eligible after the failed init step", 10*time.Minute, func(h conversionHealth) bool { return h.eligible("plain") })
 	}) {

@@ -92,19 +92,20 @@ func NeutralizeInitrds(ctx context.Context, sys Host, l paths.Layout) error {
 	return neutralizeAll(ctx, sys, l)
 }
 
-// Disarm stops a cancelled conversion whose cleanup is pending from converting the disk at a restart (plan M8e item
-// 18, amendment 2026-10-30, PDK-482): it removes the module directory and its dracut configuration, as step (1) of
-// Cleanup does, so that no later dracut run (a kernel package's) builds the init step into an initrd again, and
-// neutralizes every initrd that carries it (neutralizeAll). It runs at the abort, at every cleanup retry of the worker
-// and once at the agent's start, which catch an initrd a dracut run already under way at the abort built and a kill
-// between the cancel and the neutralization. plan.env and the key stay: a disk that converted anyway is adopted
-// (invariant I2) and RestoreModule reinstalls the module for it (ModuleMissing). ModuleWritten is recorded before a
-// module file is removed, so that the cleanup still rebuilds the initrds. Nothing happens for another phase, without
-// CleanupPending, or before step 7 wrote the module. The caller has checked that the partition is not LUKS (invariant
-// I1). A failure is logged at error level and returned.
+// Disarm stops a cancelled or failed conversion whose cleanup is pending from converting the disk at a restart (plan
+// M8e item 18, amendment 2026-10-30, PDK-482 and PDK-579): it removes the module directory and its dracut
+// configuration, as step (1) of Cleanup does, so that no later dracut run (a kernel package's) builds the init step
+// into an initrd again, and neutralizes every initrd that carries it (neutralizeAll). It runs at the abort or the
+// recorded failure (a preparation failing once step 7 wrote the module, a failed or skipped init step), at every
+// cleanup retry of the worker and once at the agent's start, which catch an initrd a dracut run already under way at
+// the abort built and a kill between recording the phase and the neutralization. plan.env and the key stay: a disk that
+// converted anyway is adopted (invariant I2) and RestoreModule reinstalls the module for it (ModuleMissing).
+// ModuleWritten is recorded before a module file is removed, so that the cleanup still rebuilds the initrds. Nothing
+// happens for another phase, without CleanupPending, or before step 7 wrote the module. The caller has checked that the
+// partition is not LUKS (invariant I1). A failure is logged at error level and returned.
 func Disarm(ctx context.Context, sys Host, l paths.Layout, store Store) error {
 	c, ok := store.Conversion()
-	if !ok || c.Phase != state.ConversionCancelled || !c.CleanupPending {
+	if !ok || c.Phase != state.ConversionCancelled && c.Phase != state.ConversionFailed || !c.CleanupPending {
 		return nil
 	}
 	present := moduleFilesPresent(l)
@@ -129,8 +130,8 @@ func Disarm(ctx context.Context, sys Host, l paths.Layout, store Store) error {
 		return errors.Join(append(errs, neutralizeAll(ctx, sys, l))...)
 	}()
 	if err != nil {
-		slog.ErrorContext(ctx, "the initrds of the cancelled in-place encryption were not neutralized; a restart before the "+
-			"cleanup finished may still encrypt the disk", "conversion_id", c.ID, "error", err)
+		slog.ErrorContext(ctx, "the initrds of the cancelled or failed in-place encryption were not neutralized; "+
+			"a restart before the cleanup finished may still encrypt the disk", "conversion_id", c.ID, "error", err)
 	}
 	return err
 }

@@ -1893,6 +1893,16 @@ Found while implementing PDK-245. The binding text of decisions 3, 18, 21, 22 an
         convention for device events (not `disk.conversion_completed_after_cancel`), and the visible notice is that
         audit entry with its en/de text; the disk card gets no notice of its own, since the conversion row keeps no
         record of the cancel and no migration is made for it.
+      - 2026-10-30 (PDK-579, architect decision 2026-10-30 by main): the same disarm applies to phase `failed` with
+        `CleanupPending`, i.e. a preparation that fails once step 7 wrote the module, and a failed or skipped init step
+        at stage init (`on_battery`, `resume_set`), whose armed initrd would otherwise convert the disk at the next
+        boot on AC power. It runs at the same three points: when the failure is recorded (the preparation's `fail`
+        before its cleanup; `initFailed` right after the failure is saved), at every cleanup retry of the worker, and
+        once at the agent's start, never on the boot that opened the converted disk nor while the partition is LUKS or
+        cannot be checked (invariant I1); a failure is reported as `disk.conversion_neutralize_failed` once per reason
+        and agent start. The segment is unchanged (its plan still reads `PADDOCK_LAYOUT=cancelled`), so that it stays
+        identical and the append idempotent. A failed conversion whose disk converted anyway is adopted as before and
+        recorded as `device.disk_conversion_started`, without a marker like `after_cancel`. Gate: S-IE2 part A3.
       - A kernel command line switch (`paddock.encrypt=off`) was rejected.
       - Gate: `TestInPlaceEncryptionCancelBeforeReboot` (cancel, restart before the cleanup, the disk stays
         unencrypted, then the cleanup completes); gate S-IE4 makes the neutralization fail to reach the adoption.

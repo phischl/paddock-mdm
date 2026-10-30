@@ -1195,14 +1195,121 @@ func TestReportOnceRecordsAfterStored(t *testing.T) {
 
 // TestCancelledNotDisarmedAfterConvertedBoot: review 2 of PDK-482, m2 — the start disarm does not run once this boot
 // opened the converted disk through the module (boot result ok, amendment item 13), even when the partition answers
-// "not LUKS".
+// "not LUKS"; neither for a failed conversion (PDK-579).
 func TestCancelledNotDisarmedAfterConvertedBoot(t *testing.T) {
+	for _, phase := range []string{state.ConversionCancelled, state.ConversionFailed} {
+		a, d := preparedConvAgent(t)
+		a.st.Conversion.Phase, a.st.Conversion.CleanupPending = phase, true
+		a.bootConverted = true
+		a.startConversion(context.Background())
+		if neutralizedInitrd(d, "/boot/initrd.img-"+testKernel) || !d.Exists(encrypt.ModuleConf) || !d.Exists(encrypt.ModuleDir) {
+			t.Fatalf("%s: disarmed after a boot that opened the converted disk", phase)
+		}
+	}
+	// Nor does the disarm of a failure recorded from a skipped init step in that run.
 	a, d := preparedConvAgent(t)
-	a.st.Conversion.Phase, a.st.Conversion.CleanupPending = state.ConversionCancelled, true
 	a.bootConverted = true
+	writeBoot(d, "skipped", "init", "on_battery")
+	a.tickConversion(context.Background())
+	if c := a.st.Conversion; c.Phase != state.ConversionFailed || neutralizedInitrd(d, "/boot/initrd.img-"+testKernel) ||
+		!d.Exists(encrypt.ModuleDir) {
+		t.Fatalf("disarmed at a failure after a boot that opened the converted disk: %+v", c)
+	}
+}
+
+// disarmed reports whether the conversion's initrd work is disarmed (plan M8e item 18, amendment 2026-10-30): the
+// module and its configuration are gone, the initrd ends with the override, plan.env and the key stay for the cleanup.
+func disarmed(d *convDevice, initrd string) bool {
+	return neutralizedInitrd(d, initrd) && !d.Exists(encrypt.ModuleDir) && !d.Exists(encrypt.ModuleConf) &&
+		d.Exists("/var/lib/paddock/encrypt/plan.env") && d.Exists("/var/lib/paddock/install-passphrase")
+}
+
+// TestSkippedInitDisarmed: PDK-579 (plan M8e item 18, amendment 2026-10-30) — a skipped init step (on battery) fails
+// the conversion at stage init with CleanupPending; its initrds still carry the step with the valid plan, so the next
+// boot on AC power would convert the disk. They are disarmed when the failure is recorded (a full pass, before the
+// worker runs), again at the worker's cleanup retries (a dracut rebuild and a new kernel's initrd while a package run
+// holds dpkg's locks) and at the next start, so a restart boots through the override; once the locks are free the
+// cleanup completes. A failure recorded at the start is disarmed there.
+func TestSkippedInitDisarmed(t *testing.T) {
+	a, d := preparedConvAgent(t)
+	initrd := "/boot/initrd.img-" + testKernel
+	d.PackagesBusy = true
+	writeBoot(d, "skipped", "init", "on_battery")
+	a.tickConversion(context.Background())
+	if c := a.st.Conversion; c.Phase != state.ConversionFailed || c.FailureReason != "on_battery" || !c.CleanupPending ||
+		!disarmed(d, initrd) {
+		t.Fatalf("not disarmed at the failure: %+v", c)
+	}
+	const newKernel = "6.8.0-90-generic"
+	d.Write("/boot/vmlinuz-"+newKernel, "")
+	d.Write("/lib/modules/"+newKernel+"/modules.dep", "")
+	d.buildInitrd(d.Path(initrd), true)
+	d.buildInitrd(d.Path("/boot/initrd.img-"+newKernel), true)
+	runWorker(t, a)
+	if !neutralizedInitrd(d, initrd) || !neutralizedInitrd(d, "/boot/initrd.img-"+newKernel) || !a.st.Conversion.CleanupPending {
+		t.Fatalf("not disarmed by the worker: %+v", a.st.Conversion)
+	}
+	d.buildInitrd(d.Path(initrd), true)
 	a.startConversion(context.Background())
-	if neutralizedInitrd(d, "/boot/initrd.img-"+testKernel) || !d.Exists(encrypt.ModuleConf) || !d.Exists(encrypt.ModuleDir) {
-		t.Fatal("disarmed after a boot that opened the converted disk")
+	if !disarmed(d, initrd) || !a.st.Conversion.CleanupPending {
+		t.Fatalf("not disarmed at the start: %+v", a.st.Conversion)
+	}
+	if n, data := countEvents(t, a, protocol.EventDiskConversionNeutralizeFailed); n != 0 {
+		t.Fatalf("neutralize failed: %v", data)
+	}
+	d.PackagesBusy = false
+	a.tickConversion(context.Background())
+	runWorker(t, a)
+	for _, v := range []string{testKernel, newKernel} {
+		raw, _ := os.ReadFile(d.Path("/boot/initrd.img-" + v))
+		if strings.Contains(string(raw), "paddock-encrypt") || strings.Contains(string(raw), "PADDOCK_LAYOUT=cancelled") {
+			t.Fatalf("the initrd of %s still carries the module or the override", v)
+		}
+	}
+	if c := a.st.Conversion; c.Phase != state.ConversionFailed || c.CleanupPending || d.Exists("/var/lib/paddock/install-passphrase") ||
+		countStarted(t, a) != 0 {
+		t.Fatalf("the cleanup did not complete: %+v", c)
+	}
+
+	b, e := preparedConvAgent(t)
+	e.PackagesBusy = true
+	writeBoot(e, "skipped", "init", "resume_set")
+	b.startConversion(context.Background())
+	if c := b.st.Conversion; c.Phase != state.ConversionFailed || !c.CleanupPending || !disarmed(e, initrd) {
+		t.Fatalf("not disarmed at a failure recorded at the start: %+v", c)
+	}
+}
+
+// countStarted is the number of disk.conversion_started events spooled.
+func countStarted(t *testing.T, a *Agent) int {
+	t.Helper()
+	n, _ := countEvents(t, a, protocol.EventDiskConversionStarted)
+	return n
+}
+
+// TestFailedNotDisarmedOnLUKS: PDK-579, invariant I1 — a failed conversion with a pending cleanup on a partition that is
+// LUKS is adopted, not disarmed; on a partition that cannot be checked neither the start nor the worker disarms it.
+func TestFailedNotDisarmedOnLUKS(t *testing.T) {
+	initrd := "/boot/initrd.img-" + testKernel
+	a, d := preparedConvAgent(t)
+	a.st.Conversion.Phase, a.st.Conversion.FailureStage, a.st.Conversion.CleanupPending = state.ConversionFailed, state.StageInit, true
+	d.setLUKS(true)
+	a.startConversion(context.Background())
+	runWorker(t, a)
+	if c := a.st.Conversion; c.Phase != state.ConversionEncrypting || c.CleanupPending || neutralizedInitrd(d, initrd) ||
+		!d.Exists(encrypt.ModuleConf) || !d.Exists(encrypt.ModuleDir) {
+		t.Fatalf("disarmed or not adopted on a LUKS partition: %+v", c)
+	}
+
+	b, e := preparedConvAgent(t)
+	b.st.Conversion.Phase, b.st.Conversion.FailureStage, b.st.Conversion.CleanupPending = state.ConversionFailed, state.StageInit, true
+	_ = os.Remove(e.Path(testPartition))
+	b.startConversion(context.Background())
+	b.tickConversion(context.Background())
+	runWorker(t, b)
+	if c := b.st.Conversion; c.Phase != state.ConversionFailed || !c.CleanupPending || neutralizedInitrd(e, initrd) ||
+		!e.Exists(encrypt.ModuleConf) {
+		t.Fatalf("disarmed on a partition that cannot be checked: %+v", c)
 	}
 }
 

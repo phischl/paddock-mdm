@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -257,16 +258,66 @@ func TestDisarmRecordsModuleWritten(t *testing.T) {
 	}
 }
 
-// TestDisarmOnlyCancelledPending: Disarm changes nothing for a conversion that is not cancelled with its cleanup
-// pending (a prepared one keeps its module and initrds).
-func TestDisarmOnlyCancelledPending(t *testing.T) {
-	f := preparedFixture(t)
-	original := f.read("/boot/initrd.img-" + runningKernel)
-	if err := encrypt.Disarm(context.Background(), f.dev, f.dev.layout, f.store); err != nil {
-		t.Fatal(err)
+// TestDisarmOnlyPendingCleanup: Disarm changes nothing for a conversion that is not cancelled or failed with its
+// cleanup pending (a prepared one, or a failed one without a cleanup, keeps its module and initrds).
+func TestDisarmOnlyPendingCleanup(t *testing.T) {
+	for name, set := range map[string]func(c *state.DiskConversion){
+		"prepared":           func(*state.DiskConversion) {},
+		"failed, no cleanup": func(c *state.DiskConversion) { c.Phase, c.CleanupPending = state.ConversionFailed, false },
+	} {
+		f := preparedFixture(t)
+		_ = f.store.Update(func(c *state.DiskConversion, _ *state.LUKS) { set(c) })
+		original := f.read("/boot/initrd.img-" + runningKernel)
+		if err := encrypt.Disarm(context.Background(), f.dev, f.dev.layout, f.store); err != nil {
+			t.Fatal(err)
+		}
+		if f.moduleGone() || f.read("/boot/initrd.img-"+runningKernel) != original {
+			t.Fatalf("%s: disarmed", name)
+		}
 	}
-	if f.moduleGone() || f.read("/boot/initrd.img-"+runningKernel) != original {
-		t.Fatal("a prepared conversion was disarmed")
+}
+
+// TestPrepareFailureDisarms: PDK-579 (plan M8e item 18, amendment 2026-10-30) — a preparation that fails after step 7
+// wrote the module disarms before its cleanup: when the cleanup cannot rebuild the initrds, the module and its
+// configuration are gone and every initrd is the prepared one followed by the override segment, plan.env and the key
+// stay for the cleanup, and no neutralize_failed is emitted. The next cleanup then completes normally.
+func TestPrepareFailureDisarms(t *testing.T) {
+	f := stoppedBeforePrepared(t)
+	originals := map[string]string{}
+	for _, v := range []string{runningKernel, olderKernel} {
+		originals[v] = f.read("/boot/initrd.img-" + v)
+	}
+	_ = f.store.Update(func(c *state.DiskConversion, _ *state.LUKS) { c.TransientErrors = encrypt.TransientRetries })
+	f.dev.set(func(d *device) { d.dracutExit = 1 })
+	if got := f.preparer().Prepare(context.Background()); got != encrypt.Failed {
+		t.Fatalf("outcome %v", got)
+	}
+	c := f.conversion()
+	if c.Phase != state.ConversionFailed || c.FailureStage != state.StagePrepare || !c.CleanupPending || !c.ModuleWritten {
+		t.Fatalf("conversion %+v", c)
+	}
+	for v, original := range originals {
+		if !neutralized(t, f, v, original) {
+			t.Fatalf("the initrd of %s is not neutralized", v)
+		}
+	}
+	if !f.moduleGone() || !f.dev.Exists("/var/lib/paddock/encrypt/plan.env") || !f.dev.Exists("/var/lib/paddock/install-passphrase") {
+		t.Fatal("not disarmed, or plan.env or the key removed before the cleanup")
+	}
+	if types := f.store.types(); slices.Contains(types, protocol.EventDiskConversionNeutralizeFailed) {
+		t.Fatalf("events %v", types)
+	}
+	f.dev.set(func(d *device) { d.dracutExit = 0 })
+	if done, err := encrypt.RunCleanup(context.Background(), f.dev, f.dev.layout, f.store); !done || err != nil {
+		t.Fatalf("cleanup %v %v", done, err)
+	}
+	for v := range originals {
+		if f.dev.initrdCarriesModule(v) || strings.Contains(f.read("/boot/initrd.img-"+v), "PADDOCK_LAYOUT=cancelled") {
+			t.Fatalf("the initrd of %s still carries the module or the override", v)
+		}
+	}
+	if c := f.conversion(); c.Phase != state.ConversionFailed || c.CleanupPending || f.dev.Exists("/var/lib/paddock/install-passphrase") {
+		t.Fatalf("conversion %+v", c)
 	}
 }
 
