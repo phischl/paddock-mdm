@@ -1,7 +1,16 @@
 # Audit domain (plan M0 §6.8, architecture §4.1). In production this file runs on a separate host with its own
 # credentials; the control plane only reaches audit-postgres (read-only role) and RabbitMQ.
+
+# YAML anchors do not cross files: the same log rotation as x-paddock-logging of compose.yaml (plan M10 decision 40).
+x-paddock-logging: &paddock-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+
 services:
   audit-postgres:
+    logging: *paddock-logging
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
     pids_limit: 512
@@ -28,6 +37,7 @@ services:
       retries: 20
 
   audit-rustfs:
+    logging: *paddock-logging
     image: ${RUSTFS_IMAGE}
     restart: unless-stopped
     pids_limit: 512
@@ -48,6 +58,7 @@ services:
       retries: 20
 
   paddock-audit-migrate:
+    logging: *paddock-logging
     <<: &paddock-audit
       image: ${PADDOCK_IMAGE:-paddock-server:dev}
       profiles: [paddock]
@@ -69,6 +80,7 @@ services:
         condition: service_healthy
 
   paddock-audit-writer:
+    logging: *paddock-logging
     <<: *paddock-audit
     restart: unless-stopped
     command: ["serve", "audit-writer"]
