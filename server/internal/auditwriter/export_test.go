@@ -147,3 +147,9 @@ var ExportReadme = renderReadme
 
 // SetExportMaxDecoded lowers the decompressed size limit of one object.
 func SetExportMaxDecoded(e *Exporter, n uint64) { e.maxDecoded = n }
+
+// SetReadyCommitted replaces the error of the transaction that marks an export ready after it ended, to simulate a
+// COMMIT whose outcome the client never learned.
+func SetReadyCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
+	e.readyCommitted = fn
+}

@@ -49,6 +49,7 @@ const (
 	exportErrorLimit     = 500
 	exportRecordTimeout  = 30 * time.Second
 	exportRecordAttempts = 3
+	exportStatusTimeout  = 30 * time.Second
 	exportStuckError     = "exporter restarted"
 	errorExportFailed    = "export_failed"
 	storeAuditExports    = "audit_exports"
@@ -88,6 +89,8 @@ type Exporter struct {
 	chunkSize int
 	// maxDecoded bounds the decompressed size of one object.
 	maxDecoded uint64
+	// readyCommitted is nil; tests turn a committed ready update into an unknown outcome.
+	readyCommitted func(ctx context.Context, id uuid.UUID, err error) error
 }
 
 // NewExporter creates an exporter; version names the generator in the package.
@@ -202,6 +205,10 @@ func (e *Exporter) Build(ctx context.Context, export auditstore.AuditExport) err
 		if errors.Is(err, errNotRunning) {
 			return err
 		}
+		if err != nil && e.becameReady(ctx, export.ID) {
+			slog.WarnContext(ctx, "evidence export: ready despite an error", "export_id", export.ID, "error", err)
+			err = nil
+		}
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -213,8 +220,9 @@ func (e *Exporter) Build(ctx context.Context, export auditstore.AuditExport) err
 		}
 		if !failed {
 			// The stuck check failed the export and recorded its outcome while this build may still have
-			// inserted chunks.
-			if _, delErr := e.deleteChunks(context.WithoutCancel(ctx), export.ID); delErr != nil {
+			// inserted chunks. Only an ended export loses them: a ready update whose outcome becameReady could not
+			// read may have committed.
+			if _, delErr := e.deleteEndedChunks(context.WithoutCancel(ctx), uuid.NullUUID{UUID: export.ID, Valid: true}); delErr != nil {
 				return errors.Join(err, errNotRunning, delErr)
 			}
 			return errors.Join(err, errNotRunning)
@@ -254,6 +262,9 @@ func (e *Exporter) markReady(ctx context.Context, export auditstore.AuditExport,
 		})
 		return err
 	})
+	if e.readyCommitted != nil {
+		err = e.readyCommitted(ctx, export.ID, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -281,6 +292,34 @@ func (e *Exporter) failRunning(ctx context.Context, id uuid.UUID, message string
 	return updated > 0, err
 }
 
+// becameReady reports whether the export is ready after markReady failed: the COMMIT may have succeeded although the
+// client never learned it, and a ready package must keep its chunks and get its completed event.
+func (e *Exporter) becameReady(ctx context.Context, id uuid.UUID) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), exportStatusTimeout)
+	defer cancel()
+	var status string
+	err := e.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		export, err := q.GetAuditExport(ctx, id)
+		status = export.Status
+		return err
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "evidence export: status not read", "export_id", id, "error", err)
+	}
+	return err == nil && status == "ready"
+}
+
+// deleteEndedChunks deletes the chunks of failed and expired exports; with a null id, of all of them.
+func (e *Exporter) deleteEndedChunks(ctx context.Context, id uuid.NullUUID) (int64, error) {
+	var n int64
+	err := e.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		n, err = q.DeleteEndedAuditExportChunks(ctx, id)
+		return err
+	})
+	return n, err
+}
+
 func (e *Exporter) deleteChunks(ctx context.Context, id uuid.UUID) (int64, error) {
 	var n int64
 	err := e.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
@@ -292,7 +331,8 @@ func (e *Exporter) deleteChunks(ctx context.Context, id uuid.UUID) (int64, error
 }
 
 // Expire deletes the chunks of ready exports past their expiry (status expired, retention.purged in the export's
-// organization) and fails exports that stayed running longer than ExportStuckAfter (plan M10 decision 34).
+// organization), fails exports that stayed running longer than ExportStuckAfter (plan M10 decision 34) and deletes
+// chunks left behind by failed or expired exports.
 func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err error) {
 	var due, stuck []auditstore.AuditExport
 	stuckBefore := now.Add(-ExportStuckAfter)
@@ -345,6 +385,15 @@ func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err 
 		metricExport.WithLabelValues("failed").Inc()
 		slog.WarnContext(ctx, "evidence export abandoned", "export_id", export.ID, "started_at", export.StartedAt)
 		e.recordSelf(ctx, completedEvent(export, nil, exportStuckError))
+	}
+	// A builder that was failed by the stuck check can still insert chunks and then die before deleting them; its
+	// outcome is already recorded, so the leftovers need no event but must not outlive the export's expiry.
+	n, err := e.deleteEndedChunks(ctx, uuid.NullUUID{})
+	if err != nil {
+		return expired, fmt.Errorf("delete chunks of ended exports: %w", err)
+	}
+	if n > 0 {
+		slog.WarnContext(ctx, "evidence export: deleted leftover chunks", "chunks", n)
 	}
 	return expired, nil
 }

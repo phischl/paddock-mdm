@@ -165,15 +165,18 @@ func ManifestDigest(file ManifestFile) ([]byte, [32]byte, error) {
 }
 
 // ObjectPath maps the store key org/<org>/… of an object of organizationID to its package path objects/…; a key
-// outside the organization's prefix, or one with a ".." segment, an absolute remainder or a backslash, is an error.
+// outside the organization's prefix, or one with an empty, "." or ".." segment or a backslash, is an error.
 func ObjectPath(organizationID, key string) (string, error) {
 	prefix := "org/" + organizationID + "/"
 	rest, ok := strings.CutPrefix(key, prefix)
 	if !ok || rest == "" || organizationID == "" {
 		return "", fmt.Errorf("auditevidence: object %q is outside the prefix %s", key, prefix)
 	}
-	// The path becomes a tar member name that an auditor extracts; it must not escape objects/.
-	if strings.HasPrefix(rest, "/") || strings.Contains(rest, "\\") || slices.Contains(strings.Split(rest, "/"), "..") {
+	// The path becomes a tar member name that an auditor extracts; it must not escape objects/, and two keys must not
+	// name the same member.
+	if strings.Contains(rest, "\\") || slices.ContainsFunc(strings.Split(rest, "/"), func(seg string) bool {
+		return seg == "" || seg == "." || seg == ".."
+	}) {
 		return "", fmt.Errorf("auditevidence: object %q is not a plain relative path", key)
 	}
 	return "objects/" + rest, nil

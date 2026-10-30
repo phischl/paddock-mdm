@@ -74,6 +74,12 @@ INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES (@
 -- name: DeleteAuditExportChunks :execrows
 DELETE FROM audit_export_chunk WHERE export_id = @export_id;
 
+-- name: DeleteEndedAuditExportChunks :execrows
+-- The status is read in the same statement, so the chunks of an export that became ready are never deleted.
+DELETE FROM audit_export_chunk c USING audit_export e
+WHERE c.export_id = e.id AND e.status IN ('failed', 'expired')
+  AND (sqlc.narg(export_id)::uuid IS NULL OR e.id = sqlc.narg(export_id)::uuid);
+
 -- name: OldestPendingAuditExportAge :one
 SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(requested_at)), 0)::float8 AS age_seconds
 FROM audit_export WHERE status = 'pending';

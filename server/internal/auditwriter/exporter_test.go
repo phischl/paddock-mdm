@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -586,6 +587,97 @@ func TestExportExpireAndStuck(t *testing.T) {
 	}
 	if n := len(e.events(t, org, audit.CodeRetentionPurged, expired)); n != 1 {
 		t.Fatalf("%d retention.purged events after a second round", n)
+	}
+}
+
+// TestExportExpireDeletesLeftoverChunks: chunks a dead builder left with a failed or expired export are deleted by
+// the next expiry pass without another event; ready and running exports keep theirs.
+func TestExportExpireDeletesLeftoverChunks(t *testing.T) {
+	e := newExportEnv(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	d := pastDay(21)
+	now := time.Now().UTC()
+	later := now.Add(time.Hour)
+	ids := map[string]uuid.UUID{}
+	for _, status := range []string{"failed", "expired", "ready", "running"} {
+		id := uuid.Must(uuid.NewV7())
+		var expires *time.Time
+		if status == "ready" {
+			expires = &later
+		}
+		if _, err := e.super.Exec(ctx, `INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose,
+			requested_by, correlation_id, started_at, expires_at) VALUES ($1, $2, $3, $4, $4, 'x', '{"type":"admin"}', $5, $6, $7)`,
+			id, org, status, d, "req-"+id.String(), now, expires); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.super.Exec(ctx, "INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, 0, 'abc')", id, org); err != nil {
+			t.Fatal(err)
+		}
+		ids[status] = id
+	}
+	for range 2 {
+		if _, err := e.exporter.Expire(ctx, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for status, id := range ids {
+		left := len(e.chunks(t, id))
+		if (status == "failed" || status == "expired") != (left == 0) {
+			t.Fatalf("%s export has %d chunk bytes", status, left)
+		}
+		if got := e.export(t, id); got.Status != status {
+			t.Fatalf("%s export became %s", status, got.Status)
+		}
+		for _, code := range []audit.Code{audit.CodeAuditExportCompleted, audit.CodeRetentionPurged} {
+			if n := len(e.events(t, org, code, id)); n != 0 {
+				t.Fatalf("%d %s events for the %s export", n, code, status)
+			}
+		}
+	}
+}
+
+// TestExportReadyDespiteLostCommit: when the transaction marking an export ready commits but the client gets an
+// error (lost acknowledgement, shutdown), the build keeps the package and records its success once.
+func TestExportReadyDespiteLostCommit(t *testing.T) {
+	e := newExportEnv(t)
+	for _, c := range []struct {
+		name   string
+		cancel bool
+	}{{"lost acknowledgement", false}, {"shutdown during commit", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			org := uuid.Must(uuid.NewV7())
+			d := pastDay(6)
+			e.object(t, org, d.Add(time.Hour), 2)
+			e.seal(t, org, d)
+			x := e.running(t, org, d, d, c.name)
+			auditwriter.SetReadyCommitted(e.exporter, func(_ context.Context, _ uuid.UUID, err error) error {
+				if err != nil {
+					return err
+				}
+				if c.cancel {
+					cancel()
+				}
+				return errors.New("connection reset")
+			})
+			defer auditwriter.SetReadyCommitted(e.exporter, nil)
+			if err := e.exporter.Build(ctx, x); err != nil {
+				t.Fatalf("build: %v", err)
+			}
+			got := e.export(t, x.ID)
+			if got.Status != "ready" || got.Size == nil || *got.Size == 0 {
+				t.Fatalf("export = %+v", got)
+			}
+			if n := int64(len(e.chunks(t, x.ID))); n != *got.Size {
+				t.Fatalf("%d chunk bytes, size %d", n, *got.Size)
+			}
+			evs := e.events(t, org, audit.CodeAuditExportCompleted, x.ID)
+			if len(evs) != 1 || evs[0].outcome != "success" {
+				t.Fatalf("audit.export_completed = %+v", evs)
+			}
+		})
 	}
 }
 

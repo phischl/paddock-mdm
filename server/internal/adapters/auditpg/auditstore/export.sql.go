@@ -96,6 +96,21 @@ func (q *Queries) DeleteAuditExportChunks(ctx context.Context, exportID uuid.UUI
 	return result.RowsAffected(), nil
 }
 
+const deleteEndedAuditExportChunks = `-- name: DeleteEndedAuditExportChunks :execrows
+DELETE FROM audit_export_chunk c USING audit_export e
+WHERE c.export_id = e.id AND e.status IN ('failed', 'expired')
+  AND ($1::uuid IS NULL OR e.id = $1::uuid)
+`
+
+// The status is read in the same statement, so the chunks of an export that became ready are never deleted.
+func (q *Queries) DeleteEndedAuditExportChunks(ctx context.Context, exportID uuid.NullUUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteEndedAuditExportChunks, exportID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getAuditExport = `-- name: GetAuditExport :one
 SELECT id, organization_id, status, from_day, to_day, purpose, requested_by, requested_at, started_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, signature, key_version, error, correlation_id FROM audit_export WHERE id = $1
 `
