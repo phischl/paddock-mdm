@@ -253,6 +253,38 @@ func waitAuditCaughtUp(t *testing.T, root *env.Portal, idx *env.AuditIndex) {
 	t.Logf("audit pipeline caught up after %s", time.Since(start).Round(time.Second))
 }
 
+// waitAuditPast blocks until a marker event triggered now (the probe of waitAuditCaughtUp) is visible in the audit
+// index and then for the settle delay of its lag (auditSettle). An absence check that follows covers every event
+// the stack committed before the call, however slow the pipeline is (PDK-569).
+func waitAuditPast(t *testing.T, root *env.Portal, idx *env.AuditIndex) {
+	t.Helper()
+	ctx := testContext(t, auditPollTimeout+time.Minute)
+	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", map[string]string{"slug": "Not A Slug", "name": "x"})
+	expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+	start := time.Now()
+	deadline := start.Add(auditPollTimeout)
+	for {
+		polled := time.Now()
+		_, found, err := idx.RecordingLag(ctx, uuid.Nil, res.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found {
+			break
+		}
+		if polled.After(deadline) {
+			t.Fatalf("audit marker %s not visible within %s", res.RequestID, auditPollTimeout)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	// The relay publishes the outbox in id order to the single serial audit writer, so an earlier event is recorded
+	// no later than the marker; the settle covers a requeued batch or a second relay replica reordering them.
+	waited := time.Since(start)
+	settle := auditSettle(waited)
+	t.Logf("audit marker visible after %s, settling %s", waited.Round(10*time.Millisecond), settle)
+	time.Sleep(settle)
+}
+
 // tempUser creates an Authentik user in groups and deletes it when the test ends.
 func tempUser(t *testing.T, prefix string, groups ...string) (string, string) {
 	t.Helper()
