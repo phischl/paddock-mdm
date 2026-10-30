@@ -536,3 +536,47 @@ tests:
             exp_annotations:
               summary: "The audit chain was not verified for 36 hours"
               description: "The audit writer's last nightly chain verification finished 1d 17h 32m 0s ago; check the audit writer's log for the 00:45 UTC cycle."
+
+  # PDK-137: device_user_seen stops succeeding at time 0, device_login_event keeps succeeding every minute.
+  - name: a retention store without success for 48 hours fires after one more hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_retention_last_success_timestamp_seconds{store="device_login_event", role="paddock-worker"}'
+        values: "0+60x3000"
+      - series: 'paddock_retention_last_success_timestamp_seconds{store="device_user_seen", role="paddock-worker"}'
+        values: "0x3000"
+      - series: 'paddock_retention_stores{role="paddock-worker"}'
+        values: "2x3000"
+    alert_rule_test:
+      - eval_time: 2900m
+        alertname: PaddockRetentionPurgeStale
+        exp_alerts: []
+      - eval_time: 2950m
+        alertname: PaddockRetentionPurgeStale
+        exp_alerts:
+          - exp_labels: { severity: critical, store: device_user_seen }
+            exp_annotations:
+              summary: "The retention purge of device_user_seen has not succeeded for 48 hours"
+              description: "The worker's retention round has not purged device_user_seen in every organization for 48 hours; check its log for the failing organization (docs/operations/monitoring.md)."
+      - eval_time: 2950m
+        alertname: PaddockRetentionPurgeMissing
+        exp_alerts: []
+
+  - name: a retention store that never succeeds is missing after an hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_retention_stores{role="paddock-worker"}'
+        values: "2x70"
+      - series: 'paddock_retention_last_success_timestamp_seconds{store="device_login_event", role="paddock-worker"}'
+        values: "0+60x70"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PaddockRetentionPurgeMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockRetentionPurgeMissing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "The retention purge of some stores never succeeded"
+              description: "The worker exports the last retention success of fewer stores than it purges; check its log."

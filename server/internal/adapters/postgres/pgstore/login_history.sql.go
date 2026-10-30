@@ -156,7 +156,8 @@ DELETE FROM device_login_event WHERE ctid IN (
 )
 `
 
-// One batch of rows older than the cutoff; the worker repeats it until it deletes nothing.
+// One batch of rows older than the cutoff; the retention round runs each batch in its own transaction until one
+// deletes fewer than 1 000 rows (plan M10 amendment 2026-10-30).
 func (q *Queries) PurgeDeviceLoginEvents(ctx context.Context, cutoff time.Time) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeDeviceLoginEvents, cutoff)
 	if err != nil {
