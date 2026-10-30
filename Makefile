@@ -13,6 +13,7 @@ SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
 GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
 UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... \
+	./test/acceptance/internal/stack/... \
 	./test/acceptance/cmd/acceptanceshard/...
 WEB_DIR       := server/web
 IMAGE         ?= paddock-server:dev
@@ -33,9 +34,22 @@ ifneq ($(BACKUP),)
 export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
 endif
 
-COMPOSE := docker compose --project-directory $(COMPOSE_DIR) -p paddock \
+# The stack of this checkout: deploy/compose/.env names its Compose project and host ports, so a second development
+# stack runs from a second checkout (docs/operations/local-dev.md, "Running a second dev stack"). The process
+# environment wins, as it does for Compose and lib.sh. Recursive, because `make up` creates .env (dev-secrets) first.
+dotenv      = $(shell sed -n 's/^$(1)=//p' $(COMPOSE_DIR)/.env 2>/dev/null | tail -1)
+dev_setting = $(or $($(1)),$(call dotenv,$(1)),$(2))
+# A PADDOCK_INSTANCE that is not the one of this checkout stops make: the other stack may be in use.
+dev_instance_guard = $(if $(and $(PADDOCK_INSTANCE),$(filter-out $(or $(call dotenv,PADDOCK_INSTANCE),1),$(PADDOCK_INSTANCE))),\
+	$(error PADDOCK_INSTANCE is $(PADDOCK_INSTANCE), but $(COMPOSE_DIR)/.env belongs to instance $(or $(call dotenv,PADDOCK_INSTANCE),1)))
+DEV_PROJECT = $(dev_instance_guard)$(call dev_setting,PADDOCK_PROJECT,paddock)
+DEV_HTTPS   = https://%.$(call dev_setting,PADDOCK_DOMAIN,paddock.localhost):$(call dev_setting,PADDOCK_HTTPS_PORT,8443)
+
+COMPOSE = docker compose --project-directory $(COMPOSE_DIR) -p $(DEV_PROJECT) \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
 	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES),-f $(COMPOSE_DIR)/$(f))
+# Expanded only where a recipe uses them, so that the guard stops the stack's targets and no other one.
+unexport dotenv dev_setting dev_instance_guard DEV_PROJECT DEV_HTTPS COMPOSE LOAD_GUARD
 
 NODE_RUN := docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 	-v $(CURDIR):/src -w /src/$(WEB_DIR) $(NODE_IMAGE)
@@ -55,7 +69,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
@@ -70,6 +84,26 @@ lint-supervisor-budget:
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
+	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
+	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
+
+# Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
+# [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them
+# into the release section (docs/operations/agent-releases.md, Server release). SCHEMA is the text after "Schema: "
+# (`unchanged` or `migrations NNNNN–NNNNN …`).
+.PHONY: changelog
+changelog: ## Assemble changelog.d/ into CHANGELOG.md: make changelog RELEASE_VERSION=<version> SCHEMA="<text>"
+	@if [ -z "$(RELEASE_VERSION)" ] || [ -z "$(SCHEMA)" ]; then \
+		echo 'usage: make changelog RELEASE_VERSION=x.y.z[-alpha.N] SCHEMA="unchanged | migrations NNNNN–NNNNN ..."' >&2; exit 2; fi
+	bash scripts/changelog-assemble.sh --version '$(RELEASE_VERSION)' --schema '$(subst ','\'',$(SCHEMA))'
+
+.PHONY: changelog-preview
+changelog-preview: ## Print the CHANGELOG.md section the next release would get (changes nothing)
+	@bash scripts/changelog-assemble.sh --preview $(if $(RELEASE_VERSION),--version '$(RELEASE_VERSION)')
+
+.PHONY: changelog-check
+changelog-check: ## Validate the changelog fragments in changelog.d/
+	@bash scripts/changelog-assemble.sh --check
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
@@ -123,6 +157,12 @@ lint-go:
 	go vet $(GO_PACKAGES)
 	go test -count=1 -run '^TestOpenAPISpec$$' ./server/internal/transport/http/admin/
 
+# Every workspace module must be tidy (PDK-457): an untidy go.mod otherwise drifts unnoticed and resurfaces in every
+# dependency update. go mod tidy -diff prints the change and fails without writing go.mod or go.sum.
+.PHONY: lint-tidy
+lint-tidy:
+	@set -e; for m in $(GO_MODULES); do echo "go mod tidy -diff $$m"; (cd $$m && go mod tidy -diff); done
+
 # govulncheck checks every workspace module, including its tests, in the pinned Go image (plan M2.1 decision 2); a
 # vulnerability in reachable code fails.
 .PHONY: lint-vuln
@@ -169,6 +209,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
+	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
@@ -176,6 +217,8 @@ test: ## Unit and integration tests (requires Docker)
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
 	bash test/skill_test.sh
+	bash scripts/changelog-assemble_test.sh
+	bash scripts/acceptance-scope_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -352,9 +395,11 @@ dev-seed: ## Create organizations acme and globex and assign the dev users
 
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards
-# (SHARD=i/n, PDK-359), each against its own stack: with three shards ~27-29 min of measured gate time each, about
-# 35 min per `make acceptance` step on a runner. Keep at least 20 % headroom when gates are added.
-ACCEPTANCE_TIMEOUT ?= 120m
+# (SHARD=i/n, PDK-359), each against its own stack: with four shards ~32 min of measured gate time each (PDK-361,
+# 2026-10-29). Keep at least 20 % headroom when gates are added.
+# A serial run (neither SHARD nor T) needs more: on 2026-10-29 the gates summed to ~131 min on a GitHub runner
+# (PDK-463), so with 20 % headroom it defaults to 180m; a shard or a single gate keeps 120m. An explicit value wins.
+ACCEPTANCE_TIMEOUT ?= $(if $(SHARD)$(T),120m,180m)
 
 # paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.
 PADDOCKCTL_LDFLAGS = -s -w -X main.version=$(VERSION)
@@ -385,7 +430,7 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 		echo "acceptance shard $(SHARD): -run '$$run'"; \
 	fi; \
 	set --; [ -z "$$run" ] || set -- -run "$$run"; \
-	set -x; PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
+	set -x; PADDOCK_PROJECT=$(DEV_PROJECT) PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
 		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... "$$@" -v
 
 .PHONY: system-test
@@ -408,29 +453,35 @@ e2e-check-playwright:
 		exit 1; \
 	fi
 
+# Only the checkout is mounted at /src, so a .secrets symlink to another worktree would dangle in the container
+# (ENOENT on every login); its resolved path is mounted at /secrets instead, for the specs (PADDOCK_E2E_SECRETS) and
+# the Go helpers they run, bin/devicesim and bin/agentrelease (PADDOCK_SECRETS_DIR, stack.SecretsDir) (PDK-353).
 .PHONY: e2e
-e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
+e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (optional SPEC=<spec file or filter>; PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
-		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
+		-e PADDOCK_E2E_SECRETS=/secrets -e PADDOCK_SECRETS_DIR=/secrets -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
+		-e PADDOCK_PROJECT=$(DEV_PROJECT) \
+		-e PADDOCK_E2E_BASE_URL=$(or $(PADDOCK_E2E_BASE_URL),$(subst %,admin,$(DEV_HTTPS))) \
+		-e PADDOCK_E2E_AUTH_URL=$(or $(PADDOCK_E2E_AUTH_URL),$(subst %,auth,$(DEV_HTTPS))) \
 		-e PADDOCK_E2E_AGENTRELEASE=/src/bin/agentrelease -e PADDOCK_E2E_SCREENSHOTS \
-		-v $(CURDIR):/src -w /src/$(WEB_DIR) \
-		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test'
+		-v $(CURDIR):/src -v "$$(realpath -e $(SECRETS_DIR))":/secrets -w /src/$(WEB_DIR) \
+		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test $(SPEC)'
 
-# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network paddock_cp and talk to
+# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network <project>_cp and talk to
 # one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Paddock-Client-IP address.
 LOAD_DIR := bin/load
 COUNT    ?= 10000
 SCENARIO ?= checkin
-# Never against production (PDK-006 review 1): load-guard.sh refuses unless the running gateway of the project paddock
+# Never against production (PDK-006 review 1): load-guard.sh refuses unless the running gateway of the checkout's project
 # is not PADDOCK_ENV=production and the checkout is a development one.
-LOAD_GUARD = gw=$$(docker ps -q --filter label=com.docker.compose.project=paddock \
+LOAD_GUARD = gw=$$(docker ps -q --filter label=com.docker.compose.project=$(DEV_PROJECT) \
 		--filter label=com.docker.compose.service=paddock-gateway | head -1); \
 	gw_env=$$([ -n "$$gw" ] && docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $$gw | \
 		sed -n 's/^PADDOCK_ENV=//p' | tail -1); \
 	bash $(COMPOSE_DIR)/scripts/load-guard.sh $(COMPOSE_DIR) "$$gw_env" $$(docker ps -a \
-		--filter label=com.docker.compose.project=paddock --format '{{.Label "com.docker.compose.project.config_files"}}' | \
+		--filter label=com.docker.compose.project=$(DEV_PROJECT) --format '{{.Label "com.docker.compose.project.config_files"}}' | \
 		tr ',' '\n' | sort -u)
 
 .PHONY: load-identities
@@ -438,7 +489,7 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 	@test -n "$(CONFIGS)" || { echo "usage: make load-identities CONFIGS='token-1.json token-2.json …' [COUNT=10000]"; exit 2; }
 	@$(LOAD_GUARD)
 	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/identities ./test/load/cmd/identities
-	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
+	docker run --rm --network $(DEV_PROJECT)_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
 		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
 		--server http://paddock-gateway:8081 --client-ip --out $(LOAD_DIR)/identities.json
 
@@ -446,7 +497,7 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 load-test: ## Run the k6 scenario SCENARIO=checkin|ingest against the running stack (RATE, VUS, WARMUP, DURATION, EVENTS_PER_S, BATCH, DRAIN, SCRAPE_INTERVAL_S)
 	@test -s $(LOAD_DIR)/identities.json || { echo "missing $(LOAD_DIR)/identities.json: run make load-identities"; exit 2; }
 	@$(LOAD_GUARD)
-	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
+	docker run --rm --network $(DEV_PROJECT)_cp -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
 		-e IDENTITIES=/data/identities.json \
 		$(foreach v,RATE VUS WARMUP DURATION EVENTS_PER_S BATCH DRAIN GATEWAY_URL PROMETHEUS_URL SCRAPE_INTERVAL_S,$(if $($(v)),-e $(v)='$($(v))',)) \
 		$(K6_IMAGE) run --summary-export /data/$(SCENARIO)-summary.json /scripts/$(SCENARIO).js
@@ -764,13 +815,17 @@ gitleaks_strip_default = awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
 		"without global paths; its layout changed and must be looked at (ADR 0026)" >&2; exit 1; }
 # gitleaks_canary,<config dir>,<its path in the container>: the configuration in <config dir> must report a fake
 # GitHub token under node_modules/, vendor/github.com/ and an ordinary path chosen per run, so that an allowlist built
-# around the fixed canary paths (^[^nv./]) still fails it.
+# around the fixed canary paths (^[^nv./]) still fails it. The token never contains an l (PDK-388): the value-based
+# global allowlist of the default drops any secret containing "false", ending in "null" (both case-insensitive) or
+# containing the stopword "abcdefghijklmnopqrstuvwxyz", and each of them needs an l, so a random token from the full
+# alphabet was dropped about twice in a million and the canary then failed a configuration that was fine.
 GITLEAKS_CANARY = node_modules/canary.txt vendor/github.com/canary/canary.txt
+GITLEAKS_CANARY_ALPHABET = A-KM-Za-km-z0-9
 gitleaks_canary = rnd=$$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8); \
 	canaries="$(GITLEAKS_CANARY) src/$$rnd/canary.txt"; \
 	for f in $$canaries; do \
 		mkdir -p -- "$$tmp/canary/$${f%/*}" || exit 1; \
-		printf 'GITHUB_TOKEN=ghp_%s\n' "$$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)" \
+		printf 'GITHUB_TOKEN=ghp_%s\n' "$$(LC_ALL=C tr -dc '$(GITLEAKS_CANARY_ALPHABET)' </dev/urandom | head -c 36)" \
 			>"$$tmp/canary/$$f" || exit 1; done; \
 	mkdir -p "$$tmp/canary-out" || exit 1; \
 	docker run --rm --user "$$(id -u):$$(id -g)" -v $(1):$(2):ro -v "$$tmp/canary:/canary:ro" \

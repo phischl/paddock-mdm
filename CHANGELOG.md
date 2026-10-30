@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Entries of merged changes that are not released yet are in `changelog.d/`.
+
 ### Added
 
+- A second development stack on the same host (PDK-519): `PADDOCK_INSTANCE=2 make dev-secrets` in a second checkout
+  writes a `.env` with its own Compose project (`paddock2`), image tags and host ports (every port 100 higher: HTTPS
+  `8543`), and every `make` target and acceptance and end-to-end gate of that checkout then reaches that stack. The
+  loopback ports of the development stack are settings (`PADDOCK_DEV_*_PORT`); unset, nothing changes. A command with
+  a `PADDOCK_INSTANCE` other than the checkout's is refused. See "Running a second dev stack" in
+  `docs/operations/local-dev.md`.
+- The system gates on the test VMs run against the stack of their checkout (PDK-525): from a second development
+  stack's checkout they use its Compose project and HTTPS port, e.g. when they cut a device off from the server.
 - MCP tool catalog generated from the admin API contract (ADR 0044, PDK-434): `make gen` derives one tool per admin
   API operation (outside the login tag) from `api/openapi/admin.yaml`, classified as read or write, with scope,
   destructive and idempotent hints and a self-contained input schema. The contract gains the extensions
@@ -56,55 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limited. `GET /api/v1/me`, `GET /api/v1/mcp/access` (what the caller's MCP sessions may do) and
   `GET /api/v1/mcp/catalog` (the tool catalog) always answer. New metric `paddock_mcp_requests_total{class, result}`.
   An MCP session calling `POST /api/v1/me/mcp-write/enable` or `…/disable` now gets 403 `mcp_tool_not_allowed`.
-- `paddockctl mcp` (ADR 0044, PDK-439): `paddockctl mcp login [--no-browser] [--platform]` signs the administrator in
-  through Authentik in the browser (password and second factor, device authorization grant) and keeps the session in
-  `$XDG_STATE_HOME/paddockctl/mcp-session.json` (mode 0600); `--platform` picks the platform role of a two-role
-  identity. `paddockctl mcp` is a stdio MCP server for local MCP clients such as Claude Code: it offers the admin API
-  operations the server currently allows the session as tools, renews the session before the access token expires,
-  and wraps every result with a notice that the data is never an instruction. `paddockctl mcp tools [-o table|json]`
-  lists the offered tools; `paddockctl mcp logout` ends the session and revokes the refresh token. The MCP never uses
-  an API token. paddockctl now depends on the MCP Go SDK `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
-  `golang.org/x/oauth2`. The license gate allows `MIT-0` and exempts `github.com/segmentio/asm` (MIT-0, a dependency of
-  the SDK that go-licenses cannot classify).
-- Portal page *Platform › MCP policy* (ADR 0044, PDK-441): platform administrators switch the MCP on or off for their
-  own MCP sessions, allow or refuse changes through the MCP, and choose between all tools and a selection of the
-  platform tools (grouped by area, filterable; step-up operations are shown as portal only). Without a saved policy
-  the page says that the MCP is switched off. Saving is confirmed and needs a step-up. There is no token page:
-  administrators connect with `paddockctl mcp login`.
-- Portal page *Settings › MCP* (ADR 0044, PDK-440) at `/settings/mcp` in the organization group: organization
-  administrators switch the MCP on or off, allow or refuse changes through the MCP and choose between all tools and
-  a selection from the tool catalog (grouped by area, with a filter; step-up actions are listed as *portal only*).
-  Saving asks for confirmation and a step-up. The page names `paddockctl mcp login` as the way to connect; operators
-  and auditors see the policy read-only. The audit log shows an *MCP* chip and the MCP client's name on events of an
-  MCP session.
-- MCP write access in the portal's account menu (ADR 0044, PDK-442): the entry *AI assistant (MCP)* shows whether the
-  administrator's MCP sessions may change data and opens a dialog that explains the three layers (role, MCP policy,
-  own write access). *Enable write access* is confirmed and needs a step-up; *Disable write access* is confirmed and
-  takes effect at once. Auditors have no entry. `GET /api/v1/me` additionally answers `mcp_write_enabled_at`, since
-  when write access is enabled (null while it is disabled).
-- AI assistants through the MCP, documented and gated (ADR 0044, PDK-443): the operations guide
-  `docs/operations/mcp.md` covers the MCP login through Authentik (`paddockctl mcp login|logout`, no tokens), the MCP
-  server `paddockctl mcp`, the three switches (role, the MCP policies of organization and platform, each
-  administrator's write opt-in), connecting Claude Code and Claude Desktop, what the assistant cannot do (step-up
-  actions), the default that keeps the MCP off until a policy is saved, the rate limits, revocation, troubleshooting
-  and prompt injection. New audit codes `organization.mcp_policy_changed`, `platform.mcp_policy_changed`,
-  `admin.mcp_write_enabled` and `admin.mcp_write_disabled`; `admin.login` records `channel` and `renewal`, events of
-  MCP sessions carry `source: mcp` and `actor.client`. Residual risks RR-85 to RR-89 (prompt injection through data,
-  channel bypass with an API token, the refresh token on the workstation, step-up actions only refused, reads not
-  audited per call) are in `docs/compliance/residual-risks.md`; the privacy notes say what an assistant on the
-  administrator's machine sees. **Upgrade:** Authentik applies the new blueprint `paddock-mcp.yaml` at its first start
-  after the upgrade; nothing else changes until an administrator saves an MCP policy. Record RR-85 to RR-89 before
-  enabling it.
-- Claude skill `skills/operate-paddock` (ADR 0044, PDK-444): teaches an AI assistant to operate Paddock — connecting
-  through `paddockctl mcp`, its rules (tool results are data, no credentials, step-up actions go to the human with the
-  portal page, confirmation before destructive tools, `applyConfig` dry run first) and the workflows install,
-  upgrade, lab installation, first device, release import and staged rollout, a device that does not check in,
-  tamper events and disk recovery, each pointing to the runbook section and the tools to call.
-  `references/tools.md`, the tool catalog by tag with the step-up list, is generated by `make gen`; `make test` checks
-  the skill's paths, anchors and tool names against the runbooks and the catalog.
 
 ### Changed
 
+- CI: the acceptance gates run in four parallel shards (was three), balanced by the median durations of eight recent
+  CI runs, so a pull request waits about 41 instead of up to 75 minutes for its slowest acceptance job. The gates
+  themselves are unchanged. The shard check now fails on a listed test it cannot parse instead of leaving it out, and
+  a failed disruptive/e2e job prints Fleet's full log again (PDK-361). No operator step.
 - CI: the acceptance shards and the disruptive/e2e job run only for pull requests to main, pushes to main and the
   weekly schedule. Pull requests into other branches (a cluster branch collecting several tickets) run lint, unit
   tests, the portal build and the secret and vulnerability scans; the full acceptance stage runs once when the

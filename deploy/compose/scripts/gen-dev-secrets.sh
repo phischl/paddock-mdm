@@ -27,9 +27,49 @@ secret() {
 }
 read_secret() { cat "$SECRETS_DIR/$1"; }
 
+# set_env <name> <value> sets a setting in .env, in place when the file has it.
+set_env() {
+  if grep -q "^$1=" "$COMPOSE_DIR/.env"; then
+    sed -i "s|^$1=.*|$1=$2|" "$COMPOSE_DIR/.env"
+  else
+    printf '%s=%s\n' "$1" "$2" >>"$COMPOSE_DIR/.env"
+  fi
+}
+
+# instance_env <n> makes the new .env the one of the n-th development stack of this host: its own Compose project
+# (volumes, networks, containers) and image tags, and every host port 100·(n−1) above the first stack's, so that it
+# runs next to that stack from a second checkout (docs/operations/local-dev.md, "Running a second dev stack").
+instance_env() {
+  local n="$1" off=$((($1 - 1) * 100)) domain var
+  domain="$(sed -n 's/^PADDOCK_DOMAIN=//p' "$COMPOSE_DIR/.env" | tail -1)"
+  printf '\n# Development stack instance %s of this host (PADDOCK_INSTANCE=%s make dev-secrets).\n' "$n" "$n" \
+    >>"$COMPOSE_DIR/.env"
+  set_env PADDOCK_INSTANCE "$n"
+  set_env PADDOCK_PROJECT "paddock$n"
+  set_env PADDOCK_IMAGE "paddock-server:dev-$n"
+  set_env PADDOCK_COMPILER_IMAGE "paddock-compiler:dev-$n"
+  set_env PADDOCK_PGBACKREST_IMAGE "paddock-pgbackrest:dev-$n"
+  set_env PADDOCK_HTTPS_PORT $((8443 + off))
+  set_env PADDOCK_HTTPS_UNTRUSTED_PORT $((8444 + off))
+  set_env PADDOCK_PUBLIC_ADMIN_URL "https://admin.${domain:-paddock.localhost}:$((8443 + off))"
+  set_env PADDOCK_PUBLIC_DEVICE_URL "https://device.${domain:-paddock.localhost}:$((8443 + off))"
+  for var in POSTGRES=5432 AUDIT_POSTGRES=5433 RABBITMQ=5672 RABBITMQ_MANAGEMENT=15672 VALKEY=6379 OPENBAO=8200 \
+    AUDIT_S3=9001 FLEET=8412 PROMETHEUS=9091; do
+    set_env "PADDOCK_DEV_${var%%=*}_PORT" $((${var#*=} + off))
+  done
+}
+
+if [[ -n "${PADDOCK_INSTANCE:-}" && ! "$PADDOCK_INSTANCE" =~ ^[1-9]$ ]]; then
+  echo "PADDOCK_INSTANCE must be a number from 1 to 9 (is '$PADDOCK_INSTANCE')" >&2
+  exit 2
+fi
 if [[ ! -f "$COMPOSE_DIR/.env" ]]; then
   cp "$COMPOSE_DIR/.env.example" "$COMPOSE_DIR/.env"
   echo "created deploy/compose/.env from .env.example"
+  if [[ "${PADDOCK_INSTANCE:-1}" != 1 ]]; then
+    instance_env "$PADDOCK_INSTANCE"
+    echo "deploy/compose/.env: development stack instance $PADDOCK_INSTANCE (project paddock$PADDOCK_INSTANCE)"
+  fi
 fi
 
 # Control-plane PostgreSQL
