@@ -520,6 +520,16 @@ ci: lint test web ## Everything CI runs
 logs: ## Show logs of the stack (token= values redacted, RR-63)
 	set -o pipefail; . $(LIB_SH) && $(COMPOSE) --profile paddock logs --no-color --tail 300 | redact_tokens
 
+# The CI acceptance jobs upload this directory as an artifact when they fail (PDK-555): a stall like PDK-545 leaves its
+# evidence outside the tail of make logs. ps -a also lists containers that exited, whose logs matter most.
+.PHONY: logs-dump
+logs-dump: ## Write the full logs of every service to LOGS_DIR/<service>.log (token= values redacted, RR-63)
+	@test -n '$(LOGS_DIR)' || { echo "usage: make logs-dump LOGS_DIR=<directory>" >&2; exit 2; }
+	set -o pipefail; . $(LIB_SH) && mkdir -p '$(LOGS_DIR)' && rc=0 && \
+	for s in $$($(COMPOSE) --profile paddock ps -a --services); do \
+		$(COMPOSE) --profile paddock logs --no-color --timestamps "$$s" 2>&1 | redact_tokens >'$(LOGS_DIR)'/"$$s".log || rc=1; \
+	done; exit $$rc
+
 # --- Release (plan M6b decision 4, plan M7b decisions 4–7 and 20, docs/operations/agent-releases.md) ---------------
 # The release workflow (.github/workflows/release.yml, tags v*.*.*) and the edge job of ci.yml call these targets, in
 # this order: release-images PUSH=1, release-packages (stable only), release-sbom, release-bundle, release-sums,
