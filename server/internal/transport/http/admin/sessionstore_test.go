@@ -70,7 +70,8 @@ func newFakeSessions() *fakeSessions {
 
 func bindingID(sub string, authTime int64) string { return fmt.Sprintf("%s|%d", sub, authTime) }
 
-func (f *fakeSessions) Bind(_ context.Context, sub string, authTime int64, b sessions.Binding, ttl time.Duration) (sessions.Binding, error) {
+// Bind writes the binding only while the first login's record sid exists and is in its chain, as sessions.Store does.
+func (f *fakeSessions) Bind(_ context.Context, sid, sub string, authTime int64, b sessions.Binding, ttl time.Duration) (sessions.Binding, error) {
 	if f.beforeBind != nil {
 		f.beforeBind()
 	}
@@ -82,8 +83,12 @@ func (f *fakeSessions) Bind(_ context.Context, sub string, authTime int64, b ses
 	if ttl <= 0 {
 		return sessions.Binding{}, errors.New("binding without lifetime")
 	}
+	id := bindingID(sub, authTime)
+	if _, ok := f.records[sid]; !ok || !f.chains[id][sid] {
+		return sessions.Binding{}, sessions.ErrNoBinding
+	}
 	b.Gen = f.gen
-	f.bindings[bindingID(sub, authTime)] = b
+	f.bindings[id] = b
 	if f.lostReply["Bind"] {
 		return sessions.Binding{}, sessions.ErrUnavailable
 	}
