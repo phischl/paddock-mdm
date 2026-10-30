@@ -3,12 +3,15 @@ package admin_test
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 )
 
 // TestReadAccessRecording (plan M10 decision 20): with the organization's switches on, the audit log list records
@@ -66,4 +69,22 @@ func TestReadAccessRecording(t *testing.T) {
 	if missing.status != http.StatusNotFound || len(e.events(missing.header.Get(httpx.HeaderRequestID))) != 0 {
 		t.Fatalf("missing device: %d, events %v", missing.status, e.events(missing.header.Get(httpx.HeaderRequestID)))
 	}
+}
+
+// TestReadAccessRecordingOneRange (PDK-139): the recording and the list search the same range, so a from just after
+// the recording's clock cannot be refused by the recording and served by the list. The handler's clock runs a minute
+// ahead of the use cases' clocks; a from between both is served and recorded.
+func TestReadAccessRecordingOneRange(t *testing.T) {
+	e := newEnvWith(t, func(d *admin.Deps) { d.Now = func() time.Time { return time.Now().Add(time.Minute) } })
+	org := e.org("onerange")
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization_privacy_settings
+		SET audit_search_recorded = true WHERE organization_id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	from := time.Now().Add(10 * time.Second).UTC().Format(time.RFC3339Nano)
+	r := e.do(call{method: http.MethodGet, path: "/api/v1/audit-events?from=" + url.QueryEscape(from), cookie: e.session(org, principal.RoleOrgAdmin)})
+	if r.status != http.StatusOK {
+		t.Fatalf("GET: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "audit.searched:success:")
 }

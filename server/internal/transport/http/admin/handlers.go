@@ -336,8 +336,14 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 	if err != nil {
 		return nil, err
 	}
+	// One end for the recording and the list: each reading its own clock lets a from just after the recording's now
+	// be refused there and served by the list, unrecorded (PDK-139).
+	to := h.now()
+	if req.Params.To != nil {
+		to = *req.Params.To
+	}
 	query := app.AuditQuery{
-		From: req.Params.From, To: req.Params.To, Codes: listing.Strings(req.Params.Code), Outcomes: outcomes,
+		From: req.Params.From, To: &to, Codes: listing.Strings(req.Params.Code), Outcomes: outcomes,
 		ActorTypes: actorTypes, TargetID: req.Params.TargetId, Page: params.ListPage(),
 	}
 	if _, err := h.readAudit.AuditSearched(ctx, query); err != nil {

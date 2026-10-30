@@ -1297,8 +1297,8 @@ var registry = map[Code]Definition{
 	},
 	CodeAuditSearched: {
 		Code: CodeAuditSearched, Emitted: true,
-		Description: "An administrator, auditor or API token searched the audit log; recorded once per actor and clock hour and only while the organization's audit_search_recorded setting is on. Filters are recorded, never results or the search text.",
-		Params:      []string{"from", "to", "codes", "outcomes", "actor_types", "target_id", "q_used", "window_start"},
+		Description: "An administrator, auditor or API token searched the audit log; recorded once per actor and clock hour and only while the organization's audit_search_recorded setting is on. Filters are recorded, never results or the search text; codes outside this registry are only counted (codes_unknown).",
+		Params:      []string{"from", "to", "codes", "codes_unknown", "outcomes", "actor_types", "target_id", "q_used", "window_start"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with forbidden for operators whatever the setting. failure when the window could not be claimed; the search is then refused.",
 	},

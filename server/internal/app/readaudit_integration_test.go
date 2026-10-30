@@ -109,6 +109,18 @@ func (h harness) events(t *testing.T, org uuid.UUID, code audit.Code) []audit.Ev
 	return out
 }
 
+// claimWindow is a claim that inserts a real window row of org under actor and then fails with err when it is set.
+func claimWindow(org uuid.UUID, actor string, err error) func(context.Context, *pgstore.Queries, app.Recorder) (bool, error) {
+	return func(ctx context.Context, q *pgstore.Queries, _ app.Recorder) (bool, error) {
+		if _, cerr := q.ClaimReadAuditWindow(ctx, pgstore.ClaimReadAuditWindowParams{
+			OrganizationID: org, ActorID: actor, Code: string(audit.CodeAuditSearched), WindowStart: time.Now().UTC().Truncate(time.Hour),
+		}); cerr != nil {
+			return false, cerr
+		}
+		return err == nil, err
+	}
+}
+
 func expectRecorded(t *testing.T, recorded bool, err error, want bool) {
 	t.Helper()
 	if err != nil || recorded != want {
@@ -117,8 +129,8 @@ func expectRecorded(t *testing.T, recorded bool, err error, want bool) {
 }
 
 // TestRecordReadOnce (plan M10 decision 18): a claim that reports an existing window inserts no action and no outbox
-// row; a fresh claim inserts both in the claim's transaction; a claim error is recorded as failure; a denied role is
-// recorded as denied without running the claim.
+// row; a fresh claim inserts its window row, the action and the outbox row in one transaction; a claim error rolls
+// the window row back and is recorded as failure; a denied role is recorded as denied without running the claim.
 func TestRecordReadOnce(t *testing.T) {
 	h := newHarness(t)
 	ctx := h.admin(principal.RoleOrgAdmin)
@@ -133,27 +145,29 @@ func TestRecordReadOnce(t *testing.T) {
 		t.Fatalf("an existing window recorded %d actions, %d outbox rows", len(actions), len(events))
 	}
 
-	recorded, err = h.runner.RecordReadOnce(ctx, app.SpecAuditSearched, claim(true))
+	recorded, err = h.runner.RecordReadOnce(ctx, app.SpecAuditSearched, claimWindow(h.org, "fresh", nil))
 	expectRecorded(t, recorded, err, true)
 	ev := expectOne(t, h, audit.OutcomeSuccess, "")
 	if ev.Code != audit.CodeAuditSearched {
 		t.Fatalf("event %+v", ev)
 	}
 	if n := countRows(t, h.super, `SELECT count(*) FROM action a JOIN outbox o ON o.payload->>'event_id' = a.id::text
-		WHERE a.correlation_id = $1 AND a.xmin = o.xmin`, corr); n != 1 {
-		t.Fatalf("action and outbox row in %d shared transactions, want 1", n)
+		JOIN read_audit_window w ON w.xmin = a.xmin
+		WHERE a.correlation_id = $1 AND a.xmin = o.xmin AND w.actor_id = 'fresh'`, corr); n != 1 {
+		t.Fatalf("window, action and outbox row in %d shared transactions, want 1", n)
 	}
 
 	t.Run("claim error", func(t *testing.T) {
 		h := newHarness(t)
 		_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgAdmin), app.SpecAuditSearched,
-			func(context.Context, *pgstore.Queries, app.Recorder) (bool, error) {
-				return false, errors.New("claim broke")
-			})
+			claimWindow(h.org, "broken", errors.New("claim broke")))
 		if err == nil {
 			t.Fatal("a claim error was not returned")
 		}
 		expectOne(t, h, audit.OutcomeFailure, "internal")
+		if n := countRows(t, h.super, "SELECT count(*) FROM read_audit_window WHERE organization_id = $1", h.org); n != 0 {
+			t.Fatalf("a failed claim left %d window rows", n)
+		}
 	})
 	t.Run("denied", func(t *testing.T) {
 		h := newHarness(t)
@@ -174,7 +188,7 @@ func TestReadAuditSearched(t *testing.T) {
 	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Display: "alice"})
 	target := uuid.Must(uuid.NewV7())
 	pattern := "%secret%"
-	q := app.AuditQuery{Codes: []string{"device.locked"}, TargetID: &target, Page: app.ListPage{QPattern: &pattern}}
+	q := app.AuditQuery{Codes: []string{"device.retired"}, TargetID: &target, Page: app.ListPage{QPattern: &pattern}}
 
 	recorded, err := w.reads.AuditSearched(alice, q)
 	expectRecorded(t, recorded, err, true)
@@ -191,7 +205,7 @@ func TestReadAuditSearched(t *testing.T) {
 		p["window_start"] != "2026-10-30T10:00:00Z" || p["target_id"] != target.String() || p["outcomes"] != nil {
 		t.Fatalf("params %v", p)
 	}
-	if codes, _ := p["codes"].([]any); len(codes) != 1 || codes[0] != "device.locked" {
+	if codes, _ := p["codes"].([]any); len(codes) != 1 || codes[0] != "device.retired" {
 		t.Fatalf("codes %v", p["codes"])
 	}
 	raw, _ := json.Marshal(p)
@@ -207,6 +221,34 @@ func TestReadAuditSearched(t *testing.T) {
 	expectRecorded(t, recorded, err, true)
 	if p := w.events(t, w.org, audit.CodeAuditSearched)[1].Params; p["q_used"] != false || p["codes"] != nil || p["target_id"] != nil {
 		t.Fatalf("params of the second hour %v", p)
+	}
+}
+
+// TestReadAuditSearchedUnknownCodes (PDK-139): the code filter is free text, so only registered codes are recorded;
+// the others, however long, are only counted.
+func TestReadAuditSearchedUnknownCodes(t *testing.T) {
+	w := newReadWorld(t, true, false)
+	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Display: "alice"})
+	long := strings.Repeat("leak", 4096)
+	recorded, err := w.reads.AuditSearched(alice, app.AuditQuery{Codes: []string{"not.registered", "device.retired", long}})
+	expectRecorded(t, recorded, err, true)
+
+	p := w.events(t, w.org, audit.CodeAuditSearched)[0].Params
+	if codes, _ := p["codes"].([]any); len(codes) != 1 || codes[0] != "device.retired" {
+		t.Fatalf("codes %v", p["codes"])
+	}
+	if p["codes_unknown"] != float64(2) {
+		t.Fatalf("codes_unknown %v, want 2", p["codes_unknown"])
+	}
+	if raw, _ := json.Marshal(p); strings.Contains(string(raw), "not.registered") || strings.Contains(string(raw), "leak") {
+		t.Fatalf("an unregistered code is recorded: %.200s", raw)
+	}
+
+	w.now = w.now.Add(time.Hour)
+	recorded, err = w.reads.AuditSearched(alice, app.AuditQuery{Codes: []string{"not.registered"}})
+	expectRecorded(t, recorded, err, true)
+	if p := w.events(t, w.org, audit.CodeAuditSearched)[1].Params; p["codes"] != nil || p["codes_unknown"] != float64(1) {
+		t.Fatalf("only unregistered codes: params %v", p)
 	}
 }
 

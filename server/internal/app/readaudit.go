@@ -56,7 +56,11 @@ func (r *ReadAudit) AuditSearched(ctx context.Context, q AuditQuery) (bool, erro
 		}
 		rec.SetParam("from", audit.Timestamp(from).Format(time.RFC3339Nano))
 		rec.SetParam("to", audit.Timestamp(to).Format(time.RFC3339Nano))
-		for key, values := range map[string][]string{"codes": q.Codes, "outcomes": q.Outcomes, "actor_types": q.ActorTypes} {
+		codes, unknown := registeredCodes(q.Codes)
+		if unknown > 0 {
+			rec.SetParam("codes_unknown", unknown)
+		}
+		for key, values := range map[string][]string{"codes": codes, "outcomes": q.Outcomes, "actor_types": q.ActorTypes} {
 			if len(values) > 0 {
 				rec.SetParam(key, values)
 			}
@@ -68,6 +72,19 @@ func (r *ReadAudit) AuditSearched(ctx context.Context, q AuditQuery) (bool, erro
 		rec.SetParam("window_start", window.Format(time.RFC3339))
 		return true, nil
 	})
+}
+
+// registeredCodes keeps the codes of the registry and counts the others: the code filter is free text, and free text
+// must not reach the audit trail any more than the search text does (only q_used is recorded).
+func registeredCodes(codes []string) (known []string, unknown int) {
+	for _, c := range codes {
+		if _, ok := audit.Lookup(audit.Code(c)); ok {
+			known = append(known, c)
+		} else {
+			unknown++
+		}
+	}
+	return known, unknown
 }
 
 // InventoryViewed records the view (InventoryViewSoftware or InventoryViewVulnerabilities) of the device's inventory
