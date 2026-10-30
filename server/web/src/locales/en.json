@@ -1,4 +1,20 @@
 {
+  "privacySettings": {
+    "title": "Privacy settings",
+    "intro": "How long Paddock keeps the inventory of retired devices and whether reads of the audit log and of device inventory are recorded. Your works council agreement decides on monitoring of administrators.",
+    "retention": "Retention",
+    "retiredInventoryDays": "Keep the inventory of retired devices",
+    "retiredInventoryDaysHint": "The software, vulnerabilities and policy results of a retired device, in Paddock and in Fleet, are deleted that many days after retirement.",
+    "retiredInventoryDaysRange": "Enter a whole number of days from {min} to {max}.",
+    "days": "days",
+    "recording": "Recording of reads",
+    "auditSearchRecorded": "Record searches of the audit log",
+    "auditSearchRecordedHint": "Each search of the audit log is recorded as an audit event, once per administrator and hour. The filters are recorded, never the results.",
+    "inventoryViewRecorded": "Record views of device inventory",
+    "inventoryViewRecordedHint": "Each view of a device's software and vulnerabilities is recorded as an audit event, once per administrator, device and day.",
+    "readOnly": "Only organization administrators can change the privacy settings.",
+    "saved": "The privacy settings were saved."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent updates",
@@ -89,6 +105,7 @@
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
+    "privacySettings": "Privacy",
     "apiTokens": "API tokens",
     "changeSets": "Change sets",
     "start": "Start",
@@ -460,7 +477,8 @@
       "login_changed": "{actor} changed the login settings",
       "dms_changed": "{actor} {enabled, select, true {turned on the dead man's switch with a period of {period_days, number} days} other {turned off the dead man's switch}}",
       "updates_changed": "{actor} changed the update settings",
-      "managed_files_changed": "{actor} changed the operator roots of the managed files"
+      "managed_files_changed": "{actor} changed the operator roots of the managed files",
+      "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",

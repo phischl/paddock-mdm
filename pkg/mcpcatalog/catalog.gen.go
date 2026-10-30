@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "979d01ac97333301b05d064fe203f9c5574afeafa48616d2b2c494641fa59097"
+const Version = "a0d14f3235c618a6e013f71431355fae09d102e826b809289394e916fa7f3c4d"
 
 var tools = []Tool{
 	{
@@ -1284,6 +1284,24 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: platform_admin. The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). Without a saved policy the MCP is off: enabled false, write_enabled false, mode all, no allowed operations, updated_at and updated_by null.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getPrivacySettings",
+		Method:      "GET",
+		Path:        "/api/v1/settings/privacy",
+		Pattern:     "GET /api/v1/settings/privacy",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The privacy settings (ADR 0032 §2); the defaults until changed.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{
@@ -2761,6 +2779,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: platform_admin. Replaces the MCP policy of the platform (platform administrators' MCP sessions). mode all requires an empty allowed_operations; mode selected requires 1 to 500 distinct operation ids of exposed MCP tools that need no step-up (400 invalid_request naming the offending id). Needs a step-up within the last 5 minutes (403 step_up_required); API tokens and MCP sessions cannot satisfy it. Every attempt is audited.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"allowed_operations\":{\"items\":{\"maxLength\":100,\"type\":\"string\"},\"maxItems\":500,\"type\":\"array\",\"uniqueItems\":true},\"enabled\":{\"type\":\"boolean\"},\"mode\":{\"enum\":[\"all\",\"selected\"],\"type\":\"string\"},\"write_enabled\":{\"type\":\"boolean\"}},\"required\":[\"enabled\",\"write_enabled\",\"mode\",\"allowed_operations\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "updatePrivacySettings",
+		Method:      "PUT",
+		Path:        "/api/v1/settings/privacy",
+		Pattern:     "PUT /api/v1/settings/privacy",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "settings.privacy_changed",
+		Summary:     "",
+		Description: "Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator and hour) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"properties\":{\"audit_search_recorded\":{\"type\":\"boolean\"},\"inventory_view_recorded\":{\"type\":\"boolean\"},\"retired_inventory_days\":{\"maximum\":365,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"retired_inventory_days\",\"audit_search_recorded\",\"inventory_view_recorded\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "updateProfileAssignment",

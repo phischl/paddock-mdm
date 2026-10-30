@@ -542,6 +542,15 @@ type OrganizationMcpSetting struct {
 	UpdatedBy         uuid.NullUUID
 }
 
+type OrganizationPrivacySetting struct {
+	OrganizationID        uuid.UUID
+	RetiredInventoryDays  int32
+	AuditSearchRecorded   bool
+	InventoryViewRecorded bool
+	UpdatedAt             time.Time
+	UpdatedBy             uuid.NullUUID
+}
+
 type OrganizationRoleMember struct {
 	OrganizationID uuid.UUID
 	Role           string

@@ -2325,6 +2325,46 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/settings/privacy:
+    get:
+      operationId: getPrivacySettings
+      tags: [settings]
+      description: "Roles: org_admin, org_operator, org_auditor. The privacy settings (ADR 0032 §2); the defaults until changed."
+      responses:
+        "200":
+          description: The privacy settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PrivacySettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updatePrivacySettings
+      tags: [settings]
+      description: |
+        Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired
+        device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches
+        of the audit log are recorded as audit.searched, once per administrator and hour) and
+        inventory_view_recorded (views of a device's software and vulnerabilities are recorded as
+        device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.
+      x-paddock-audit: settings.privacy_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PrivacySettingsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PrivacySettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
   /api/v1/package-holds:
     get:
       operationId: listPackageHolds
@@ -6196,6 +6236,21 @@ components:
           description: Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it.
           allOf:
             - $ref: "#/components/schemas/AgentUpdatePolicy"
+    PrivacySettings:
+      type: object
+      required: [retired_inventory_days, audit_search_recorded, inventory_view_recorded, updated_at]
+      properties:
+        retired_inventory_days: { type: integer, minimum: 1, maximum: 365 }
+        audit_search_recorded: { type: boolean }
+        inventory_view_recorded: { type: boolean }
+        updated_at: { type: string, format: date-time }
+    PrivacySettingsUpdate:
+      type: object
+      required: [retired_inventory_days, audit_search_recorded, inventory_view_recorded]
+      properties:
+        retired_inventory_days: { type: integer, minimum: 1, maximum: 365 }
+        audit_search_recorded: { type: boolean }
+        inventory_view_recorded: { type: boolean }
     UpdateSettings:
       type: object
       required: [security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h,

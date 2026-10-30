@@ -168,9 +168,11 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getDMSSettings` | read | no | The dead man's switch; off with the defaults until changed. |
 | `getLoginSettings` | read | no | GET /api/v1/settings/login |
 | `getManagedFileSettings` | read | no | The operator roots of the managed files (ADR 0034 amendment 2026-10-16); empty until changed. |
+| `getPrivacySettings` | read | no | The privacy settings (ADR 0032 §2); the defaults until changed. |
 | `getUpdateSettings` | read | no | The update settings (plan M5b decisions 1 and 9); the defaults until changed. |
 | `updateDMSSettings` | write | no | Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal warns below 30), distinct warn_days below the period. |
 | `updateLoginSettings` | write | no | Replaces the login settings; every device is recompiled. |
+| `updatePrivacySettings` | write | no | Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator and hour) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). |
 | `updateUpdateSettings` | write | no | Replaces the update settings: security_daily_at (HH:MM, local device time), regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720) and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). |
 
 ## updates
