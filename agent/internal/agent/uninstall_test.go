@@ -169,7 +169,7 @@ func TestUninstallHelperFailed(t *testing.T) {
 	if a.st.PendingUninstall != nil {
 		t.Fatalf("pending mark kept: %+v", a.st.PendingUninstall)
 	}
-	for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary()} {
+	for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary(), filepath.Dir(a.d.Layout.UninstallPlan())} {
 		if _, err := os.Stat(f); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s kept after helper_failed: %v", f, err)
 		}
@@ -227,6 +227,37 @@ func TestNoexecStatfs(t *testing.T) {
 	}
 }
 
+// TestNoexecStatfsFlag: the statfs check reports the noexec option as the mount table of this process lists it, for a
+// mount with the option and for one without; ST_NOEXEC is defined by hand, so a wrong value fails here.
+func TestNoexecStatfsFlag(t *testing.T) {
+	raw, err := os.ReadFile("/proc/self/mounts")
+	if err != nil {
+		t.Skipf("no mount table: %v", err)
+	}
+	// A later line for the same mount point is mounted over the earlier one and is the one statfs sees.
+	options := map[string]string{}
+	for line := range strings.Lines(string(raw)) {
+		if fields := strings.Fields(line); len(fields) >= 4 && !strings.ContainsRune(fields[1], '\\') {
+			options[fields[1]] = fields[3]
+		}
+	}
+	seen := map[bool]bool{}
+	for dir, opts := range options {
+		want := slices.Contains(strings.Split(opts, ","), "noexec")
+		got, err := noexec(dir)
+		if err != nil {
+			continue
+		}
+		if got != want {
+			t.Fatalf("noexec(%s) = %v, mount options %s", dir, got, opts)
+		}
+		seen[want] = true
+	}
+	if !seen[true] || !seen[false] {
+		t.Skipf("mount table lacks a readable mount with or without noexec: %v", seen)
+	}
+}
+
 // TestUninstallRefusedResultWithdraws (review finding 1): a result the server refuses (cancelled: 409, removed from
 // cmd: 404) never starts the removal; the mark, the plan and the binary copy are removed.
 func TestUninstallRefusedResultWithdraws(t *testing.T) {
@@ -242,7 +273,7 @@ func TestUninstallRefusedResultWithdraws(t *testing.T) {
 		if len(*launched) != 0 || a.st.PendingUninstall != nil || len(a.st.CommandResults) != 0 {
 			t.Fatalf("%d: launched %v, pending %+v", status, *launched, a.st.PendingUninstall)
 		}
-		for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary()} {
+		for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary(), filepath.Dir(a.d.Layout.UninstallPlan())} {
 			if _, err := os.Stat(f); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("%d: %s kept: %v", status, f, err)
 			}

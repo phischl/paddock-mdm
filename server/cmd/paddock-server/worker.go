@@ -103,7 +103,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	escrowQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEscrow), worker.Prefetch)
 	queues := []*mq.Consumer{enrollQueue, heartbeatQueue, eventQueue, issuedQueue, resultQueue, escrowQueue}
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
-	deviceCommands := app.NewDeviceCommands(pool)
+	deviceCommands := app.NewDeviceCommands(runner, pool)
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache)
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
 	escrowStore := worker.NewEscrow(app.NewEscrow(runner, pool, escrowObjects), cache, pool, platformPool)

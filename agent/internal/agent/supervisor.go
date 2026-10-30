@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -26,10 +28,10 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 	if !ok {
 		return
 	}
-	marker, err := supervisorpkg.ReadMarker(a.d.Layout)
+	running, _ := a.supervisorUpgradeHolds()
 	result, rerr := supervisorpkg.ReadResult(a.d.Layout)
 	// An accepted uninstall removes the supervisor package; an upgrade started now would race the removal.
-	busy := marker != nil || result != nil || err != nil || rerr != nil || update.Pending(a.d.Layout) || a.st.PendingUninstall != nil
+	busy := running || result != nil || rerr != nil || update.Pending(a.d.Layout) || a.st.PendingUninstall != nil
 	// The conversion worker may hold dpkg's locks and must not be interrupted by a supervisor restart (plan M8e
 	// decision 37 as amended on 2026-10-21, items 16 to 18): only while it runs. A preparation waiting between its
 	// passes, possibly for a long time for a foreign dpkg run, and a cleanup waiting for its next attempt do not hold
@@ -141,6 +143,29 @@ func (a *Agent) retrySupervisor(r *supervisorpkg.Result) {
 	if retry.Attempts >= supervisorpkg.MaxAttempts {
 		a.st.FailedSupervisorVersion, a.st.SupervisorRetry = r.Version, nil
 	}
+}
+
+// supervisorUpgradeHolds reports whether supervisor-upgrade.json holds back other work (an agent update, a further
+// supervisor upgrade, the removal of Paddock). A readable marker holds until staleSupervisorUpgrade turns it into a
+// result. An unreadable one holds only until its mtime is older than supervisorpkg.StaleAfter: staleSupervisorUpgrade
+// cannot clear a marker it cannot read, and nothing may wait longer than the 30 minutes of the ADR 0037 amendment. err
+// is the read error of an unreadable marker, for the caller's log.
+func (a *Agent) supervisorUpgradeHolds() (bool, error) {
+	marker, err := supervisorpkg.ReadMarker(a.d.Layout)
+	if marker != nil {
+		return true, nil
+	}
+	if err == nil {
+		return false, nil
+	}
+	info, statErr := os.Stat(a.d.Layout.SupervisorUpgrade())
+	if errors.Is(statErr, os.ErrNotExist) {
+		return false, nil
+	}
+	if statErr == nil && a.d.Now().Sub(info.ModTime()) >= supervisorpkg.StaleAfter {
+		return false, err
+	}
+	return true, err
 }
 
 // staleSupervisorUpgrade writes and returns an install_failed result for a marker older than StaleAfter.
