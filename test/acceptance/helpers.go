@@ -52,13 +52,15 @@ const (
 )
 
 // parallelCases returns a semaphore that bounds the parallel cases of a gate: PADDOCK_ACCEPTANCE_PARALLEL, default 8
-// (plan M3b decision 2).
+// (plan M3b decision 2). go test caps parallel subtests as well (-parallel, default GOMAXPROCS), so the effective limit
+// is min(semaphore, -parallel); make acceptance passes -parallel only with ACCEPTANCE_GO_PARALLEL (PDK-556).
 func parallelCases(t *testing.T) chan struct{} {
 	t.Helper()
 	return make(chan struct{}, parallelism(t))
 }
 
-// parallelism is the number of parallel cases of a gate (PADDOCK_ACCEPTANCE_PARALLEL, default 8).
+// parallelism is the semaphore size for a gate's parallel cases (PADDOCK_ACCEPTANCE_PARALLEL, default 8), an upper
+// bound: go test's -parallel may hold fewer at a time (see parallelCases).
 func parallelism(t *testing.T) int {
 	t.Helper()
 	n := 8
@@ -253,6 +255,38 @@ func waitAuditCaughtUp(t *testing.T, root *env.Portal, idx *env.AuditIndex) {
 	t.Logf("audit pipeline caught up after %s", time.Since(start).Round(time.Second))
 }
 
+// waitAuditPast blocks until a marker event triggered now (the probe of waitAuditCaughtUp) is visible in the audit
+// index and then for the settle delay of its lag (auditSettle). An absence check that follows covers every event
+// the stack committed before the call, however slow the pipeline is (PDK-569).
+func waitAuditPast(t *testing.T, root *env.Portal, idx *env.AuditIndex) {
+	t.Helper()
+	ctx := testContext(t, auditPollTimeout+time.Minute)
+	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", map[string]string{"slug": "Not A Slug", "name": "x"})
+	expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+	start := time.Now()
+	deadline := start.Add(auditPollTimeout)
+	for {
+		polled := time.Now()
+		_, found, err := idx.RecordingLag(ctx, uuid.Nil, res.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found {
+			break
+		}
+		if polled.After(deadline) {
+			t.Fatalf("audit marker %s not visible within %s", res.RequestID, auditPollTimeout)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	// The relay publishes the outbox in id order to the single serial audit writer, so an earlier event is recorded
+	// no later than the marker; the settle covers a requeued batch or a second relay replica reordering them.
+	waited := time.Since(start)
+	settle := auditSettle(waited)
+	t.Logf("audit marker visible after %s, settling %s", waited.Round(10*time.Millisecond), settle)
+	time.Sleep(settle)
+}
+
 // tempUser creates an Authentik user in groups and deletes it when the test ends.
 func tempUser(t *testing.T, prefix string, groups ...string) (string, string) {
 	t.Helper()
@@ -433,3 +467,20 @@ func stepUp(t *testing.T, p *env.Portal, user string, ok bool) {
 // operatorRootsMu serializes every read-modify-write of operator roots in this run: the list is replaced as a whole,
 // so two writers must never interleave (ensureOperatorRoots, the audit case of the setting, the isolation fixture).
 var operatorRootsMu sync.Mutex
+
+// requireSingleService fails unless exactly one container of the compose service runs in this stack. Gates whose
+// ordering proof holds for a single replica only call it, so scaling the service fails them loudly instead of letting
+// them pass for the wrong reason (PDK-572, PDK-573). One-off containers of `compose run` serve no traffic and are not
+// counted.
+func requireSingleService(t *testing.T, ctx context.Context, service string) {
+	t.Helper()
+	out, err := stack.Docker(ctx, nil, "ps", "-q", "--filter", "status=running",
+		"--filter", "label=com.docker.compose.project="+stack.Project(), "--filter", "label=com.docker.compose.service="+service,
+		"--filter", "label=com.docker.compose.oneoff=False")
+	if err != nil {
+		t.Fatalf("counting the %s containers: %v", service, err)
+	}
+	if n := len(strings.Fields(out)); n != 1 {
+		t.Fatalf("this gate's ordering proof assumes a single %s; found %d", service, n)
+	}
+}

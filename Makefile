@@ -416,6 +416,11 @@ dev-seed: ## Create organizations acme and globex and assign the dev users
 # A serial run (neither SHARD nor T) needs more: on 2026-10-29 the gates summed to ~131 min on a GitHub runner
 # (PDK-463), so with 20 % headroom it defaults to 180m; a shard or a single gate keeps 120m. An explicit value wins.
 ACCEPTANCE_TIMEOUT ?= $(if $(SHARD)$(T),120m,180m)
+# go test runs at most -parallel parallel tests at a time, by default GOMAXPROCS, so a gate's parallel cases run
+# min(PADDOCK_ACCEPTANCE_PARALLEL, -parallel) at a time: 4 instead of 8 on a 4-vCPU GitHub runner (PDK-556).
+# ACCEPTANCE_GO_PARALLEL=<n> passes -parallel <n>; CI sets it to PADDOCK_ACCEPTANCE_PARALLEL's value. Empty by default,
+# so a local run keeps the GOMAXPROCS cap and does not load the development machine further.
+ACCEPTANCE_GO_PARALLEL ?=
 
 # paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.
 PADDOCKCTL_LDFLAGS = -s -w -X main.version=$(VERSION)
@@ -430,8 +435,9 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 
 .PHONY: acceptance
 # The exactly-once gate checks about 366 cases of ≈ 10 s each in the median, ≈ 17 s on average (delivery plus the 5 s
-# settle check); they run in parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8), about 29 min wall time on a
-# CI runner (≈ 1730 s, test/acceptance/shard-weights.txt; PDK-513).
+# settle check); they run in parallel, min(PADDOCK_ACCEPTANCE_PARALLEL (default 8), go test -parallel) at a time; without
+# ACCEPTANCE_GO_PARALLEL -parallel is GOMAXPROCS, 4 on a CI runner, about 29 min wall time there (≈ 1730 s,
+# test/acceptance/shard-weights.txt; PDK-513, PDK-556).
 # SHARD=i/n runs shard i of n: test/acceptance/cmd/acceptanceshard puts every listed test into exactly one shard,
 # balanced by test/acceptance/shard-weights.txt; before the run it checks (-verify n) that the n shard regexes select
 # every test of `go test -list` exactly once, so a new test can never be left out.
@@ -440,7 +446,7 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 # STACK_PREFLIGHT stops acceptance, system-test and e2e up front when the checkout lacks deploy/compose/.env or the
 # secrets, instead of minutes in (PDK-353).
 STACK_PREFLIGHT = @bash test/stack-preflight.sh $(COMPOSE_DIR) $(SECRETS_DIR)
-acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll, TestSessionsPlatformEmptied and TestAutoUnsealRestart)
+acceptance: ## Run acceptance gates against the running stack (optional T=<regex> or SHARD=<i/n>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_GO_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll, TestSessionsPlatformEmptied and TestAutoUnsealRestart)
 	$(STACK_PREFLIGHT)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
 	@set -eo pipefail; run='$(value T)'; \
@@ -454,7 +460,8 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 	fi; \
 	set --; [ -z "$$run" ] || set -- -run "$$run"; \
 	set -x; PADDOCK_PROJECT=$(DEV_PROJECT) PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
-		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... "$$@" -v | bash test/require-tests.sh
+		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) $(if $(ACCEPTANCE_GO_PARALLEL),-parallel $(ACCEPTANCE_GO_PARALLEL),) \
+		./test/acceptance/... "$$@" -v | bash test/require-tests.sh
 
 .PHONY: system-test
 # T and the zero-test guard as for acceptance (PDK-339).
