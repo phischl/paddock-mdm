@@ -576,3 +576,39 @@ Open points — all resolved on 2026-10-29:
 3. ADR 0016 is set to Accepted with an amendment for decision 6; shipped with this plan.
 4. Issue #113 (RabbitMQ) closes via the watch after PDK-354; the former two-step is dropped.
 5. Timing of the lab carry-over: once, after `cluster/upstream-majors` is on `main` and an edge bundle of it exists.
+
+## Amendment 2026-10-30 (architect decision in the PDK-343 fix round)
+
+**Decision 6 revised: no automatic stanza fallback.** `ensure_stanza` in `run.sh` runs `stanza-create` only and
+writes the marker on success. When the repository holds the stanza for another cluster (other system identifier or
+major), it fails loudly: no upgrade, no backup, a log line in the container log naming the manual step; the backup
+alerts cover the stalled backups. `run.sh` gains a `stanza-upgrade` subcommand that the operator runs once:
+`./paddock compose run --rm --no-deps pgbackrest stanza-upgrade`, likewise for `pgbackrest-authentik` (dev stack:
+`docker compose … run --rm --no-deps pgbackrest stanza-upgrade` with the files of `make up BACKUP=1`). The serve loop no longer discards the output of
+`ensure_stanza`. Reason: review 1 and the external review of PDK-343 showed that the automatic `stanza-upgrade`
+makes a disaster restore on a rebuilt host bring back an empty cluster: the backup service starts against the
+freshly initialised cluster, upgrades the stanza, takes a full backup of it, and `pgbackrest restore` then picks
+that newest set. It also stops the archiving of a second installation that shares the bucket
+(`ArchiveMismatchError`).
+
+Text changes that follow:
+
+- §6.3: `ensure_stanza` is `pgb stanza-create && : >"$STATE/stanza"` plus the log line on a mismatch (exit 28);
+  a new `stanza-upgrade)` case runs `pgb stanza-upgrade`. The Dockerfile also creates `/var/lib/postgresql` as
+  `999:999` with mode `1777`, as the 18 image does, so that a later `pg_upgrade` in the volume can create the next
+  major's directory.
+- §6.5: the last sentence of the fragment reads: a backup repository that already holds the stanzas is refused
+  (logged, no backups) until the operator runs the `stanza-upgrade` subcommand once per stanza.
+- §6.6: "A backup bucket may be kept" names the two one-off `stanza-upgrade` commands instead of an automatic
+  upgrade; `docs/operations/restore.md` describes the same and gains one warning: on a rebuilt host, restore before
+  the first full `./paddock up`.
+- §7 step 9 and §8 "Manual": the refusal and the manual subcommand are covered by `pgbackrest_test.sh` (a stanza of
+  a foreign cluster of the same major is refused by `serve`, no marker, no backup; `stanza-upgrade` then succeeds
+  and a backup verifies).
+- **AC-8** reads: given a repository that holds the stanza for another cluster, when `pgbackrest` runs, then it
+  refuses the stanza loudly (error logged, no marker, no backup); the manual `stanza-upgrade` subcommand is
+  documented and, run once, lets the next backup verify (`pgbackrest_test.sh`, result document).
+- §7 step 13 (lab carry-over): when step 13.1 showed `PADDOCK_LAB_BACKUP=yes` and the lab keeps its backup bucket,
+  run `./paddock compose run --rm --no-deps pgbackrest stanza-upgrade` and `./paddock compose run --rm --no-deps
+  pgbackrest-authentik stanza-upgrade` in B as an explicit step **after** the `pg_restore` of step 13.8 and before
+  backups resume with `./paddock up` in step 13.9; step 13.11 then lists the stanza with the new cluster as current.

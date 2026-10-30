@@ -47,8 +47,21 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   more than 60 s off appear on the attention list as `clock_drift`, and the nightly audit chain verification starts
   (alerts `PaddockAuditChainBroken`, `PaddockAuditVerifyStale`). Schema: migrations 00068–00071 and audit migrations
   00004–00006 (new tables and columns only; no data rewrite).
+- **From 0.1.0-alpha.7: no upgrade path.** This release moves PostgreSQL to 18 (new data directory layout), Valkey
+  to 9 and RabbitMQ to 4.4. None of them opens the data of the previous release, and this release ships no
+  migration. Install it fresh: in the old bundle directory `./paddock down --volumes` (deletes every volume of the
+  project: the databases, OpenBao with its keys, the object stores, Fleet), then follow `docs/operations/install.md`
+  for the new release and enrol every device again (`docs/operations/uninstall.md` for the device side). Escrowed
+  recovery keys of the old installation are lost with it: before you take it down, make sure no device still needs
+  one. A backup bucket may be kept on purpose: until the stanzas are upgraded, `pgbackrest` and
+  `pgbackrest-authentik` refuse the old stanzas, log why and take no backup. Once the new installation runs, upgrade
+  them once with `./paddock compose run --rm --no-deps pgbackrest stanza-upgrade` and `./paddock compose run --rm
+  --no-deps pgbackrest-authentik stanza-upgrade`; the old backups expire with retention and cannot be restored into
+  the new clusters. Fleet's MySQL stays on the 8.4 line.
 
 ## Upgrade (each host)
+
+This section does not apply to the move to 0.1.0-alpha.7, which is a fresh installation ("Before you start").
 
 1. Download the bundle of B and its `.sigstore.json` and verify them as `docs/operations/install.md` section 3
    describes. Extract it next to the running bundle directory, for example `/opt/paddock/paddock-deploy-<B>/` beside
