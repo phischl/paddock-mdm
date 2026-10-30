@@ -203,6 +203,9 @@ const (
 
 	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
 	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
+
+	// Evidence export (ADR 0032 §5, plan M10 §6.4).
+	CodeAuditExportRequested Code = "audit.export_requested"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1267,6 +1270,12 @@ var registry = map[Code]Definition{
 		Code: CodeSettingsPrivacyChanged, Emitted: true,
 		Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
 		Params:      []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAuditExportRequested: {
+		Code: CodeAuditExportRequested, Emitted: true,
+		Description: "An organization administrator or auditor requested a signed evidence package for a range of sealed recording days after a step-up; denied with step_up_required without one.",
+		Params:      []string{"export_id", "from_day", "to_day", "purpose"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeActionFinalizedUnknown: {

@@ -398,6 +398,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_auditor. The organization's evidence exports (ADR 0032 §5). q matches the purpose and the requester's display name. */
+        get: operations["listAuditExports"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_auditor, with a step-up within the last 300 s (403 step_up_required). Requests a signed
+         *     evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; at most
+         *     400 days: 400 range_too_large; from_day after to_day or an empty purpose: 400 invalid_request). At most two
+         *     exports of the organization may be pending or running (409 too_many_exports). The audit writer builds the
+         *     package on the audit host; it is ready within minutes for small ranges and expires 7 days after it is ready.
+         *     Recorded as audit.export_requested; every download as audit.export_downloaded.
+         */
+        post: operations["createAuditExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit/exports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_auditor. One evidence export of the organization. */
+        get: operations["getAuditExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/device-groups/{id}/devices": {
         parameters: {
             query?: never;
@@ -3388,6 +3432,55 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /** @enum {string} */
+        AuditExportStatus: "pending" | "running" | "ready" | "failed" | "expired";
+        AuditExportCreate: {
+            /** Format: date */
+            from_day: string;
+            /** Format: date */
+            to_day: string;
+            purpose: string;
+        };
+        AuditExport: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["AuditExportStatus"];
+            /** Format: date */
+            from_day: string;
+            /** Format: date */
+            to_day: string;
+            purpose: string;
+            /** @description The requester; never carries the client address (ip). */
+            requested_by: components["schemas"]["AuditActor"];
+            /** Format: date-time */
+            requested_at: string;
+            /** Format: date-time */
+            ready_at: string | null;
+            /** Format: date-time */
+            expires_at: string | null;
+            /** Format: int64 */
+            event_count: number | null;
+            object_count: number | null;
+            /** Format: int64 */
+            size: number | null;
+            /** @description Lowercase hex. */
+            package_sha256: string | null;
+            verify_ok: boolean | null;
+            verify_problems: string[];
+            key_version: number | null;
+            error: string | null;
+        };
+        AuditExportPage: {
+            items: components["schemas"]["AuditExport"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         AuditIntegrity: {
             /**
              * Format: date
@@ -5286,6 +5379,8 @@ export interface components {
         /** @description Sort field; "-" prefix sorts descending. The day is the primary key. */
         AuditManifestSort: "day" | "-day";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        AuditExportSort: "requested_at" | "-requested_at" | "status" | "-status" | "from_day" | "-from_day" | "to_day" | "-to_day";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         IpAllowlistSort: "cidr" | "-cidr" | "label" | "-label" | "created_at" | "-created_at";
         /**
          * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
@@ -6038,6 +6133,95 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    listAuditExports: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["AuditExportSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["AuditExportStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of exports. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditExportPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createAuditExport: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuditExportCreate"];
+            };
+        };
+        responses: {
+            /** @description The pending export. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditExport"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getAuditExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The export. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditExport"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
         };
     };
     listDeviceGroupDevices: {

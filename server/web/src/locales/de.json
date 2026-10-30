@@ -231,6 +231,9 @@
     "not_found": "Dieser Eintrag existiert nicht mehr.",
     "upstream_unavailable": "Der Identitätsanbieter ist nicht erreichbar. Die Organisation wurde gespeichert und kann erneut eingerichtet werden.",
     "range_too_large": "Der Zeitraum darf höchstens 92 Tage umfassen.",
+    "day_not_sealed": "Ein Tag des Zeitraums ist noch nicht versiegelt. Exporte umfassen nur versiegelte Aufzeichnungstage.",
+    "too_many_exports": "Es laufen bereits zwei Exporte oder warten auf ihre Erstellung. Warten Sie, bis einer davon abgeschlossen ist.",
+    "export_not_ready": "Der Export steht noch nicht zum Herunterladen bereit.",
     "page_out_of_range": "Diese Seite liegt zu weit zurück. Schränken Sie Suche oder Filter ein.",
     "invalid_request": "Die Anfrage war ungültig.",
     "internal": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
@@ -309,7 +312,8 @@
     },
     "audit": {
       "chain_verified": "Die Hash-Kette des Audit-Protokolls wurde für {from_day} bis {to_day} geprüft ({days, number} Tage, {objects, number} Objekte, {trigger})",
-      "chain_verification_failed": "Der Prüflauf der Hash-Kette des Audit-Protokolls fand {problem_count, plural, one {# Problem} other {# Probleme}} für {from_day} bis {to_day} ({trigger})"
+      "chain_verification_failed": "Der Prüflauf der Hash-Kette des Audit-Protokolls fand {problem_count, plural, one {# Problem} other {# Probleme}} für {from_day} bis {to_day} ({trigger})",
+      "export_requested": "{actor} hat einen Nachweis-Export für {from_day} bis {to_day} angefordert"
     },
     "organization": {
       "created": "{actor} hat die Organisation {slug} angelegt",

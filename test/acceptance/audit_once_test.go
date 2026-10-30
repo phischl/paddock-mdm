@@ -410,6 +410,30 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "platform.mcp_policy_changed", "denied")
 		}},
 	},
+	// The success of an export request needs a sealed day of its own organization: gate E1 (TestAuditEvidenceExport)
+	// covers it with a fresh organization. Validation precedes the sealed-day check, so acme needs none here.
+	"POST /api/v1/audit/exports": {
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			day := time.Now().UTC().Format(time.DateOnly)
+			res := call(t, login(t, env.Bob), http.MethodPost, "/api/v1/audit/exports", map[string]string{"from_day": day, "to_day": day, "purpose": "a3"})
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "audit.export_requested", "denied")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			bob := login(t, env.Bob)
+			stepUp(t, bob, env.Bob, true)
+			today, yesterday := time.Now().UTC().Format(time.DateOnly), time.Now().UTC().AddDate(0, 0, -1).Format(time.DateOnly)
+			res := call(t, bob, http.MethodPost, "/api/v1/audit/exports", map[string]string{"from_day": today, "to_day": yesterday, "purpose": "a3"})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "audit.export_requested", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			day := time.Now().UTC().Format(time.DateOnly)
+			res := call(t, operatorUser(t).Portal, http.MethodPost, "/api/v1/audit/exports", map[string]string{"from_day": day, "to_day": day, "purpose": "a3"})
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "audit.export_requested", "denied")
+		}},
+	},
 	"POST /api/v1/me/mcp-write/enable": {
 		{"success", func(t *testing.T, w *auditWorld) {
 			a := adminUser(t, "a3-mcpw")

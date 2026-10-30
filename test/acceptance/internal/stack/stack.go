@@ -270,6 +270,21 @@ func AuditIndexDSN() (string, error) {
 	return u.String(), nil
 }
 
+// AuditWriterDSN is the paddock_audit_writer DSN with the host rewritten to the development port mapping: the
+// isolation gate finishes the evidence exports it requested itself with it (isolation_fixtures.go).
+func AuditWriterDSN() (string, error) {
+	raw, err := Secret("db_paddock_audit_writer_url")
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	u.Host = Env("PADDOCK_TEST_AUDIT_DB_HOST", loopback("PADDOCK_DEV_AUDIT_POSTGRES_PORT", "5433"))
+	return u.String(), nil
+}
+
 // PaddockOwnerDSN is the paddock_owner DSN with the host rewritten to the development port mapping: the gates that
 // play a compromised database (plan M4c gate R3) write with it.
 func PaddockOwnerDSN() (string, error) {

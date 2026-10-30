@@ -309,6 +309,18 @@ func (r *AuditReader) InOrg(ctx context.Context, fn func(ctx context.Context, q 
 		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
 }
 
+// InOrgWrite is InOrg in a read-write transaction. The reader role's only write is the insert of an evidence export
+// request (plan M10 decision 29); its grants and RLS policies, not this transaction mode, keep it from anything else.
+func (r *AuditReader) InOrgWrite(ctx context.Context, fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, r.p,
+		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
+}
+
 // AuditWriterPool is the pool of role paddock_audit_writer (cross-organization writer).
 type AuditWriterPool struct{ pool }
 

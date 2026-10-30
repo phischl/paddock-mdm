@@ -366,8 +366,11 @@ func TestAuditReaderIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
-	_, err = conn.Exec(ctx, "SELECT * FROM audit_object")
-	expectPermissionDenied(t, "paddock_audit_reader SELECT audit_object", err)
+	// The reader may read audit_object of its organization since audit migration 00008 (plan M10 §6.2); without an
+	// organization context the policy fails closed.
+	if _, err = conn.Exec(ctx, "SELECT * FROM audit_object"); err == nil {
+		t.Error("paddock_audit_reader SELECT audit_object without organization context succeeded")
+	}
 	if err := reader.InOrg(context.Background(), func(context.Context, *auditstore.Queries) error { return nil }); !errors.Is(err, db.ErrNoOrganization) {
 		t.Fatalf("AuditReader.InOrg without principal: got %v", err)
 	}
@@ -427,6 +430,84 @@ func TestAuditReaderSeesOnlyItsChainStatus(t *testing.T) {
 		if _, err := conn.Exec(ctx, "SELECT * FROM "+table); err == nil {
 			t.Errorf("%s: reader without organization context succeeded", table)
 		}
+	}
+}
+
+// TestAuditReaderExports: the reader inserts and reads the evidence exports of its own organization only and can
+// neither change nor delete one (plan M10 §6.2, decision 29).
+func TestAuditReaderExports(t *testing.T) {
+	env := sharedAudit(t)
+	ctx := context.Background()
+	reader, err := db.NewAuditReader(ctx, env.Reader, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	orgA, orgB := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	insert := func(org, as uuid.UUID) (uuid.UUID, error) {
+		id := uuid.Must(uuid.NewV7())
+		day := time.Now().UTC().Truncate(24 * time.Hour)
+		return id, reader.InOrgWrite(orgCtx(org), func(ctx context.Context, q *auditstore.Queries) error {
+			_, err := q.InsertAuditExport(ctx, auditstore.InsertAuditExportParams{
+				ID: id, OrganizationID: as, FromDay: day, ToDay: day, Purpose: "rls", RequestedBy: []byte(`{"type":"admin","step_up":true}`),
+				CorrelationID: "rls",
+			})
+			return err
+		})
+	}
+	idA, err := insert(orgA, orgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idB, err := insert(orgB, orgB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := insert(orgA, orgB); err == nil {
+		t.Error("reader of org A inserted an export of org B")
+	}
+
+	err = reader.InOrg(orgCtx(orgA), func(ctx context.Context, q *auditstore.Queries) error {
+		if _, err := q.GetAuditExport(ctx, idA); err != nil {
+			t.Errorf("reader of org A cannot read its export: %v", err)
+		}
+		if _, err := q.GetAuditExport(ctx, idB); !db.IsNoRows(err) {
+			t.Errorf("reader of org A reads the export of org B: %v", err)
+		}
+		items, err := q.ListAuditExports(ctx, auditstore.ListAuditExportsParams{Sort: "-requested_at", MaxRows: 100})
+		if err != nil {
+			return err
+		}
+		for _, e := range items {
+			if e.OrganizationID != orgA {
+				t.Errorf("reader of org A lists an export of %s", e.OrganizationID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pgx.Connect(ctx, env.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	for _, stmt := range []string{
+		"UPDATE audit_export SET status = 'ready'",
+		"DELETE FROM audit_export",
+		"INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES (gen_random_uuid(), gen_random_uuid(), 0, '')",
+		"INSERT INTO audit_signing_key (key_version, public_key) VALUES (99, decode(repeat('00', 32), 'hex'))",
+	} {
+		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgA.String()); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, stmt)
+			return err
+		})
+		expectPermissionDenied(t, "paddock_audit_reader: "+stmt, err)
 	}
 }
 

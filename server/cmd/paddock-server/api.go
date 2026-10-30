@@ -222,6 +222,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Conversions:    app.NewDiskConversions(runner, orgPool, devicecache.New(vk)),
 		AuditLog:       app.NewAuditLog(auditReader, orgPool),
 		AuditIntegrity: app.NewAuditIntegrity(auditReader),
+		AuditExports:   app.NewAuditExports(runner, auditReader),
 		ServerVersion:  buildinfo.Version,
 		IPAllowlist:    ipAllowlist,
 		IPGuard:        ipGuard,
