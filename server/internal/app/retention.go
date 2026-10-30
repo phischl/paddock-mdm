@@ -151,7 +151,8 @@ func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, er
 // retention.purged failure (upstream_unavailable, store retired_inventory) for the organization instead; the devices
 // keep their rows. A failure loading the privacy settings or listing the first page records one retention.purged
 // failure (store retired_inventory) as well. A device whose Fleet host is kept with an unchanged answer starts no
-// action (unchangedHold).
+// action (unchangedHold); neither does one the pass cannot check against its held answer this round, which fails the
+// pass without an event. Only a device whose rows or Fleet host were deleted counts.
 func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time, round *RetentionRound) (int, error) {
 	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
 		return 0, problem.Unauthenticated
@@ -189,11 +190,15 @@ pages:
 				errs = append(errs, r.recordFleetSkipped(ctx, cutoff))
 				break pages
 			}
-			if !r.unchangedHold(ctx, d, now) {
+			skip, err := r.unchangedHold(ctx, d, now, round)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("device %s: %w", d.ID, err))
+			}
+			if !skip {
 				attempted++
-				if err := r.purgeDeviceInventory(ctx, d, now, cutoff, round); err != nil {
+				if deleted, err := r.purgeDeviceInventory(ctx, d, now, cutoff, round); err != nil {
 					failed = append(failed, fmt.Errorf("device %s: %w", d.ID, err))
-				} else {
+				} else if deleted {
 					purged++
 				}
 			}
@@ -266,12 +271,17 @@ func (r *Retention) answerHost(ctx context.Context, d pgstore.ListRetiredDevices
 }
 
 // unchangedHold reports whether the pass starts no action for a listed device: its Fleet host is kept with the answer
-// its last event recorded (retention_inventory_hold) and nothing but the host reference is left, so an event every
-// round would be noise (plan M10 amendment 2026-10-30, PDK-583 round 2). It counts the unchanged round and records
-// the one device.inventory_host_kept notice once the device reaches holdNotice of them. Otherwise it drops the held
-// answer before the action runs, so an action that fails before it records its own answer leaves none, and the next
-// kept answer records an event again. Any error of the check reports false; the action then re-checks and records.
-func (r *Retention) unchangedHold(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow, now time.Time) bool {
+// its last event recorded (retention_inventory_hold) for the same retirement and nothing but the host reference is
+// left, so an event every round would be noise (plan M10 amendment 2026-10-30, PDK-583 round 2). It counts the
+// unchanged round and records the one device.inventory_host_kept notice once the device reaches holdNotice of them.
+// The check-in lookup runs under fleetDeleteTimeout; when it fails with upstream_unavailable, the device keeps its
+// held answer and is skipped this round with the error, which counts toward the round's Fleet breaker, so a Fleet
+// blip neither records an event nor restarts the count. Otherwise a held answer is dropped and committed before the
+// action runs, and when the drop fails the device is skipped with the error: an action never runs with a held answer,
+// so one that fails at any step leaves none, and the next kept answer records an event again. Any other error of the
+// check lets the action run; it checks again and records the outcome.
+func (r *Retention) unchangedHold(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow, now time.Time,
+	round *RetentionRound) (bool, error) {
 	var held pgstore.CountDeviceInventoryRow
 	var hold pgstore.InventoryHoldRow
 	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -282,25 +292,33 @@ func (r *Retention) unchangedHold(ctx context.Context, d pgstore.ListRetiredDevi
 		hold, err = q.InventoryHold(ctx, d.ID)
 		return err
 	})
-	if err != nil || hold.LastAnswer == "" {
-		return false
+	if err == nil && hold.LastAnswer == "" {
+		return false, nil
 	}
-	if held.ExternalID != "" && held.Software+held.Findings+held.PolicyResults == 0 {
-		if a, _, err := r.answerHost(ctx, d, held.ExternalID, now); err == nil && a.kept == hold.LastAnswer {
+	if err == nil && hold.RetiredAt.Equal(d.StateChangedAt) && held.ExternalID != "" &&
+		held.Software+held.Findings+held.PolicyResults == 0 {
+		lookupCtx, cancel := context.WithTimeout(ctx, fleetDeleteTimeout)
+		a, fleet, err := r.answerHost(lookupCtx, d, held.ExternalID, now)
+		cancel()
+		switch {
+		case fleet && errors.Is(err, problem.UpstreamUnavailable):
+			round.fleetFailures++
+			return true, fmt.Errorf("check the kept Fleet host: %w", err)
+		case err == nil && a.kept == hold.LastAnswer:
 			if err := r.countUnchanged(ctx, d, hold); err != nil {
 				slog.WarnContext(ctx, "count an unchanged round of a kept Fleet host", "device", d.ID, "error", err)
 			}
 			slog.InfoContext(ctx, "retired device keeps its Fleet host; the answer has not changed", "device", d.ID,
 				"answer", a.kept)
-			return true
+			return true, nil
 		}
 	}
 	if err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		return q.DeleteInventoryHold(ctx, d.ID)
 	}); err != nil {
-		slog.WarnContext(ctx, "drop the held answer of a retired device", "device", d.ID, "error", err)
+		return true, fmt.Errorf("drop the held answer of the kept Fleet host: %w", err)
 	}
-	return false
+	return false, nil
 }
 
 // countUnchanged counts one more unchanged round of a kept Fleet host; the round that reaches holdNotice records the
@@ -354,13 +372,14 @@ func (r *Retention) recordFleetSkipped(ctx context.Context, cutoff time.Time) er
 // hardware has no reference yet, or the host checked in after the retirement within fleetHostSeenDays (answerHost),
 // the host is kept and so is the retired device's reference, so later rounds list the device again and decide once
 // the answer changes (plan M10 amendments 2026-10-30); fleet_host_in_use and fleet_host_kept record the answer, and
-// the kept answer is held so that unchanged rounds start no action (unchangedHold). When a check fails, nothing is
-// deleted. cutoff is the one the device was listed with; a
+// the kept answer is held with the device's retirement so that unchanged rounds start no action (unchangedHold); the
+// held answer is set or dropped in the transaction that records the outcome. When a check fails, nothing is
+// deleted. It reports whether rows or the Fleet host were deleted. cutoff is the one the device was listed with; a
 // device no longer retired before it is refused under the row lock. round counts the Fleet step's consecutive
 // upstream_unavailable failures, of the check-in lookup as of the deletion; Fleet's refusal of this one host
 // (invalid_state) fails the device without counting (plan M10 amendment 2026-10-30, PDK-583).
 func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListRetiredDevicesWithInventoryRow, now, cutoff time.Time,
-	round *RetentionRound) error {
+	round *RetentionRound) (bool, error) {
 	spec := SpecDeviceInventoryPurged
 	spec.Target = &audit.Target{Type: "device", ID: d.ID.String(), Display: d.Hostname}
 	spec.Params = map[string]any{
@@ -369,7 +388,7 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 	}
 	var held pgstore.CountDeviceInventoryRow
 	var answer hostAnswer
-	var hostDeleted bool
+	var hostDeleted, deleted bool
 	var fleetErr error
 	err := r.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
@@ -419,7 +438,7 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 				rec.SetParam("fleet_host_seen_at", audit.Timestamp(answer.seen).Format(time.RFC3339Nano))
 			}
 			if externalErr != nil {
-				return nil
+				return q.DeleteInventoryHold(ctx, d.ID)
 			}
 			if err := r.setLockTimeout(ctx, q); err != nil {
 				return err
@@ -431,10 +450,14 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 				return err
 			}
 			if answer.kept != "" {
-				if err := q.SetInventoryHold(ctx, pgstore.SetInventoryHoldParams{DeviceID: d.ID, LastAnswer: answer.kept}); err != nil {
-					return err
-				}
+				err = q.SetInventoryHold(ctx, pgstore.SetInventoryHoldParams{DeviceID: d.ID, LastAnswer: answer.kept})
+			} else {
+				err = q.DeleteInventoryHold(ctx, d.ID)
 			}
+			if err != nil {
+				return err
+			}
+			deleted = hostDeleted || n.Software+n.Findings+n.PolicyResults+n.Refs > 0
 			rec.SetParam("software", n.Software)
 			rec.SetParam("findings", n.Findings)
 			rec.SetParam("policy_results", n.PolicyResults)
@@ -446,7 +469,7 @@ func (r *Retention) purgeDeviceInventory(ctx context.Context, d pgstore.ListReti
 	case errors.Is(fleetErr, problem.UpstreamUnavailable):
 		round.fleetFailures++
 	}
-	return err
+	return deleted && err == nil, err
 }
 
 // lockDevice locks the retired device's row for the action's first transaction, waiting at most the lock timeout, and

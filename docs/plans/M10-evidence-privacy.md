@@ -1779,3 +1779,31 @@ Architect decisions on review 1 of PDK-583. They amend the amendment above where
 - **x4: a pass-level failure records one event.** A failure loading the organization's privacy settings or listing
   the first page of its retired devices records one `retention.purged` failure (`store` `retired_inventory`) for the
   organization and round, through `RunTx` like the breaker skip.
+
+### Amendment 2026-10-30 (PDK-583 round 3, review 2 of the leftovers)
+
+Decisions on review 2 of PDK-583. They amend M1, x3 and the bound above where they differ.
+
+- **The held answer is consistent with the last event.** A device's action never runs while the device has a held
+  answer: before the action the pass drops the held answer in a transaction of its own, also when it could not read
+  it, and when the drop fails the device is skipped this round and the pass fails (no action, no event). The action
+  sets the held answer, or drops it on a failure or when nothing is kept, in the transaction that records its outcome.
+  A held answer therefore always belongs to the last event of the device.
+- **The held answer belongs to one retirement.** `retention_inventory_hold.retired_at` (migration 00079) stores the
+  device's `state_changed_at` with the answer. When it differs from the listed device's (reactivated and retired
+  again), the answer counts as changed: the action runs, records its event and starts the count over.
+- **A lookup blip neither records an event nor restarts the count.** The comparison's host check and check-in lookup
+  run under the same bound as the action's Fleet step (`fleetDeleteTimeout`). When the check-in lookup of a held
+  device fails with `upstream_unavailable`, the device keeps its held answer and its count, is skipped this round
+  without an action or event, the pass fails (the worker logs it and the store's last success does not advance) and the
+  failure counts toward the round's Fleet breaker like a failed lookup in an action. Any other failure of the
+  comparison lets the action run; it checks again and records the outcome.
+- **The breaker is reset only by a deleted host.** A successful lookup does not reset it, so a proxy that answers
+  reads but fails every deletion still trips it.
+- **`paddock_retention_deleted_total{store="retired_inventory"}` counts a device only when rows or its Fleet host were
+  deleted**; a first sight or changed kept answer of a device with nothing but its host reference left counts nothing.
+- **`HostSeenAt` fails closed on a foreign answer.** A 200 without a host object (or host id) or without `seen_time`
+  is `upstream_unavailable`: Fleet always sends both, and a host that never checked in carries Fleet's zero time. Only
+  Fleet's own 404 reads as a host that is gone.
+- **`device.inventory_host_kept` declares `failure`**: a notice that cannot be recorded fails with the count and is
+  retried the next round.

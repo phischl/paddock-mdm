@@ -59,7 +59,10 @@ func TestRetentionPurgeRetiredInventoryHoldFirstSight(t *testing.T) {
 	pending := w.inventoried(t, org, "pending", now, "", 0, 0, 0)
 	w.hardware(t, pending, "hold-h1")
 
-	w.passes(t, org, now, 3)
+	if n, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound()); err != nil || n != 0 {
+		t.Fatalf("first pass purged %d devices (%v), want none: nothing was deleted", n, err)
+	}
+	w.passes(t, org, now, 2)
 	events := w.inventoryPurgedEvents(t, org)
 	if len(events) != 1 || events[0].outcome != "success" || events[0].params["fleet_host_in_use"] != "hardware" ||
 		events[0].params["fleet_host_kept"] != "hardware" || events[0].params["fleet_host_deleted"] != false {
@@ -230,18 +233,172 @@ func TestRetentionPurgeRetiredInventoryLookupTrips(t *testing.T) {
 // failSelect makes every read of table by the worker in org's context raise until the test ends.
 func (w retentionWorld) failSelect(t *testing.T, org uuid.UUID, table string) {
 	t.Helper()
+	w.failCommand(t, org, table, "SELECT")
+}
+
+// failCommand makes every command (SELECT, DELETE, ...) on table by the worker in org's context raise until the test
+// ends or the returned function stops it.
+func (w retentionWorld) failCommand(t *testing.T, org uuid.UUID, table, command string) func() {
+	t.Helper()
 	ctx := context.Background()
-	name := "fail_" + table + "_" + strings.ReplaceAll(org.String(), "-", "")
+	name := "fail_" + strings.ToLower(command) + "_" + table + "_" + strings.ReplaceAll(org.String(), "-", "")
 	if _, err := w.super.Exec(ctx, fmt.Sprintf(`
-		CREATE FUNCTION %[1]s() RETURNS boolean LANGUAGE plpgsql AS $f$ BEGIN RAISE EXCEPTION 'injected read failure'; END $f$;
+		CREATE FUNCTION %[1]s() RETURNS boolean LANGUAGE plpgsql AS $f$ BEGIN RAISE EXCEPTION 'injected failure'; END $f$;
+		CREATE POLICY %[1]s ON %[2]s AS RESTRICTIVE FOR %[4]s TO paddock_worker
+		  USING (CASE WHEN current_setting('paddock.org_id', true) = '%[3]s' THEN %[1]s() ELSE true END);`,
+		name, table, org, command)); err != nil {
+		t.Fatal(err)
+	}
+	stop := func() {
+		_, _ = w.super.Exec(ctx, fmt.Sprintf("DROP POLICY IF EXISTS %[1]s ON %[2]s; DROP FUNCTION IF EXISTS %[1]s();", name, table))
+	}
+	t.Cleanup(stop)
+	return stop
+}
+
+// failFirstRead makes the next read of table by the worker in org's context raise; the reads after it succeed.
+func (w retentionWorld) failFirstRead(t *testing.T, org uuid.UUID, table string) {
+	t.Helper()
+	ctx := context.Background()
+	name := "fail_once_" + table + "_" + strings.ReplaceAll(org.String(), "-", "")
+	if _, err := w.super.Exec(ctx, fmt.Sprintf(`
+		CREATE SEQUENCE %[1]s;
+		CREATE FUNCTION %[1]s() RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER AS $f$
+		  BEGIN IF nextval('%[1]s') = 1 THEN RAISE EXCEPTION 'injected read failure'; END IF; RETURN true; END $f$;
 		CREATE POLICY %[1]s ON %[2]s AS RESTRICTIVE FOR SELECT TO paddock_worker
 		  USING (CASE WHEN current_setting('paddock.org_id', true) = '%[3]s' THEN %[1]s() ELSE true END);`,
 		name, table, org)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = w.super.Exec(ctx, fmt.Sprintf("DROP POLICY %[1]s ON %[2]s; DROP FUNCTION %[1]s();", name, table))
+		_, _ = w.super.Exec(ctx, fmt.Sprintf("DROP POLICY %[1]s ON %[2]s; DROP FUNCTION %[1]s(); DROP SEQUENCE %[1]s;", name, table))
 	})
+}
+
+// TestRetentionPurgeRetiredInventoryHoldCheckFails (PDK-583 review 2, R2-1): an action never runs while the device
+// still has a held answer. When the pass cannot read the held answer, it drops it before the action, so a failing action
+// followed by the kept answer held before records one failure and then one success; when the drop fails, the device is
+// skipped this round with the error, and an unchanged answer afterwards records nothing.
+func TestRetentionPurgeRetiredInventoryHoldCheckFails(t *testing.T) {
+	t.Run("read", func(t *testing.T) {
+		w := newRetentionWorld(t)
+		now := time.Now().UTC()
+		org := w.emptyOrganization(t)
+		w.inventoried(t, org, "retired", now.Add(-400*time.Second), "hc1", 0, 0, 0)
+		answer := "hardware"
+		w.retention.SetHostUsers(func(context.Context, uuid.UUID, string) (string, error) { return answer, nil })
+
+		w.passes(t, org, now, 1)
+		w.failFirstRead(t, org, "retention_inventory_hold")
+		answer, w.fleet.err = "none", fleetDown()
+		w.passes(t, org, now, 1)
+		answer, w.fleet.err = "hardware", nil
+		w.passes(t, org, now, 2)
+		var got []string
+		for _, ev := range w.inventoryPurgedEvents(t, org) {
+			got = append(got, fmt.Sprint(ev.outcome, "/", ev.params["fleet_host_kept"]))
+		}
+		if fmt.Sprint(got) != "[success/hardware failure/<nil> success/hardware]" {
+			t.Fatalf("events %v, want success, failure, success keeping the host for hardware", got)
+		}
+	})
+	t.Run("drop", func(t *testing.T) {
+		w := newRetentionWorld(t)
+		now := time.Now().UTC()
+		org := w.emptyOrganization(t)
+		dev := w.inventoried(t, org, "retired", now.Add(-400*time.Second), "hc2", 0, 0, 0)
+		answer := "hardware"
+		w.retention.SetHostUsers(func(context.Context, uuid.UUID, string) (string, error) { return answer, nil })
+
+		w.passes(t, org, now, 1)
+		stop := w.failCommand(t, org, "retention_inventory_hold", "DELETE")
+		answer = "none"
+		if _, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound()); err == nil {
+			t.Fatal("pass succeeded, want the failed drop")
+		}
+		stop()
+		answer = "hardware"
+		w.passes(t, org, now, 1)
+		if events := w.inventoryPurgedEvents(t, org); len(events) != 1 || w.fleet.calls != 0 || w.inventoryRows(t, dev) != 1 {
+			t.Fatalf("events %+v, %d deletions, %d rows left; want the first success only, none and the reference", events,
+				w.fleet.calls, w.inventoryRows(t, dev))
+		}
+	})
+}
+
+// TestRetentionPurgeRetiredInventoryHoldLookupFails (PDK-583 review 2, R2-2 and medium B): an upstream_unavailable
+// failure of the check-in lookup of a held device keeps its held answer and its count of unchanged rounds, records no
+// event and fails the pass; the lookup is bounded and counts toward the round's Fleet breaker.
+func TestRetentionPurgeRetiredInventoryHoldLookupFails(t *testing.T) {
+	w := newRetentionWorld(t)
+	now := time.Now().UTC()
+	org := w.emptyOrganization(t)
+	w.fleet.seen = map[ports.HostRef]time.Time{}
+	var devices []uuid.UUID
+	for i := range 4 {
+		ref := ports.HostRef("hl" + string(rune('1'+i)))
+		devices = append(devices, w.inventoried(t, org, "retired", now.Add(time.Duration(i-400)*time.Second), string(ref), 0, 0, 0))
+		w.fleet.seen[ref] = now.Add(-time.Second)
+	}
+	w.passes(t, org, now, 2)
+	rounds := "SELECT unchanged_rounds FROM retention_inventory_hold WHERE device_id = $1"
+	if got := countRows(t, w.super, rounds, devices[0]); got != 1 {
+		t.Fatalf("%d unchanged rounds held, want 1", got)
+	}
+
+	w.fleet.seenErr = map[ports.HostRef]error{"hl1": fleetDown()}
+	if _, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound()); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("pass: %v, want upstream_unavailable", err)
+	}
+	w.fleet.seenErr = nil
+	w.passes(t, org, now, 1)
+	if got := countRows(t, w.super, rounds, devices[0]); got != 2 {
+		t.Fatalf("%d unchanged rounds held after a failed lookup, want 2", got)
+	}
+	if events := w.inventoryPurgedEvents(t, org); len(events) != 4 {
+		t.Fatalf("%d purge events, want the 4 first sights only", len(events))
+	}
+
+	w.fleet.seenErr = map[ports.HostRef]error{"hl1": fleetDown(), "hl2": fleetDown(), "hl3": fleetDown(), "hl4": fleetDown()}
+	lookups := w.fleet.lookups
+	if _, err := w.retention.PurgeRetiredInventory(systemCtx(org), now, app.NewRetentionRound()); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("pass: %v, want upstream_unavailable", err)
+	}
+	if w.fleet.lookups-lookups != 3 || w.fleet.unbounded != 0 || w.fleet.calls != 0 {
+		t.Fatalf("%d lookups, %d without a deadline, %d deletions; want 3, none and none", w.fleet.lookups-lookups,
+			w.fleet.unbounded, w.fleet.calls)
+	}
+	if skips := w.retiredInventorySkips(t, org); len(skips) != 1 || skips[0] != "failure/upstream_unavailable" {
+		t.Fatalf("skip events %v, want one failure/upstream_unavailable", skips)
+	}
+	if events := w.inventoryPurgedEvents(t, org); len(events) != 4 {
+		t.Fatalf("%d purge events, want the 4 first sights only", len(events))
+	}
+}
+
+// TestRetentionPurgeRetiredInventoryHoldNewRetirement (PDK-583 review 2, medium A): an answer is held for the
+// retirement it was recorded for; a device reactivated and retired again records its kept answer anew, even when it is
+// the same.
+func TestRetentionPurgeRetiredInventoryHoldNewRetirement(t *testing.T) {
+	w := newRetentionWorld(t)
+	now := time.Now().UTC()
+	org := w.emptyOrganization(t)
+	dev := w.inventoried(t, org, "retired", now.Add(-400*time.Second), "hr1", 0, 0, 0)
+	w.retention.SetHostUsers(func(context.Context, uuid.UUID, string) (string, error) { return "hardware", nil })
+
+	w.passes(t, org, now, 2)
+	if _, err := w.super.Exec(context.Background(), "UPDATE device SET state_changed_at = $2 WHERE id = $1", dev,
+		now.Add(-300*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	w.passes(t, org, now, 2)
+	events := w.inventoryPurgedEvents(t, org)
+	if len(events) != 2 || events[1].outcome != "success" || events[1].params["fleet_host_kept"] != "hardware" {
+		t.Fatalf("events %+v, want one success per retirement keeping the host for hardware", events)
+	}
+	if got := countRows(t, w.super, "SELECT unchanged_rounds FROM retention_inventory_hold WHERE device_id = $1", dev); got != 1 {
+		t.Fatalf("%d unchanged rounds held, want 1 since the new retirement", got)
+	}
 }
 
 // TestRetentionPurgeRetiredInventoryPassFailure (plan M10 amendment 2026-10-30, PDK-583 round 2): a pass that cannot

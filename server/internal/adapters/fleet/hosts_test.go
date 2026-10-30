@@ -204,7 +204,12 @@ func TestHostSeenAt(t *testing.T) {
 		err  error
 	}{
 		{"seen", http.StatusOK, `{"host":{"id":1,"seen_time":"2026-10-29T08:00:00Z"}}`, seen, nil},
-		{"never seen", http.StatusOK, `{"host":{"id":1,"seen_time":null}}`, time.Time{}, nil},
+		{"never seen", http.StatusOK, `{"host":{"id":1,"seen_time":"0001-01-01T00:00:00Z"}}`, time.Time{}, nil},
+		{"null seen_time", http.StatusOK, `{"host":{"id":1,"seen_time":null}}`, time.Time{}, problem.UpstreamUnavailable},
+		{"no seen_time", http.StatusOK, `{"host":{"id":1}}`, time.Time{}, problem.UpstreamUnavailable},
+		{"no host", http.StatusOK, `{}`, time.Time{}, problem.UpstreamUnavailable},
+		{"null host", http.StatusOK, `{"host":null}`, time.Time{}, problem.UpstreamUnavailable},
+		{"host without id", http.StatusOK, `{"host":{"seen_time":"2026-10-29T08:00:00Z"}}`, time.Time{}, problem.UpstreamUnavailable},
 		{"gone", http.StatusNotFound, fleetError, time.Time{}, nil},
 		{"foreign 404", http.StatusNotFound, "404 page not found", time.Time{}, problem.UpstreamUnavailable},
 		{"refused", http.StatusBadRequest, fleetError, time.Time{}, problem.InvalidState},

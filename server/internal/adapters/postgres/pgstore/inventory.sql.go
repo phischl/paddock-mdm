@@ -409,12 +409,14 @@ func (q *Queries) InventoryDevices(ctx context.Context, uuids []string) ([]Inven
 
 const inventoryHold = `-- name: InventoryHold :one
 SELECT coalesce((SELECT h.last_answer FROM retention_inventory_hold h WHERE h.device_id = $1), '')::text AS last_answer,
-       coalesce((SELECT h.unchanged_rounds FROM retention_inventory_hold h WHERE h.device_id = $1), 0)::int AS unchanged_rounds
+       coalesce((SELECT h.unchanged_rounds FROM retention_inventory_hold h WHERE h.device_id = $1), 0)::int AS unchanged_rounds,
+       coalesce((SELECT h.retired_at FROM retention_inventory_hold h WHERE h.device_id = $1), 'epoch')::timestamptz AS retired_at
 `
 
 type InventoryHoldRow struct {
 	LastAnswer      string
 	UnchangedRounds int32
+	RetiredAt       time.Time
 }
 
 // The answer the retention round last recorded an event for while it keeps a retired device's Fleet host, ” without
@@ -422,7 +424,7 @@ type InventoryHoldRow struct {
 func (q *Queries) InventoryHold(ctx context.Context, deviceID uuid.UUID) (InventoryHoldRow, error) {
 	row := q.db.QueryRow(ctx, inventoryHold, deviceID)
 	var i InventoryHoldRow
-	err := row.Scan(&i.LastAnswer, &i.UnchangedRounds)
+	err := row.Scan(&i.LastAnswer, &i.UnchangedRounds, &i.RetiredAt)
 	return i, err
 }
 
@@ -884,9 +886,10 @@ func (q *Queries) MarkAgentNotRunningReported(ctx context.Context, arg MarkAgent
 }
 
 const setInventoryHold = `-- name: SetInventoryHold :exec
-INSERT INTO retention_inventory_hold (device_id, organization_id, last_answer, unchanged_rounds, last_event_at)
-SELECT d.id, d.organization_id, $1, 0, now() FROM device d WHERE d.id = $2
-ON CONFLICT (device_id) DO UPDATE SET last_answer = excluded.last_answer, unchanged_rounds = 0, last_event_at = now()
+INSERT INTO retention_inventory_hold (device_id, organization_id, last_answer, retired_at, unchanged_rounds, last_event_at)
+SELECT d.id, d.organization_id, $1, d.state_changed_at, 0, now() FROM device d WHERE d.id = $2
+ON CONFLICT (device_id) DO UPDATE SET last_answer = excluded.last_answer, retired_at = excluded.retired_at,
+  unchanged_rounds = 0, last_event_at = now()
 `
 
 type SetInventoryHoldParams struct {
@@ -894,6 +897,7 @@ type SetInventoryHoldParams struct {
 	DeviceID   uuid.UUID
 }
 
+// Holds the answer with the device's current retirement.
 func (q *Queries) SetInventoryHold(ctx context.Context, arg SetInventoryHoldParams) error {
 	_, err := q.db.Exec(ctx, setInventoryHold, arg.LastAnswer, arg.DeviceID)
 	return err

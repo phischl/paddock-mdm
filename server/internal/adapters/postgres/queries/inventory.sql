@@ -276,7 +276,8 @@ SELECT (SELECT count(*) FROM s)::bigint AS software, (SELECT count(*) FROM f)::b
 -- one (plan M10 amendment 2026-10-30, PDK-583 round 2).
 -- name: InventoryHold :one
 SELECT coalesce((SELECT h.last_answer FROM retention_inventory_hold h WHERE h.device_id = @device_id), '')::text AS last_answer,
-       coalesce((SELECT h.unchanged_rounds FROM retention_inventory_hold h WHERE h.device_id = @device_id), 0)::int AS unchanged_rounds;
+       coalesce((SELECT h.unchanged_rounds FROM retention_inventory_hold h WHERE h.device_id = @device_id), 0)::int AS unchanged_rounds,
+       coalesce((SELECT h.retired_at FROM retention_inventory_hold h WHERE h.device_id = @device_id), 'epoch')::timestamptz AS retired_at;
 
 -- Counts one more round without a change of the held answer and returns the rounds counted.
 -- name: CountInventoryHoldRound :one
@@ -284,10 +285,12 @@ UPDATE retention_inventory_hold SET unchanged_rounds = unchanged_rounds + 1
 WHERE device_id = @device_id AND last_answer = @last_answer
 RETURNING unchanged_rounds;
 
+-- Holds the answer with the device's current retirement.
 -- name: SetInventoryHold :exec
-INSERT INTO retention_inventory_hold (device_id, organization_id, last_answer, unchanged_rounds, last_event_at)
-SELECT d.id, d.organization_id, @last_answer, 0, now() FROM device d WHERE d.id = @device_id
-ON CONFLICT (device_id) DO UPDATE SET last_answer = excluded.last_answer, unchanged_rounds = 0, last_event_at = now();
+INSERT INTO retention_inventory_hold (device_id, organization_id, last_answer, retired_at, unchanged_rounds, last_event_at)
+SELECT d.id, d.organization_id, @last_answer, d.state_changed_at, 0, now() FROM device d WHERE d.id = @device_id
+ON CONFLICT (device_id) DO UPDATE SET last_answer = excluded.last_answer, retired_at = excluded.retired_at,
+  unchanged_rounds = 0, last_event_at = now();
 
 -- name: DeleteInventoryHold :exec
 DELETE FROM retention_inventory_hold WHERE device_id = @device_id;

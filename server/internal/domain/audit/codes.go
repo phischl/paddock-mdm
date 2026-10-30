@@ -734,9 +734,9 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceInventoryHostKept: {
 		Code: CodeDeviceInventoryHostKept, Emitted: true,
-		Description: "The retention job has kept a retired device's Fleet host and host reference for rounds unchanged rounds with the same answer fleet_host_kept (hardware or seen_recently, see device.inventory_purged) and records it once (actor: system). Nothing is deleted; the device is still checked every round and records device.inventory_purged again when the answer changes.",
+		Description: "The retention job has kept a retired device's Fleet host and host reference for rounds unchanged rounds with the same answer fleet_host_kept (hardware or seen_recently, see device.inventory_purged) and records it once (actor: system). Nothing is deleted; the device is still checked every round and records device.inventory_purged again when the answer changes. A failure means the notice could not be recorded; the next round retries it.",
 		Params:      []string{"hostname", "retired_at", "fleet_host_kept", "rounds"},
-		Outcomes:    []Outcome{OutcomeSuccess},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Notice; ADR 0032.",
 	},
 	CodeDeviceLoginAssignmentChange: {

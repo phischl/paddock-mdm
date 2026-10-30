@@ -166,24 +166,29 @@ func (c *Client) DeleteHost(ctx context.Context, ref ports.HostRef) error {
 }
 
 // HostSeenAt implements ports.InventoryAdmin with Fleet's host detail without its software. A host Fleet no longer
-// knows (a 404 with Fleet's own error body) and a host that never checked in report the zero time; failures are
-// classified like DeleteHost's.
+// knows (a 404 with Fleet's own error body) and a host that never checked in (Fleet's zero seen_time) report the zero
+// time; failures are classified like DeleteHost's. A 200 without the host or its seen_time is upstream_unavailable:
+// Fleet always sends both, so another answer is not Fleet's, and reading it as never seen would delete a host in use.
 func (c *Client) HostSeenAt(ctx context.Context, ref ports.HostRef) (time.Time, error) {
 	id, err := strconv.Atoi(string(ref))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("%w: fleet: invalid host reference %q", problem.InvalidState, ref)
 	}
 	var out struct {
-		Host struct {
+		Host *struct {
+			ID       int        `json:"id"`
 			SeenTime *time.Time `json:"seen_time"`
 		} `json:"host"`
 	}
 	err = c.do(ctx, http.MethodGet, "/api/v1/fleet/hosts/"+strconv.Itoa(id)+"?exclude_software=true", nil, &out)
 	st := (*errStatus)(nil)
 	switch {
-	case err == nil && out.Host.SeenTime != nil:
+	case err == nil && out.Host != nil && out.Host.ID != 0 && out.Host.SeenTime != nil:
 		return *out.Host.SeenTime, nil
-	case err == nil, errors.As(err, &st) && st.code == http.StatusNotFound && isFleetErrorBody(st.body):
+	case err == nil:
+		return time.Time{}, fmt.Errorf("%w: get fleet host %d: the answer has no host with its seen_time",
+			problem.UpstreamUnavailable, id)
+	case errors.As(err, &st) && st.code == http.StatusNotFound && isFleetErrorBody(st.body):
 		return time.Time{}, nil
 	}
 	return time.Time{}, hostError(err, fmt.Sprintf("get fleet host %d", id))

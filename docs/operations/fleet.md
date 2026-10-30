@@ -116,9 +116,11 @@ any organization still references stays in Fleet. The host also stays with the r
 a device of the same hardware is enrolled again but has not synced its inventory yet (`fleet_host_kept` `hardware`),
 or while the host still checks in to Fleet after the retirement, within the last 7 days (`seen_recently`: fleetd still
 runs on the retired machine or a successor uses the host); the retired device's other rows go and it is checked again
-every round. An event is recorded only when that answer changes; rounds with the same answer only log `retired device
-keeps its Fleet host`, and after 30 such rounds one `device.inventory_host_kept` event notes that the host is still
-kept (uninstall fleetd from a retired machine that is still running). A failure to load the privacy settings or list
+every round. An event is recorded only when that answer changes, or the device was reactivated and retired again;
+rounds with the same answer only log `retired device keeps its Fleet host`, and after 30 such rounds one
+`device.inventory_host_kept` event notes that the host is still kept (uninstall fleetd from a retired machine that is
+still running). When Fleet cannot answer the check-in lookup of such a device, the device is skipped that round
+without an event (the round logs the failure and it counts toward the three failures in a row). A failure to load the privacy settings or list
 the retired devices records one `retention.purged` failure (`store` `retired_inventory`). The
 lists show the state of the last inventory round, so a package change on a device appears after fleetd's next
 software report (hourly by default) and the next round.
