@@ -61,6 +61,7 @@ type handlers struct {
 	inventory   *app.Inventory
 	updates     *app.Updates
 	privacy     *app.Privacy
+	readAudit   *app.ReadAudit
 	attention   *app.Attention
 	ipAllowlist *app.IPAllowlist
 	overview    *app.Overview
@@ -335,10 +336,14 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 	if err != nil {
 		return nil, err
 	}
-	res, err := h.audit.List(ctx, app.AuditQuery{
+	query := app.AuditQuery{
 		From: req.Params.From, To: req.Params.To, Codes: listing.Strings(req.Params.Code), Outcomes: outcomes,
 		ActorTypes: actorTypes, TargetID: req.Params.TargetId, Page: params.ListPage(),
-	})
+	}
+	if _, err := h.readAudit.AuditSearched(ctx, query); err != nil {
+		return nil, err
+	}
+	res, err := h.audit.List(ctx, query)
 	if err != nil {
 		return nil, err
 	}

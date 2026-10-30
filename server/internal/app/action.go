@@ -404,6 +404,38 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 	return recorded, nil
 }
 
+// RecordReadOnce records a read of sensitive data at most once per window: authorization as in RunTx (a denied role
+// is recorded as denied), then claim runs inside the organization transaction; it returns false when the window key
+// existed, and then nothing is recorded (no action, no outbox row). true records outcome success in the same
+// transaction. A claim error rolls back and is recorded as failure (plan M10 decision 18).
+func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
+	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok {
+		return false, problem.Unauthenticated
+	}
+	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
+	if err := r.authorize(p, ScopeOrg, spec, rec); err != nil {
+		r.recordFinal(ctx, p, ScopeOrg, rec, err)
+		return false, err
+	}
+	defer r.recordPanic(ctx, p, ScopeOrg, rec)
+	recorded := false
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		fresh, err := claim(ctx, q, rec)
+		if err != nil || !fresh {
+			return err
+		}
+		recorded = true
+		return r.insertFinished(ctx, q, rec, nil)
+	})
+	if err != nil {
+		r.recordFinal(ctx, p, ScopeOrg, rec, err)
+		return false, err
+	}
+	return recorded, nil
+}
+
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
 // login) and reports false.

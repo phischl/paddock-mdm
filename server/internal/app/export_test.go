@@ -35,3 +35,6 @@ func (r *Retention) SetPage(n int32) { r.page = n }
 
 // SetHoldNotice shortens the unchanged rounds of a kept Fleet host before its notice, for tests of the notice.
 func (r *Retention) SetHoldNotice(n int32) { r.holdNotice = n }
+
+// SetClock replaces time.Now of the read-access recording, for tests of consecutive windows.
+func (r *ReadAudit) SetClock(now func() time.Time) { r.now = now }

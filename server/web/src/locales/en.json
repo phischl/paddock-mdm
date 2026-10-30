@@ -315,6 +315,7 @@
       "chain_verified": "The audit hash chain was verified for {from_day} to {to_day} ({days, number} days, {objects, number} objects, {trigger})",
       "chain_verification_failed": "The audit hash chain verification found {problem_count, plural, one {# problem} other {# problems}} for {from_day} to {to_day} ({trigger})",
       "export_requested": "{actor} requested an evidence export of {from_day} to {to_day}",
+      "searched": "{actor} searched the audit log{q_used, select, true { with a search term} other {}}",
       "export_completed": "The audit writer processed the evidence export of {from_day} to {to_day} ({events, number} events, {objects, number} objects)",
       "export_downloaded": "{actor} downloaded the evidence export of {from_day} to {to_day} ({size, number} bytes)"
     },
@@ -366,6 +367,7 @@
       "login_assignment_changed": "{actor} changed who may log in on {hostname}",
       "logins_suspended": "{actor} suspended logins on {hostname}",
       "inventory_purged": "Inventory purge of the retired device {hostname}: {software, plural, one {# package} other {# packages}}, {findings, plural, one {# finding} other {# findings}}",
+      "inventory_viewed": "{actor} viewed the {view, select, vulnerabilities {vulnerabilities} other {software}} of {hostname}",
       "inventory_host_kept": "The retired device {hostname} still keeps its Fleet host after {rounds, number} unchanged rounds ({fleet_host_kept})",
       "logins_resumed": "{actor} resumed logins on {hostname}",
       "bundle_render_failed": "A new bundle of {target} was blocked: the sudo rights of {username} failed the check",

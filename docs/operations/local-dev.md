@@ -137,7 +137,8 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
   `paddock-dev-stepup-mfa` (WebAuthn or TOTP), so the test users complete step-ups with their seeded TOTP keys
   (`docs/operations/step-up.md`, "Development stack").
 - Retention days in seconds: `PADDOCK_RETENTION_UNIT` (`days` default; the dev stack sets `seconds`) is the length of
-  a retention day for `paddock-worker` (login history, users seen on devices: 365 days become 365 s); with
+  a retention day for `paddock-worker` (login history, users seen on devices: 365 days become 365 s; the read-access coalescing keys
+  are still kept at least a day, as long as their longest window); with
   `PADDOCK_ENV=production`, `seconds` stops the start with a configuration error.
 
 The dev stack also sets the operator variable `PADDOCK_RETENTION_INTERVAL` to `15s` (`15s` is the default when it is

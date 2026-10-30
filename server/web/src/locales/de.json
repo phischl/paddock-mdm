@@ -315,6 +315,7 @@
       "chain_verified": "Die Hash-Kette des Audit-Protokolls wurde für {from_day} bis {to_day} geprüft ({days, number} Tage, {objects, number} Objekte, {trigger})",
       "chain_verification_failed": "Der Prüflauf der Hash-Kette des Audit-Protokolls fand {problem_count, plural, one {# Problem} other {# Probleme}} für {from_day} bis {to_day} ({trigger})",
       "export_requested": "{actor} hat einen Nachweis-Export für {from_day} bis {to_day} angefordert",
+      "searched": "{actor} hat das Audit-Protokoll durchsucht{q_used, select, true { (mit Suchbegriff)} other {}}",
       "export_completed": "Der Audit-Writer hat den Nachweis-Export für {from_day} bis {to_day} verarbeitet ({events, number} Ereignisse, {objects, number} Objekte)",
       "export_downloaded": "{actor} hat den Nachweis-Export für {from_day} bis {to_day} heruntergeladen ({size, number} Bytes)"
     },
@@ -366,6 +367,7 @@
       "login_assignment_changed": "{actor} hat geändert, wer sich an {hostname} anmelden darf",
       "logins_suspended": "{actor} hat die Anmeldungen an {hostname} ausgesetzt",
       "inventory_purged": "Inventarlöschung des außer Betrieb genommenen Geräts {hostname}: {software, plural, one {# Paket} other {# Pakete}}, {findings, plural, one {# Befund} other {# Befunde}}",
+      "inventory_viewed": "{actor} hat {view, select, vulnerabilities {die Schwachstellen} other {die Software}} von {hostname} angesehen",
       "inventory_host_kept": "Das außer Betrieb genommene Gerät {hostname} behält seinen Fleet-Host seit {rounds, number} unveränderten Durchläufen ({fleet_host_kept})",
       "logins_resumed": "{actor} hat die Anmeldungen an {hostname} wieder zugelassen",
       "bundle_render_failed": "Ein neues Bundle für {target} wurde blockiert: Die sudo-Rechte von {username} haben die Prüfung nicht bestanden",

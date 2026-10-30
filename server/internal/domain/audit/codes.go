@@ -206,6 +206,10 @@ const (
 	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
 	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
 
+	// Read-access recording, coalesced per actor and window (ADR 0032 §4, plan M10 §6.4).
+	CodeAuditSearched         Code = "audit.searched"
+	CodeDeviceInventoryViewed Code = "device.inventory_viewed"
+
 	// Evidence export (ADR 0032 §5, plan M10 §6.4).
 	CodeAuditExportRequested  Code = "audit.export_requested"
 	CodeAuditExportCompleted  Code = "audit.export_completed"
@@ -1290,6 +1294,20 @@ var registry = map[Code]Definition{
 		Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
 		Params:      []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeAuditSearched: {
+		Code: CodeAuditSearched, Emitted: true,
+		Description: "An administrator, auditor or API token searched the audit log; recorded once per actor and clock hour and only while the organization's audit_search_recorded setting is on. Filters are recorded, never results or the search text.",
+		Params:      []string{"from", "to", "codes", "outcomes", "actor_types", "target_id", "q_used", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators whatever the setting. failure when the window could not be claimed; the search is then refused.",
+	},
+	CodeDeviceInventoryViewed: {
+		Code: CodeDeviceInventoryViewed, Emitted: true,
+		Description: "An organization member viewed the software or vulnerabilities of a device; recorded once per actor, device and UTC day and only while inventory_view_recorded is on. view is the first view of the day.",
+		Params:      []string{"hostname", "view", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "failure when the window could not be claimed; the view is then refused.",
 	},
 	CodeAuditExportRequested: {
 		Code: CodeAuditExportRequested, Emitted: true,

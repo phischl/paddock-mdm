@@ -130,8 +130,8 @@ func TestRetentionRoundRetiredInventory(t *testing.T) {
 	day := 24 * time.Hour
 	fleet := &fakeSource{}
 	r := NewRetention(app.NewRetention(runner, f.pool, platform, fleet, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
-	if len(r.passes) != 3 || r.passes[2].store != app.StoreRetiredInventory {
-		t.Fatalf("passes %+v, want retired_inventory third of 3", r.passes)
+	if len(r.passes) != 4 || r.passes[2].store != app.StoreRetiredInventory {
+		t.Fatalf("passes %+v, want retired_inventory third of 4", r.passes)
 	}
 	dev := uuid.Must(uuid.NewV7())
 	for _, stmt := range []string{
@@ -161,6 +161,48 @@ func TestRetentionRoundRetiredInventory(t *testing.T) {
 	}
 	if d := testutil.ToFloat64(metricRetentionDeleted.WithLabelValues(app.StoreRetiredInventory)) - deletedBefore; d != 1 {
 		t.Fatalf("deleted_total grew by %v, want 1 device", d)
+	}
+}
+
+// TestRetentionRoundReadWindows (plan M10 amendment A3, decision 21): the round's fourth and last pass deletes the
+// read-access coalescing keys older than 48 hours with one retention.purged event (store read_audit_window), keeps the
+// younger ones and exports the store's last success.
+func TestRetentionRoundReadWindows(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	day := 24 * time.Hour
+	r := NewRetention(app.NewRetention(runner, f.pool, platform, &fakeSource{}, day), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	if len(r.passes) != 4 || r.passes[3].store != app.StoreReadAuditWindow {
+		t.Fatalf("passes %+v, want read_audit_window fourth of 4", r.passes)
+	}
+	now := time.Now().UTC()
+	for i, start := range []time.Time{now.Add(-49 * time.Hour), now.Add(-50 * time.Hour), now.Add(-47 * time.Hour)} {
+		if _, err := f.super.Exec(ctx, `INSERT INTO read_audit_window (organization_id, actor_id, code, window_start)
+			VALUES ($1, $2, 'audit.searched', $3)`, f.org, fmt.Sprintf("actor-%d", i), start); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lastSuccess := metricRetentionLastSuccess.WithLabelValues(app.StoreReadAuditWindow)
+	lastSuccess.Set(0)
+
+	if err := r.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "SELECT count(*) FROM read_audit_window WHERE organization_id = $1", f.org); n != 1 {
+		t.Fatalf("%d windows left, want the one younger than 48 hours", n)
+	}
+	if n := f.count(t, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'retention.purged'
+		AND outcome = 'success' AND params->>'store' = 'read_audit_window' AND (params->>'deleted')::int = 2`, f.org); n != 1 {
+		t.Fatalf("%d retention.purged events of read_audit_window with deleted=2, want 1", n)
+	}
+	if testutil.ToFloat64(lastSuccess) == 0 {
+		t.Fatal("read_audit_window has no last success")
 	}
 }
 

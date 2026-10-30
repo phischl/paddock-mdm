@@ -24,6 +24,16 @@ const StoreDeviceUserSeen = "device_user_seen"
 // 15); its evidence is device.inventory_purged per device.
 const StoreRetiredInventory = "retired_inventory"
 
+// StoreReadAuditWindow is the store name of the read-access coalescing keys in retention.purged (plan M10 decision 21).
+const StoreReadAuditWindow = "read_audit_window"
+
+// ReadWindowRetention is how long the coalescing keys of read-access events are kept (plan M10 decision 21).
+const ReadWindowRetention = 48 * time.Hour
+
+// readWindowLongest is the longest read-access window (device.inventory_viewed, a UTC day): a key younger than that
+// may still coalesce reads, so not even a development installation counting days in seconds deletes it.
+const readWindowLongest = 24 * time.Hour
+
 // retiredInventoryDevices is the page of devices one listing of a pass reads (plan M10 decision 16); the pass pages on
 // after the last listed device until its budget elapses, so devices behind ones that keep failing are reached in the
 // same pass (amendment 2026-10-30, PDK-138).
@@ -137,6 +147,31 @@ func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, er
 	}
 	return purgeBatches(ctx, r.runner, r.org, StoreDeviceUserSeen, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 		return q.DeleteExpiredDeviceUserSeen(ctx, cutoff)
+	})
+}
+
+// PurgeReadWindows deletes the coalescing keys of the context's organization's read-access events whose window started
+// more than ReadWindowRetention before now (system principal, plan M10 decision 21). Without expired keys it records
+// nothing. It returns the number of deleted rows (purgeBatches).
+func (r *Retention) PurgeReadWindows(ctx context.Context, now time.Time) (int64, error) {
+	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
+		return 0, problem.Unauthenticated
+	}
+	cutoff := now.Add(-time.Duration(ReadWindowRetention/(24*time.Hour)) * r.unit)
+	if latest := now.Add(-readWindowLongest); cutoff.After(latest) {
+		cutoff = latest
+	}
+	var expired bool
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		expired, err = q.HasExpiredReadAuditWindows(ctx, cutoff)
+		return err
+	})
+	if err != nil || !expired {
+		return 0, err
+	}
+	return purgeBatches(ctx, r.runner, r.org, StoreReadAuditWindow, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+		return q.DeleteExpiredReadAuditWindows(ctx, cutoff)
 	})
 }
 

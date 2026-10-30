@@ -58,32 +58,42 @@ type AuditListed struct {
 	Count   int
 }
 
+// effectiveRange is the range the query searches at now: to defaults to now, from to DefaultAuditRange before to; an
+// empty or reversed range and one longer than MaxAuditRange are refused.
+func (f AuditQuery) effectiveRange(now time.Time) (from, to time.Time, err error) {
+	to = now
+	if f.To != nil {
+		to = *f.To
+	}
+	from = to.Add(-DefaultAuditRange)
+	if f.From != nil {
+		from = *f.From
+	}
+	if !from.Before(to) {
+		return from, to, problem.InvalidRequest.WithDetail("from must be before to")
+	}
+	if to.Sub(from) > MaxAuditRange {
+		return from, to, problem.RangeTooLarge.WithDetail("the range may span at most 92 days")
+	}
+	return from, to, nil
+}
+
 // List returns one page of events and the capped number of matches (ADR 0018).
 func (l *AuditLog) List(ctx context.Context, f AuditQuery) (AuditListed, error) {
 	var out AuditListed
 	if _, err := RequireOrg(ctx, RolesAudit); err != nil {
 		return out, err
 	}
-	to := l.now()
-	if f.To != nil {
-		to = *f.To
-	}
-	from := to.Add(-DefaultAuditRange)
-	if f.From != nil {
-		from = *f.From
-	}
-	if !from.Before(to) {
-		return out, problem.InvalidRequest.WithDetail("from must be before to")
-	}
-	if to.Sub(from) > MaxAuditRange {
-		return out, problem.RangeTooLarge.WithDetail("the range may span at most 92 days")
+	from, to, err := f.effectiveRange(l.now())
+	if err != nil {
+		return out, err
 	}
 	var targetID *string
 	if f.TargetID != nil {
 		id := f.TargetID.String()
 		targetID = &id
 	}
-	err := l.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+	err = l.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		n, err := q.CountAuditEvents(ctx, auditstore.CountAuditEventsParams{
 			FromTime: from, ToTime: to, Codes: f.Codes, Outcomes: f.Outcomes, ActorTypes: f.ActorTypes, TargetID: targetID,
 			QPattern: f.Page.QPattern, CountLimit: countLimit,

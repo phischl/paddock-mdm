@@ -25,6 +25,9 @@ func (h *handlers) ListDeviceSoftware(ctx context.Context, req adminapi.ListDevi
 	if err != nil {
 		return nil, err
 	}
+	if _, err := h.readAudit.InventoryViewed(ctx, req.Id, app.InventoryViewSoftware); err != nil {
+		return nil, err
+	}
 	res, err := h.inventory.DeviceSoftware(ctx, req.Id, params.ListPage())
 	if err != nil {
 		return nil, err
@@ -45,6 +48,9 @@ func (h *handlers) ListDeviceVulnerabilities(ctx context.Context, req adminapi.L
 	}
 	severities, err := listing.Enum("severity", req.Params.Severity)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := h.readAudit.InventoryViewed(ctx, req.Id, app.InventoryViewVulnerabilities); err != nil {
 		return nil, err
 	}
 	res, err := h.inventory.DeviceVulnerabilities(ctx, req.Id, app.VulnerabilityQuery{Page: params.ListPage(), Severities: severities})
