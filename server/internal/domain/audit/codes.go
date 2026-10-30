@@ -234,9 +234,9 @@ var registry = map[Code]Definition{
 	CodeAdminLogin: {
 		Code: CodeAdminLogin, Emitted: true,
 		Description: "An administrator signed in to the portal or opened an MCP session, or a sign-in was rejected.",
-		Params:      []string{"role", "organization_slug", "reason", "denial_reason", "previous_role", "channel", "renewal"},
+		Params:      []string{"role", "organization_slug", "reason", "denial_reason", "previous_role", "channel", "renewal", "fallback"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
-		Note:        "Platform administrators and rejected sign-ins without a resolvable organization are recorded in the platform pseudo-organization. previous_role is the role of the session a role switch ended (ADR 0045); absent for a plain sign-in. channel is portal or mcp; renewal is true when an MCP session was renewed with a refreshed token (ADR 0044).",
+		Note:        "Platform administrators and rejected sign-ins without a resolvable organization are recorded in the platform pseudo-organization. previous_role is the role of the session a role switch ended (ADR 0045); absent for a plain sign-in. channel is portal or mcp; renewal is true when an MCP session was renewed with a refreshed token (ADR 0044). fallback is organization_inactive when a plain sign-in of an identity with the platform role and an organization role entered the platform role because the organization is unknown or not active (ADR 0045 amendment 2026-10-29).",
 	},
 	CodeOrganizationCreated: {
 		Code: CodeOrganizationCreated, Emitted: true,

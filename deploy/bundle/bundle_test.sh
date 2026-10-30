@@ -209,18 +209,24 @@ else
 fi
 chmod 755 "$work/release"
 
-# agent-rollout and agent-rollout-halt (ADR 0034 amendment 2026-10-26): usage errors, and only on the control plane or
-# a lab host.
+# agent-rollout, agent-rollout-halt and agent-rollout-resume (ADR 0034 amendment 2026-10-26): usage errors, and only on
+# the control plane or a lab host.
 expect 2 "agent-rollout without a version" "$work/p" agent-rollout
 expect 2 "agent-rollout with an option instead of a version" "$work/p" agent-rollout --waves 100
 expect 2 "agent-rollout-halt without a version" "$work/p" agent-rollout-halt
 expect 2 "agent-rollout-halt with an option" "$work/p" agent-rollout-halt 1.0.0 --waves 100
+expect 2 "agent-rollout-resume without a version" "$work/p" agent-rollout-resume
+expect 2 "agent-rollout-resume with an option" "$work/p" agent-rollout-resume 1.0.0 --waves 100
+if [[ "$out" == *"usage: ./paddock agent-rollout-resume <version>"* ]]; then pass "the agent-rollout-resume usage names the command"; else
+  fail "the agent-rollout-resume usage: $out"
+fi
 sed 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/p/.env.example" >"$work/p/.env"
 expect 2 "agent-rollout on the audit host" "$work/p" agent-rollout 1.0.0
 if [[ "$out" == *"runs on the controlplane host"* ]]; then pass "the agent-rollout host refusal names the control plane"; else
   fail "the agent-rollout host refusal: $out"
 fi
 expect 2 "agent-rollout-halt on the audit host" "$work/p" agent-rollout-halt 1.0.0
+expect 2 "agent-rollout-resume on the audit host" "$work/p" agent-rollout-resume 1.0.0
 cp "$work/p/.env.example" "$work/p/.env"
 
 # The lab host (plan M8a decision 8): accepted with its own settings; the backup file only with PADDOCK_LAB_BACKUP=yes.

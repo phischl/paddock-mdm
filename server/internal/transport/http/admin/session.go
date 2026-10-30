@@ -172,6 +172,9 @@ type Session struct {
 	// identity.
 	AltRole string `json:"alt_role,omitempty"`
 	AltSlug string `json:"alt_slug,omitempty"`
+	// Fallback is app.FallbackOrganizationInactive when a plain sign-in entered the platform role because the
+	// organization role's organization is not active (ADR 0045 amendment 2026-10-29); the portal shows a notice.
+	Fallback string `json:"fallback,omitempty"`
 }
 
 // sessionVersion is the version of the session cookie payload.

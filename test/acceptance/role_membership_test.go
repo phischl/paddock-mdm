@@ -3,6 +3,7 @@ package acceptance
 import (
 	"context"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,9 +16,36 @@ import (
 // the development stack) plus the round's duration and the audit pipeline.
 const roleEventWait = syncRound
 
-// roleRevokeWait bounds the wait for a revocation: two rounds, because the first listing that misses a member only
-// marks it, plus one interval of slack for the rounds' duration and the audit pipeline.
-const roleRevokeWait = 4 * time.Minute
+// roleAuditWait bounds the audit pipeline (outbox, relay, audit writer) from a committed revocation to the index.
+const roleAuditWait = time.Minute
+
+// roleMemberState returns the stored state of username's org_operator membership in org: "listed", "marked" (a listing
+// missed it and set missing_since) or "absent" (no row: never granted or revoked). It reads Paddock's database as the
+// superuser, because the worker's rounds leave no other trace of a listing that changed nothing.
+func roleMemberState(t *testing.T, org uuid.UUID, username string) string {
+	t.Helper()
+	return paddockSQL(t, "SELECT coalesce((SELECT CASE WHEN missing_since IS NULL THEN 'listed' ELSE 'marked' END"+
+		" FROM organization_role_member WHERE organization_id = '"+org.String()+"' AND role = 'org_operator'"+
+		" AND username = '"+username+"'), 'absent')")
+}
+
+// waitRoleMemberState polls until username's org_operator membership in org is in one of the states want and returns
+// it; wait bounds one round of the organization (PDK-425: each round is awaited on its own evidence, so the bound does
+// not have to cover two rounds whose recurrence grows with the number of organizations).
+func waitRoleMemberState(t *testing.T, step string, org uuid.UUID, username string, wait time.Duration, want ...string) string {
+	t.Helper()
+	deadline := time.Now().Add(wait)
+	for {
+		state := roleMemberState(t, org, username)
+		if slices.Contains(want, state) {
+			return state
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: membership of %s in %s is %q after %s, want one of %v", step, username, org, state, wait, want)
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
 
 // waitRoleEvents polls the audit index of org until it holds at least one event code for username and returns them.
 func waitRoleEvents(t *testing.T, idx *env.AuditIndex, org uuid.UUID, code, username string, wait time.Duration) []env.IndexEvent {
@@ -75,9 +103,14 @@ func TestRoleMembership(t *testing.T) {
 	if err := ak.RemoveFromGroup(ctx, op.name, operators); err != nil {
 		t.Fatal(err)
 	}
-	// A revocation needs two consecutive listings that miss the member (a single paged listing can skip one), so R2
-	// waits up to two rounds plus slack; still exactly one revocation and no other grant.
-	expectRoleEvent(t, "R2", waitRoleEvents(t, idx, acme, "admin.role_revoked", op.name, roleRevokeWait),
+	// A revocation needs two consecutive listings that miss the member (a single paged listing can skip one). R2 waits
+	// on the evidence of each round instead of one bound for both: the first round marks the member (missing_since),
+	// the next one deletes it together with the revocation's audit action; then only the audit pipeline remains. The
+	// mark may already be gone when both rounds pass between two polls. Still exactly one revocation and no other grant.
+	if waitRoleMemberState(t, "R2 first round", acme, op.name, roleEventWait, "marked", "absent") == "marked" {
+		waitRoleMemberState(t, "R2 second round", acme, op.name, roleEventWait, "absent")
+	}
+	expectRoleEvent(t, "R2", waitRoleEvents(t, idx, acme, "admin.role_revoked", op.name, roleAuditWait),
 		map[string]any{"role": "org_operator", "username": op.name, "group": operators})
 	time.Sleep(auditSettleDelay)
 	granted, err := idx.Events(ctx, acme, "code = 'admin.role_granted' AND params->>'username' = $1", op.name)

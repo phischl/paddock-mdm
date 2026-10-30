@@ -58,6 +58,7 @@
     "switchRoleConfirmMessage": "Your current session ends and privileged actions need a new step-up.",
     "switchRoleConfirm": "Switch",
     "switchRoleFailed": "The role could not be switched. Please try again.",
+    "roleFallbackOrganizationInactive": "Your organization is not active; you are signed in as platform administrator.",
     "stepUpValidUntil": "Identity confirmed until {time}",
     "stepUpNone": "No current identity confirmation",
     "stepUpChip": "Confirmed until {time}"
@@ -614,13 +615,15 @@
     "not_authorized": "Your account is not authorized for the Paddock portal. Ask your administrator to add you to exactly one Paddock administrator group.",
     "login_failed": "The sign-in could not be completed.",
     "mfa_required": "Your sign-in did not include a second factor. Sign in again: the portal asks for your password and your authenticator.",
+    "passkey_required": "Your sign-in did not use a passkey, and every Paddock portal role requires one (a security key or the authenticator built into your device). Sign out of the identity provider, then sign in again and confirm with your passkey. If you have no passkey yet, the sign-in asks you to set one up.",
     "key_store_sealed": "The server's key store is sealed, so the portal cannot start sessions. An operator must unseal OpenBao (docs/operations/openbao.md, section 2). Devices keep working.",
     "no_role": "Your account is not in any Paddock role group. Ask your administrator to add you to exactly one of the groups paddock.'<organization>'.admins, .operators or .auditors.",
     "multiple_organizations": "Your account holds roles in several organizations. One account belongs to exactly one organization; ask your administrator to remove the other memberships or to create separate accounts.",
     "multiple_roles": "Your account holds several roles in one organization (administrator, operator or auditor). Ask your administrator to keep exactly one of the memberships.",
     "role_not_granted": "The role you chose is no longer granted to your account. Your current session is unchanged; sign in again to continue.",
     "organization_inactive": "Your organization is not active. Ask a platform administrator.",
-    "retry": "Sign in again"
+    "retry": "Sign in again",
+    "signOutIdentityProvider": "Sign out of the identity provider"
   },
   "notFound": {
     "title": "Page not found",

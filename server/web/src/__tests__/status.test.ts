@@ -19,7 +19,7 @@ const outcomes = ['success', 'failure', 'denied', 'unknown'] as const satisfies 
 const kinds = [
   'stale_warning', 'stale_critical', 'presumed_lost', 'quarantined', 'disk_not_compliant', 'agent_outdated', 'login_apply_failed',
   'sudo_apply_failed', 'revocation_pending', 'revocation_expired', 'agent_rollback_pending',
-  'agent_not_running', 'uninstall_pending', 'config_behind', 'clock_drift', 'event_gap',
+  'agent_not_running', 'uninstall_pending', 'config_behind', 'disk_conversion_failed', 'clock_drift', 'event_gap',
 ] as const satisfies readonly AttentionKind[]
 const commands = ['pending', 'delivered', 'succeeded', 'failed', 'expired', 'cancelled'] as const satisfies readonly DeviceCommandStatus[]
 const revocations = ['requested', 'approved', 'issued', 'delivered', 'confirmed', 'failed', 'rejected', 'cancelled', 'expired'] as const satisfies readonly RevocationStatus[]

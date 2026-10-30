@@ -40,7 +40,8 @@ func NewAdminAccounts(runner *ActionRunner, org *db.OrgPool, platform *db.Platfo
 	return &AdminAccounts{runner: runner, org: org, platform: platform, dir: dir, sessions: sessions}
 }
 
-// ErrDirectoryEmpty fails a round whose role group listings are all empty while accounts are enabled.
+// ErrDirectoryEmpty fails a round whose role group listings are all empty while accounts are enabled or role members
+// are recorded, and the directory probe does not prove them real (RoleGroups.DirectoryVisible, PDK-424).
 var ErrDirectoryEmpty = errors.New("app: empty role group listings")
 
 // directoryUser is what the role group listings say about one user.
@@ -69,9 +70,12 @@ func directoryByUID(users map[string]*directoryUser, group string, members []por
 
 // Reconcile compares every account of the caller's organization that is not disabled with the members of the
 // organization's three role groups as listed in groups (one listing each per round, shared with RoleMembership, never
-// one call per account) and records one admin.sessions_revoked per changed account. A failing listing, a missing role group or three empty listings while
-// the organization has enabled accounts change nothing and fail the organization's round: a renamed group or a
-// service token that may no longer see users must not disable every administrator.
+// one call per account) and records one admin.sessions_revoked per changed account. A failing listing or a missing
+// role group changes nothing and fails the organization's round: a renamed group must not disable every administrator.
+// Three listings without a member while the organization has enabled accounts are compared only when the directory
+// probe proves them real (PDK-424): the organization then lost its last role holders and each account is confirmed and
+// disabled as usual; otherwise the round fails with ErrDirectoryEmpty, since a service token that may no longer see
+// users must not disable every administrator.
 func (a *AdminAccounts) Reconcile(ctx context.Context, groups *RoleGroups) error {
 	var o pgstore.Organization
 	var accounts []pgstore.AdminAccount
@@ -99,7 +103,14 @@ func (a *AdminAccounts) Reconcile(ctx context.Context, groups *RoleGroups) error
 		listed += directoryByUID(users, name, members)
 	}
 	if listed == 0 {
-		return fmt.Errorf("%w: the role groups of %s list no member with a UID while %d accounts are enabled", ErrDirectoryEmpty, o.Slug, len(accounts))
+		visible, err := groups.DirectoryVisible(ctx)
+		if err != nil {
+			return fmt.Errorf("the role groups of %s list no member with a UID while %d accounts are enabled: %w", o.Slug, len(accounts), err)
+		}
+		if !visible {
+			return fmt.Errorf("%w: the role groups of %s list no member with a UID while %d accounts are enabled, and the "+
+				"directory probe does not show that the service token sees them", ErrDirectoryEmpty, o.Slug, len(accounts))
+		}
 	}
 	var errs []error
 	for _, acc := range accounts {

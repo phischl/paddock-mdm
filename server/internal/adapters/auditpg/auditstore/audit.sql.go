@@ -821,6 +821,39 @@ func (q *Queries) ListAuditVerificationRuns(ctx context.Context, arg ListAuditVe
 	return items, nil
 }
 
+const listLatestNightlyFailedOrganizations = `-- name: ListLatestNightlyFailedOrganizations :many
+SELECT organization_id FROM (
+  SELECT DISTINCT ON (organization_id, trigger) organization_id, ok FROM audit_verification_run
+  WHERE trigger IN ('nightly', 'sample')
+  ORDER BY organization_id, trigger, finished_at DESC, id DESC
+) latest
+WHERE NOT ok
+GROUP BY organization_id
+`
+
+// Organizations whose newest nightly window or newest sample day failed: the writer's start-up value of
+// paddock_audit_verify_failed_organizations (amendment 2026-10-29 to plan M8b decision 27). UUIDv7 run IDs order
+// runs that finished in the same instant.
+func (q *Queries) ListLatestNightlyFailedOrganizations(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listLatestNightlyFailedOrganizations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var organization_id uuid.UUID
+		if err := rows.Scan(&organization_id); err != nil {
+			return nil, err
+		}
+		items = append(items, organization_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockAuditDays = `-- name: LockAuditDays :exec
 SELECT pg_advisory_xact_lock(hashtext('audit-day'), hashtext(CAST($1::uuid AS text)))
 `

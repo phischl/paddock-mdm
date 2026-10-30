@@ -5,10 +5,11 @@
 # whose worker also makes the device-code flow the default brand's (plan M3.1 decision 5): a blueprint condition on
 # the brand is evaluated once and races with the creation of the default brand.
 #
-# The authorization flow carries the MFA stage too: a device code opened with ?code= (the QR code at the greeter)
-# signs the user in with the brand's authentication flow, paddock-admin-login (set by paddock-worker; it asks only
-# members of Paddock administrator groups to enrol a passkey, ADR 0034 amendment 2026-10-29), or accepts an existing
-# Authentik session, and then runs only the provider's authorization flow (verified against Authentik 2026.8.3).
+# The authorization flow alone carries the device MFA stage (plan M8f amendment 2026-10-29, PDK-521): every device
+# code, opened with ?code= (the QR code at the greeter) or typed at /device, signs the user in with the brand's
+# authentication flow, paddock-admin-login (set by paddock-worker; it asks only members of Paddock administrator groups
+# to enrol a passkey, ADR 0034 amendment 2026-10-29), or accepts an existing Authentik session, and then runs the
+# provider's authorization flow (verified against Authentik 2026.8.3), so each approval has exactly one device prompt.
 version: 1
 metadata:
   name: Paddock - Device login
@@ -85,10 +86,10 @@ entries:
       stage: !KeyOf login
       order: 100
 
-  # Device-code verification. The brand's /device entry signs unauthenticated users in with the brand's
-  # authentication flow (paddock-admin-login) and accepts an existing Authentik session from any flow; the MFA stage
-  # here therefore enforces MFA for every device approval, whatever sign-in preceded it (skipped only when the user
-  # passed MFA within the last 5 minutes).
+  # Device-code entry at /device. The brand's /device entry signs unauthenticated users in with the brand's
+  # authentication flow (paddock-admin-login) and accepts an existing Authentik session from any flow. It binds no
+  # stage: the MFA stage here asked a second time on the typed path only, because the authorization flow below runs
+  # for every device approval whatever the entry path (plan M8f amendment 2026-10-29, PDK-521).
   - model: authentik_flows.flow
     id: device-code-flow
     identifiers:
@@ -99,13 +100,20 @@ entries:
       designation: stage_configuration
       authentication: require_authenticated
 
+  # Removes the MFA binding of the entry flow on installations that applied an earlier version of this blueprint. The
+  # condition skips the entry once the binding is gone: Authentik 2026.8 deletes an unsaved placeholder for a missing
+  # binding, which raises outside EntryInvalidError and rolls back the whole blueprint (PDK-521 review 1).
   - model: authentik_flows.flowstagebinding
+    state: absent
+    conditions:
+      - !Find [authentik_flows.flowstagebinding, [target, !KeyOf device-code-flow], [stage, !KeyOf mfa], [order, 10]]
     identifiers:
       target: !KeyOf device-code-flow
       stage: !KeyOf mfa
       order: 10
 
-  # Authorization of every device approval, whatever the entry path: MFA again unless passed within 5 minutes.
+  # Authorization of every device approval, whatever the entry path: the one device prompt, skipped only when the
+  # user passed this stage within the last 5 minutes.
   - model: authentik_flows.flow
     id: authorization-flow
     identifiers:

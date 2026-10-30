@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -51,6 +53,52 @@ func (h *hookStore) putKeys() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.keys...)
+}
+
+// settlement is how a delivery was settled: acked, or nacked or rejected with or without requeue.
+type settlement struct{ ack, requeue bool }
+
+// recordingAcknowledger reports every settlement after passing it to the broker.
+type recordingAcknowledger struct {
+	amqp.Acknowledger
+	settled chan<- settlement
+}
+
+func (r recordingAcknowledger) Ack(tag uint64, multiple bool) error {
+	err := r.Acknowledger.Ack(tag, multiple)
+	r.settled <- settlement{ack: true}
+	return err
+}
+
+func (r recordingAcknowledger) Nack(tag uint64, multiple, requeue bool) error {
+	err := r.Acknowledger.Nack(tag, multiple, requeue)
+	r.settled <- settlement{requeue: requeue}
+	return err
+}
+
+func (r recordingAcknowledger) Reject(tag uint64, requeue bool) error {
+	err := r.Acknowledger.Reject(tag, requeue)
+	r.settled <- settlement{requeue: requeue}
+	return err
+}
+
+// recordSettlements wraps handle so that every settlement of a delivery is reported on settled.
+func recordSettlements(handle mq.ConsumeFunc, settled chan<- settlement) mq.ConsumeFunc {
+	return func(ctx context.Context, ch *amqp.Channel, deliveries <-chan amqp.Delivery) error {
+		proxied := make(chan amqp.Delivery)
+		go func() {
+			defer close(proxied)
+			for d := range deliveries {
+				d.Acknowledger = recordingAcknowledger{Acknowledger: d.Acknowledger, settled: settled}
+				select {
+				case proxied <- d:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		return handle(ctx, ch, proxied)
+	}
 }
 
 func writeOne(t *testing.T, w *auditwriter.Writer, ev audit.Event) {
@@ -308,14 +356,28 @@ func TestSealedDayRetryIsBounded(t *testing.T) {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	consumer := mq.NewConsumer(broker.Config, mq.QueueAudit, auditwriter.Prefetch)
+	settled := make(chan settlement, 8)
 	done := make(chan struct{})
-	go func() { _ = consumer.Run(runCtx, writer.Handle); close(done) }()
-	deadline := time.Now().Add(60 * time.Second)
-	for s.count(t, "SELECT count(*) FROM audit_event WHERE event_id = $1", late.EventID) == 0 && time.Now().Before(deadline) {
-		time.Sleep(200 * time.Millisecond)
+	go func() { _ = consumer.Run(runCtx, recordSettlements(writer.Handle, settled)); close(done) }()
+	// The consumer stops only once the redelivery is acked, not when its index row appears: the row is visible at
+	// commit, and a cancel during tx.Commit's round trip fails the commit call although the server committed, so
+	// the delivery would be nacked and stay in the queue (PDK-502).
+	want := []settlement{{requeue: true}, {ack: true}}
+	var got []settlement
+	timeout := time.After(60 * time.Second)
+	for len(got) < len(want) {
+		select {
+		case st := <-settled:
+			got = append(got, st)
+		case <-timeout:
+			t.Fatalf("settlements %+v after 60s, want %+v", got, want)
+		}
 	}
 	cancel()
 	<-done
+	if !slices.Equal(got, want) {
+		t.Fatalf("settlements %+v, want %+v (nack with requeue, then ack)", got, want)
+	}
 
 	// A fourth transaction exists only if the first delivery was nacked with requeue: an acked or dropped delivery is
 	// never redelivered, and the writer itself stops after three.

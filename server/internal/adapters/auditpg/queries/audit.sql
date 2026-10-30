@@ -115,6 +115,18 @@ VALUES (@id, @organization_id, @trigger, @from_day, @to_day, @started_at, @finis
 -- The end of the newest nightly run of any organization; no row before the first one (plan M8b decision 27).
 SELECT finished_at FROM audit_verification_run WHERE trigger = 'nightly' ORDER BY finished_at DESC LIMIT 1;
 
+-- name: ListLatestNightlyFailedOrganizations :many
+-- Organizations whose newest nightly window or newest sample day failed: the writer's start-up value of
+-- paddock_audit_verify_failed_organizations (amendment 2026-10-29 to plan M8b decision 27). UUIDv7 run IDs order
+-- runs that finished in the same instant.
+SELECT organization_id FROM (
+  SELECT DISTINCT ON (organization_id, trigger) organization_id, ok FROM audit_verification_run
+  WHERE trigger IN ('nightly', 'sample')
+  ORDER BY organization_id, trigger, finished_at DESC, id DESC
+) latest
+WHERE NOT ok
+GROUP BY organization_id;
+
 -- name: CountAuditVerificationRuns :many
 -- The writer's paddock_audit_verify_runs_total for ok and failed runs of every process, the CLI included.
 SELECT trigger, ok, count(*) AS runs FROM audit_verification_run GROUP BY trigger, ok;

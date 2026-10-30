@@ -34,19 +34,41 @@ func (f fixedPortalUsers) PortalUsers(context.Context) ([]ports.IdentityUser, er
 	return out, nil
 }
 
-// identitySessions records every bulk delete; each user has two sessions. failAt fails the call with that index (1-based).
+// identitySessions records every bulk delete; each user has two sessions. failAt fails the call with that index
+// (1-based); retried makes every bulk delete report 0, like one repeated after a timeout (PDK-342); countFail fails
+// the count, countHangs blocks it until its context ends. deadlines are the bulk deletes' deadlines.
 type identitySessions struct {
-	mu     sync.Mutex
-	calls  [][]string
-	failAt int
+	mu         sync.Mutex
+	calls      [][]string
+	deadlines  []time.Time
+	failAt     int
+	retried    bool
+	countFail  bool
+	countHangs bool
 }
 
-func (f *identitySessions) EndUserSessions(_ context.Context, pks []string) (int, error) {
+func (f *identitySessions) CountUserSessions(ctx context.Context, pks []string) (int, error) {
+	if f.countHangs {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	if f.countFail {
+		return 0, fmt.Errorf("%w: authentik: HTTP 503", problem.UpstreamUnavailable)
+	}
+	return 2 * len(pks), nil
+}
+
+func (f *identitySessions) EndUserSessions(ctx context.Context, pks []string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, slices.Clone(pks))
+	deadline, _ := ctx.Deadline()
+	f.deadlines = append(f.deadlines, deadline)
 	if len(f.calls) == f.failAt {
 		return 0, fmt.Errorf("%w: authentik: HTTP 403", problem.UpstreamUnavailable)
+	}
+	if f.retried {
+		return 0, nil
 	}
 	return 2 * len(pks), nil
 }
@@ -116,6 +138,64 @@ func TestEndAllSessionsEndsIdentitySessions(t *testing.T) {
 	}
 }
 
+// TestEndAllSessionsCountsIdentitySessions (PDK-342): the sessions ended are the users' sessions counted before the
+// bulk deletes when a repeated bulk delete reports fewer; a failing count still ends every chunk and records the
+// deletes' count.
+func TestEndAllSessionsCountsIdentitySessions(t *testing.T) {
+	store := sessions.NewStore(valkeytest.Start(t).Client(t))
+	for _, tc := range []struct {
+		name  string
+		ender *identitySessions
+		want  int
+	}{
+		{"repeated bulk delete", &identitySessions{retried: true}, 240},
+		{"failing count", &identitySessions{countFail: true}, 240},
+		{"failing count and repeated bulk delete", &identitySessions{countFail: true, retried: true}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			admin, super, _ := adminHarness(t)
+			if _, err := app.NewSessions(admin.Runner(), store, fixedPortalUsers{n: 120}, tc.ender).EndAllCLI(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(tc.ender.calls) != 3 {
+				t.Fatalf("%d bulk deletes, want 3", len(tc.ender.calls))
+			}
+			if n := countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.sessions_ended'
+				AND outcome = 'success' AND (params->>'identity_sessions_ended')::int = $2`, "corr-"+t.Name(), tc.want); n != 1 {
+				t.Fatalf("%d success events with identity_sessions_ended %d", n, tc.want)
+			}
+		})
+	}
+}
+
+// TestEndAllSessionsSlowCountKeepsTheDeleteBudget (PDK-342): a count that does not answer is cut off after its own
+// bound, every chunk's bulk delete is still sent, and the deletes' deadline moves by the time the count took, so they
+// keep the whole identitySessionBudget (80 s).
+func TestEndAllSessionsSlowCountKeepsTheDeleteBudget(t *testing.T) {
+	admin, super, _ := adminHarness(t)
+	store := sessions.NewStore(valkeytest.Start(t).Client(t))
+	ender := &identitySessions{countHangs: true}
+	s := app.NewSessions(admin.Runner(), store, fixedPortalUsers{n: 120}, ender)
+	const countBudget = 300 * time.Millisecond
+	s.SetCountBudget(countBudget)
+	before := time.Now()
+	if _, err := s.EndAllCLI(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(ender.calls) != 3 {
+		t.Fatalf("%d bulk deletes, want 3", len(ender.calls))
+	}
+	for i, d := range ender.deadlines {
+		if d.Before(before.Add(80*time.Second + countBudget)) {
+			t.Fatalf("bulk delete %d has the deadline %v, want at least 80 s plus the count's %v after %v", i+1, d, countBudget, before)
+		}
+	}
+	if n := countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.sessions_ended'
+		AND outcome = 'success' AND (params->>'identity_sessions_ended')::int = 240`, "corr-"+t.Name()); n != 1 {
+		t.Fatalf("%d success events with identity_sessions_ended 240", n)
+	}
+}
+
 // observingSessions checks, during each bulk delete, that the action is already recorded as started and that the call
 // carries a deadline; it ends no session and fails when told to.
 type observingSessions struct {
@@ -123,6 +203,8 @@ type observingSessions struct {
 	deadline time.Time
 	fail     error
 }
+
+func (f *observingSessions) CountUserSessions(context.Context, []string) (int, error) { return 0, nil }
 
 func (f *observingSessions) EndUserSessions(ctx context.Context, _ []string) (int, error) {
 	f.check()
@@ -167,22 +249,27 @@ func TestEndAllSessionsCallsOutsideTheTransaction(t *testing.T) {
 	}
 }
 
-// roleDirectory answers RoleGroupUsers from groups; a group it does not know does not exist.
+// roleDirectory answers RoleGroupsUsers from groups and records the names of every call; a group it does not know
+// does not exist and is skipped.
 type roleDirectory struct {
-	ports.UserDirectory
 	groups map[string][]ports.IdentityUser
+	calls  *[][]string
 }
 
-func (d roleDirectory) RoleGroupUsers(_ context.Context, name string) ([]ports.IdentityUser, error) {
-	if users, ok := d.groups[name]; ok {
-		return users, nil
+func (d roleDirectory) RoleGroupsUsers(_ context.Context, names []string) ([]ports.IdentityUser, error) {
+	if d.calls != nil {
+		*d.calls = append(*d.calls, names)
 	}
-	return nil, ports.ErrGroupNotFound
+	var out []ports.IdentityUser
+	for _, name := range names {
+		out = append(out, d.groups[name]...)
+	}
+	return out, nil
 }
 
 // TestPortalUsers (plan M8f decision 16): the portal users are the platform administrators and the members of the
 // three role groups of every organization, each once; a group that does not exist yet is skipped, any other error
-// fails the listing.
+// fails the listing. Every role group is asked for in one call to the directory, not one call per group (PDK-501).
 func TestPortalUsers(t *testing.T) {
 	_, super, org := adminHarness(t)
 	var slug string
@@ -195,7 +282,8 @@ func TestPortalUsers(t *testing.T) {
 	}
 	t.Cleanup(platform.Close)
 	root, alice, bob := ports.IdentityUser{PK: "1"}, ports.IdentityUser{PK: "2"}, ports.IdentityUser{PK: "3"}
-	dir := roleDirectory{groups: map[string][]ports.IdentityUser{
+	var calls [][]string
+	dir := roleDirectory{calls: &calls, groups: map[string][]ports.IdentityUser{
 		organization.PlatformAdminsGroup():                        {root},
 		organization.RoleGroup(slug, organization.GroupAdmins):    {alice},
 		organization.RoleGroup(slug, organization.GroupOperators): {alice, bob},
@@ -208,6 +296,12 @@ func TestPortalUsers(t *testing.T) {
 	if fmt.Sprint(users) != fmt.Sprint([]ports.IdentityUser{root, alice, bob}) {
 		t.Fatalf("portal users %v, want root, alice and bob once", users)
 	}
+	if len(calls) != 1 || calls[0][0] != organization.PlatformAdminsGroup() ||
+		!slices.Contains(calls[0], organization.RoleGroup(slug, organization.GroupAdmins)) ||
+		!slices.Contains(calls[0], organization.RoleGroup(slug, organization.GroupOperators)) ||
+		!slices.Contains(calls[0], organization.RoleGroup(slug, organization.GroupAuditors)) {
+		t.Fatalf("directory calls %v, want one call with every role group", calls)
+	}
 	failing := failingDirectory{roleDirectory: dir}
 	if _, err := app.NewPortalUsers(platform, failing).PortalUsers(ctx); err == nil {
 		t.Fatal("a failing role group listing was ignored")
@@ -217,6 +311,6 @@ func TestPortalUsers(t *testing.T) {
 // failingDirectory fails every listing.
 type failingDirectory struct{ roleDirectory }
 
-func (failingDirectory) RoleGroupUsers(context.Context, string) ([]ports.IdentityUser, error) {
+func (failingDirectory) RoleGroupsUsers(context.Context, []string) ([]ports.IdentityUser, error) {
 	return nil, problem.UpstreamUnavailable
 }

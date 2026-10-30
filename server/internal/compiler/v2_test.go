@@ -334,6 +334,26 @@ func TestReconcileDeliversRotatedKeys(t *testing.T) {
 	}
 }
 
+// TestReconcileDeliversRevocationFlag (plan M4c decision 1, gate R5): a compiler restarted with
+// PADDOCK_REVOCATION_ENABLED switched off brings existing bundles to revocation.enabled=false with its first
+// reconcile, without any change in the organization.
+func TestReconcileDeliversRevocationFlag(t *testing.T) {
+	w := newWorldConfig(t, func(c *compiler.Config) { c.RevocationEnabled = true })
+	dev := w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeDevice, dev)
+	if r := w.fetch(dev).Revocation; r == nil || !r.Enabled {
+		t.Fatalf("revocation before the restart %+v", r)
+	}
+	before := w.version(dev)
+	w.restart(func(c *compiler.Config) { c.RevocationEnabled = false })
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b := w.fetch(dev); b.BundleVersion != before+1 || b.Revocation == nil || b.Revocation.Enabled {
+		t.Fatalf("after the reconcile: version %d→%d, revocation %+v", before, b.BundleVersion, b.Revocation)
+	}
+}
+
 // TestVisudo checks the real validator with the host's visudo (the compiler image has it, gate P1).
 func TestVisudo(t *testing.T) {
 	path := "/usr/sbin/visudo"

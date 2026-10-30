@@ -1065,6 +1065,13 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > sessions, so logout, role change, deactivation and end-all end it; MCP sessions are restricted by the scope's MCP
 > policy and the administrator's write opt-in and never satisfy a step-up (ADR 0034 decision 3 applies to API tokens
 > and MCP sessions alike).
+>
+> **Amendment 2026-10-29 (PDK-498):** the WebAuthn enrolment of the portal sign-in (stage
+> `paddock-admin-login-webauthn`) runs only for an account without a WebAuthn device that is a direct member of
+> `paddock.platform.admins` or of an organization's `admins`, `operators` or `auditors` group (policy
+> `paddock-admin-login-webauthn-administrator` next to `paddock-admin-login-webauthn-missing`). An end user who
+> approves a device sign-in through the brand sign-in is not asked to enrol a passkey (ADR 0034 and ADR 0007
+> amendments 2026-10-29).
 
 ---
 

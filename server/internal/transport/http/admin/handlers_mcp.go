@@ -73,6 +73,7 @@ func (h *handlers) requestMe(ctx context.Context, me app.Me) adminapi.Me {
 	out.ClientIp = p.IP
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
+	out.RoleFallback = roleFallback(ctx)
 	return out
 }
 
