@@ -262,12 +262,9 @@ and numbers the existing rows in one transaction that locks `audit_event`. The n
 the migration (`depends_on` `paddock-audit-migrate` in `compose.audit.yaml`), but during `./paddock up` the previous
 writer keeps running until compose replaces it: its transactions wait for the migration's lock and then fail, and the
 queue redelivers their events. The queue dead-letters an event after 20 deliveries (`dlq.audit.writer`), so a long
-backfill is not guaranteed to be absorbed. Unless the index is small (see the planning figure below), stop the writer
-before the upgrade's `./paddock up` on the audit host, so that new events wait in the queue instead:
-
-```sh
-./paddock compose stop paddock-audit-writer   # in the old bundle directory; ./paddock up starts B's writer again
-```
+backfill is not guaranteed to be absorbed. The upgrade procedure therefore stops the running audit writer before
+`./paddock up` whenever audit migrations are pending (`docs/operations/upgrade.md`, *Upgrade*, step 4), so that new
+events wait in the queue instead.
 
 A fresh installation, including the move to 0.1.0-alpha.7 (`docs/operations/upgrade.md`), applies the migration to an
 empty index and needs none of this.
