@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openbao/openbao/api/v2"
 )
 
@@ -279,21 +280,28 @@ func (c *Client) Decrypt(ctx context.Context, key string, version int, ciphertex
 	return out, nil
 }
 
-// Encrypt encrypts plaintext with the derived Transit key under keyContext (the organization a secret belongs to, so
-// its ciphertext decrypts under no other) and returns the ciphertext as Transit writes it ("vault:vN:…").
-func (c *Client) Encrypt(ctx context.Context, key string, keyContext, plaintext []byte) (string, error) {
+// OrganizationContext is the Transit context of a derived key for an organization (ADR 0031 amendment 2026-10-31):
+// the lowercase canonical form of the organization ID, base64-encoded as Transit requires. It is the only place that
+// forms the context, so a ciphertext made by the api decrypts in the notifier under the same organization only.
+func OrganizationContext(org uuid.UUID) string {
+	return base64.StdEncoding.EncodeToString([]byte(strings.ToLower(org.String())))
+}
+
+// Encrypt encrypts plaintext with the derived Transit key under the organization's context, so the ciphertext decrypts
+// under no other organization, and returns it as Transit writes it ("vault:vN:…").
+func (c *Client) Encrypt(ctx context.Context, key string, org uuid.UUID, plaintext []byte) (string, error) {
 	return c.writeCiphertext(ctx, "transit/encrypt/"+key, map[string]any{
 		"plaintext": base64.StdEncoding.EncodeToString(plaintext),
-		"context":   base64.StdEncoding.EncodeToString(keyContext),
+		"context":   OrganizationContext(org),
 	})
 }
 
-// WrappedDataKey returns a new random 256-bit data key, wrapped by the derived Transit key under keyContext; the
-// caller never sees the plaintext key (ADR 0031 decision 8 amendment, pseudonym keys).
-func (c *Client) WrappedDataKey(ctx context.Context, key string, keyContext []byte) (string, error) {
+// WrappedDataKey returns a new random 256-bit data key, wrapped by the derived Transit key under the organization's
+// context; the caller never sees the plaintext key (pseudonym keys, ADR 0031 amendment 2026-10-31).
+func (c *Client) WrappedDataKey(ctx context.Context, key string, org uuid.UUID) (string, error) {
 	return c.writeCiphertext(ctx, "transit/datakey/wrapped/"+key, map[string]any{
 		"bits":    256,
-		"context": base64.StdEncoding.EncodeToString(keyContext),
+		"context": OrganizationContext(org),
 	})
 }
 
@@ -316,14 +324,14 @@ func (c *Client) writeCiphertext(ctx context.Context, path string, body map[stri
 }
 
 // DecryptContext decrypts a ciphertext of Encrypt or WrappedDataKey ("vault:vN:…") with the derived Transit key under
-// keyContext; a ciphertext made under another context fails.
-func (c *Client) DecryptContext(ctx context.Context, key string, keyContext []byte, ciphertext string) ([]byte, error) {
+// the organization's context; a ciphertext made for another organization fails.
+func (c *Client) DecryptContext(ctx context.Context, key string, org uuid.UUID, ciphertext string) ([]byte, error) {
 	if err := c.ensureToken(ctx); err != nil {
 		return nil, err
 	}
 	s, err := c.api.Logical().WriteWithContext(ctx, "transit/decrypt/"+key, map[string]any{
 		"ciphertext": ciphertext,
-		"context":    base64.StdEncoding.EncodeToString(keyContext),
+		"context":    OrganizationContext(org),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bao: decrypt: %w", err)

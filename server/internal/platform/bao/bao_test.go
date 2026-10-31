@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	openbao "github.com/openbao/openbao/api/v2"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
@@ -117,7 +118,8 @@ func TestNotificationWrap(t *testing.T) {
 		return c
 	}
 	api, notifier, worker := client("paddock-api"), client("paddock-notifier"), client("paddock-worker")
-	orgA, orgB := []byte("7d0a3c1e-0000-4000-8000-00000000000a"), []byte("7d0a3c1e-0000-4000-8000-00000000000b")
+	orgA := uuid.MustParse("7d0a3c1e-0000-4000-8000-00000000000a")
+	orgB := uuid.MustParse("7d0a3c1e-0000-4000-8000-00000000000b")
 	secret := []byte("https://hooks.slack.com/services/T0/B0/secret")
 	ct, err := api.Encrypt(ctx, "notification-wrap", orgA, secret)
 	if err != nil {
@@ -170,8 +172,21 @@ func TestNotificationWrap(t *testing.T) {
 	}
 	raw.SetToken(login.Auth.ClientToken)
 	if _, err := raw.Logical().Write("transit/datakey/plaintext/notification-wrap", map[string]any{
-		"context": base64.StdEncoding.EncodeToString(orgA),
+		"context": bao.OrganizationContext(orgA),
 	}); err == nil {
 		t.Fatal("the api may obtain a plaintext data key")
+	}
+}
+
+// TestOrganizationContext: the context is the lowercase canonical organization ID, base64-encoded, whatever form the
+// ID was parsed from.
+func TestOrganizationContext(t *testing.T) {
+	org := uuid.MustParse("{7D0A3C1E-ABCD-4000-8000-00000000000A}")
+	raw, err := base64.StdEncoding.DecodeString(bao.OrganizationContext(org))
+	if err != nil || string(raw) != "7d0a3c1e-abcd-4000-8000-00000000000a" {
+		t.Fatalf("context %q (%v)", raw, err)
+	}
+	if bao.OrganizationContext(uuid.Nil) != base64.StdEncoding.EncodeToString([]byte(uuid.Nil.String())) {
+		t.Fatal("platform context differs from the nil organization ID")
 	}
 }

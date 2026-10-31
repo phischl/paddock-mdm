@@ -12,9 +12,11 @@ import (
 
 // TestNotificationsMigration proves the isolation of migration 00085 (plan M9 decision 10, ADR 0031 decisions 10 and
 // 11): an organization sees only its own destinations, the platform role only the nil organization's and nothing but
-// destinations, their state and fresh test deliveries; the api inserts only fresh test deliveries; a child row cannot
-// reference another organization's destination or delivery; the notifier reads destinations but cannot write them,
-// serves the nil organization under its own role and records its audit actions; a missing context fails closed.
+// destinations, the state cursor and fresh test deliveries; the api inserts only fresh test deliveries and unresolved
+// pseudonym lookups and writes no state result column; a row naming another organization's destination or delivery
+// fails exactly like one naming an unknown ID; the notifier reads destinations but cannot write them, writes state
+// results and resolutions, serves the nil organization under its own role and records its audit actions; a missing
+// context fails closed.
 func TestNotificationsMigration(t *testing.T) {
 	env := sharedPaddock(t)
 	ctx := context.Background()
@@ -34,6 +36,24 @@ func TestNotificationsMigration(t *testing.T) {
 		if _, err := super.Exec(ctx, `INSERT INTO notification_destination (id, organization_id, type, name, filter_mode,
 			url_ciphertext, url_display, created_by) VALUES ($1, $2, 'webhook', 'siem', 'security', 'vault:v1:x',
 			'https://hooks.example.org/…', 'test')`, d.id, d.org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliveryB := uuid.New()
+	for _, x := range []struct {
+		stmt string
+		args []any
+	}{
+		{`INSERT INTO notification_destination_state (destination_id, organization_id) VALUES ($1, $2)`,
+			[]any{destB, orgB}},
+		{`INSERT INTO notification_delivery (id, destination_id, organization_id, kind) VALUES ($1, $2, $3, 'events')`,
+			[]any{deliveryB, destB, orgB}},
+		{`INSERT INTO notification_delivery_event (destination_id, organization_id, forward_seq, event_id, commit_seq,
+			delivery_id) VALUES ($1, $2, 1, gen_random_uuid(), 1, $3)`, []any{destB, orgB, deliveryB}},
+		{`INSERT INTO notification_pseudonym_lookup (id, organization_id, pseudonym, requested_by)
+			VALUES (gen_random_uuid(), $1, 'u_x', 'admin')`, []any{orgB}},
+	} {
+		if _, err := super.Exec(ctx, x.stmt, x.args...); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -115,27 +135,95 @@ func TestNotificationsMigration(t *testing.T) {
 		}))
 	}
 
-	// A child row naming another organization's destination fails exactly like one naming no destination, so the
-	// refusal reveals nothing (PDK-123 maps it to 404 not_found).
-	for name, target := range map[string]uuid.UUID{"B's destination": destB, "no destination": uuid.New()} {
-		err := inOrg(api, orgA, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id)
-				VALUES ($1, $2)`, target, orgA)
-			return err
-		})
-		var pgErr *pgconn.PgError
-		if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
-			t.Fatalf("state for %s: %v, want foreign key violation 23503", name, err)
+	// A row of A naming B's destination or delivery fails with the same foreign key violation as one naming an ID that
+	// does not exist, even where B already has a row with that key (composite keys and references, so neither a
+	// primary key collision nor the reference reveals B's row; PDK-123 maps the violation to 404 not_found).
+	sameRefusal := func(what string, stmt string, args func(target uuid.UUID) []any, targetB uuid.UUID) {
+		t.Helper()
+		for name, target := range map[string]uuid.UUID{"B's": targetB, "an unknown": uuid.New()} {
+			err := inOrg(super, orgA, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, stmt, args(target)...)
+				return err
+			})
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+				t.Errorf("%s naming %s ID: %v, want foreign key violation 23503", what, name, err)
+			}
 		}
 	}
-	refused("a delivery event of A naming B's delivery", inOrg(super, orgA, func(tx pgx.Tx) error {
-		delivery := uuid.New()
-		if _, err := tx.Exec(ctx, `INSERT INTO notification_delivery (id, destination_id, organization_id, kind)
-			VALUES ($1, $2, $3, 'test')`, delivery, destB, orgB); err != nil {
-			t.Fatal(err)
+	sameRefusal("state", `INSERT INTO notification_destination_state (destination_id, organization_id) VALUES ($1, $2)`,
+		func(target uuid.UUID) []any { return []any{target, orgA} }, destB)
+	sameRefusal("delivery", `INSERT INTO notification_delivery (id, destination_id, organization_id, kind)
+		VALUES (gen_random_uuid(), $1, $2, 'test')`, func(target uuid.UUID) []any { return []any{target, orgA} }, destB)
+	sameRefusal("event of B's destination", `INSERT INTO notification_delivery_event (destination_id, organization_id,
+		forward_seq, event_id, commit_seq, delivery_id) VALUES ($1, $2, 1, gen_random_uuid(), 1, $3)`,
+		func(target uuid.UUID) []any { return []any{target, orgA, deliveryB} }, destB)
+	sameRefusal("event of B's delivery", `INSERT INTO notification_delivery_event (destination_id, organization_id,
+		forward_seq, event_id, commit_seq, delivery_id) VALUES ($1, $2, 9, gen_random_uuid(), 1, $3)`,
+		func(target uuid.UUID) []any { return []any{destA, orgA, target} }, deliveryB)
+
+	// State columns: the api and the platform role write only the cursor (and the key when creating the row); every
+	// result column is the notifier's.
+	for _, role := range []struct {
+		name string
+		conn *pgx.Conn
+		org  uuid.UUID
+		dest uuid.UUID
+	}{{"api", api, orgA, destA}, {"platform", platform, uuid.Nil, destP}} {
+		must(role.name+" state cursor", inOrg(role.conn, role.org, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id,
+				cursor_commit_seq) VALUES ($1, $2, 42)`, role.dest, role.org); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `UPDATE notification_destination_state SET cursor_commit_seq = 43
+				WHERE destination_id = $1`, role.dest)
+			return err
+		}))
+		for _, col := range []string{
+			"status = 'stalled'", "consecutive_failures = 1", "last_test_ok = true", "last_test_at = now()",
+			"last_test_error = 'x'", "last_success_at = now()", "forward_seq = 5", "pending_delivery_id = gen_random_uuid()",
+			"last_error = 'x'", "next_attempt_at = now()",
+		} {
+			refused(role.name+" state update "+col, inOrg(role.conn, role.org, func(tx pgx.Tx) error {
+				if _, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id)
+					VALUES ($1, $2)`, role.dest, role.org); err != nil {
+					t.Fatal(err)
+				}
+				_, err := tx.Exec(ctx, "UPDATE notification_destination_state SET "+col+" WHERE destination_id = $1",
+					role.dest)
+				return err
+			}))
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO notification_delivery_event (destination_id, organization_id, forward_seq,
-			event_id, commit_seq, delivery_id) VALUES ($1, $2, 1, $3, 1, $4)`, destA, orgA, uuid.New(), delivery)
+		refused(role.name+" state insert of a result column", inOrg(role.conn, role.org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id, status)
+				VALUES ($1, $2, 'stalled')`, role.dest, role.org)
+			return err
+		}))
+		refused(role.name+" state delete", inOrg(role.conn, role.org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, "DELETE FROM notification_destination_state")
+			return err
+		}))
+	}
+
+	// Pseudonym lookups: the api requests, reads and deletes; it cannot store a resolution.
+	must("api lookup request", inOrg(api, orgA, func(tx pgx.Tx) error {
+		id := uuid.New()
+		if _, err := tx.Exec(ctx, `INSERT INTO notification_pseudonym_lookup (id, organization_id, pseudonym,
+			requested_by) VALUES ($1, $2, 'u_x', 'admin')`, id, orgA); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, "DELETE FROM notification_pseudonym_lookup WHERE id = $1", id)
+		return err
+	}))
+	for col, value := range map[string]string{"resolved_username": "'alice'", "resolved_at": "now()"} {
+		refused("api lookup with "+col, inOrg(api, orgA, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO notification_pseudonym_lookup (id, organization_id, pseudonym,
+				requested_by, `+col+`) VALUES ($1, $2, 'u_x', 'admin', `+value+`)`, uuid.New(), orgA)
+			return err
+		}))
+	}
+	refused("api lookup update", inOrg(api, orgA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, "UPDATE notification_pseudonym_lookup SET resolved_username = 'alice'")
 		return err
 	}))
 
@@ -194,12 +282,17 @@ func TestNotificationsMigration(t *testing.T) {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO notification_delivery_event (destination_id, organization_id,
-			forward_seq, event_id, commit_seq, delivery_id) VALUES ($1, $2, 1, $3, 7, $4)`, destB, orgB, uuid.New(), delivery); err != nil {
+			forward_seq, event_id, commit_seq, delivery_id) VALUES ($1, $2, 2, $3, 7, $4)`, destB, orgB, uuid.New(), delivery); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id,
-			cursor_commit_seq, forward_seq) VALUES ($1, $2, 7, 1)`, destB, orgB); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE notification_destination_state SET cursor_commit_seq = 7, forward_seq = 2,
+			status = 'stalled', consecutive_failures = 3, last_test_ok = true, last_test_at = now(),
+			pending_delivery_id = $3 WHERE destination_id = $1 AND organization_id = $2`, destB, orgB, delivery); err != nil {
 			return err
+		}
+		if tag, err := tx.Exec(ctx, `UPDATE notification_pseudonym_lookup SET resolved_username = 'alice',
+			resolved_at = now()`); err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("notifier resolves a lookup: %d rows, %v", tag.RowsAffected(), err)
 		}
 		action := uuid.New()
 		if _, err := tx.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, actor, correlation_id,

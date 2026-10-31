@@ -32,8 +32,10 @@ CREATE TABLE notification_destination (
   UNIQUE (id, organization_id)
 );
 
+-- Keys that a caller names (the destination of a state row or a forwarded event) include the organization, so a row of
+-- another organization never collides with a new one and an ID of another organization fails like an unknown one.
 CREATE TABLE notification_destination_state (
-  destination_id uuid PRIMARY KEY,
+  destination_id uuid NOT NULL,
   organization_id uuid NOT NULL,
   cursor_commit_seq bigint NOT NULL DEFAULT 0,
   forward_seq bigint NOT NULL DEFAULT 0,
@@ -44,6 +46,7 @@ CREATE TABLE notification_destination_state (
   last_attempt_at timestamptz, next_attempt_at timestamptz, last_heartbeat_at timestamptz,
   last_error text,
   last_test_at timestamptz, last_test_ok boolean, last_test_error text,
+  PRIMARY KEY (destination_id, organization_id),
   FOREIGN KEY (destination_id, organization_id) REFERENCES notification_destination (id, organization_id)
     ON DELETE CASCADE
 );
@@ -73,7 +76,7 @@ CREATE TABLE notification_delivery_event (
   event_id uuid NOT NULL,
   commit_seq bigint NOT NULL,
   delivery_id uuid NOT NULL,
-  PRIMARY KEY (destination_id, forward_seq),
+  PRIMARY KEY (destination_id, organization_id, forward_seq),
   FOREIGN KEY (destination_id, organization_id) REFERENCES notification_destination (id, organization_id)
     ON DELETE CASCADE,
   FOREIGN KEY (delivery_id, organization_id) REFERENCES notification_delivery (id, organization_id) ON DELETE CASCADE
@@ -132,7 +135,15 @@ CREATE POLICY tenant ON notification_delivery_event TO paddock_notifier
 CREATE POLICY tenant ON notification_pseudonym_key TO paddock_api, paddock_notifier
   USING (organization_id = current_setting('paddock.org_id')::uuid)
   WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
-CREATE POLICY tenant ON notification_pseudonym_lookup TO paddock_api, paddock_notifier
+-- The api requests a lookup and reads or deletes it; only the notifier resolves it (plan M9 decision 18).
+CREATE POLICY tenant ON notification_pseudonym_lookup FOR SELECT TO paddock_api
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY tenant_request ON notification_pseudonym_lookup FOR INSERT TO paddock_api
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid AND resolved_username IS NULL
+    AND resolved_at IS NULL);
+CREATE POLICY tenant_delete ON notification_pseudonym_lookup FOR DELETE TO paddock_api
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY notifier ON notification_pseudonym_lookup TO paddock_notifier
   USING (organization_id = current_setting('paddock.org_id')::uuid)
   WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
 
@@ -149,13 +160,21 @@ CREATE POLICY platform_test ON notification_delivery FOR INSERT TO paddock_platf
     AND delivered_at IS NULL AND attempts = 0 AND forward_from IS NULL AND forward_to IS NULL AND event_count = 0
     AND last_error IS NULL);
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination, notification_destination_state TO paddock_api;
+-- State: the api creates the row with the cursor at the scope's latest commit sequence (a new destination never
+-- replays history, plan M9 decision 15) and moves only that cursor when an administrator enables a destination with
+-- cursor "skip" (decision 16). Every result column (status, failures, attempts, test result, forward_seq,
+-- pending_delivery_id) is the notifier's alone; without DELETE the api cannot reset forward_seq by re-creating the row.
+GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination TO paddock_api;
+GRANT SELECT, INSERT (destination_id, organization_id, cursor_commit_seq), UPDATE (cursor_commit_seq)
+  ON notification_destination_state TO paddock_api;
 GRANT SELECT, INSERT ON notification_delivery, notification_pseudonym_key TO paddock_api;
 GRANT SELECT, INSERT, DELETE ON notification_pseudonym_lookup TO paddock_api;
 
 -- paddock_platform is the platform administrators' api only: platform destinations, their state and test deliveries.
 -- Platform destinations have no pseudonym operations (plan M9 decision 18).
-GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination, notification_destination_state TO paddock_platform;
+GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination TO paddock_platform;
+GRANT SELECT, INSERT (destination_id, organization_id, cursor_commit_seq), UPDATE (cursor_commit_seq)
+  ON notification_destination_state TO paddock_platform;
 GRANT SELECT, INSERT ON notification_delivery TO paddock_platform;
 
 GRANT SELECT ON notification_destination, notification_pseudonym_key TO paddock_notifier;

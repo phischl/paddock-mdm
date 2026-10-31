@@ -66,7 +66,17 @@ if ! bao read transit/keys/notification-wrap >/dev/null 2>&1; then
     allow_plaintext_backup=false >/dev/null
   echo "created transit key notification-wrap"
 elif [[ "$(bao read -field=derived transit/keys/notification-wrap)" != true ]]; then
-  echo "transit key notification-wrap is not derived: delete and re-create it (docs/operations/openbao.md)" >&2
+  # Derivation cannot be switched on for an existing key; a non-derived key would let a ciphertext of one organization
+  # decrypt for another. It exists only on stacks configured by an early build of PDK-122, before any destination.
+  cat >&2 <<'MSG'
+transit key notification-wrap exists but is not derived. Re-create it (this destroys what it encrypted, so only while
+no notification destination exists), then run this configuration again:
+  bao write transit/keys/notification-wrap/config deletion_allowed=true
+  bao delete transit/keys/notification-wrap
+Development: run both through `docker compose exec -e BAO_TOKEN openbao bao …` with the root token, then make up.
+Production: prefix both with ./paddock (./paddock bao write …), then ./paddock bootstrap openbao.
+MSG
+  exit 1
 fi
 
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
