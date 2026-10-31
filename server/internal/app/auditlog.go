@@ -170,3 +170,50 @@ func (l *AuditLog) resolveDevices(ctx context.Context, events []auditstore.Audit
 	}
 	return devices, nil
 }
+
+// Cursor feed bounds (plan M9 decision 6).
+const (
+	DefaultFeedLimit = 100
+	MaxFeedLimit     = 1000
+)
+
+// FeedPage is one page of the commit-ordered feed. NextAfter is the commit_seq of the last event, or the request's
+// cursor when the page is empty; Latest is the highest commit_seq of the organization.
+type FeedPage struct {
+	Events    []auditstore.AuditEvent
+	NextAfter int64
+	Latest    int64
+}
+
+// Feed returns up to limit events with a commit_seq above after, in ascending commit order, for a SIEM pull
+// (ADR 0031). Unlike List it does not enrich the events with devices.
+func (l *AuditLog) Feed(ctx context.Context, after int64, limit int) (FeedPage, error) {
+	out := FeedPage{NextAfter: after}
+	if _, err := RequireOrg(ctx, RolesAudit); err != nil {
+		return out, err
+	}
+	if after < 0 {
+		return out, problem.InvalidRequest.WithDetail("after must not be negative")
+	}
+	if limit < 1 || limit > MaxFeedLimit {
+		return out, problem.InvalidRequest.WithDetail(fmt.Sprintf("limit must be between 1 and %d", MaxFeedLimit))
+	}
+	err := l.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		out.Events, err = q.ListAuditEventsAfter(ctx, auditstore.ListAuditEventsAfterParams{After: after, MaxRows: int32(limit)}) //nolint:gosec // validated 1–MaxFeedLimit
+		if err != nil {
+			return fmt.Errorf("list audit events after %d: %w", after, err)
+		}
+		if out.Latest, err = q.LatestCommitSeq(ctx); err != nil {
+			return fmt.Errorf("latest commit seq: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return out, err
+	}
+	if n := len(out.Events); n > 0 {
+		out.NextAfter = out.Events[n-1].CommitSeq
+	}
+	return out, nil
+}

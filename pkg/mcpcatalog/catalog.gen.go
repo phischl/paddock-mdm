@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "348e498f76d67c7095c4807c685028cb6eacb9028e1cf7e57f2b99cb745076ce"
+const Version = "8f3c36abe6ba6fd4bf36eec4c3274971b646488c1178920839de0b712760de2b"
 
 var tools = []Tool{
 	{
@@ -781,6 +781,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal session and every identity-provider browser session of every portal user (platform administrators and organization role members); device logins and API tokens are not affected. The caller's own session ends with its next request; every administrator signs in again. 503 session_store_unavailable while the session store is unreachable; 502 upstream_unavailable when the identity provider's sessions could not be ended (the portal sessions are ended already; end all sessions again).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "feedAuditEvents",
+		Method:      "GET",
+		Path:        "/api/v1/audit-events/feed",
+		Pattern:     "GET /api/v1/audit-events/feed",
+		Tag:         "audit",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_auditor (sessions and API tokens). Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. An after below the oldest retained commit_seq returns the oldest retained events (catch-up is bounded by the index retention).\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{\"after\":{\"default\":0,\"description\":\"Commit sequence of the last event already read; 0 starts at the beginning.\",\"format\":\"int64\",\"minimum\":0,\"type\":\"integer\"},\"limit\":{\"default\":100,\"description\":\"Maximum number of events in the page.\",\"maximum\":1000,\"minimum\":1,\"type\":\"integer\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "generateAutoinstall",

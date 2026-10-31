@@ -351,6 +351,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit-events/feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_auditor (sessions and API tokens). Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. An after below the oldest retained commit_seq returns the oldest retained events (catch-up is bounded by the index retention). */
+        get: operations["feedAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit/integrity": {
         parameters: {
             query?: never;
@@ -3475,6 +3492,53 @@ export interface components {
             error_code?: string;
             correlation_id: string;
         };
+        /** @description The stored audit event, without the read-time device enrichment of AuditEvent. */
+        AuditEventStored: {
+            /** Format: uuid */
+            event_id: string;
+            /**
+             * Format: uuid
+             * @description The organization the event belongs to; always the caller's.
+             */
+            organization_id: string;
+            /** Format: date-time */
+            occurred_at: string;
+            /** Format: date-time */
+            recorded_at: string;
+            code: string;
+            outcome: components["schemas"]["AuditOutcome"];
+            source: string;
+            actor: components["schemas"]["AuditActor"];
+            target: components["schemas"]["AuditTarget"] | null;
+            params: {
+                [key: string]: unknown;
+            };
+            error_code?: string;
+            correlation_id: string;
+        };
+        AuditFeedEvent: {
+            /**
+             * Format: int64
+             * @description Position of the event in the organization's commit order.
+             */
+            commit_seq: number;
+            event: components["schemas"]["AuditEventStored"];
+        };
+        AuditFeedPage: {
+            /** @enum {string} */
+            schema: "paddock.audit.feed.v1";
+            events: components["schemas"]["AuditFeedEvent"][];
+            /**
+             * Format: int64
+             * @description commit_seq of the last returned event, or after when the page is empty.
+             */
+            next_after: number;
+            /**
+             * Format: int64
+             * @description Highest commit_seq of the organization; equal to next_after when caught up.
+             */
+            latest: number;
+        };
         AuditEventPage: {
             items: components["schemas"]["AuditEvent"][];
             page: number;
@@ -6217,6 +6281,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditEventPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    feedAuditEvents: {
+        parameters: {
+            query?: {
+                /** @description Commit sequence of the last event already read; 0 starts at the beginning. */
+                after?: number;
+                /** @description Maximum number of events in the page. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Events after the cursor in ascending commit_seq. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditFeedPage"];
                 };
             };
             400: components["responses"]["Problem"];

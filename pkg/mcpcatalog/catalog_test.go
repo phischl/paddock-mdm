@@ -114,7 +114,7 @@ func TestExposedExcludesStepUpAndHidden(t *testing.T) {
 		t.Errorf("%d step-up tools, want at least the 18 step-up specs of ADR 0044", stepUp)
 	}
 	for _, name := range []string{
-		"lockDevice", "destroyDevice", "revealDeviceLocalAdmin", "revealDeviceRecoveryKey", "endAllSessions",
+		"feedAuditEvents", "lockDevice", "destroyDevice", "revealDeviceLocalAdmin", "revealDeviceRecoveryKey", "endAllSessions",
 		"createApiToken", "revokeApiToken", "updateMe", "uploadAgentArtifact", "uploadAgentPackage",
 		"generateAutoinstall", "downloadDeviceHeader",
 	} {
@@ -124,6 +124,9 @@ func TestExposedExcludesStepUpAndHidden(t *testing.T) {
 		if exposed[name] {
 			t.Errorf("%s is exposed", name)
 		}
+	}
+	if feed, ok := ByName("feedAuditEvents"); !ok || feed.Expose {
+		t.Errorf("feedAuditEvents: found %t, Expose %t, want hidden (ADR 0044)", ok, feed.Expose)
 	}
 	for _, name := range []string{"getMe", "listDevices", "createDeviceGroup"} {
 		if !exposed[name] {
