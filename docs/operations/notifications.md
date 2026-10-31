@@ -263,7 +263,7 @@ development stack).
 ## E-mail
 
 An e-mail destination sends through **your** SMTP relay; Paddock has no mail server. The relay is platform
-configuration of `paddock-notifier`, set in `.env` ([install.md](install.md), "E-mail relay"):
+configuration of `paddock-notifier`; the host, port, TLS mode, username and sender are set in `.env` ([install.md](install.md), "E-mail relay"):
 
 | Variable | Meaning |
 | --- | --- |
@@ -272,8 +272,8 @@ configuration of `paddock-notifier`, set in `.env` ([install.md](install.md), "E
 | `PADDOCK_SMTP_TLS` | `starttls` (default; a relay that does not offer it is refused) or `implicit`; `none` only on a development stack |
 | `PADDOCK_SMTP_USERNAME` | optional; with it the password comes from `PADDOCK_SMTP_PASSWORD_FILE` (`.secrets/smtp_password`) |
 | `PADDOCK_SMTP_FROM` | required with a host: the sender address |
-| `PADDOCK_SMTP_TIMEOUT` | default `30s` |
-| `PADDOCK_SMTP_CA_FILE` | optional PEM file with the CA of a relay whose certificate is not publicly trusted; added to the system roots, verification stays on |
+| `PADDOCK_SMTP_TIMEOUT` | default `30s`; reaches the notifier only through a Compose override on `paddock-notifier`, not through `.env` ([install.md](install.md), "E-mail relay") |
+| `PADDOCK_SMTP_CA_FILE` | optional PEM file with the CA of a relay whose certificate is not publicly trusted; added to the system roots, verification stays on; only through a Compose override that mounts the file on `paddock-notifier` and sets the variable there ([install.md](install.md), "E-mail relay") |
 | `PADDOCK_SMTP_ENABLED` | on the api: `true` exactly when the host is set; `./paddock check` fails when they disagree |
 
 TLS is mandatory: the certificate is always verified, and credentials are sent only over TLS (the notifier refuses to

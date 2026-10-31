@@ -80,6 +80,7 @@ against the Wazuh version you run):
     <disabled>no</disabled>
     <frequency>43200</frequency>
     <directories check_all="yes">/usr/bin,/usr/sbin,/boot</directories>
+    <ignore>/etc/sudoers</ignore>
     <ignore>/etc/sudoers.d</ignore>
     <ignore>/etc/pam.d</ignore>
     <ignore>/etc/himmelblau</ignore>
