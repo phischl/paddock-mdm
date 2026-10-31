@@ -59,7 +59,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		retentionDefault = 15 * time.Second
 	}
 	retentionEvery := config.RetentionInterval(l, common, retentionDefault)
-	_, indexRetention := auditRetention(l)
+	indexRetention := workerIndexRetention(l)
 	if err := l.Err(); err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,32 +76,40 @@ func TestIndexRetentionDefaultsToWORMRetention(t *testing.T) {
 	}
 }
 
-// TestAuditRetentionForWorker (ADR 0032 amendment 2026-10-18, PDK-180): the worker reads the index retention with the
-// audit writer's default and validation, so its retention round keeps the rows as long as the index.
-func TestAuditRetentionForWorker(t *testing.T) {
+// TestWorkerIndexRetention (ADR 0032 amendment 2026-10-31, PDK-180): the worker reads the audit writer's index
+// retention variable without a default and refuses to start when it is missing, not an integer or below the bucket
+// default, so its retention round never purges with a value other than the writer's.
+func TestWorkerIndexRetention(t *testing.T) {
 	for _, tc := range []struct {
-		env        map[string]string
-		index      int
-		invalidVar string
+		env     map[string]string
+		index   int
+		missing bool
 	}{
-		{env: map[string]string{}, index: auditwriter.MinRetentionDays},
-		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "500"}, index: 500},
-		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "400", "PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "730"}, index: 730},
-		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "500", "PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "450"},
-			invalidVar: "PADDOCK_AUDIT_INDEX_RETENTION_DAYS"},
-		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "399"}, invalidVar: "PADDOCK_AUDIT_RETENTION_DAYS"},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "400"}, index: 400},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "730"}, index: 730},
+		{env: map[string]string{}, missing: true},
+		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "500"}, missing: true},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "399"}},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "0"}},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "four hundred"}},
 	} {
 		l := config.NewLoaderFrom(tc.env)
-		_, index := auditRetention(l)
+		index := workerIndexRetention(l)
 		err := l.Err()
-		if tc.invalidVar != "" {
-			if err == nil || !strings.Contains(err.Error(), tc.invalidVar) {
-				t.Errorf("%v: err = %v, want it to name %s", tc.env, err, tc.invalidVar)
+		var missing *config.MissingError
+		switch {
+		case tc.missing:
+			if !errors.As(err, &missing) || !slices.Contains(missing.Names, "PADDOCK_AUDIT_INDEX_RETENTION_DAYS") {
+				t.Errorf("%v: err = %v, want PADDOCK_AUDIT_INDEX_RETENTION_DAYS missing", tc.env, err)
 			}
-			continue
-		}
-		if err != nil || index != tc.index {
-			t.Errorf("%v: index %d (%v), want %d", tc.env, index, err, tc.index)
+		case tc.index == 0:
+			if err == nil || !strings.Contains(err.Error(), "PADDOCK_AUDIT_INDEX_RETENTION_DAYS") {
+				t.Errorf("%v: err = %v, want PADDOCK_AUDIT_INDEX_RETENTION_DAYS invalid", tc.env, err)
+			}
+		default:
+			if err != nil || index != tc.index {
+				t.Errorf("%v: index %d (%v), want %d", tc.env, index, err, tc.index)
+			}
 		}
 	}
 }

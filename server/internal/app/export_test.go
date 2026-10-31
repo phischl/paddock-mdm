@@ -38,3 +38,9 @@ func (r *Retention) SetHoldNotice(n int32) { r.holdNotice = n }
 
 // SetClock replaces time.Now of the read-access recording, for tests of consecutive windows.
 func (r *ReadAudit) SetClock(now func() time.Time) { r.now = now }
+
+// SetIndexDays replaces the audit index retention, for tests of a retention below the minimum.
+func (r *Retention) SetIndexDays(n int) { r.indexDays = n }
+
+// KeptByIndex is keptByIndex, for tests of both arms of the cutoff.
+var KeptByIndex = keptByIndex

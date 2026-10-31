@@ -130,8 +130,8 @@ func TestRetentionRoundRetiredInventory(t *testing.T) {
 	day := 24 * time.Hour
 	fleet := &fakeSource{}
 	r := NewRetention(app.NewRetention(runner, f.pool, platform, fleet, day, 400), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
-	if len(r.passes) != 7 || r.passes[2].store != app.StoreRetiredInventory {
-		t.Fatalf("passes %+v, want retired_inventory third of 7", r.passes)
+	if len(r.passes) != 8 || r.passes[2].store != app.StoreRetiredInventory {
+		t.Fatalf("passes %+v, want retired_inventory third of 8", r.passes)
 	}
 	dev := uuid.Must(uuid.NewV7())
 	for _, stmt := range []string{
@@ -178,8 +178,8 @@ func TestRetentionRoundReadWindows(t *testing.T) {
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
 	r := NewRetention(app.NewRetention(runner, f.pool, platform, &fakeSource{}, day, 400), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
-	if len(r.passes) != 7 || r.passes[3].store != app.StoreReadAuditWindow {
-		t.Fatalf("passes %+v, want read_audit_window fourth of 7", r.passes)
+	if len(r.passes) != 8 || r.passes[3].store != app.StoreReadAuditWindow {
+		t.Fatalf("passes %+v, want read_audit_window fourth of 8", r.passes)
 	}
 	now := time.Now().UTC()
 	for i, start := range []time.Time{now.Add(-49 * time.Hour), now.Add(-50 * time.Hour), now.Add(-47 * time.Hour)} {
@@ -302,8 +302,10 @@ func TestRetentionRoundWaitsForLegacyLock(t *testing.T) {
 }
 
 // TestRetentionRoundControlPlane (ADR 0032 amendments 2026-10-18 and 2026-10-31, PDK-180): after pass 4 the round
-// purges finished commands, cleared alerts and filled event gaps older than the audit index retention, each with its
-// own retention.purged event, and keeps the younger rows.
+// purges finished commands, cleared alerts, filled event gaps and finished actions that the audit index no longer
+// shows, each with its own retention.purged event, and keeps the rows of the month the index still shows; the
+// platform pseudo-organization's actions follow once per round with their event there. The clock puts now − 500 days
+// mid-month, so a row an hour after that month's start is older than now − 500 days and stays.
 func TestRetentionRoundControlPlane(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -315,8 +317,10 @@ func TestRetentionRoundControlPlane(t *testing.T) {
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
 	r := NewRetention(app.NewRetention(runner, f.pool, platform, &fakeSource{}, day, 500), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
+	r.now = func() time.Time { return time.Date(2026, 3, 29, 12, 0, 0, 0, time.UTC) }
+	floor := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
 	dev := uuid.Must(uuid.NewV7())
-	expired, kept := time.Now().Add(-501*day), time.Now().Add(-499*day)
+	expired, kept := floor.Add(-time.Hour), floor.Add(time.Hour)
 	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'cp', 'active')", dev, f.org); err != nil {
 		t.Fatal(err)
 	}
@@ -333,24 +337,48 @@ func TestRetentionRoundControlPlane(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := f.super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, outcome, actor, correlation_id, started_at, finished_at)
+		SELECT gen_random_uuid(), o, 'test.retention', 'finished', 'success', '{"kind":"system"}', 'retention-test', t, t
+		  FROM unnest(ARRAY[$2, $3]::timestamptz[]) t, unnest(ARRAY[$1, $4]::uuid[]) o`, f.org, expired, kept, uuid.Nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = f.super.Exec(context.Background(), `DELETE FROM action WHERE organization_id = $1
+			AND (code = 'test.retention' OR (code = 'retention.purged' AND params->>'cutoff' = $2))`,
+			uuid.Nil, floor.Format(time.RFC3339))
+	})
 
 	if err := r.Round(ctx); err != nil {
 		t.Fatal(err)
 	}
 	for _, store := range []string{app.StoreDeviceCommand, app.StoreDeviceAlert, app.StoreDeviceEventGap} {
 		if n := f.count(t, "SELECT count(*) FROM "+store+" WHERE organization_id = $1", f.org); n != 1 {
-			t.Errorf("%s: %d rows left, want the younger one", store, n)
+			t.Errorf("%s: %d rows left, want the one of the index month", store, n)
+		}
+	}
+	for _, org := range []uuid.UUID{f.org, uuid.Nil} {
+		if n := f.count(t, "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'test.retention'", org); n != 1 {
+			t.Errorf("actions of %s: %d left, want the one of the index month", org, n)
 		}
 		if n := f.count(t, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'retention.purged'
-			AND outcome = 'success' AND params->>'store' = $2 AND (params->>'deleted')::int = 1`, f.org, store); n != 1 {
-			t.Errorf("%s: %d success events with deleted 1, want 1", store, n)
+			AND outcome = 'success' AND params->>'store' = $2 AND (params->>'deleted')::int = 1 AND params->>'cutoff' = $3`,
+			org, app.StoreAction, floor.Format(time.RFC3339)); n != 1 {
+			t.Errorf("action events of %s: %d success events with deleted 1, want 1", org, n)
+		}
+	}
+	for _, store := range []string{app.StoreDeviceCommand, app.StoreDeviceAlert, app.StoreDeviceEventGap, app.StoreAction} {
+		if store != app.StoreAction {
+			if n := f.count(t, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'retention.purged'
+				AND outcome = 'success' AND params->>'store' = $2 AND (params->>'deleted')::int = 1`, f.org, store); n != 1 {
+				t.Errorf("%s: %d success events with deleted 1, want 1", store, n)
+			}
 		}
 		if testutil.ToFloat64(metricRetentionLastSuccess.WithLabelValues(store)) == 0 {
 			t.Errorf("%s has no last success", store)
 		}
 	}
-	if len(r.passes) != 7 || r.passes[4].store != app.StoreDeviceCommand || r.passes[5].store != app.StoreDeviceAlert ||
-		r.passes[6].store != app.StoreDeviceEventGap {
-		t.Fatalf("passes %+v, want device_command, device_alert, device_event_gap after pass 4", r.passes)
+	if len(r.passes) != 8 || r.passes[4].store != app.StoreDeviceCommand || r.passes[5].store != app.StoreDeviceAlert ||
+		r.passes[6].store != app.StoreDeviceEventGap || r.passes[7].store != app.StoreAction || r.passes[7].platform == nil {
+		t.Fatalf("passes %+v, want device_command, device_alert, device_event_gap and action (with its platform pass) after pass 4", r.passes)
 	}
 }

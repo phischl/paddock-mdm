@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
@@ -44,15 +45,18 @@ var (
 )
 
 // retentionPass purges one store of the context's organization and returns what it deleted: rows, or devices for
-// app.StoreRetiredInventory (plan M10 §6.6). round is the state the round shares across its organizations.
+// app.StoreRetiredInventory (plan M10 §6.6). round is the state the round shares across its organizations. platform,
+// when set, purges the store's rows of the platform pseudo-organization once per round, after the organizations.
 type retentionPass struct {
-	store string
-	purge func(ctx context.Context, now time.Time, round *app.RetentionRound) (int64, error)
+	store    string
+	purge    func(ctx context.Context, now time.Time, round *app.RetentionRound) (int64, error)
+	platform func(ctx context.Context, now time.Time) (int64, error)
 }
 
 // Retention is the one retention round (plan M10 amendment A3): per organization it runs every store's pass in a
 // fixed order, each with its own evidence: a retention.purged event per store, a device.inventory_purged event per
-// retired device whose inventory it deleted.
+// retired device whose inventory it deleted. The platform pseudo-organization's actions follow once per round, after
+// the organizations (ADR 0032 amendment 2026-10-31).
 type Retention struct {
 	passes   []retentionPass
 	pool     *db.OrgPool
@@ -88,6 +92,9 @@ func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool,
 			{store: app.StoreDeviceEventGap, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
 				return a.PurgeEventGaps(ctx, now)
 			}},
+			{store: app.StoreAction, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
+				return a.PurgeActions(ctx, now)
+			}, platform: a.PurgePlatformActions},
 		},
 		pool: pool, platform: platform, interval: interval, now: time.Now,
 	}
@@ -137,6 +144,17 @@ func (r *Retention) purge(ctx context.Context) error {
 				failed[i] = true
 				errs = append(errs, fmt.Errorf("organization %s, store %s: %w", org, pass.store, err))
 			}
+		}
+	}
+	for i, pass := range r.passes {
+		if pass.platform == nil {
+			continue
+		}
+		n, err := pass.platform(systemContext(ctx, uuid.Nil, "retention-round"), now)
+		metricRetentionDeleted.WithLabelValues(pass.store).Add(float64(n))
+		if err != nil {
+			failed[i] = true
+			errs = append(errs, fmt.Errorf("platform pseudo-organization, store %s: %w", pass.store, err))
 		}
 	}
 	done := float64(r.now().Unix())

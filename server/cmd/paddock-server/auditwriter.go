@@ -63,9 +63,7 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 	return &auditDeps{pool: pool, store: store, bao: baoClient, writer: writer, indexRetention: indexRetention}, nil
 }
 
-// auditRetention reads the WORM retention and the audit index retention in days, for the audit writer and for the
-// worker, whose retention round keeps the rows that explain audit events as long as the index (ADR 0032 amendment
-// 2026-10-18, PDK-180); both validate the same way.
+// auditRetention reads the audit writer's WORM retention and audit index retention in days.
 func auditRetention(l *config.Loader) (retention, index int) {
 	retention = l.Int("PADDOCK_AUDIT_RETENTION_DAYS", auditwriter.MinRetentionDays)
 	if retention < auditwriter.MinRetentionDays {
@@ -77,6 +75,22 @@ func auditRetention(l *config.Loader) (retention, index int) {
 		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least PADDOCK_AUDIT_RETENTION_DAYS (%d days)", retention))
 	}
 	return retention, index
+}
+
+// workerIndexRetention reads the audit index retention in days for the worker, whose retention round keeps the rows
+// that explain audit events as long as the index shows them (ADR 0032 amendments 2026-10-18 and 2026-10-31, PDK-180).
+// The worker reads the audit writer's variable but has no default: a worker that guessed a value other than the
+// writer's would purge ahead of the index. Missing, or below the bucket default the writer requires as its minimum,
+// the worker does not start.
+func workerIndexRetention(l *config.Loader) int {
+	if l.Required("PADDOCK_AUDIT_INDEX_RETENTION_DAYS") == "" {
+		return 0
+	}
+	index := l.Int("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", 0)
+	if index < auditwriter.MinRetentionDays {
+		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days", auditwriter.MinRetentionDays))
+	}
+	return index
 }
 
 // verifier checks the hash chain with the audit-chain public keys from OpenBao.

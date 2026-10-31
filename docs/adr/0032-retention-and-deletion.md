@@ -246,11 +246,8 @@ The table of the amendment 2026-10-18 does not match the schema in six places. D
    `filled_at`; unfilled gaps are kept, like open alerts. `device_event_dropped` has no timestamp and leaves this
    ticket (follow-up ticket).
 3. **`action` by `finished_at`.** Rows with status `started` (the outbox reaper's input) are never purged; rows of the
-   platform pseudo-organization go through the platform pool. The cutoff is the earlier of
-   now − `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` and the start of the oldest audit index partition that still exists, so
-   the purge never runs ahead of the index, which drops whole months only. Where the worker learns the oldest
-   remaining partition (it lives in the audit database) is not decided yet; the `action` store is implemented once it
-   is.
+   platform pseudo-organization go through the platform pool, once per round, with their `retention.purged` event in
+   the pseudo-organization.
 4. **Referenced rows are skipped.** A finished `device_command` that `device_disk_conversion.command_id` or
    `abort_command_id`, or `device.uninstall_command_id` still references stays; it explains that row.
 5. **Status names.** The final statuses of `device_command` are `succeeded`, `failed`, `expired` and `cancelled`
@@ -259,5 +256,17 @@ The table of the amendment 2026-10-18 does not match the schema in six places. D
    (ADR 0014); giving the worker `DELETE` on them widens that domain's writers. They leave this ticket (follow-up
    ticket that names the ADR 0014 boundary).
 
-The worker reads `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` with the audit writer's default and validation. Migration
-`00080` grants the worker `DELETE` on `device_command`, `device_alert` and `device_event_gap`.
+**Cutoff never ahead of the index, for all four stores** (`action`, `device_command`, `device_alert`,
+`device_event_gap`). The index drops whole UTC months only, a month once it ended more than
+`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` ago, so the oldest month it may still show is the one containing
+now − that period. The cutoff is the earlier of now − the store's period and the start of that UTC month; the
+worker computes it from its own clock and the shared variable and reads nothing from the audit database (no new
+boundary). Residual: when the index purge lags (the audit writer down, a partition kept after a lock timeout), the
+index briefly shows events whose explaining rows are gone and the portal shows fewer rows than the index; the
+failure direction is keeping data longer, never deleting it early.
+
+The worker reads the audit writer's variable `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, which the Compose files pass to
+both from the same `.env` value; it has no default of its own and refuses to start when the variable is missing or
+below the bucket default of 400 days (`auditwriter.MinRetentionDays`), and a retention configured below that deletes
+nothing. Migration `00080` grants the worker `DELETE` on `device_command`, `device_alert` and `device_event_gap`;
+migration `00081` grants `DELETE` on `action` to the worker and the platform role.

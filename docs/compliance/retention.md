@@ -33,7 +33,7 @@ job that deletes and the audit event that proves it. "Now" means configurable pe
 | `device_event_gap` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `filled_at`; unfilled gaps never | Art. 6(1)(f) | Worker, every 6 h, per organization, batches of 1 000; `retention.purged` (store `device_event_gap`, only when rows were deleted) | — |
 | `device_event_dropped` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | Lifetime of the device (no timestamp; ADR 0032 amendment 2026-10-31) | Art. 6(1)(f) | None yet; follow-up ticket | — |
 | `paddock_audit.audit_verification_run` (M8b) | Evidence metadata | Verification results per range; no personal data | Unlimited (part of the chain's evidence) | — | None | — |
-| `action` (control-plane origin of audit events) | Evidence (origin copy) | As audit events | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at`, never ahead of the oldest remaining audit index partition; started actions never (ADR 0032 amendment 2026-10-31) | As audit events | None yet: worker retention round once the cutoff source is decided; `retention.purged` (store `action`) | — |
+| `action` (control-plane origin of audit events) | Evidence (origin copy) | As audit events | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at`, never before the start of the UTC month containing now − that period; started actions never (ADR 0032 amendment 2026-10-31) | As audit events | Worker, every 6 h, per organization and once for the platform pseudo-organization, batches of 1 000; `retention.purged` (store `action`, only when rows were deleted) | — |
 | `outbox` | Transport | Audit payloads, state changes | 7 days after publication (existing) | — | Outbox relay (existing, not audited: transport only) | — |
 | `read_audit_window` | Coalescing keys of read-access events | Actor ID, code, target ID, window | 48 hours | Art. 6(1)(f) | Worker, every 6 h; `retention.purged` (store `read_audit_window`) | — |
 | Administrator accounts (`admin_account`), API tokens (`api_token`) | Administrator data | Name, display, role, token hash and metadata | Account: follows Authentik (synced); token: until revoked or expired, then kept as metadata for `api_token.use_denied` | Art. 6(1)(b)/(f) | None (operator removes the person in Authentik; the audit trail keeps the name) | — |
@@ -50,9 +50,14 @@ The per-organization settings are *Privacy settings* (`GET`/`PUT /api/v1/setting
 `settings.privacy` of `paddock.yml`: `retired_inventory_days`, `audit_search_recorded`, `inventory_view_recorded`)
 and *Login & privileges* → *Login history* (`settings.login`). Every other period is platform-wide or fixed by code.
 The periods of `action`, `device_command`, `device_alert` and the filled device event gaps equal the audit index
-retention (≥ the WORM retention): these rows explain audit events and must
-not disappear while the index still shows them (ADR 0032 amendments 2026-10-18 and 2026-10-31). The worker reads
-`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` with the audit writer's default and validation.
+retention (≥ the WORM retention): these rows explain audit events and must not disappear while the index still shows
+them (ADR 0032 amendments 2026-10-18 and 2026-10-31). The index drops whole UTC months, so the worker deletes such a
+row only once it lies before the start of the UTC month containing now − `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, the
+oldest month the index may still show. When the index purge lags (the audit writer down, a partition kept after a
+lock timeout), the portal briefly shows fewer of these rows than the index shows events; the failure direction is
+keeping data longer, never deleting it early. The worker reads the audit writer's variable
+`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` without a default of its own and does not start when it is missing or below 400
+days; set it, and `PADDOCK_AUDIT_RETENTION_DAYS`, to the same values on the control-plane and the audit host.
 
 ## Deletion evidence
 
@@ -60,8 +65,8 @@ Every purge leaves an audit event in the same WORM chain as every other event, r
 
 - **`retention.purged`**: one event per run, organization and store when at least one row was deleted (or when the
   purge failed). Parameters: `store` (`device_login_event`, `device_user_seen`, `read_audit_window`, `audit_index`,
-  `audit_exports`, `device_command`, `device_alert`, `device_event_gap` (ADR 0032 amendments 2026-10-18 and
-  2026-10-31), `action` once its pass exists; `change_set_before` only once M11 (PDK-154) adds
+  `audit_exports`, `device_command`, `device_alert`, `device_event_gap`, `action` (ADR 0032 amendments 2026-10-18 and
+  2026-10-31; the platform pseudo-organization's actions in that pseudo-organization); `change_set_before` only once M11 (PDK-154) adds
   that pass), `deleted` (number of rows), `cutoff` (RFC 3339;
   rows older than it were deleted) and, for the audit index, `partition` (one event per dropped partition, recorded in the
   platform pseudo-organization); an expired export carries `export_id` and is recorded in its organization.
@@ -115,10 +120,8 @@ until a later decision adds a purge:
 - administrator accounts and API tokens (`admin_account`, `api_token`): they follow Authentik;
 - the chain metadata (`audit_object`, `audit_manifest`, `audit_signing_key`, `audit_verification_run`): unlimited by
   design;
-- `action`: the period is decided (ADR 0032 amendment 2026-10-31), the pass waits for the decision where the worker
-  learns the oldest remaining audit index partition;
 - `revocation_request` with its approvals and `device_event_dropped`: excluded by ADR 0032 amendment 2026-10-31,
   follow-up tickets.
 
-Finished commands, cleared alerts and filled event gaps are purged by the worker's retention round (PDK-180). The purge of `change_set.before` joins the same round with the M11 change
+Finished commands, cleared alerts, filled event gaps and finished actions are purged by the worker's retention round (PDK-180). The purge of `change_set.before` joins the same round with the M11 change
 that creates the column.
