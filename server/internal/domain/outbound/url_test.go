@@ -93,6 +93,15 @@ func TestValidateWebhookURL(t *testing.T) {
 		}
 	}
 
+	for _, a := range []string{"64:ff9b::a00:1", "2002:a00:1::1", "2001:0:4136:e378:8000:63bf:f5ff:fffe"} {
+		if !outbound.Denied(netip.MustParseAddr(a)) {
+			t.Errorf("%s (IPv6 embedding an IPv4 address) is not denied", a)
+		}
+	}
+	if outbound.Denied(netip.MustParseAddr("2001:4860:4860::8888")) {
+		t.Error("a public IPv6 address in 2001::/16 outside Teredo is denied")
+	}
+
 	dev := outbound.Policy{AllowPrivate: true, Resolver: res}
 	for _, ok := range []string{"http://mixed.example.org:8080/x", "https://10.0.0.1:9000/x"} {
 		if err := dev.Validate(ctx, ok); err != nil {

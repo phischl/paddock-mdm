@@ -216,3 +216,12 @@ Facts about the code that bound the design (checked 2026-10-15):
   this engine; M8b's `device.event_gap` and `device.clock_drift` are finding sources through their attention
   kinds `event_gap` and `clock_drift` (the attention view is the source of attention findings), so M9 needs no
   tamper-finding entry for them.
+
+## Amendment 2026-10-31 — IPv6 prefixes that embed IPv4 (decision 12)
+
+Authorised by the architect on 2026-10-31 (external review of PDK-122). The deny list of decision 12 gains three
+IPv6 prefixes: `64:ff9b::/96` (NAT64 well-known prefix, RFC 6052), `2002::/16` (6to4, RFC 3056) and `2001::/32`
+(Teredo, RFC 4380). Each embeds an IPv4 address that a translator or relay on the control plane's network reaches,
+so a webhook name resolving to, for example, `64:ff9b::a00:1` or `2002:a00:1::1` would reach `10.0.0.1` past the
+IPv4 entries of the list. They are checked like every other entry: at validation and again at every dial.
+`outbound.DeniedPrefixes` implements the list.

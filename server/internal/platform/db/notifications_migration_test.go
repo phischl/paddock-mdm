@@ -2,15 +2,19 @@ package db_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TestNotificationsMigration proves the isolation of migration 00085 (plan M9 decision 10, ADR 0031 decisions 10 and
-// 11): an organization sees only its own destinations, the platform role only the nil organization's, the notifier
-// reads destinations but cannot write them and records its audit actions, and a missing context fails closed.
+// 11): an organization sees only its own destinations, the platform role only the nil organization's and nothing but
+// destinations, their state and fresh test deliveries; the api inserts only fresh test deliveries; a child row cannot
+// reference another organization's destination or delivery; the notifier reads destinations but cannot write them,
+// serves the nil organization under its own role and records its audit actions; a missing context fails closed.
 func TestNotificationsMigration(t *testing.T) {
 	env := sharedPaddock(t)
 	ctx := context.Background()
@@ -100,6 +104,41 @@ func TestNotificationsMigration(t *testing.T) {
 		}
 		return err
 	}))
+	for col, value := range map[string]string{
+		"delivered_at": "now()", "attempts": "1", "forward_from": "1", "forward_to": "1", "event_count": "1",
+		"last_error": "'x'",
+	} {
+		refused("api test delivery with "+col, inOrg(api, orgA, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO notification_delivery (id, destination_id, organization_id, kind, `+col+
+				`) VALUES ($1, $2, $3, 'test', `+value+`)`, uuid.New(), destA, orgA)
+			return err
+		}))
+	}
+
+	// A child row naming another organization's destination fails exactly like one naming no destination, so the
+	// refusal reveals nothing (PDK-123 maps it to 404 not_found).
+	for name, target := range map[string]uuid.UUID{"B's destination": destB, "no destination": uuid.New()} {
+		err := inOrg(api, orgA, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id)
+				VALUES ($1, $2)`, target, orgA)
+			return err
+		})
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+			t.Fatalf("state for %s: %v, want foreign key violation 23503", name, err)
+		}
+	}
+	refused("a delivery event of A naming B's delivery", inOrg(super, orgA, func(tx pgx.Tx) error {
+		delivery := uuid.New()
+		if _, err := tx.Exec(ctx, `INSERT INTO notification_delivery (id, destination_id, organization_id, kind)
+			VALUES ($1, $2, $3, 'test')`, delivery, destB, orgB); err != nil {
+			t.Fatal(err)
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO notification_delivery_event (destination_id, organization_id, forward_seq,
+			event_id, commit_seq, delivery_id) VALUES ($1, $2, 1, $3, 1, $4)`, destA, orgA, uuid.New(), delivery)
+		return err
+	}))
+
 	refused("api without organization context", func() error {
 		_, err := api.Exec(ctx, "SELECT count(*) FROM notification_destination")
 		return err
@@ -110,6 +149,34 @@ func TestNotificationsMigration(t *testing.T) {
 			t.Fatalf("platform sees %v, want only %s", got, destP)
 		}
 		return nil
+	}))
+	must("platform test delivery", inOrg(platform, uuid.Nil, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO notification_delivery (id, destination_id, organization_id, kind,
+			requested_by) VALUES ($1, $2, $3, 'test', 'root')`, uuid.New(), destP, uuid.Nil)
+		return err
+	}))
+	for name, stmt := range map[string]string{
+		"events delivery": `INSERT INTO notification_delivery (id, destination_id, organization_id, kind)
+			VALUES (gen_random_uuid(), '` + destP.String() + `', '` + uuid.Nil.String() + `', 'events')`,
+		"delivered test": `INSERT INTO notification_delivery (id, destination_id, organization_id, kind, attempts)
+			VALUES (gen_random_uuid(), '` + destP.String() + `', '` + uuid.Nil.String() + `', 'test', 1)`,
+		"delivery update":  `UPDATE notification_delivery SET attempts = 1`,
+		"delivery event":   `SELECT count(*) FROM notification_delivery_event`,
+		"pseudonym key":    `SELECT count(*) FROM notification_pseudonym_key`,
+		"pseudonym lookup": `SELECT count(*) FROM notification_pseudonym_lookup`,
+	} {
+		refused("platform "+name, inOrg(platform, uuid.Nil, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, stmt)
+			return err
+		}))
+	}
+	must("notifier in the platform scope", inOrg(notifier, uuid.Nil, func(tx pgx.Tx) error {
+		if got := ids(tx); len(got) != 1 || got[0] != destP {
+			t.Fatalf("notifier in the nil organization sees %v, want only %s", got, destP)
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO notification_delivery (id, destination_id, organization_id, kind)
+			VALUES ($1, $2, $3, 'heartbeat')`, uuid.New(), destP, uuid.Nil)
+		return err
 	}))
 	refused("platform insert into A", inOrg(platform, uuid.Nil, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO notification_destination (id, organization_id, type, name, filter_mode,

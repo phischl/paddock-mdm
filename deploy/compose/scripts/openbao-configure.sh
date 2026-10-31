@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Configures an initialized and unsealed OpenBao (plan M7b decision 17; content of plan M0 §6.8, M2a decision 15, M4a
-# decisions 2 and 9, M4c decisions 2 and 14, M6a decision 5): the engines transit, secret (kv-v2) and approle, the
-# transit keys audit-chain, bundle-signing, command-signing, revocation-signing, time-ticket (ed25519), escrow-wrap
-# (rsa-4096) and notification-wrap (aes256-gcm96, plan M9 decision 12), the KV secret secret/paddock/session, the policies and the AppRoles, whose role_id and secret_id are
-# written to .secrets/approle/<role>/ (paddock-audit-writer's directory is copied to the audit host). Idempotent: a
-# stored non-empty secret_id is kept. Needs the root token in BAO_TOKEN. Development: openbao-bootstrap.sh calls it;
-# production: `./paddock bootstrap openbao` after the manual init and unseal (docs/operations/openbao.md).
+# decisions 2 and 9, M4c decisions 2 and 14, M6a decision 5, M9 decision 12): the engines transit, secret (kv-v2) and
+# approle, the transit keys audit-chain, bundle-signing, command-signing, revocation-signing, time-ticket (ed25519),
+# escrow-wrap (rsa-4096) and notification-wrap (aes256-gcm96, derived), the KV secret secret/paddock/session, the
+# policies and the AppRoles, whose role_id and secret_id are written to .secrets/approle/<role>/ (paddock-audit-writer's
+# directory is copied to the audit host). Idempotent: a stored non-empty secret_id is kept. Needs the root token in
+# BAO_TOKEN. Development: openbao-bootstrap.sh calls it; production: `./paddock bootstrap openbao` after the manual init
+# and unseal (docs/operations/openbao.md).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,10 +59,14 @@ if ! bao read transit/keys/escrow-wrap >/dev/null 2>&1; then
 fi
 
 # Destination secrets of the notifications (webhook URL and signing secret, pseudonym keys): the api encrypts, the
-# notifier alone decrypts (ADR 0031 decision 11).
+# notifier alone decrypts (ADR 0031 decision 11). Derived, so that every ciphertext is bound to its organization (the
+# context); derivation cannot be switched on later.
 if ! bao read transit/keys/notification-wrap >/dev/null 2>&1; then
-  bao write transit/keys/notification-wrap type=aes256-gcm96 exportable=false allow_plaintext_backup=false >/dev/null
+  bao write transit/keys/notification-wrap type=aes256-gcm96 derived=true exportable=false \
+    allow_plaintext_backup=false >/dev/null
   echo "created transit key notification-wrap"
+elif [[ "$(bao read -field=derived transit/keys/notification-wrap)" != true ]]; then
+  echo "transit key notification-wrap is not derived: delete and re-create it (docs/operations/openbao.md)" >&2
 fi
 
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
@@ -81,6 +86,9 @@ path "transit/keys/revocation-signing" {
   capabilities = ["read"]
 }
 path "transit/encrypt/notification-wrap" {
+  capabilities = ["update"]
+}
+path "transit/datakey/wrapped/notification-wrap" {
   capabilities = ["update"]
 }
 EOF

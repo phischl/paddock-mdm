@@ -279,25 +279,67 @@ func (c *Client) Decrypt(ctx context.Context, key string, version int, ciphertex
 	return out, nil
 }
 
-// Encrypt encrypts plaintext with the Transit key and returns the ciphertext as Transit writes it ("vault:vN:…").
-func (c *Client) Encrypt(ctx context.Context, key string, plaintext []byte) (string, error) {
+// Encrypt encrypts plaintext with the derived Transit key under keyContext (the organization a secret belongs to, so
+// its ciphertext decrypts under no other) and returns the ciphertext as Transit writes it ("vault:vN:…").
+func (c *Client) Encrypt(ctx context.Context, key string, keyContext, plaintext []byte) (string, error) {
+	return c.writeCiphertext(ctx, "transit/encrypt/"+key, map[string]any{
+		"plaintext": base64.StdEncoding.EncodeToString(plaintext),
+		"context":   base64.StdEncoding.EncodeToString(keyContext),
+	})
+}
+
+// WrappedDataKey returns a new random 256-bit data key, wrapped by the derived Transit key under keyContext; the
+// caller never sees the plaintext key (ADR 0031 decision 8 amendment, pseudonym keys).
+func (c *Client) WrappedDataKey(ctx context.Context, key string, keyContext []byte) (string, error) {
+	return c.writeCiphertext(ctx, "transit/datakey/wrapped/"+key, map[string]any{
+		"bits":    256,
+		"context": base64.StdEncoding.EncodeToString(keyContext),
+	})
+}
+
+func (c *Client) writeCiphertext(ctx context.Context, path string, body map[string]any) (string, error) {
 	if err := c.ensureToken(ctx); err != nil {
 		return "", err
 	}
-	s, err := c.api.Logical().WriteWithContext(ctx, "transit/encrypt/"+key, map[string]any{
-		"plaintext": base64.StdEncoding.EncodeToString(plaintext),
-	})
+	s, err := c.api.Logical().WriteWithContext(ctx, path, body)
 	if err != nil {
-		return "", fmt.Errorf("bao: encrypt: %w", err)
+		return "", fmt.Errorf("bao: %s: %w", path, err)
 	}
 	if s == nil {
-		return "", errors.New("bao: encrypt returned no ciphertext")
+		return "", fmt.Errorf("bao: %s returned no ciphertext", path)
 	}
 	ct, _ := s.Data["ciphertext"].(string)
 	if ct == "" {
-		return "", errors.New("bao: encrypt returned no ciphertext")
+		return "", fmt.Errorf("bao: %s returned no ciphertext", path)
 	}
 	return ct, nil
+}
+
+// DecryptContext decrypts a ciphertext of Encrypt or WrappedDataKey ("vault:vN:…") with the derived Transit key under
+// keyContext; a ciphertext made under another context fails.
+func (c *Client) DecryptContext(ctx context.Context, key string, keyContext []byte, ciphertext string) ([]byte, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	s, err := c.api.Logical().WriteWithContext(ctx, "transit/decrypt/"+key, map[string]any{
+		"ciphertext": ciphertext,
+		"context":    base64.StdEncoding.EncodeToString(keyContext),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bao: decrypt: %w", err)
+	}
+	if s == nil {
+		return nil, errors.New("bao: decrypt returned no plaintext")
+	}
+	plain, _ := s.Data["plaintext"].(string)
+	if plain == "" {
+		return nil, errors.New("bao: decrypt returned no plaintext")
+	}
+	out, err := base64.StdEncoding.DecodeString(plain)
+	if err != nil {
+		return nil, fmt.Errorf("bao: plaintext encoding: %w", err)
+	}
+	return out, nil
 }
 
 // KV reads the data of a KV v2 secret, e.g. path "secret/data/paddock/session".

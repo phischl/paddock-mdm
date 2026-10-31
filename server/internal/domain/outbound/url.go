@@ -13,8 +13,9 @@ import (
 	"time"
 )
 
-// DeniedPrefixes are the addresses a webhook never reaches (ADR 0031 decision 12): this host, private, shared,
-// link-local, benchmark, multicast and reserved networks, and IPv4-mapped IPv6.
+// DeniedPrefixes are the addresses a webhook never reaches (ADR 0031 decision 12 and its amendment of 2026-10-31):
+// this host, private, shared, link-local, benchmark, multicast and reserved networks, IPv4-mapped IPv6, and the IPv6
+// prefixes that embed an IPv4 address a translator reaches (NAT64, 6to4, Teredo).
 var DeniedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("10.0.0.0/8"),
@@ -32,6 +33,9 @@ var DeniedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("fc00::/7"),
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("::ffff:0:0/96"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("2001::/32"),
 }
 
 // Transport limits of a webhook call (ADR 0031 decision 12).

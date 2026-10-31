@@ -1,9 +1,11 @@
 -- Notifications (plan M9 §6.2, decisions 10, 11 and 13; ADR 0031 decisions 10 and 11). Forward-only: there is no
 -- Down migration. Organization destinations and their state are organization data; platform destinations use the
 -- same tables with the nil organization (audit.PlatformOrganizationID) under the policy platform of paddock_platform
--- alone. The notifier (role paddock_notifier) reads destinations and writes delivery state; the platform scope of the
--- notifier runs as paddock_platform. Webhook URL, signing secret and pseudonym keys are stored only as Transit
--- ciphertext of notification-wrap, which the api encrypts and the notifier alone decrypts.
+-- alone. The notifier (role paddock_notifier) reads destinations and writes delivery state of every organization, the
+-- nil one included, under its organization context; paddock_platform only manages platform destinations. Webhook URL,
+-- signing secret and pseudonym keys are stored only as Transit ciphertext of the derived key notification-wrap under
+-- the organization as context, which the api creates and the notifier alone decrypts. Children reference their
+-- destination and delivery together with the organization, so no row can point into another organization.
 -- +goose Up
 
 CREATE TABLE notification_destination (
@@ -19,17 +21,19 @@ CREATE TABLE notification_destination (
   url_ciphertext text,                      -- webhook; the URL is a secret (it may carry the credential)
   url_display text,                         -- webhook; scheme, host and masked path (outbound.DisplayURL)
   secret_ciphertext text,                   -- webhook; HMAC signing secret
-  heartbeat_interval_s int NOT NULL DEFAULT 0 CHECK (heartbeat_interval_s = 0 OR heartbeat_interval_s BETWEEN 60 AND 3600),
+  heartbeat_interval_s int NOT NULL DEFAULT 0
+    CHECK (heartbeat_interval_s = 0 OR heartbeat_interval_s BETWEEN 60 AND 3600),
   recipients text[] NOT NULL DEFAULT '{}',  -- email
   email_min_interval_s int NOT NULL DEFAULT 300 CHECK (email_min_interval_s BETWEEN 60 AND 3600),
   created_by text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, name)
+  UNIQUE (organization_id, name),
+  UNIQUE (id, organization_id)
 );
 
 CREATE TABLE notification_destination_state (
-  destination_id uuid PRIMARY KEY REFERENCES notification_destination(id) ON DELETE CASCADE,
+  destination_id uuid PRIMARY KEY,
   organization_id uuid NOT NULL,
   cursor_commit_seq bigint NOT NULL DEFAULT 0,
   forward_seq bigint NOT NULL DEFAULT 0,
@@ -39,12 +43,14 @@ CREATE TABLE notification_destination_state (
   first_failure_at timestamptz, stalled_since timestamptz, last_success_at timestamptz,
   last_attempt_at timestamptz, next_attempt_at timestamptz, last_heartbeat_at timestamptz,
   last_error text,
-  last_test_at timestamptz, last_test_ok boolean, last_test_error text
+  last_test_at timestamptz, last_test_ok boolean, last_test_error text,
+  FOREIGN KEY (destination_id, organization_id) REFERENCES notification_destination (id, organization_id)
+    ON DELETE CASCADE
 );
 
 CREATE TABLE notification_delivery (
   id uuid PRIMARY KEY,
-  destination_id uuid NOT NULL REFERENCES notification_destination(id) ON DELETE CASCADE,
+  destination_id uuid NOT NULL,
   organization_id uuid NOT NULL,
   kind text NOT NULL CHECK (kind IN ('events','heartbeat','test')),
   forward_from bigint, forward_to bigint,
@@ -53,24 +59,30 @@ CREATE TABLE notification_delivery (
   delivered_at timestamptz,
   attempts int NOT NULL DEFAULT 0,
   last_error text,
-  requested_by text                         -- kind test: the administrator's display
+  requested_by text,                        -- kind test: the administrator's display
+  UNIQUE (id, organization_id),
+  FOREIGN KEY (destination_id, organization_id) REFERENCES notification_destination (id, organization_id)
+    ON DELETE CASCADE
 );
 CREATE INDEX notification_delivery_destination_idx ON notification_delivery (destination_id, created_at DESC);
 
 CREATE TABLE notification_delivery_event (
-  destination_id uuid NOT NULL REFERENCES notification_destination(id) ON DELETE CASCADE,
+  destination_id uuid NOT NULL,
   organization_id uuid NOT NULL,
   forward_seq bigint NOT NULL,
   event_id uuid NOT NULL,
   commit_seq bigint NOT NULL,
-  delivery_id uuid NOT NULL REFERENCES notification_delivery(id) ON DELETE CASCADE,
-  PRIMARY KEY (destination_id, forward_seq)
+  delivery_id uuid NOT NULL,
+  PRIMARY KEY (destination_id, forward_seq),
+  FOREIGN KEY (destination_id, organization_id) REFERENCES notification_destination (id, organization_id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (delivery_id, organization_id) REFERENCES notification_delivery (id, organization_id) ON DELETE CASCADE
 );
 CREATE INDEX notification_delivery_event_delivery_idx ON notification_delivery_event (delivery_id);
 
 CREATE TABLE notification_pseudonym_key (
   organization_id uuid PRIMARY KEY,
-  key_ciphertext text NOT NULL,
+  key_ciphertext text NOT NULL,             -- Transit datakey/wrapped, context = organization_id
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -104,11 +116,13 @@ CREATE POLICY tenant ON notification_destination TO paddock_api, paddock_notifie
 CREATE POLICY tenant ON notification_destination_state TO paddock_api, paddock_notifier
   USING (organization_id = current_setting('paddock.org_id')::uuid)
   WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
--- The api lists deliveries and inserts only test deliveries (plan M9 §6.2); the notifier writes the others.
+-- The api lists deliveries and inserts only fresh test deliveries (plan M9 §6.2): every result column at its default,
+-- so it cannot forge a delivered or failed attempt. The notifier writes everything else.
 CREATE POLICY tenant ON notification_delivery FOR SELECT TO paddock_api
   USING (organization_id = current_setting('paddock.org_id')::uuid);
 CREATE POLICY tenant_test ON notification_delivery FOR INSERT TO paddock_api
-  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid AND kind = 'test');
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid AND kind = 'test' AND delivered_at IS NULL
+    AND attempts = 0 AND forward_from IS NULL AND forward_to IS NULL AND event_count = 0 AND last_error IS NULL);
 CREATE POLICY notifier ON notification_delivery TO paddock_notifier
   USING (organization_id = current_setting('paddock.org_id')::uuid)
   WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
@@ -128,28 +142,21 @@ CREATE POLICY platform ON notification_destination TO paddock_platform
 CREATE POLICY platform ON notification_destination_state TO paddock_platform
   USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid)
   WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
-CREATE POLICY platform ON notification_delivery TO paddock_platform
-  USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid)
-  WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
-CREATE POLICY platform ON notification_delivery_event TO paddock_platform
-  USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid)
-  WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
-CREATE POLICY platform ON notification_pseudonym_key TO paddock_platform
-  USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid)
-  WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
-CREATE POLICY platform ON notification_pseudonym_lookup TO paddock_platform
-  USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid)
-  WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
+CREATE POLICY platform ON notification_delivery FOR SELECT TO paddock_platform
+  USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
+CREATE POLICY platform_test ON notification_delivery FOR INSERT TO paddock_platform
+  WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid AND kind = 'test'
+    AND delivered_at IS NULL AND attempts = 0 AND forward_from IS NULL AND forward_to IS NULL AND event_count = 0
+    AND last_error IS NULL);
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination, notification_destination_state TO paddock_api;
 GRANT SELECT, INSERT ON notification_delivery, notification_pseudonym_key TO paddock_api;
 GRANT SELECT, INSERT, DELETE ON notification_pseudonym_lookup TO paddock_api;
 
--- paddock_platform serves the platform administrators' api and the notifier's platform scope, so it holds both sets.
+-- paddock_platform is the platform administrators' api only: platform destinations, their state and test deliveries.
+-- Platform destinations have no pseudonym operations (plan M9 decision 18).
 GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination, notification_destination_state TO paddock_platform;
-GRANT SELECT, INSERT, UPDATE ON notification_delivery, notification_delivery_event TO paddock_platform;
-GRANT SELECT, INSERT ON notification_pseudonym_key TO paddock_platform;
-GRANT SELECT, INSERT, UPDATE, DELETE ON notification_pseudonym_lookup TO paddock_platform;
+GRANT SELECT, INSERT ON notification_delivery TO paddock_platform;
 
 GRANT SELECT ON notification_destination, notification_pseudonym_key TO paddock_notifier;
 GRANT SELECT, INSERT, UPDATE ON notification_destination_state, notification_delivery, notification_delivery_event

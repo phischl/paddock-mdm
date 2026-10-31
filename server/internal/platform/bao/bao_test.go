@@ -3,9 +3,12 @@ package bao_test
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
+
+	openbao "github.com/openbao/openbao/api/v2"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
@@ -98,9 +101,10 @@ func TestEscrowWrap(t *testing.T) {
 	}
 }
 
-// TestNotificationWrap checks ADR 0031 decision 11 and plan M9 decision 12: the api AppRole encrypts destination
-// secrets with notification-wrap and cannot decrypt them; the notifier AppRole decrypts and cannot encrypt; no other
-// role decrypts.
+// TestNotificationWrap checks ADR 0031 decision 11 and plan M9 decision 12 with the fix-round binding of PDK-122: the
+// api AppRole encrypts destination secrets and obtains wrapped pseudonym keys with the derived key notification-wrap,
+// never a plaintext key, and cannot decrypt; the notifier AppRole decrypts and cannot encrypt; a ciphertext decrypts
+// only under the organization (context) it was made for; no other role decrypts.
 func TestNotificationWrap(t *testing.T) {
 	b := baotest.Start(t)
 	ctx := context.Background()
@@ -113,26 +117,61 @@ func TestNotificationWrap(t *testing.T) {
 		return c
 	}
 	api, notifier, worker := client("paddock-api"), client("paddock-notifier"), client("paddock-worker")
+	orgA, orgB := []byte("7d0a3c1e-0000-4000-8000-00000000000a"), []byte("7d0a3c1e-0000-4000-8000-00000000000b")
 	secret := []byte("https://hooks.slack.com/services/T0/B0/secret")
-	ct, err := api.Encrypt(ctx, "notification-wrap", secret)
+	ct, err := api.Encrypt(ctx, "notification-wrap", orgA, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rest, ok := strings.CutPrefix(ct, "vault:v1:")
-	if !ok || strings.Contains(ct, string(secret)) {
+	if !strings.HasPrefix(ct, "vault:v1:") || strings.Contains(ct, string(secret)) {
 		t.Fatalf("ciphertext %q", ct)
 	}
-	plain, err := notifier.Decrypt(ctx, "notification-wrap", 1, rest)
+	plain, err := notifier.DecryptContext(ctx, "notification-wrap", orgA, ct)
 	if err != nil || string(plain) != string(secret) {
 		t.Fatalf("decrypt: %q %v", plain, err)
 	}
-	if _, err := api.Decrypt(ctx, "notification-wrap", 1, rest); err == nil {
+	if _, err := notifier.DecryptContext(ctx, "notification-wrap", orgB, ct); err == nil {
+		t.Fatal("a ciphertext of organization A decrypts under organization B")
+	}
+	if _, err := api.DecryptContext(ctx, "notification-wrap", orgA, ct); err == nil {
 		t.Fatal("the api may decrypt destination secrets")
 	}
-	if _, err := worker.Decrypt(ctx, "notification-wrap", 1, rest); err == nil {
+	if _, err := worker.DecryptContext(ctx, "notification-wrap", orgA, ct); err == nil {
 		t.Fatal("the worker may decrypt destination secrets")
 	}
-	if _, err := notifier.Encrypt(ctx, "notification-wrap", secret); err == nil {
+	if _, err := notifier.Encrypt(ctx, "notification-wrap", orgA, secret); err == nil {
 		t.Fatal("the notifier may encrypt")
+	}
+
+	wrapped, err := api.WrappedDataKey(ctx, "notification-wrap", orgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := notifier.DecryptContext(ctx, "notification-wrap", orgA, wrapped)
+	if err != nil || len(key) != 32 {
+		t.Fatalf("unwrap pseudonym key: %d bytes, %v", len(key), err)
+	}
+	if _, err := notifier.DecryptContext(ctx, "notification-wrap", orgB, wrapped); err == nil {
+		t.Fatal("a pseudonym key of organization A unwraps under organization B")
+	}
+	if _, err := notifier.WrappedDataKey(ctx, "notification-wrap", orgA); err == nil {
+		t.Fatal("the notifier may create data keys")
+	}
+	apiRole := b.AppRole(t, "paddock-api")
+	raw, err := openbao.NewClient(&openbao.Config{Address: b.Addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, err := raw.Logical().Write("auth/approle/login", map[string]any{
+		"role_id": apiRole.RoleID, "secret_id": apiRole.SecretID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetToken(login.Auth.ClientToken)
+	if _, err := raw.Logical().Write("transit/datakey/plaintext/notification-wrap", map[string]any{
+		"context": base64.StdEncoding.EncodeToString(orgA),
+	}); err == nil {
+		t.Fatal("the api may obtain a plaintext data key")
 	}
 }

@@ -127,8 +127,9 @@ Then the audit host, the same way without step 3.
 A control-plane cluster creates its database roles once, at initialization (`postgres/init/10-roles.sh`). A cluster
 initialized before the notifications (plan M9) lacks the role `paddock_notifier`, and the migration 00085 that
 creates the notification tables refuses to run without it. A fresh installation (the move to 0.1.0-alpha.7 is one)
-creates the role itself; this section is for clusters that already run a build without it. Before step 5 of the upgrade, on the control plane in B's
-directory, after `./paddock secrets` created `.secrets/db_paddock_notifier_password`:
+creates the role itself; this section is for clusters that already run a build without it. Before step 5 of the
+upgrade, on the control plane in B's directory, after `./paddock secrets` created
+`.secrets/db_paddock_notifier_password`:
 
 ```sh
 ./paddock compose up -d postgres
