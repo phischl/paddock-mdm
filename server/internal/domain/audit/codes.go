@@ -201,6 +201,12 @@ const (
 	CodePlatformMCPPolicyChanged     Code = "platform.mcp_policy_changed"
 	CodeAdminMCPWriteEnabled         Code = "admin.mcp_write_enabled"  //nolint:gosec // an audit code, not a credential
 	CodeAdminMCPWriteDisabled        Code = "admin.mcp_write_disabled" //nolint:gosec // an audit code, not a credential
+
+	// Findings: the reaction to tamper events and attention conditions (plan M9 decision 33).
+	CodeFindingAcknowledged Code = "finding.acknowledged"
+	CodeFindingAssigned     Code = "finding.assigned"
+	CodeFindingClosed       Code = "finding.closed"
+	CodeFindingReopened     Code = "finding.reopened"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1268,6 +1274,34 @@ var registry = map[Code]Definition{
 		Params:      []string{"role"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with forbidden for auditors and for requests made with an API token or through the MCP.",
+	},
+	CodeFindingAcknowledged: {
+		Code: CodeFindingAcknowledged, Emitted: true,
+		Description: "An administrator or operator acknowledged an open finding (a tamper event or an attention condition of a device).",
+		Params:      []string{"kind", "code", "hostname", "subject", "previous_status"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_state unless the finding is open.",
+	},
+	CodeFindingAssigned: {
+		Code: CodeFindingAssigned, Emitted: true,
+		Description: "An administrator or operator assigned a finding to an administrator or operator of the organization, or removed its assignee; the finding is in progress.",
+		Params:      []string{"kind", "code", "hostname", "subject", "previous_status", "assignee"},
+		Outcomes:    adminOutcomes,
+		Note:        "assignee is the username, empty when the assignee was removed. Failure with invalid_state for a closed finding, with not_found for an assignee that is not an administrator or operator of the organization.",
+	},
+	CodeFindingClosed: {
+		Code: CodeFindingClosed, Emitted: true,
+		Description: "An administrator or operator closed a finding as resolved, accepted risk or false positive, with a reason and an optional external reference.",
+		Params:      []string{"kind", "code", "hostname", "subject", "previous_status", "resolution", "reason", "external_ref"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden when an operator closes as accepted_risk (administrators only). Failure with invalid_request without a reason, with invalid_state for a closed finding.",
+	},
+	CodeFindingReopened: {
+		Code: CodeFindingReopened, Emitted: true,
+		Description: "An administrator or operator reopened a closed finding with a reason; an attention finding only while its condition is still open.",
+		Params:      []string{"kind", "code", "hostname", "subject", "previous_status", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request without a reason, with invalid_state for a finding that is not closed, an attention finding whose condition is gone, or a tamper finding whose subject has a newer open finding.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

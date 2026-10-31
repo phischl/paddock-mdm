@@ -208,6 +208,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		DMS:            app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
 		Updates:        app.NewUpdates(runner, orgPool),
 		Attention:      app.NewAttention(orgPool),
+		Findings:       app.NewFindings(runner, orgPool),
+		AccountList:    app.NewAccountList(orgPool),
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),
 		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),

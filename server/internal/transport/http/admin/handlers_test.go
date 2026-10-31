@@ -426,6 +426,8 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		AuditLog:       app.NewAuditLog(reader, orgPool),
 		AuditIntegrity: app.NewAuditIntegrity(reader),
 		Attention:      app.NewAttention(orgPool),
+		Findings:       app.NewFindings(runner, orgPool),
+		AccountList:    app.NewAccountList(orgPool),
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),
 		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),

@@ -77,6 +77,17 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `listEnrollmentTokens` | read | no | GET /api/v1/enrollment-tokens |
 | `revokeEnrollmentToken` | write | yes | Idempotent: revoking a revoked token keeps the first revocation time. |
 
+## findings
+
+| Tool | Class | Destructive | Summary |
+| --- | --- | --- | --- |
+| `acknowledgeFinding` | write | no | Acknowledges an open finding (status acknowledged); 409 invalid_state for any other status. |
+| `assignFinding` | write | no | Assigns an open, acknowledged or in-progress finding to an administrator or operator of the organization, or removes the assignee (assignee_id null); the finding is in progress afterwards. |
+| `closeFinding` | write | no | Closes an open, acknowledged or in-progress finding with a resolution and a reason (1 to 1000 characters, 400 invalid_request otherwise) and an optional external reference (at most 200 characters). |
+| `getFinding` | read | no | One finding; 404 not_found for another organization's. |
+| `listFindings` | read | no | Findings: tamper events and attention conditions of devices with their status, assignee and reason (plan M9 decisions 30–34). |
+| `reopenFinding` | write | no | Reopens a closed finding with a reason (1 to 1000 characters, 400 invalid_request otherwise): a tamper finding always, unless a newer finding of the same device and subject is open; an attention finding only while its condition is still open. |
+
 ## inventory
 
 | Tool | Class | Destructive | Summary |
@@ -196,6 +207,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `deleteUserGroup` | write | yes | Deletes the group in Authentik and Paddock with its login and profile assignments. |
 | `getUser` | read | no | GET /api/v1/users/{id} |
 | `getUserGroup` | read | no | GET /api/v1/user-groups/{id} |
+| `listAccounts` | read | no | The organization's administrator accounts that are not disabled (the assignee picker of findings, plan M9 decision 34). |
 | `listUpstreamGroups` | read | no | Authentik groups outside Paddock's namespace with at least one member of the organization; they can be imported. |
 | `listUserDevices` | read | no | The devices the user owns (plan M8d decision 4). |
 | `listUserGroupMembers` | read | no | The members of a user group. |
