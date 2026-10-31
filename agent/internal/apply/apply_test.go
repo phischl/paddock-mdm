@@ -4,7 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io/fs"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -12,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 func newBundle(t *testing.T, version int64, files map[string]string, units ...bundle.UnitSpec) *bundle.Bundle {
@@ -286,4 +291,108 @@ func TestHostnameSection(t *testing.T) {
 	if plan := a.Plan(ctx, b); slices.ContainsFunc(plan, func(p apply.Planned) bool { return p.ID == "hostname" }) {
 		t.Fatalf("plan without the section %+v", plan)
 	}
+}
+
+func TestPerResourceOutcomes(t *testing.T) {
+	_, a := fixture(t)
+	b := newBundle(t, 1, map[string]string{"/etc/a": "a"}, bundle.UnitSpec{Unit: "app.service", Enabled: true})
+	b.Resources = append(b.Resources, bundle.Resource{ID: "future:x", Type: "future"})
+	rep := a.Apply(context.Background(), b)
+	if rep.Mode != protocol.BundleModeEnforce {
+		t.Fatalf("mode %q", rep.Mode)
+	}
+	want := []protocol.BundleAppliedResource{
+		{ID: "time", Status: protocol.ResourceApplied},
+		{ID: "file:/etc/a", Status: protocol.ResourceApplied},
+		{ID: "unit:app.service", Status: protocol.ResourceApplied},
+		{ID: "future:x", Status: protocol.ResourceFailed, Message: "unsupported resource type future"},
+	}
+	if !reflect.DeepEqual(rep.Resources, want) || len(rep.Errors) != 1 || rep.Errors[0].Message != want[3].Message {
+		t.Fatalf("resources %+v errors %+v", rep.Resources, rep.Errors)
+	}
+
+	raw, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"version", "changed", "errors", "mode", "resources"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("event data lacks %q", k)
+		}
+	}
+	if _, ok := m["ChangedIDs"]; ok || len(m) != 5 {
+		t.Errorf("event data keys %v", m)
+	}
+}
+
+func TestReportOnlyModeIsReported(t *testing.T) {
+	_, a := fixture(t)
+	b := newBundle(t, 1, nil)
+	b.Mode = bundle.ModeReportOnly
+	if rep := a.Apply(context.Background(), b); rep.Mode != protocol.BundleModeReportOnly {
+		t.Fatalf("mode %q", rep.Mode)
+	}
+}
+
+func TestStaleFileOutcomes(t *testing.T) {
+	ctx := context.Background()
+	sys, a := fixture(t)
+	a.Apply(ctx, newBundle(t, 1, map[string]string{"/etc/clean": "c", "/etc/edited": "e"}))
+	sys.Files["/etc/edited"].Data = []byte("local change")
+	rep := a.Apply(ctx, newBundle(t, 2, nil))
+	got := map[string]protocol.BundleAppliedResource{}
+	for _, r := range rep.Resources {
+		got[r.ID] = r
+	}
+	if got["file:/etc/clean"].Status != protocol.ResourceApplied {
+		t.Errorf("removed file: %+v", got["file:/etc/clean"])
+	}
+	if e := got["file:/etc/edited"]; e.Status != protocol.ResourceFailed || e.Message != "left_modified_file" {
+		t.Errorf("kept file: %+v", e)
+	}
+}
+
+func denyListOutcome(rep apply.Report) (protocol.BundleAppliedResource, bool) {
+	for _, r := range rep.Resources {
+		if r.ID == reconcile.DenyListID {
+			return r, true
+		}
+	}
+	return protocol.BundleAppliedResource{}, false
+}
+
+func TestDenyListOutcomes(t *testing.T) {
+	ctx := context.Background()
+	sys, a := fixture(t)
+	b := newBundle(t, 1, nil)
+	if _, ok := denyListOutcome(a.Apply(ctx, b)); ok {
+		t.Fatal("deny list reported without the PAM profile")
+	}
+	sys.Files["/etc/pam.d/common-auth"] = &fakesys.File{Data: []byte(reconcile.DenyAuthLine + "\n"), Mode: 0o644}
+	want := protocol.BundleAppliedResource{ID: reconcile.DenyListID, Status: protocol.ResourceApplied}
+	for _, step := range []string{"written", "already in place"} {
+		if got, ok := denyListOutcome(a.Apply(ctx, b)); !ok || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: %+v, %v", step, got, ok)
+		}
+	}
+	delete(sys.Files, reconcile.DenyList)
+	m, err := reconcile.LoadManaged(filepath.Join(t.TempDir(), "managed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := apply.New(failingWrites{sys}, m, nil).Apply(ctx, b)
+	if got, ok := denyListOutcome(rep); !ok || got.Status != protocol.ResourceFailed || got.Message == "" || len(rep.Errors) != 1 {
+		t.Fatalf("failed: %+v, %v, errors %+v", got, ok, rep.Errors)
+	}
+}
+
+// failingWrites makes every write fail like a full disk.
+type failingWrites struct{ *fakesys.System }
+
+func (failingWrites) WriteFileAtomic(string, []byte, fs.FileMode, int, int) error {
+	return errors.New("disk full")
 }

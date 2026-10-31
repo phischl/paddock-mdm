@@ -327,3 +327,21 @@ func TestHostnameResource(t *testing.T) {
 		t.Error("the hostname section is not part of the content hash")
 	}
 }
+
+func TestVerifyModes(t *testing.T) {
+	for mode, wantErr := range map[string]bool{ModeEnforce: false, ModeReportOnly: false, "dry": true} {
+		b := sample(t)
+		b.Mode = mode
+		_, err := Verify(seal(t, b, signingKey, PayloadType), trust(), device, org, 0)
+		if wantErr != errors.Is(err, ErrSchema) || (!wantErr && err != nil) {
+			t.Errorf("mode %q: err %v, want ErrSchema %v", mode, err, wantErr)
+		}
+	}
+	plain, withMode := sample(t), sample(t)
+	withMode.Mode = ModeReportOnly
+	hp, _ := ContentSHA256(plain)
+	hm, _ := ContentSHA256(withMode)
+	if hp == hm {
+		t.Fatal("mode is not part of the content hash")
+	}
+}

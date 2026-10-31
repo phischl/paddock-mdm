@@ -546,3 +546,27 @@ type EnrollmentConfig struct {
 	BundleKeys     []BundleKey `json:"bundle_keys"`
 	RevocationKeys []BundleKey `json:"revocation_keys,omitempty"`
 }
+
+// Modes of a bundle apply as reported in bundle.applied (plan M11 decision 7).
+const (
+	BundleModeEnforce    = "enforce"
+	BundleModeReportOnly = "report_only"
+)
+
+// Per-resource statuses (plan M11 decision 3). The agent reports applied and failed in bundle.applied; pending is
+// reported by a report-only apply and drift_corrected is set by the server from config.drift_corrected.
+const (
+	ResourceApplied        = "applied"
+	ResourceFailed         = "failed"
+	ResourcePending        = "pending"
+	ResourceDriftCorrected = "drift_corrected"
+)
+
+// BundleAppliedResource is the outcome of one resource in the data of bundle.applied. Changes lists what a
+// report-only apply would change.
+type BundleAppliedResource struct {
+	ID      string   `json:"id"`
+	Status  string   `json:"status"`
+	Message string   `json:"message,omitempty"`
+	Changes []string `json:"changes,omitempty"`
+}

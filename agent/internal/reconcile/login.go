@@ -279,11 +279,15 @@ func (l *Login) checkPAM(id string) (Result, bool) {
 // DenyListID is the plan and report ID of the deny list on a device without a login resource (plan M4a step 0c).
 const DenyListID = "login:deny_list"
 
-// DenyListMissing reports whether the deny-list PAM profile is enabled (either of its lines is present) while
-// /etc/paddock/login-deny does not exist.
+// DenyListManaged reports whether the deny-list PAM profile is enabled (either of its lines is present), so that the
+// agent keeps /etc/paddock/login-deny in place.
+func (l *Login) DenyListManaged() bool {
+	return slices.Contains(pamLines(l.read(commonAuth)), DenyAuthLine) || slices.Contains(pamLines(l.read(commonAccount)), DenyAccountLine)
+}
+
+// DenyListMissing reports whether the deny list is managed while /etc/paddock/login-deny does not exist.
 func (l *Login) DenyListMissing() bool {
-	enabled := slices.Contains(pamLines(l.read(commonAuth)), DenyAuthLine) || slices.Contains(pamLines(l.read(commonAccount)), DenyAccountLine)
-	if !enabled {
+	if !l.DenyListManaged() {
 		return false
 	}
 	_, _, err := l.Sys.ReadFile(DenyList)

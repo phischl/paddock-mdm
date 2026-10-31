@@ -15,6 +15,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // SchemaVersions are the bundle schema versions this agent verifies and applies, reported in every check-in and used
@@ -37,8 +38,19 @@ type Report struct {
 	Version int64           `json:"version"`
 	Changed int             `json:"changed"`
 	Errors  []ResourceError `json:"errors"`
+	// Mode is protocol.BundleModeEnforce unless the bundle asks for report_only.
+	Mode string `json:"mode"`
+	// Resources has one outcome per resource in apply order, so the server can tell an applied resource from one it
+	// never saw; Errors stays as it was because the audit params read it.
+	Resources []protocol.BundleAppliedResource `json:"resources"`
 	// ChangedIDs are the resources that changed (not part of the event).
 	ChangedIDs []string `json:"-"`
+}
+
+// fail records a failed resource in Errors and Resources.
+func (r *Report) fail(id, message string) {
+	r.Errors = append(r.Errors, ResourceError{ID: id, Message: message})
+	r.Resources = append(r.Resources, protocol.BundleAppliedResource{ID: id, Status: protocol.ResourceFailed, Message: message})
 }
 
 // Planned is the plan of one resource.
@@ -165,11 +177,14 @@ func (a *Applier) ApplyResources(ctx context.Context, b *bundle.Bundle, ids []st
 }
 
 func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.Resource) bool) Report {
-	rep := Report{Version: b.BundleVersion, Errors: []ResourceError{}}
+	rep := Report{Version: b.BundleVersion, Errors: []ResourceError{}, Mode: protocol.BundleModeEnforce, Resources: []protocol.BundleAppliedResource{}}
+	if b.Mode == bundle.ModeReportOnly {
+		rep.Mode = protocol.BundleModeReportOnly
+	}
 	for _, res := range a.sorted(b, keep) {
 		rec, ok := a.reconciler(b, res.Type)
 		if !ok {
-			rep.Errors = append(rep.Errors, ResourceError{ID: res.ID, Message: "unsupported resource type " + res.Type})
+			rep.fail(res.ID, "unsupported resource type "+res.Type)
 			continue
 		}
 		switch out := rec.Apply(ctx, res); out.Status {
@@ -177,16 +192,22 @@ func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.
 			rep.Changed++
 			rep.ChangedIDs = append(rep.ChangedIDs, res.ID)
 		case reconcile.Error:
-			rep.Errors = append(rep.Errors, ResourceError{ID: res.ID, Message: out.Message})
+			rep.fail(res.ID, out.Message)
+			continue
 		}
+		rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: res.ID, Status: protocol.ResourceApplied})
 	}
-	if !hasLogin(b) && keep(bundle.Resource{ID: reconcile.DenyListID}) {
+	if !hasLogin(b) && keep(bundle.Resource{ID: reconcile.DenyListID}) && a.login.DenyListManaged() {
 		switch written, err := a.login.EnsureDenyList(); {
 		case err != nil:
-			rep.Errors = append(rep.Errors, ResourceError{ID: reconcile.DenyListID, Message: err.Error()})
-		case written:
-			rep.Changed++
-			rep.ChangedIDs = append(rep.ChangedIDs, reconcile.DenyListID)
+			rep.fail(reconcile.DenyListID, err.Error())
+		default:
+			if written {
+				rep.Changed++
+				rep.ChangedIDs = append(rep.ChangedIDs, reconcile.DenyListID)
+			}
+			// Also when already in place: the server drops status rows that are missing from the next report.
+			rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: reconcile.DenyListID, Status: protocol.ResourceApplied})
 		}
 	}
 	return rep
@@ -222,11 +243,12 @@ func (a *Applier) removeStale(b *bundle.Bundle, rep *Report) {
 		}
 		id := "file:" + path
 		if err := a.file.Remove(path); err != nil { // reconcile.ErrModified: left in place and reported
-			rep.Errors = append(rep.Errors, ResourceError{ID: id, Message: err.Error()})
+			rep.fail(id, err.Error())
 			continue
 		}
 		rep.Changed++
 		rep.ChangedIDs = append(rep.ChangedIDs, id)
+		rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: id, Status: protocol.ResourceApplied})
 	}
 }
 
