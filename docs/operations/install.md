@@ -218,8 +218,9 @@ configuration. It prints one PASS/FAIL line per item and exits 1 on any FAIL. It
 configuration; `PADDOCK_ENV` other than `production`; development-only variables (`PADDOCK_STEPUP_WINDOW`,
 `PADDOCK_STEPUP_MAX_AUTH_AGE`, `PADDOCK_STALENESS_UNIT`, `PADDOCK_RETENTION_UNIT`, `PADDOCK_REAPER_THRESHOLD`, `PADDOCK_OSV_SYNC_INTERVAL`,
 `PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE`, `PADDOCK_TEST_*`) and `PADDOCK_SMTP_TLS=none`; `PADDOCK_SMTP_ENABLED` that does
-not match whether `PADDOCK_SMTP_HOST` is set (item `notifications: SMTP presence flag matches the relay`); a retention
-round interval (`PADDOCK_RETENTION_INTERVAL`) below 1 minute, above 24 hours, or unparsable;
+not match whether `PADDOCK_SMTP_HOST` is set, an unknown `PADDOCK_SMTP_TLS` or a relay without `PADDOCK_SMTP_FROM`
+(item `notifications: SMTP presence flag matches the relay`); a retention round interval (`PADDOCK_RETENTION_INTERVAL`)
+below 1 minute, above 24 hours, or unparsable;
 `PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
 missing, empty (except `smtp_password` without `PADDOCK_SMTP_USERNAME`) or readable by every user of the host
 (symbolic links resolved; `.secrets/` must stay 0700); a path

@@ -1123,12 +1123,23 @@ func checkAuditIndexRetention(c Config) Result {
 // relay it refuses them.
 func checkSMTPPresence(c Config) Result {
 	var f []string
-	host := env(c.Services["paddock-notifier"], "PADDOCK_SMTP_HOST")
+	notifier := c.Services["paddock-notifier"]
+	host := env(notifier, "PADDOCK_SMTP_HOST")
+	// The values loadSMTPSettings refuses at start; none is a finding of the development-only item.
+	switch tls := env(notifier, "PADDOCK_SMTP_TLS"); tls {
+	case "", "starttls", "implicit", "none":
+	default:
+		f = append(f, fmt.Sprintf("paddock-notifier: PADDOCK_SMTP_TLS is %q, not starttls or implicit", tls))
+	}
+	if host != "" && env(notifier, "PADDOCK_SMTP_FROM") == "" {
+		f = append(f, "paddock-notifier: PADDOCK_SMTP_HOST is set but PADDOCK_SMTP_FROM is empty")
+	}
 	if api, ok := c.Services["paddock-api"]; ok {
 		raw := env(api, "PADDOCK_SMTP_ENABLED")
-		enabled, err := strconv.ParseBool(raw)
+		// Exactly the spellings config.Loader.Bool of the api accepts; any other value stops the api at start.
+		enabled := raw == "true"
 		switch {
-		case raw != "" && err != nil:
+		case raw != "" && raw != "true" && raw != "false":
 			f = append(f, fmt.Sprintf("paddock-api: PADDOCK_SMTP_ENABLED is %q, not true or false", raw))
 		case enabled && host == "":
 			f = append(f, "PADDOCK_SMTP_ENABLED is true but paddock-notifier has no PADDOCK_SMTP_HOST: set the relay or false")

@@ -1065,6 +1065,7 @@ func TestNotifierPasses(t *testing.T) {
 	}
 	f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
 	f.setEnv("paddock-notifier", "PADDOCK_SMTP_TLS", "starttls")
+	f.setEnv("paddock-notifier", "PADDOCK_SMTP_FROM", "paddock@example.org")
 	f.setEnv("paddock-notifier", "PADDOCK_SMTP_USERNAME", "paddock")
 	f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "true")
 	if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok {
@@ -1099,6 +1100,21 @@ func TestNotifierFindings(t *testing.T) {
 		"flag not a boolean": {func(f *fixture) {
 			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "maybe")
 		}, `paddock-api: PADDOCK_SMTP_ENABLED is "maybe", not true or false`},
+		"unknown TLS mode": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_TLS", "tls")
+		}, `paddock-notifier: PADDOCK_SMTP_TLS is "tls", not starttls or implicit`},
+		"relay without a sender": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
+			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "true")
+		}, "paddock-notifier: PADDOCK_SMTP_HOST is set but PADDOCK_SMTP_FROM is empty"},
+		"flag 1, which the api refuses": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
+			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "1")
+		}, `paddock-api: PADDOCK_SMTP_ENABLED is "1", not true or false`},
+		"flag TRUE, which the api refuses": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
+			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "TRUE")
+		}, `paddock-api: PADDOCK_SMTP_ENABLED is "TRUE", not true or false`},
 		"username with an empty password": {func(f *fixture) {
 			f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
 			f.setEnv("paddock-notifier", "PADDOCK_SMTP_USERNAME", "paddock")

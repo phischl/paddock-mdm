@@ -187,7 +187,7 @@ controlplane_secrets() {
 }
 
 audit_secrets() {
-  # On a lab host audit-postgres has neither TLS nor a published port; its only client is the api on audit-index.
+  # On a lab host audit-postgres has neither TLS nor a published port; its clients are the api and the notifier on audit-index.
   [[ "$HOST" == lab ]] || cert audit-postgres "DNS:audit-postgres,IP:$INTERCONNECT"
 
   secret audit_postgres_superuser_password
