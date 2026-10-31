@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -33,8 +34,13 @@ func runAuditFeed(ctx context.Context, e Env, args []string) error {
 	if *after < 0 {
 		return usagef("--after must not be negative")
 	}
-	if *limit < 0 || *limit > 1000 {
+	limitSet := false
+	fs.Visit(func(f *flag.Flag) { limitSet = limitSet || f.Name == "limit" })
+	if *limit < 0 || *limit > 1000 || (limitSet && *limit == 0) {
 		return usagef("--limit must be between 1 and 1000")
+	}
+	if err := g.requireOutput("json"); err != nil {
+		return err
 	}
 	c, err := g.connect(e)
 	if err != nil {
@@ -55,10 +61,12 @@ func runAuditFeed(ctx context.Context, e Env, args []string) error {
 			if *follow && ctx.Err() != nil {
 				break
 			}
+			fmt.Fprintf(e.Stderr, "next_after=%d\n", cursor)
 			return err
 		}
 		for _, ev := range page.Events {
 			if _, err := fmt.Fprintf(e.Stdout, "%s\n", ev); err != nil {
+				fmt.Fprintf(e.Stderr, "next_after=%d\n", cursor)
 				return err
 			}
 		}

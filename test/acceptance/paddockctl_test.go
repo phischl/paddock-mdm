@@ -97,9 +97,15 @@ func TestPaddockctl(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.stdout), &page); err != nil || r.code != 0 || page.PageSize != 10 || page.Items == nil {
 		t.Fatalf("devices list: %+v (%v)", r, err)
 	}
-	if r := ctl.run(t, acme, "", "audit", "feed", "--after", "0", "--limit", "2"); r.code != 0 ||
-		!strings.HasPrefix(r.stderr, "next_after=") || strings.Count(r.stdout, "\n") > 2 {
-		t.Fatalf("audit feed: %+v", r)
+	feed := ctl.run(t, acme, "", "audit", "feed", "--after", "0", "--limit", "2")
+	lines := strings.Split(strings.TrimSuffix(feed.stdout, "\n"), "\n")
+	if feed.code != 0 || !strings.HasPrefix(feed.stderr, "next_after=") || len(lines) != 2 || !json.Valid([]byte(lines[0])) ||
+		!json.Valid([]byte(lines[1])) {
+		t.Fatalf("audit feed: %+v", feed)
+	}
+	operator := tokenFile(t, createAPIToken(t, alice, env.Alice, "org_operator").Secret, 0o600)
+	if r := ctl.run(t, operator, "", "audit", "feed", "--after", "0", "--limit", "2"); r.code != 1 || !strings.Contains(r.stderr, "forbidden") {
+		t.Fatalf("audit feed as org_operator: %+v", r)
 	}
 	if r := ctl.run(t, acme, "", "findings", "list", "--status", "open", "-o", "json"); r.code != 0 || !json.Valid([]byte(r.stdout)) {
 		t.Fatalf("findings list: %+v", r)

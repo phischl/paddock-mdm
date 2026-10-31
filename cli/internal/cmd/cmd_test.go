@@ -35,6 +35,7 @@ type fakeAPI struct {
 	changed       bool
 	feedQueries   []string
 	feedForbidden bool
+	feedFailAt    int
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +79,11 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "GET /api/v1/audit-events/feed":
 		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
 		f.feedQueries = append(f.feedQueries, r.URL.RawQuery)
+		if f.feedFailAt > 0 && after == f.feedFailAt {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"status":500,"code":"internal"}`)
+			return
+		}
 		if f.feedForbidden {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = io.WriteString(w, `{"status":403,"code":"forbidden"}`)
@@ -296,7 +302,8 @@ func TestAuditFeed(t *testing.T) {
 	if r := pc("", "audit", "feed"); r.code != cmd.ExitError || !strings.Contains(r.stderr, "forbidden") || r.stdout != "" {
 		t.Fatalf("forbidden: %+v", r)
 	}
-	for _, args := range [][]string{{"audit"}, {"audit", "list"}, {"audit", "feed", "--limit", "1001"}, {"audit", "feed", "--after", "-1"}} {
+	for _, args := range [][]string{{"audit"}, {"audit", "list"}, {"audit", "feed", "--limit", "1001"}, {"audit", "feed", "--after", "-1"}, {"audit", "feed", "-o", "table"},
+		{"audit", "feed", "--limit", "0"}} {
 		if r := pc("", args...); r.code != cmd.ExitUsage {
 			t.Fatalf("%v: %+v", args, r)
 		}
@@ -325,6 +332,15 @@ func TestAuditFeedFollow(t *testing.T) {
 	if code != 0 || out.String() != "{\"commit_seq\":1}\n{\"commit_seq\":2}\n{\"commit_seq\":3}\n{\"commit_seq\":4}\n" ||
 		errOut.String() != "next_after=4\n" {
 		t.Fatalf("follow: %d %q %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestAuditFeedFollowError(t *testing.T) {
+	api, pc := setup(t, emptyPlan)
+	api.feedFailAt = 2
+	r := pc("", "audit", "feed", "--follow", "--limit", "2")
+	if r.code != cmd.ExitError || r.stdout != "{\"commit_seq\":1}\n{\"commit_seq\":2}\n" || !strings.Contains(r.stderr, "next_after=2\n") {
+		t.Fatalf("follow error: %+v", r)
 	}
 }
 
