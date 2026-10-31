@@ -24,6 +24,7 @@ type feedEvent struct {
 		Target     *struct {
 			ID string `json:"id"`
 		} `json:"target"`
+		Params map[string]any `json:"params"`
 	} `json:"event"`
 }
 
@@ -226,32 +227,41 @@ func TestAuditFeed(t *testing.T) {
 				t.Fatalf("events: %v HTTP %d %s", err, res.Status, res.Body)
 			}
 		}
+		// The audit event's occurred_at is the server's record time; the device's own time is the occurred_at param.
+		deviceSeq := func(e feedEvent) float64 { n, _ := e.Event.Params["event_seq"].(float64); return n }
+		deviceTime := func(t *testing.T, e feedEvent) time.Time {
+			t.Helper()
+			raw, _ := e.Event.Params["occurred_at"].(string)
+			at, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				t.Fatalf("event %s has no device occurred_at: %v", e.Event.EventID, err)
+			}
+			return at
+		}
+		seq := func(n float64) func(feedEvent) bool {
+			return func(e feedEvent) bool { return e.Event.Code == "device.bundle_applied" && deviceSeq(e) == n }
+		}
 		newer := time.Now()
 		late := newer.Add(-3 * time.Hour)
-		near := func(at time.Time) func(feedEvent) bool {
-			return func(e feedEvent) bool {
-				return e.Event.Code == "device.bundle_applied" && e.Event.OccurredAt.Sub(at).Abs() < 2*time.Second
-			}
-		}
 		send(1, newer)
-		waitTargetEvent(t, auditor, d.DeviceID, near(newer))
+		waitTargetEvent(t, auditor, d.DeviceID, seq(1))
 		send(2, late)
-		events := waitTargetEvent(t, auditor, d.DeviceID, near(late))
+		events := waitTargetEvent(t, auditor, d.DeviceID, seq(2))
 		var lateEvent *feedEvent
 		for i, e := range events {
-			if e.Event.OccurredAt.Sub(late).Abs() < 2*time.Second {
+			if seq(2)(e) {
 				lateEvent = &events[i]
 			}
 		}
-		if lateEvent == nil {
-			t.Fatalf("the late event is not in the feed: %+v", events)
+		if got := deviceTime(t, *lateEvent); got.Sub(late).Abs() > time.Second {
+			t.Fatalf("the late event carries device time %s, want %s", got, late)
 		}
 		for _, e := range events {
 			if e.CommitSeq > lateEvent.CommitSeq {
 				t.Errorf("event %s (commit_seq %d) is after the late event (commit_seq %d) although it was sent before", e.Event.EventID, e.CommitSeq, lateEvent.CommitSeq)
 			}
-			if e.Event.EventID != lateEvent.Event.EventID && e.Event.OccurredAt.Before(lateEvent.Event.OccurredAt) {
-				t.Errorf("event %s occurred before the late event, which is meant to be the oldest", e.Event.EventID)
+			if seq(1)(e) && !deviceTime(t, e).After(deviceTime(t, *lateEvent)) {
+				t.Errorf("event %s did not occur after the late event, which is meant to be the oldest", e.Event.EventID)
 			}
 		}
 	})
