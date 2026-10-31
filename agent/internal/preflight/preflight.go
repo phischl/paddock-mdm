@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/config"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -240,9 +241,9 @@ func serverCheck(ctx context.Context, o Options) Check {
 		c.Status, c.Detail = Fail, err.Error()
 		return c
 	}
-	var cfg protocol.EnrollmentConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil || cfg.ServerURL == "" {
-		c.Status, c.Detail = Fail, "the enrollment configuration has no server_url"
+	cfg, err := config.ParseEnrollment(raw)
+	if err != nil {
+		c.Status, c.Detail = Fail, err.Error()
 		return c
 	}
 	// The device gateway has no health route (/healthz is on the internal ops listener). A plain unauthenticated GET

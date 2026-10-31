@@ -135,7 +135,8 @@ names what will change.
    `fleet-osquery` and keeps the quarantine copy. Retiring the device first makes this impossible.
 2. A device that never became active or is unreachable: retire it in the portal and remove the packages by hand,
    `sudo apt remove paddock-agent paddock-supervisor` (add `paddock-revoke` only if you installed it).
-3. Left on the device: the quarantine directory `/var/lib/paddock/quarantine/` (restore sudoers files by hand) and
+3. Left on the device: after step 1, `/root/paddock-uninstall/` (`result.json` and the quarantine copy in
+   `quarantine/`, from which you restore sudoers files by hand); after step 2, `/var/lib/paddock/quarantine/` and
    `/var/lib/paddock`. Remove them when you no longer need them.
 
 ## 9. Troubleshooting

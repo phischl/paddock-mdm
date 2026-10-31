@@ -3,8 +3,11 @@ package preflight_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/preflight"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 type luksTools struct {
@@ -196,10 +200,38 @@ func gateway(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"code":"not_found"}`))
 }
 
+// enrollment is an enrollment configuration that paddockd enroll accepts, for serverURL.
+func enrollment(t *testing.T, serverURL string) string {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := json.Marshal(protocol.EnrollmentConfig{
+		ServerURL: serverURL, OrganizationID: "11111111-1111-4111-8111-111111111111", Token: "t",
+		BundleKeys: []protocol.BundleKey{{KeyID: "bundle-signing:v1", PublicKey: base64.StdEncoding.EncodeToString(pub)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeConfig(t, string(doc))
+}
+
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "enroll.json")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestServer(t *testing.T) {
-	var path string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
+	var method, path string
+	var body []byte
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		body, _ = io.ReadAll(r.Body)
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/portal"):
 			w.Header().Set("Content-Type", "text/html")
@@ -211,50 +243,45 @@ func TestServer(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	write := func(body string) string {
-		p := filepath.Join(t.TempDir(), "enroll.json")
-		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
 	cfg := func(url string) func(*preflight.Options) {
 		return func(o *preflight.Options) {
-			o.ConfigPath = write(`{"server_url":"` + url + `"}`)
+			o.ConfigPath = enrollment(t, url)
 			o.HTTP = srv.Client()
 		}
 	}
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(srv.URL)), "server", preflight.OK)
-	if strings.HasPrefix(path, "/healthz") {
-		t.Errorf("requested %q", path)
+	if method != http.MethodGet || path != "/v1/preflight" || len(body) != 0 {
+		t.Errorf("probe was %s %s with %d body bytes", method, path, len(body))
 	}
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(srv.URL+"/portal")), "server", preflight.Fail)
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(srv.URL+"/ok200")), "server", preflight.Fail)
-	closed := httptest.NewServer(http.NotFoundHandler())
+	closed := httptest.NewTLSServer(http.NotFoundHandler())
 	closed.Close()
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(closed.URL)), "server", preflight.Fail)
-	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath = write(`{}`) }), "server", preflight.Fail)
+	// paddockd enroll rejects these, so the check must too.
+	plainHTTP := httptest.NewServer(http.HandlerFunc(gateway))
+	defer plainHTTP.Close()
+	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath = enrollment(t, plainHTTP.URL) }), "server", preflight.Fail)
+	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath = writeConfig(t, `{}`) }), "server", preflight.Fail)
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath = "/nonexistent" }), "server", preflight.Fail)
 }
 
-// TestServerProxy: the probe goes through the proxy of the options and never the environment's.
+// TestServerProxy: the probe goes through the proxy of the options and never the environment's. The https probe
+// reaches the proxy as CONNECT; the proxy refuses it, which fails the check.
 func TestServerProxy(t *testing.T) {
-	var via string
+	var via, method string
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		via = r.Host
-		gateway(w, r)
+		via, method = r.Host, r.Method
+		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer proxy.Close()
-	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
-	p := filepath.Join(t.TempDir(), "enroll.json")
-	if err := os.WriteFile(p, []byte(`{"server_url":"http://device.example.test"}`), 0o600); err != nil {
-		t.Fatal(err)
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	cfg := enrollment(t, "https://device.example.test")
+	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath, o.Proxy = cfg, proxy.URL }), "server", preflight.Fail)
+	if method != http.MethodConnect || via != "device.example.test:443" {
+		t.Errorf("proxy saw %s %q", method, via)
 	}
-	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath, o.Proxy = p, proxy.URL }), "server", preflight.OK)
-	if via != "device.example.test" {
-		t.Errorf("proxy saw host %q", via)
-	}
-	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath, o.Proxy = p, "://bad" }), "server", preflight.Fail)
+	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath, o.Proxy = cfg, "://bad" }), "server", preflight.Fail)
 }
 
 func TestFailedAndOutput(t *testing.T) {
