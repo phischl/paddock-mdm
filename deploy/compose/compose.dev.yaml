@@ -123,6 +123,8 @@ services:
       # Webhook destinations may point at the acceptance sinks on the host (private addresses, plain http); plan M9
       # gate N5. Honoured only with PADDOCK_ENV=development.
       PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE: "true"
+    # The api resolves a webhook host when a destination is saved; the acceptance sinks run on the test host.
+    extra_hosts: ["acceptance-host:host-gateway"]
 
   # The revocation path is enabled in development and test stacks only (plan M4c decision 1); gate R5 runs with
   # PADDOCK_REVOCATION_ENABLED=false.
@@ -197,7 +199,59 @@ services:
       BAO_CACERT: !reset null
     secrets: !override [db_paddock_unsealer_url, openbao_auto_unseal_shares]
 
+  # The notifier (plan M9 decisions 20–26). Defined here in full until the production wiring adds it to compose.yaml
+  # (plan M9 decision 41, PDK-132); the development values follow decision 26. Acceptance sinks listen on the test host
+  # and are reached as acceptance-host from both development stacks (plan M9 amendment B0.5).
+  paddock-notifier:
+    image: ${PADDOCK_IMAGE:-paddock-server:dev}
+    build: *paddock-build
+    profiles: [paddock]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/paddock-server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    command: ["serve", "notifier"]
+    environment:
+      PADDOCK_ENV: development
+      PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
+      PADDOCK_OPS_ADDR: ":9090"
+      PADDOCK_DB_NOTIFIER_URL_FILE: /run/secrets/db_paddock_notifier_url
+      PADDOCK_DB_PLATFORM_URL_FILE: /run/secrets/db_paddock_platform_url
+      PADDOCK_AUDIT_DB_READER_URL_FILE: /run/secrets/db_paddock_audit_reader_url
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_notifier_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_notifier_secret_id
+      PADDOCK_PUBLIC_ADMIN_URL: ${PADDOCK_PUBLIC_ADMIN_URL:-https://admin.paddock.localhost:8443}
+      # Private addresses and plain http for the acceptance sinks (development only; refused in production).
+      PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE: "true"
+      PADDOCK_NOTIFY_POLL_INTERVAL: ${PADDOCK_NOTIFY_POLL_INTERVAL:-5s}
+      PADDOCK_NOTIFY_STALL_AFTER: ${PADDOCK_NOTIFY_STALL_AFTER:-1m}
+    secrets:
+      - db_paddock_notifier_url
+      - db_paddock_platform_url
+      - db_paddock_audit_reader_url
+      - approle_notifier_role_id
+      - approle_notifier_secret_id
+    extra_hosts: ["acceptance-host:host-gateway"]
+    networks: [cp, audit-index]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
+
 secrets:
+  db_paddock_notifier_url: { file: ./.secrets/db_paddock_notifier_url }
+  approle_notifier_role_id: { file: ./.secrets/approle/paddock-notifier/role_id }
+  approle_notifier_secret_id: { file: ./.secrets/approle/paddock-notifier/secret_id }
   dev_platform_admin_password: { file: ./.secrets/dev_platform_admin_password }
   dev_alice_password: { file: ./.secrets/dev_alice_password }
   dev_bob_password: { file: ./.secrets/dev_bob_password }

@@ -536,3 +536,25 @@ tests:
             exp_annotations:
               summary: "The audit chain was not verified for 36 hours"
               description: "The audit writer's last nightly chain verification finished 1d 17h 32m 0s ago; check the audit writer's log for the 00:45 UTC cycle."
+
+  - name: a stalled notification destination warns after five minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_notify_destination_stalled{job="paddock", role="paddock-notifier", instance="paddock-notifier:9090", destination_id="d1", type="webhook"}'
+        values: "0x5 1x10 0x5"
+      - series: 'paddock_notify_destination_stalled{job="paddock", role="paddock-notifier", instance="paddock-notifier:9090", destination_id="d2", type="webhook"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: PaddockNotificationStalled
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: PaddockNotificationStalled
+        exp_alerts:
+          - exp_labels: { severity: warning, destination_id: d1, type: webhook }
+            exp_annotations:
+              summary: "Notification destination d1 is stalled"
+              description: "Deliveries to the webhook destination d1 have been failing; see its last_error in the portal or GET /api/v1/notification-destinations/d1."
+      - eval_time: 18m
+        alertname: PaddockNotificationStalled
+        exp_alerts: []

@@ -221,6 +221,29 @@ func (p *PlatformPool) WithLeaderLock(ctx context.Context, key int64, fn func(ct
 	return true, fn(ctx)
 }
 
+// NotifierPool is the pool of role paddock_notifier (plan M9 decisions 21–23): InOrg for the organizations and
+// InPlatformScope for the platform destinations, which the notifier serves under its own role because
+// paddock_platform has no right on their delivery state (plan M9 amendment section E).
+type NotifierPool struct{ OrgPool }
+
+// NewNotifierPool opens the paddock_notifier pool.
+func NewNotifierPool(ctx context.Context, dsn string, o Options) (*NotifierPool, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &NotifierPool{OrgPool{pool{p}}}, nil
+}
+
+// InPlatformScope runs fn in a transaction scoped to the platform pseudo-organization (audit.PlatformOrganizationID),
+// independent of any principal in ctx. Its only caller is the notifier's platform round (plan M9 amendment section E);
+// like AuditReader.InPlatformScope it MUST NOT be reachable from an HTTP handler (platformscope_lint_test.go).
+func (p *NotifierPool) InPlatformScope(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return setOrg(ctx, tx, audit.PlatformOrganizationID) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
 // RelayPool is the pool of role paddock_relay (outbox relay and reaper).
 type RelayPool struct{ pool }
 

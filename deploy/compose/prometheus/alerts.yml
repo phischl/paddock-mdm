@@ -228,3 +228,16 @@ groups:
         annotations:
           summary: "The certificate of {{ $labels.host }} cannot be read or does not verify"
           description: "The worker's TLS handshake with Caddy for {{ $labels.host }} fails, or the certificate is expired, untrusted or issued for another name."
+
+  - name: paddock-notifications
+    rules:
+      # A destination whose deliveries fail longer than PADDOCK_NOTIFY_STALL_AFTER (plan M9 decision 25); the notifier
+      # keeps retrying and loses nothing, but the receiver sees no detections meanwhile.
+      - alert: PaddockNotificationStalled
+        expr: max by (destination_id, type) (paddock_notify_destination_stalled) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Notification destination {{ $labels.destination_id }} is stalled"
+          description: "Deliveries to the {{ $labels.type }} destination {{ $labels.destination_id }} have been failing; see its last_error in the portal or GET /api/v1/notification-destinations/{{ $labels.destination_id }}."

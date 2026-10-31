@@ -521,7 +521,10 @@
       "destination_secret_rotated": "{actor} replaced the signing secret of the notification destination {name}",
       "test_requested": "{actor} requested a test notification to {name}",
       "test_sent": "Test notification to {name}, requested by {requested_by}",
-      "pseudonym_resolved": "{actor} resolved the pseudonym {pseudonym}"
+      "pseudonym_resolved": "{actor} resolved the pseudonym {pseudonym}",
+      "delivered": "{count} events delivered to {destination}",
+      "destination_stalled": "Deliveries to {destination} are stalled ({last_error})",
+      "destination_resumed": "Deliveries to {destination} resumed after {stalled_for_s} s"
     }
   },
   "organizations": {
