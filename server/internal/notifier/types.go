@@ -42,6 +42,8 @@ type Destination struct {
 	EmailMinInterval  time.Duration
 	URL               string
 	Secret            []byte
+	// ScopeName is ScopeData.Name of the destination's scope.
+	ScopeName string
 }
 
 // State is the delivery state of a destination.
@@ -73,6 +75,8 @@ type Row struct {
 type ScopeData struct {
 	// Slug is Message.Organization: the organization's slug, outbound.PlatformOrganization for the platform.
 	Slug string
+	// Name is the organization's display name, outbound.PlatformOrganization for the platform (e-mail subjects).
+	Name string
 	Rows []Row
 	// PseudonymKey is the ciphertext of the scope's pseudonym key, empty when it has none.
 	PseudonymKey string
@@ -130,6 +134,8 @@ type Success struct {
 	At          time.Time
 	Record      *Record
 	Resume      *Record
+	// NextAttemptAt is the earliest next delivery of an e-mail digest (plan M9 decision 28), nil otherwise.
+	NextAttemptAt *time.Time
 }
 
 // Failure is a failed delivery with the destination's new failure state. Delivery is uuid.Nil for a failure before
@@ -196,7 +202,7 @@ type Index interface {
 	After(ctx context.Context, sc Scope, after int64, max int) ([]IndexedEvent, error)
 }
 
-// Transport delivers a message to a destination: webhook here, e-mail (PDK-125) and syslog (M12) later. Its errors
+// Transport delivers a message to a destination: webhook, e-mail, and syslog (M12) later. Its errors
 // carry the class of plan M9 decision 22 (ErrorClass).
 type Transport interface {
 	Deliver(ctx context.Context, d Destination, m outbound.Message) error

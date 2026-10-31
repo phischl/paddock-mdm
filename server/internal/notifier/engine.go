@@ -302,6 +302,7 @@ type destRound struct {
 func (e *Engine) serveDestination(ctx context.Context, r *scopeRound, row Row) error {
 	t, ok := e.transports[row.Destination.Type]
 	dr := &destRound{scopeRound: r, d: row.Destination, st: row.State, transport: t}
+	dr.d.ScopeName = r.data.Name
 	defer func() {
 		e.metrics.stall(dr.d, dr.st.Status == StatusStalled)
 		e.metrics.destination(dr.d, e.lagOf(dr.d.ID))
@@ -490,7 +491,7 @@ func (e *Engine) serveEvents(ctx context.Context, dr *destRound) error {
 		}
 		n++
 		ok, err := e.deliverBatch(ctx, dr, b)
-		if err != nil || !ok {
+		if err != nil || !ok || dr.st.NextAttemptAt != nil {
 			return err
 		}
 	}
@@ -631,6 +632,11 @@ func (e *Engine) succeeded(ctx context.Context, dr *destRound, delivery, pending
 	now := e.now()
 	s := Success{Destination: dr.d.ID, Name: dr.d.Name, Delivery: delivery, Pending: pending, Cursor: cursor, At: now,
 		Record: rec}
+	// An e-mail destination receives at most one message per email_min_interval_s (digest, plan M9 decision 28).
+	if cursor != nil && dr.d.Type == outbound.TypeEmail && dr.d.EmailMinInterval > 0 {
+		next := now.Add(dr.d.EmailMinInterval)
+		s.NextAttemptAt = &next
+	}
 	if dr.st.Status == StatusStalled {
 		params := map[string]any{"destination": dr.d.Name, "destination_id": dr.d.ID.String(), "stalled_for_s": 0}
 		if dr.st.StalledSince != nil {
@@ -649,7 +655,7 @@ func (e *Engine) succeeded(ctx context.Context, dr *destRound, delivery, pending
 		return errStale
 	}
 	dr.delivered = true
-	dr.st.ConsecutiveFailures, dr.st.FirstFailureAt, dr.st.NextAttemptAt = 0, nil, nil
+	dr.st.ConsecutiveFailures, dr.st.FirstFailureAt, dr.st.NextAttemptAt = 0, nil, s.NextAttemptAt
 	dr.st.Status, dr.st.StalledSince = StatusActive, nil
 	return nil
 }

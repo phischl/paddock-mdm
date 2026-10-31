@@ -436,15 +436,17 @@ const notifierDestinationSucceeded = `-- name: NotifierDestinationSucceeded :exe
 UPDATE notification_destination_state SET
   cursor_commit_seq = coalesce($1::bigint, cursor_commit_seq),
   pending_delivery_id = CASE WHEN $1::bigint IS NULL THEN pending_delivery_id END,
-  consecutive_failures = 0, first_failure_at = NULL, last_error = NULL, next_attempt_at = NULL,
-  last_attempt_at = $2,
-  last_success_at = CASE WHEN $1::bigint IS NULL THEN last_success_at ELSE $2 END,
-  last_heartbeat_at = CASE WHEN $1::bigint IS NULL THEN $2 ELSE last_heartbeat_at END
-WHERE destination_id = $3 AND pending_delivery_id IS NOT DISTINCT FROM $4::uuid
+  consecutive_failures = 0, first_failure_at = NULL, last_error = NULL,
+  next_attempt_at = $2::timestamptz,
+  last_attempt_at = $3,
+  last_success_at = CASE WHEN $1::bigint IS NULL THEN last_success_at ELSE $3 END,
+  last_heartbeat_at = CASE WHEN $1::bigint IS NULL THEN $3 ELSE last_heartbeat_at END
+WHERE destination_id = $4 AND pending_delivery_id IS NOT DISTINCT FROM $5::uuid
 `
 
 type NotifierDestinationSucceededParams struct {
 	CursorCommitSeq *int64
+	NextAttemptAt   *time.Time
 	At              *time.Time
 	DestinationID   uuid.UUID
 	ExpectedPending uuid.NullUUID
@@ -452,10 +454,11 @@ type NotifierDestinationSucceededParams struct {
 
 // A delivered batch moves the cursor to the last event it covered; a heartbeat (cursor_commit_seq NULL) does not. Only
 // while the state still has the pending batch the engine delivered (none for a heartbeat): a skip request resolved
-// meanwhile wins.
+// meanwhile wins. next_attempt_at is the e-mail digest's earliest next delivery (plan M9 decision 28), NULL otherwise.
 func (q *Queries) NotifierDestinationSucceeded(ctx context.Context, arg NotifierDestinationSucceededParams) (int64, error) {
 	result, err := q.db.Exec(ctx, notifierDestinationSucceeded,
 		arg.CursorCommitSeq,
+		arg.NextAttemptAt,
 		arg.At,
 		arg.DestinationID,
 		arg.ExpectedPending,

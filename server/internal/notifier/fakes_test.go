@@ -70,9 +70,9 @@ func (f *fakeStore) Organizations(context.Context) ([]uuid.UUID, error) {
 func (f *fakeStore) Load(_ context.Context, sc Scope) (ScopeData, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	data := ScopeData{Slug: outbound.PlatformOrganization, PseudonymKey: f.pkey[sc.Org]}
+	data := ScopeData{Slug: outbound.PlatformOrganization, Name: outbound.PlatformOrganization, PseudonymKey: f.pkey[sc.Org]}
 	if !sc.Platform() {
-		data.Slug = f.slugs[sc.Org]
+		data.Slug, data.Name = f.slugs[sc.Org], "Name of "+f.slugs[sc.Org]
 	}
 	var ids []uuid.UUID
 	for id, r := range f.rows {
@@ -203,7 +203,7 @@ func (f *fakeStore) Succeeded(_ context.Context, sc Scope, s Success) (bool, err
 	} else {
 		r.State.LastHeartbeatAt = &at
 	}
-	r.State.ConsecutiveFailures, r.State.FirstFailureAt, r.State.NextAttemptAt = 0, nil, nil
+	r.State.ConsecutiveFailures, r.State.FirstFailureAt, r.State.NextAttemptAt = 0, nil, s.NextAttemptAt
 	if s.Record != nil {
 		f.records = append(f.records, *s.Record)
 	}
