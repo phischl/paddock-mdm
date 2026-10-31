@@ -275,7 +275,10 @@ entries:
       expression: |
         from authentik.events.signals import get_login_event
         classes = []
-        event = get_login_event(token.session) if token and token.session else None
+        # Authentik's discovery endpoint evaluates every scope mapping without a token (claims_supported), where a bare
+        # token raises NameError (PDK-618); request.context holds the evaluation's arguments either way.
+        grant = request.context.get("token")
+        event = get_login_event(grant.session) if grant and grant.session else None
         if event:
             for device in (event.context.get("auth_method_args") or {}).get("mfa_devices") or []:
                 if isinstance(device, dict) and device.get("app") and device.get("model_name"):

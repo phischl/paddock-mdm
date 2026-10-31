@@ -456,6 +456,37 @@ func (a *Authentik) TestPolicy(ctx context.Context, policyPK string, userPK int)
 	return res.Passing, err
 }
 
+// TestPropertyMapping evaluates the property mapping named name through Authentik's mapping test endpoint (the
+// mapping as stored, as a dry run without user and token, like the discovery endpoint's evaluation for
+// claims_supported) and returns whether it succeeded and its result or error.
+func (a *Authentik) TestPropertyMapping(ctx context.Context, name string) (bool, string, error) {
+	var page struct {
+		Results []struct {
+			PK   string `json:"pk"`
+			Name string `json:"name"`
+		} `json:"results"`
+	}
+	if err := a.Get(ctx, "/propertymappings/all/?name="+url.QueryEscape(name), &page); err != nil {
+		return false, "", err
+	}
+	pk := ""
+	for _, m := range page.Results {
+		if m.Name == name {
+			pk = m.PK
+		}
+	}
+	if pk == "" {
+		return false, "", fmt.Errorf("property mapping %q not found", name)
+	}
+	var res struct {
+		Successful bool   `json:"successful"`
+		Result     string `json:"result"`
+	}
+	err := a.do(ctx, http.MethodPost, "/propertymappings/all/"+url.PathEscape(pk)+"/test/",
+		map[string]any{"context": map[string]any{}}, &res)
+	return res.Successful, res.Result, err
+}
+
 // GroupPK returns the pk of a group ("" if missing).
 func (a *Authentik) GroupPK(ctx context.Context, name string) (string, error) {
 	var page struct {
