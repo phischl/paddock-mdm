@@ -31,8 +31,7 @@ var securityPrefixes = []string{
 
 // securityExplicit are the single codes of ADR 0031 decision 7 and of the refresh of plan M9 (amendment 2026-10-31,
 // B3.3). Only registered codes belong here (TestSecurityCodesRegistered); a ticket that registers a code the ADR
-// names (vulnerability.critical_summary, config_rollout.halted,
-// audit.export_requested, audit.export_downloaded) adds it in the same change.
+// names (config_rollout.halted) adds it in the same change.
 var securityExplicit = []audit.Code{
 	"device.clone_suspected", "device.bundle_rejected", "device.agent_events_dropped", "device.agent_rollback_failed",
 	"device.stale_critical", "device.presumed_self_locked", "device.revocation_trust_pinned_tofu",
@@ -50,6 +49,7 @@ var securityExplicit = []audit.Code{
 	"device.retired", "device.uninstall_requested", "device.escrow_destroyed", "managed_file.sensitive_confirmed",
 	"vulnerability.critical_summary",
 	"notification.pseudonym_resolved",
+	"audit.export_requested", "audit.export_downloaded",
 }
 
 // SecurityCodes returns the preset of filter mode security, sorted: every registered code of the wildcard groups of
