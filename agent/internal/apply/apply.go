@@ -182,15 +182,18 @@ const (
 )
 
 // reportOnly reports what applying b would change without changing anything (plan M11 decision 9): status pending
-// with the plan lines, applied for a resource without changes, failed for a plan error; managed files that left the
-// bundle are pending with the line "remove". It goes through Plan only and never reaches a reconciler's Apply,
-// EnsureDenyList or removeStale, so every reconciler that sorted returns is covered — also one a later release adds.
+// with the plan lines, applied for a resource without changes, failed for a plan error (Errors stays empty); managed
+// files that left the bundle are pending with the line "remove". It goes through Plan only and never reaches a
+// reconciler's Apply, EnsureDenyList or removeStale, so every reconciler that sorted returns is covered — also one a
+// later release adds.
 func (a *Applier) reportOnly(ctx context.Context, b *bundle.Bundle) Report {
 	rep := newReport(b)
 	for _, p := range a.Plan(ctx, b) {
 		switch {
 		case p.Error != "":
-			rep.fail(p.ID, p.Error)
+			// Not in Errors: a plan error of a report-only device is no failed apply and must not count toward a
+			// wave's failure rate (plan M11 amendment R6.6).
+			rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: p.ID, Status: protocol.ResourceFailed, Message: p.Error})
 		case len(p.Changes) > 0:
 			rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: p.ID, Status: protocol.ResourcePending, Changes: cutChanges(p.Changes)})
 		default:

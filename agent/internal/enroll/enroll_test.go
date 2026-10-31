@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -247,9 +248,9 @@ func TestAutoinstalled(t *testing.T) {
 	}
 }
 
-// TestEnrollmentMethod (plan M11 decision 10): the request carries the method of Options — paddockd enroll adopts an
-// installed device — the autoinstall path always sends autoinstall, and without a method the field is left out, as
-// by an agent of an earlier release.
+// TestEnrollmentMethod (plan M11 decision 10, amendment R6.5): the request carries the method of Options —
+// paddockd enroll adopts an installed device — and without a method the field is left out, as by an agent of an
+// earlier release.
 func TestEnrollmentMethod(t *testing.T) {
 	f := newFixture(t)
 	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
@@ -262,24 +263,6 @@ func TestEnrollmentMethod(t *testing.T) {
 		t.Fatalf("enroll requests %+v", f.g.Enrolls)
 	}
 
-	f = newFixture(t)
-	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
-	o = f.options(f.layout.EnrollConfig())
-	o.Method = protocol.EnrollmentAdopted
-	data, err := os.ReadFile(f.cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(o.ConfigPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(o.ConfigPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 1 || f.g.Enrolls[0].EnrollmentMethod != protocol.EnrollmentAutoinstall {
-		t.Fatalf("autoinstall enroll requests %+v", f.g.Enrolls)
-	}
-
 	key, err := identity.LoadOrCreate(filepath.Join(t.TempDir(), "key"))
 	if err != nil {
 		t.Fatal(err)
@@ -290,5 +273,110 @@ func TestEnrollmentMethod(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "enrollment_method") {
 		t.Fatalf("request without a method: %s", raw)
+	}
+}
+
+// TestAutoinstalledMethod (plan M11 amendment R6.5): the agent's own enrollment sends autoinstall only on a device
+// with the autoinstall's disk setup configuration; a configuration at the daemon's path alone gives adopted (fail
+// safe), whatever the caller asked for.
+func TestAutoinstalledMethod(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		marker bool
+		want   string
+	}{
+		{"configuration without the autoinstall marker", false, protocol.EnrollmentAdopted},
+		{"autoinstalled device", true, protocol.EnrollmentAutoinstall},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
+			o := f.options(f.layout.EnrollConfig())
+			o.Method = protocol.EnrollmentAutoinstall
+			data, err := os.ReadFile(f.cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(o.ConfigPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(o.ConfigPath, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.marker {
+				if err := os.WriteFile(f.layout.DiskSetupConfig(), []byte("{\"boot_pin_min_length\":8}\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 1 || f.g.Enrolls[0].EnrollmentMethod != tc.want {
+				t.Fatalf("enroll requests %+v, want %s", f.g.Enrolls, tc.want)
+			}
+		})
+	}
+}
+
+// holdLock takes the enrollment lock like a second process would (flock locks belong to the open file, so a second
+// open of the same file conflicts even within this process).
+func holdLock(t *testing.T, l paths.Layout) func() {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(l.EnrollLock()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(l.EnrollLock(), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	return func() { _ = f.Close() }
+}
+
+// TestEnrollmentLock (plan M11 amendment R6.5): while another enrollment holds the lock, the agent's autoinstall
+// loop skips without a request and keeps the configuration, and `paddockd enroll` waits; after the lock, both re-read
+// the state, so an enrollment the other one started is resumed and never requested a second time.
+func TestEnrollmentLock(t *testing.T) {
+	f := newFixture(t)
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollPending, DeviceID: testgw.DeviceID})
+	o := f.options(f.layout.EnrollConfig())
+	data, err := os.ReadFile(f.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(o.ConfigPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(o.ConfigPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	release := holdLock(t, f.layout)
+	if enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 0 {
+		t.Fatalf("autoinstall loop enrolled while the lock was held: %d requests", len(f.g.Enrolls))
+	}
+	if _, err := os.Stat(o.ConfigPath); err != nil {
+		t.Fatalf("configuration removed while busy: %v", err)
+	}
+	cli := f.options(f.cfgPath)
+	cli.NoWait = true
+	done := make(chan int, 1)
+	go func() {
+		code, _ := enroll.Run(context.Background(), cli)
+		done <- code
+	}()
+	select {
+	case code := <-done:
+		t.Fatalf("paddockd enroll did not wait for the lock: exit %d", code)
+	case <-time.After(200 * time.Millisecond):
+	}
+	release()
+	if code := <-done; code != enroll.ExitPending || len(f.g.Enrolls) != 1 {
+		t.Fatalf("paddockd enroll after the lock: exit %d, %d requests", code, len(f.g.Enrolls))
+	}
+
+	// The autoinstall loop now finds the pending enrollment of paddockd enroll and resumes it.
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
+	if !enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 1 {
+		t.Fatalf("autoinstall loop after paddockd enroll: %d requests", len(f.g.Enrolls))
 	}
 }

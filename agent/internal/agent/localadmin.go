@@ -91,10 +91,15 @@ func (a *Agent) localAdminLogin(l localadmin.Login) {
 	a.event(protocol.EventLocalAdminLogin, protocol.LocalAdminLogin{Service: l.Service, At: l.At})
 }
 
-// rotateCommand defers rotate_admin_password to the next rotation, which reports its result.
+// rotateCommand defers rotate_admin_password to the next rotation, which reports its result. On a report-only device
+// it fails with reason report_only: the manager does not tick there, so a deferral would never resolve (plan M11
+// amendment R6.7).
 func (a *Agent) rotateCommand(_ context.Context, c *command.Command) (string, map[string]any) {
 	if a.localAdminSpec() == nil {
 		return protocol.CommandFailed, map[string]any{"reason": "not_managed"}
+	}
+	if a.reportOnly() {
+		return protocol.CommandFailed, map[string]any{"reason": "report_only"}
 	}
 	a.localAdmin.Request(c.CommandID)
 	return commands.Deferred, nil

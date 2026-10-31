@@ -252,6 +252,42 @@ func TestReportOnlyBundle(t *testing.T) {
 	}
 }
 
+// readCounter counts the file reads of the reconcilers, which every plan does.
+type readCounter struct {
+	*fakesys.System
+	reads int
+}
+
+func (r *readCounter) ReadFile(path string) ([]byte, fs.FileInfo, error) {
+	r.reads++
+	return r.System.ReadFile(path)
+}
+
+// TestDriftSkipsReportOnlyBundle: the drift loop does not even plan a report-only bundle; it does an enforced one.
+func TestDriftSkipsReportOnlyBundle(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	m, err := reconcile.LoadManaged(a.d.Layout.Managed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := &readCounter{System: sys}
+	a.d.Applier = apply.New(counter, m, a.d.Events)
+	b := testBundle(t, 1, testgw.DeviceID, "managed\n")
+	b.Mode = bundle.ModeReportOnly
+	a.current = &b
+	a.drift(context.Background())
+	if counter.reads != 0 {
+		t.Fatalf("drift planned a report-only bundle: %d reads", counter.reads)
+	}
+	b.Mode = bundle.ModeEnforce
+	a.drift(context.Background())
+	if counter.reads == 0 {
+		t.Fatal("drift did not plan an enforced bundle")
+	}
+}
+
 // TestSessionLogins: a directory user's session is reported once per 24 h with username and time only; local
 // accounts and the greeter are never reported (plan M3b decision 11).
 func TestSessionLogins(t *testing.T) {

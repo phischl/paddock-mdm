@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
@@ -54,8 +56,10 @@ type Options struct {
 	RemoveConfig bool
 	NoWait       bool
 	Proxy        string
-	// Method is the protocol.EnrollmentMethod the request sends: paddockd enroll adopts an installed device,
-	// Autoinstalled sets protocol.EnrollmentAutoinstall itself.
+	// SkipWhenBusy returns ErrBusy instead of waiting while another enrollment holds the enrollment lock.
+	SkipWhenBusy bool
+	// Method is the enrollment method the request sends: paddockd enroll adopts an installed device, Autoinstalled
+	// sets Method(Layout) itself.
 	Method string
 	// Sleep waits between polls; nil uses a timer (tests replace it).
 	Sleep func(ctx context.Context, d time.Duration) error
@@ -74,6 +78,12 @@ func Run(ctx context.Context, o Options) (int, error) {
 		}
 	}
 	l := o.Layout
+	release, err := lock(l, !o.SkipWhenBusy)
+	if err != nil {
+		return ExitError, err
+	}
+	defer release()
+	// Loaded under the lock: an enrollment that finished or started meanwhile is resumed, never requested again.
 	st, err := state.Load(l.State())
 	if err != nil {
 		return ExitError, err
@@ -135,7 +145,7 @@ func Autoinstalled(ctx context.Context, o Options) bool {
 	if _, err := os.Stat(o.ConfigPath); errors.Is(err, os.ErrNotExist) {
 		return true
 	}
-	o.RemoveConfig, o.NoWait, o.Method = true, true, protocol.EnrollmentAutoinstall
+	o.RemoveConfig, o.NoWait, o.SkipWhenBusy, o.Method = true, true, true, Method(o.Layout)
 	code, err := Run(ctx, o)
 	switch code {
 	case ExitActive, ExitPending:
@@ -147,6 +157,46 @@ func Autoinstalled(ctx context.Context, o Options) bool {
 	}
 	slog.WarnContext(ctx, "enrollment with the configuration of the autoinstall failed; retrying", "error", err)
 	return false
+}
+
+// Method is the enrollment method of the agent's own enrollment (plan M11 amendment R6.5): autoinstall only with
+// /etc/paddock/disk-setup.json, which the Paddock autoinstall writes and nothing else does before enrollment, adopted
+// otherwise — a configuration file alone proves nothing, and report-only is the safe default. The disk-setup-pending
+// marker cannot serve: the first-boot disk setup removes it before the agent starts.
+func Method(l paths.Layout) string {
+	if _, err := os.Stat(l.DiskSetupConfig()); err == nil {
+		return protocol.EnrollmentAutoinstall
+	}
+	return protocol.EnrollmentAdopted
+}
+
+// ErrBusy reports that another enrollment of this device holds the enrollment lock.
+var ErrBusy = errors.New("another enrollment of this device is running")
+
+// lock takes the enrollment lock shared by `paddockd enroll` and the agent's autoinstall loop, so a device never sends
+// two concurrent enrollment requests (plan M11 amendment R6.5); wait blocks until it is free, otherwise a held lock
+// is ErrBusy. The lock is released when the returned function closes the file, or when the process exits.
+func lock(l paths.Layout, wait bool) (func(), error) {
+	path := l.EnrollLock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("enrollment lock: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // fixed path below the state directory
+	if err != nil {
+		return nil, fmt.Errorf("enrollment lock: %w", err)
+	}
+	how := syscall.LOCK_EX
+	if !wait {
+		how |= syscall.LOCK_NB
+	}
+	if err := syscall.Flock(int(f.Fd()), how); err != nil { //nolint:gosec // a file descriptor fits an int
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrBusy
+		}
+		return nil, fmt.Errorf("enrollment lock: %w", err)
+	}
+	return func() { _ = f.Close() }, nil
 }
 
 // requestEnrollment sends the enrollment request and retries invalid_token answers.
