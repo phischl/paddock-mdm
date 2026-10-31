@@ -26,7 +26,7 @@ test('organization admin manages a webhook destination', async ({ page }) => {
 
   await page.getByTestId('create-notification').click()
   const dialog = page.getByRole('dialog', { name: 'New notification destination' })
-  await dialog.getByLabel('Name').fill(name)
+  await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill(name)
   await dialog.getByLabel('Webhook URL').fill('https://example.com/paddock-e2e')
   await expectAccessible(page)
   const submit = () => dialog.getByTestId('notification-submit').click()
@@ -36,7 +36,7 @@ test('organization admin manages a webhook destination', async ({ page }) => {
   await withStepUp(page, submit)
   if (!valid) {
     await expect(page.getByTestId('notification-reenter-url')).toBeVisible()
-    await expect(page.getByRole('dialog', { name: 'New notification destination' }).getByLabel('Name')).toHaveValue(name)
+    await expect(page.getByRole('dialog', { name: 'New notification destination' }).getByRole('textbox', { name: 'Name', exact: true })).toHaveValue(name)
     await page.getByRole('dialog', { name: 'New notification destination' }).getByLabel('Webhook URL').fill('https://example.com/paddock-e2e')
     await submit()
   }
@@ -52,12 +52,12 @@ test('organization admin manages a webhook destination', async ({ page }) => {
   await expect(row).toContainText('https://example.com/…')
   await expect(row).toContainText('Active')
 
-  await page.getByRole('button', { name: `Replace the signing secret of ${name}` }).click()
+  await page.getByRole('button', { name: `Replace secret: ${name}` }).click()
   await page.getByTestId('confirm-accept').click()
   await expect(page.getByTestId('notification-secret').locator('input')).not.toHaveValue('')
   await page.getByTestId('close-notification-secret').click()
 
-  await page.getByRole('button', { name: `Delete ${name}` }).click()
+  await page.getByRole('button', { name: `Delete: ${name}` }).click()
   await page.getByTestId('confirm-typed').locator('input').fill(name)
   await page.getByTestId('confirm-accept').click()
   await expect(page.getByTestId('notification-saved')).toContainText(`${name} deleted`)

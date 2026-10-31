@@ -378,6 +378,7 @@ const dialogTitle = computed(() => (dialog.value?.editing ? t('notifications.edi
       empty-icon="bell"
       empty-title="notifications.empty.title"
       empty-description="notifications.empty.description"
+      tabindex="-1"
       data-testid="notification-list"
     >
       <template #empty-action>
@@ -478,11 +479,9 @@ const dialogTitle = computed(() => (dialog.value?.editing ? t('notifications.edi
       :aria-label="dialogTitle"
       persistent
       @update:model-value="(v: boolean) => !v && closeDialog()"
+      @keydown.esc.stop="closeDialog"
     >
-      <v-card
-        :title="dialogTitle"
-        @keydown.esc.stop="closeDialog"
-      >
+      <v-card :title="dialogTitle">
         <v-card-text>
           <v-alert
             v-if="reenterUrl"
@@ -514,11 +513,9 @@ const dialogTitle = computed(() => (dialog.value?.editing ? t('notifications.edi
       max-width="40rem"
       :aria-label="t('notifications.secretTitle')"
       persistent
+      @keydown.esc.stop="closeSecret"
     >
-      <v-card
-        :title="t('notifications.secretTitle')"
-        @keydown.esc.stop="closeSecret"
-      >
+      <v-card :title="t('notifications.secretTitle')">
         <v-card-text v-if="secret">
           <v-alert
             type="warning"

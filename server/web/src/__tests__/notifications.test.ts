@@ -8,6 +8,8 @@ import NotificationDestinationForm from '../components/NotificationDestinationFo
 import NotificationDestinations from '../views/NotificationDestinations.vue'
 import PlatformNotifications from '../views/PlatformNotifications.vue'
 import { createPortalI18n } from '../i18n'
+import en from '../locales/en.json'
+import de from '../locales/de.json'
 import { vuetify } from '../plugins/vuetify'
 import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
 import { useSessionStore } from '../stores/session'
@@ -116,6 +118,13 @@ describe('NotificationDestinationForm', () => {
     expect((url.element as HTMLInputElement).value).toBe('')
     expect(url.attributes('placeholder')).toBe('unchanged')
     expect(w.text()).toContain('https://siem.example/…')
+    w.unmount()
+  })
+
+  it('shows the localized message at the field and the server detail on a separate line', () => {
+    const w = mountForm({ problem: { code: 'invalid_request', detail: 'invalid webhook URL: the scheme must be https' } })
+    expect(w.text()).toContain('The server refused the URL')
+    expect(w.find('[data-testid="notification-problem-detail"]').text()).toBe('invalid webhook URL: the scheme must be https')
     w.unmount()
   })
 
@@ -321,12 +330,12 @@ describe('notification pages', () => {
   it('deletes only after the name is typed in the confirmation', async () => {
     remove.mockResolvedValue(null)
     await mountPage('org_admin')
-    await click('[aria-label="Delete SIEM"]')
+    await click('[aria-label="Delete: SIEM"]')
     expect(pendingConfirm.value?.options.requireTypedText).toBe('SIEM')
     settleConfirm(false)
     await flushPromises()
     expect(remove).not.toHaveBeenCalled()
-    await click('[aria-label="Delete SIEM"]')
+    await click('[aria-label="Delete: SIEM"]')
     settleConfirm({ reason: '' })
     await flushPromises()
     expect(remove).toHaveBeenCalledWith('organization', 'd1')
@@ -337,7 +346,7 @@ describe('notification pages', () => {
     items = [destination({ enabled: false })]
     update.mockResolvedValue(destination())
     await mountPage('org_admin')
-    await click('[aria-label="Edit SIEM"]')
+    await click('[aria-label="Edit: SIEM"]')
     await click('[data-testid="notification-enabled"] input')
     ;(document.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'))
     await flushPromises()
@@ -355,7 +364,7 @@ describe('notification pages', () => {
       .mockResolvedValueOnce(destination())
       .mockResolvedValue(destination({ state: { ...destination().state, last_test: { at: '2026-10-31T10:00:00Z', ok: false, error: 'http_5xx' } } }))
     await mountPage('org_admin')
-    await click('[aria-label="Send test to SIEM"]')
+    await click('[aria-label="Send test: SIEM"]')
     expect(pendingConfirm.value?.options.title).toBe('Send a test notification')
     settleConfirm({ reason: '' })
     await new Promise((r) => setTimeout(r, 50))
@@ -368,7 +377,7 @@ describe('notification pages', () => {
     test.mockResolvedValue({ code: 'invalid_state' })
     getOne.mockResolvedValue(destination())
     const w = await mountPage('org_admin')
-    await click('[aria-label="Send test to SIEM"]')
+    await click('[aria-label="Send test: SIEM"]')
     settleConfirm({ reason: '' })
     await flushPromises()
     expect(w.find('[data-testid="notification-page-problem"]').text()).toContain('earlier test of this destination is still waiting')
@@ -480,5 +489,58 @@ describe('pseudonym dialog', () => {
     await mountPage('org_admin')
     expect(requestPseudo).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('identity confirmation failed')
+  })
+})
+
+describe('notification page accessibility and keyboard', () => {
+  it('names every row button starting with its visible text (WCAG 2.5.3)', async () => {
+    const w = await mountPage('org_admin')
+    const buttons = w.findAll('[data-testid="notification-list"] td button, [data-testid="notification-list"] .form-actions button')
+    expect(buttons.length).toBeGreaterThanOrEqual(4)
+    for (const b of buttons) {
+      expect(b.attributes('aria-label')?.startsWith(b.text()), b.text()).toBe(true)
+    }
+  })
+
+  it('keeps the row button labels led by the visible text in both catalogs', () => {
+    for (const c of [de, en]) {
+      const n = c.notifications
+      expect(n.editLabel.startsWith(c.common.edit)).toBe(true)
+      expect(n.deleteLabel.startsWith(c.common.delete)).toBe(true)
+      expect(n.testLabel.startsWith(n.test)).toBe(true)
+      expect(n.rotateLabel.startsWith(n.rotate)).toBe(true)
+    }
+  })
+
+  it('closes the form dialog and the secret dialog with Escape while focus is on the overlay content', async () => {
+    created.mockResolvedValue({ destination: destination({ name: 'New' }), secret: 'whsec_once' })
+    await mountPage('org_admin')
+    await click('[data-testid="create-notification"]')
+    const esc = async () => {
+      const content = [...document.querySelectorAll('.v-overlay__content')].at(-1) as HTMLElement
+      content.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await flushPromises()
+    }
+    expect(document.querySelector('[data-testid="notification-form"]')).not.toBeNull()
+    await esc()
+    expect(document.querySelector('[data-testid="notification-form"]')).toBeNull()
+
+    await click('[data-testid="create-notification"]')
+    for (const [sel, v] of [['#notification-name', 'New'], ['#notification-url', 'https://siem.example/hook']]) {
+      const el = document.querySelector(sel) as HTMLInputElement
+      el.value = v
+      el.dispatchEvent(new Event('input'))
+    }
+    await flushPromises()
+    ;(document.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'))
+    await flushPromises()
+    expect(document.querySelector('[data-testid="notification-secret"]')).not.toBeNull()
+    await esc()
+    expect(document.querySelector('[data-testid="notification-secret"]')).toBeNull()
+  })
+
+  it('gives the list a focusable fallback target', async () => {
+    const w = await mountPage('org_admin')
+    expect(w.find('[data-testid="notification-list"]').attributes('tabindex')).toBe('-1')
   })
 })

@@ -2400,10 +2400,10 @@
     "create": "Add destination",
     "createTitle": "New notification destination",
     "editTitle": "Edit notification destination",
-    "editLabel": "Edit {name}",
-    "testLabel": "Send test to {name}",
-    "rotateLabel": "Replace the signing secret of {name}",
-    "deleteLabel": "Delete {name}",
+    "editLabel": "Edit: {name}",
+    "testLabel": "Send test: {name}",
+    "rotateLabel": "Replace secret: {name}",
+    "deleteLabel": "Delete: {name}",
     "type": "Type",
     "types": {
       "webhook": "Webhook",
@@ -2508,6 +2508,8 @@
     "empty": {
       "title": "No notification destinations",
       "description": "Add a webhook or an e-mail list to receive security events outside the portal."
-    }
+    },
+    "urlRejected": "The server refused the URL: it must be an https address on port 443 or 1024 to 65535 whose host is public.",
+    "nameTaken": "A destination with this name already exists."
   }
 }

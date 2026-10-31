@@ -89,11 +89,11 @@ async function submit(): Promise<void> {
     max-width="36rem"
     :aria-label="t('notifications.pseudonym.title')"
     persistent
+    @keydown.esc.stop="emit('close')"
   >
     <v-card
       :title="t('notifications.pseudonym.title')"
       data-testid="notification-pseudonym-dialog"
-      @keydown.esc.stop="emit('close')"
     >
       <v-card-text>
         <p class="summary">

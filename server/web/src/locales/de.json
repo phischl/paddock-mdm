@@ -2400,10 +2400,10 @@
     "create": "Ziel hinzufügen",
     "createTitle": "Neues Benachrichtigungsziel",
     "editTitle": "Benachrichtigungsziel bearbeiten",
-    "editLabel": "{name} bearbeiten",
-    "testLabel": "Test an {name} senden",
-    "rotateLabel": "Signaturgeheimnis von {name} ersetzen",
-    "deleteLabel": "{name} löschen",
+    "editLabel": "Bearbeiten: {name}",
+    "testLabel": "Test senden: {name}",
+    "rotateLabel": "Geheimnis ersetzen: {name}",
+    "deleteLabel": "Löschen: {name}",
     "type": "Typ",
     "types": {
       "webhook": "Webhook",
@@ -2508,6 +2508,8 @@
     "empty": {
       "title": "Keine Benachrichtigungsziele",
       "description": "Fügen Sie einen Webhook oder eine E-Mail-Liste hinzu, um Sicherheitsereignisse außerhalb des Portals zu erhalten."
-    }
+    },
+    "urlRejected": "Der Server hat die URL abgelehnt: Sie muss eine https-Adresse auf Port 443 oder 1024 bis 65535 mit öffentlichem Host sein.",
+    "nameTaken": "Ein Ziel mit diesem Namen existiert bereits."
   }
 }

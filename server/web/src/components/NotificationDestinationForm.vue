@@ -32,10 +32,20 @@ const clientErrors = computed<NotificationErrors>(() => {
 })
 
 const serverField = computed<NotificationField | null>(() => (props.problem ? fieldOfProblem(props.problem) : null))
+/** The localized message of the problem; the server's English detail is shown separately, never mixed into it. */
 const serverMessage = computed(() => {
-  if (!props.problem) return ''
-  return problemText(props.problem.code) + (props.problem.detail ? ' (' + props.problem.detail + ')' : '')
+  const p = props.problem
+  if (!p) return ''
+  if (p.code === 'invalid_request' && serverField.value === 'url') return t('notifications.urlRejected')
+  if (serverField.value === 'name' && p.code !== 'invalid_request') return t('notifications.nameTaken')
+  if (p.code === 'invalid_request' && serverField.value) return t(fieldMessages[serverField.value])
+  return problemText(p.code)
 })
+
+const fieldMessages: Record<NotificationField, string> = {
+  name: 'notifications.nameInvalid', type: 'problems.invalid_request', url: 'notifications.urlRejected', codes: 'notifications.codesCount',
+  recipients: 'notifications.recipientsInvalid', heartbeat: 'notifications.heartbeatInvalid', interval: 'notifications.intervalInvalid',
+}
 
 /** The messages of a field: its own validation first, else the server's problem when it belongs to the field. */
 function errorsOf(field: NotificationField): string[] {
@@ -192,6 +202,14 @@ function submit(): void {
       data-testid="notification-problem"
     >
       {{ serverMessage }}
+    </p>
+    <p
+      v-if="problem?.detail"
+      class="pd-muted mono"
+      lang="en"
+      data-testid="notification-problem-detail"
+    >
+      {{ problem.detail }}
     </p>
     <div class="form-actions">
       <v-btn
