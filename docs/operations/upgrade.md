@@ -145,8 +145,8 @@ SQL
 
 The password reaches `psql` through the container's environment, never a command line. The step is idempotent.
 After step 5, run `./paddock bootstrap openbao` once with a root token (`docs/operations/openbao.md` section 1): it
-adds the Transit key `notification-wrap`, the encrypt permission of `paddock-api`, the policy and AppRole
-`paddock-notifier`, and keeps every existing secret ID. The same release adds the commit sequence of the audit index:
+adds the Transit keys `notification-wrap` and `notification-pseudonym`, the permissions of `paddock-api` on them, the
+policy and AppRole `paddock-notifier`, and keeps every existing secret ID. The same release adds the commit sequence of the audit index:
 its audit migration backfills every existing event, so stop the audit writer first (step 4; duration in
 `docs/operations/capacity.md`, *Audit index commit sequence backfill*).
 

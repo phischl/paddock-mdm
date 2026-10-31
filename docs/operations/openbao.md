@@ -10,7 +10,8 @@ OpenBao holds Paddock's keys (ADR 0006):
 | `transit/keys/revocation-signing` | Ed25519 key that signs revocation tokens (Lock, Destroy, self-lock; non-exportable); its public keys reach devices only in their enrollment configuration (`revocation_keys`, pinned in `/etc/paddock/revoke-trust.json`), never through bundles except once for devices enrolled before it existed | the `revocation-issuer` role only (AppRole `paddock-revocation-issuer`, sign and read); `api` and `compiler` read the public keys |
 | `transit/keys/time-ticket` | Ed25519 key that signs the time tickets of the dead man's switch (non-exportable); its public keys reach devices in their bundles | `compiler` (AppRole `paddock-compiler`, sign and read) |
 | `transit/keys/escrow-wrap` | RSA-4096 key (non-exportable) devices encrypt escrowed secrets to (RSA-OAEP with SHA-256); its latest public key reaches devices in their bundles | encrypt: devices; decrypt: the `escrow-reader` role only (AppRole `paddock-escrow-reader`, `docs/operations/escrow-reader.md`); `compiler` reads the public key |
-| `transit/keys/notification-wrap` | AES-256-GCM key (non-exportable, derived: every ciphertext is bound to its lowercase organization ID as context) that wraps the secrets of notification destinations: the webhook URL (it may carry the credential), the signing secret and the per-organization pseudonym key, a wrapped data key whose plaintext the api never sees (ADR 0031 decisions 8 and 11) | encrypt: `api` (AppRole `paddock-api`, `transit/encrypt/notification-wrap` and `transit/datakey/wrapped/notification-wrap` only); decrypt: the `notifier` role only (AppRole `paddock-notifier`, `transit/decrypt/notification-wrap` only). A key created without derivation cannot be converted: the configuration stops with the commands to delete and re-create it, which is safe only before any destination exists |
+| `transit/keys/notification-wrap` | AES-256-GCM key (non-exportable, derived: every ciphertext is bound to `<organization ID>:<field>` as context) that encrypts the webhook URL (it may carry the credential) and the signing secret of notification destinations (ADR 0031 decision 11 and amendment 2026-10-31) | encrypt: `api` (AppRole `paddock-api`, `transit/encrypt/notification-wrap` only); decrypt: the `notifier` role only (AppRole `paddock-notifier`) |
+| `transit/keys/notification-pseudonym` | AES-256-GCM key (non-exportable, derived like `notification-wrap`) that wraps the per-organization pseudonym keys: data keys whose plaintext the api never sees (ADR 0031 decision 8 and amendment 2026-10-31) | wrapped data keys: `api` (`transit/datakey/wrapped/notification-pseudonym` only); decrypt: the `notifier` role only. A notification key created without derivation cannot be converted: the configuration stops with the commands to delete and re-create it, which is safe only before any destination exists |
 | `secret/paddock/session` (KV v2) | AES-256 keys `current` / `previous` of the portal session cookie | `api` (AppRole `paddock-api`) |
 
 Storage is the integrated Raft backend on the `openbao-data` volume (`deploy/compose/openbao/config.hcl`).
@@ -51,15 +52,16 @@ read -rs BAO_TOKEN && export BAO_TOKEN   # the decrypted root token, typed witho
 ```
 
 It enables `transit`, `secret` (kv-v2) and `approle`, creates the transit keys `audit-chain`, `bundle-signing`,
-`command-signing`, `revocation-signing`, `time-ticket` (Ed25519), `escrow-wrap` (RSA-4096) and `notification-wrap`
-(AES-256-GCM), the KV secret `secret/paddock/session`, the eight policies and AppRoles of
-`deploy/compose/scripts/openbao-configure.sh` (the same as in development: each role reads or signs only with its own
-keys; `paddock-revocation-issuer` is the only role that signs revocations, `paddock-backup` may only read Raft
-snapshots, `paddock-notifier` may only decrypt with `notification-wrap`, which `paddock-api` may only encrypt with),
-and writes each AppRole's role ID and secret ID to `.secrets/approle/<role>/`. It is idempotent: a stored secret ID is
-kept. The roles read them as files referenced by `PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`:
-`paddock-escrow-reader` reaches the escrow-reader and never the api, `paddock-revocation-issuer` the
-revocation-issuer and no other role, `paddock-backup` the worker, `paddock-notifier` the notifier and no other role.
+`command-signing`, `revocation-signing`, `time-ticket` (Ed25519), `escrow-wrap` (RSA-4096), `notification-wrap` and
+`notification-pseudonym` (AES-256-GCM, derived), the KV secret `secret/paddock/session`, the eight policies and
+AppRoles of `deploy/compose/scripts/openbao-configure.sh` (the same as in development: each role reads or signs only
+with its own keys; `paddock-revocation-issuer` is the only role that signs revocations, `paddock-backup` may only read
+Raft snapshots, `paddock-notifier` may only decrypt with the two notification keys, with which `paddock-api` may only
+encrypt and obtain wrapped data keys), and writes each AppRole's role ID and secret ID to `.secrets/approle/<role>/`.
+It is idempotent: a stored secret ID is kept. The roles read them as files referenced by
+`PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`: `paddock-escrow-reader` reaches the escrow-reader
+and never the api, `paddock-revocation-issuer` the revocation-issuer and no other role, `paddock-backup` the worker,
+`paddock-notifier` the notifier and no other role.
 Copy `.secrets/approle/paddock-audit-writer/` to the audit host (`docs/operations/install.md` section 4).
 
 Then take the first snapshot (section 5) and finally revoke the root token

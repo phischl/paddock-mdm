@@ -38,6 +38,8 @@ CREATE TABLE notification_destination_state (
   destination_id uuid NOT NULL,
   organization_id uuid NOT NULL,
   cursor_commit_seq bigint NOT NULL DEFAULT 0,
+  -- The notifier moves the cursor to the scope's latest commit sequence before anything else (see below).
+  start_at_latest boolean NOT NULL DEFAULT true,
   forward_seq bigint NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','stalled')),
   pending_delivery_id uuid,
@@ -160,27 +162,61 @@ CREATE POLICY platform_test ON notification_delivery FOR INSERT TO paddock_platf
     AND delivered_at IS NULL AND attempts = 0 AND forward_from IS NULL AND forward_to IS NULL AND event_count = 0
     AND last_error IS NULL);
 
--- State: the api creates the row with the cursor at the scope's latest commit sequence (a new destination never
--- replays history, plan M9 decision 15) and moves only that cursor when an administrator enables a destination with
--- cursor "skip" (decision 16). Every result column (status, failures, attempts, test result, forward_seq,
--- pending_delivery_id) is the notifier's alone; without DELETE the api cannot reset forward_seq by re-creating the row.
+-- State and cursor (plan M9 decisions 15, 16, 21; amendment 2026-10-31): a new destination never replays history and
+-- enabling with cursor "skip" jumps to the latest event. The latest commit sequence lives in the audit database, which
+-- this database cannot read, so neither the api nor paddock_platform writes the cursor: the api creates the row with
+-- the key columns only (start_at_latest defaults to true) and requests a skip through
+-- paddock_destination_start_at_latest; the notifier, which reads the audit index, then sets the cursor to the scope's
+-- latest commit sequence and clears the flag before it delivers anything. A trigger keeps the cursor from ever
+-- decreasing, for every role. Every result column is the notifier's alone; without DELETE the api cannot reset
+-- forward_seq by re-creating the row. created_at of api-inserted rows is always the default.
 GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination TO paddock_api;
-GRANT SELECT, INSERT (destination_id, organization_id, cursor_commit_seq), UPDATE (cursor_commit_seq)
-  ON notification_destination_state TO paddock_api;
-GRANT SELECT, INSERT ON notification_delivery, notification_pseudonym_key TO paddock_api;
-GRANT SELECT, INSERT, DELETE ON notification_pseudonym_lookup TO paddock_api;
+GRANT SELECT, INSERT (destination_id, organization_id) ON notification_destination_state TO paddock_api;
+GRANT SELECT, INSERT (id, destination_id, organization_id, kind, requested_by) ON notification_delivery TO paddock_api;
+GRANT SELECT, INSERT ON notification_pseudonym_key TO paddock_api;
+GRANT SELECT, INSERT (id, organization_id, pseudonym, requested_by), DELETE ON notification_pseudonym_lookup
+  TO paddock_api;
 
 -- paddock_platform is the platform administrators' api only: platform destinations, their state and test deliveries.
 -- Platform destinations have no pseudonym operations (plan M9 decision 18).
 GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination TO paddock_platform;
-GRANT SELECT, INSERT (destination_id, organization_id, cursor_commit_seq), UPDATE (cursor_commit_seq)
-  ON notification_destination_state TO paddock_platform;
-GRANT SELECT, INSERT ON notification_delivery TO paddock_platform;
+GRANT SELECT, INSERT (destination_id, organization_id) ON notification_destination_state TO paddock_platform;
+GRANT SELECT, INSERT (id, destination_id, organization_id, kind, requested_by) ON notification_delivery
+  TO paddock_platform;
 
 GRANT SELECT ON notification_destination, notification_pseudonym_key TO paddock_notifier;
 GRANT SELECT, INSERT, UPDATE ON notification_destination_state, notification_delivery, notification_delivery_event
   TO paddock_notifier;
 GRANT SELECT, UPDATE, DELETE ON notification_pseudonym_lookup TO paddock_notifier;
+
+-- A skip request: start_at_latest of the caller's own destination (organization from paddock.org_id, so a missing
+-- context fails; the platform variant for the nil organization). NULL when there is no such destination.
+CREATE FUNCTION paddock_destination_start_at_latest(p_destination uuid) RETURNS boolean
+  LANGUAGE sql SECURITY DEFINER SET search_path = public AS
+  $$ UPDATE notification_destination_state SET start_at_latest = true
+     WHERE destination_id = p_destination AND organization_id = current_setting('paddock.org_id')::uuid
+     RETURNING true $$;
+REVOKE ALL ON FUNCTION paddock_destination_start_at_latest(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_destination_start_at_latest(uuid) TO paddock_api;
+CREATE FUNCTION paddock_platform_destination_start_at_latest(p_destination uuid) RETURNS boolean
+  LANGUAGE sql SECURITY DEFINER SET search_path = public AS
+  $$ UPDATE notification_destination_state SET start_at_latest = true
+     WHERE destination_id = p_destination AND organization_id = '00000000-0000-0000-0000-000000000000'::uuid
+     RETURNING true $$;
+REVOKE ALL ON FUNCTION paddock_platform_destination_start_at_latest(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_platform_destination_start_at_latest(uuid) TO paddock_platform;
+
+-- +goose StatementBegin
+CREATE FUNCTION notification_cursor_forward() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+  IF NEW.cursor_commit_seq < OLD.cursor_commit_seq THEN
+    RAISE EXCEPTION 'cursor_commit_seq of a notification destination never decreases' USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER notification_cursor_forward BEFORE UPDATE OF cursor_commit_seq ON notification_destination_state
+  FOR EACH ROW EXECUTE FUNCTION notification_cursor_forward();
 
 -- The notifier's reads around a message (slug, device and account names, pseudonym resolution) and its audit events
 -- through ActionRunner, mirroring paddock_worker (00003, 00007, 00046).

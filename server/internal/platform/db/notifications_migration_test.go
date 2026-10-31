@@ -12,8 +12,10 @@ import (
 
 // TestNotificationsMigration proves the isolation of migration 00085 (plan M9 decision 10, ADR 0031 decisions 10 and
 // 11): an organization sees only its own destinations, the platform role only the nil organization's and nothing but
-// destinations, the state cursor and fresh test deliveries; the api inserts only fresh test deliveries and unresolved
-// pseudonym lookups and writes no state result column; a row naming another organization's destination or delivery
+// destinations, new state rows and fresh test deliveries; the api inserts only fresh test deliveries and unresolved
+// pseudonym lookups (created_at always the database's), creates state rows that start at the latest event, requests a
+// skip only through its function and writes neither the cursor nor a result column; the cursor never decreases for any
+// role; a row naming another organization's destination or delivery
 // fails exactly like one naming an unknown ID; the notifier reads destinations but cannot write them, writes state
 // results and resolutions, serves the nil organization under its own role and records its audit actions; a missing
 // context fails closed.
@@ -162,24 +164,52 @@ func TestNotificationsMigration(t *testing.T) {
 		forward_seq, event_id, commit_seq, delivery_id) VALUES ($1, $2, 9, gen_random_uuid(), 1, $3)`,
 		func(target uuid.UUID) []any { return []any{destA, orgA, target} }, deliveryB)
 
-	// State columns: the api and the platform role write only the cursor (and the key when creating the row); every
-	// result column is the notifier's.
+	// State: the api and the platform role create the row with its key only, so it starts at the latest event, and
+	// request a skip through their function; they never write the cursor or any result column.
 	for _, role := range []struct {
-		name string
-		conn *pgx.Conn
-		org  uuid.UUID
-		dest uuid.UUID
-	}{{"api", api, orgA, destA}, {"platform", platform, uuid.Nil, destP}} {
-		must(role.name+" state cursor", inOrg(role.conn, role.org, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id,
-				cursor_commit_seq) VALUES ($1, $2, 42)`, role.dest, role.org); err != nil {
+		name, startFn string
+		conn          *pgx.Conn
+		org, dest     uuid.UUID
+	}{
+		{"api", "paddock_destination_start_at_latest", api, orgA, destA},
+		{"platform", "paddock_platform_destination_start_at_latest", platform, uuid.Nil, destP},
+	} {
+		must(role.name+" state create and skip", inOrg(role.conn, role.org, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id)
+				VALUES ($1, $2)`, role.dest, role.org); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE notification_destination_state SET cursor_commit_seq = 43
-				WHERE destination_id = $1`, role.dest)
+			var cursor int64
+			var start bool
+			if err := tx.QueryRow(ctx, `SELECT cursor_commit_seq, start_at_latest FROM notification_destination_state
+				WHERE destination_id = $1`, role.dest).Scan(&cursor, &start); err != nil {
+				return err
+			}
+			if cursor != 0 || !start {
+				t.Fatalf("%s: new state cursor %d start_at_latest %v, want 0 and true", role.name, cursor, start)
+			}
+			var found *bool
+			if err := tx.QueryRow(ctx, "SELECT "+role.startFn+"($1)", role.dest).Scan(&found); err != nil {
+				return err
+			}
+			if found == nil || !*found {
+				t.Fatalf("%s: skip request found no destination", role.name)
+			}
+			if err := tx.QueryRow(ctx, "SELECT "+role.startFn+"($1)", destB).Scan(&found); err != nil {
+				return err
+			}
+			if found != nil {
+				t.Fatalf("%s: skip request reached organization B's destination", role.name)
+			}
+			return nil
+		}))
+		refused(role.name+" state insert of the cursor", inOrg(role.conn, role.org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO notification_destination_state (destination_id, organization_id,
+				cursor_commit_seq) VALUES ($1, $2, 0)`, role.dest, role.org)
 			return err
 		}))
 		for _, col := range []string{
+			"cursor_commit_seq = 0", "cursor_commit_seq = 43", "start_at_latest = false",
 			"status = 'stalled'", "consecutive_failures = 1", "last_test_ok = true", "last_test_at = now()",
 			"last_test_error = 'x'", "last_success_at = now()", "forward_seq = 5", "pending_delivery_id = gen_random_uuid()",
 			"last_error = 'x'", "next_attempt_at = now()",
@@ -204,6 +234,53 @@ func TestNotificationsMigration(t *testing.T) {
 			return err
 		}))
 	}
+
+	refused("api skip request without organization context", func() error {
+		_, err := api.Exec(ctx, "SELECT paddock_destination_start_at_latest($1)", destA)
+		return err
+	}())
+	refused("api calling the platform skip request", inOrg(api, orgA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, "SELECT paddock_platform_destination_start_at_latest($1)", destP)
+		return err
+	}))
+
+	// The cursor never moves back, whoever writes it; the notifier moves it forward and clears the start flag.
+	must("notifier moves the cursor forward", inOrg(notifier, orgB, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE notification_destination_state SET cursor_commit_seq = 50, start_at_latest = false
+			WHERE destination_id = $1`, destB)
+		return err
+	}))
+	for _, conn := range []struct {
+		name string
+		c    *pgx.Conn
+	}{{"notifier", notifier}, {"owner", super}} {
+		refused(conn.name+" rewinds the cursor", inOrg(conn.c, orgB, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `UPDATE notification_destination_state SET cursor_commit_seq = 50
+				WHERE destination_id = $1`, destB); err != nil {
+				t.Fatal(err)
+			}
+			_, err := tx.Exec(ctx, `UPDATE notification_destination_state SET cursor_commit_seq = 0
+				WHERE destination_id = $1`, destB)
+			return err
+		}))
+	}
+
+	// created_at of rows the api inserts is always the database's.
+	refused("api test delivery with created_at", inOrg(api, orgA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO notification_delivery (id, destination_id, organization_id, kind, created_at)
+			VALUES ($1, $2, $3, 'test', now() - interval '1 day')`, uuid.New(), destA, orgA)
+		return err
+	}))
+	refused("platform test delivery with created_at", inOrg(platform, uuid.Nil, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO notification_delivery (id, destination_id, organization_id, kind, created_at)
+			VALUES ($1, $2, $3, 'test', now() - interval '1 day')`, uuid.New(), destP, uuid.Nil)
+		return err
+	}))
+	refused("api lookup with created_at", inOrg(api, orgA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO notification_pseudonym_lookup (id, organization_id, pseudonym, requested_by,
+			created_at) VALUES ($1, $2, 'u_x', 'admin', now() - interval '1 day')`, uuid.New(), orgA)
+		return err
+	}))
 
 	// Pseudonym lookups: the api requests, reads and deletes; it cannot store a resolution.
 	must("api lookup request", inOrg(api, orgA, func(tx pgx.Tx) error {

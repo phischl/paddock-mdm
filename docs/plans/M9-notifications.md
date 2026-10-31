@@ -1459,28 +1459,39 @@ once at the end.
 - **Decision 38 / §6.5 (PDK-130).** A refused unit returns the existing problem `unit_not_allowed` with status
   **422** (since M1, managed units), not 400; duplicates and more than 32 units return 400 `invalid_request`.
 
-- **Decisions 9, 10, 12, 13 and §6.2 (PDK-122 external review, architect, 2026-10-31).** Binding for PDK-123 and
-  PDK-124:
-  - `notification-wrap` is a **derived** Transit key (`derived=true`, aes256-gcm96). The context of every operation is
-    the lowercase canonical `organization_id` string (the nil UUID for the platform scope), base64-encoded as Transit
-    requires; `bao.OrganizationContext(org uuid.UUID)` is the only place that forms it. A ciphertext therefore decrypts
-    under its own organization only. `bao.Client.Encrypt(ctx, key, org, plaintext)`,
-    `WrappedDataKey(ctx, key, org)` and `DecryptContext(ctx, key, org, ciphertext)` take the organization; every
-    key-wrapping interface of the use cases and the notifier takes it too.
-  - The pseudonym key is a Transit data key from `transit/datakey/wrapped/notification-wrap`: the api stores the
-    wrapped key in `notification_pseudonym_key.key_ciphertext` and never sees the plaintext; the notifier alone unwraps
-    it. Policy `paddock-api`: `transit/encrypt` and `transit/datakey/wrapped` on `notification-wrap`;
-    `paddock-notifier`: `transit/decrypt` only. `openbao-configure.sh` refuses to continue on an existing non-derived
-    key.
+- **Decisions 9, 10, 12, 13, 15, 16, 21 and §6.2 (PDK-122 external review, architect, 2026-10-31).** Binding for
+  PDK-123 and PDK-124:
+  - Two **derived** Transit keys (`derived=true`, aes256-gcm96): `notification-wrap` for the webhook URL and signing
+    secret (api: `transit/encrypt`; notifier: `transit/decrypt`) and `notification-pseudonym` for the pseudonym keys
+    (api: `transit/datakey/wrapped` only, never encrypt or a plaintext data key; notifier: `transit/decrypt`). The
+    context of every operation is `<organization_id>:<field>` with the lowercase canonical organization ID (the nil
+    UUID for the platform scope) and the field `url`, `secret` or `pseudonym`, base64-encoded as Transit requires;
+    `bao.OrganizationContext(org, field)` is the only place that forms it. A ciphertext therefore decrypts for its own
+    organization and field only. `bao.Client.Encrypt(ctx, key, org, field, plaintext)`,
+    `WrappedDataKey(ctx, key, org, field)` and `DecryptContext(ctx, key, org, field, ciphertext)`; every key-wrapping
+    interface of the use cases and the notifier takes the organization. `openbao-configure.sh` stops on an existing
+    non-derived key.
+  - **Cursor (replaces "insert … with `cursor_commit_seq = LatestCommitSeq`" of decision 15 and "`skip` sets
+    `cursor_commit_seq = LatestCommitSeq`" of decision 16).** The latest commit sequence lives in the audit database,
+    which the paddock database cannot read, so neither the api nor `paddock_platform` writes the cursor. `Create`
+    inserts the state row with its key only; `start_at_latest` defaults to `true`. Enabling with `cursor: skip` calls
+    `paddock_destination_start_at_latest(id)` (platform: `paddock_platform_destination_start_at_latest(id)`;
+    SECURITY DEFINER, organization from the context; NULL = not found). The notifier, before step (a) of decision 21,
+    sets `cursor_commit_seq` to the scope's latest commit sequence and `start_at_latest = false` in one transaction
+    and delivers nothing for that destination while the flag is set. Events committed between the request and that
+    round are skipped as well (at most one poll interval). A trigger refuses any decrease of `cursor_commit_seq` for
+    every role.
   - §6.2 corrections in migration 00085: `notification_destination` and `notification_delivery` carry
     `UNIQUE (id, organization_id)`; every child references `(…_id, organization_id)`; the keys a caller names include
     the organization (`notification_destination_state` PK `(destination_id, organization_id)`,
     `notification_delivery_event` PK `(destination_id, organization_id, forward_seq)`), so an ID of another
-    organization fails like an unknown one (PDK-123 answers 404 `not_found`). The api and `paddock_platform` insert
-    the state row with `cursor_commit_seq` only and update only `cursor_commit_seq` (decision 16 `skip`); every result
-    column is written by `paddock_notifier`; neither may delete a state row. Their delivery inserts are fresh test
-    deliveries only (every result column at its default). The api inserts pseudonym lookups only unresolved.
-    `paddock_platform` has no rights on `notification_delivery_event`, `notification_pseudonym_key` and
-    `notification_pseudonym_lookup`; the notifier serves the platform scope (nil organization) under its own role.
+    organization fails like an unknown one (PDK-123 answers 404 `not_found`). Row IDs are server-generated (UUIDv7),
+    never caller input, so their single-column primary keys stay. The api and `paddock_platform` insert state rows with
+    the key columns only, write no state column afterwards and delete none; every result column is written by
+    `paddock_notifier`. Their delivery inserts are fresh test deliveries (`id, destination_id, organization_id, kind,
+    requested_by`; every result column and `created_at` at the default). The api inserts pseudonym lookups unresolved
+    (`id, organization_id, pseudonym, requested_by`). `paddock_platform` has no rights on `notification_delivery_event`,
+    `notification_pseudonym_key` and `notification_pseudonym_lookup`; the notifier serves the platform scope (nil
+    organization) under its own role.
   - The webhook deny list gains `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`, `100::/64` and the
     documentation ranges (ADR 0031 amendment 2026-10-31).

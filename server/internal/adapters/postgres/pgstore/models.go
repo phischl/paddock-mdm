@@ -521,6 +521,7 @@ type NotificationDestinationState struct {
 	DestinationID       uuid.UUID
 	OrganizationID      uuid.UUID
 	CursorCommitSeq     int64
+	StartAtLatest       bool
 	ForwardSeq          int64
 	Status              string
 	PendingDeliveryID   uuid.NullUUID

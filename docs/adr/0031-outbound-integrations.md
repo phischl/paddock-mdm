@@ -228,9 +228,12 @@ The list also denies `64:ff9b:1::/48` (local-use NAT64, RFC 8215), `100::/64` (d
 documentation ranges `2001:db8::/32`, `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` (RFC 3849, RFC 5737), which no
 real receiver uses (`198.18.0.0/15` was already listed). `outbound.DeniedPrefixes` implements the list.
 
-The same amendment binds the destination secrets of decisions 8 and 11. `notification-wrap` is a derived Transit key;
-the context of every encryption, data key and decryption is the lowercase canonical `organization_id` string (the
-nil UUID for the platform scope), base64-encoded as Transit requires, so a ciphertext decrypts under its own
-organization only. The pseudonym key is a data key from `transit/datakey/wrapped/notification-wrap`: the api stores
-the wrapped key and never sees its plaintext; the notifier alone unwraps it. Every key-wrapping interface (Paddock's
-OpenBao client, the use cases, the notifier) takes the organization and forms the context in one helper.
+The same amendment binds the destination secrets of decisions 8 and 11. Two derived Transit keys hold them:
+`notification-wrap` the webhook URL and signing secret (the api encrypts), `notification-pseudonym` the
+per-organization pseudonym keys, which are data keys from `transit/datakey/wrapped`: the api stores the wrapped key and
+can neither choose one (no encrypt on that key) nor see its plaintext. The notifier alone decrypts both. The context of
+every operation is `<organization_id>:<field>` (lowercase canonical organization ID, the nil UUID for the platform
+scope; field `url`, `secret` or `pseudonym`), base64-encoded as Transit requires, so a ciphertext decrypts for its own
+organization and field only. Every key-wrapping interface (Paddock's OpenBao client, the use cases, the notifier) takes
+the organization and forms the context in one helper. Row IDs of the notification tables are server-generated
+(UUIDv7) and never caller input; the keys a caller names include the organization.

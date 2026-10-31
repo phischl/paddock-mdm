@@ -2,11 +2,11 @@
 # Configures an initialized and unsealed OpenBao (plan M7b decision 17; content of plan M0 §6.8, M2a decision 15, M4a
 # decisions 2 and 9, M4c decisions 2 and 14, M6a decision 5, M9 decision 12): the engines transit, secret (kv-v2) and
 # approle, the transit keys audit-chain, bundle-signing, command-signing, revocation-signing, time-ticket (ed25519),
-# escrow-wrap (rsa-4096) and notification-wrap (aes256-gcm96, derived), the KV secret secret/paddock/session, the
-# policies and the AppRoles, whose role_id and secret_id are written to .secrets/approle/<role>/ (paddock-audit-writer's
-# directory is copied to the audit host). Idempotent: a stored non-empty secret_id is kept. Needs the root token in
-# BAO_TOKEN. Development: openbao-bootstrap.sh calls it; production: `./paddock bootstrap openbao` after the manual init
-# and unseal (docs/operations/openbao.md).
+# escrow-wrap (rsa-4096), notification-wrap and notification-pseudonym (aes256-gcm96, derived), the KV secret
+# secret/paddock/session, the policies and the AppRoles, whose role_id and secret_id are written to
+# .secrets/approle/<role>/ (paddock-audit-writer's directory is copied to the audit host). Idempotent: a stored
+# non-empty secret_id is kept. Needs the root token in BAO_TOKEN. Development: openbao-bootstrap.sh calls it;
+# production: `./paddock bootstrap openbao` after the manual init and unseal (docs/operations/openbao.md).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,26 +58,29 @@ if ! bao read transit/keys/escrow-wrap >/dev/null 2>&1; then
   echo "created transit key escrow-wrap"
 fi
 
-# Destination secrets of the notifications (webhook URL and signing secret, pseudonym keys): the api encrypts, the
-# notifier alone decrypts (ADR 0031 decision 11). Derived, so that every ciphertext is bound to its organization (the
+# Notification keys (ADR 0031 decision 11, amendment 2026-10-31): notification-wrap holds webhook URL and signing secret
+# (the api encrypts), notification-pseudonym the per-organization pseudonym keys (the api only obtains wrapped data
+# keys); the notifier alone decrypts. Derived, so every ciphertext is bound to its organization and field (the
 # context); derivation cannot be switched on later.
-if ! bao read transit/keys/notification-wrap >/dev/null 2>&1; then
-  bao write transit/keys/notification-wrap type=aes256-gcm96 derived=true exportable=false \
-    allow_plaintext_backup=false >/dev/null
-  echo "created transit key notification-wrap"
-elif [[ "$(bao read -field=derived transit/keys/notification-wrap)" != true ]]; then
-  # Derivation cannot be switched on for an existing key; a non-derived key would let a ciphertext of one organization
-  # decrypt for another. It exists only on stacks configured by an early build of PDK-122, before any destination.
-  cat >&2 <<'MSG'
-transit key notification-wrap exists but is not derived. Re-create it (this destroys what it encrypted, so only while
-no notification destination exists), then run this configuration again:
-  bao write transit/keys/notification-wrap/config deletion_allowed=true
-  bao delete transit/keys/notification-wrap
-Development: run both through `docker compose exec -e BAO_TOKEN openbao bao …` with the root token, then make up.
+for key in notification-wrap notification-pseudonym; do
+  if ! bao read "transit/keys/$key" >/dev/null 2>&1; then
+    bao write "transit/keys/$key" type=aes256-gcm96 derived=true exportable=false allow_plaintext_backup=false \
+      >/dev/null
+    echo "created transit key $key"
+  elif [[ "$(bao read -field=derived "transit/keys/$key")" != true ]]; then
+    # A non-derived key would let a ciphertext of one organization decrypt for another. It exists only on stacks
+    # configured by an early build of PDK-122, before any destination.
+    cat >&2 <<MSG
+transit key $key exists but is not derived. Re-create it (this destroys what it encrypted, so only while no
+notification destination exists), then run this configuration again:
+  bao write transit/keys/$key/config deletion_allowed=true
+  bao delete transit/keys/$key
+Development: run both through \`docker compose exec -e BAO_TOKEN openbao bao …\` with the root token, then make up.
 Production: prefix both with ./paddock (./paddock bao write …), then ./paddock bootstrap openbao.
 MSG
-  exit 1
-fi
+    exit 1
+  fi
+done
 
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
   printf '{"current":"%s","previous":"%s"}' "$(head -c 32 /dev/urandom | base64 -w0)" \
@@ -98,13 +101,16 @@ path "transit/keys/revocation-signing" {
 path "transit/encrypt/notification-wrap" {
   capabilities = ["update"]
 }
-path "transit/datakey/wrapped/notification-wrap" {
+path "transit/datakey/wrapped/notification-pseudonym" {
   capabilities = ["update"]
 }
 EOF
 
 bao policy write paddock-notifier - >/dev/null <<'EOF'
 path "transit/decrypt/notification-wrap" {
+  capabilities = ["update"]
+}
+path "transit/decrypt/notification-pseudonym" {
   capabilities = ["update"]
 }
 EOF
