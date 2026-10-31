@@ -159,6 +159,8 @@ describe('findings page', () => {
     await rows(w)[0].findAll('button')[2].trigger('click')
     await flushPromises()
     expect(body('finding-close-dialog')).not.toBeNull()
+    expect(body('finding-close-dialog')!.textContent).toContain('Close Silent (critical) on acme-lt-0142')
+    expect(body('finding-close-dialog')!.textContent).not.toContain('stale_critical')
     expect(document.body.textContent).toContain('Facts and ticket references, no personal judgements.')
     body('finding-resolution-false_positive')!.querySelector('input')!.click()
     body('finding-close-submit')!.click()
@@ -209,6 +211,14 @@ describe('findings page', () => {
     await flushPromises()
     expect(body('finding-close-dialog')!.querySelector('.form-error')!.textContent).toBe('You are not allowed to do this.')
     expect(w.find('[data-testid="finding-done"]').exists()).toBe(false)
+  })
+
+  it('names an attention finding by its label in the assign dialog', async () => {
+    const w = await mountFindings()
+    await rows(w)[0].findAll('button')[1].trigger('click')
+    await flushPromises()
+    expect(body('finding-assign-dialog')!.textContent).toContain('Who takes care of Silent (critical) on acme-lt-0142?')
+    expect(body('finding-assign-dialog')!.textContent).not.toContain('stale_critical')
   })
 
   it('assigns through the assign dialog', async () => {

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Finding, FindingResolution } from '../api/client'
 import {
-  findingResolutions, maxFindingExternalRef, maxFindingReason, validateClose, type CloseInput,
+  findingCodeText, findingResolutions, maxFindingExternalRef, maxFindingReason, validateClose, type CloseInput,
 } from '../lib/findings'
 import { useProblemText } from '../lib/problems'
 
@@ -55,7 +55,7 @@ const disabled = (r: FindingResolution) => r === 'accepted_risk' && !props.admin
       data-testid="finding-close-dialog"
     >
       <v-card-text>
-        <p>{{ t('findings.close.message', { code: finding?.code ?? '', hostname: finding?.hostname ?? '' }) }}</p>
+        <p>{{ t('findings.close.message', { code: finding ? findingCodeText(finding, t) : '', hostname: finding?.hostname ?? '' }) }}</p>
         <v-radio-group
           v-model="resolution"
           :label="t('findings.close.resolution')"

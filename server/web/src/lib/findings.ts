@@ -31,6 +31,11 @@ export const findingFilters: ListFilter[] = [
   },
 ]
 
+/** The finding's code for people: the attention kind's label, or the audit code of a tamper event as it is. */
+export function findingCodeText(f: Pick<Finding, 'kind' | 'code'>, t: (key: string) => string): string {
+  return f.kind === 'attention' ? t('attention.kinds.' + f.code) : f.code
+}
+
 /** One page of findings for DataList; without a status filter the live findings, without a cleared filter the uncleared. */
 export async function listFindings(p: ListParams): Promise<Page<Finding>> {
   const status = ((p.status as FindingStatus[] | undefined) ?? [])

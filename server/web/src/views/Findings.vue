@@ -10,7 +10,7 @@ import TimeCell from '../components/TimeCell.vue'
 import { useConfirm } from '../composables/useConfirm'
 import { usePending } from '../composables/usePending'
 import {
-  acknowledgeFinding, assignFinding, closeFinding, findingFilters, listFindings, maxFindingReason, reopenFinding,
+  acknowledgeFinding, assignFinding, closeFinding, findingCodeText, findingFilters, listFindings, maxFindingReason, reopenFinding,
   type CloseInput, type FindingResult,
 } from '../lib/findings'
 import type { ListColumn } from '../lib/listQuery'
@@ -37,9 +37,7 @@ const dialogProblem = ref('')
 const columns = computed<ListColumn[]>(() => [
   { key: 'code', title: 'findings.code', sortable: true, role: 'primary' },
   { key: 'status', title: 'findings.statusColumn', sortable: true, role: 'status' },
-  { key: 'kind', title: 'findings.kind', role: 'meta', hideBelow: 'md' },
   { key: 'hostname', title: 'findings.device', sortable: true, role: 'meta' },
-  { key: 'subject', title: 'findings.subject', role: 'meta', hideBelow: 'md' },
   { key: 'occurrences', title: 'findings.occurrences', role: 'meta', hideBelow: 'md', align: 'end' },
   { key: 'assignee', title: 'findings.assignee', role: 'meta', hideBelow: 'sm' },
   { key: 'last_seen_at', title: 'findings.lastSeen', sortable: true, role: 'meta', hideBelow: 'sm' },
@@ -51,9 +49,7 @@ const canAcknowledge = (f: Finding) => f.status === 'open'
 const canAssign = (f: Finding) => !closed(f) && f.cleared_at === null
 const canClose = (f: Finding) => !closed(f)
 
-function codeText(f: Finding): string {
-  return f.kind === 'attention' ? t('attention.kinds.' + f.code) : f.code
-}
+const codeText = (f: Finding) => findingCodeText(f, t)
 
 /** Shows the outcome inline: the new status of the finding or the problem; the list reloads on success. */
 function settle(result: FindingResult, f: Finding): boolean {
@@ -163,6 +159,9 @@ async function submitClose(input: CloseInput): Promise<void> {
           :class="item.kind === 'tamper' ? 'mono' : ''"
           :title="item.code"
         >{{ codeText(item) }}</span>
+        <span class="pd-type-caption pd-muted pd-block">
+          {{ t('findings.kinds.' + item.kind) }}<template v-if="item.subject"> · <span class="mono">{{ item.subject }}</span></template>
+        </span>
       </template>
       <template #[`item.status`]="{ item }: { item: Finding }">
         <StatusChip
@@ -177,9 +176,6 @@ async function submitClose(input: CloseInput): Promise<void> {
           :title="t('findings.clearedHint')"
         />
       </template>
-      <template #[`item.kind`]="{ item }: { item: Finding }">
-        {{ t('findings.kinds.' + item.kind) }}
-      </template>
       <template #[`item.hostname`]="{ item }: { item: Finding }">
         <RouterLink
           :to="{ name: 'device', params: { id: item.device_id } }"
@@ -188,17 +184,6 @@ async function submitClose(input: CloseInput): Promise<void> {
         >
           {{ item.hostname }}
         </RouterLink>
-      </template>
-      <template #[`item.subject`]="{ item }: { item: Finding }">
-        <span
-          v-if="item.subject"
-          class="mono pd-truncate"
-          :title="item.subject"
-        >{{ item.subject }}</span>
-        <span
-          v-else
-          class="pd-muted"
-        >–</span>
       </template>
       <template #[`item.assignee`]="{ item }: { item: Finding }">
         <span v-if="item.assignee">{{ item.assignee.display_name || item.assignee.username }}</span>
@@ -214,7 +199,7 @@ async function submitClose(input: CloseInput): Promise<void> {
         />
       </template>
       <template #[`item.actions`]="{ item }: { item: Finding }">
-        <div class="row-actions">
+        <div class="row-actions pd-finding-actions">
           <v-btn
             v-if="canAcknowledge(item)"
             size="small"
@@ -280,3 +265,12 @@ async function submitClose(input: CloseInput): Promise<void> {
     />
   </section>
 </template>
+
+<style scoped>
+/* Three actions plus the other columns overflow a 1280 px page, so the actions wrap onto a second line instead of
+   clipping the column. */
+.pd-finding-actions {
+  flex-wrap: wrap;
+  gap: var(--pd-space-1);
+}
+</style>
