@@ -308,9 +308,8 @@ outbox reaper close it as unknown, or its target, params, error code or organiza
 event it writes. `organization_id` never changes, for every role and in every status, so an action stays in its
 organization without exception; this drops the exception of `00083` out of the platform pseudo-organization, which no
 code path uses: organization creation inserts its started action in the new organization already. The table owner
-`paddock_owner`
-is out of scope: it runs the migrations only, bypasses row-level security and may disable the trigger, and no service
-connects as it. Residual: a role with `UPDATE` can still finish a started action of an organization it may update,
+`paddock_owner` is out of scope: it runs the migrations only, bypasses row-level security and may disable the trigger,
+and no service connects as it. Residual: a role with `UPDATE` can still finish a started action of an organization it may update,
 with another outcome or params, before its use case does; the action stays in that organization with a finish time
 the database bounds, so the retention round keeps it for the full period, but its use case's finish then fails and
 the original outcome never reaches the outbox. And `paddock_relay` holds `DELETE` on `outbox`, so it can remove an
