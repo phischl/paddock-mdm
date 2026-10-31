@@ -248,11 +248,23 @@ func approver(t *testing.T, u *directoryUser) func(code string) error {
 	}
 }
 
+// holdDeviceCode serializes every login that creates a device authorization, from the code's creation until its
+// approval or expiry, so the greeter's newest-pending lookup (pendingUserCode) cannot see the other VM's code. pamLogin
+// and gdmLogin take it through this one helper; the caller defers the returned unlock. A lock-screen or PIN login that
+// falls back to a device code is not covered (not observed; PDK-597).
+func (w *identityWorld) holdDeviceCode() (unlock func()) {
+	return w.group.Lock("device code")
+}
+
 // pamLogin runs the gdm-password PAM stack for u (authenticate and account management) and returns pamtester's exit
 // code; the transcript is logged.
 func (w *identityWorld) pamLogin(t *testing.T, u *directoryUser, approve bool, timeout time.Duration) int {
 	t.Helper()
 	o := pamOpts{pin: u.pin, timeout: timeout}
+	// Himmelblau may create a pending device authorization inside this run, also without approve (a suspended login
+	// falls back to the device flow); until it is approved or expired, a greeter login on the other VM must not look
+	// up "the newest pending code" of the organization (PDK-597).
+	defer w.holdDeviceCode()()
 	if approve {
 		o.approve = approver(t, u)
 	}
@@ -300,8 +312,7 @@ func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int) Ses
 	t.Helper()
 	func() {
 		// The greeter's code is read as the newest pending one of the organization: one VM at a time until approved.
-		unlock := w.group.Lock("device code")
-		defer unlock()
+		defer w.holdDeviceCode()()
 		after := lastDeviceTokenID(t)
 		w.Shot(t, "01-greeter")
 		for range listed {
