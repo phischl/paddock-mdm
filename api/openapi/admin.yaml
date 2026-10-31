@@ -5324,9 +5324,10 @@ components:
     AuditEventStored:
       type: object
       description: The stored audit event, without the read-time device enrichment of AuditEvent.
-      required: [event_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id]
+      required: [event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id]
       properties:
         event_id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid, description: The organization the event belongs to; always the caller's. }
         occurred_at: { type: string, format: date-time }
         recorded_at: { type: string, format: date-time }
         code: { type: string }

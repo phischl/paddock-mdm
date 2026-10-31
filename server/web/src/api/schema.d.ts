@@ -3341,6 +3341,11 @@ export interface components {
         AuditEventStored: {
             /** Format: uuid */
             event_id: string;
+            /**
+             * Format: uuid
+             * @description The organization the event belongs to; always the caller's.
+             */
+            organization_id: string;
             /** Format: date-time */
             occurred_at: string;
             /** Format: date-time */

@@ -17,6 +17,7 @@ type feedEvent struct {
 	CommitSeq int64 `json:"commit_seq"`
 	Event     struct {
 		EventID    string    `json:"event_id"`
+		OrgID      string    `json:"organization_id"`
 		Code       string    `json:"code"`
 		OccurredAt time.Time `json:"occurred_at"`
 		RecordedAt time.Time `json:"recorded_at"`
@@ -135,6 +136,7 @@ func TestAuditFeed(t *testing.T) {
 		if len(events) == 0 || last.NextAfter != last.Latest {
 			t.Fatalf("%d events, next_after %d, latest %d", len(events), last.NextAfter, last.Latest)
 		}
+		acmeID := orgOf(t, alice).String()
 		seen := map[string]bool{}
 		targets := map[string]int{}
 		for i, e := range events {
@@ -145,6 +147,9 @@ func TestAuditFeed(t *testing.T) {
 				t.Fatalf("event %s delivered twice", e.Event.EventID)
 			}
 			seen[e.Event.EventID] = true
+			if e.Event.OrgID != acmeID {
+				t.Fatalf("event %s belongs to organization %q, the token's is %s", e.Event.EventID, e.Event.OrgID, acmeID)
+			}
 			if e.Event.Target != nil && e.Event.Code == "device_group.created" {
 				targets[e.Event.Target.ID]++
 			}
@@ -167,7 +172,11 @@ func TestAuditFeed(t *testing.T) {
 		}
 
 		other, _ := drainFeed(t, globex, 100)
+		globexID := orgOf(t, globex).String()
 		for _, e := range other {
+			if e.Event.OrgID != globexID {
+				t.Fatalf("event %s in the globex feed belongs to organization %q, want %s", e.Event.EventID, e.Event.OrgID, globexID)
+			}
 			if seen[e.Event.EventID] {
 				t.Fatalf("event %s appears in both organizations", e.Event.EventID)
 			}

@@ -366,19 +366,27 @@ func (h *handlers) FeedAuditEvents(ctx context.Context, req adminapi.FeedAuditEv
 	}
 	events := make([]adminapi.AuditFeedEvent, len(res.Events))
 	for i, e := range res.Events {
-		ev, err := toAuditEvent(e)
-		if err != nil {
+		if events[i], err = toAuditFeedEvent(e); err != nil {
 			return nil, err
 		}
-		events[i] = adminapi.AuditFeedEvent{CommitSeq: e.CommitSeq, Event: adminapi.AuditEventStored{
-			Actor: ev.Actor, Code: ev.Code, CorrelationId: ev.CorrelationId, ErrorCode: ev.ErrorCode, EventId: ev.EventId,
-			OccurredAt: ev.OccurredAt, Outcome: ev.Outcome, Params: ev.Params, RecordedAt: ev.RecordedAt, Source: ev.Source,
-			Target: ev.Target,
-		}}
 	}
 	return adminapi.FeedAuditEvents200JSONResponse(adminapi.AuditFeedPage{
 		Schema: adminapi.PaddockAuditFeedV1, Events: events, NextAfter: res.NextAfter, Latest: res.Latest,
 	}), nil
+}
+
+// toAuditFeedEvent maps an index row to a feed item: the stored event with its organization and without the
+// read-time device enrichment.
+func toAuditFeedEvent(e auditstore.AuditEvent) (adminapi.AuditFeedEvent, error) {
+	ev, err := toAuditEvent(e)
+	if err != nil {
+		return adminapi.AuditFeedEvent{}, err
+	}
+	return adminapi.AuditFeedEvent{CommitSeq: e.CommitSeq, Event: adminapi.AuditEventStored{
+		Actor: ev.Actor, Code: ev.Code, CorrelationId: ev.CorrelationId, ErrorCode: ev.ErrorCode, EventId: ev.EventId,
+		OrganizationId: e.OrganizationID, OccurredAt: ev.OccurredAt, Outcome: ev.Outcome, Params: ev.Params,
+		RecordedAt: ev.RecordedAt, Source: ev.Source, Target: ev.Target,
+	}}, nil
 }
 
 // toAuditEvent maps an index row to the API. The writer keeps error_code inside params in the index (there is no
