@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +44,7 @@ func exportServer(t *testing.T, writeTimeout time.Duration, bounds transferBound
 
 // writeBound is a transfer bound of write per write and no overall bound a test reaches.
 func writeBound(write time.Duration) transferBounds {
-	return transferBounds{write: write, minTotal: time.Hour, minRate: exportMinRate}
+	return transferBounds{write: write, minTotal: time.Hour, minRate: exportMinRate, maxTotal: exportMaxTransfer}
 }
 
 func exportPackage(size int64) app.ExportPackage {
@@ -109,7 +110,7 @@ func TestAuditExportDownloadStalledClient(t *testing.T) {
 // is still cut off when the transfer's overall deadline passes.
 func TestAuditExportDownloadTooSlowClient(t *testing.T) {
 	done := make(chan error, 1)
-	srv := exportServer(t, time.Minute, transferBounds{write: time.Minute, minTotal: 500 * time.Millisecond, minRate: 1 << 40},
+	srv := exportServer(t, time.Minute, transferBounds{write: time.Minute, minTotal: 500 * time.Millisecond, minRate: 1 << 40, maxTotal: exportMaxTransfer},
 		func(_ context.Context, _ uuid.UUID, begin func(app.ExportPackage), stream func([]byte) error) error {
 			begin(exportPackage(1 << 40))
 			chunk := make([]byte, 256<<10)
@@ -157,7 +158,7 @@ func TestAuditExportDownloadTooSlowClient(t *testing.T) {
 }
 
 func TestTransferBoundsTotal(t *testing.T) {
-	b := transferBounds{write: exportWriteDeadline, minTotal: exportMinTransfer, minRate: exportMinRate}
+	b := transferBounds{write: exportWriteDeadline, minTotal: exportMinTransfer, minRate: exportMinRate, maxTotal: exportMaxTransfer}
 	for _, c := range []struct {
 		size int64
 		want time.Duration
@@ -166,6 +167,8 @@ func TestTransferBoundsTotal(t *testing.T) {
 		{32 << 20, 10 * time.Minute},
 		{100 << 20, 1600 * time.Second},
 		{1 << 30, 16384 * time.Second},
+		{math.MaxInt64, exportMaxTransfer},
+		{1 << 50, exportMaxTransfer},
 	} {
 		if got := b.total(c.size); got != c.want {
 			t.Errorf("total(%d) = %s, want %s", c.size, got, c.want)

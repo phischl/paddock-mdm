@@ -292,6 +292,26 @@ func (v *verifier) checkEvents(doc *auditevidence.Export, _ []auditevidence.Obje
 	}
 }
 
+// checkReadme is part of group 4: the README an auditor reads first is covered by the signature through export.json.
+func (v *verifier) checkReadme(doc *auditevidence.Export) {
+	if _, ok := v.members["README.md"]; !ok {
+		v.add("README.md is missing")
+		return
+	}
+	if doc.ReadmeSHA256 == "" {
+		v.add("export.json has no readme_sha256")
+		return
+	}
+	sum, err := v.hashMember("README.md")
+	if err != nil {
+		v.add("README.md cannot be read: %v", err)
+		return
+	}
+	if sum != doc.ReadmeSHA256 {
+		v.add("README.md does not match readme_sha256 of export.json")
+	}
+}
+
 // checkServer is group 5: reported, never a problem of the verifier.
 func (v *verifier) checkServer(doc *auditevidence.Export) {
 	s := &v.res.Server

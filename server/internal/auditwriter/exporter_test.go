@@ -384,6 +384,10 @@ func TestExportBuildsPackage(t *testing.T) {
 		doc.EventsSHA256 != hex.EncodeToString(eventsSum[:]) || doc.ChainAnchor != nil || !doc.Verification.OK {
 		t.Fatalf("export.json = %+v", doc)
 	}
+	readmeSum := sha256.Sum256(byName["README.md"])
+	if doc.ReadmeSHA256 != hex.EncodeToString(readmeSum[:]) {
+		t.Fatalf("readme_sha256 %s, README.md hashes to %x", doc.ReadmeSHA256, readmeSum)
+	}
 	if bytes.Contains(raw, []byte("organization_slug")) {
 		t.Fatal("export.json carries an organization slug (plan M10 amendment 2026-10-30)")
 	}
@@ -1052,5 +1056,115 @@ func TestExportReadmeKeepsFreeTextOnOneLine(t *testing.T) {
 	}
 	if strings.Contains(readme, "\u202e") || strings.Contains(readme, "\n# x") || strings.Contains(readme, "\n## y") {
 		t.Fatalf("README carries raw control text:\n%s", readme)
+	}
+}
+
+// switchingSigner signs with the versions of its keys in turn, so the exporter sees the signing key change on every
+// call.
+type switchingSigner struct {
+	keys     map[int]ed25519.PrivateKey
+	versions []int
+	calls    *int
+}
+
+func (s switchingSigner) Sign(ctx context.Context, name string, message []byte) (bao.Signature, error) {
+	v := s.versions[*s.calls%len(s.versions)]
+	*s.calls++
+	return edSigner{priv: s.keys[v], version: v}.Sign(ctx, name, message)
+}
+
+// withKeyPair publishes keys 1 and 2 with private halves known to the test; the sealer signs with version 2 while the
+// exporter signs with exporterSigner(privs).
+func (e exportEnv) withKeyPair(t *testing.T, exporterSigner func(privs map[int]ed25519.PrivateKey) auditwriter.Signer) (
+	exportEnv, map[int][]byte) {
+	t.Helper()
+	pubs, privs := map[int][]byte{}, map[int]ed25519.PrivateKey{}
+	for _, v := range []int{1, 2} {
+		pub, priv, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pubs[v], privs[v] = pub, priv
+	}
+	keyFn := func(context.Context) (map[int][]byte, error) { return pubs, nil }
+	e.sealer = auditwriter.NewSealer(e.pool, e.writer, edSigner{priv: privs[2], version: 2}, auditwriter.NewKeyPublisher(keyFn))
+	e.exporter = auditwriter.NewExporter(e.pool, e.writer, e.store, exporterSigner(privs), keyFn,
+		auditwriter.NewVerifier(e.pool, e.store, keyFn), "test-1.2.3", time.Second)
+	return e, pubs
+}
+
+// TestExportReadmeNamesTheKeyThatSigned: the README is rendered for the newest published key before signing; when the
+// signer used an older published key, the README is rendered again so that it names the key of export.sig and
+// readme_sha256 still covers the final README.
+func TestExportReadmeNamesTheKeyThatSigned(t *testing.T) {
+	ctx := context.Background()
+	e, pubs := newExportEnv(t).withKeyPair(t, func(privs map[int]ed25519.PrivateKey) auditwriter.Signer {
+		return edSigner{priv: privs[1], version: 1}
+	})
+	org := uuid.Must(uuid.NewV7())
+	d := pastDay(5)
+	e.object(t, org, d.Add(time.Hour), 2)
+	e.seal(t, org, d)
+	x := e.running(t, org, d, d, "older key")
+	if err := e.exporter.Build(ctx, x); err != nil {
+		t.Fatal(err)
+	}
+	got := e.export(t, x.ID)
+	if got.Status != "ready" || got.KeyVersion == nil || *got.KeyVersion != 1 {
+		t.Fatalf("export = %+v", got)
+	}
+	byName := map[string][]byte{}
+	for _, m := range untar(t, e.chunks(t, x.ID)) {
+		byName[m.name] = m.body
+	}
+	readme := string(byName["README.md"])
+	want := "version 1, SHA-256 fingerprint " + auditevidence.Fingerprint(pubs[1])
+	if !strings.Contains(readme, want) || strings.Contains(readme, "version 2, SHA-256") ||
+		strings.Contains(readme, auditevidence.Fingerprint(pubs[2])) {
+		t.Fatalf("README does not name only key 1 (%q):\n%s", want, readme)
+	}
+	var doc auditevidence.Export
+	if err := json.Unmarshal(byName["export.json"], &doc); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(byName["README.md"])
+	if doc.ReadmeSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("readme_sha256 %s, README.md hashes to %x", doc.ReadmeSHA256, sum)
+	}
+	var sig auditevidence.Signature
+	if err := json.Unmarshal(byName["export.sig"], &sig); err != nil {
+		t.Fatal(err)
+	}
+	digest := auditevidence.ExportDigest(byName["export.json"])
+	if sig.KeyVersion != 1 || !auditevidence.VerifySignature(pubs, 1, sig.Signature, digest[:]) {
+		t.Fatalf("export.sig %+v does not verify with key 1", sig)
+	}
+}
+
+// TestExportFailsWhenTheSignerKeepsSwitchingKeys: a signer that changes its key version on every call never settles on
+// the key the README names, so the build fails instead of delivering a README that disagrees with export.sig.
+func TestExportFailsWhenTheSignerKeepsSwitchingKeys(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	e, _ := newExportEnv(t).withKeyPair(t, func(privs map[int]ed25519.PrivateKey) auditwriter.Signer {
+		return switchingSigner{keys: privs, versions: []int{1, 2}, calls: &calls}
+	})
+	org := uuid.Must(uuid.NewV7())
+	d := pastDay(5)
+	e.object(t, org, d.Add(time.Hour), 2)
+	e.seal(t, org, d)
+	x := e.running(t, org, d, d, "switching signer")
+	err := e.exporter.Build(ctx, x)
+	if err == nil || !strings.Contains(err.Error(), "the signer switched from audit-chain v1 to v2 twice") {
+		t.Fatalf("build error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("signer called %d times, want 2", calls)
+	}
+	if got := e.export(t, x.ID); got.Status != "failed" || got.ReadyAt != nil {
+		t.Fatalf("export = %+v", got)
+	}
+	if pkg := e.chunks(t, x.ID); len(pkg) != 0 {
+		t.Fatalf("%d bytes of chunks left", len(pkg))
 	}
 }

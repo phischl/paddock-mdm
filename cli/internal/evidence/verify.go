@@ -291,6 +291,7 @@ func (v *verifier) check(opts Options) error {
 		return err
 	}
 	v.checkEvents(doc, expected)
+	v.checkReadme(doc)
 	v.checkServer(doc)
 	return nil
 }

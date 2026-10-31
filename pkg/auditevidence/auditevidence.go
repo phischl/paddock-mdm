@@ -92,6 +92,7 @@ type Export struct {
 	Objects        []Object     `json:"objects"`
 	EventCount     int          `json:"event_count"`
 	EventsSHA256   string       `json:"events_sha256"`
+	ReadmeSHA256   string       `json:"readme_sha256"`
 	ChainAnchor    *string      `json:"chain_anchor"`
 	Verification   Verification `json:"verification"`
 	Keys           []Key        `json:"keys"`
