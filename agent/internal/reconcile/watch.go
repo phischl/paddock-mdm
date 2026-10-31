@@ -39,41 +39,55 @@ type Watch struct {
 // Type implements Reconciler.
 func (w *Watch) Type() string { return bundle.TypeWatch }
 
+// watchSpec decodes the watch section; a unit listed twice is watched once, so that a stop is one event.
 func watchSpec(r bundle.Resource) (bundle.WatchSpec, error) {
 	var s bundle.WatchSpec
 	if err := json.Unmarshal(r.Spec, &s); err != nil {
 		return s, fmt.Errorf("invalid watch spec: %w", err)
 	}
+	units := make([]string, 0, len(s.Units))
 	for _, u := range s.Units {
-		// The server refuses the same names; the agent checks again because a unit name becomes a systemctl argument.
-		if policy.ValidateUnit(u) != nil || !strings.HasSuffix(u, ".service") {
+		// The server refuses the same names; the agent checks again because a unit name becomes a systemctl argument,
+		// and a leading '-' would read as an option.
+		if policy.ValidateUnit(u) != nil || !strings.HasSuffix(u, ".service") || strings.HasPrefix(u, "-") {
 			return s, fmt.Errorf("invalid watched unit %q", u)
 		}
+		if !slices.Contains(units, u) {
+			units = append(units, u)
+		}
 	}
+	s.Units = units
 	return s, nil
 }
 
 // watchState returns the state of a watched unit: "" while it runs, otherwise WatchInactive, WatchFailed or
-// WatchMissing.
+// WatchMissing. Only systemd's own "not-found" makes a unit missing: a query that fails (bus error, timeout) is an
+// error, so that a busy or restarting systemd is never reported as tampering.
 func watchState(ctx context.Context, sys System, unit string) (string, error) {
-	out, exit, err := sys.Systemctl(ctx, "is-enabled", unit)
+	out, exit, err := sys.Systemctl(ctx, "show", "-p", "LoadState", "-p", "ActiveState", "-p", "SubState", "--", unit)
 	if err != nil {
-		return "", fmt.Errorf("systemctl is-enabled %s: %w", unit, err)
+		return "", fmt.Errorf("systemctl show %s: %w", unit, err)
 	}
-	// A unit systemd knows answers with its enablement, also with a non-zero exit (disabled, linked, masked); anything
-	// else on a non-zero exit is an unknown unit.
-	if state := firstLine(out); exit != 0 && !slices.Contains([]string{"disabled", "linked", "linked-runtime", "masked", "masked-runtime"}, state) {
+	if exit != 0 {
+		return "", fmt.Errorf("systemctl show %s: exit %d: %s", unit, exit, firstLine(out))
+	}
+	props := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			props[k] = v
+		}
+	}
+	load, active, sub := props["LoadState"], props["ActiveState"], props["SubState"]
+	switch {
+	case load == "" || active == "":
+		return "", fmt.Errorf("systemctl show %s: unexpected answer %q", unit, firstLine(out))
+	case load == "not-found":
 		return WatchMissing, nil
-	}
-	out, _, err = sys.Systemctl(ctx, "is-active", unit)
-	if err != nil {
-		return "", fmt.Errorf("systemctl is-active %s: %w", unit, err)
-	}
-	switch state := firstLine(out); {
-	case slices.Contains(activeStates, state):
-		return "", nil
-	case state == WatchFailed:
+	// A crash loop waits in activating/auto-restart between the attempts: it is not running.
+	case active == "failed" || strings.HasPrefix(sub, "auto-restart"):
 		return WatchFailed, nil
+	case slices.Contains(activeStates, active):
+		return "", nil
 	default:
 		return WatchInactive, nil
 	}

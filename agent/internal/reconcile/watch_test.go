@@ -148,7 +148,7 @@ func TestWatchForgetsUnits(t *testing.T) {
 func TestWatchRefusesInvalidUnits(t *testing.T) {
 	ctx := context.Background()
 	sys, w, events := watchFixture(t)
-	for _, units := range [][]string{{"--now"}, {"paddockd.service"}, {"foo.timer"}, {"a b.service"}} {
+	for _, units := range [][]string{{"--now"}, {"-x.service"}, {"--.service"}, {"paddockd.service"}, {"foo.timer"}, {"a b.service"}} {
 		r := watchResource(t, units...)
 		if _, err := w.Plan(ctx, r); err == nil {
 			t.Errorf("plan of %v succeeded", units)
@@ -162,5 +162,59 @@ func TestWatchRefusesInvalidUnits(t *testing.T) {
 	}
 	if calls := sys.TakeCalls(); len(calls) != 0 {
 		t.Fatalf("calls %v", calls)
+	}
+}
+
+// TestWatchQueryFailure: a systemd query that fails (here a bus error) is an error, never a missing unit, and keeps the
+// unit's previous state: no event while it fails, no second event for a stop reported before it.
+func TestWatchQueryFailure(t *testing.T) {
+	ctx := context.Background()
+	sys, w, events := watchFixture(t)
+	r := watchResource(t, "wazuh-agent.service")
+	sys.FailCmd = "systemctl show -p LoadState -p ActiveState -p SubState -- wazuh-agent.service"
+	if _, err := w.Plan(ctx, r); err == nil {
+		t.Fatal("plan succeeded while systemd fails")
+	}
+	if res := w.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply while systemd fails: %+v", res)
+	}
+	if got := takeEvents(events); len(got) != 0 {
+		t.Fatalf("a failing query was reported: %v", got)
+	}
+
+	sys.FailCmd = ""
+	sys.Units["wazuh-agent.service"].Active = false
+	applyWatch(t, w, r)
+	sys.FailCmd = "systemctl show -p LoadState -p ActiveState -p SubState -- wazuh-agent.service"
+	w.Apply(ctx, r)
+	sys.FailCmd = ""
+	applyWatch(t, w, r)
+	if got := takeEvents(events); !slices.Equal(got, []event{stopped("wazuh-agent.service", "inactive")}) {
+		t.Fatalf("events across a failing query %v", got)
+	}
+}
+
+// TestWatchCrashLoop: a unit that systemd keeps restarting (activating, auto-restart) is not running: failed.
+func TestWatchCrashLoop(t *testing.T) {
+	sys, w, events := watchFixture(t)
+	sys.Units["wazuh-agent.service"] = &fakesys.Unit{State: "enabled", Restarting: true}
+	applyWatch(t, w, watchResource(t, "wazuh-agent.service"))
+	if got := takeEvents(events); !slices.Equal(got, []event{stopped("wazuh-agent.service", "failed")}) {
+		t.Fatalf("events %v", got)
+	}
+}
+
+// TestWatchDuplicateUnits: a unit listed twice is one event per stop.
+func TestWatchDuplicateUnits(t *testing.T) {
+	ctx := context.Background()
+	sys, w, events := watchFixture(t)
+	sys.Units["wazuh-agent.service"].Active = false
+	r := watchResource(t, "wazuh-agent.service", "wazuh-agent.service")
+	if plan, err := w.Plan(ctx, r); err != nil || !slices.Equal(plan, []string{"report wazuh-agent.service inactive"}) {
+		t.Fatalf("plan %v (%v)", plan, err)
+	}
+	applyWatch(t, w, r)
+	if got := takeEvents(events); !slices.Equal(got, []event{stopped("wazuh-agent.service", "inactive")}) {
+		t.Fatalf("events %v", got)
 	}
 }

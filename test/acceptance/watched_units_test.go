@@ -15,7 +15,7 @@ import (
 // TestWatchedUnits is the server part of gate N10 (plan M9 §9): the units of the presence policy are set by an
 // administrator with a step-up and audited with added, reserved and non-service units are refused, the next bundle of
 // an active v2 device carries them (and none without units), the device's report of a missing watched unit is recorded
-// with its state (PDK-131), and the declarative document applies the same list.
+// with its state and opens one tamper finding with the unit as subject (PDK-131), and the declarative document applies the same list.
 func TestWatchedUnits(t *testing.T) {
 	admin, _ := gateOrg(t, "n10-admin")
 	const path = "/api/v1/settings/watched-units"
@@ -58,6 +58,9 @@ func TestWatchedUnits(t *testing.T) {
 		dev.DeviceID, "device.tamper_service_stopped", "success", time.Minute)
 	if stopped.Params["unit"] != unit[0] || stopped.Params["state"] != "missing" {
 		t.Fatalf("tamper event params %v", stopped.Params)
+	}
+	if f := tamperFindingOf(t, admin.Portal, dev.DeviceID, 1); f.Code != "device.tamper_service_stopped" || f.Subject != unit[0] || f.Status != "open" {
+		t.Fatalf("tamper finding %+v", f)
 	}
 
 	// The declarative document shows the diff in a dry run and applies the list.
