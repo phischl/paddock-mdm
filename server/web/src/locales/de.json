@@ -258,6 +258,9 @@
     "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal."
   },
   "audit": {
+    "vulnerability": {
+      "critical_summary": "{new_critical, plural, one {# neue kritische Schwachstelle} other {# neue kritische Schwachstellen}} auf {devices, plural, one {# Gerät} other {# Geräten}}"
+    },
     "retention": {
       "purged": "{deleted, plural, one {# abgelaufener Eintrag} other {# abgelaufene Einträge}} von {store} gelöscht"
     },

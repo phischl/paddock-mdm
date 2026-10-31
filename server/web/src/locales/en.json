@@ -258,6 +258,9 @@
     "rate_limited": "Too many requests. Try again shortly."
   },
   "audit": {
+    "vulnerability": {
+      "critical_summary": "{new_critical, plural, one {# new critical vulnerability} other {# new critical vulnerabilities}} on {devices, plural, one {# device} other {# devices}}"
+    },
     "retention": {
       "purged": "{deleted, plural, one {# expired entry} other {# expired entries}} of {store} were deleted"
     },

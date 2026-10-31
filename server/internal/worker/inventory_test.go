@@ -106,7 +106,8 @@ func TestInventoryRound(t *testing.T) {
 	}
 	src := &fakeSource{hosts: []ports.InventoryHost{{Ref: "1", HardwareUUID: strings.ToUpper(hw)}, {Ref: "2", HardwareUUID: uuid.NewString()}}}
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
-	i := NewInventory(nil, src, app.NewInventorySync(runner, f.pool, platform), f.pool, platform, time.Minute)
+	i := NewInventory(nil, src, app.NewInventorySync(runner, f.pool, platform),
+		app.NewVulnerabilitySummary(runner), f.pool, platform, time.Minute)
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	for n := range inventoryFullEvery + 1 {
 		if n == 5 {
@@ -133,5 +134,38 @@ func TestInventoryRound(t *testing.T) {
 	}
 	if full != 6 { // two pages each in rounds 1, 6 (new vulnerability matches) and 13
 		t.Fatalf("%d full listings in %v", full, src.since)
+	}
+}
+
+// TestInventoryRoundRecordsCriticalSummary (plan M9 decision 37): a round records the critical CVE summary of an
+// organization with new critical findings, and the next round of the same day records no second one.
+func TestInventoryRoundRecordsCriticalSummary(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	dev := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-sum', 'active')", dev, f.org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.super.Exec(ctx, `INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version,
+		severity, first_seen_at) VALUES ($1, $2, 'CVE-2026-1111', 'p', '1', 'critical', now() - interval '1 hour')`, dev, f.org); err != nil {
+		t.Fatal(err)
+	}
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	i := NewInventory(nil, &fakeSource{hosts: []ports.InventoryHost{{Ref: "1", HardwareUUID: uuid.NewString()}, {Ref: "2", HardwareUUID: uuid.NewString()}}}, app.NewInventorySync(runner, f.pool, platform),
+		app.NewVulnerabilitySummary(runner), f.pool, platform, time.Minute)
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
+	for range 2 {
+		if err := i.Round(sys); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err := f.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'vulnerability.critical_summary'", f.org).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d summaries, %v", n, err)
 	}
 }
