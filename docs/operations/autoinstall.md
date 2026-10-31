@@ -64,6 +64,9 @@ UEFI with Secure Boot and a TPM 2.0.
    the recovery key and the LUKS header, and then removes the temporary passphrase. From the next boot on, the
    device asks only for the boot PIN.
 
+**Troubleshooting:** recovering a failed first-boot enrollment with `paddockd enroll` makes the device `adopted`,
+so it starts in report-only mode until an administrator enables enforcement for it.
+
 ## Encrypting an installed device
 
 A device that is not encrypted — the portal shows *Not encrypted* and the attention page *Disk encryption not

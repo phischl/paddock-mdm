@@ -424,10 +424,9 @@ func TestEnrollmentLockWaitIsInterruptible(t *testing.T) {
 	}
 }
 
-// TestResumeWithoutConfiguration: when the enrollment configuration is gone because the other side of the lock
-// started the enrollment and removed it, `paddockd enroll` resumes that enrollment instead of failing on the file.
-func TestResumeWithoutConfiguration(t *testing.T) {
-	f := newFixture(t)
+// pendingEnrollment starts an enrollment that waits for approval and removes its configuration.
+func pendingEnrollment(t *testing.T, f *fixture) {
+	t.Helper()
 	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollPending, DeviceID: testgw.DeviceID})
 	o := f.options(f.cfgPath)
 	o.NoWait = true
@@ -438,10 +437,56 @@ func TestResumeWithoutConfiguration(t *testing.T) {
 		t.Fatal("configuration not removed")
 	}
 	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
-	if code, err := enroll.Run(context.Background(), f.options(f.cfgPath)); code != enroll.ExitActive || err != nil {
-		t.Fatalf("resume with a removed configuration: %d, %v", code, err)
+}
+
+// TestResumeWithoutConfiguration: when the configuration is gone because the other side of the lock started the
+// enrollment and removed it — on the agent's own path, or while `paddockd enroll` waited for the lock — the
+// enrollment is resumed instead of failing on the file.
+func TestResumeWithoutConfiguration(t *testing.T) {
+	t.Run("agent's own path", func(t *testing.T) {
+		f := newFixture(t)
+		pendingEnrollment(t, f)
+		o := f.options(f.cfgPath)
+		o.SkipWhenBusy = true
+		if code, err := enroll.Run(context.Background(), o); code != enroll.ExitActive || err != nil || len(f.g.Enrolls) != 1 {
+			t.Fatalf("resume: %d, %v, %d requests", code, err, len(f.g.Enrolls))
+		}
+	})
+	t.Run("removed while paddockd enroll waited", func(t *testing.T) {
+		f := newFixture(t)
+		data, err := os.ReadFile(f.cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pendingEnrollment(t, f)
+		if err := os.WriteFile(f.cfgPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		release := holdLock(t, f.layout)
+		cli := f.options(f.cfgPath)
+		cli.Sleep = func(ctx context.Context, _ time.Duration) error {
+			if err := os.Remove(f.cfgPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Error(err)
+			}
+			release()
+			return ctx.Err()
+		}
+		if code, err := enroll.Run(context.Background(), cli); code != enroll.ExitActive || err != nil || len(f.g.Enrolls) != 1 {
+			t.Fatalf("resume: %d, %v, %d requests", code, err, len(f.g.Enrolls))
+		}
+	})
+}
+
+// TestMissingConfigurationFailsWhilePending: a mistyped or missing --config fails with the file error, also while an
+// enrollment is pending; it is never taken as a resume.
+func TestMissingConfigurationFailsWhilePending(t *testing.T) {
+	f := newFixture(t)
+	pendingEnrollment(t, f)
+	code, err := enroll.Run(context.Background(), f.options(f.cfgPath))
+	if code != enroll.ExitError || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing --config: %d, %v", code, err)
 	}
-	if len(f.g.Enrolls) != 1 {
-		t.Fatalf("%d enrollment requests", len(f.g.Enrolls))
+	if st, _ := state.Load(f.layout.State()); st.Status == state.StatusActive {
+		t.Fatal("resumed with a missing configuration")
 	}
 }

@@ -81,6 +81,9 @@ func Run(ctx context.Context, o Options) (int, error) {
 		}
 	}
 	l := o.Layout
+	// Only a configuration that vanished while this run waited for the lock may be missing later: a mistyped
+	// --config must fail even when an enrollment is pending.
+	configExisted := o.ConfigPath != "" && !configGone(o.ConfigPath)
 	release, err := lock(ctx, o)
 	if err != nil {
 		return ExitError, err
@@ -100,7 +103,7 @@ func Run(ctx context.Context, o Options) (int, error) {
 	}
 	var token string
 	switch {
-	case o.ConfigPath != "" && st.EnrollmentID != "" && configGone(o.ConfigPath):
+	case o.ConfigPath != "" && st.EnrollmentID != "" && (o.SkipWhenBusy || configExisted) && configGone(o.ConfigPath):
 		// The other side of the enrollment lock started this enrollment and removed the configuration meanwhile: resume
 		// with what it stored instead of failing on the missing file.
 		slog.InfoContext(ctx, "resuming the enrollment started meanwhile", "enrollment_id", st.EnrollmentID)
