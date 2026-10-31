@@ -1797,7 +1797,8 @@
     "errors": {
       "notService": "{unit} is not a service name. Use a name ending in .service.",
       "duplicate": "{unit} is listed twice.",
-      "tooMany": "At most {max} units can be watched."
+      "tooMany": "At most {max} units can be watched.",
+      "refused": "{unit} is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected."
     }
   },
   "dms": {

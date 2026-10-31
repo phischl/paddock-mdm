@@ -5,14 +5,14 @@ import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { VApp } from 'vuetify/components'
 import WatchedUnits from '../views/WatchedUnits.vue'
-import { validateWatchedUnits, type WatchedUnits as Saved } from '../lib/watchedUnits'
+import { refusedUnit, validateWatchedUnits, type WatchedUnits as Saved, type WatchedUnitsRefusal } from '../lib/watchedUnits'
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
 import { useSessionStore } from '../stores/session'
 
 let stored: Saved = { units: ['wazuh-agent.service'], updatedAt: '2026-10-31T10:00:00Z' }
-const setWatchedUnits = vi.fn<(u: string[]) => Promise<Saved | string>>()
+const setWatchedUnits = vi.fn<(u: string[]) => Promise<Saved | WatchedUnitsRefusal>>()
 vi.mock('../lib/watchedUnits', async (original) => ({
   ...(await original<typeof import('../lib/watchedUnits')>()),
   getWatchedUnits: () => Promise.resolve(stored),
@@ -70,7 +70,7 @@ describe('validateWatchedUnits', () => {
 
 describe('WatchedUnits (plan M9 decision 38)', () => {
   it('shows the stored units, confirms, steps up and saves after the return', async () => {
-    setWatchedUnits.mockResolvedValueOnce('step_up_required')
+    setWatchedUnits.mockResolvedValueOnce({ code: 'step_up_required', unit: null })
     const w = await mountPage()
     expect(w.text()).toContain('wazuh-agent.service')
     expect(w.find('[data-testid="watched-info"]').text()).toContain('never installs')
@@ -99,14 +99,39 @@ describe('WatchedUnits (plan M9 decision 38)', () => {
     expect(setWatchedUnits).not.toHaveBeenCalled()
   })
 
-  it('shows the server refusal inline', async () => {
-    setWatchedUnits.mockResolvedValueOnce('unit_not_allowed')
-    const w = await mountPage()
+  async function submit(): Promise<void> {
     ;(document.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'))
     await flushPromises()
     settleConfirm({ reason: '' })
     await flushPromises()
-    expect(w.find('[data-testid="watched-problem"]').text()).toContain('This unit is not allowed')
+  }
+
+  it('names the refused unit and marks the input invalid', async () => {
+    setWatchedUnits.mockResolvedValueOnce({ code: 'unit_not_allowed', unit: 'paddockd.service' })
+    const w = await mountPage()
+    expect(document.querySelector('#watched-units')?.getAttribute('aria-invalid')).not.toBe('true')
+    await submit()
+    expect(w.text()).toContain('paddockd.service is not allowed')
+    expect(document.querySelector('#watched-units')?.getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('marks the input invalid while a client-side error shows', async () => {
+    await mountPage()
+    await addUnit('foo.timer')
+    expect(document.querySelector('#watched-units')?.getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('shows another server refusal inline', async () => {
+    setWatchedUnits.mockResolvedValueOnce({ code: 'invalid_request', unit: null })
+    const w = await mountPage()
+    await submit()
+    expect(w.find('[data-testid="watched-problem"]').exists()).toBe(true)
+  })
+
+  it('reads the refused unit from the problem detail', () => {
+    expect(refusedUnit('paddockd.service: not a watchable service unit')).toBe('paddockd.service')
+    expect(refusedUnit('something else')).toBeNull()
+    expect(refusedUnit(undefined)).toBeNull()
   })
 
   it('offers no save button to an auditor', async () => {

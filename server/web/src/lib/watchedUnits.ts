@@ -15,12 +15,27 @@ export async function getWatchedUnits(): Promise<WatchedUnits | string> {
   return data ? { units: data.units, updatedAt: data.updated_at ?? null } : problemCode(error)
 }
 
-/** Replaces the watched units (organization administrator with a step-up); the saved list or a problem code. */
-export async function setWatchedUnits(units: string[]): Promise<WatchedUnits | string> {
+/** A refusal of the server: the problem code and, for unit_not_allowed, the unit it names. */
+export interface WatchedUnitsRefusal {
+  code: string
+  unit: string | null
+}
+
+/** The unit a unit_not_allowed detail names ("<unit>: not a watchable service unit"), or null. */
+export function refusedUnit(detail: unknown): string | null {
+  if (typeof detail !== 'string') return null
+  const m = /^(.+?): not a watchable service unit$/.exec(detail)
+  return m ? m[1] : null
+}
+
+/** Replaces the watched units (organization administrator with a step-up); the saved list or the refusal. */
+export async function setWatchedUnits(units: string[]): Promise<WatchedUnits | WatchedUnitsRefusal> {
   const { data, error } = await api.PUT('/api/v1/settings/watched-units', {
     params: { header: { 'X-Paddock-CSRF': '1' } }, body: { units },
   })
-  return data ? { units: data.units, updatedAt: data.updated_at ?? null } : problemCode(error)
+  if (data) return { units: data.units, updatedAt: data.updated_at ?? null }
+  const code = problemCode(error)
+  return { code, unit: code === 'unit_not_allowed' ? refusedUnit((error as { detail?: unknown }).detail) : null }
 }
 
 /** A validation problem of a unit list: the message key and its values, or null when the list can be saved. */

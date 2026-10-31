@@ -25,9 +25,12 @@ const units = ref<string[]>([])
 const updatedAt = ref('')
 const problem = ref('')
 const saved = ref(false)
+const refused = ref<string | null>(null)
 
 const invalid = computed(() => validateWatchedUnits(units.value))
 const invalidText = computed(() => (invalid.value ? t(invalid.value.key, invalid.value.values) : ''))
+const refusedText = computed(() => (refused.value ? t('watchedUnits.errors.refused', { unit: refused.value }) : ''))
+const errorText = computed(() => invalidText.value || refusedText.value)
 
 function apply(list: string[], at: string | null): void {
   units.value = list
@@ -42,13 +45,15 @@ async function load(): Promise<void> {
 
 async function save(list: string[]): Promise<void> {
   saved.value = false
+  refused.value = null
   const r = await setWatchedUnits(list)
-  if (r === stepUpRequired) {
+  if ('code' in r && r.code === stepUpRequired) {
     startStepUp('watched-units', 'settings', list)
     return
   }
-  if (typeof r === 'string') {
-    problem.value = r
+  if ('code' in r) {
+    if (r.unit) refused.value = r.unit
+    else problem.value = r.code
     return
   }
   problem.value = ''
@@ -126,7 +131,8 @@ onMounted(async () => {
         :items="[]"
         :delimiters="[',', ' ']"
         :readonly="!session.canDelete"
-        :error-messages="invalidText ? [invalidText] : []"
+        :error-messages="errorText ? [errorText] : []"
+        :aria-invalid="errorText ? 'true' : undefined"
         data-testid="watched-units"
       />
       <p
