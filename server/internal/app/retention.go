@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -234,8 +235,8 @@ func (r *Retention) PurgePlatformActions(ctx context.Context, now time.Time) (in
 	if err != nil || !found {
 		return 0, err
 	}
-	return purgeBatchesIn(ctx, r.runner, ScopePlatform, r.platform.InPlatform, StoreAction, cutoff, r.budget, r.lockTimeout,
-		func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+	return purgeBatchesIn(ctx, r.runner, ScopePlatform, r.platform.InPlatform, StoreAction, cutoff, r.indexParams(), r.budget,
+		r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 			return q.DeleteExpiredActions(ctx, pgstore.DeleteExpiredActionsParams{OrganizationID: org, Cutoff: cutoff})
 		})
 }
@@ -278,24 +279,36 @@ func (r *Retention) PurgeEventGaps(ctx context.Context, now time.Time) (int64, e
 }
 
 // indexCutoff is the cutoff of the stores kept as long as the audit index shows their events (ADR 0032 amendment
-// 2026-10-31): the earlier of now − the index retention and the start of the UTC month containing that instant. The
-// index drops whole months only, after the month ended more than the index retention ago, so a row older than that
-// month's start has no event left in the index, and a younger one may still have. It fails when the index retention
-// is below auditwriter.MinRetentionDays.
+// 2026-10-31, keptByIndex). It fails when the index retention is below auditwriter.MinRetentionDays.
 func (r *Retention) indexCutoff(now time.Time) (time.Time, error) {
 	if r.indexDays < auditwriter.MinRetentionDays {
 		return time.Time{}, fmt.Errorf("the audit index retention of %d days is below the minimum of %d days",
 			r.indexDays, auditwriter.MinRetentionDays)
 	}
-	return keptByIndex(now, r.indexDays, r.indexDays, r.unit), nil
+	return keptByIndex(now, r.indexDays, r.unit), nil
 }
 
-// keptByIndex is min(now − storeDays, start of the UTC month containing now − indexDays), both counted in unit.
-func keptByIndex(now time.Time, storeDays, indexDays int, unit time.Duration) time.Time {
-	cutoff := now.Add(-time.Duration(storeDays) * unit)
-	t := now.Add(-time.Duration(indexDays) * unit).UTC()
-	if floor := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC); floor.Before(cutoff) {
-		cutoff = floor
+// indexParams are the retention.purged params of the stores kept by the audit index beyond store, cutoff and deleted.
+func (r *Retention) indexParams() map[string]any { return map[string]any{"index_days": r.indexDays} }
+
+// indexMarginDays covers the audit index purge running late and the clocks of the worker and the audit host differing
+// (ADR 0032 amendment 2026-10-31).
+const indexMarginDays = 2
+
+// indexYoungest is the age below which no store kept by the index loses a row, so a development installation that
+// counts days in seconds does not delete rows a running gate or session still reads; production cutoffs lie hundreds
+// of days back and never reach it.
+const indexYoungest = time.Hour
+
+// keptByIndex is the start of the UTC month containing now − (indexDays + indexMarginDays), counted in unit, and never
+// later than now − indexYoungest. The index drops whole months only, after the month ended more than the index
+// retention ago, so a row older than that month's start has no event left in the index, and a younger one may still
+// have.
+func keptByIndex(now time.Time, indexDays int, unit time.Duration) time.Time {
+	t := now.Add(-time.Duration(indexDays+indexMarginDays) * unit).UTC()
+	cutoff := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+	if youngest := now.Add(-indexYoungest); youngest.Before(cutoff) {
+		cutoff = youngest
 	}
 	return cutoff
 }
@@ -321,9 +334,10 @@ func (r *Retention) purgeAfterIndex(ctx context.Context, now time.Time, store st
 	if err != nil || !found {
 		return 0, err
 	}
-	return purgeBatches(ctx, r.runner, r.org, store, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
-		return batch(ctx, q, cutoff)
-	})
+	return purgeBatchesIn(ctx, r.runner, ScopeOrg, r.org.InOrg, store, cutoff, r.indexParams(), r.budget, r.lockTimeout,
+		func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+			return batch(ctx, q, cutoff)
+		})
 }
 
 // PurgeRetiredInventory deletes the inventory of the context's organization's devices retired longer than the
@@ -691,16 +705,17 @@ func (r *Retention) setLockTimeout(ctx context.Context, q *pgstore.Queries) erro
 // lockTimeout for a row lock rolls back alone and ends the pass the same way.
 func purgeBatches(ctx context.Context, runner *ActionRunner, org *db.OrgPool, store string, cutoff time.Time, budget, lockTimeout time.Duration,
 	batch func(ctx context.Context, q *pgstore.Queries) (int64, error)) (int64, error) {
-	return purgeBatchesIn(ctx, runner, ScopeOrg, org.InOrg, store, cutoff, budget, lockTimeout, batch)
+	return purgeBatchesIn(ctx, runner, ScopeOrg, org.InOrg, store, cutoff, nil, budget, lockTimeout, batch)
 }
 
-// purgeBatchesIn is purgeBatches in scope, with every batch's transaction opened by in.
+// purgeBatchesIn is purgeBatches in scope, with every batch's transaction opened by in and params added to the event's.
 func purgeBatchesIn(ctx context.Context, runner *ActionRunner, scope Scope,
 	in func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error,
-	store string, cutoff time.Time, budget, lockTimeout time.Duration,
+	store string, cutoff time.Time, params map[string]any, budget, lockTimeout time.Duration,
 	batch func(ctx context.Context, q *pgstore.Queries) (int64, error)) (int64, error) {
 	spec := SpecRetentionPurged
 	spec.Params = map[string]any{"store": store, "cutoff": audit.Timestamp(cutoff).Format(time.RFC3339Nano)}
+	maps.Copy(spec.Params, params)
 	var deleted int64
 	err := runner.RunExternal(ctx, scope, spec,
 		func(context.Context, *pgstore.Queries, Recorder) error { return nil },

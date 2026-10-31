@@ -42,5 +42,5 @@ func (r *ReadAudit) SetClock(now func() time.Time) { r.now = now }
 // SetIndexDays replaces the audit index retention, for tests of a retention below the minimum.
 func (r *Retention) SetIndexDays(n int) { r.indexDays = n }
 
-// KeptByIndex is keptByIndex, for tests of both arms of the cutoff.
+// KeptByIndex is keptByIndex, for tests of the month start, the margin and the youngest row.
 var KeptByIndex = keptByIndex

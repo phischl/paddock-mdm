@@ -110,8 +110,9 @@ disk. They get an issue and a structural fix (a cache, a pinned digest, a local 
 Gates must not depend on the development stack's retention timing. With `PADDOCK_RETENTION_UNIT=seconds` the
 worker's retention round counts retention days in seconds and runs every 15 s: login history and seen users vanish
 after a few hundred seconds, and finished commands, cleared alerts, filled event gaps and finished actions vanish
-once they lie before the UTC month containing now − 400 s (ADR 0032 amendment 2026-10-31). A gate that needs such a
-row writes it shortly before it reads it, or backdates it on purpose to test the purge.
+once they lie before the UTC month containing now − 402 s (400 days and a margin of 2, in seconds) and are older
+than one hour (ADR 0032 amendment 2026-10-31). A gate that needs such a row writes it shortly before it reads it, or
+backdates it on purpose to test the purge.
 
 ## 3. How to read shard timing
 

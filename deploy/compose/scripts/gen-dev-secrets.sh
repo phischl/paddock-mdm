@@ -72,10 +72,13 @@ if [[ ! -f "$COMPOSE_DIR/.env" ]]; then
   fi
 fi
 # The worker does not start without the audit index retention (compose.yaml), which a .env copied from an older
-# .env.example lacks.
+# .env.example lacks. Without it the audit writer uses its WORM retention, so the backfill takes that value and keeps
+# what the stack's index retention already was.
 if ! grep -q '^PADDOCK_AUDIT_INDEX_RETENTION_DAYS=' "$COMPOSE_DIR/.env"; then
-  set_env PADDOCK_AUDIT_INDEX_RETENTION_DAYS 400
-  echo "deploy/compose/.env: added PADDOCK_AUDIT_INDEX_RETENTION_DAYS=400"
+  index_days="$(sed -n 's/^PADDOCK_AUDIT_RETENTION_DAYS=//p' "$COMPOSE_DIR/.env" | tail -1)"
+  [[ "$index_days" =~ ^[0-9]+$ ]] || index_days=400
+  set_env PADDOCK_AUDIT_INDEX_RETENTION_DAYS "$index_days"
+  echo "deploy/compose/.env: added PADDOCK_AUDIT_INDEX_RETENTION_DAYS=$index_days"
 fi
 
 # Control-plane PostgreSQL

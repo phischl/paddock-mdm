@@ -183,6 +183,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	if usesAny(c, []string{"PADDOCK_RETENTION_INTERVAL"}) {
 		results = append(results, checkRetentionInterval(c))
 	}
+	if _, ok := c.Services["paddock-worker"]; ok {
+		results = append(results, checkAuditIndexRetention(c))
+	}
 	if usesAny(c, releaseKeyVars) {
 		results = append(results, checkReleaseKeys(c, o))
 	}
@@ -1064,6 +1067,30 @@ func checkRetentionInterval(c Config) Result {
 		}
 	}
 	return result("retention round interval", f)
+}
+
+// checkAuditIndexRetention fails on an audit index retention the worker would refuse to start with (ADR 0032 amendment
+// 2026-10-31): Compose passes the variable empty when .env lacks it, as an .env from before the variable does.
+func checkAuditIndexRetention(c Config) Result {
+	var f []string
+	s := c.Services["paddock-worker"]
+	least := MinObjectLockDays
+	if worm := env(s, "PADDOCK_AUDIT_RETENTION_DAYS"); worm != "" {
+		if n, err := strconv.Atoi(worm); err != nil {
+			f = append(f, fmt.Sprintf("paddock-worker: PADDOCK_AUDIT_RETENTION_DAYS=%s is not a number of days", worm))
+		} else if n > least {
+			least = n
+		}
+	}
+	v := env(s, "PADDOCK_AUDIT_INDEX_RETENTION_DAYS")
+	if n, err := strconv.Atoi(v); v == "" {
+		f = append(f, "paddock-worker: PADDOCK_AUDIT_INDEX_RETENTION_DAYS is not set; add it to .env with the audit host's value "+
+			"(docs/operations/upgrade.md)")
+	} else if err != nil || n < least {
+		f = append(f, fmt.Sprintf("paddock-worker: PADDOCK_AUDIT_INDEX_RETENTION_DAYS=%s is not a number of days of at least %d "+
+			"(the bucket default and PADDOCK_AUDIT_RETENTION_DAYS)", v, least))
+	}
+	return result("audit index retention of the retention round", f)
 }
 
 func checkReleaseKeys(c Config, o Options) Result {

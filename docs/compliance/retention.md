@@ -33,7 +33,7 @@ job that deletes and the audit event that proves it. "Now" means configurable pe
 | `device_event_gap` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `filled_at`; unfilled gaps never | Art. 6(1)(f) | Worker, every 6 h, per organization, batches of 1 000; `retention.purged` (store `device_event_gap`, only when rows were deleted) | — |
 | `device_event_dropped` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | Lifetime of the device (no timestamp; ADR 0032 amendment 2026-10-31) | Art. 6(1)(f) | None yet; follow-up ticket | — |
 | `paddock_audit.audit_verification_run` (M8b) | Evidence metadata | Verification results per range; no personal data | Unlimited (part of the chain's evidence) | — | None | — |
-| `action` (control-plane origin of audit events) | Evidence (origin copy) | As audit events | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at`, never before the start of the UTC month containing now − that period; started actions never (ADR 0032 amendment 2026-10-31) | As audit events | Worker, every 6 h, per organization and once for the platform pseudo-organization, batches of 1 000; `retention.purged` (store `action`, only when rows were deleted) | — |
+| `action` (control-plane origin of audit events) | Evidence (origin copy) | As audit events | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at`, never before the start of the UTC month containing now − that period − 2 days; started actions never; a finished action is read-only for every runtime role (ADR 0032 amendment 2026-10-31) | As audit events | Worker, every 6 h, per organization and once for the platform pseudo-organization, batches of 1 000; `retention.purged` (store `action`, only when rows were deleted) | — |
 | `outbox` | Transport | Audit payloads, state changes | 7 days after publication (existing) | — | Outbox relay (existing, not audited: transport only) | — |
 | `read_audit_window` | Coalescing keys of read-access events | Actor ID, code, target ID, window | 48 hours | Art. 6(1)(f) | Worker, every 6 h; `retention.purged` (store `read_audit_window`) | — |
 | Administrator accounts (`admin_account`), API tokens (`api_token`) | Administrator data | Name, display, role, token hash and metadata | Account: follows Authentik (synced); token: until revoked or expired, then kept as metadata for `api_token.use_denied` | Art. 6(1)(b)/(f) | None (operator removes the person in Authentik; the audit trail keeps the name) | — |
@@ -52,12 +52,13 @@ and *Login & privileges* → *Login history* (`settings.login`). Every other per
 The periods of `action`, `device_command`, `device_alert` and the filled device event gaps equal the audit index
 retention (≥ the WORM retention): these rows explain audit events and must not disappear while the index still shows
 them (ADR 0032 amendments 2026-10-18 and 2026-10-31). The index drops whole UTC months, so the worker deletes such a
-row only once it lies before the start of the UTC month containing now − `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, the
-oldest month the index may still show. When the index purge lags (the audit writer down, a partition kept after a
+row only once it lies before the start of the UTC month containing now − `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` − 2
+days, the oldest month the index may still show plus a margin for a late index purge and clock skew, and never a row
+younger than one hour (which only a development installation counting days in seconds reaches). When the index purge lags (the audit writer down, a partition kept after a
 lock timeout), the portal briefly shows fewer of these rows than the index shows events; the failure direction is
 keeping data longer, never deleting it early. The worker reads the audit writer's variable
-`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` without a default of its own and does not start when it is missing or below 400
-days; set it, and `PADDOCK_AUDIT_RETENTION_DAYS`, to the same values on the control-plane and the audit host.
+`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` without a default of its own and does not start when it is missing, not a
+number, below 400 days or below `PADDOCK_AUDIT_RETENTION_DAYS`; set it, and `PADDOCK_AUDIT_RETENTION_DAYS`, to the same values on the control-plane and the audit host.
 
 ## Deletion evidence
 

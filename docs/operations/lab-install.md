@@ -323,6 +323,8 @@ Every production item that applies to one host runs unchanged:
   gain privileges; every service has a `pids_limit`)
 - `role trusted proxies` (no `/0` in `PADDOCK_TRUSTED_PROXY_CIDRS`)
 - `ip allow list bypass is off`
+- `audit index retention of the retention round` (`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` set, at least 400 days and at
+  least `PADDOCK_AUDIT_RETENTION_DAYS`; the worker does not start otherwise)
 - `release public keys are production keys`
 - `audit bucket has Object Lock COMPLIANCE` (with `--online`; at least 400 days)
 

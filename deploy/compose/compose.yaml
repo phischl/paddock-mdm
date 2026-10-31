@@ -694,10 +694,13 @@ services:
       PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_FLEET_TOKEN_FILE: /run/secrets/fleet_api_token
       # The retention round keeps the rows that explain audit events as long as the audit index shows them (ADR 0032
-      # amendments 2026-10-18 and 2026-10-31): the audit writer's variable. No fallback here: on a two-host installation
-      # the control-plane and the audit host read separate .env files, and a silent default on the control plane would
-      # delete these rows before an audit host with a longer index retention drops their events.
-      PADDOCK_AUDIT_INDEX_RETENTION_DAYS: ${PADDOCK_AUDIT_INDEX_RETENTION_DAYS:?set PADDOCK_AUDIT_INDEX_RETENTION_DAYS in .env, the same value as on the audit host}
+      # amendments 2026-10-18 and 2026-10-31): the audit writer's variables. No fallback for the index retention: on a
+      # two-host installation the control-plane and the audit host read separate .env files, and a silent default on
+      # the control plane would delete these rows before an audit host with a longer index retention drops their
+      # events. Unset, it stays empty and the worker alone refuses to start; a Compose error (:?) would stop every
+      # ./paddock command of an installation whose .env predates the variable.
+      PADDOCK_AUDIT_RETENTION_DAYS: ${PADDOCK_AUDIT_RETENTION_DAYS:-400}
+      PADDOCK_AUDIT_INDEX_RETENTION_DAYS: ${PADDOCK_AUDIT_INDEX_RETENTION_DAYS:-}
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
       - fleet_api_token

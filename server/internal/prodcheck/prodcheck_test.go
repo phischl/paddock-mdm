@@ -484,6 +484,43 @@ func TestRetentionInterval(t *testing.T) {
 	}
 }
 
+// TestAuditIndexRetention (ADR 0032 amendment 2026-10-31): prod-check fails where the worker would refuse to start, on
+// an audit index retention that is missing (an .env from before the variable), no number, below the bucket default or
+// below the WORM retention; the shipped value passes.
+func TestAuditIndexRetention(t *testing.T) {
+	withWorker := func(env map[string]*string) *fixture {
+		f := newFixture(t)
+		f.cfg.Services["paddock-worker"] = prodcheck.Service{Environment: env}
+		harden(f.cfg)
+		return f
+	}
+	for name, tc := range map[string]struct {
+		index, worm string
+		want        string
+	}{
+		"missing":          {"", "400", "PADDOCK_AUDIT_INDEX_RETENTION_DAYS is not set; add it to .env"},
+		"no number":        {"four hundred", "400", "PADDOCK_AUDIT_INDEX_RETENTION_DAYS=four hundred is not a number of days of at least 400"},
+		"below the bucket": {"399", "", "PADDOCK_AUDIT_INDEX_RETENTION_DAYS=399 is not a number of days of at least 400"},
+		"below the WORM":   {"500", "730", "PADDOCK_AUDIT_INDEX_RETENTION_DAYS=500 is not a number of days of at least 730"},
+		"WORM no number":   {"400", "x", "PADDOCK_AUDIT_RETENTION_DAYS=x is not a number of days"},
+	} {
+		f := withWorker(map[string]*string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": ptr(tc.index), "PADDOCK_AUDIT_RETENTION_DAYS": ptr(tc.worm)})
+		ok, out := run(t, f.cfg, prodcheck.Options{})
+		if ok {
+			t.Fatalf("%s: expected FAIL:\n%s", name, out)
+		}
+		failItem(t, out, "audit index retention of the retention round", tc.want)
+	}
+	for _, env := range []map[string]*string{
+		{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": ptr("400"), "PADDOCK_AUDIT_RETENTION_DAYS": ptr("400")},
+		{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": ptr("730"), "PADDOCK_AUDIT_RETENTION_DAYS": ptr("500")},
+	} {
+		if ok, out := run(t, withWorker(env).cfg, prodcheck.Options{}); !ok {
+			t.Fatalf("%v: expected all PASS:\n%s", env, out)
+		}
+	}
+}
+
 func TestReleaseKeys(t *testing.T) {
 	t.Run("secret key next to the public key", func(t *testing.T) {
 		f := newFixture(t)
@@ -599,6 +636,7 @@ var labItems = []string{
 	"lab: roles resolve the public names to the proxy",
 	"role trusted proxies",
 	"ip allow list bypass is off",
+	"audit index retention of the retention round",
 	"release public keys are production keys",
 }
 
@@ -639,8 +677,9 @@ func newLabFixture(t *testing.T) *fixture {
 	f.cfg.Services["paddock-escrow-reader"] = prodcheck.Service{ExtraHosts: labHosts()}
 	f.cfg.Services["paddock-revocation-issuer"] = prodcheck.Service{ExtraHosts: labHosts()}
 	f.cfg.Services["paddock-worker"] = prodcheck.Service{
-		ExtraHosts:  labHosts(),
-		Environment: map[string]*string{"PADDOCK_TLS_PROBE_ADDR": ptr(labProxy + ":443")},
+		ExtraHosts: labHosts(),
+		Environment: map[string]*string{"PADDOCK_TLS_PROBE_ADDR": ptr(labProxy + ":443"),
+			"PADDOCK_AUDIT_RETENTION_DAYS": ptr("400"), "PADDOCK_AUDIT_INDEX_RETENTION_DAYS": ptr("400")},
 	}
 	harden(f.cfg)
 	return f

@@ -168,6 +168,8 @@ type purgedEvent struct {
 	outcome, store, cutoff string
 	deleted                int64
 	sameTx                 bool
+	// indexDays is the index_days param of the stores kept by the audit index, empty for the others.
+	indexDays string
 }
 
 // purgedEvents returns org's retention.purged events of store device_user_seen; sameTx reports whether the event was

@@ -105,7 +105,7 @@ func (w retentionWorld) exists(t *testing.T, table string, id uuid.UUID) bool {
 func (w retentionWorld) purged(t *testing.T, org uuid.UUID, store string) []purgedEvent {
 	t.Helper()
 	rows, err := w.super.Query(context.Background(), `
-		SELECT outcome, params->>'store', params->>'cutoff', (params->>'deleted')::bigint
+		SELECT outcome, params->>'store', params->>'cutoff', (params->>'deleted')::bigint, coalesce(params->>'index_days', '')
 		  FROM action WHERE organization_id = $1 AND code = 'retention.purged' AND params->>'store' = $2
 		 ORDER BY started_at`, org, store)
 	if err != nil {
@@ -115,7 +115,7 @@ func (w retentionWorld) purged(t *testing.T, org uuid.UUID, store string) []purg
 	var out []purgedEvent
 	for rows.Next() {
 		var e purgedEvent
-		if err := rows.Scan(&e.outcome, &e.store, &e.cutoff, &e.deleted); err != nil {
+		if err := rows.Scan(&e.outcome, &e.store, &e.cutoff, &e.deleted, &e.indexDays); err != nil {
 			t.Fatal(err)
 		}
 		out = append(out, e)
@@ -128,8 +128,8 @@ func (w retentionWorld) purged(t *testing.T, org uuid.UUID, store string) []purg
 
 func at(t time.Time) *time.Time { return &t }
 
-// assertOneSuccess checks that org has exactly one successful retention.purged event of store with deleted rows and
-// the cutoff want.
+// assertOneSuccess checks that org has exactly one successful retention.purged event of store with deleted rows, the
+// cutoff want and the world's index retention of 400 days.
 func (w retentionWorld) assertOneSuccess(t *testing.T, org uuid.UUID, store string, deleted int64, want time.Time) {
 	t.Helper()
 	events := w.purged(t, org, store)
@@ -138,8 +138,8 @@ func (w retentionWorld) assertOneSuccess(t *testing.T, org uuid.UUID, store stri
 	}
 	ev := events[0]
 	cutoff, err := time.Parse(time.RFC3339, ev.cutoff)
-	if ev.outcome != "success" || ev.deleted != deleted || err != nil || !cutoff.Equal(want) {
-		t.Fatalf("event %+v (cutoff %v), want success with deleted %d and cutoff %v", ev, err, deleted, want)
+	if ev.outcome != "success" || ev.deleted != deleted || err != nil || !cutoff.Equal(want) || ev.indexDays != "400" {
+		t.Fatalf("event %+v (cutoff %v), want success with deleted %d, cutoff %v and index_days 400", ev, err, deleted, want)
 	}
 }
 
@@ -350,8 +350,8 @@ func TestRetentionPurgePlatformActions(t *testing.T) {
 			events = append(events, e)
 		}
 	}
-	if len(events) != 1 || events[0].outcome != "success" || events[0].deleted != 1 {
-		t.Fatalf("platform events %+v, want one success with deleted 1", events)
+	if len(events) != 1 || events[0].outcome != "success" || events[0].deleted != 1 || events[0].indexDays != "400" {
+		t.Fatalf("platform events %+v, want one success with deleted 1 and index_days 400", events)
 	}
 }
 
@@ -362,40 +362,12 @@ func TestRetentionPurgePlatformActions(t *testing.T) {
 func TestRetentionActionDeleteLimitedByDatabase(t *testing.T) {
 	w := newRetentionWorld(t)
 	env := pgtest.SharedPaddock(t)
-	ctx := context.Background()
 	org, _ := w.orgWithDevice(t)
 	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	orgFinished := w.action(t, org, long, at(long.Add(time.Minute)))
 	orgStarted := w.action(t, org, long, nil)
 	platformFinished := w.action(t, uuid.Nil, long, at(long.Add(time.Minute)))
 	platformStarted := w.action(t, uuid.Nil, long, nil)
-
-	deleted := func(t *testing.T, url string, orgCtx *uuid.UUID, id uuid.UUID) int64 {
-		t.Helper()
-		conn, err := pgx.Connect(ctx, url)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = conn.Close(ctx) }()
-		tx, err := conn.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = tx.Rollback(ctx) }()
-		if orgCtx != nil {
-			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgCtx.String()); err != nil {
-				t.Fatal(err)
-			}
-		}
-		tag, err := tx.Exec(ctx, "DELETE FROM action WHERE id = $1", id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-		return tag.RowsAffected()
-	}
 
 	for _, c := range []struct {
 		name   string
@@ -410,7 +382,7 @@ func TestRetentionActionDeleteLimitedByDatabase(t *testing.T) {
 		{"platform, finished platform action", env.Platform, nil, platformFinished, 1},
 		{"worker, finished action", env.Worker, &org, orgFinished, 1},
 	} {
-		if n := deleted(t, c.url, c.orgCtx, c.id); n != c.want {
+		if n := affected(t, c.url, c.orgCtx, "DELETE FROM action WHERE id = $1", c.id); n != c.want {
 			t.Errorf("%s: deleted %d rows, want %d", c.name, n, c.want)
 		}
 	}
@@ -419,10 +391,100 @@ func TestRetentionActionDeleteLimitedByDatabase(t *testing.T) {
 	}
 }
 
+// affected runs sql with args in one committed transaction of the role behind url, with paddock.org_id set to orgCtx
+// when given, and returns the rows it affected.
+func affected(t *testing.T, url string, orgCtx *uuid.UUID, sql string, args ...any) int64 {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if orgCtx != nil {
+		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgCtx.String()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tag, err := tx.Exec(ctx, sql, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return tag.RowsAffected()
+}
+
+// TestRetentionActionFinishedImmutable (ADR 0032 amendment 2026-10-31, migration 00082): no runtime role with UPDATE
+// on action changes a finished action, so none can rewrite its params and outcome or move an organization's finished
+// action into the platform pseudo-organization, where the platform role could delete it. Finishing a started action,
+// as FinishAction and the outbox reaper do, keeps working for every role.
+func TestRetentionActionFinishedImmutable(t *testing.T) {
+	w := newRetentionWorld(t)
+	env := pgtest.SharedPaddock(t)
+	org, _ := w.orgWithDevice(t)
+	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	const rewrite = `UPDATE action SET params = '{"rewritten":true}', outcome = 'failure' WHERE id = $1`
+	const finish = `UPDATE action SET status = 'finished', outcome = 'success', finished_at = now() WHERE id = $1`
+
+	for _, r := range []struct {
+		role   string
+		url    string
+		orgCtx *uuid.UUID
+	}{
+		{"paddock_api", env.API, &org},
+		{"paddock_platform", env.Platform, nil},
+		{"paddock_relay", env.Relay, nil},
+		{"paddock_worker", env.Worker, &org},
+		{"paddock_compiler", env.Compiler, &org},
+		{"paddock_revocation", env.Revocation, &org},
+	} {
+		t.Run(r.role, func(t *testing.T) {
+			finished := w.action(t, org, long, at(long.Add(time.Minute)))
+			if n := affected(t, r.url, r.orgCtx, rewrite, finished); n != 0 {
+				t.Errorf("rewrote %d finished actions, want 0", n)
+			}
+			if n := affected(t, r.url, r.orgCtx, "UPDATE action SET status = 'started', outcome = NULL WHERE id = $1", finished); n != 0 {
+				t.Errorf("reopened %d finished actions, want 0", n)
+			}
+			if got := countRows(t, w.super, `SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2
+				AND status = 'finished' AND outcome = 'success' AND params = '{}'`, finished, org); got != 1 {
+				t.Error("want the finished action unchanged")
+			}
+			started := w.action(t, org, long, nil)
+			if n := affected(t, r.url, r.orgCtx, finish, started); n != 1 {
+				t.Errorf("finished %d started actions, want 1", n)
+			}
+		})
+	}
+
+	t.Run("moved into the platform pseudo-organization, then deleted", func(t *testing.T) {
+		finished := w.action(t, org, long, at(long.Add(time.Minute)))
+		for _, url := range []string{env.Platform, env.Relay} {
+			if n := affected(t, url, nil, "UPDATE action SET organization_id = $2 WHERE id = $1", finished, uuid.Nil); n != 0 {
+				t.Errorf("moved %d finished actions, want 0", n)
+			}
+		}
+		if n := affected(t, env.Platform, nil, "DELETE FROM action WHERE id = $1", finished); n != 0 {
+			t.Errorf("deleted %d actions, want 0", n)
+		}
+		if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2", finished, org) != 1 {
+			t.Fatal("want the organization's finished action kept in its organization")
+		}
+	})
+}
+
 // TestRetentionPurgeNeverAheadOfIndex (ADR 0032 amendment 2026-10-31): every store kept by the audit index deletes
-// only rows older than the start of the UTC month containing now − the index retention, also when now − the index
-// retention lies in the previous month. A row older than now − the index retention but inside that month stays: the
-// index, which drops whole months only, may still show its events.
+// only rows older than the start of the UTC month containing now − the index retention − 2 days, also when that
+// instant lies in the previous month while now − the index retention does not, and never a row younger than an hour.
+// A row older than now − the index retention but inside that month stays: the index, which drops whole months only,
+// may still show its events.
 func TestRetentionPurgeNeverAheadOfIndex(t *testing.T) {
 	w := newRetentionWorld(t)
 	stores := []struct {
@@ -449,6 +511,8 @@ func TestRetentionPurgeNeverAheadOfIndex(t *testing.T) {
 	}{
 		{"mid-month", indexNow, indexFloor},
 		{"month boundary", time.Date(2026, 3, 1, 0, 3, 0, 0, time.UTC), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+		{"month boundary within the margin", time.Date(2026, 3, 1, 0, 6, 41, 0, time.UTC), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+		{"never within the last hour", time.Date(2026, 3, 1, 0, 30, 0, 0, time.UTC), time.Date(2026, 2, 28, 23, 30, 0, 0, time.UTC)},
 	}
 	for _, s := range stores {
 		for _, c := range clocks {

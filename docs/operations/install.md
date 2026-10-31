@@ -207,6 +207,9 @@ or may gain privileges, or a service without `pids_limit` (item `container harde
 a service whose container log is not rotated (log driver other than `json-file` or no `max-size`, item
 `container logs are rotated`);
 `PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
+on the control plane, a `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` that is missing, not a number, below 400 days or below
+`PADDOCK_AUDIT_RETENTION_DAYS`, with which the worker does not start (item `audit index retention of the retention
+round`);
 the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
 audit bucket without Object Lock COMPLIANCE of at least 400 days.
 

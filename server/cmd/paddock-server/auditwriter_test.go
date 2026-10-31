@@ -78,7 +78,8 @@ func TestIndexRetentionDefaultsToWORMRetention(t *testing.T) {
 
 // TestWorkerIndexRetention (ADR 0032 amendment 2026-10-31, PDK-180): the worker reads the audit writer's index
 // retention variable without a default and refuses to start when it is missing, not an integer or below the bucket
-// default, so its retention round never purges with a value other than the writer's.
+// default or below the WORM retention, so its retention round never purges with a value other than the writer's. Compose
+// passes an unset variable as an empty one.
 func TestWorkerIndexRetention(t *testing.T) {
 	for _, tc := range []struct {
 		env     map[string]string
@@ -92,6 +93,11 @@ func TestWorkerIndexRetention(t *testing.T) {
 		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "399"}},
 		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "0"}},
 		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "four hundred"}},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": ""}, missing: true},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "  "}, missing: true},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "400", "PADDOCK_AUDIT_RETENTION_DAYS": "500"}},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "500", "PADDOCK_AUDIT_RETENTION_DAYS": "500"}, index: 500},
+		{env: map[string]string{"PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "730", "PADDOCK_AUDIT_RETENTION_DAYS": "500"}, index: 730},
 	} {
 		l := config.NewLoaderFrom(tc.env)
 		index := workerIndexRetention(l)
