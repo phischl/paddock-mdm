@@ -93,9 +93,12 @@ func TestValidateWebhookURL(t *testing.T) {
 		}
 	}
 
-	for _, a := range []string{"64:ff9b::a00:1", "2002:a00:1::1", "2001:0:4136:e378:8000:63bf:f5ff:fffe"} {
+	for _, a := range []string{
+		"64:ff9b::a00:1", "64:ff9b:1::a00:1", "2002:a00:1::1", "2001:0:4136:e378:8000:63bf:f5ff:fffe", "100::1",
+		"2001:db8::1", "192.0.2.10", "198.51.100.10", "203.0.113.10", "198.19.255.255",
+	} {
 		if !outbound.Denied(netip.MustParseAddr(a)) {
-			t.Errorf("%s (IPv6 embedding an IPv4 address) is not denied", a)
+			t.Errorf("%s is not denied", a)
 		}
 	}
 	if outbound.Denied(netip.MustParseAddr("2001:4860:4860::8888")) {

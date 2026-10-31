@@ -224,4 +224,6 @@ IPv6 prefixes: `64:ff9b::/96` (NAT64 well-known prefix, RFC 6052), `2002::/16` (
 (Teredo, RFC 4380). Each embeds an IPv4 address that a translator or relay on the control plane's network reaches,
 so a webhook name resolving to, for example, `64:ff9b::a00:1` or `2002:a00:1::1` would reach `10.0.0.1` past the
 IPv4 entries of the list. They are checked like every other entry: at validation and again at every dial.
-`outbound.DeniedPrefixes` implements the list.
+The list also denies `64:ff9b:1::/48` (local-use NAT64, RFC 8215), `100::/64` (discard, RFC 6666) and the
+documentation ranges `2001:db8::/32`, `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` (RFC 3849, RFC 5737), which no
+real receiver uses (`198.18.0.0/15` was already listed). `outbound.DeniedPrefixes` implements the list.

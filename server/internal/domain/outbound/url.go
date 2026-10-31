@@ -14,8 +14,8 @@ import (
 )
 
 // DeniedPrefixes are the addresses a webhook never reaches (ADR 0031 decision 12 and its amendment of 2026-10-31):
-// this host, private, shared, link-local, benchmark, multicast and reserved networks, IPv4-mapped IPv6, and the IPv6
-// prefixes that embed an IPv4 address a translator reaches (NAT64, 6to4, Teredo).
+// this host, private, shared, link-local, benchmark, documentation, multicast and reserved networks, IPv4-mapped IPv6,
+// the IPv6 prefixes that embed an IPv4 address a translator reaches (NAT64, 6to4, Teredo) and the discard prefix.
 var DeniedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("10.0.0.0/8"),
@@ -24,8 +24,11 @@ var DeniedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("169.254.0.0/16"),
 	netip.MustParsePrefix("172.16.0.0/12"),
 	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
 	netip.MustParsePrefix("192.168.0.0/16"),
 	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
 	netip.MustParsePrefix("224.0.0.0/4"),
 	netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("::/128"),
@@ -34,6 +37,9 @@ var DeniedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("::ffff:0:0/96"),
 	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:db8::/32"),
 	netip.MustParsePrefix("2002::/16"),
 	netip.MustParsePrefix("2001::/32"),
 }
