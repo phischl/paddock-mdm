@@ -24,22 +24,35 @@ var ErrAccessDenied = errors.New("authflow: access denied")
 // TOTP generates RFC 6238 codes for an authenticator secret and never repeats a time step (Authentik rejects a
 // replayed code). The zero value has no secret: the first device login enrolls one.
 type TOTP struct {
-	mu     sync.Mutex
-	Secret string // base32
+	once   sync.Once
+	sem    chan struct{} // capacity 1; a channel so that queued callers can leave when their context ends
+	Secret string        // base32
 	last   int64
 }
 
-// Code returns the code of the next unused 30 s step, waiting for it if necessary.
-func (t *TOTP) Code() (string, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// Code returns the code of the next unused 30 s step, waiting for it if necessary. The wait, in the queue of
+// other callers and for the step, ends with an error as soon as ctx ends.
+func (t *TOTP) Code(ctx context.Context) (string, error) {
+	t.once.Do(func() { t.sem = make(chan struct{}, 1) })
+	select {
+	case t.sem <- struct{}{}:
+	case <-ctx.Done():
+		return "", fmt.Errorf("authflow: waiting for the next TOTP code in the queue of this user: %w", ctx.Err())
+	}
+	defer func() { <-t.sem }()
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(strings.TrimRight(t.Secret, "=")))
 	if err != nil {
 		return "", fmt.Errorf("authflow: totp secret: %w", err)
 	}
 	step := time.Now().Unix() / 30
 	if step <= t.last {
-		time.Sleep(time.Until(time.Unix((t.last+1)*30+1, 0)))
+		timer := time.NewTimer(time.Until(time.Unix((t.last+1)*30+1, 0)))
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return "", fmt.Errorf("authflow: waiting for the next TOTP code in the queue of this user: %w", ctx.Err())
+		}
 		step = time.Now().Unix() / 30
 	}
 	t.last = step
@@ -185,11 +198,11 @@ func runDeviceFlow(ctx context.Context, client *http.Client, page *url.URL, slug
 		case "ak-stage-consent":
 			answer = map[string]any{"token": ch.Token}
 		case "ak-stage-authenticator-validate":
-			if answer, err = validateAnswer(ch.Raw, totp); err != nil {
+			if answer, err = validateAnswer(ctx, ch.Raw, totp); err != nil {
 				return false, "", err
 			}
 		case "ak-stage-authenticator-totp":
-			if answer, err = enrollTOTP(ch.Raw, totp); err != nil {
+			if answer, err = enrollTOTP(ctx, ch.Raw, totp); err != nil {
 				return false, "", err
 			}
 		default:
@@ -205,7 +218,7 @@ func runDeviceFlow(ctx context.Context, client *http.Client, page *url.URL, slug
 
 // validateAnswer answers the MFA stage: the TOTP code, or the choice of the TOTP setup stage when the user has no
 // authenticator yet (not_configured_action configure).
-func validateAnswer(raw json.RawMessage, totp *TOTP) (map[string]any, error) {
+func validateAnswer(ctx context.Context, raw json.RawMessage, totp *TOTP) (map[string]any, error) {
 	var ch struct {
 		DeviceChallenges []struct {
 			DeviceClass string `json:"device_class"`
@@ -219,7 +232,7 @@ func validateAnswer(raw json.RawMessage, totp *TOTP) (map[string]any, error) {
 		return nil, err
 	}
 	if len(ch.DeviceChallenges) > 0 {
-		code, err := totp.Code()
+		code, err := totp.Code(ctx)
 		return map[string]any{"code": code}, err
 	}
 	for _, s := range ch.ConfigurationStages {
@@ -231,7 +244,7 @@ func validateAnswer(raw json.RawMessage, totp *TOTP) (map[string]any, error) {
 }
 
 // enrollTOTP takes the secret of the TOTP setup stage and answers with a code.
-func enrollTOTP(raw json.RawMessage, totp *TOTP) (map[string]any, error) {
+func enrollTOTP(ctx context.Context, raw json.RawMessage, totp *TOTP) (map[string]any, error) {
 	var ch struct {
 		ConfigURL string `json:"config_url"`
 	}
@@ -243,7 +256,7 @@ func enrollTOTP(raw json.RawMessage, totp *TOTP) (map[string]any, error) {
 		return nil, err
 	}
 	totp.Secret = u.Query().Get("secret")
-	code, err := totp.Code()
+	code, err := totp.Code(ctx)
 	return map[string]any{"code": code}, err
 }
 

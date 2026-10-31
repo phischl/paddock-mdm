@@ -2,6 +2,7 @@ package authflow
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -96,5 +97,37 @@ func TestDoRepeatsAuthentikStarting(t *testing.T) {
 	}
 	if status := send(); status != http.StatusServiceUnavailable || calls.Load() != 3 {
 		t.Fatalf("status %d after %d calls, want 503 after 3", status, calls.Load())
+	}
+}
+
+func TestTOTPCodeEndsWithContext(t *testing.T) {
+	totp := &TOTP{Secret: "JBSWY3DPEHPK3PXP"}
+	first, err := totp.Code(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == "" {
+		t.Fatal("first caller got no code")
+	}
+	lastStep := totp.last
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = totp.Code(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "TOTP") {
+		t.Fatalf("second caller error = %v, want the TOTP queue error wrapping the deadline", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("second caller took %s, want a prompt return", time.Since(start))
+	}
+	if totp.last != lastStep {
+		t.Fatal("the cancelled caller consumed a step")
+	}
+
+	cancelled, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	if _, err = totp.Code(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled caller error = %v", err)
 	}
 }
