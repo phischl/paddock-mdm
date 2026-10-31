@@ -540,6 +540,36 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/audit-events/feed:
+    get:
+      operationId: feedAuditEvents
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor (sessions and API tokens). Commit-ordered cursor feed of the organization's audit
+        events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. An after
+        below the oldest retained commit_seq returns the oldest retained events (catch-up is bounded by the index
+        retention).
+      x-paddock-feed: { cursor: after, limit: { default: 100, max: 1000 } }
+      x-paddock-mcp: { expose: false }
+      parameters:
+        - name: after
+          in: query
+          description: Commit sequence of the last event already read; 0 starts at the beginning.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          description: Maximum number of events in the page.
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        "200":
+          description: Events after the cursor in ascending commit_seq.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditFeedPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
   /api/v1/audit/integrity:
     get:
       operationId: getAuditIntegrity
@@ -5291,6 +5321,43 @@ components:
           additionalProperties: true
         error_code: { type: string }
         correlation_id: { type: string }
+    AuditEventStored:
+      type: object
+      description: The stored audit event, without the read-time device enrichment of AuditEvent.
+      required: [event_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id]
+      properties:
+        event_id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        recorded_at: { type: string, format: date-time }
+        code: { type: string }
+        outcome: { $ref: "#/components/schemas/AuditOutcome" }
+        source: { type: string }
+        actor: { $ref: "#/components/schemas/AuditActor" }
+        target:
+          allOf:
+            - $ref: "#/components/schemas/AuditTarget"
+          nullable: true
+        params:
+          type: object
+          additionalProperties: true
+        error_code: { type: string }
+        correlation_id: { type: string }
+    AuditFeedEvent:
+      type: object
+      required: [commit_seq, event]
+      properties:
+        commit_seq: { type: integer, format: int64, description: "Position of the event in the organization's commit order." }
+        event: { $ref: "#/components/schemas/AuditEventStored" }
+    AuditFeedPage:
+      type: object
+      required: [schema, events, next_after, latest]
+      properties:
+        schema: { type: string, enum: ["paddock.audit.feed.v1"] }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/AuditFeedEvent" }
+        next_after: { type: integer, format: int64, description: "commit_seq of the last returned event, or after when the page is empty." }
+        latest: { type: integer, format: int64, description: "Highest commit_seq of the organization; equal to next_after when caught up." }
     AuditEventPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

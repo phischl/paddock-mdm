@@ -352,6 +352,35 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 	return adminapi.ListAuditEvents200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }
 
+func (h *handlers) FeedAuditEvents(ctx context.Context, req adminapi.FeedAuditEventsRequestObject) (adminapi.FeedAuditEventsResponseObject, error) {
+	after, limit := int64(0), app.DefaultFeedLimit
+	if req.Params.After != nil {
+		after = *req.Params.After
+	}
+	if req.Params.Limit != nil {
+		limit = *req.Params.Limit
+	}
+	res, err := h.audit.Feed(ctx, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]adminapi.AuditFeedEvent, len(res.Events))
+	for i, e := range res.Events {
+		ev, err := toAuditEvent(e)
+		if err != nil {
+			return nil, err
+		}
+		events[i] = adminapi.AuditFeedEvent{CommitSeq: e.CommitSeq, Event: adminapi.AuditEventStored{
+			Actor: ev.Actor, Code: ev.Code, CorrelationId: ev.CorrelationId, ErrorCode: ev.ErrorCode, EventId: ev.EventId,
+			OccurredAt: ev.OccurredAt, Outcome: ev.Outcome, Params: ev.Params, RecordedAt: ev.RecordedAt, Source: ev.Source,
+			Target: ev.Target,
+		}}
+	}
+	return adminapi.FeedAuditEvents200JSONResponse(adminapi.AuditFeedPage{
+		Schema: adminapi.PaddockAuditFeedV1, Events: events, NextAfter: res.NextAfter, Latest: res.Latest,
+	}), nil
+}
+
 // toAuditEvent maps an index row to the API. The writer keeps error_code inside params in the index (there is no
 // column for it); it is presented in its own field again.
 func toAuditEvent(e auditstore.AuditEvent) (adminapi.AuditEvent, error) {
