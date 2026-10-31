@@ -139,8 +139,8 @@ separate decision afterwards.*
    the device is enrolled or pending; add `--proxy <url>` behind an HTTP proxy.
 4. If the token does not approve automatically, the command keeps waiting for the approval (for up to 24 hours): approve
    the device in the portal under *Devices* (*Approve*) while it waits. Alternatively run it with `--no-wait`, which
-   returns with exit code 2 at once; approve the device, then run the same command again, which resumes the
-   enrollment.
+   returns with exit code 2 at once and, with `--remove-config`, deletes the file; approve the device, then run
+   `sudo paddockd enroll` without `--config`, which resumes the enrollment.
 
 An unencrypted device then shows *Not encrypted* in the portal. Whether it can be encrypted in place or has to be
 reinstalled with the autoinstall: `docs/operations/autoinstall.md`, "Encrypting an installed device", and
