@@ -78,7 +78,7 @@ build: ## Build ./paddock-server for the host
 gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code document
 	cd server && go generate ./...
 	cd cli && go generate ./...
-	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
+	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
 lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check ## Run all linters, govulncheck, the license gate and the server image build
