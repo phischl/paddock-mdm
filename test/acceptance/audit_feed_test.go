@@ -111,6 +111,32 @@ func targetEvents(t *testing.T, p *env.Portal, id string, n int) []feedEvent {
 	}
 }
 
+// waitTargetEvent polls the feed until an event for target id satisfies match and returns all events of that
+// target. Keying the wait on the event itself, not on a count, keeps unrelated events of the target (enrollment, the
+// first bundle) from satisfying it early.
+func waitTargetEvent(t *testing.T, p *env.Portal, id string, match func(feedEvent) bool) []feedEvent {
+	t.Helper()
+	deadline := time.Now().Add(auditPollTimeout)
+	for {
+		events, _ := drainFeed(t, p, 100)
+		var out []feedEvent
+		found := false
+		for _, e := range events {
+			if e.Event.Target != nil && e.Event.Target.ID == id {
+				out = append(out, e)
+				found = found || match(e)
+			}
+		}
+		if found {
+			return out
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no matching event for target %s in the feed: %+v", id, out)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 // TestAuditFeed is gates N1 and N2 of plan M9: the feed returns every event of the caller's organization exactly
 // once in commit order, and it is closed to other roles and organizations.
 func TestAuditFeed(t *testing.T) {
@@ -202,10 +228,15 @@ func TestAuditFeed(t *testing.T) {
 		}
 		newer := time.Now()
 		late := newer.Add(-3 * time.Hour)
+		near := func(at time.Time) func(feedEvent) bool {
+			return func(e feedEvent) bool {
+				return e.Event.Code == "device.bundle_applied" && e.Event.OccurredAt.Sub(at).Abs() < 2*time.Second
+			}
+		}
 		send(1, newer)
-		before := len(targetEvents(t, auditor, d.DeviceID, 1))
+		waitTargetEvent(t, auditor, d.DeviceID, near(newer))
 		send(2, late)
-		events := targetEvents(t, auditor, d.DeviceID, before+1)
+		events := waitTargetEvent(t, auditor, d.DeviceID, near(late))
 		var lateEvent *feedEvent
 		for i, e := range events {
 			if e.Event.OccurredAt.Sub(late).Abs() < 2*time.Second {
