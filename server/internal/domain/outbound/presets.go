@@ -48,6 +48,7 @@ var securityExplicit = []audit.Code{
 	"admin.sessions_revoked", "platform.sessions_ended",
 	"platform.auto_unseal_enabled", "platform.auto_unseal_disabled",
 	"device.retired", "device.uninstall_requested", "device.escrow_destroyed", "managed_file.sensitive_confirmed",
+	"vulnerability.critical_summary",
 }
 
 // SecurityCodes returns the preset of filter mode security, sorted: every registered code of the wildcard groups of

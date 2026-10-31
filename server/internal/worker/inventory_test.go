@@ -106,7 +106,8 @@ func TestInventoryRound(t *testing.T) {
 	}
 	src := &fakeSource{hosts: []ports.InventoryHost{{Ref: "1", HardwareUUID: strings.ToUpper(hw)}, {Ref: "2", HardwareUUID: uuid.NewString()}}}
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
-	i := NewInventory(nil, src, app.NewInventorySync(runner, f.pool, platform), f.pool, platform, time.Minute)
+	i := NewInventory(nil, src, app.NewInventorySync(runner, f.pool, platform),
+		app.NewVulnerabilitySummary(runner), f.pool, platform, time.Minute)
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	for n := range inventoryFullEvery + 1 {
 		if n == 5 {

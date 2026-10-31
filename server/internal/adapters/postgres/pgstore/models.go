@@ -867,6 +867,13 @@ type VulnerabilityFinding struct {
 	FleetFixedVersion *string
 }
 
+type VulnerabilitySummary struct {
+	OrganizationID uuid.UUID
+	Day            time.Time
+	Since          time.Time
+	Until          time.Time
+}
+
 type WatchedUnit struct {
 	OrganizationID uuid.UUID
 	Unit           string
