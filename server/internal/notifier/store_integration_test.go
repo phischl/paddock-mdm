@@ -311,3 +311,59 @@ func TestPGStoreTestAndLookups(t *testing.T) {
 		t.Errorf("a failed test counted as a delivery failure: %+v", s)
 	}
 }
+
+// TestPGStoreExactlyOnce: on the real tables a success applies once (a repeated or overtaken success changes and
+// records nothing), and ending a stall records notification.delivered and notification.destination_resumed in the
+// same transaction.
+func TestPGStoreExactlyOnce(t *testing.T) {
+	w := newWorld(t)
+	dest := w.destination(w.org, false)
+	w.events(w.org, tamper, 1)
+	w.tr.fail = &DeliveryError{Class: "http_500"}
+	w.round()
+	s := w.state(dest)
+	if s.pending == nil {
+		t.Fatal("no pending batch")
+	}
+	w.exec(`UPDATE notification_destination_state SET status = 'stalled', stalled_since = now() WHERE destination_id = $1`, dest)
+	store := w.e.store
+	rec := &Record{Code: audit.CodeNotificationDelivered, Params: map[string]any{"destination": "d"}}
+	resume := &Record{Code: audit.CodeNotificationDestinationResumed, Params: map[string]any{"destination": "d"}}
+	cursor := int64(1)
+	success := Success{Destination: dest, Name: "d", Delivery: *s.pending, Pending: *s.pending, Cursor: &cursor, At: w.now,
+		Record: rec, Resume: resume}
+	ok, err := store.Succeeded(context.Background(), Scope{Org: w.org}, success)
+	if err != nil || !ok {
+		t.Fatalf("first success: %t %v", ok, err)
+	}
+	ok, err = store.Succeeded(context.Background(), Scope{Org: w.org}, success)
+	if err != nil || ok {
+		t.Fatalf("repeated success: %t %v", ok, err)
+	}
+	delivered := w.actions(w.org, audit.CodeNotificationDelivered, dest)
+	resumed := w.actions(w.org, audit.CodeNotificationDestinationResumed, dest)
+	if len(delivered) != 1 || len(resumed) != 1 {
+		t.Fatalf("%d delivered, %d resumed actions", len(delivered), len(resumed))
+	}
+	var sameTx bool
+	if err := w.super.QueryRow(context.Background(), `SELECT count(DISTINCT xmin::text) = 1 FROM action
+		WHERE organization_id = $1 AND target->>'id' = $2 AND code IN ('notification.delivered', 'notification.destination_resumed')`,
+		w.org, dest.String()).Scan(&sameTx); err != nil || !sameTx {
+		t.Errorf("delivered and resumed not in one transaction (%v)", err)
+	}
+	if st := w.state(dest); st.status != StatusActive || st.pending != nil || st.cursor != 1 {
+		t.Errorf("state %+v", st)
+	}
+	// A failure for the batch that is no longer pending changes nothing.
+	ok, err = store.Failed(context.Background(), Scope{Org: w.org}, Failure{Destination: dest, Name: "d", Delivery: *s.pending,
+		Pending: *s.pending, PreviousStatus: StatusActive, Class: "http_500", At: w.now, ConsecutiveFailures: 9,
+		FirstFailureAt: w.now, NextAttemptAt: w.now, Status: StatusStalled, StalledSince: &w.now,
+		Record: &Record{Code: audit.CodeNotificationDestinationStalled, Params: map[string]any{"destination": "d"}}})
+	if err != nil || ok {
+		t.Fatalf("stale failure: %t %v", ok, err)
+	}
+	if st := w.state(dest); st.failures != 0 || st.status != StatusActive ||
+		len(w.actions(w.org, audit.CodeNotificationDestinationStalled, dest)) != 0 {
+		t.Errorf("stale failure applied: %+v", st)
+	}
+}

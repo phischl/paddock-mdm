@@ -40,6 +40,10 @@ type fakeStore struct {
 	resolved   map[uuid.UUID]string
 	names      []string
 	pkey       map[uuid.UUID]string
+	// stale counts the state changes refused by the guards.
+	stale int
+	// pendingErr makes Pending fail (an unreadable pending batch).
+	pendingErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -145,6 +149,9 @@ func (f *fakeStore) FinishTest(_ context.Context, _ Scope, r TestResult) error {
 func (f *fakeStore) Pending(_ context.Context, _ Scope, delivery uuid.UUID) (PendingBatch, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.pendingErr != nil {
+		return PendingBatch{}, f.pendingErr
+	}
 	d, ok := f.deliveries[delivery]
 	if !ok {
 		return PendingBatch{}, errors.New("no rows")
@@ -178,11 +185,15 @@ func (f *fakeStore) AdvanceCursor(_ context.Context, sc Scope, dest uuid.UUID, c
 	return nil
 }
 
-func (f *fakeStore) Succeeded(_ context.Context, sc Scope, s Success) error {
+func (f *fakeStore) Succeeded(_ context.Context, sc Scope, s Success) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r := f.row(sc, s.Destination)
 	d := f.deliveries[s.Delivery]
+	if d == nil || d.delivered || r.State.Pending != s.Pending || (s.Resume != nil && r.State.Status != StatusStalled) {
+		f.stale++
+		return false, nil
+	}
 	d.attempts++
 	d.delivered, d.lastError = true, ""
 	at := s.At
@@ -196,32 +207,32 @@ func (f *fakeStore) Succeeded(_ context.Context, sc Scope, s Success) error {
 	if s.Record != nil {
 		f.records = append(f.records, *s.Record)
 	}
-	return nil
+	if s.Resume != nil {
+		r.State.Status, r.State.StalledSince = StatusActive, nil
+		f.records = append(f.records, *s.Resume)
+	}
+	return true, nil
 }
 
-func (f *fakeStore) Resumed(_ context.Context, sc Scope, res Resumption) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	r := f.row(sc, res.Destination)
-	r.State.Status, r.State.StalledSince = StatusActive, nil
-	f.records = append(f.records, res.Record)
-	return nil
-}
-
-func (f *fakeStore) Failed(_ context.Context, sc Scope, fl Failure) error {
+func (f *fakeStore) Failed(_ context.Context, sc Scope, fl Failure) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r := f.row(sc, fl.Destination)
-	d := f.deliveries[fl.Delivery]
-	d.attempts++
-	d.lastError = fl.Class
+	if r.State.Pending != fl.Pending || r.State.Status != fl.PreviousStatus {
+		f.stale++
+		return false, nil
+	}
+	if d := f.deliveries[fl.Delivery]; d != nil && !d.delivered {
+		d.attempts++
+		d.lastError = fl.Class
+	}
 	first, next := fl.FirstFailureAt, fl.NextAttemptAt
 	r.State.ConsecutiveFailures, r.State.FirstFailureAt, r.State.NextAttemptAt = fl.ConsecutiveFailures, &first, &next
 	r.State.Status, r.State.StalledSince = fl.Status, fl.StalledSince
 	if fl.Record != nil {
 		f.records = append(f.records, *fl.Record)
 	}
-	return nil
+	return true, nil
 }
 
 func (f *fakeStore) Lookups(context.Context, Scope) ([]Lookup, error) {

@@ -342,7 +342,7 @@ func (q *Queries) NextNotifierTestDelivery(ctx context.Context, destinationID uu
 }
 
 const notifierDeliveryFailed = `-- name: NotifierDeliveryFailed :exec
-UPDATE notification_delivery SET attempts = attempts + 1, last_error = $1 WHERE id = $2
+UPDATE notification_delivery SET attempts = attempts + 1, last_error = $1 WHERE id = $2 AND delivered_at IS NULL
 `
 
 type NotifierDeliveryFailedParams struct {
@@ -355,8 +355,9 @@ func (q *Queries) NotifierDeliveryFailed(ctx context.Context, arg NotifierDelive
 	return err
 }
 
-const notifierDeliverySucceeded = `-- name: NotifierDeliverySucceeded :exec
-UPDATE notification_delivery SET attempts = attempts + 1, delivered_at = $1, last_error = NULL WHERE id = $2
+const notifierDeliverySucceeded = `-- name: NotifierDeliverySucceeded :execrows
+UPDATE notification_delivery SET attempts = attempts + 1, delivered_at = $1, last_error = NULL
+WHERE id = $2 AND delivered_at IS NULL
 `
 
 type NotifierDeliverySucceededParams struct {
@@ -364,17 +365,22 @@ type NotifierDeliverySucceededParams struct {
 	ID uuid.UUID
 }
 
-func (q *Queries) NotifierDeliverySucceeded(ctx context.Context, arg NotifierDeliverySucceededParams) error {
-	_, err := q.db.Exec(ctx, notifierDeliverySucceeded, arg.At, arg.ID)
-	return err
+// Guarded: a delivery is marked delivered once, so its notification.delivered is recorded once.
+func (q *Queries) NotifierDeliverySucceeded(ctx context.Context, arg NotifierDeliverySucceededParams) (int64, error) {
+	result, err := q.db.Exec(ctx, notifierDeliverySucceeded, arg.At, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const notifierDestinationFailed = `-- name: NotifierDestinationFailed :exec
+const notifierDestinationFailed = `-- name: NotifierDestinationFailed :execrows
 UPDATE notification_destination_state SET
   consecutive_failures = $1, first_failure_at = $2, last_error = $3,
   last_attempt_at = $4, next_attempt_at = $5, status = $6,
   stalled_since = $7::timestamptz
-WHERE destination_id = $8
+WHERE destination_id = $8 AND pending_delivery_id IS NOT DISTINCT FROM $9::uuid
+  AND status = $10
 `
 
 type NotifierDestinationFailedParams struct {
@@ -386,10 +392,13 @@ type NotifierDestinationFailedParams struct {
 	Status              string
 	StalledSince        *time.Time
 	DestinationID       uuid.UUID
+	ExpectedPending     uuid.NullUUID
+	PreviousStatus      string
 }
 
-func (q *Queries) NotifierDestinationFailed(ctx context.Context, arg NotifierDestinationFailedParams) error {
-	_, err := q.db.Exec(ctx, notifierDestinationFailed,
+// Guarded like NotifierDestinationSucceeded, so a stall is recorded once and never for a batch that was dropped.
+func (q *Queries) NotifierDestinationFailed(ctx context.Context, arg NotifierDestinationFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, notifierDestinationFailed,
 		arg.ConsecutiveFailures,
 		arg.FirstFailureAt,
 		arg.LastError,
@@ -398,20 +407,29 @@ func (q *Queries) NotifierDestinationFailed(ctx context.Context, arg NotifierDes
 		arg.Status,
 		arg.StalledSince,
 		arg.DestinationID,
+		arg.ExpectedPending,
+		arg.PreviousStatus,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const notifierDestinationResumed = `-- name: NotifierDestinationResumed :exec
-UPDATE notification_destination_state SET status = 'active', stalled_since = NULL WHERE destination_id = $1
+const notifierDestinationResumed = `-- name: NotifierDestinationResumed :execrows
+UPDATE notification_destination_state SET status = 'active', stalled_since = NULL
+WHERE destination_id = $1 AND status = 'stalled'
 `
 
-func (q *Queries) NotifierDestinationResumed(ctx context.Context, destinationID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, notifierDestinationResumed, destinationID)
-	return err
+func (q *Queries) NotifierDestinationResumed(ctx context.Context, destinationID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, notifierDestinationResumed, destinationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const notifierDestinationSucceeded = `-- name: NotifierDestinationSucceeded :exec
+const notifierDestinationSucceeded = `-- name: NotifierDestinationSucceeded :execrows
 UPDATE notification_destination_state SET
   cursor_commit_seq = coalesce($1::bigint, cursor_commit_seq),
   pending_delivery_id = CASE WHEN $1::bigint IS NULL THEN pending_delivery_id END,
@@ -419,19 +437,30 @@ UPDATE notification_destination_state SET
   last_attempt_at = $2,
   last_success_at = CASE WHEN $1::bigint IS NULL THEN last_success_at ELSE $2 END,
   last_heartbeat_at = CASE WHEN $1::bigint IS NULL THEN $2 ELSE last_heartbeat_at END
-WHERE destination_id = $3
+WHERE destination_id = $3 AND pending_delivery_id IS NOT DISTINCT FROM $4::uuid
 `
 
 type NotifierDestinationSucceededParams struct {
 	CursorCommitSeq *int64
 	At              *time.Time
 	DestinationID   uuid.UUID
+	ExpectedPending uuid.NullUUID
 }
 
-// A delivered batch moves the cursor to the last event it covered; a heartbeat (cursor_commit_seq NULL) does not.
-func (q *Queries) NotifierDestinationSucceeded(ctx context.Context, arg NotifierDestinationSucceededParams) error {
-	_, err := q.db.Exec(ctx, notifierDestinationSucceeded, arg.CursorCommitSeq, arg.At, arg.DestinationID)
-	return err
+// A delivered batch moves the cursor to the last event it covered; a heartbeat (cursor_commit_seq NULL) does not. Only
+// while the state still has the pending batch the engine delivered (none for a heartbeat): a skip request resolved
+// meanwhile wins.
+func (q *Queries) NotifierDestinationSucceeded(ctx context.Context, arg NotifierDestinationSucceededParams) (int64, error) {
+	result, err := q.db.Exec(ctx, notifierDestinationSucceeded,
+		arg.CursorCommitSeq,
+		arg.At,
+		arg.DestinationID,
+		arg.ExpectedPending,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const resolveNotifierPseudonymLookup = `-- name: ResolveNotifierPseudonymLookup :exec

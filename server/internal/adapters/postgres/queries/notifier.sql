@@ -68,11 +68,15 @@ WHERE destination_id = @destination_id;
 -- name: AdvanceNotifierCursor :exec
 UPDATE notification_destination_state SET cursor_commit_seq = @cursor_commit_seq WHERE destination_id = @destination_id;
 
--- name: NotifierDeliverySucceeded :exec
-UPDATE notification_delivery SET attempts = attempts + 1, delivered_at = @at, last_error = NULL WHERE id = @id;
+-- name: NotifierDeliverySucceeded :execrows
+-- Guarded: a delivery is marked delivered once, so its notification.delivered is recorded once.
+UPDATE notification_delivery SET attempts = attempts + 1, delivered_at = @at, last_error = NULL
+WHERE id = @id AND delivered_at IS NULL;
 
--- name: NotifierDestinationSucceeded :exec
--- A delivered batch moves the cursor to the last event it covered; a heartbeat (cursor_commit_seq NULL) does not.
+-- name: NotifierDestinationSucceeded :execrows
+-- A delivered batch moves the cursor to the last event it covered; a heartbeat (cursor_commit_seq NULL) does not. Only
+-- while the state still has the pending batch the engine delivered (none for a heartbeat): a skip request resolved
+-- meanwhile wins.
 UPDATE notification_destination_state SET
   cursor_commit_seq = coalesce(sqlc.narg(cursor_commit_seq)::bigint, cursor_commit_seq),
   pending_delivery_id = CASE WHEN sqlc.narg(cursor_commit_seq)::bigint IS NULL THEN pending_delivery_id END,
@@ -80,20 +84,23 @@ UPDATE notification_destination_state SET
   last_attempt_at = @at,
   last_success_at = CASE WHEN sqlc.narg(cursor_commit_seq)::bigint IS NULL THEN last_success_at ELSE @at END,
   last_heartbeat_at = CASE WHEN sqlc.narg(cursor_commit_seq)::bigint IS NULL THEN @at ELSE last_heartbeat_at END
-WHERE destination_id = @destination_id;
+WHERE destination_id = @destination_id AND pending_delivery_id IS NOT DISTINCT FROM sqlc.narg(expected_pending)::uuid;
 
--- name: NotifierDestinationResumed :exec
-UPDATE notification_destination_state SET status = 'active', stalled_since = NULL WHERE destination_id = @destination_id;
+-- name: NotifierDestinationResumed :execrows
+UPDATE notification_destination_state SET status = 'active', stalled_since = NULL
+WHERE destination_id = @destination_id AND status = 'stalled';
 
 -- name: NotifierDeliveryFailed :exec
-UPDATE notification_delivery SET attempts = attempts + 1, last_error = @last_error WHERE id = @id;
+UPDATE notification_delivery SET attempts = attempts + 1, last_error = @last_error WHERE id = @id AND delivered_at IS NULL;
 
--- name: NotifierDestinationFailed :exec
+-- name: NotifierDestinationFailed :execrows
+-- Guarded like NotifierDestinationSucceeded, so a stall is recorded once and never for a batch that was dropped.
 UPDATE notification_destination_state SET
   consecutive_failures = @consecutive_failures, first_failure_at = @first_failure_at, last_error = @last_error,
   last_attempt_at = @at, next_attempt_at = @next_attempt_at, status = @status,
   stalled_since = sqlc.narg(stalled_since)::timestamptz
-WHERE destination_id = @destination_id;
+WHERE destination_id = @destination_id AND pending_delivery_id IS NOT DISTINCT FROM sqlc.narg(expected_pending)::uuid
+  AND status = @previous_status;
 
 -- name: GetNotifierPseudonymKey :one
 SELECT key_ciphertext FROM notification_pseudonym_key;

@@ -32,6 +32,9 @@ const (
 	ScanWindow = 500
 	// MaxDeliveriesPerRound bounds the deliveries of one destination in one round.
 	MaxDeliveriesPerRound = 20
+	// DestinationBudget bounds the time one destination's deliveries take in a round besides MaxDeliveriesPerRound; a
+	// slow receiver continues in the next round instead of holding the round up for everyone.
+	DestinationBudget = 60 * time.Second
 	// MaxParallelDestinations bounds the destinations served at the same time; destinations are independent, so a
 	// slow or failing receiver does not hold up the others (plan M9 decision 21).
 	MaxParallelDestinations = 16
@@ -71,16 +74,20 @@ type Engine struct {
 	now        func() time.Time
 	newID      func() uuid.UUID
 	mu         sync.Mutex
-	// lag keeps each destination's last known lag across rounds in which it waits for its backoff.
-	lag map[uuid.UUID]float64
+	// oldest is the commit (recorded_at) time of each destination's oldest undelivered matching event, zero when it
+	// is caught up; kept across rounds, so the lag keeps rising while a destination waits for its backoff.
+	oldest map[uuid.UUID]time.Time
 }
+
+// errStale reports a state change that no longer applied (Store.Succeeded or Failed returned false).
+var errStale = errors.New("notifier: the destination's state changed meanwhile")
 
 // NewEngine creates the engine.
 func NewEngine(cfg Config, leader Leader, store Store, index Index, keys Decrypter,
 	transports map[outbound.Type]Transport, metrics *Metrics) *Engine {
 	return &Engine{
 		cfg: cfg, leader: leader, store: store, index: index, keys: keys, transports: transports, metrics: metrics,
-		now: time.Now, newID: func() uuid.UUID { return uuid.Must(uuid.NewV7()) }, lag: map[uuid.UUID]float64{},
+		now: time.Now, newID: func() uuid.UUID { return uuid.Must(uuid.NewV7()) }, oldest: map[uuid.UUID]time.Time{},
 	}
 }
 
@@ -125,9 +132,9 @@ func (e *Engine) Round(ctx context.Context) error {
 		}
 		errs = append(errs, e.serveAll(ctx, jobs)...)
 		e.mu.Lock()
-		for id := range e.lag {
+		for id := range e.oldest {
 			if !seen[id] {
-				delete(e.lag, id)
+				delete(e.oldest, id)
 			}
 		}
 		e.mu.Unlock()
@@ -167,16 +174,29 @@ func (e *Engine) serveAll(ctx context.Context, jobs []job) []error {
 	return errs
 }
 
-func (e *Engine) setLag(id uuid.UUID, v float64) {
+// setOldest records the commit time of the destination's oldest undelivered event; the zero time means caught up.
+func (e *Engine) setOldest(id uuid.UUID, at time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.lag[id] = v
+	e.oldest[id] = at
 }
 
-func (e *Engine) lagOf(id uuid.UUID) float64 {
+func (e *Engine) oldestKnown(id uuid.UUID) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.lag[id]
+	_, ok := e.oldest[id]
+	return ok
+}
+
+// lagOf is now minus the commit time of the destination's oldest undelivered event, 0 when caught up or unknown.
+func (e *Engine) lagOf(id uuid.UUID) float64 {
+	e.mu.Lock()
+	at := e.oldest[id]
+	e.mu.Unlock()
+	if at.IsZero() {
+		return 0
+	}
+	return max(e.now().Sub(at).Seconds(), 0)
 }
 
 func scopes(orgs []uuid.UUID) []Scope {
@@ -293,21 +313,55 @@ func (e *Engine) serveDestination(ctx context.Context, r *scopeRound, row Row) e
 		}
 	}
 	if dr.st.NextAttemptAt != nil && dr.st.NextAttemptAt.After(e.now()) {
+		e.learnOldest(ctx, dr)
 		return nil
 	}
 	if err := e.unseal(ctx, dr, row); err != nil {
-		return err
+		return e.internal(ctx, dr, err)
 	}
-	if err := e.serveTest(ctx, dr); err != nil {
-		return err
+	err := e.serveTest(ctx, dr)
+	if err == nil {
+		err = e.serveEvents(ctx, dr)
 	}
-	if err := e.serveEvents(ctx, dr); err != nil {
-		return err
+	if err == nil {
+		if dr.st.Pending == uuid.Nil {
+			e.setOldest(dr.d.ID, time.Time{})
+		}
+		err = e.serveHeartbeat(ctx, dr)
 	}
-	if dr.st.Pending == uuid.Nil {
-		e.setLag(dr.d.ID, 0)
+	if errors.Is(err, errStale) {
+		slog.InfoContext(ctx, "notification destination changed during the round; continuing next round",
+			"destination_id", dr.d.ID)
+		return nil
 	}
-	return e.serveHeartbeat(ctx, dr)
+	return err
+}
+
+// learnOldest finds the oldest undelivered event of a destination waiting for its backoff whose lag is not known yet
+// (after a restart), so the lag keeps rising while it waits.
+func (e *Engine) learnOldest(ctx context.Context, dr *destRound) {
+	if dr.st.Pending == uuid.Nil || e.oldestKnown(dr.d.ID) {
+		return
+	}
+	if b, err := e.pendingBatch(ctx, dr); err == nil && len(b.events) > 0 {
+		e.setOldest(dr.d.ID, b.events[0].Event.RecordedAt)
+	}
+}
+
+// internal records a failure that happened before anything was sent (a ciphertext that does not decrypt, a pending
+// batch that cannot be read) as a failed attempt of class internal, so it backs off and stalls like a refused
+// delivery and the stall alert fires; the cause is logged, never recorded.
+func (e *Engine) internal(ctx context.Context, dr *destRound, cause error) error {
+	slog.WarnContext(ctx, "notification destination cannot be served", "destination_id", dr.d.ID, "error", cause)
+	forward := dr.st.ForwardSeq + 1
+	if dr.st.Pending != uuid.Nil {
+		forward = dr.st.ForwardSeq
+	}
+	err := e.failed(ctx, dr, uuid.Nil, forward, &DeliveryError{Class: "internal"})
+	if errors.Is(err, errStale) {
+		return nil
+	}
+	return errors.Join(cause, err)
 }
 
 // startAtLatest resolves a skip request before anything is delivered: the cursor moves to the scope's newest commit
@@ -388,12 +442,14 @@ func (b batch) to() int64   { return b.refs[len(b.refs)-1].ForwardSeq }
 // serveEvents retries the pending batch, then cuts and delivers new ones, at most MaxDeliveriesPerRound, and stops at
 // the first failure: deliveries of one destination are strictly sequential.
 func (e *Engine) serveEvents(ctx context.Context, dr *destRound) error {
-	for n, scans := 0, 0; n < MaxDeliveriesPerRound && scans < MaxDeliveriesPerRound; {
+	start := e.now()
+	for n, scans := 0, 0; n < MaxDeliveriesPerRound && scans < MaxDeliveriesPerRound &&
+		e.now().Sub(start) < DestinationBudget; {
 		var b batch
 		if dr.st.Pending != uuid.Nil {
 			var err error
 			if b, err = e.pendingBatch(ctx, dr); err != nil {
-				return err
+				return e.internal(ctx, dr, err)
 			}
 		} else {
 			scans++
@@ -502,13 +558,13 @@ func (e *Engine) deliverBatch(ctx context.Context, dr *destRound, b batch) (bool
 	for _, ev := range b.events {
 		me, err := e.messageEvent(ctx, dr, ev)
 		if err != nil {
-			return false, err
+			return false, e.internal(ctx, dr, err)
 		}
 		me.ForwardSeq = forward[ev.Event.EventID]
 		m.Events = append(m.Events, me)
 	}
 	if len(b.events) > 0 {
-		e.setLag(dr.d.ID, e.now().Sub(b.events[0].Event.RecordedAt).Seconds())
+		e.setOldest(dr.d.ID, b.events[0].Event.RecordedAt)
 	}
 	derr := dr.transport.Deliver(ctx, dr.d, m)
 	e.metrics.delivery(dr.d.Type, derr == nil)
@@ -518,14 +574,14 @@ func (e *Engine) deliverBatch(ctx context.Context, dr *destRound, b batch) (bool
 	attempts := b.attempts + 1
 	resumed := dr.st.Status == StatusStalled
 	advance := b.advanceTo
-	if err := e.succeeded(ctx, dr, b.id, &advance, &Record{Code: audit.CodeNotificationDelivered, Params: map[string]any{
+	if err := e.succeeded(ctx, dr, b.id, b.id, &advance, &Record{Code: audit.CodeNotificationDelivered, Params: map[string]any{
 		"destination": dr.d.Name, "destination_id": dr.d.ID.String(), "kind": outbound.KindEvents,
 		"forward_from": b.from(), "forward_to": b.to(), "count": len(b.refs), "attempts": attempts, "resumed": resumed,
 	}}, map[string]any{"forward_from": b.from(), "forward_to": b.to()}); err != nil {
 		return false, err
 	}
 	dr.st.Cursor, dr.st.Pending = advance, uuid.Nil
-	e.setLag(dr.d.ID, 0)
+	e.setOldest(dr.d.ID, time.Time{})
 	return true, nil
 }
 
@@ -545,34 +601,32 @@ func (e *Engine) messageEvent(ctx context.Context, dr *destRound, ev IndexedEven
 	return me, nil
 }
 
-// succeeded records a successful events batch or heartbeat; a stalled destination resumes, with
-// notification.destination_resumed in its own transaction after the delivery's.
-func (e *Engine) succeeded(ctx context.Context, dr *destRound, delivery uuid.UUID, cursor *int64, rec *Record,
+// succeeded records a successful events batch or heartbeat; a stalled destination resumes in the same transaction
+// (notification.destination_resumed). pending is the batch the state must still hold (uuid.Nil for a heartbeat).
+func (e *Engine) succeeded(ctx context.Context, dr *destRound, delivery, pending uuid.UUID, cursor *int64, rec *Record,
 	resumedParams map[string]any) error {
 	now := e.now()
-	if err := e.store.Succeeded(ctx, dr.sc, Success{
-		Destination: dr.d.ID, Name: dr.d.Name, Delivery: delivery, Cursor: cursor, At: now, Record: rec,
-	}); err != nil {
+	s := Success{Destination: dr.d.ID, Name: dr.d.Name, Delivery: delivery, Pending: pending, Cursor: cursor, At: now,
+		Record: rec}
+	if dr.st.Status == StatusStalled {
+		params := map[string]any{"destination": dr.d.Name, "destination_id": dr.d.ID.String(), "stalled_for_s": 0}
+		if dr.st.StalledSince != nil {
+			params["stalled_for_s"] = int64(now.Sub(*dr.st.StalledSince).Seconds())
+		}
+		for k, v := range resumedParams {
+			params[k] = v
+		}
+		s.Resume = &Record{Code: audit.CodeNotificationDestinationResumed, Params: params}
+	}
+	applied, err := e.store.Succeeded(ctx, dr.sc, s)
+	if err != nil {
 		return fmt.Errorf("record delivery: %w", err)
+	}
+	if !applied {
+		return errStale
 	}
 	dr.delivered = true
 	dr.st.ConsecutiveFailures, dr.st.FirstFailureAt, dr.st.NextAttemptAt = 0, nil, nil
-	if dr.st.Status != StatusStalled {
-		return nil
-	}
-	params := map[string]any{"destination": dr.d.Name, "destination_id": dr.d.ID.String(), "stalled_for_s": 0}
-	if dr.st.StalledSince != nil {
-		params["stalled_for_s"] = int64(now.Sub(*dr.st.StalledSince).Seconds())
-	}
-	for k, v := range resumedParams {
-		params[k] = v
-	}
-	if err := e.store.Resumed(ctx, dr.sc, Resumption{
-		Destination: dr.d.ID, Name: dr.d.Name, At: now,
-		Record: Record{Code: audit.CodeNotificationDestinationResumed, Params: params},
-	}); err != nil {
-		return fmt.Errorf("record resumption: %w", err)
-	}
 	dr.st.Status, dr.st.StalledSince = StatusActive, nil
 	return nil
 }
@@ -596,7 +650,8 @@ func (e *Engine) failed(ctx context.Context, dr *destRound, delivery uuid.UUID, 
 		first = *dr.st.FirstFailureAt
 	}
 	f := Failure{
-		Destination: dr.d.ID, Name: dr.d.Name, Delivery: delivery, Class: class, At: now, ConsecutiveFailures: n,
+		Destination: dr.d.ID, Name: dr.d.Name, Delivery: delivery, Pending: dr.st.Pending,
+		PreviousStatus: dr.st.Status, Class: class, At: now, ConsecutiveFailures: n,
 		FirstFailureAt: first, NextAttemptAt: now.Add(Backoff(n)), Status: dr.st.Status, StalledSince: dr.st.StalledSince,
 	}
 	if dr.st.Status != StatusStalled && now.Sub(first) >= e.cfg.StallAfter {
@@ -608,8 +663,12 @@ func (e *Engine) failed(ctx context.Context, dr *destRound, delivery uuid.UUID, 
 	}
 	slog.InfoContext(ctx, "notification delivery failed", "destination_id", dr.d.ID, "class", class,
 		"consecutive_failures", n, "status", f.Status)
-	if err := e.store.Failed(ctx, dr.sc, f); err != nil {
+	applied, err := e.store.Failed(ctx, dr.sc, f)
+	if err != nil {
 		return fmt.Errorf("record failure: %w", err)
+	}
+	if !applied {
+		return errStale
 	}
 	dr.st.ConsecutiveFailures, dr.st.FirstFailureAt, dr.st.NextAttemptAt = n, &first, &f.NextAttemptAt
 	dr.st.Status, dr.st.StalledSince = f.Status, f.StalledSince
@@ -640,7 +699,7 @@ func (e *Engine) serveHeartbeat(ctx context.Context, dr *destRound) error {
 	if derr != nil {
 		return e.failed(ctx, dr, id, dr.st.ForwardSeq+1, derr)
 	}
-	return e.succeeded(ctx, dr, id, nil, nil, nil)
+	return e.succeeded(ctx, dr, id, uuid.Nil, nil, nil, nil)
 }
 
 // DeliveryError is a failed delivery with its class of plan M9 decision 22: dns, dial, tls, timeout, http_<status>,

@@ -438,6 +438,45 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 	return recorded, nil
 }
 
+// RecordAllOnce records the successful events of specs (none is allowed) in one transaction together with the state
+// change claim makes, and records nothing when claim reports false because that change no longer applies (made
+// already, or overtaken by another change). Each event therefore exists at most once per state change, as the
+// notifier's delivery, stall and resumption events require (plan M9 decision 22). The scope is the system principal's
+// organization, or the platform when it has none.
+func (r *ActionRunner) RecordAllOnce(ctx context.Context, specs []ActionSpec,
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return false, problem.Unauthenticated
+	}
+	scope := ScopeOrg
+	if p.OrganizationID == uuid.Nil {
+		scope = ScopePlatform
+	}
+	recs := make([]*recorder, len(specs))
+	for i, spec := range specs {
+		recs[i] = r.newRecorder(ctx, p, scope, spec)
+	}
+	recorded := false
+	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
+		fresh, err := claim(ctx, q)
+		if err != nil || !fresh {
+			return err
+		}
+		for _, rec := range recs {
+			if err := r.insertFinished(ctx, q, rec, nil); err != nil {
+				return err
+			}
+		}
+		recorded = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return recorded, nil
+}
+
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
 // login) and reports false. After (optional) runs when the event was recorded.

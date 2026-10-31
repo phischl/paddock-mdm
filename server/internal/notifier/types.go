@@ -116,29 +116,29 @@ type Record struct {
 	Failure error
 }
 
-// Success is a delivered events batch (Cursor set) or heartbeat (Cursor nil).
+// Success is a delivered events batch (Cursor set) or heartbeat (Cursor nil). It applies only while the destination's
+// pending batch is still Pending (uuid.Nil for a heartbeat) and the delivery is not marked delivered yet; Resume ends a
+// stall in the same transaction.
 type Success struct {
 	Destination uuid.UUID
 	Name        string
 	Delivery    uuid.UUID
+	Pending     uuid.UUID
 	Cursor      *int64
 	At          time.Time
 	Record      *Record
+	Resume      *Record
 }
 
-// Resumption ends a stall.
-type Resumption struct {
-	Destination uuid.UUID
-	Name        string
-	At          time.Time
-	Record      Record
-}
-
-// Failure is a failed delivery with the destination's new failure state.
+// Failure is a failed delivery with the destination's new failure state. Delivery is uuid.Nil for a failure before
+// any delivery (class internal). It applies only while the destination still has the pending batch Pending and the
+// status PreviousStatus.
 type Failure struct {
 	Destination         uuid.UUID
 	Name                string
 	Delivery            uuid.UUID
+	Pending             uuid.UUID
+	PreviousStatus      string
 	Class               string
 	At                  time.Time
 	ConsecutiveFailures int
@@ -178,9 +178,9 @@ type Store interface {
 	CreateBatch(ctx context.Context, sc Scope, dest uuid.UUID, b NewBatch) error
 	CreateHeartbeat(ctx context.Context, sc Scope, dest, delivery uuid.UUID) error
 	AdvanceCursor(ctx context.Context, sc Scope, dest uuid.UUID, cursor int64) error
-	Succeeded(ctx context.Context, sc Scope, s Success) error
-	Resumed(ctx context.Context, sc Scope, r Resumption) error
-	Failed(ctx context.Context, sc Scope, f Failure) error
+	// Succeeded and Failed report false, changing and recording nothing, when the state moved on meanwhile.
+	Succeeded(ctx context.Context, sc Scope, s Success) (bool, error)
+	Failed(ctx context.Context, sc Scope, f Failure) (bool, error)
 	Lookups(ctx context.Context, sc Scope) ([]Lookup, error)
 	Usernames(ctx context.Context, sc Scope) ([]string, error)
 	ResolveLookup(ctx context.Context, sc Scope, id uuid.UUID, username string, at time.Time) error

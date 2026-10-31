@@ -2,6 +2,8 @@ package notifier
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -561,5 +563,193 @@ func TestIndependentDestinations(t *testing.T) {
 	}
 	if first != fast.Destination.ID || len(h.tr.sent) != 2 {
 		t.Fatalf("first delivery to %s, %d deliveries", first, len(h.tr.sent))
+	}
+}
+
+// syncClock is a clock that transports may advance from the engine's goroutines.
+type syncClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *syncClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *syncClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// slowTransport takes 30 s of the clock for every delivery to one destination.
+type slowTransport struct {
+	slow  uuid.UUID
+	clock *syncClock
+	next  *fakeTransport
+}
+
+func (s slowTransport) Deliver(ctx context.Context, d Destination, m outbound.Message) error {
+	if d.ID == s.slow {
+		s.clock.Advance(30 * time.Second)
+	}
+	return s.next.Deliver(ctx, d, m)
+}
+
+// TestDestinationBudget: a slow receiver gets at most DestinationBudget of a round and continues in the next; another
+// organization's destination is delivered in the same round.
+func TestDestinationBudget(t *testing.T) {
+	h := newHarness(t)
+	clock := &syncClock{now: h.now}
+	h.e.now = clock.Now
+	h.index.clock = clock.Now
+	h.e.cfg.Batch = 10
+	other := uuid.Must(uuid.NewV7())
+	h.store.orgs = append(h.store.orgs, other)
+	slow := h.webhook(h.org, State{})
+	fast := h.webhook(other, State{})
+	h.e.transports[outbound.TypeWebhook] = slowTransport{slow: slow.Destination.ID, clock: clock, next: h.tr}
+	h.index.append(h.org, tamper, 50)
+	h.index.append(other, tamper, 1)
+	h.round()
+	count := func(id uuid.UUID) int {
+		n := 0
+		for _, s := range h.tr.sent {
+			if s.dest.ID == id {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(slow.Destination.ID); n != 2 {
+		t.Fatalf("%d deliveries to the slow receiver in one round, want 2 (60 s budget)", n)
+	}
+	if n := count(fast.Destination.ID); n != 1 {
+		t.Fatalf("the other organization's destination got %d deliveries in the round", n)
+	}
+	h.round()
+	if n := count(slow.Destination.ID); n != 4 {
+		t.Fatalf("%d deliveries after the second round, want 4", n)
+	}
+	if st := h.state(slow); st.Cursor != 40 || st.ForwardSeq != 40 {
+		t.Errorf("slow state %+v", st)
+	}
+}
+
+// TestInternalFailureStalls: a ciphertext that does not decrypt and an unreadable pending batch are failures of class
+// internal: backoff, then the stall with its event; nothing is sent.
+func TestInternalFailureStalls(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		setup func(h *harness, r *Row)
+	}{
+		{"decrypt denied", func(h *harness, r *Row) { r.URLCiphertext = "denied" }},
+		{"pending batch unreadable", func(h *harness, r *Row) {
+			h.store.pendingErr = errors.New("connection reset")
+			r.State.Pending = uuid.Must(uuid.NewV7())
+			r.State.ForwardSeq = 4
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			d := h.webhook(h.org, State{})
+			c.setup(h, h.store.rows[d.Destination.ID])
+			h.index.append(h.org, tamper, 1)
+			start := h.now
+			for h.now.Sub(start) < 2*time.Minute {
+				_ = h.e.Round(context.Background())
+				if st := h.state(d); st.NextAttemptAt != nil {
+					h.now = *st.NextAttemptAt
+				} else {
+					h.now = h.now.Add(5 * time.Second)
+				}
+			}
+			if len(h.tr.sent) != 0 {
+				t.Fatalf("%d messages sent", len(h.tr.sent))
+			}
+			st := h.state(d)
+			stalled := h.store.recordsOf(audit.CodeNotificationDestinationStalled)
+			if st.Status != StatusStalled || st.ConsecutiveFailures < 3 || len(stalled) != 1 ||
+				stalled[0].Params["last_error"] != "internal" {
+				t.Fatalf("state %+v, stalled %+v", st, stalled)
+			}
+			if v := testutil.ToFloat64(h.metrics.stalled.WithLabelValues(d.Destination.ID.String(), "webhook")); v != 1 {
+				t.Errorf("stalled gauge %v", v)
+			}
+		})
+	}
+}
+
+// TestLagRisesDuringBackoff: the lag is the age of the oldest undelivered event's commit and keeps rising while the
+// destination waits for its backoff, also for an engine that has just started.
+func TestLagRisesDuringBackoff(t *testing.T) {
+	h := newHarness(t)
+	d := h.webhook(h.org, State{})
+	lag := func() float64 { return testutil.ToFloat64(h.metrics.lag.WithLabelValues(d.Destination.ID.String())) }
+	h.index.append(h.org, tamper, 1)
+	h.now = h.now.Add(2 * time.Second)
+	h.tr.fail = &DeliveryError{Class: "http_503"}
+	h.round()
+	if v := lag(); v != 2 {
+		t.Fatalf("lag after the failure %v, want 2", v)
+	}
+	h.now = h.now.Add(3 * time.Second)
+	h.round()
+	if v := lag(); v != 5 {
+		t.Fatalf("lag during the backoff %v, want 5", v)
+	}
+	h.e.oldest = map[uuid.UUID]time.Time{}
+	h.now = h.now.Add(4 * time.Second)
+	h.round()
+	if v := lag(); v != 9 {
+		t.Fatalf("lag after a restart during the backoff %v, want 9", v)
+	}
+	h.tr.fail = nil
+	h.now = h.now.Add(10 * time.Second)
+	h.round()
+	if v := lag(); v != 0 {
+		t.Fatalf("lag after the delivery %v, want 0", v)
+	}
+}
+
+// staleTransport drops the destination's pending batch while the delivery is under way, as a skip request resolved
+// by another round would.
+type staleTransport struct {
+	store *fakeStore
+	fail  error
+	next  *fakeTransport
+}
+
+func (s staleTransport) Deliver(ctx context.Context, d Destination, m outbound.Message) error {
+	s.store.mu.Lock()
+	s.store.rows[d.ID].State.Pending = uuid.Nil
+	s.store.mu.Unlock()
+	if err := s.next.Deliver(ctx, d, m); err != nil {
+		return err
+	}
+	return s.fail
+}
+
+// TestStaleStateChange: a success or failure whose pending batch is gone changes nothing and records nothing, so
+// notification.delivered and the stall exist at most once.
+func TestStaleStateChange(t *testing.T) {
+	for _, fail := range []error{nil, &DeliveryError{Class: "http_500"}} {
+		h := newHarness(t)
+		h.e.cfg.StallAfter = time.Nanosecond
+		d := h.webhook(h.org, State{FirstFailureAt: &h.now, ConsecutiveFailures: 3})
+		h.e.transports[outbound.TypeWebhook] = staleTransport{store: h.store, fail: fail, next: h.tr}
+		h.index.append(h.org, tamper, 1)
+		h.now = h.now.Add(time.Second)
+		if err := h.e.Round(context.Background()); err != nil {
+			t.Fatalf("round: %v", err)
+		}
+		if h.store.stale != 1 || len(h.store.records) != 0 || len(h.tr.sent) != 1 {
+			t.Fatalf("fail %v: %d stale, records %+v, %d sent", fail, h.store.stale, h.store.records, len(h.tr.sent))
+		}
+		if st := h.state(d); st.Cursor != 0 || st.ConsecutiveFailures != 3 || st.Status != StatusActive {
+			t.Fatalf("fail %v: state changed %+v", fail, st)
+		}
 	}
 }

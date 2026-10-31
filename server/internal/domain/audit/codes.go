@@ -1392,7 +1392,7 @@ var registry = map[Code]Definition{
 		Description: "Deliveries to a notification destination have failed for longer than the stall threshold (PADDOCK_NOTIFY_STALL_AFTER); the notifier keeps retrying the pending batch with backoff and nothing is lost.",
 		Params:      []string{"destination", "destination_id", "since_s", "last_error", "forward_seq"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "Recorded once per stall. last_error is the error class only (dns, dial, tls, timeout, http_<status>, redirect, denied_address), never the URL; forward_seq is the first forward sequence number not yet delivered.",
+		Note:        "Recorded once per stall. last_error is the error class only (dns, dial, tls, timeout, http_<status>, redirect, denied_address, or internal when the destination cannot be served at all, e.g. its URL does not decrypt), never the URL; forward_seq is the first forward sequence number not yet delivered.",
 	},
 	CodeNotificationDestinationResumed: {
 		Code: CodeNotificationDestinationResumed, Emitted: true,

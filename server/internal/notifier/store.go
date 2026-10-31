@@ -267,38 +267,79 @@ func (s *PGStore) AdvanceCursor(ctx context.Context, sc Scope, dest uuid.UUID, c
 	})
 }
 
-// Succeeded stores a successful delivery and records its event (notification.delivered for event batches).
-func (s *PGStore) Succeeded(ctx context.Context, sc Scope, r Success) error {
-	return s.record(ctx, sc, r.Record, r.Destination, r.Name, r.Delivery, func(ctx context.Context, q *pgstore.Queries) error {
-		if err := q.NotifierDeliverySucceeded(ctx, pgstore.NotifierDeliverySucceededParams{At: &r.At, ID: r.Delivery}); err != nil {
-			return err
+// errStaleClaim rolls back a claim whose first statement applied and a later one did not.
+var errStaleClaim = errors.New("notifier: stale state change")
+
+func nullable(id uuid.UUID) uuid.NullUUID { return uuid.NullUUID{UUID: id, Valid: id != uuid.Nil} }
+
+// once applies claim and records recs in one transaction through ActionRunner.RecordAllOnce; it reports false, and
+// changes and records nothing, when claim does not apply (any guarded statement matched no row).
+func (s *PGStore) once(ctx context.Context, sc Scope, dest uuid.UUID, name string, correlation uuid.UUID, recs []*Record,
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	var specs []app.ActionSpec
+	for _, rec := range recs {
+		if rec == nil {
+			continue
 		}
-		return q.NotifierDestinationSucceeded(ctx, pgstore.NotifierDestinationSucceededParams{
-			CursorCommitSeq: r.Cursor, At: &r.At, DestinationID: r.Destination,
-		})
+		spec := app.ActionSpec{Code: rec.Code, Params: rec.Params,
+			Target: &audit.Target{Type: "notification_destination", ID: dest.String(), Display: name}}
+		if correlation != uuid.Nil {
+			spec.CorrelationID = correlation.String()
+		}
+		specs = append(specs, spec)
+	}
+	ok, err := s.runner.RecordAllOnce(scopeContext(ctx, sc), specs, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		ok, err := claim(ctx, q)
+		if err == nil && !ok {
+			return false, errStaleClaim
+		}
+		return ok, err
 	})
+	if errors.Is(err, errStaleClaim) {
+		return false, nil
+	}
+	return ok, err
 }
 
-// Resumed ends a stall and records notification.destination_resumed.
-func (s *PGStore) Resumed(ctx context.Context, sc Scope, r Resumption) error {
-	rec := r.Record
-	return s.record(ctx, sc, &rec, r.Destination, r.Name, uuid.Nil, func(ctx context.Context, q *pgstore.Queries) error {
-		return q.NotifierDestinationResumed(ctx, r.Destination)
-	})
+// Succeeded stores a successful delivery, ends a stall, and records notification.delivered (event batches) and
+// notification.destination_resumed in the same transaction, exactly once.
+func (s *PGStore) Succeeded(ctx context.Context, sc Scope, r Success) (bool, error) {
+	return s.once(ctx, sc, r.Destination, r.Name, r.Delivery, []*Record{r.Record, r.Resume},
+		func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			n, err := q.NotifierDeliverySucceeded(ctx, pgstore.NotifierDeliverySucceededParams{At: &r.At, ID: r.Delivery})
+			if err != nil || n == 0 {
+				return false, err
+			}
+			if n, err = q.NotifierDestinationSucceeded(ctx, pgstore.NotifierDestinationSucceededParams{
+				CursorCommitSeq: r.Cursor, At: &r.At, DestinationID: r.Destination, ExpectedPending: nullable(r.Pending),
+			}); err != nil || n == 0 {
+				return false, err
+			}
+			if r.Resume == nil {
+				return true, nil
+			}
+			n, err = q.NotifierDestinationResumed(ctx, r.Destination)
+			return n > 0, err
+		})
 }
 
-// Failed stores a failed delivery and, at the stall, records notification.destination_stalled.
-func (s *PGStore) Failed(ctx context.Context, sc Scope, f Failure) error {
-	return s.record(ctx, sc, f.Record, f.Destination, f.Name, f.Delivery, func(ctx context.Context, q *pgstore.Queries) error {
-		if err := q.NotifierDeliveryFailed(ctx, pgstore.NotifierDeliveryFailedParams{LastError: &f.Class, ID: f.Delivery}); err != nil {
-			return err
-		}
-		return q.NotifierDestinationFailed(ctx, pgstore.NotifierDestinationFailedParams{
-			ConsecutiveFailures: int32(f.ConsecutiveFailures), //nolint:gosec // a failure counter
-			FirstFailureAt:      &f.FirstFailureAt, LastError: &f.Class, At: &f.At, NextAttemptAt: &f.NextAttemptAt,
-			Status: f.Status, StalledSince: f.StalledSince, DestinationID: f.Destination,
+// Failed stores a failed delivery and, at the stall, records notification.destination_stalled, exactly once.
+func (s *PGStore) Failed(ctx context.Context, sc Scope, f Failure) (bool, error) {
+	return s.once(ctx, sc, f.Destination, f.Name, f.Delivery, []*Record{f.Record},
+		func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			if f.Delivery != uuid.Nil {
+				if err := q.NotifierDeliveryFailed(ctx, pgstore.NotifierDeliveryFailedParams{LastError: &f.Class, ID: f.Delivery}); err != nil {
+					return false, err
+				}
+			}
+			n, err := q.NotifierDestinationFailed(ctx, pgstore.NotifierDestinationFailedParams{
+				ConsecutiveFailures: int32(f.ConsecutiveFailures), //nolint:gosec // a failure counter
+				FirstFailureAt:      &f.FirstFailureAt, LastError: &f.Class, At: &f.At, NextAttemptAt: &f.NextAttemptAt,
+				Status: f.Status, StalledSince: f.StalledSince, DestinationID: f.Destination,
+				ExpectedPending: nullable(f.Pending), PreviousStatus: f.PreviousStatus,
+			})
+			return n > 0, err
 		})
-	})
 }
 
 // Lookups lists the unresolved pseudonym lookups.
