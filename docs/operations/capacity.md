@@ -255,6 +255,19 @@ Every portal login, step-up, device login and every call of the worker's identit
   change the capacity. Authentik's HTTP timeouts (`web.timeout_http_*`) stay at their defaults; their sum (215 s) only
   bounds a request in Authentik's Rust front end and is not what clients run into.
 
+## Audit index commit sequence backfill
+
+Audit migration `00010_commit_seq` (PDK-120) gives every event of the audit index a per-organization `commit_seq`
+and numbers the existing rows in one transaction. The audit writer cannot write while it runs; the writer's queue
+has no TTL and absorbs the pause, so no event is lost.
+
+- **Measured:** 1 000 000 synthetic events (50 organizations, 12 monthly partitions, typical row size) took
+  **1 min 26 s** for the whole migration (column, backfill, `NOT NULL`, index, `audit_org_seq`). Measured on
+  2026-10-31 on the development host against PostgreSQL 18.6 in a test container with the repository's audit roles
+  and migrations, while the host ran other test suites (load average 16–39 on 22 cores); an idle host is faster.
+- **Planning figure:** about 1.5 min per million events in the index. Count the events before an upgrade with
+  `SELECT count(*) FROM audit_event` on `paddock_audit`.
+
 ## Method
 
 The load generator is k6 (`K6_IMAGE` in `deploy/compose/versions.env`, a tool only, never shipped). It runs as a
