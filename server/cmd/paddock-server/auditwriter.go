@@ -78,7 +78,7 @@ func auditRetention(l *config.Loader) (retention, index int) {
 func wormRetention(l *config.Loader) int {
 	retention := l.Int("PADDOCK_AUDIT_RETENTION_DAYS", auditwriter.MinRetentionDays)
 	if retention < auditwriter.MinRetentionDays {
-		l.Invalid("PADDOCK_AUDIT_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days", auditwriter.MinRetentionDays))
+		l.Invalid("PADDOCK_AUDIT_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days, got %d", auditwriter.MinRetentionDays, retention))
 	}
 	return retention
 }
@@ -96,9 +96,9 @@ func workerIndexRetention(l *config.Loader) int {
 	index := l.Int("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", 0)
 	switch {
 	case index < auditwriter.MinRetentionDays:
-		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days", auditwriter.MinRetentionDays))
+		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days, got %d", auditwriter.MinRetentionDays, index))
 	case index < retention:
-		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least PADDOCK_AUDIT_RETENTION_DAYS (%d days)", retention))
+		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least PADDOCK_AUDIT_RETENTION_DAYS (%d days), got %d", retention, index))
 	}
 	return index
 }

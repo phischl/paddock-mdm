@@ -75,7 +75,9 @@ fi
 # .env.example lacks. Without it the audit writer uses its WORM retention, so the backfill takes that value and keeps
 # what the stack's index retention already was.
 if ! grep -q '^PADDOCK_AUDIT_INDEX_RETENTION_DAYS=' "$COMPOSE_DIR/.env"; then
-  index_days="$(sed -n 's/^PADDOCK_AUDIT_RETENTION_DAYS=//p' "$COMPOSE_DIR/.env" | tail -1)"
+  # Compose reads `730 # comment`, `"730"` and `'730'` as 730, so the backfill does too instead of falling back to 400.
+  index_days="$(sed -n 's/^PADDOCK_AUDIT_RETENTION_DAYS=//p' "$COMPOSE_DIR/.env" | tail -1 |
+    sed -E "s/[[:space:]]+#.*\$//; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\\1/; s/^'(.*)'\$/\\1/")"
   [[ "$index_days" =~ ^[0-9]+$ ]] || index_days=400
   set_env PADDOCK_AUDIT_INDEX_RETENTION_DAYS "$index_days"
   echo "deploy/compose/.env: added PADDOCK_AUDIT_INDEX_RETENTION_DAYS=$index_days"

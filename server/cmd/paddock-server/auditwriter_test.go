@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +81,7 @@ func TestIndexRetentionDefaultsToWORMRetention(t *testing.T) {
 // TestWorkerIndexRetention (ADR 0032 amendment 2026-10-31, PDK-180): the worker reads the audit writer's index
 // retention variable without a default and refuses to start when it is missing, not an integer or below the bucket
 // default or below the WORM retention, so its retention round never purges with a value other than the writer's. Compose
-// passes an unset variable as an empty one.
+// passes an unset variable as an empty one. A refusal names the variable and the value the worker got.
 func TestWorkerIndexRetention(t *testing.T) {
 	for _, tc := range []struct {
 		env     map[string]string
@@ -109,8 +111,13 @@ func TestWorkerIndexRetention(t *testing.T) {
 				t.Errorf("%v: err = %v, want PADDOCK_AUDIT_INDEX_RETENTION_DAYS missing", tc.env, err)
 			}
 		case tc.index == 0:
-			if err == nil || !strings.Contains(err.Error(), "PADDOCK_AUDIT_INDEX_RETENTION_DAYS") {
-				t.Errorf("%v: err = %v, want PADDOCK_AUDIT_INDEX_RETENTION_DAYS invalid", tc.env, err)
+			got := tc.env["PADDOCK_AUDIT_INDEX_RETENTION_DAYS"]
+			want := "PADDOCK_AUDIT_INDEX_RETENTION_DAYS: .*got " + regexp.QuoteMeta(got) + "$"
+			if _, convErr := strconv.Atoi(got); convErr != nil {
+				want = "PADDOCK_AUDIT_INDEX_RETENTION_DAYS: .*" + regexp.QuoteMeta(strconv.Quote(got))
+			}
+			if err == nil || !regexp.MustCompile(want).MatchString(err.Error()) {
+				t.Errorf("%v: err = %v, want PADDOCK_AUDIT_INDEX_RETENTION_DAYS invalid naming %q", tc.env, err, got)
 			}
 		default:
 			if err != nil || index != tc.index {

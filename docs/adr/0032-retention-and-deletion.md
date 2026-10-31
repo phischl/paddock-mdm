@@ -259,14 +259,18 @@ The table of the amendment 2026-10-18 does not match the schema in six places. D
 **Cutoff never ahead of the index, for all four stores** (`action`, `device_command`, `device_alert`,
 `device_event_gap`). The index drops whole UTC months only, a month once it ended more than
 `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` ago, so the oldest month it may still show is the one containing
-now − that period. The cutoff is the start of the UTC month containing now − that period − 2 days (the margin covers
-an index purge that runs late and the clocks of the control plane and the audit host differing), and never later
+now − that period. The cutoff is the start of the UTC month containing now − that period − 7 days, and never later
 than one hour before now, so a development installation that counts retention days in seconds does not delete rows
 a running session still reads; the store's own period equals the index retention and no longer enters the cutoff.
 The worker computes it from its own clock and the shared variable and reads nothing from the audit database (no new
 boundary); every `retention.purged` event of these stores records the index retention as `index_days`. Residual:
 when the index purge lags (the audit writer down, a partition kept after a lock timeout), the portal shows fewer
 rows than the index shows events; the failure direction is keeping data longer, never deleting it early.
+The margin is 7 days, not the 2 a late index purge and clock skew alone would need: after an outage of the audit
+pipeline (the audit writer, the broker or the audit host down for days), the backlog of audit events reaches the index
+late, and these late events keep their month in the index longer than the month's end plus the index retention; the
+margin covers an outage of about a week. The cost: in the first seven days of a month instead of two, the cutoff stays
+one month further back, so these rows are kept at most one month longer, never deleted earlier.
 
 The worker reads the audit writer's variables `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` and `PADDOCK_AUDIT_RETENTION_DAYS`,
 which the Compose files pass to both from the same `.env` values; it has no default of its own for the index
@@ -282,6 +286,12 @@ finished action read-only for every runtime role with `UPDATE` on `action` (`pad
 `paddock_relay`, `paddock_worker`, `paddock_compiler`, `paddock_revocation`): a restrictive `FOR UPDATE` policy with
 `USING (status = 'started')` and `WITH CHECK (status IN ('started', 'finished'))`, so no role can move an
 organization's finished action into the pseudo-organization, or rewrite its params or outcome, and then delete it.
-No runtime role has `BYPASSRLS`; only the table owner `paddock_owner` does. Residual: a started action can still be
-finished, moved into the pseudo-organization and deleted by a role with `UPDATE` in the short window before its use
-case or the outbox reaper finishes it; finishing it then fails and its audit event never reaches the outbox.
+No runtime role has `BYPASSRLS`; only the table owner `paddock_owner` does. Migration `00083` closes the started
+window: a `BEFORE UPDATE` trigger rejects every change of `organization_id` for every role, except out of the platform
+pseudo-organization (nil UUID), where organization creation starts its action and finishes it in the new
+organization; and the restrictive policies become `TO PUBLIC` with the same expressions (`finished_immutable` for
+`UPDATE`; `delete_finished`, `USING (status = 'finished')`, replaces the worker's `DELETE` policy; the platform role's
+`platform_delete` stays), so a role added later with `UPDATE` or `DELETE` on `action` (M9's `paddock_notifier`) is
+bound without naming it. Residual: a role with `UPDATE` can still finish a started action of an organization it may
+update, with another outcome or params, before its use case does; the action stays in that organization, its use
+case's finish then fails and the original outcome never reaches the outbox.

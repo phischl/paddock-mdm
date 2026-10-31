@@ -47,8 +47,8 @@ func TestRetentionUserSeen(t *testing.T) {
 
 // TestRetentionDeviceCommand covers the control-plane stores of PDK-180 (ADR 0032 amendments 2026-10-18 and
 // 2026-10-31): the development stack counts the 400-day index retention in seconds, and the purge never runs ahead of
-// the index, which drops whole UTC months: the cutoff is the start of the month containing now − 402 s (the 400 days
-// and a margin of 2, in seconds), never later than an hour ago. A command that finished 40 days ago, before that
+// the index, which drops whole UTC months: the cutoff is the start of the month containing now − 407 s (the 400 days
+// and a margin of 7, in seconds), never later than an hour ago. A command that finished 40 days ago, before that
 // month in any case, is deleted within two rounds with one retention.purged event (actor system, store
 // device_command, index_days 400), while a command that finished just now stays. The commands are written directly,
 // as gate C1 backdates its command: no device runs for 400 s in a gate. The insert is a SELECT, so psql prints the id
@@ -56,7 +56,7 @@ func TestRetentionUserSeen(t *testing.T) {
 //
 // Other gates must not depend on these stores outliving the development timing: with PADDOCK_RETENTION_UNIT=seconds
 // the round deletes finished commands, cleared alerts, filled event gaps and finished actions from before the current
-// UTC month (and, in the first 402 s of a month, from before the previous one), never younger than an hour.
+// UTC month (and, in the first 407 s of a month, from before the previous one), never younger than an hour.
 func TestRetentionDeviceCommand(t *testing.T) {
 	slug, org := gateOrganization(t)
 	user, password := tempUser(t, "retention", env.RoleGroup(slug, "admins"))

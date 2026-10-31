@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -395,17 +396,40 @@ func TestRetentionActionDeleteLimitedByDatabase(t *testing.T) {
 // when given, and returns the rows it affected.
 func affected(t *testing.T, url string, orgCtx *uuid.UUID, sql string, args ...any) int64 {
 	t.Helper()
+	n, err := tryAffected(t, url, orgCtx, sql, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// tryAffected is affected that returns the statement's error instead of failing the test.
+func tryAffected(t *testing.T, url string, orgCtx *uuid.UUID, sql string, args ...any) (int64, error) {
+	t.Helper()
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
+	return inTx(t, conn, "", orgCtx, sql, args...)
+}
+
+// inTx runs sql with args in one committed transaction on conn, as role when given (SET LOCAL ROLE) and with
+// paddock.org_id set to orgCtx when given, and returns the rows it affected or the statement's error.
+func inTx(t *testing.T, conn *pgx.Conn, role string, orgCtx *uuid.UUID, sql string, args ...any) (int64, error) {
+	t.Helper()
+	ctx := context.Background()
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if role != "" {
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if orgCtx != nil {
 		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgCtx.String()); err != nil {
 			t.Fatal(err)
@@ -413,12 +437,12 @@ func affected(t *testing.T, url string, orgCtx *uuid.UUID, sql string, args ...a
 	}
 	tag, err := tx.Exec(ctx, sql, args...)
 	if err != nil {
-		t.Fatal(err)
+		return 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return tag.RowsAffected()
+	return tag.RowsAffected(), nil
 }
 
 // TestRetentionActionFinishedImmutable (ADR 0032 amendment 2026-10-31, migration 00082): no runtime role with UPDATE
@@ -480,8 +504,108 @@ func TestRetentionActionFinishedImmutable(t *testing.T) {
 	})
 }
 
+// TestRetentionActionOrganizationImmutable (ADR 0032 amendment 2026-10-31, migration 00083): neither the platform
+// role nor the relay role moves an organization's started action into another organization or the platform
+// pseudo-organization, where it could be finished and deleted outside the organization's audit trail. Moving a started
+// action out of the pseudo-organization, as organization creation does, keeps working.
+func TestRetentionActionOrganizationImmutable(t *testing.T) {
+	w := newRetentionWorld(t)
+	env := pgtest.SharedPaddock(t)
+	org, _ := w.orgWithDevice(t)
+	other, _ := w.orgWithDevice(t)
+	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	const move = "UPDATE action SET organization_id = $2 WHERE id = $1"
+	const moveAndFinish = `UPDATE action SET organization_id = $2, status = 'finished', outcome = 'success',
+		finished_at = now() WHERE id = $1`
+
+	for _, r := range []struct {
+		role string
+		url  string
+	}{
+		{"paddock_platform", env.Platform},
+		{"paddock_relay", env.Relay},
+	} {
+		for _, target := range []struct {
+			name string
+			id   uuid.UUID
+		}{
+			{"another organization", other},
+			{"platform pseudo-organization", uuid.Nil},
+		} {
+			for _, sql := range []string{move, moveAndFinish} {
+				started := w.action(t, org, long, nil)
+				_, err := tryAffected(t, r.url, nil, sql, started, target.id)
+				var pgErr *pgconn.PgError
+				if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+					t.Errorf("%s, into %s: got %v, want check_violation", r.role, target.name, err)
+				}
+				if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2 AND status = 'started'",
+					started, org) != 1 {
+					t.Errorf("%s, into %s: want the started action kept in its organization", r.role, target.name)
+				}
+			}
+		}
+	}
+
+	t.Run("organization creation finishes its action in the new organization", func(t *testing.T) {
+		started := w.action(t, uuid.Nil, long, nil)
+		if n := affected(t, env.Platform, nil, moveAndFinish, started, org); n != 1 {
+			t.Fatalf("finished %d pseudo-organization actions in the organization, want 1", n)
+		}
+		if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2 AND status = 'finished'",
+			started, org) != 1 {
+			t.Fatal("want the action finished in the new organization")
+		}
+	})
+}
+
+// TestRetentionActionPoliciesBindEveryRole (ADR 0032 amendment 2026-10-31, migration 00083): the restrictive UPDATE
+// and DELETE policies on action hold for every role, also one no migration names (M9's paddock_notifier, say). A
+// temporary role with UPDATE and DELETE on action and an organization policy rewrites no finished action and deletes
+// no started one; finishing a started action and deleting a finished one show that its grants work.
+func TestRetentionActionPoliciesBindEveryRole(t *testing.T) {
+	w := newRetentionWorld(t)
+	org, _ := w.orgWithDevice(t)
+	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	role := "paddock_test_unlisted_" + uuid.NewString()[:8]
+	ident := pgx.Identifier{role}.Sanitize()
+	w.exec(t, "CREATE ROLE "+ident+" NOLOGIN")
+	t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), "DROP ROLE "+ident) })
+	w.exec(t, "GRANT USAGE ON SCHEMA public TO "+ident)
+	t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), "REVOKE ALL ON SCHEMA public FROM "+ident) })
+	w.exec(t, "GRANT SELECT, UPDATE, DELETE ON action TO "+ident)
+	t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), "REVOKE ALL ON action FROM "+ident) })
+	w.exec(t, "CREATE POLICY "+ident+" ON action TO "+ident+`
+		USING (organization_id = current_setting('paddock.org_id')::uuid)
+		WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid)`)
+	t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), "DROP POLICY "+ident+" ON action") })
+
+	run := func(sql string, id uuid.UUID) int64 {
+		t.Helper()
+		n, err := inTx(t, w.super, role, &org, sql, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	finished := w.action(t, org, long, at(long.Add(time.Minute)))
+	started := w.action(t, org, long, nil)
+	if n := run(`UPDATE action SET params = '{"rewritten":true}', outcome = 'failure' WHERE id = $1`, finished); n != 0 {
+		t.Errorf("rewrote %d finished actions, want 0", n)
+	}
+	if n := run("DELETE FROM action WHERE id = $1", started); n != 0 {
+		t.Errorf("deleted %d started actions, want 0", n)
+	}
+	if n := run(`UPDATE action SET status = 'finished', outcome = 'success', finished_at = now() WHERE id = $1`, started); n != 1 {
+		t.Errorf("finished %d started actions, want 1", n)
+	}
+	if n := run("DELETE FROM action WHERE id = $1", finished); n != 1 {
+		t.Errorf("deleted %d finished actions, want 1", n)
+	}
+}
+
 // TestRetentionPurgeNeverAheadOfIndex (ADR 0032 amendment 2026-10-31): every store kept by the audit index deletes
-// only rows older than the start of the UTC month containing now − the index retention − 2 days, also when that
+// only rows older than the start of the UTC month containing now − the index retention − 7 days, also when that
 // instant lies in the previous month while now − the index retention does not, and never a row younger than an hour.
 // A row older than now − the index retention but inside that month stays: the index, which drops whole months only,
 // may still show its events.
@@ -511,7 +635,7 @@ func TestRetentionPurgeNeverAheadOfIndex(t *testing.T) {
 	}{
 		{"mid-month", indexNow, indexFloor},
 		{"month boundary", time.Date(2026, 3, 1, 0, 3, 0, 0, time.UTC), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
-		{"month boundary within the margin", time.Date(2026, 3, 1, 0, 6, 41, 0, time.UTC), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+		{"month boundary within the margin", time.Date(2026, 3, 1, 0, 6, 45, 0, time.UTC), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
 		{"never within the last hour", time.Date(2026, 3, 1, 0, 30, 0, 0, time.UTC), time.Date(2026, 2, 28, 23, 30, 0, 0, time.UTC)},
 	}
 	for _, s := range stores {

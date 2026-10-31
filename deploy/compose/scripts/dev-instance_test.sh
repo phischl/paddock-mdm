@@ -70,6 +70,10 @@ backfill() {
   printf '%s:%s' "$(grep -c '^PADDOCK_AUDIT_INDEX_RETENTION_DAYS=' "$dir/.env")" "$(setting "$dir" PADDOCK_AUDIT_INDEX_RETENTION_DAYS)"
 }
 check "index retention backfilled from the WORM retention" "$(backfill index-worm PADDOCK_AUDIT_RETENTION_DAYS=730)" 1:730
+check "index retention backfilled from a WORM retention with a comment" "$(backfill index-comment 'PADDOCK_AUDIT_RETENTION_DAYS=730   # WORM')" 1:730
+check "index retention backfilled from a double-quoted WORM retention" "$(backfill index-dquote 'PADDOCK_AUDIT_RETENTION_DAYS="730"')" 1:730
+check "index retention backfilled from a single-quoted WORM retention" "$(backfill index-squote "PADDOCK_AUDIT_RETENTION_DAYS='730'")" 1:730
+check "index retention backfilled from a quoted WORM retention with a comment" "$(backfill index-both 'PADDOCK_AUDIT_RETENTION_DAYS="730" # WORM')" 1:730
 check "index retention backfilled with 400 without a WORM retention" "$(backfill index-none '')" 1:400
 check "index retention backfilled with 400 for a WORM retention that is no number" "$(backfill index-nan PADDOCK_AUDIT_RETENTION_DAYS=x)" 1:400
 check "an existing index retention stays" "$(backfill index-kept $'PADDOCK_AUDIT_RETENTION_DAYS=730\nPADDOCK_AUDIT_INDEX_RETENTION_DAYS=900')" 1:900

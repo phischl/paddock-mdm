@@ -291,9 +291,9 @@ func (r *Retention) indexCutoff(now time.Time) (time.Time, error) {
 // indexParams are the retention.purged params of the stores kept by the audit index beyond store, cutoff and deleted.
 func (r *Retention) indexParams() map[string]any { return map[string]any{"index_days": r.indexDays} }
 
-// indexMarginDays covers the audit index purge running late and the clocks of the worker and the audit host differing
-// (ADR 0032 amendment 2026-10-31).
-const indexMarginDays = 2
+// indexMarginDays covers the audit index purge running late, audit events reaching the index late after an outage of
+// the audit pipeline, and the clocks of the worker and the audit host differing (ADR 0032 amendment 2026-10-31).
+const indexMarginDays = 7
 
 // indexYoungest is the age below which no store kept by the index loses a row, so a development installation that
 // counts days in seconds does not delete rows a running gate or session still reads; production cutoffs lie hundreds
