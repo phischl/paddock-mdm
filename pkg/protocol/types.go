@@ -546,3 +546,24 @@ type EnrollmentConfig struct {
 	BundleKeys     []BundleKey `json:"bundle_keys"`
 	RevocationKeys []BundleKey `json:"revocation_keys,omitempty"`
 }
+
+// Modes of a bundle apply as reported in bundle.applied (plan M11 decision 7).
+const (
+	BundleModeEnforce    = "enforce"
+	BundleModeReportOnly = "report_only"
+)
+
+// Per-resource statuses of bundle.applied; drifted and pending are derived by the server.
+const (
+	ResourceApplied = "applied"
+	ResourceFailed  = "failed"
+)
+
+// BundleAppliedResource is the outcome of one resource in the data of bundle.applied. Changes lists what a
+// report-only apply would change.
+type BundleAppliedResource struct {
+	ID      string   `json:"id"`
+	Status  string   `json:"status"`
+	Message string   `json:"message,omitempty"`
+	Changes []string `json:"changes,omitempty"`
+}

@@ -75,7 +75,15 @@ type Bundle struct {
 	// Hostname is the device's managed name (schema v2 only, ADR 0041). Agents that do not know the section ignore
 	// it; a device without a managed name has no section.
 	Hostname *HostnameSpec `json:"hostname,omitempty"`
+	// Mode is ModeEnforce (absent) or ModeReportOnly; the agent reports a report-only bundle without applying it.
+	Mode string `json:"mode,omitempty"`
 }
+
+// Bundle modes. The enforce mode is the empty value so that bundles without the field keep their content hash.
+const (
+	ModeEnforce    = ""
+	ModeReportOnly = "report_only"
+)
 
 // HostnameSpec is the hostname section: the device's managed name (ADR 0041).
 type HostnameSpec struct {
@@ -515,6 +523,9 @@ func VerifyVersions(envelope []byte, trust Trust, deviceID, orgID string, minVer
 	}
 	if !slices.Contains(accepted, b.SchemaVersion) {
 		return nil, fmt.Errorf("%w: schema_version %d", ErrSchema, b.SchemaVersion)
+	}
+	if b.Mode != ModeEnforce && b.Mode != ModeReportOnly {
+		return nil, fmt.Errorf("%w: mode %q", ErrSchema, b.Mode)
 	}
 	return &b, nil
 }

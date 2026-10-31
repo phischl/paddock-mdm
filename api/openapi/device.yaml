@@ -520,6 +520,19 @@ components:
         data:
           type: object
           additionalProperties: true
+          description: |
+            bundle.applied data: version, changed, errors [{id, message}] and, since plan M11, the optional mode
+            (enforce or report_only; absent from older agents) and resources [BundleAppliedResource], one entry per
+            resource in apply order. A new agent against an older server stays valid: the server ignores the fields it
+            does not know.
+    BundleAppliedResource:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string, description: "Resource ID, e.g. file:/etc/motd." }
+        status: { type: string, enum: [applied, failed], description: "Outcome of the apply of this resource." }
+        message: { type: string, description: Error message of a failed resource. }
+        changes: { type: array, items: { type: string }, description: What a report-only apply would change. }
     EventsRequest:
       type: object
       required: [events]

@@ -73,7 +73,7 @@ func TestBundleApplyAndEvents(t *testing.T) {
 		t.Fatalf("bundle not applied: applied %d", a.st.AppliedBundleVersion)
 	}
 	applied := eventsOf(g, protocol.EventBundleApplied)
-	if len(applied) != 1 || string(applied[0].Data) != `{"version":4,"changed":1,"errors":[]}` {
+	if len(applied) != 1 || string(applied[0].Data) != `{"version":4,"changed":1,"errors":[],"mode":"enforce","resources":[{"id":"time","status":"applied"},{"id":"file:/etc/motd","status":"applied"}]}` {
 		t.Fatalf("bundle.applied events %+v", applied)
 	}
 	if pending, _ := a.d.Spool.Pending(); len(pending) != 0 {
