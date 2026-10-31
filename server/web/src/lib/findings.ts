@@ -34,13 +34,15 @@ export const findingFilters: ListFilter[] = [
 /** One page of findings for DataList; without a status filter the live findings, without a cleared filter the uncleared. */
 export async function listFindings(p: ListParams): Promise<Page<Finding>> {
   const status = ((p.status as FindingStatus[] | undefined) ?? [])
+  const kinds = (p.kind as FindingKind[] | undefined) ?? []
   return listPage(
     await api.GET('/api/v1/findings', {
       params: {
         query: {
           page: p.page, page_size: p.page_size, sort: p.sort as FindingListSort, q: p.q,
           status: status.length > 0 ? status : liveFindingStatuses,
-          kind: ((p.kind as FindingKind[] | undefined) ?? [])[0],
+          // The API takes one kind; both chosen means no restriction.
+          kind: kinds.length === 1 ? kinds[0] : undefined,
           cleared: ((p.cleared as string[] | undefined) ?? []).includes('true'),
         },
       },
@@ -48,10 +50,15 @@ export async function listFindings(p: ListParams): Promise<Page<Finding>> {
   )
 }
 
-/** The organization's assignable accounts, the first hundred by user name. */
-export async function listAccounts(): Promise<Account[]> {
-  const { data } = await api.GET('/api/v1/accounts', { params: { query: { page: 1, page_size: 100, sort: 'username' } } })
-  return data?.items ?? []
+/**
+ * The organization's assignable accounts, the first hundred by user name: administrators and operators, because the
+ * assign step refuses an auditor. The problem code on failure.
+ */
+export async function listAccounts(): Promise<Account[] | string> {
+  const { data, error } = await api.GET('/api/v1/accounts', {
+    params: { query: { page: 1, page_size: 100, sort: 'username', role: ['org_admin', 'org_operator'] } },
+  })
+  return data?.items ?? problemCode(error)
 }
 
 /** The finding after a step, or the problem code. */

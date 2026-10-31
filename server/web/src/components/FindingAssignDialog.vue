@@ -24,9 +24,12 @@ const { t } = useI18n()
 const problemText = useProblemText()
 const accounts = ref<Account[]>([])
 const assignee = ref<string | null>(props.finding?.assignee?.id ?? null)
+const loadProblem = ref('')
 
 onMounted(async () => {
-  accounts.value = await listAccounts()
+  const result = await listAccounts()
+  if (typeof result === 'string') loadProblem.value = result
+  else accounts.value = result
 })
 
 function title(a: Account): string {
@@ -60,11 +63,11 @@ function title(a: Account): string {
           data-testid="finding-assignee"
         />
         <p
-          v-if="problem"
+          v-if="problem || loadProblem"
           class="form-error"
           role="alert"
         >
-          {{ problemText(problem) }}
+          {{ problemText(problem || loadProblem) }}
         </p>
         <div class="form-actions">
           <v-btn

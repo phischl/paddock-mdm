@@ -24,6 +24,7 @@ const tamper: Finding = {
 }
 const closedFinding: Finding = { ...base, id: 'f3', status: 'false_positive', closed_at: '2026-10-31T11:00:00Z', closed_by: 'alice', reason: 'test lab' }
 
+const accountsResult = vi.hoisted(() => ({ value: null as Promise<unknown> | null }))
 let items: Finding[] = [base, tamper, closedFinding]
 const queries: unknown[] = []
 const calls = vi.hoisted(() => ({
@@ -35,7 +36,7 @@ vi.mock('../lib/findings', async (original) => ({
     queries.push(p)
     return Promise.resolve({ items, page: 1, page_size: 25, total: items.length, total_capped: false, sort: '-last_seen_at' })
   },
-  listAccounts: () => Promise.resolve([
+  listAccounts: () => accountsResult.value ?? Promise.resolve([
     { id: 'u1', username: 'bob', display_name: 'Bob Builder', role: 'org_operator' },
     { id: 'u2', username: 'alice', display_name: 'Alice Admin', role: 'org_admin' },
   ]),
@@ -52,6 +53,7 @@ afterEach(() => {
   settleConfirm(false)
   items = [base, tamper, closedFinding]
   queries.length = 0
+  accountsResult.value = null
   for (const c of Object.values(calls)) c.mockReset()
   document.body.innerHTML = ''
 })
@@ -223,6 +225,16 @@ describe('findings page', () => {
 })
 
 describe('FindingAssignDialog', () => {
+  it('shows a failed account load as an inline alert', async () => {
+    accountsResult.value = Promise.resolve('forbidden')
+    wrapper = mount(FindingAssignDialog, {
+      props: { modelValue: true, finding: base, problem: '', pending: false },
+      global: { plugins: [createPortalI18n(), vuetify] }, attachTo: document.body,
+    })
+    await flushPromises()
+    expect(document.body.querySelector('.form-error')!.textContent).toBe('You are not allowed to do this.')
+  })
+
   it('submits the current assignee and shows a refusal inline', async () => {
     wrapper = mount(FindingAssignDialog, {
       props: { modelValue: true, finding: tamper, problem: 'invalid_state', pending: false },
