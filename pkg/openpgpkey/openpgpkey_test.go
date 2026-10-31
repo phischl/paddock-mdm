@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,7 +55,8 @@ func TestParseFixtures(t *testing.T) {
 			want: openpgpkey.Key{
 				Fingerprint: rsaFP, Algorithm: openpgpkey.RSA, Bits: 3072,
 				Created: *unix(1793479615), Expires: unix(1893495600),
-				UserIDs: []string{"Paddock Test RSA <rsa@example.invalid>"}, Subkeys: 1,
+				UserIDs: []string{"Paddock Test RSA <rsa@example.invalid>"},
+				Subkeys: []openpgpkey.Subkey{{Algorithm: openpgpkey.RSA, Bits: 2048}},
 			},
 		},
 		{
@@ -62,7 +64,8 @@ func TestParseFixtures(t *testing.T) {
 			want: openpgpkey.Key{
 				Fingerprint: rsaFP, Algorithm: openpgpkey.RSA, Bits: 3072,
 				Created: *unix(1793479615), Expires: unix(1893495600),
-				UserIDs: []string{"Paddock Test RSA <rsa@example.invalid>"}, Subkeys: 1,
+				UserIDs: []string{"Paddock Test RSA <rsa@example.invalid>"},
+				Subkeys: []openpgpkey.Subkey{{Algorithm: openpgpkey.RSA, Bits: 2048}},
 			},
 		},
 		{
@@ -71,7 +74,7 @@ func TestParseFixtures(t *testing.T) {
 				Fingerprint: ed25519FP, Algorithm: openpgpkey.EdDSA, Curve: "Ed25519",
 				Created: *unix(1793479615),
 				UserIDs: []string{"Paddock Test Ed25519 <ed25519@example.invalid>", "Second UID <second@example.invalid>"},
-				Subkeys: 1,
+				Subkeys: []openpgpkey.Subkey{{Algorithm: openpgpkey.ECDH, Curve: "Curve25519"}},
 			},
 		},
 	}
@@ -89,7 +92,7 @@ func TestParseFixtures(t *testing.T) {
 			got.Keyring = nil
 			if got.Fingerprint != tt.want.Fingerprint || got.Algorithm != tt.want.Algorithm ||
 				got.Bits != tt.want.Bits || got.Curve != tt.want.Curve || !got.Created.Equal(tt.want.Created) ||
-				got.Subkeys != tt.want.Subkeys || strings.Join(got.UserIDs, "|") != strings.Join(tt.want.UserIDs, "|") {
+				!slices.Equal(got.Subkeys, tt.want.Subkeys) || strings.Join(got.UserIDs, "|") != strings.Join(tt.want.UserIDs, "|") {
 				t.Errorf("got %+v, want %+v", got, tt.want)
 			}
 			switch {
@@ -228,13 +231,33 @@ func TestExpiryFromPrimaryUserIDSelfCertification(t *testing.T) {
 	}
 }
 
-func TestAlgorithms(t *testing.T) {
-	mpi := func(bits int) []byte {
-		b := make([]byte, (bits+7)/8)
-		b[0] = 0x80 >> ((8 - bits%8) % 8)
-		return append([]byte{byte(bits >> 8), byte(bits)}, b...)
+// mpi encodes an MPI of exactly the given bit length.
+func mpi(bits int) []byte {
+	b := make([]byte, (bits+7)/8)
+	b[0] = 0x80 >> ((8 - bits%8) % 8)
+	return append([]byte{byte(bits >> 8), byte(bits)}, b...)
+}
+
+// Curve OIDs with their length octet (RFC 9580 §9.2).
+var (
+	p256       = []byte{8, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07}
+	secp256k1  = []byte{5, 0x2b, 0x81, 0x04, 0x00, 0x0a}
+	brainpool  = []byte{9, 0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07}
+	ed25519OID = []byte{9, 0x2b, 0x06, 0x01, 0x04, 0x01, 0xda, 0x47, 0x0f, 0x01}
+	cv25519OID = []byte{10, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01}
+	ed448OID   = []byte{3, 0x2b, 0x65, 0x71}
+	x448OID    = []byte{3, 0x2b, 0x65, 0x6f}
+)
+
+func ecKey(tag, alg byte, oid []byte) []byte {
+	material := cat(oid, mpi(263))
+	if alg == 18 {
+		material = append(material, 3, 1, 8, 9)
 	}
-	p256 := []byte{8, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07}
+	return pkt(tag, keyBody(4, alg, material))
+}
+
+func TestAlgorithms(t *testing.T) {
 	tests := []struct {
 		name  string
 		body  []byte
@@ -259,9 +282,92 @@ func TestAlgorithms(t *testing.T) {
 			}
 		})
 	}
-	ecdhSub := pkt(14, keyBody(4, 18, cat([]byte{10, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01}, mpi(263), []byte{3, 1, 8, 9})))
+	ecdhSub := ecKey(14, 18, cv25519OID)
 	if _, err := openpgpkey.Parse(cat(ed25519Key(4), uid("a"), ecdhSub)); err != nil {
 		t.Errorf("Curve25519 ECDH subkey: %v", err)
+	}
+}
+
+func TestCurveMustFitAlgorithm(t *testing.T) {
+	accepted := map[string][]byte{
+		"EdDSA Ed25519":     cat(ecKey(6, 22, ed25519OID), uid("a")),
+		"EdDSA Ed448":       cat(ecKey(6, 22, ed448OID), uid("a")),
+		"ECDSA P-256":       cat(ecKey(6, 19, p256), uid("a")),
+		"ECDSA brainpool":   cat(ecKey(6, 19, brainpool), uid("a")),
+		"ECDSA secp256k1":   cat(ecKey(6, 19, secp256k1), uid("a")),
+		"ECDH X448 subkey":  cat(ed25519Key(4), uid("a"), ecKey(14, 18, x448OID)),
+		"ECDH P-256 subkey": cat(ed25519Key(4), uid("a"), ecKey(14, 18, p256)),
+	}
+	for name, in := range accepted {
+		if _, err := openpgpkey.Parse(in); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	refused := map[string][]byte{
+		"ECDSA Ed25519":             cat(ecKey(6, 19, ed25519OID), uid("a")),
+		"ECDSA Curve25519":          cat(ecKey(6, 19, cv25519OID), uid("a")),
+		"EdDSA P-256":               cat(ecKey(6, 22, p256), uid("a")),
+		"EdDSA Curve25519":          cat(ecKey(6, 22, cv25519OID), uid("a")),
+		"EdDSA secp256k1":           cat(ecKey(6, 22, secp256k1), uid("a")),
+		"ECDH Ed25519 subkey":       cat(ed25519Key(4), uid("a"), ecKey(14, 18, ed25519OID)),
+		"ECDH secp256k1 subkey":     cat(ed25519Key(4), uid("a"), ecKey(14, 18, secp256k1)),
+		"ECDSA X448 signing subkey": cat(ed25519Key(4), uid("a"), ecKey(14, 19, x448OID)),
+	}
+	for name, in := range refused {
+		if _, err := openpgpkey.Parse(in); !errors.Is(err, openpgpkey.ErrNotPublicKey) || !strings.Contains(err.Error(), "does not fit") {
+			t.Errorf("%s: err = %v, want a curve mismatch", name, err)
+		}
+	}
+}
+
+func TestMPIBitCountMustMatch(t *testing.T) {
+	padded := cat(mpi(2048), mpi(17))
+	padded[2] = 0x01 // top byte now has 1 significant bit: the value is 2041 bits long but declares 2048.
+	leadingZero := append([]byte{0x08, 0x08, 0x00}, make([]byte, 256)...)
+	leadingZero[3] = 0x80
+	for name, material := range map[string][]byte{
+		"declared above actual": padded,
+		"leading zero byte":     cat(leadingZero, mpi(17)),
+		"exponent mismatch":     cat(mpi(3072), []byte{0, 18, 0x01, 0x00, 0x01}),
+	} {
+		_, err := openpgpkey.Parse(cat(pkt(6, keyBody(4, 1, material)), uid("a")))
+		if !errors.Is(err, openpgpkey.ErrNotPublicKey) || !strings.Contains(err.Error(), "MPI bit count") {
+			t.Errorf("%s: err = %v, want an MPI bit count refusal", name, err)
+		}
+	}
+}
+
+func TestUserIDControlAndBidiRunesReplaced(t *testing.T) {
+	tests := map[string]string{
+		"Vendor \x1b[31mred\x1b[0m":        "Vendor \ufffd[31mred\ufffd[0m",
+		"evil\u202Egpj.exe":                "evil\ufffdgpj.exe",
+		"a\u202Ab\u202Bc\u202Cd\u202De":    "a\ufffdb\ufffdc\ufffdd\ufffde",
+		"\u2066isolate\u2069 \u2067\u2068": "\ufffdisolate\ufffd \ufffd\ufffd",
+		"mark\u200E\u200F":                 "mark\ufffd\ufffd",
+		"tab\tnl\ndel\x7fc1\u0085":         "tab\ufffdnl\ufffddel\ufffdc1\ufffd",
+		"bad utf8 \xff":                    "bad utf8 \ufffd",
+		"Ümlaut <ü@example.invalid>":       "Ümlaut <ü@example.invalid>",
+	}
+	for in, want := range tests {
+		k, err := openpgpkey.Parse(cat(ed25519Key(4), uid(in)))
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if k.UserIDs[0] != want {
+			t.Errorf("user ID %q = %q, want %q", in, k.UserIDs[0], want)
+		}
+	}
+}
+
+func TestKeyringDoesNotAliasInput(t *testing.T) {
+	in := fixture(t, "rsa.gpg")
+	k, err := openpgpkey.Parse(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in[len(in)-1] ^= 0xFF
+	if bytes.Equal(k.Keyring, in) || !bytes.Equal(k.Keyring, fixture(t, "rsa.gpg")) {
+		t.Error("Keyring changed with the caller's input buffer")
 	}
 }
 
@@ -358,7 +464,7 @@ func FuzzParse(f *testing.F) {
 			return
 		}
 		if len(k.Fingerprint) != 40 || len(k.UserIDs) == 0 || len(k.UserIDs) > openpgpkey.MaxUserIDs ||
-			k.Subkeys > openpgpkey.MaxSubkeys || len(k.Keyring) == 0 {
+			len(k.Subkeys) > openpgpkey.MaxSubkeys || len(k.Keyring) == 0 {
 			t.Fatalf("accepted key out of bounds: %+v", k)
 		}
 		again, err := openpgpkey.Parse(k.Keyring)

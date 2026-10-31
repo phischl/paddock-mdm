@@ -19,6 +19,7 @@ import (
 	"math/bits"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -72,25 +73,40 @@ type Key struct {
 	// advertises none. The signature carrying it is NOT verified: the value is display-only and must never gate a
 	// security decision.
 	Expires *time.Time
-	// UserIDs lists the user IDs in packet order; invalid UTF-8 is replaced with U+FFFD.
+	// UserIDs lists the user IDs in packet order; invalid UTF-8, control characters and bidirectional formatting
+	// characters are replaced with U+FFFD.
 	UserIDs []string
-	// Subkeys is the number of public subkeys.
-	Subkeys int
+	// Subkeys lists the public subkeys in packet order.
+	Subkeys []Subkey
 	// Keyring is the binary (dearmored) transferable public key, exactly as read.
 	Keyring []byte
+}
+
+// Subkey is the inspected algorithm of a public subkey.
+type Subkey struct {
+	Algorithm Algorithm
+	// Bits is the modulus or prime size for RSA, DSA and ElGamal; zero for elliptic-curve keys.
+	Bits int
+	// Curve names the curve of an elliptic-curve key; empty otherwise.
+	Curve string
 }
 
 // Fingerprint reads an ASCII-armored public key block and returns its fingerprint and binary keyring (plan M13a
 // §6.4).
 func Fingerprint(armored []byte) (fingerprint string, keyring []byte, err error) {
-	if !isArmored(armored) {
-		return "", nil, notKey("input is not ASCII-armored")
-	}
-	k, err := Parse(armored)
+	k, err := ParseArmored(armored)
 	if err != nil {
 		return "", nil, err
 	}
 	return k.Fingerprint, k.Keyring, nil
+}
+
+// ParseArmored is Parse restricted to ASCII-armored input, the form a source's signing_key is stored in.
+func ParseArmored(armored []byte) (*Key, error) {
+	if !isArmored(armored) {
+		return nil, notKey("input is not ASCII-armored")
+	}
+	return Parse(armored)
 }
 
 // FingerprintBinary reads a binary transferable public key and returns its fingerprint (plan M13a §6.4).
@@ -314,10 +330,11 @@ func parsePackets(raw []byte) (*Key, error) {
 	if first.tag != tagPublicKey {
 		return nil, unexpectedTag(first.tag)
 	}
-	k := &Key{}
-	if err := inspectKeyMaterial(first.body, true, k); err != nil {
+	params, created, err := inspectKeyMaterial(first.body, true)
+	if err != nil {
 		return nil, err
 	}
+	k := &Key{Algorithm: params.Algorithm, Bits: params.Bits, Curve: params.Curve, Created: created}
 	fp := v4Fingerprint(first.body)
 	k.Fingerprint = strings.ToUpper(hex.EncodeToString(fp))
 
@@ -342,7 +359,7 @@ func parsePackets(raw []byte) (*Key, error) {
 			if len(p.body) == 0 || len(p.body) > MaxUserIDLen {
 				return nil, notKey(fmt.Sprintf("user ID length outside 1..%d", MaxUserIDLen))
 			}
-			k.UserIDs = append(k.UserIDs, toValidUTF8(p.body))
+			k.UserIDs = append(k.UserIDs, displayable(p.body))
 			uids = append(uids, userID{})
 			sec = sectionUser
 		case tagUserAttribute:
@@ -351,13 +368,14 @@ func parsePackets(raw []byte) (*Key, error) {
 			}
 			sec = sectionAttribute
 		case tagPublicSubkey:
-			if k.Subkeys == MaxSubkeys {
+			if len(k.Subkeys) == MaxSubkeys {
 				return nil, notKey(fmt.Sprintf("more than %d subkeys", MaxSubkeys))
 			}
-			if err := inspectKeyMaterial(p.body, false, nil); err != nil {
+			params, _, err := inspectKeyMaterial(p.body, false)
+			if err != nil {
 				return nil, err
 			}
-			k.Subkeys++
+			k.Subkeys = append(k.Subkeys, params)
 			sec = sectionSubkey
 		case tagSignature:
 			sig, err := inspectSignature(p.body, fp)
@@ -381,7 +399,8 @@ func parsePackets(raw []byte) (*Key, error) {
 		exp := k.Created.Add(time.Duration(cert.expiry) * time.Second)
 		k.Expires = &exp
 	}
-	k.Keyring = raw
+	// A clone, so a caller that reuses its input buffer cannot change the keyring after the fingerprint was taken.
+	k.Keyring = bytes.Clone(raw)
 	return k, nil
 }
 
@@ -415,11 +434,21 @@ func primaryCert(uids []userID) *selfCert {
 	return first
 }
 
-func toValidUTF8(b []byte) string {
-	if utf8.Valid(b) {
-		return string(b)
+// displayable turns a user ID into text that is safe to show: invalid UTF-8, control characters and the bidirectional
+// formatting characters that can reorder what an administrator reads (Trojan Source, CVE-2021-42574) become U+FFFD.
+// Replacing rather than refusing keeps a vendor key with such a user ID usable.
+func displayable(b []byte) string {
+	s := string(b)
+	if !utf8.Valid(b) {
+		s = strings.ToValidUTF8(s, string(utf8.RuneError))
 	}
-	return strings.ToValidUTF8(string(b), "�")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u200E' || r == '\u200F' || (r >= '\u202A' && r <= '\u202E') ||
+			(r >= '\u2066' && r <= '\u2069') {
+			return utf8.RuneError
+		}
+		return r
+	}, s)
 }
 
 func v4Fingerprint(body []byte) []byte {
@@ -476,20 +505,35 @@ func curveName(oid string) (string, bool) {
 	return "", false
 }
 
-// inspectKeyMaterial checks a v4 public-key or public-subkey packet body (RFC 4880 §5.5.2) and, for the primary key,
-// fills the algorithm fields of k. The algorithm-specific fields must consume the body exactly.
-func inspectKeyMaterial(body []byte, primary bool, k *Key) error {
+// curveFitsAlgorithm reports whether a curve is defined for the algorithm (RFC 9580 §9.2): EdDSA signs only on the
+// Edwards curves, ECDH and ECDSA never use them, and secp256k1 appears only with ECDSA in practice.
+func curveFitsAlgorithm(alg byte, curve string) bool {
+	switch curve {
+	case "Ed25519", "Ed448":
+		return alg == algEdDSALegacy
+	case "Curve25519", "X448":
+		return alg == algECDH
+	case "secp256k1":
+		return alg == algECDSA
+	default:
+		return alg == algECDH || alg == algECDSA
+	}
+}
+
+// inspectKeyMaterial checks a v4 public-key or public-subkey packet body (RFC 4880 §5.5.2) and returns its algorithm
+// and creation time. The algorithm-specific fields must consume the body exactly.
+func inspectKeyMaterial(body []byte, primary bool) (Subkey, time.Time, error) {
 	if len(body) < 1 {
-		return notKey("empty key packet")
+		return Subkey{}, time.Time{}, notKey("empty key packet")
 	}
 	if body[0] != 4 {
-		return notKey(fmt.Sprintf("key packet version %d is not 4", body[0]))
+		return Subkey{}, time.Time{}, notKey(fmt.Sprintf("key packet version %d is not 4", body[0]))
 	}
 	if len(body) > maxKeyPacketBody {
-		return notKey("key packet too long")
+		return Subkey{}, time.Time{}, notKey("key packet too long")
 	}
 	if len(body) < 6 {
-		return notKey("truncated key packet")
+		return Subkey{}, time.Time{}, notKey("truncated key packet")
 	}
 	created := time.Unix(int64(binary.BigEndian.Uint32(body[1:5])), 0).UTC()
 	alg := body[5]
@@ -523,6 +567,9 @@ func inspectKeyMaterial(body []byte, primary bool, k *Key) error {
 			name = EdDSA
 		}
 		curve = r.oid()
+		if r.err == nil && !curveFitsAlgorithm(alg, curve) {
+			return Subkey{}, time.Time{}, notKey(fmt.Sprintf("curve %s does not fit algorithm %s", curve, name))
+		}
 		r.mpi()
 		if alg == algECDH {
 			// KDF parameters: length 3, reserved 0x01, hash and cipher identifiers (RFC 9580 §11.5).
@@ -544,22 +591,21 @@ func inspectKeyMaterial(body []byte, primary bool, k *Key) error {
 		name = Ed448
 		r.take(57)
 	default:
-		return notKey(fmt.Sprintf("unsupported public-key algorithm %d", alg))
+		return Subkey{}, time.Time{}, notKey(fmt.Sprintf("unsupported public-key algorithm %d", alg))
 	}
 	if r.err != nil {
-		return r.err
+		return Subkey{}, time.Time{}, r.err
 	}
 	if len(r.b) != 0 {
-		return notKey("trailing bytes in key packet")
+		return Subkey{}, time.Time{}, notKey("trailing bytes in key packet")
 	}
 	if primary {
 		switch alg {
 		case algRSAEncrypt, algElGamal, algECDH, algX25519, algX448:
-			return notKey(fmt.Sprintf("encryption-only algorithm %s as primary key", name))
+			return Subkey{}, time.Time{}, notKey(fmt.Sprintf("encryption-only algorithm %s as primary key", name))
 		}
-		k.Algorithm, k.Bits, k.Curve, k.Created = name, size, curve, created
 	}
-	return nil
+	return Subkey{Algorithm: name, Bits: size, Curve: curve}, created, nil
 }
 
 // Signature subpacket types (RFC 9580 §5.2.3.7).
@@ -716,7 +762,9 @@ func bitLen(v []byte) int {
 	return (len(v)-1)*8 + bits.Len8(v[0])
 }
 
-// mpi reads a multiprecision integer (RFC 4880 §3.2), at most MaxMPIBits long.
+// mpi reads a multiprecision integer (RFC 4880 §3.2), at most MaxMPIBits long. The declared bit count must equal the
+// bit length of the value: RFC 4880 §3.2 defines it so, and a padded MPI would let Bits disagree with the real key
+// size the upload policy checks.
 func (r *reader) mpi() []byte {
 	n := int(r.uint16())
 	if r.err != nil {
@@ -726,7 +774,12 @@ func (r *reader) mpi() []byte {
 		r.fail("MPI length")
 		return nil
 	}
-	return r.take((n + 7) / 8)
+	v := r.take((n + 7) / 8)
+	if r.err == nil && bitLen(v) != n {
+		r.fail("MPI bit count")
+		return nil
+	}
+	return v
 }
 
 // oid reads a curve OID (RFC 9580 §5.5.5.4); lengths 0 and 0xFF are reserved.
