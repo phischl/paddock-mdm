@@ -54,6 +54,9 @@ type Options struct {
 	RemoveConfig bool
 	NoWait       bool
 	Proxy        string
+	// Method is the protocol.EnrollmentMethod the request sends: paddockd enroll adopts an installed device,
+	// Autoinstalled sets protocol.EnrollmentAutoinstall itself.
+	Method string
 	// Sleep waits between polls; nil uses a timer (tests replace it).
 	Sleep func(ctx context.Context, d time.Duration) error
 	// NewClient builds the device API client; nil uses client.New.
@@ -103,7 +106,7 @@ func Run(ctx context.Context, o Options) (int, error) {
 		return ExitError, err
 	}
 	if st.EnrollmentID == "" {
-		id, err := requestEnrollment(ctx, o, c, Request(l, token, key))
+		id, err := requestEnrollment(ctx, o, c, Request(l, token, key, o.Method))
 		if err != nil {
 			return ExitError, fmt.Errorf("enrollment request: %w", err)
 		}
@@ -132,7 +135,7 @@ func Autoinstalled(ctx context.Context, o Options) bool {
 	if _, err := os.Stat(o.ConfigPath); errors.Is(err, os.ErrNotExist) {
 		return true
 	}
-	o.RemoveConfig, o.NoWait = true, true
+	o.RemoveConfig, o.NoWait, o.Method = true, true, protocol.EnrollmentAutoinstall
 	code, err := Run(ctx, o)
 	switch code {
 	case ExitActive, ExitPending:
@@ -270,14 +273,14 @@ func Poll(ctx context.Context, l paths.Layout, c *client.Client, st *state.State
 	return code == ExitActive && err == nil, err
 }
 
-// Request describes this device for POST /v1/enroll.
-func Request(l paths.Layout, token string, key identity.Key) protocol.EnrollRequest {
+// Request describes this device for POST /v1/enroll; method is the enrollment method ("" for none).
+func Request(l paths.Layout, token string, key identity.Key, method string) protocol.EnrollRequest {
 	host, _ := os.Hostname()
 	return protocol.EnrollRequest{
 		Token: token, PublicKey: base64.StdEncoding.EncodeToString(key.SPKI), KeyProtection: protocol.KeyProtectionFile,
 		Hostname: host, HardwareUUID: firstLine(l.Join("/sys/class/dmi/id/product_uuid")),
 		MachineID: firstLine(l.Join("/etc/machine-id")), OSRelease: osRelease(l.Join("/etc/os-release")),
-		AgentVersion: buildinfo.Version,
+		AgentVersion: buildinfo.Version, EnrollmentMethod: method,
 	}
 }
 

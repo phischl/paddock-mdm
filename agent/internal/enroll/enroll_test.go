@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -243,5 +244,51 @@ func TestAutoinstalled(t *testing.T) {
 	}
 	if st, _ := state.Load(f.layout.State()); st.Status != state.StatusActive {
 		t.Fatalf("state %+v", st)
+	}
+}
+
+// TestEnrollmentMethod (plan M11 decision 10): the request carries the method of Options — paddockd enroll adopts an
+// installed device — the autoinstall path always sends autoinstall, and without a method the field is left out, as
+// by an agent of an earlier release.
+func TestEnrollmentMethod(t *testing.T) {
+	f := newFixture(t)
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
+	o := f.options(f.cfgPath)
+	o.Method = protocol.EnrollmentAdopted
+	if code, err := enroll.Run(context.Background(), o); err != nil || code != enroll.ExitActive {
+		t.Fatalf("enroll: %d, %v", code, err)
+	}
+	if len(f.g.Enrolls) != 1 || f.g.Enrolls[0].EnrollmentMethod != protocol.EnrollmentAdopted {
+		t.Fatalf("enroll requests %+v", f.g.Enrolls)
+	}
+
+	f = newFixture(t)
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
+	o = f.options(f.layout.EnrollConfig())
+	o.Method = protocol.EnrollmentAdopted
+	data, err := os.ReadFile(f.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(o.ConfigPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(o.ConfigPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 1 || f.g.Enrolls[0].EnrollmentMethod != protocol.EnrollmentAutoinstall {
+		t.Fatalf("autoinstall enroll requests %+v", f.g.Enrolls)
+	}
+
+	key, err := identity.LoadOrCreate(filepath.Join(t.TempDir(), "key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(enroll.Request(f.layout, "secret", key, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "enrollment_method") {
+		t.Fatalf("request without a method: %s", raw)
 	}
 }

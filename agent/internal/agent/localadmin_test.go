@@ -88,3 +88,33 @@ func TestLocalAdminWiring(t *testing.T) {
 		t.Fatalf("rotated events %+v", rotated)
 	}
 }
+
+// TestLocalAdminWaitsForEnforcement (plan M11 decision 9): while the current bundle is report-only the local
+// administrator is neither created nor rotated; the first enforced bundle creates it.
+func TestLocalAdminWaitsForEnforcement(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	sys.Files["/etc/passwd"] = &fakesys.File{Data: []byte("root:x:0:0:root:/root:/bin/bash\n"), Mode: 0o644}
+	sys.Files["/etc/group"] = &fakesys.File{Data: []byte("sudo:x:27:\n"), Mode: 0o644}
+	a.d.Accounts, a.localAdmin.Sys = sys, sys
+	now := time.Now().UTC()
+	a.localAdmin.Now = func() time.Time { return now }
+	a.current = localAdminBundle(t)
+	a.current.Mode = bundle.ModeReportOnly
+	ctx := context.Background()
+
+	for range 2 {
+		a.tickLocalAdmin(ctx)
+		now = now.Add(localadmin.PollInterval)
+	}
+	if calls := sys.TakeCalls(); len(calls) != 0 || len(g.Escrows) != 0 || a.st.LocalAdmin.Generation != 0 {
+		t.Fatalf("report-only: calls %v, escrows %d, state %+v", calls, len(g.Escrows), a.st.LocalAdmin)
+	}
+
+	a.current.Mode = bundle.ModeEnforce
+	a.tickLocalAdmin(ctx)
+	if len(sys.TakeCalls()) == 0 || len(g.Escrows) != 1 {
+		t.Fatalf("enforced: escrows %d", len(g.Escrows))
+	}
+}

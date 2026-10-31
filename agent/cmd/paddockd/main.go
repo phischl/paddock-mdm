@@ -131,6 +131,7 @@ func runEnroll(ctx context.Context, layout paths.Layout, args []string) int {
 	}
 	code, err := enroll.Run(ctx, enroll.Options{
 		Layout: layout, ConfigPath: *cfg, RemoveConfig: *remove, NoWait: *noWait, Proxy: *proxy,
+		Method: protocol.EnrollmentAdopted,
 	})
 	if err != nil {
 		slog.Error("enrollment failed", "error", err)

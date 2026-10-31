@@ -48,7 +48,16 @@ type EnrollRequest struct {
 	MachineID     string            `json:"machine_id,omitempty"`
 	OSRelease     map[string]string `json:"os_release,omitempty"`
 	AgentVersion  string            `json:"agent_version"`
+	// EnrollmentMethod is EnrollmentAutoinstall or EnrollmentAdopted; servers of earlier releases ignore it and an
+	// agent of an earlier release leaves it out (plan M11 decision 10).
+	EnrollmentMethod string `json:"enrollment_method,omitempty"`
 }
+
+// Enrollment methods of EnrollRequest.EnrollmentMethod (plan M11 decision 10).
+const (
+	EnrollmentAutoinstall = "autoinstall"
+	EnrollmentAdopted     = "adopted"
+)
 
 // EnrollAccepted is the 202 body of POST /v1/enroll.
 type EnrollAccepted struct {

@@ -64,9 +64,10 @@ func (a *Agent) localAdminSpec() *bundle.LocalAdminSpec {
 	return nil
 }
 
-// tickLocalAdmin advances the managed local administrator (plan M4a decision 15).
+// tickLocalAdmin advances the managed local administrator (plan M4a decision 15); it waits while the current bundle
+// is report-only, because creating or rotating the account changes the device (plan M11 decision 9).
 func (a *Agent) tickLocalAdmin(ctx context.Context) {
-	if a.d.Accounts == nil || a.st.DeviceID == "" {
+	if a.d.Accounts == nil || a.st.DeviceID == "" || a.reportOnly() {
 		return
 	}
 	a.localAdmin.Tick(ctx, a.localAdminSpec(), a.bundleKeys())

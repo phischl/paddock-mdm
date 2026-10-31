@@ -197,6 +197,61 @@ func TestDriftLoop(t *testing.T) {
 	}
 }
 
+// TestReportOnlyBundle (plan M11 decision 9): a report-only bundle is recorded and cached like an enforced one and
+// reported with mode report_only, but changes nothing, and the drift loop leaves the device alone while it is
+// current; the next enforced bundle applies normally.
+func TestReportOnlyBundle(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	sys.Files["/etc/motd"] = &fakesys.File{Data: []byte("local\n"), Mode: 0o644}
+	sys.NTP = false
+	b := testBundle(t, 4, testgw.DeviceID, "managed\n")
+	b.Mode = bundle.ModeReportOnly
+	g.OfferBundle(testgw.SignedBundleOffer(t, b))
+
+	a.Cycle(ctx)
+	if calls := sys.TakeCalls(); len(calls) != 0 || string(sys.Files["/etc/motd"].Data) != "local\n" || sys.NTP {
+		t.Fatalf("report-only bundle changed the device: %v", calls)
+	}
+	if st, _ := state.Load(a.d.Layout.State()); st.AppliedBundleVersion != 4 || a.current == nil || a.current.Mode != bundle.ModeReportOnly {
+		t.Fatalf("state %+v", st)
+	}
+	if _, err := os.Stat(a.d.Layout.Bundle()); err != nil {
+		t.Fatalf("bundle not cached: %v", err)
+	}
+	applied := eventsOf(g, protocol.EventBundleApplied)
+	var rep apply.Report
+	if len(applied) != 1 || json.Unmarshal(applied[0].Data, &rep) != nil || rep.Mode != protocol.BundleModeReportOnly || rep.Changed != 0 ||
+		len(rep.Resources) != 2 || rep.Resources[0].Status != protocol.ResourcePending || rep.Resources[1].Status != protocol.ResourcePending {
+		t.Fatalf("bundle.applied %+v", applied)
+	}
+
+	a.drift(ctx)
+	if calls := sys.TakeCalls(); len(calls) != 0 || string(sys.Files["/etc/motd"].Data) != "local\n" {
+		t.Fatalf("drift corrected a report-only bundle: %v", calls)
+	}
+	if pending, _ := a.d.Spool.Pending(); len(pending) != 0 {
+		t.Fatalf("drift spooled %+v", pending)
+	}
+	if r, err := New(a.d); err != nil || !r.reportOnly() {
+		t.Fatalf("restart: the cached bundle is not report-only (%v)", err)
+	}
+
+	enforced := testBundle(t, 5, testgw.DeviceID, "managed\n")
+	g.OfferBundle(testgw.SignedBundleOffer(t, enforced))
+	a.Cycle(ctx)
+	if string(sys.Files["/etc/motd"].Data) != "managed\n" || !sys.NTP || a.st.AppliedBundleVersion != 5 {
+		t.Fatal("the enforced bundle after a report-only one was not applied")
+	}
+	sys.Files["/etc/motd"].Data = []byte("local\n")
+	a.drift(ctx)
+	if string(sys.Files["/etc/motd"].Data) != "managed\n" {
+		t.Fatal("drift not corrected under the enforced bundle")
+	}
+}
+
 // TestSessionLogins: a directory user's session is reported once per 24 h with username and time only; local
 // accounts and the greeter are never reported (plan M3b decision 11).
 func TestSessionLogins(t *testing.T) {
