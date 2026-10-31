@@ -16,7 +16,9 @@ UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKA
 	./test/acceptance/internal/stack/... \
 	./test/acceptance/cmd/acceptanceshard/...
 WEB_DIR       := server/web
-IMAGE         ?= paddock-server:dev
+# Default to the tag of this checkout's stack (deploy/compose/.env, see dev_setting), so a second dev stack never
+# retags the first one's image.
+IMAGE         ?= $(call dev_setting,PADDOCK_IMAGE,paddock-server:dev)
 # The version the server images report (GET /api/v1/me server_version); release-images always uses RELEASE_VERSION.
 SERVER_VERSION ?= $(or $(RELEASE_VERSION),0.0.0-dev)
 UID           := $(shell id -u)
@@ -795,8 +797,8 @@ release-sign-sums: release-check ## Sign SHA256SUMS keyless with cosign (DRY_RUN
 # --- Security scans (CI jobs `secrets` and `trivy`) --------------------------------------------------------------
 TRIVY_CACHE     ?= $(HOME)/.cache/trivy
 TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
-COMPILER_IMAGE  ?= paddock-compiler:dev
-PGBACKREST_IMAGE ?= paddock-pgbackrest:dev
+COMPILER_IMAGE  ?= $(call dev_setting,PADDOCK_COMPILER_IMAGE,paddock-compiler:dev)
+PGBACKREST_IMAGE ?= $(call dev_setting,PADDOCK_PGBACKREST_IMAGE,paddock-pgbackrest:dev)
 
 .PHONY: scan scan-secrets scan-secrets-diff scan-secrets-strip-default scan-secrets-canary scan-fs scan-images \
 	image-compiler image-pgbackrest
