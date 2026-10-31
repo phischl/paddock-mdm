@@ -1992,3 +1992,44 @@ this amendment wins. No migration and no change to the API, the events or the pa
 7. **A failing expiry or stuck-check failure does not stop the pass.** `Expire` records the error, continues with the
    next due export, then runs the stuck check, which likewise continues with the next stuck export; the pass returns
    all errors joined.
+
+### Amendment 2026-10-31 (PDK-593: export temp file and size limits)
+
+Architect decision 2026-10-31 (PDK-593, with finding L3 of the PDK-143 external review), implemented in PDK-593.
+Where this amendment and decision 32 differ, this amendment wins. No migration and no change to the API or the
+package format; `audit.export_completed` gains the param `reason`.
+
+1. **TMPDIR on a volume (decision 32 step 3).** `paddock-audit-writer` keeps `read_only: true` and `/tmp` as a 64 MiB
+   tmpfs mounted `noexec,nosuid,nodev`; `TMPDIR` is `/var/lib/paddock/export-tmp`, the named volume
+   `audit-writer-tmp` (`compose.audit.yaml`, used by the development stack, the audit host and the lab), so a large
+   export uses disk, not the host's memory. The image creates that directory owned by `nonroot`, so a fresh volume
+   copies the owner. **Accepted deviation:** a named volume is mounted without `noexec`, so the volume is the writer's
+   one writable directory that allows executing files; nothing but the export temp file is written there.
+   `docs/operations/audit-bucket.md` section 4 records it and `deploy/bundle/bundle_test.sh` asserts the `/tmp` flags,
+   `TMPDIR` and the volume for the dev, audit-host and lab configurations. The temp file of `events.jsonl` is unlinked
+   right after `os.CreateTemp` and used through its open handle, so a writer killed during a build leaves nothing on
+   the volume. The volume lives in Docker's data-root and its bound applies per audit-writer replica.
+2. **`PADDOCK_AUDIT_EXPORT_MAX_BYTES`** (`paddock-audit-writer`, default `4294967296` = 4 GiB, a positive integer,
+   otherwise the role refuses to start; parsed as a 64-bit integer, a larger value is `out of range`) bounds
+   `events.jsonl` while it is written to the temp file and the whole package. The exact package size (each tar header
+   as `tar.Writer` encodes it, each member padded to 512 bytes, the 1024-byte end marker) is computed once the
+   signature exists and before the first chunk is inserted; the counting writer under the tar stays as a backstop.
+   Exceeding either fails the build: status `failed`, `error` = `"export_too_large: events.jsonl exceeds
+   PADDOCK_AUDIT_EXPORT_MAX_BYTES (<n> bytes)"` or `"export_too_large: the package (<size> bytes) exceeds …"`, no chunks
+   left, exactly one `audit.export_completed` failure event with `error_code: "export_failed"` and the registered param
+   `reason: "export_too_large"`. An export failed by the stuck check (`exporter restarted`) carries no `reason`: the
+   check does not know why the build stopped.
+3. **Object-store reads are bounded and streamed (L3; decisions 32 step 4 and the verifier of M8b).** Every manifest and
+   object read of the exporter and of `Verifier` goes through `ObjectStore.Open` and `io.LimitReader` with the per-object
+   limit `MaxObjectSize` (256 MiB, equal to the decode limit) and is hashed while it streams; a larger object is an
+   error (`"… unreadable: larger than the per-object read limit (<n> bytes)"`): the build fails, the verifier reports
+   it as a problem. The verifier hashes objects without buffering them. The first pass of the build buffers one object
+   (at most the limit) because it decodes only bytes whose hash matched; the second pass streams each object straight
+   into the tar with the size read in the first pass, and an object whose hash then differs fails the build (`"day <d>:
+   object <key> changed during the build"`).
+4. **Streamed decoding.** After the hash matched, an object is decoded as a stream (`Decoder.Reset` + `io.Copy` through
+   `io.LimitReader(decoder, limit+1)`), first only counting its lines and bytes, then once more into `events.jsonl`, so
+   an undecodable or too large object leaves no partial events. The decoder refuses a declared window above 8 MiB
+   (`WithDecoderMaxWindow`, the window of the encoder of audit objects); a single-segment frame sizes its window from
+   its content size, which the decode limit (256 MiB) bounds. Peak memory of a build is about one buffered object plus
+   the decoder window.

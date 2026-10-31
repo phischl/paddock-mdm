@@ -174,7 +174,7 @@ func TestExportBuildPublishesSigningKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	exporter := auditwriter.NewExporter(k.pool, k.writer, k.store, k.signer, k.keyFn,
-		auditwriter.NewVerifier(k.pool, k.store, k.keyFn), "test", time.Second)
+		auditwriter.NewVerifier(k.pool, k.store, k.keyFn), "test", time.Second, auditwriter.DefaultExportMaxBytes)
 	if err := exporter.Build(ctx, k.running(t, org, day, day, "keys")); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestExportBuildFailsOnSigningKeyMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	exporter := auditwriter.NewExporter(k.pool, k.writer, k.store, k.signer, k.keyFn,
-		auditwriter.NewVerifier(k.pool, k.store, k.keyFn), "test", time.Second)
+		auditwriter.NewVerifier(k.pool, k.store, k.keyFn), "test", time.Second, auditwriter.DefaultExportMaxBytes)
 	if err := exporter.Build(ctx, k.running(t, org, day, day, "mismatch")); !errors.Is(err, auditwriter.ErrSigningKeyMismatch) {
 		t.Fatalf("Build with a mismatching published key: err = %v, want ErrSigningKeyMismatch", err)
 	}

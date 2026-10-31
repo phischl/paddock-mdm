@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -119,6 +120,7 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	if poll <= 0 {
 		l.Invalid("PADDOCK_AUDIT_EXPORT_POLL_INTERVAL", "must be positive")
 	}
+	maxBytes := exportMaxBytes(l)
 	deps, err := loadAuditDeps(ctx, l)
 	if err != nil {
 		return err
@@ -134,7 +136,7 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
 	purger := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention)
 	exporter := auditwriter.NewExporter(deps.pool, deps.writer, deps.store, deps.bao, deps.publicKeys, deps.verifier(),
-		buildinfo.Version, poll)
+		buildinfo.Version, poll, maxBytes)
 	slog.InfoContext(ctx, "audit-writer starting", "bucket", deps.store.Bucket())
 
 	return runAll(ctx,
@@ -153,6 +155,27 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 		func(ctx context.Context) error { purger.RunDaily(ctx); return nil },
 		exporter.Run,
 	)
+}
+
+// exportMaxBytes reads PADDOCK_AUDIT_EXPORT_MAX_BYTES, the limit of events.jsonl and of the package of one evidence
+// export (PDK-593).
+func exportMaxBytes(l *config.Loader) int64 {
+	const name = "PADDOCK_AUDIT_EXPORT_MAX_BYTES"
+	v := l.String(name, "")
+	if v == "" {
+		return auditwriter.DefaultExportMaxBytes
+	}
+	// ParseInt with 64 bits, not Loader.Int: the limit is a byte count that must not wrap on a 32-bit int.
+	n, err := strconv.ParseInt(v, 10, 64)
+	switch {
+	case errors.Is(err, strconv.ErrRange):
+		l.Invalid(name, fmt.Sprintf("out of range: %q", v))
+	case err != nil:
+		l.Invalid(name, fmt.Sprintf("not an integer: %q", v))
+	case n <= 0:
+		l.Invalid(name, "must be positive")
+	}
+	return n
 }
 
 // runAudit implements `audit seal [--day YYYY-MM-DD]`, `audit verify --org <id> --from <day> --to <day>` and

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"time"
@@ -56,7 +57,7 @@ const (
 // ObjectStore is the subset of objectstore.Store the writer needs.
 type ObjectStore interface {
 	PutLocked(ctx context.Context, key, contentType string, body []byte, retainUntil time.Time) error
-	Get(ctx context.Context, key string) ([]byte, error)
+	Open(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
 var _ ObjectStore = (*objectstore.Store)(nil)

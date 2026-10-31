@@ -84,7 +84,16 @@ services:
     <<: *paddock-audit
     restart: unless-stopped
     command: ["serve", "audit-writer"]
+    # An evidence export writes its decoded events to TMPDIR: a disk volume keeps a large export off the host's memory;
+    # PADDOCK_AUDIT_EXPORT_MAX_BYTES bounds it. /tmp stays a noexec, nosuid, nodev tmpfs; 64 MiB because with TMPDIR
+    # moved nothing of the writer uses it, the size only caps the memory a stray write could take. The volume is the
+    # writer's one writable directory without noexec (PDK-593, docs/operations/audit-bucket.md).
+    tmpfs: ["/tmp:size=64m,noexec,nosuid,nodev"]
+    volumes:
+      - audit-writer-tmp:/var/lib/paddock/export-tmp
     environment:
+      TMPDIR: /var/lib/paddock/export-tmp
+      PADDOCK_AUDIT_EXPORT_MAX_BYTES: ${PADDOCK_AUDIT_EXPORT_MAX_BYTES:-4294967296}
       PADDOCK_ENV: ${PADDOCK_ENV:-production}
       PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
       PADDOCK_OPS_ADDR: ":9090"
@@ -130,6 +139,7 @@ networks:
 volumes:
   audit-postgres-data: {}
   audit-rustfs-data: {}
+  audit-writer-tmp: {}
 
 secrets:
   audit_postgres_superuser_password: { file: ./.secrets/audit_postgres_superuser_password }

@@ -93,7 +93,7 @@ func newExportEnv(t *testing.T) exportEnv {
 	return exportEnv{
 		pool: pool, super: super, store: store, writer: writer, keys: keys, signer: signer,
 		sealer:   auditwriter.NewSealer(pool, writer, signer, auditwriter.NewKeyPublisher(keyFn)),
-		exporter: auditwriter.NewExporter(pool, writer, store, signer, keyFn, verifier, "test-1.2.3", time.Second),
+		exporter: auditwriter.NewExporter(pool, writer, store, signer, keyFn, verifier, "test-1.2.3", time.Second, auditwriter.DefaultExportMaxBytes),
 	}
 }
 
@@ -101,7 +101,7 @@ func newExportEnv(t *testing.T) exportEnv {
 func (e exportEnv) newExporter(store auditwriter.ObjectStore) *auditwriter.Exporter {
 	keyFn := func(context.Context) (map[int][]byte, error) { return e.keys, nil }
 	return auditwriter.NewExporter(e.pool, e.writer, store, e.signer, keyFn, auditwriter.NewVerifier(e.pool, e.store, keyFn),
-		"test-1.2.3", time.Second)
+		"test-1.2.3", time.Second, auditwriter.DefaultExportMaxBytes)
 }
 
 // object stores one WORM object of org recorded at recorded with n events and indexes it (as the writer would).
@@ -841,14 +841,14 @@ func TestExportDoesNotDecodeUnsafeObjects(t *testing.T) {
 	}
 }
 
-// hangingStore blocks every Get until ctx ends and closes reached on the first one.
+// hangingStore blocks every Open until ctx ends and closes reached on the first one.
 type hangingStore struct {
 	auditwriter.ObjectStore
 	once    sync.Once
 	reached chan struct{}
 }
 
-func (s *hangingStore) Get(ctx context.Context, _ string) ([]byte, error) {
+func (s *hangingStore) Open(ctx context.Context, _ string) (io.ReadCloser, error) {
 	s.once.Do(func() { close(s.reached) })
 	<-ctx.Done()
 	return nil, ctx.Err()
@@ -880,7 +880,7 @@ func TestExportPendingAgeDuringHungBuild(t *testing.T) {
 	store := &hangingStore{ObjectStore: e.store, reached: make(chan struct{})}
 	keyFn := func(context.Context) (map[int][]byte, error) { return e.keys, nil }
 	exporter := auditwriter.NewExporter(e.pool, e.writer, store, edSigner{}, keyFn, auditwriter.NewVerifier(e.pool, store, keyFn),
-		"test", 20*time.Millisecond)
+		"test", 20*time.Millisecond, auditwriter.DefaultExportMaxBytes)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = exporter.Run(ctx); close(done) }()
@@ -940,7 +940,7 @@ func TestExportClaimSkipsLockedExports(t *testing.T) {
 	}
 
 	a, b := pending(), pending()
-	other := auditwriter.NewExporter(e.pool, e.writer, e.store, nil, nil, nil, "x", time.Second)
+	other := auditwriter.NewExporter(e.pool, e.writer, e.store, nil, nil, nil, "x", time.Second, auditwriter.DefaultExportMaxBytes)
 	var wg sync.WaitGroup
 	ids := make([]uuid.UUID, 3)
 	for i, ex := range []*auditwriter.Exporter{e.exporter, other, e.exporter} {
@@ -1097,7 +1097,7 @@ func (e exportEnv) withKeyPair(t *testing.T, exporterSigner func(privs map[int]e
 	keyFn := func(context.Context) (map[int][]byte, error) { return pubs, nil }
 	e.sealer = auditwriter.NewSealer(e.pool, e.writer, edSigner{priv: privs[2], version: 2}, auditwriter.NewKeyPublisher(keyFn))
 	e.exporter = auditwriter.NewExporter(e.pool, e.writer, e.store, exporterSigner(privs), keyFn,
-		auditwriter.NewVerifier(e.pool, e.store, keyFn), "test-1.2.3", time.Second)
+		auditwriter.NewVerifier(e.pool, e.store, keyFn), "test-1.2.3", time.Second, auditwriter.DefaultExportMaxBytes)
 	return e, pubs
 }
 
@@ -1317,9 +1317,9 @@ type stuckCheckStore struct {
 	onGet func()
 }
 
-func (s *stuckCheckStore) Get(ctx context.Context, key string) ([]byte, error) {
+func (s *stuckCheckStore) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	s.onGet()
-	return s.ObjectStore.Get(ctx, key)
+	return s.ObjectStore.Open(ctx, key)
 }
 
 // TestExportStuckCheckStopsChunkInserts: once another replica's stuck check failed an export in the middle of its
@@ -1906,7 +1906,7 @@ func TestExportExpireContinuesPastAFailedExpiry(t *testing.T) {
 // TestExportDefaultBounds: a build is bounded by ExportStuckAfter, and markReady and failRunning outlast the
 // writer's own transaction timeout, so its error arrives first.
 func TestExportDefaultBounds(t *testing.T) {
-	x := auditwriter.NewExporter(nil, nil, nil, nil, nil, nil, "test", time.Second)
+	x := auditwriter.NewExporter(nil, nil, nil, nil, nil, nil, "test", time.Second, auditwriter.DefaultExportMaxBytes)
 	build, write := auditwriter.ExportTimeouts(x)
 	if build != auditwriter.ExportStuckAfter {
 		t.Fatalf("build bound %s, want %s", build, auditwriter.ExportStuckAfter)

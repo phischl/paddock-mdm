@@ -1332,8 +1332,8 @@ var registry = map[Code]Definition{
 	},
 	CodeAuditExportCompleted: {
 		Code: CodeAuditExportCompleted, Emitted: true,
-		Description: "The audit writer finished building an evidence package (actor: system). verify_ok tells whether the chain of the range verified; a package with problems is still delivered so that the auditor sees them. failure carries the error and error_code export_failed.",
-		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error"},
+		Description: "The audit writer finished building an evidence package (actor: system). verify_ok tells whether the chain of the range verified; a package with problems is still delivered so that the auditor sees them. failure carries the error and error_code export_failed; reason export_too_large marks a build whose events.jsonl or package exceeded PADDOCK_AUDIT_EXPORT_MAX_BYTES.",
+		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error", "reason"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodeActionFinalizedUnknown: {
