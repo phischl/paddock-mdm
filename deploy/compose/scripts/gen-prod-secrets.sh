@@ -163,6 +163,8 @@ controlplane_secrets() {
   secret fleet_admin_password "$(rand)1!"
   secret fleet_enroll_secret
   placeholder fleet_api_token
+  # The SMTP relay's password (docs/operations/install.md); stays empty for a relay without PADDOCK_SMTP_USERNAME.
+  placeholder smtp_password
 
   # Backups (docs/operations/restore.md): the encryption key MUST also be kept offline with the custodians, else a
   # lost host takes the means to read its backups with it. The bucket credentials come from the backup S3 provider.
@@ -185,7 +187,7 @@ controlplane_secrets() {
 }
 
 audit_secrets() {
-  # On a lab host audit-postgres has neither TLS nor a published port; its only client is the api on audit-index.
+  # On a lab host audit-postgres has neither TLS nor a published port; its clients are the api and the notifier on audit-index.
   [[ "$HOST" == lab ]] || cert audit-postgres "DNS:audit-postgres,IP:$INTERCONNECT"
 
   secret audit_postgres_superuser_password

@@ -139,9 +139,18 @@ Then the audit host, the same way without step 3.
 A control-plane cluster creates its database roles once, at initialization (`postgres/init/10-roles.sh`). A cluster
 initialized before the notifications (plan M9) lacks the role `paddock_notifier`, and the migration 00085 that
 creates the notification tables refuses to run without it. A fresh installation (the move to 0.1.0-alpha.7 is one)
-creates the role itself; this section is for clusters that already run a build without it. Before step 5 of the
-upgrade, on the control plane in B's directory, after `./paddock secrets` created
-`.secrets/db_paddock_notifier_password`:
+creates the role itself; this section is for clusters that already run a build without it. On the control plane,
+in B's directory, in this order:
+
+1. Right after `./paddock migrate-from` (step 2), run `./paddock secrets`. It adds the notifier's files to the copied
+   `.secrets/`: `db_paddock_notifier_password`, `db_paddock_notifier_url`, an empty `smtp_password` and empty
+   `approle/paddock-notifier/role_id` and `secret_id`. Until the next two steps are done, `./paddock check` of step 2
+   fails on `approle_notifier_role_id` and `approle_notifier_secret_id` (empty); that is expected.
+2. Create the database role (below).
+3. Run `./paddock bootstrap openbao` (below); it fills the AppRole files.
+4. Run `./paddock check` again: every item PASS. Only then continue with step 3 of the upgrade.
+
+The database role, with A's stack still running:
 
 ```sh
 ./paddock compose up -d postgres
@@ -156,11 +165,27 @@ SQL
 ```
 
 The password reaches `psql` through the container's environment, never a command line. The step is idempotent.
-After step 5, run `./paddock bootstrap openbao` once with a root token (`docs/operations/openbao.md` section 1): it
-adds the Transit keys `notification-wrap` and `notification-pseudonym`, the permissions of `paddock-api` on them, the
-policy and AppRole `paddock-notifier`, and keeps every existing secret ID. The same release adds the commit sequence of the audit index:
-its audit migration backfills every existing event, so stop the audit writer first (step 4; duration in
-`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
+
+The OpenBao bootstrap, with A's stack running and OpenBao unsealed: run `./paddock bootstrap openbao` once in B's
+directory with a root token (`docs/operations/openbao.md` section 1; revoke the token afterwards). It adds the Transit
+keys `notification-wrap` and `notification-pseudonym`, the permissions of `paddock-api` on them, the policy and
+AppRole `paddock-notifier`, and keeps every existing secret ID. It writes the notifier's AppRole files to
+`.secrets/approle/paddock-notifier/role_id` and `secret_id` of B's directory; the notifier runs on the control plane,
+so nothing goes to the audit host. If you ran the bootstrap in another directory, copy that directory's
+`.secrets/approle/paddock-notifier/` to B's `.secrets/approle/` (`cp -a`) before step 5: B's `./paddock up` starts the
+new role `paddock-notifier` and waits for it, and it cannot become healthy with empty AppRole files.
+
+B's `.env.example` brings new keys; copy them into `.env` before the second `./paddock check`:
+
+- `PADDOCK_SMTP_ENABLED=false`, or, with an SMTP relay for e-mail destinations, `true` together with
+  `PADDOCK_SMTP_HOST`, `PADDOCK_SMTP_PORT`, `PADDOCK_SMTP_TLS`, `PADDOCK_SMTP_FROM` and, for a relay with
+  authentication, `PADDOCK_SMTP_USERNAME` with the password in `.secrets/smtp_password` (`docs/operations/install.md`,
+  *E-mail relay*). `./paddock check` fails while `PADDOCK_SMTP_ENABLED` and `PADDOCK_SMTP_HOST` disagree.
+
+The same release adds the commit sequence of the audit index: its audit migration backfills every existing event, so
+stop the audit writer first (step 4). The backfill takes about 1.5 minutes per million events in the index (measured:
+1 000 000 events in 1 min 26 s on PostgreSQL 18); count them with `SELECT count(*) FROM audit_event` on
+`paddock_audit` (`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
 
 ## Rollback
 
