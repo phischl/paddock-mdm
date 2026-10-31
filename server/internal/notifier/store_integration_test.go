@@ -329,6 +329,9 @@ func TestPGStoreExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if data.Name == "" || data.Name == outbound.PlatformOrganization {
+		t.Errorf("loaded scope name %q", data.Name)
+	}
 	for _, r := range data.Rows {
 		if r.Destination.ID == dest && (r.State.Pending != *s.pending || r.State.PendingFrom != 1) {
 			t.Fatalf("loaded pending %s from %d, want %s from 1", r.State.Pending, r.State.PendingFrom, *s.pending)
@@ -339,11 +342,17 @@ func TestPGStoreExactlyOnce(t *testing.T) {
 	rec := &Record{Code: audit.CodeNotificationDelivered, Params: map[string]any{"destination": "d"}}
 	resume := &Record{Code: audit.CodeNotificationDestinationResumed, Params: map[string]any{"destination": "d"}}
 	cursor := int64(1)
+	digest := w.now.Add(5 * time.Minute).Truncate(time.Microsecond)
 	success := Success{Destination: dest, Name: "d", Delivery: *s.pending, Pending: *s.pending, Cursor: &cursor, At: w.now,
-		Record: rec, Resume: resume}
+		Record: rec, Resume: resume, NextAttemptAt: &digest}
 	ok, err := store.Succeeded(context.Background(), Scope{Org: w.org}, success)
 	if err != nil || !ok {
 		t.Fatalf("first success: %t %v", ok, err)
+	}
+	var next time.Time
+	if err := w.super.QueryRow(context.Background(), `SELECT next_attempt_at FROM notification_destination_state
+		WHERE destination_id = $1`, dest).Scan(&next); err != nil || !next.Equal(digest) {
+		t.Errorf("next_attempt_at %v, want the digest's %v (%v)", next, digest, err)
 	}
 	ok, err = store.Succeeded(context.Background(), Scope{Org: w.org}, success)
 	if err != nil || ok {

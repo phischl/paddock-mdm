@@ -807,3 +807,51 @@ func TestLagWithoutBatch(t *testing.T) {
 		}
 	})
 }
+
+// TestEmailDigest: after a delivered e-mail batch the destination waits email_min_interval_s (plan M9 decision 28),
+// so 150 events leave as one message now and the next one after the interval; the transport sees the scope's name.
+func TestEmailDigest(t *testing.T) {
+	h := newHarness(t)
+	h.e.transports[outbound.TypeEmail] = h.tr
+	d := h.store.add(h.org, Destination{ID: uuid.Must(uuid.NewV7()), Type: outbound.TypeEmail, Name: "secops",
+		Filter: outbound.FilterSecurity, Recipients: []string{"a@example.org"}, EmailMinInterval: 5 * time.Minute}, State{})
+	h.index.append(h.org, tamper, 150)
+	h.round()
+	sent := h.tr.kinds(outbound.KindEvents)
+	if len(sent) != 1 {
+		t.Fatalf("%d deliveries, want 1", len(sent))
+	}
+	assertContiguous(t, sent[0], 1, 100)
+	if h.tr.sent[0].dest.ScopeName != "Name of acme" {
+		t.Errorf("scope name %q", h.tr.sent[0].dest.ScopeName)
+	}
+	st := h.state(d)
+	if st.Cursor != 100 || st.NextAttemptAt == nil || !st.NextAttemptAt.Equal(h.now.Add(5*time.Minute)) {
+		t.Fatalf("state %+v", st)
+	}
+	h.now = h.now.Add(4 * time.Minute)
+	h.round()
+	if n := len(h.tr.kinds(outbound.KindEvents)); n != 1 {
+		t.Fatalf("%d deliveries within the interval, want 1", n)
+	}
+	h.now = h.now.Add(time.Minute)
+	h.round()
+	sent = h.tr.kinds(outbound.KindEvents)
+	if len(sent) != 2 {
+		t.Fatalf("%d deliveries after the interval, want 2", len(sent))
+	}
+	assertContiguous(t, sent[1], 101, 150)
+	if st := h.state(d); st.NextAttemptAt == nil || !st.NextAttemptAt.Equal(h.now.Add(5*time.Minute)) {
+		t.Fatalf("state after the second digest %+v", st)
+	}
+
+	t.Run("a webhook has no digest", func(t *testing.T) {
+		h := newHarness(t)
+		d := h.webhook(h.org, State{})
+		h.index.append(h.org, tamper, 1)
+		h.round()
+		if st := h.state(d); st.NextAttemptAt != nil {
+			t.Errorf("webhook next attempt %v", st.NextAttemptAt)
+		}
+	})
+}

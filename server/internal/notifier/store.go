@@ -77,16 +77,16 @@ func (s *PGStore) Organizations(ctx context.Context) ([]uuid.UUID, error) {
 	return s.pool.OrganizationIDs(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "notifier"}))
 }
 
-// Load reads the scope's slug, enabled destinations with their state and the pseudonym key ciphertext.
+// Load reads the scope's slug and name, enabled destinations with their state and the pseudonym key ciphertext.
 func (s *PGStore) Load(ctx context.Context, sc Scope) (ScopeData, error) {
-	data := ScopeData{Slug: outbound.PlatformOrganization}
+	data := ScopeData{Slug: outbound.PlatformOrganization, Name: outbound.PlatformOrganization}
 	err := s.tx(ctx, sc, func(ctx context.Context, q *pgstore.Queries) error {
 		if !sc.Platform() {
 			org, err := q.GetOrganization(ctx, sc.Org)
 			if err != nil {
 				return fmt.Errorf("organization: %w", err)
 			}
-			data.Slug = org.Slug
+			data.Slug, data.Name = org.Slug, org.Name
 			key, err := q.GetNotifierPseudonymKey(ctx)
 			switch {
 			case err == nil:
@@ -318,7 +318,8 @@ func (s *PGStore) Succeeded(ctx context.Context, sc Scope, r Success) (bool, err
 				return false, err
 			}
 			if n, err = q.NotifierDestinationSucceeded(ctx, pgstore.NotifierDestinationSucceededParams{
-				CursorCommitSeq: r.Cursor, At: &r.At, DestinationID: r.Destination, ExpectedPending: nullable(r.Pending),
+				CursorCommitSeq: r.Cursor, NextAttemptAt: r.NextAttemptAt, At: &r.At, DestinationID: r.Destination,
+				ExpectedPending: nullable(r.Pending),
 			}); err != nil || n == 0 {
 				return false, err
 			}

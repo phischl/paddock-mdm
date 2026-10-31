@@ -145,12 +145,14 @@ func TestNotificationDestinations(t *testing.T) {
 		var c struct {
 			Email bool `json:"email"`
 		}
-		if err := caps.JSON(&c); err != nil || c.Email {
-			t.Fatalf("capabilities %s (the development stack has no SMTP relay)", caps.Body)
+		// The development stack has a relay (the acceptance SMTP sink, gate N6); the refusal without one
+		// (email_not_configured) is integration-tested (TestNotificationDestinationValidation).
+		if err := caps.JSON(&c); err != nil || !c.Email {
+			t.Fatalf("capabilities %s (the development stack has an SMTP relay)", caps.Body)
 		}
 		res = call(t, admin.Portal, http.MethodPost, collection, map[string]any{"type": "email", "name": destinationName("mail"),
-			"enabled": true, "filter_mode": "all", "recipients": []string{"secops@example.org"}})
-		expectStatus(t, res, http.StatusConflict, "email_not_configured")
+			"enabled": true, "filter_mode": "all", "recipients": []string{}})
+		expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 	})
 
 	t.Run("update, enable with cursor, rotate, test", func(t *testing.T) {
