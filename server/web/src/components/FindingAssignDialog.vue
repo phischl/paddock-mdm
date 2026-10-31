@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Account, Finding } from '../api/client'
-import { findingCodeText, listAccounts } from '../lib/findings'
+import { findingTitle, listAccounts } from '../lib/findings'
 import { useProblemText } from '../lib/problems'
 
 /**
@@ -20,7 +20,7 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const problemText = useProblemText()
 const accounts = ref<Account[]>([])
 const assignee = ref<string | null>(props.finding?.assignee?.id ?? null)
@@ -49,7 +49,7 @@ function title(a: Account): string {
       data-testid="finding-assign-dialog"
     >
       <v-card-text>
-        <p>{{ t('findings.assign.message', { code: finding ? findingCodeText(finding, t) : '', hostname: finding?.hostname ?? '' }) }}</p>
+        <p>{{ t('findings.assign.message', { finding: finding ? findingTitle(finding, t, te) : '' }) }}</p>
         <v-autocomplete
           v-model="assignee"
           :items="accounts"

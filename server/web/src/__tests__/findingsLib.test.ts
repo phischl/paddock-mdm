@@ -1,6 +1,7 @@
+import { createPortalI18n } from '../i18n'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { findingStatus } from '../lib/status'
-import { findingFilters, liveFindingStatuses, listAccounts, listFindings, maxFindingReason, validateClose } from '../lib/findings'
+import { findingFilters, findingTitle, liveFindingStatuses, listAccounts, listFindings, maxFindingReason, validateClose } from '../lib/findings'
 
 const get = vi.hoisted(() => vi.fn())
 vi.mock('../api/client', async (original) => ({
@@ -69,5 +70,40 @@ describe('finding rules', () => {
     expect(findingStatus('in_progress').status).toBe('info')
     expect(findingStatus('false_positive').status).toBe('neutral')
     expect(findingFilters.map((f) => (f.kind === 'enum' ? f.key : ''))).toEqual(['status', 'kind', 'cleared'])
+  })
+})
+
+describe('findingTitle', () => {
+  const tamper = { kind: 'tamper' as const, code: 'device.tamper_sudoers_d_file', subject: '/etc/sudoers.d/x', hostname: 'lt-1' }
+  const titleIn = (locale: 'en' | 'de', f: Parameters<typeof findingTitle>[0]) => {
+    const { t, te } = createPortalI18n(locale).global
+    return findingTitle(f, t as never, te as never)
+  }
+
+  it('shows a tamper code through its audit message with the device and the subject', () => {
+    expect(titleIn('en', tamper)).toBe('The device lt-1 quarantined the unexpected sudoers file /etc/sudoers.d/x')
+    expect(titleIn('de', tamper)).not.toContain('device.tamper')
+    expect(titleIn('de', tamper)).toContain('lt-1')
+    expect(titleIn('de', tamper)).toContain('/etc/sudoers.d/x')
+  })
+
+  it('has a label for every tamper code that opens a finding, in both languages', () => {
+    const codes = [
+      'device.tamper_sudo_group_member', 'device.tamper_sudoers_d_file', 'device.tamper_sudoers_changed',
+      'device.tamper_protected_file_changed', 'device.tamper_local_admin_changed', 'device.tamper_keyslot_changed',
+      'device.tamper_service_stopped', 'device.clone_suspected', 'device.tamper_agent_not_running',
+    ]
+    for (const locale of ['en', 'de'] as const) {
+      for (const code of codes) {
+        const title = titleIn(locale, { kind: 'tamper', code, subject: 's', hostname: 'lt-1' })
+        expect(title, `${locale} ${code}`).not.toBe(code)
+        expect(title, `${locale} ${code}`).toContain('lt-1')
+      }
+    }
+  })
+
+  it('names an attention finding by its condition label and device, and falls back to an unknown code', () => {
+    expect(titleIn('en', { kind: 'attention', code: 'stale_critical', subject: '', hostname: 'lt-1' })).toBe('Silent (critical) – lt-1')
+    expect(titleIn('en', { ...tamper, code: 'device.unknown_thing' })).toBe('device.unknown_thing')
   })
 })

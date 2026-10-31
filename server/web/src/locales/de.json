@@ -2004,7 +2004,7 @@
     "lastSeen": "Zuletzt gesehen",
     "cleared": "Erledigt",
     "clearedHint": "Der Befund ist verschwunden; die Feststellung bleibt, bis jemand sie schließt.",
-    "done": "{code} auf {hostname} ist jetzt {status}.",
+    "done": "{finding} ist jetzt {status}.",
     "deviceTitle": "Feststellungen",
     "openList": "Feststellungen öffnen",
     "status": {
@@ -2034,16 +2034,16 @@
     },
     "acknowledge": {
       "action": "Zur Kenntnis nehmen",
-      "label": "{code} auf {hostname} zur Kenntnis nehmen",
+      "label": "Zur Kenntnis nehmen: {finding}",
       "title": "Feststellung zur Kenntnis nehmen",
-      "message": "{code} auf {hostname} als gesehen markieren. Sie bleibt offen, bis sie geschlossen wird.",
+      "message": "Diese Feststellung als gesehen markieren: {finding}. Sie bleibt offen, bis sie geschlossen wird.",
       "confirm": "Zur Kenntnis nehmen"
     },
     "assign": {
       "action": "Zuweisen",
-      "label": "{code} auf {hostname} zuweisen",
+      "label": "Zuweisen: {finding}",
       "title": "Feststellung zuweisen",
-      "message": "Wer kümmert sich um {code} auf {hostname}?",
+      "message": "Wer kümmert sich um diese Feststellung? {finding}",
       "assignee": "Zuständig",
       "hint": "Administratoren und Operatoren Ihrer Organisation. Leeren Sie das Feld, um die Zuweisung zu entfernen.",
       "submit": "Zuweisen",
@@ -2051,9 +2051,9 @@
     },
     "close": {
       "action": "Schließen",
-      "label": "{code} auf {hostname} schließen",
+      "label": "Schließen: {finding}",
       "title": "Feststellung schließen",
-      "message": "{code} auf {hostname} mit einem Ergebnis und einer Begründung schließen. Das Audit-Log behält beides.",
+      "message": "Diese Feststellung mit einem Ergebnis und einer Begründung schließen: {finding}. Das Audit-Log behält beides.",
       "resolution": "Ergebnis",
       "acceptedRiskHint": "Risiko akzeptiert erfordert einen Organisations-Administrator.",
       "reason": "Begründung",
@@ -2067,9 +2067,9 @@
     },
     "reopen": {
       "action": "Wieder öffnen",
-      "label": "{code} auf {hostname} wieder öffnen",
+      "label": "Wieder öffnen: {finding}",
       "title": "Feststellung wieder öffnen",
-      "message": "{code} auf {hostname} wieder öffnen. Eine Begründung ist nötig und steht im Audit-Log.",
+      "message": "Diese Feststellung wieder öffnen: {finding}. Eine Begründung ist nötig und steht im Audit-Log.",
       "reason": "Begründung",
       "confirm": "Wieder öffnen"
     },

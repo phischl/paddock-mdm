@@ -2004,7 +2004,7 @@
     "lastSeen": "Last seen",
     "cleared": "Cleared",
     "clearedHint": "The condition is gone; the finding stays until someone closes it.",
-    "done": "{code} on {hostname} is now {status}.",
+    "done": "{finding} is now {status}.",
     "deviceTitle": "Findings",
     "openList": "Open the findings",
     "status": {
@@ -2034,16 +2034,16 @@
     },
     "acknowledge": {
       "action": "Acknowledge",
-      "label": "Acknowledge {code} on {hostname}",
+      "label": "Acknowledge: {finding}",
       "title": "Acknowledge finding",
-      "message": "Mark {code} on {hostname} as seen. It stays open until it is closed.",
+      "message": "Mark this finding as seen: {finding}. It stays open until it is closed.",
       "confirm": "Acknowledge"
     },
     "assign": {
       "action": "Assign",
-      "label": "Assign {code} on {hostname}",
+      "label": "Assign: {finding}",
       "title": "Assign finding",
-      "message": "Who takes care of {code} on {hostname}?",
+      "message": "Who takes care of this finding? {finding}",
       "assignee": "Assignee",
       "hint": "Administrators and operators of your organization. Clear the field to remove the assignee.",
       "submit": "Assign",
@@ -2051,9 +2051,9 @@
     },
     "close": {
       "action": "Close",
-      "label": "Close {code} on {hostname}",
+      "label": "Close: {finding}",
       "title": "Close finding",
-      "message": "Close {code} on {hostname} with a resolution and a reason. The audit log keeps both.",
+      "message": "Close this finding with a resolution and a reason: {finding}. The audit log keeps both.",
       "resolution": "Resolution",
       "acceptedRiskHint": "Accepted risk needs an organization administrator.",
       "reason": "Reason",
@@ -2067,9 +2067,9 @@
     },
     "reopen": {
       "action": "Reopen",
-      "label": "Reopen {code} on {hostname}",
+      "label": "Reopen: {finding}",
       "title": "Reopen finding",
-      "message": "Reopen {code} on {hostname}. A reason is required and recorded in the audit log.",
+      "message": "Reopen this finding: {finding}. A reason is required and recorded in the audit log.",
       "reason": "Reason",
       "confirm": "Reopen"
     },

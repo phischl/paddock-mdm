@@ -31,9 +31,26 @@ export const findingFilters: ListFilter[] = [
   },
 ]
 
-/** The finding's code for people: the attention kind's label, or the audit code of a tamper event as it is. */
-export function findingCodeText(f: Pick<Finding, 'kind' | 'code'>, t: (key: string) => string): string {
-  return f.kind === 'attention' ? t('attention.kinds.' + f.code) : f.code
+type Translate = (key: string, values?: Record<string, unknown>) => string
+
+/**
+ * The finding for people (CLAUDE.md: audit codes are shown through the message key audit.<code>): an attention
+ * finding is its condition's label and the device; a tamper finding is the audit message of its code with the
+ * device and the subject filled in. The sentence names the device itself.
+ */
+export function findingTitle(f: Pick<Finding, 'kind' | 'code' | 'subject' | 'hostname'>, t: Translate, te: (key: string) => boolean): string {
+  if (f.kind === 'attention') return t('attention.kinds.' + f.code) + ' – ' + f.hostname
+  const key = 'audit.' + f.code
+  if (!te(key)) return f.code
+  const values = {
+    actor: '', target: f.hostname, hostname: f.hostname, username: '–',
+    group: f.subject, file: f.subject, field: f.subject, volume: f.subject, unit: f.subject,
+  }
+  try {
+    return t(key, values)
+  } catch {
+    return f.code
+  }
 }
 
 /** One page of findings for DataList; without a status filter the live findings, without a cleared filter the uncleared. */

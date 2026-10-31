@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Finding, FindingResolution } from '../api/client'
 import {
-  findingCodeText, findingResolutions, maxFindingExternalRef, maxFindingReason, validateClose, type CloseInput,
+  findingTitle, findingResolutions, maxFindingExternalRef, maxFindingReason, validateClose, type CloseInput,
 } from '../lib/findings'
 import { useProblemText } from '../lib/problems'
 
@@ -24,7 +24,7 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const problemText = useProblemText()
 const resolution = ref<FindingResolution>('resolved')
 const reason = ref('')
@@ -55,7 +55,7 @@ const disabled = (r: FindingResolution) => r === 'accepted_risk' && !props.admin
       data-testid="finding-close-dialog"
     >
       <v-card-text>
-        <p>{{ t('findings.close.message', { code: finding ? findingCodeText(finding, t) : '', hostname: finding?.hostname ?? '' }) }}</p>
+        <p>{{ t('findings.close.message', { finding: finding ? findingTitle(finding, t, te) : '' }) }}</p>
         <v-radio-group
           v-model="resolution"
           :label="t('findings.close.resolution')"
@@ -82,6 +82,7 @@ const disabled = (r: FindingResolution) => r === 'accepted_risk' && !props.admin
           :label="t('findings.close.reason')"
           :hint="t('findings.close.reasonHint')"
           persistent-hint
+          class="pd-finding-reason"
           :counter="maxFindingReason"
           :error-messages="touched && errors.reason ? [t(errors.reason)] : []"
           rows="3"
@@ -131,3 +132,11 @@ const disabled = (r: FindingResolution) => r === 'accepted_risk' && !props.admin
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+/* The persistent hint under the reason sits in the field's fixed details row and ran into the floating label of the
+   field below. */
+.pd-finding-reason {
+  margin-bottom: var(--pd-space-4);
+}
+</style>

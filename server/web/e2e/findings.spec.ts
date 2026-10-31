@@ -28,8 +28,8 @@ test('organization admin opens the findings and filters them through the URL', a
 
   await page.goto('/findings')
   const row = page.getByTestId('finding-list').locator('tbody tr').first()
-  if (await row.getByRole('button', { name: /^Close / }).count()) {
-    await row.getByRole('button', { name: /^Close / }).click()
+  if (await row.getByRole('button', { name: /^Close: / }).count()) {
+    await row.getByRole('button', { name: /^Close: / }).click()
     const dialog = page.getByTestId('finding-close-dialog')
     await expect(dialog.getByText('Facts and ticket references, no personal judgements.')).toBeVisible()
     await dialog.getByTestId('finding-close-submit').click()
@@ -47,7 +47,7 @@ test('operator sees accepted risk disabled in the close dialog', async ({ page }
     await loginWithPassword(page, operator.username, operator.password)
     await page.goto('/findings')
     await expect(page.getByTestId('finding-list')).toBeVisible()
-    const close = page.getByTestId('finding-list').getByRole('button', { name: /^Close / }).first()
+    const close = page.getByTestId('finding-list').getByRole('button', { name: /^Close: / }).first()
     test.skip((await close.count()) === 0, 'the stack has no open finding to close')
     await close.click()
     await expect(page.getByTestId('finding-resolution-accepted_risk').getByRole('radio')).toBeDisabled()

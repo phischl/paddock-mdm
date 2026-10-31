@@ -85,7 +85,8 @@ describe('findings page', () => {
     expect(r[0].find('[data-testid="finding-status-open"]').text()).toBe('Open')
     expect(r[0].find('a.mono').text()).toBe('acme-lt-0142')
     expect(r[1].text()).toContain('device.tamper_sudoers_d_file')
-    expect(r[1].text()).toContain('/etc/sudoers.d/x')
+    expect(r[1].text()).toContain('The device acme-lt-0142 quarantined the unexpected sudoers file /etc/sudoers.d/x')
+    expect(r[1].text()).toContain('Tamper event · device.tamper_sudoers_d_file')
     expect(r[1].text()).toContain('Bob Builder')
     expect(r[1].find('[data-testid="finding-status-in_progress"]').text()).toBe('In progress')
     expect(queries[0]).toMatchObject({ sort: '-last_seen_at' })
@@ -116,7 +117,7 @@ describe('findings page', () => {
     settleConfirm({ reason: '' })
     await flushPromises()
     expect(calls.acknowledge).toHaveBeenCalledWith('f1')
-    expect(w.find('[data-testid="finding-done"]').text()).toBe('Silent (critical) on acme-lt-0142 is now Acknowledged.')
+    expect(w.find('[data-testid="finding-done"]').text()).toBe('Silent (critical) – acme-lt-0142 is now Acknowledged.')
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(queries.length).toBeGreaterThan(1)
   })
@@ -159,7 +160,7 @@ describe('findings page', () => {
     await rows(w)[0].findAll('button')[2].trigger('click')
     await flushPromises()
     expect(body('finding-close-dialog')).not.toBeNull()
-    expect(body('finding-close-dialog')!.textContent).toContain('Close Silent (critical) on acme-lt-0142')
+    expect(body('finding-close-dialog')!.textContent).toContain('Close this finding with a resolution and a reason: Silent (critical) – acme-lt-0142.')
     expect(body('finding-close-dialog')!.textContent).not.toContain('stale_critical')
     expect(document.body.textContent).toContain('Facts and ticket references, no personal judgements.')
     body('finding-resolution-false_positive')!.querySelector('input')!.click()
@@ -217,7 +218,7 @@ describe('findings page', () => {
     const w = await mountFindings()
     await rows(w)[0].findAll('button')[1].trigger('click')
     await flushPromises()
-    expect(body('finding-assign-dialog')!.textContent).toContain('Who takes care of Silent (critical) on acme-lt-0142?')
+    expect(body('finding-assign-dialog')!.textContent).toContain('Who takes care of this finding? Silent (critical) – acme-lt-0142')
     expect(body('finding-assign-dialog')!.textContent).not.toContain('stale_critical')
   })
 
@@ -231,6 +232,31 @@ describe('findings page', () => {
     await flushPromises()
     expect(calls.assign).toHaveBeenCalledWith('f2', 'u1')
     expect(w.find('[data-testid="finding-done"]').exists()).toBe(true)
+  })
+})
+
+describe('focus after a findings dialog', () => {
+  it('returns to the button that opened the assign dialog on Cancel', async () => {
+    const w = await mountFindings()
+    const button = rows(w)[0].findAll('button')[1]
+    ;(button.element as HTMLElement).focus()
+    await button.trigger('click')
+    await flushPromises()
+    body('finding-assign-cancel')!.click()
+    await flushPromises()
+    expect(document.activeElement).toBe(button.element)
+  })
+
+  it('returns to the button that opened the close dialog on Cancel', async () => {
+    const w = await mountFindings()
+    const button = rows(w)[0].findAll('button')[2]
+    ;(button.element as HTMLElement).focus()
+    await button.trigger('click')
+    await flushPromises()
+    body('finding-close-cancel')!.click()
+    await flushPromises()
+    expect(body('finding-close-dialog')).toBeNull()
+    expect(document.activeElement).toBe(button.element)
   })
 })
 

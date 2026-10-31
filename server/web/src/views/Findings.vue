@@ -8,9 +8,10 @@ import FindingCloseDialog from '../components/FindingCloseDialog.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import { useConfirm } from '../composables/useConfirm'
+import { useFocusReturn } from '../composables/useFocusReturn'
 import { usePending } from '../composables/usePending'
 import {
-  acknowledgeFinding, assignFinding, closeFinding, findingCodeText, findingFilters, listFindings, maxFindingReason, reopenFinding,
+  acknowledgeFinding, assignFinding, closeFinding, findingTitle, findingFilters, listFindings, maxFindingReason, reopenFinding,
   type CloseInput, type FindingResult,
 } from '../lib/findings'
 import type { ListColumn } from '../lib/listQuery'
@@ -22,7 +23,7 @@ import { useSessionStore } from '../stores/session'
  * Findings (plan M9 decision 35): tamper events and attention conditions with their status. Administrators and
  * operators acknowledge, assign, close and reopen; every step is a modal and an audit event, auditors only read.
  */
-const { t } = useI18n()
+const { t, te } = useI18n()
 const confirm = useConfirm()
 const problemText = useProblemText()
 const session = useSessionStore()
@@ -33,6 +34,13 @@ const done = ref('')
 const assigning = ref<Finding | null>(null)
 const closing = ref<Finding | null>(null)
 const dialogProblem = ref('')
+const focusReturn = useFocusReturn()
+
+function closeDialogs(): void {
+  assigning.value = null
+  closing.value = null
+  focusReturn.restore()
+}
 
 const columns = computed<ListColumn[]>(() => [
   { key: 'code', title: 'findings.code', sortable: true, role: 'primary' },
@@ -49,7 +57,7 @@ const canAcknowledge = (f: Finding) => f.status === 'open'
 const canAssign = (f: Finding) => !closed(f) && f.cleared_at === null
 const canClose = (f: Finding) => !closed(f)
 
-const codeText = (f: Finding) => findingCodeText(f, t)
+const title = (f: Finding) => findingTitle(f, t, te)
 
 /** Shows the outcome inline: the new status of the finding or the problem; the list reloads on success. */
 function settle(result: FindingResult, f: Finding): boolean {
@@ -59,7 +67,7 @@ function settle(result: FindingResult, f: Finding): boolean {
     return false
   }
   pageProblem.value = ''
-  done.value = t('findings.done', { code: codeText(f), hostname: f.hostname, status: t('findings.status.' + result.status) })
+  done.value = t('findings.done', { finding: title(f), status: t('findings.status.' + result.status) })
   void list.value?.reload()
   return true
 }
@@ -67,7 +75,7 @@ function settle(result: FindingResult, f: Finding): boolean {
 async function acknowledge(f: Finding): Promise<void> {
   const ok = await confirm({
     title: t('findings.acknowledge.title'),
-    message: t('findings.acknowledge.message', { code: codeText(f), hostname: f.hostname }),
+    message: t('findings.acknowledge.message', { finding: title(f) }),
     confirmLabel: t('findings.acknowledge.confirm'),
   })
   if (ok) settle(await acknowledgeFinding(f.id), f)
@@ -76,19 +84,21 @@ async function acknowledge(f: Finding): Promise<void> {
 async function reopen(f: Finding): Promise<void> {
   const answer = await confirm({
     title: t('findings.reopen.title'),
-    message: t('findings.reopen.message', { code: codeText(f), hostname: f.hostname }),
+    message: t('findings.reopen.message', { finding: title(f) }),
     confirmLabel: t('findings.reopen.confirm'),
     reason: { label: t('findings.reopen.reason'), hint: t('findings.close.reasonHint'), required: true, maxLength: maxFindingReason },
   })
   if (answer) settle(await reopenFinding(f.id, answer.reason), f)
 }
 
-function openAssign(f: Finding): void {
+function openAssign(f: Finding, event: Event): void {
+  focusReturn.remember(event)
   dialogProblem.value = ''
   assigning.value = f
 }
 
-function openClose(f: Finding): void {
+function openClose(f: Finding, event: Event): void {
+  focusReturn.remember(event)
   dialogProblem.value = ''
   closing.value = f
 }
@@ -98,7 +108,7 @@ async function submitAssign(assigneeID: string | null): Promise<void> {
   if (!f) return
   const result = await assignFinding(f.id, assigneeID)
   if (typeof result === 'string') dialogProblem.value = result
-  else if (settle(result, f)) assigning.value = null
+  else if (settle(result, f)) closeDialogs()
 }
 
 async function submitClose(input: CloseInput): Promise<void> {
@@ -106,7 +116,7 @@ async function submitClose(input: CloseInput): Promise<void> {
   if (!f) return
   const result = await closeFinding(f.id, input)
   if (typeof result === 'string') dialogProblem.value = result
-  else if (settle(result, f)) closing.value = null
+  else if (settle(result, f)) closeDialogs()
 }
 </script>
 
@@ -156,11 +166,10 @@ async function submitClose(input: CloseInput): Promise<void> {
       <template #[`item.code`]="{ item }: { item: Finding }">
         <span
           class="pd-truncate"
-          :class="item.kind === 'tamper' ? 'mono' : ''"
-          :title="item.code"
-        >{{ codeText(item) }}</span>
+          :title="title(item)"
+        >{{ item.kind === 'attention' ? t('attention.kinds.' + item.code) : title(item) }}</span>
         <span class="pd-type-caption pd-muted pd-block">
-          {{ t('findings.kinds.' + item.kind) }}<template v-if="item.subject"> · <span class="mono">{{ item.subject }}</span></template>
+          {{ t('findings.kinds.' + item.kind) }} · <span class="mono">{{ item.code }}</span>
         </span>
       </template>
       <template #[`item.status`]="{ item }: { item: Finding }">
@@ -205,7 +214,7 @@ async function submitClose(input: CloseInput): Promise<void> {
             size="small"
             variant="tonal"
             :disabled="pending"
-            :aria-label="t('findings.acknowledge.label', { code: codeText(item), hostname: item.hostname })"
+            :aria-label="t('findings.acknowledge.label', { finding: title(item) })"
             @click="run(() => acknowledge(item))"
           >
             {{ t('findings.acknowledge.action') }}
@@ -214,8 +223,8 @@ async function submitClose(input: CloseInput): Promise<void> {
             v-if="canAssign(item)"
             size="small"
             variant="tonal"
-            :aria-label="t('findings.assign.label', { code: codeText(item), hostname: item.hostname })"
-            @click="openAssign(item)"
+            :aria-label="t('findings.assign.label', { finding: title(item) })"
+            @click="openAssign(item, $event)"
           >
             {{ t('findings.assign.action') }}
           </v-btn>
@@ -223,8 +232,8 @@ async function submitClose(input: CloseInput): Promise<void> {
             v-if="canClose(item)"
             size="small"
             variant="tonal"
-            :aria-label="t('findings.close.label', { code: codeText(item), hostname: item.hostname })"
-            @click="openClose(item)"
+            :aria-label="t('findings.close.label', { finding: title(item) })"
+            @click="openClose(item, $event)"
           >
             {{ t('findings.close.action') }}
           </v-btn>
@@ -233,7 +242,7 @@ async function submitClose(input: CloseInput): Promise<void> {
             size="small"
             variant="tonal"
             :disabled="pending"
-            :aria-label="t('findings.reopen.label', { code: codeText(item), hostname: item.hostname })"
+            :aria-label="t('findings.reopen.label', { finding: title(item) })"
             @click="run(() => reopen(item))"
           >
             {{ t('findings.reopen.action') }}
@@ -250,7 +259,7 @@ async function submitClose(input: CloseInput): Promise<void> {
       :problem="dialogProblem"
       :pending="pending"
       @submit="run(() => submitAssign($event))"
-      @cancel="assigning = null"
+      @cancel="closeDialogs"
     />
     <FindingCloseDialog
       v-if="closing"
@@ -261,7 +270,7 @@ async function submitClose(input: CloseInput): Promise<void> {
       :problem="dialogProblem"
       :pending="pending"
       @submit="run(() => submitClose($event))"
-      @cancel="closing = null"
+      @cancel="closeDialogs"
     />
   </section>
 </template>
