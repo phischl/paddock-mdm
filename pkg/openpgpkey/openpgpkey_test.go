@@ -1,0 +1,369 @@
+package openpgpkey_test
+
+import (
+	"bytes"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/phischl/paddock-mdm/pkg/openpgpkey"
+)
+
+// Fingerprints as `gpg --show-keys --with-colons` prints them for the fixtures (GnuPG 2.4.4).
+const (
+	himmelblauFP = "E87FD8D463A5E4814B9CDBA90CC0D4002C425E03"
+	rsaFP        = "7149256BEC1A7DB713A95C7366280043EC88781E"
+	ed25519FP    = "8A367815ED9674ED9013609A8F03DFF0EB10E2E4"
+)
+
+func fixture(t testing.TB, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func unix(sec int64) *time.Time {
+	v := time.Unix(sec, 0).UTC()
+	return &v
+}
+
+func TestParseFixtures(t *testing.T) {
+	tests := []struct {
+		file    string
+		want    openpgpkey.Key
+		armored bool
+	}{
+		{
+			file: "himmelblau.gpg",
+			want: openpgpkey.Key{
+				Fingerprint: himmelblauFP, Algorithm: openpgpkey.RSA, Bits: 4096,
+				Created: *unix(1761166251), Expires: unix(1824238251),
+				UserIDs: []string{"Himmelblau Build (2025) <build@himmelblau-idm.org>"},
+			},
+		},
+		{
+			file: "rsa.asc", armored: true,
+			want: openpgpkey.Key{
+				Fingerprint: rsaFP, Algorithm: openpgpkey.RSA, Bits: 3072,
+				Created: *unix(1793479615), Expires: unix(1893495600),
+				UserIDs: []string{"Paddock Test RSA <rsa@example.invalid>"}, Subkeys: 1,
+			},
+		},
+		{
+			file: "rsa.gpg",
+			want: openpgpkey.Key{
+				Fingerprint: rsaFP, Algorithm: openpgpkey.RSA, Bits: 3072,
+				Created: *unix(1793479615), Expires: unix(1893495600),
+				UserIDs: []string{"Paddock Test RSA <rsa@example.invalid>"}, Subkeys: 1,
+			},
+		},
+		{
+			file: "ed25519.asc", armored: true,
+			want: openpgpkey.Key{
+				Fingerprint: ed25519FP, Algorithm: openpgpkey.EdDSA, Curve: "Ed25519",
+				Created: *unix(1793479615),
+				UserIDs: []string{"Paddock Test Ed25519 <ed25519@example.invalid>", "Second UID <second@example.invalid>"},
+				Subkeys: 1,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			data := fixture(t, tt.file)
+			k, err := openpgpkey.Parse(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tt.armored && !bytes.Equal(k.Keyring, data) {
+				t.Error("binary input: keyring differs from input")
+			}
+			got := *k
+			got.Keyring = nil
+			if got.Fingerprint != tt.want.Fingerprint || got.Algorithm != tt.want.Algorithm ||
+				got.Bits != tt.want.Bits || got.Curve != tt.want.Curve || !got.Created.Equal(tt.want.Created) ||
+				got.Subkeys != tt.want.Subkeys || strings.Join(got.UserIDs, "|") != strings.Join(tt.want.UserIDs, "|") {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+			switch {
+			case tt.want.Expires == nil && got.Expires != nil:
+				t.Errorf("Expires = %v, want none", got.Expires)
+			case tt.want.Expires != nil && (got.Expires == nil || !got.Expires.Equal(*tt.want.Expires)):
+				t.Errorf("Expires = %v, want %v", got.Expires, tt.want.Expires)
+			}
+		})
+	}
+}
+
+func TestArmoredAndBinaryAgree(t *testing.T) {
+	fp, keyring, err := openpgpkey.Fingerprint(fixture(t, "rsa.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp != rsaFP || !bytes.Equal(keyring, fixture(t, "rsa.gpg")) {
+		t.Errorf("Fingerprint = %s and keyring of %d bytes, want %s and rsa.gpg", fp, len(keyring), rsaFP)
+	}
+	fp, err = openpgpkey.FingerprintBinary(fixture(t, "himmelblau.gpg"))
+	if err != nil || fp != himmelblauFP {
+		t.Errorf("FingerprintBinary = %s, %v; want %s", fp, err, himmelblauFP)
+	}
+}
+
+func TestEntryPointsRefuseTheOtherEncoding(t *testing.T) {
+	if _, _, err := openpgpkey.Fingerprint(fixture(t, "rsa.gpg")); !errors.Is(err, openpgpkey.ErrNotPublicKey) {
+		t.Errorf("Fingerprint(binary) err = %v", err)
+	}
+	if _, err := openpgpkey.FingerprintBinary(fixture(t, "rsa.asc")); !errors.Is(err, openpgpkey.ErrNotPublicKey) {
+		t.Errorf("FingerprintBinary(armored) err = %v", err)
+	}
+}
+
+func TestArmorVariantsAccepted(t *testing.T) {
+	asc := string(fixture(t, "rsa.asc"))
+	lines := strings.Split(strings.TrimSpace(asc), "\n")
+	withoutCRC := strings.Join(append(append([]string{}, lines[:len(lines)-2]...), lines[len(lines)-1]), "\n")
+	withHeader := strings.Replace(asc, "-----\n", "-----\nComment: vendor key\nVersion: test\n", 1)
+	for name, in := range map[string]string{
+		"crlf":           strings.ReplaceAll(asc, "\n", "\r\n"),
+		"no checksum":    withoutCRC,
+		"armor headers":  withHeader,
+		"surrounding ws": "\n\t " + asc + "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			k, err := openpgpkey.Parse([]byte(in))
+			if err != nil || k.Fingerprint != rsaFP {
+				t.Errorf("Parse = %v, %v", k, err)
+			}
+		})
+	}
+}
+
+// Synthetic packet builders: only shapes matter here, no signature is valid.
+
+func pkt(tag byte, body []byte) []byte {
+	out := []byte{0xC0 | tag, 255, 0, 0, 0, 0}
+	binary.BigEndian.PutUint32(out[2:], uint32(len(body)))
+	return append(out, body...)
+}
+
+func keyBody(version, alg byte, material []byte) []byte {
+	return append([]byte{version, 0x60, 0, 0, 0, alg}, material...)
+}
+
+func ed25519Key(version byte) []byte {
+	return pkt(6, keyBody(version, 27, make([]byte, 32)))
+}
+
+func sub(typ byte, v ...byte) []byte {
+	return append([]byte{byte(len(v) + 1), typ}, v...)
+}
+
+func sig(version, sigType byte, hashed, unhashed []byte) []byte {
+	b := []byte{version, sigType, 27, 10, byte(len(hashed) >> 8), byte(len(hashed))}
+	b = append(b, hashed...)
+	b = append(b, byte(len(unhashed)>>8), byte(len(unhashed)))
+	b = append(b, unhashed...)
+	return pkt(2, append(b, 0, 0))
+}
+
+func uid(s string) []byte { return pkt(13, []byte(s)) }
+
+func cat(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+
+func syntheticFP(t *testing.T) []byte {
+	t.Helper()
+	k, err := openpgpkey.Parse(cat(ed25519Key(4), uid("a")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, _ := hex.DecodeString(k.Fingerprint)
+	return fp
+}
+
+func u32(v uint32) []byte { return binary.BigEndian.AppendUint32(nil, v) }
+
+func TestExpiryFromPrimaryUserIDSelfCertification(t *testing.T) {
+	fp := syntheticFP(t)
+	issuerFP := sub(33, append([]byte{4}, fp...)...)
+	issuerID := sub(16, fp[12:]...)
+	created := int64(0x60000000)
+	cert := func(sigCreated, expiry uint32, primary bool, issuer []byte) []byte {
+		h := cat(sub(2, u32(sigCreated)...), sub(9, u32(expiry)...))
+		if primary {
+			h = append(h, sub(25, 1)...)
+		}
+		return sig(4, 0x13, cat(h, issuer), nil)
+	}
+	tests := []struct {
+		name string
+		key  []byte
+		want *time.Time
+	}{
+		{"first user ID without primary flag", cat(ed25519Key(4), uid("a"), cert(1, 100, false, issuerFP), uid("b"), cert(1, 200, false, issuerFP)), unix(created + 100)},
+		{"flagged user ID wins", cat(ed25519Key(4), uid("a"), cert(1, 100, false, issuerFP), uid("b"), cert(1, 200, true, issuerFP)), unix(created + 200)},
+		{"newest certification wins", cat(ed25519Key(4), uid("a"), cert(5, 300, false, issuerFP), cert(1, 100, false, issuerFP)), unix(created + 300)},
+		{"issuer key ID in the unhashed area", cat(ed25519Key(4), uid("a"), sig(4, 0x10, cat(sub(2, u32(1)...), sub(9, u32(50)...)), issuerID)), unix(created + 50)},
+		{"third-party certification ignored", cat(ed25519Key(4), uid("a"), cert(1, 100, false, sub(16, 1, 2, 3, 4, 5, 6, 7, 8))), nil},
+		{"direct-key signature ignored", cat(ed25519Key(4), sig(4, 0x1F, cat(sub(9, u32(10)...), issuerFP), nil), uid("a")), nil},
+		{"zero means no expiry", cat(ed25519Key(4), uid("a"), cert(1, 0, false, issuerFP)), nil},
+		{"user attribute certification does not attach to the user ID", cat(ed25519Key(4), uid("a"), pkt(17, []byte{1, 2, 3}), cert(1, 100, false, issuerFP)), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			k, err := openpgpkey.Parse(tt.key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (tt.want == nil) != (k.Expires == nil) || (tt.want != nil && !tt.want.Equal(*k.Expires)) {
+				t.Errorf("Expires = %v, want %v", k.Expires, tt.want)
+			}
+		})
+	}
+}
+
+func TestAlgorithms(t *testing.T) {
+	mpi := func(bits int) []byte {
+		b := make([]byte, (bits+7)/8)
+		b[0] = 0x80 >> ((8 - bits%8) % 8)
+		return append([]byte{byte(bits >> 8), byte(bits)}, b...)
+	}
+	p256 := []byte{8, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07}
+	tests := []struct {
+		name  string
+		body  []byte
+		alg   openpgpkey.Algorithm
+		bits  int
+		curve string
+	}{
+		{"rsa 2047 bits", keyBody(4, 1, cat(mpi(2047), mpi(17))), openpgpkey.RSA, 2047, ""},
+		{"dsa", keyBody(4, 17, cat(mpi(2048), mpi(256), mpi(2048), mpi(2048))), openpgpkey.DSA, 2048, ""},
+		{"ecdsa p-256", keyBody(4, 19, cat(p256, mpi(515))), openpgpkey.ECDSA, 0, "NIST P-256"},
+		{"ed25519 native", keyBody(4, 27, make([]byte, 32)), openpgpkey.Ed25519, 0, ""},
+		{"ed448 native", keyBody(4, 28, make([]byte, 57)), openpgpkey.Ed448, 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			k, err := openpgpkey.Parse(cat(pkt(6, tt.body), uid("a")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if k.Algorithm != tt.alg || k.Bits != tt.bits || k.Curve != tt.curve {
+				t.Errorf("got %s/%d/%q", k.Algorithm, k.Bits, k.Curve)
+			}
+		})
+	}
+	ecdhSub := pkt(14, keyBody(4, 18, cat([]byte{10, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01}, mpi(263), []byte{3, 1, 8, 9})))
+	if _, err := openpgpkey.Parse(cat(ed25519Key(4), uid("a"), ecdhSub)); err != nil {
+		t.Errorf("Curve25519 ECDH subkey: %v", err)
+	}
+}
+
+func TestRefused(t *testing.T) {
+	rsaGPG := fixture(t, "rsa.gpg")
+	asc := string(fixture(t, "rsa.asc"))
+	mutate := func(b []byte, i int, v byte) []byte {
+		c := bytes.Clone(b)
+		c[i] = v
+		return c
+	}
+	crcLine := strings.Split(strings.TrimSpace(asc), "\n")
+	crc := crcLine[len(crcLine)-2]
+	badCRC := strings.Replace(asc, crc, "="+string(rune('A'+(crc[1]-'A'+1)%26))+crc[2:], 1)
+	if !strings.HasPrefix(crc, "=") || crc[1] < 'A' || crc[1] > 'Z' {
+		t.Fatalf("fixture checksum line %q is not of the expected shape", crc)
+	}
+	longUID := uid(strings.Repeat("x", openpgpkey.MaxUserIDLen+1))
+	manyUIDs := ed25519Key(4)
+	for range openpgpkey.MaxUserIDs + 1 {
+		manyUIDs = append(manyUIDs, uid("a")...)
+	}
+	manyPackets := cat(ed25519Key(4), uid("a"))
+	for range openpgpkey.MaxPackets {
+		manyPackets = append(manyPackets, sig(4, 0x30, nil, nil)...)
+	}
+	manySubpackets := bytes.Repeat(sub(2, 0, 0, 0, 1), openpgpkey.MaxSubpackets+1)
+	tests := map[string][]byte{
+		"empty":                       nil,
+		"truncated binary":            rsaGPG[:len(rsaGPG)/2],
+		"truncated armor":             []byte(asc[:len(asc)/2]),
+		"wrong checksum":              []byte(badCRC),
+		"secret key block":            mutate(rsaGPG, 0, 0x95),
+		"secret subkey":               cat(ed25519Key(4), uid("a"), pkt(7, keyBody(4, 27, make([]byte, 32)))),
+		"private armor header":        []byte(strings.ReplaceAll(asc, "PUBLIC KEY BLOCK", "PRIVATE KEY BLOCK")),
+		"v3 key":                      mutate(rsaGPG, 3, 3),
+		"v5 key":                      ed25519Key(5),
+		"v6 key":                      cat(ed25519Key(6), uid("a")),
+		"v3 subkey":                   cat(ed25519Key(4), uid("a"), pkt(14, keyBody(3, 27, make([]byte, 32)))),
+		"v3 signature":                cat(ed25519Key(4), uid("a"), sig(3, 0x13, nil, nil)),
+		"v6 signature":                cat(ed25519Key(4), uid("a"), sig(6, 0x13, nil, nil)),
+		"user ID first":               cat(uid("a"), ed25519Key(4)),
+		"two primary keys":            cat(ed25519Key(4), uid("a"), ed25519Key(4), uid("b")),
+		"literal data packet":         cat(ed25519Key(4), uid("a"), pkt(11, []byte("x"))),
+		"trust packet":                cat(ed25519Key(4), uid("a"), pkt(12, []byte{0})),
+		"no user ID":                  ed25519Key(4),
+		"empty user ID":               cat(ed25519Key(4), uid("")),
+		"user ID too long":            cat(ed25519Key(4), longUID),
+		"too many user IDs":           manyUIDs,
+		"too many packets":            manyPackets,
+		"too many subpackets":         cat(ed25519Key(4), uid("a"), sig(4, 0x13, manySubpackets, nil)),
+		"user ID after subkey":        cat(ed25519Key(4), uid("a"), pkt(14, keyBody(4, 27, make([]byte, 32))), uid("b")),
+		"unknown algorithm":           cat(pkt(6, keyBody(4, 99, make([]byte, 32))), uid("a")),
+		"encryption-only primary":     cat(pkt(6, keyBody(4, 25, make([]byte, 32))), uid("a")),
+		"trailing key material":       cat(pkt(6, keyBody(4, 27, make([]byte, 33))), uid("a")),
+		"short native key":            cat(pkt(6, keyBody(4, 27, make([]byte, 31))), uid("a")),
+		"unknown curve":               cat(pkt(6, keyBody(4, 19, []byte{3, 1, 2, 3, 0, 8, 0xFF})), uid("a")),
+		"zero-length MPI":             cat(pkt(6, keyBody(4, 1, []byte{0, 0, 0, 1, 1})), uid("a")),
+		"oversized MPI":               cat(pkt(6, keyBody(4, 1, []byte{0x40, 0x01})), uid("a")),
+		"subpacket overruns area":     cat(ed25519Key(4), uid("a"), sig(4, 0x13, []byte{9, 2, 0}, nil)),
+		"zero-length subpacket":       cat(ed25519Key(4), uid("a"), sig(4, 0x13, []byte{0}, nil)),
+		"hashed area overruns packet": cat(ed25519Key(4), uid("a"), pkt(2, []byte{4, 0x13, 27, 10, 0xFF, 0xFF})),
+		"partial body length":         cat(ed25519Key(4), []byte{0xCD, 0xE1, 'a', 'b'}),
+		"indeterminate old length":    cat(ed25519Key(4), []byte{0xB7, 'a'}),
+		"packet length beyond input":  cat(ed25519Key(4), []byte{0xCD, 0xFF, 0x7F, 0xFF, 0xFF, 0xFF}),
+		"not a packet":                []byte("hello"),
+		"text before armor":           []byte("key:\n" + asc),
+		"two armored blocks":          []byte(asc + asc),
+		"oversized input":             append(cat(ed25519Key(4), uid("a")), make([]byte, openpgpkey.MaxInput)...),
+		"non-base64 armor body":       []byte(strings.Replace(asc, "\n\n", "\n\n!!!!", 1)),
+	}
+	for name, in := range tests {
+		t.Run(name, func(t *testing.T) {
+			k, err := openpgpkey.Parse(in)
+			if !errors.Is(err, openpgpkey.ErrNotPublicKey) {
+				t.Errorf("Parse = %+v, %v; want ErrNotPublicKey", k, err)
+			}
+		})
+	}
+}
+
+// FuzzParse checks that arbitrary input never panics or hangs and that an accepted key is self-consistent. The seed
+// corpus is the fixtures plus testdata/fuzz/FuzzParse.
+func FuzzParse(f *testing.F) {
+	for _, name := range []string{"himmelblau.gpg", "rsa.asc", "rsa.gpg", "ed25519.asc"} {
+		f.Add(fixture(f, name))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		k, err := openpgpkey.Parse(data)
+		if err != nil {
+			if !errors.Is(err, openpgpkey.ErrNotPublicKey) {
+				t.Fatalf("error %v does not wrap ErrNotPublicKey", err)
+			}
+			return
+		}
+		if len(k.Fingerprint) != 40 || len(k.UserIDs) == 0 || len(k.UserIDs) > openpgpkey.MaxUserIDs ||
+			k.Subkeys > openpgpkey.MaxSubkeys || len(k.Keyring) == 0 {
+			t.Fatalf("accepted key out of bounds: %+v", k)
+		}
+		again, err := openpgpkey.Parse(k.Keyring)
+		if err != nil || again.Fingerprint != k.Fingerprint {
+			t.Fatalf("keyring does not reparse to the same key: %v", err)
+		}
+	})
+}
