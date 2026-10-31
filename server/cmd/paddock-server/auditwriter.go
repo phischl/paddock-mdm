@@ -128,7 +128,8 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	defer deps.pool.Close()
 	consumer := mq.NewConsumer(mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password},
 		mq.QueueAudit, auditwriter.Prefetch)
-	sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao, auditwriter.NewKeyPublisher(deps.publicKeys))
+	publisher := auditwriter.NewKeyPublisher(deps.publicKeys)
+	sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao, publisher)
 	recorder := auditwriter.NewRecorder(deps.pool, deps.writer, time.Now)
 	if err := prometheus.Register(recorder.Collector()); err != nil {
 		return err
@@ -150,11 +151,27 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 			})
 		},
 		func(ctx context.Context) error { return consumer.Run(ctx, deps.writer.Handle) },
+		func(ctx context.Context) error { publishCurrentKey(ctx, publisher, deps.pool); return nil },
 		func(ctx context.Context) error { sealer.RunDaily(ctx); return nil },
 		func(ctx context.Context) error { nightly.RunNightly(ctx); return nil },
 		func(ctx context.Context) error { purger.RunDaily(ctx); return nil },
 		exporter.Run,
 	)
+}
+
+// publishCurrentKey publishes the current audit-chain key once OpenBao and the audit database answer, so the portal
+// lists its fingerprint before the first seal (PDK-652), and then waits for ctx: runAll stops every loop as soon as one
+// function returns. A mismatch is not retried: it persists until the key is rotated, and every seal and export reports
+// it again.
+func publishCurrentKey(ctx context.Context, publisher *auditwriter.KeyPublisher, pool *db.AuditWriterPool) {
+	retryUntilDone(ctx, "publishing the current audit signing key", time.Second, time.Minute, func(ctx context.Context) error {
+		err := publisher.EnsureCurrent(ctx, pool)
+		if errors.Is(err, auditwriter.ErrSigningKeyMismatch) {
+			return nil
+		}
+		return err
+	})
+	<-ctx.Done()
 }
 
 // exportMaxBytes reads PADDOCK_AUDIT_EXPORT_MAX_BYTES, the limit of events.jsonl and of the package of one evidence
