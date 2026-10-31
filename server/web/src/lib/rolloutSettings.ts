@@ -5,6 +5,7 @@ const csrf = { 'X-Paddock-CSRF': '1' } as const
 /** Limits of the settings (server: domain/configrollout). The server also enforces a minimum wave duration of 15 minutes. */
 export const maxWaves = 10
 export const minWaveMinutesProduction = 15
+export const minWaveMinutesDevelopment = 1
 
 /** The rollout settings of the organization (plan M11 decision 24). */
 export async function getRolloutSettings(): Promise<RolloutSettings | string> {

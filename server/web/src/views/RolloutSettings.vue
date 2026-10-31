@@ -6,7 +6,7 @@ import { allGroups } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import {
-  formatWaves, getRolloutSettings, minWaveMinutesProduction, parseWaves, saveRolloutSettings, validateRolloutSettings,
+  formatWaves, getRolloutSettings, minWaveMinutesDevelopment, minWaveMinutesProduction, parseWaves, saveRolloutSettings, validateRolloutSettings,
 } from '../lib/rolloutSettings'
 import { hasErrors } from '../lib/validation'
 import { useSessionStore } from '../stores/session'
@@ -30,6 +30,8 @@ const updatedAt = ref('')
 const problem = ref('')
 const saved = ref(false)
 const touched = ref(false)
+const minWaveRefused = ref(false)
+const minWaveLimits = { min: minWaveMinutesProduction, devMin: minWaveMinutesDevelopment }
 const errors = computed(() => (form.value ? validateRolloutSettings(form.value, wavesText.value) : {}))
 const canaryItems = computed(() => [{ id: '', name: t('rolloutSettings.canaryNone') }, ...groups.value])
 
@@ -42,20 +44,24 @@ function apply(s: RolloutSettings): void {
 }
 
 function message(key: keyof ReturnType<typeof validateRolloutSettings>): string[] {
+  if (key === 'min_wave_minutes' && minWaveRefused.value) return [t('rolloutSettings.minWaveRefused', minWaveLimits)]
   const k = errors.value[key]
-  return touched.value && k ? [t(k)] : []
+  return touched.value && k ? [t(k, minWaveLimits)] : []
 }
 
 async function save(): Promise<void> {
   touched.value = true
   problem.value = ''
   saved.value = false
+  minWaveRefused.value = false
   if (!form.value || hasErrors(errors.value)) return
   const res = await saveRolloutSettings({
     ...form.value, waves: parseWaves(wavesText.value) ?? [], canary_device_group_id: canary.value || null,
   })
   if (typeof res === 'string') {
-    problem.value = res
+    // The client already checked the other fields, so the production minimum is what the server refuses.
+    if (res === 'invalid_request') minWaveRefused.value = true
+    else problem.value = res
     return
   }
   apply(res)
@@ -113,7 +119,7 @@ onMounted(async () => {
           type="number"
           :label="t('rolloutSettings.minWaveMinutes')"
           :suffix="t('common.units.minutes')"
-          :hint="t('rolloutSettings.minWaveMinutesHint', { min: minWaveMinutesProduction })"
+          :hint="t('rolloutSettings.minWaveMinutesHint', minWaveLimits)"
           persistent-hint
           :error-messages="message('min_wave_minutes')"
           data-testid="rollout-min-wave"

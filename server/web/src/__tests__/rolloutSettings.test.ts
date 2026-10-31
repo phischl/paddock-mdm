@@ -130,11 +130,26 @@ describe('RolloutSettings (plan M11 decision 24)', () => {
     expect(save).not.toHaveBeenCalled()
   })
 
-  it('shows a refusal of the server inline', async () => {
+  it('names both minimum wave durations in the hint', async () => {
+    const w = await mountAs('org_admin')
+    expect(w.text()).toContain('At least 15 minutes (1 in a development stack).')
+  })
+
+  it('maps a server refusal of the request onto the minimum wave duration field', async () => {
     save.mockResolvedValue('invalid_request')
     const w = await mountAs('org_admin')
+    await type('rollout-min-wave', '5')
     await submit()
-    expect(w.find('[role="alert"]').exists()).toBe(true)
+    expect(w.text()).toContain('at least 15 minutes (1 in a development stack)')
+    expect(w.find('.form-error').exists()).toBe(false)
+    expect(document.body.textContent).not.toContain('The rollout settings were saved.')
+  })
+
+  it('shows other refusals of the server as an alert', async () => {
+    save.mockResolvedValue('forbidden')
+    const w = await mountAs('org_admin')
+    await submit()
+    expect(w.find('.form-error').exists()).toBe(true)
     expect(document.body.textContent).not.toContain('The rollout settings were saved.')
   })
 
