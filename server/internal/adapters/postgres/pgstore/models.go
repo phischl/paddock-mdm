@@ -472,6 +472,87 @@ type ManagedUnit struct {
 	UpdatedAt      time.Time
 }
 
+type NotificationDelivery struct {
+	ID             uuid.UUID
+	DestinationID  uuid.UUID
+	OrganizationID uuid.UUID
+	Kind           string
+	ForwardFrom    *int64
+	ForwardTo      *int64
+	EventCount     int32
+	CreatedAt      time.Time
+	DeliveredAt    *time.Time
+	Attempts       int32
+	LastError      *string
+	RequestedBy    *string
+}
+
+type NotificationDeliveryEvent struct {
+	DestinationID  uuid.UUID
+	OrganizationID uuid.UUID
+	ForwardSeq     int64
+	EventID        uuid.UUID
+	CommitSeq      int64
+	DeliveryID     uuid.UUID
+}
+
+type NotificationDestination struct {
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	Type               string
+	Name               string
+	Enabled            bool
+	FilterMode         string
+	Codes              []string
+	PseudonymizeUsers  bool
+	IncludeParams      bool
+	UrlCiphertext      *string
+	UrlDisplay         *string
+	SecretCiphertext   *string
+	HeartbeatIntervalS int32
+	Recipients         []string
+	EmailMinIntervalS  int32
+	CreatedBy          string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type NotificationDestinationState struct {
+	DestinationID       uuid.UUID
+	OrganizationID      uuid.UUID
+	CursorCommitSeq     int64
+	ForwardSeq          int64
+	Status              string
+	PendingDeliveryID   uuid.NullUUID
+	ConsecutiveFailures int32
+	FirstFailureAt      *time.Time
+	StalledSince        *time.Time
+	LastSuccessAt       *time.Time
+	LastAttemptAt       *time.Time
+	NextAttemptAt       *time.Time
+	LastHeartbeatAt     *time.Time
+	LastError           *string
+	LastTestAt          *time.Time
+	LastTestOk          *bool
+	LastTestError       *string
+}
+
+type NotificationPseudonymKey struct {
+	OrganizationID uuid.UUID
+	KeyCiphertext  string
+	CreatedAt      time.Time
+}
+
+type NotificationPseudonymLookup struct {
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	Pseudonym        string
+	RequestedBy      string
+	CreatedAt        time.Time
+	ResolvedUsername *string
+	ResolvedAt       *time.Time
+}
+
 type OpenbaoAutoUnseal struct {
 	ID                    int16
 	State                 string

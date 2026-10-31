@@ -122,6 +122,33 @@ This section does not apply to the move to 0.1.0-alpha.7, which is a fresh insta
 
 Then the audit host, the same way without step 3.
 
+## Notifications on a cluster initialized before them
+
+A control-plane cluster creates its database roles once, at initialization (`postgres/init/10-roles.sh`). A cluster
+initialized before the notifications (plan M9) lacks the role `paddock_notifier`, and the migration 00085 that
+creates the notification tables refuses to run without it. A fresh installation (the move to 0.1.0-alpha.7 is one)
+creates the role itself; this section is for clusters that already run a build without it. Before step 5 of the upgrade, on the control plane in B's
+directory, after `./paddock secrets` created `.secrets/db_paddock_notifier_password`:
+
+```sh
+./paddock compose up -d postgres
+NOTIFIER_PASSWORD="$(cat .secrets/db_paddock_notifier_password)" ./paddock compose exec -T -e NOTIFIER_PASSWORD \
+  postgres psql -v ON_ERROR_STOP=1 -q -U postgres -d paddock <<'SQL'
+\set pw `printf '%s' "$NOTIFIER_PASSWORD"`
+SELECT format('CREATE ROLE paddock_notifier LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD %L', :'pw')
+  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'paddock_notifier') \gexec
+GRANT CONNECT ON DATABASE paddock TO paddock_notifier;
+GRANT USAGE ON SCHEMA public TO paddock_notifier;
+SQL
+```
+
+The password reaches `psql` through the container's environment, never a command line. The step is idempotent.
+After step 5, run `./paddock bootstrap openbao` once with a root token (`docs/operations/openbao.md` section 1): it
+adds the Transit key `notification-wrap`, the encrypt permission of `paddock-api`, the policy and AppRole
+`paddock-notifier`, and keeps every existing secret ID. The same release adds the commit sequence of the audit index:
+its audit migration backfills every existing event, so stop the audit writer first (step 4; duration in
+`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
+
 ## Rollback
 
 Migrations only move forward (`server/migrations/`; there is no down migration), so a rollback depends on the release

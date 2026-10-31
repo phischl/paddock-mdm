@@ -279,6 +279,27 @@ func (c *Client) Decrypt(ctx context.Context, key string, version int, ciphertex
 	return out, nil
 }
 
+// Encrypt encrypts plaintext with the Transit key and returns the ciphertext as Transit writes it ("vault:vN:…").
+func (c *Client) Encrypt(ctx context.Context, key string, plaintext []byte) (string, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return "", err
+	}
+	s, err := c.api.Logical().WriteWithContext(ctx, "transit/encrypt/"+key, map[string]any{
+		"plaintext": base64.StdEncoding.EncodeToString(plaintext),
+	})
+	if err != nil {
+		return "", fmt.Errorf("bao: encrypt: %w", err)
+	}
+	if s == nil {
+		return "", errors.New("bao: encrypt returned no ciphertext")
+	}
+	ct, _ := s.Data["ciphertext"].(string)
+	if ct == "" {
+		return "", errors.New("bao: encrypt returned no ciphertext")
+	}
+	return ct, nil
+}
+
 // KV reads the data of a KV v2 secret, e.g. path "secret/data/paddock/session".
 func (c *Client) KV(ctx context.Context, path string) (map[string]string, error) {
 	if err := c.ensureToken(ctx); err != nil {

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Configures an initialized and unsealed OpenBao (plan M7b decision 17; content of plan M0 §6.8, M2a decision 15, M4a
 # decisions 2 and 9, M4c decisions 2 and 14, M6a decision 5): the engines transit, secret (kv-v2) and approle, the
-# transit keys audit-chain, bundle-signing, command-signing, revocation-signing, time-ticket (ed25519) and escrow-wrap
-# (rsa-4096), the KV secret secret/paddock/session, the policies and the AppRoles, whose role_id and secret_id are
+# transit keys audit-chain, bundle-signing, command-signing, revocation-signing, time-ticket (ed25519), escrow-wrap
+# (rsa-4096) and notification-wrap (aes256-gcm96, plan M9 decision 12), the KV secret secret/paddock/session, the policies and the AppRoles, whose role_id and secret_id are
 # written to .secrets/approle/<role>/ (paddock-audit-writer's directory is copied to the audit host). Idempotent: a
 # stored non-empty secret_id is kept. Needs the root token in BAO_TOKEN. Development: openbao-bootstrap.sh calls it;
 # production: `./paddock bootstrap openbao` after the manual init and unseal (docs/operations/openbao.md).
@@ -57,6 +57,13 @@ if ! bao read transit/keys/escrow-wrap >/dev/null 2>&1; then
   echo "created transit key escrow-wrap"
 fi
 
+# Destination secrets of the notifications (webhook URL and signing secret, pseudonym keys): the api encrypts, the
+# notifier alone decrypts (ADR 0031 decision 11).
+if ! bao read transit/keys/notification-wrap >/dev/null 2>&1; then
+  bao write transit/keys/notification-wrap type=aes256-gcm96 exportable=false allow_plaintext_backup=false >/dev/null
+  echo "created transit key notification-wrap"
+fi
+
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
   printf '{"current":"%s","previous":"%s"}' "$(head -c 32 /dev/urandom | base64 -w0)" \
     "$(head -c 32 /dev/urandom | base64 -w0)" | bao kv put secret/paddock/session - >/dev/null
@@ -72,6 +79,15 @@ path "transit/keys/bundle-signing" {
 }
 path "transit/keys/revocation-signing" {
   capabilities = ["read"]
+}
+path "transit/encrypt/notification-wrap" {
+  capabilities = ["update"]
+}
+EOF
+
+bao policy write paddock-notifier - >/dev/null <<'EOF'
+path "transit/decrypt/notification-wrap" {
+  capabilities = ["update"]
 }
 EOF
 
@@ -139,7 +155,7 @@ path "sys/storage/raft/snapshot" {
 EOF
 
 for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer \
-  paddock-backup; do
+  paddock-backup paddock-notifier; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h \
     secret_id_ttl=0 token_no_default_policy=false >/dev/null
   dir="$SECRETS_DIR/approle/$role"

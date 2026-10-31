@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
@@ -94,5 +95,44 @@ func TestEscrowWrap(t *testing.T) {
 	}
 	if _, _, err := reader.LatestPublicKeyPEM(ctx, escrow.KeyName); err == nil {
 		t.Fatal("the escrow reader may read the key")
+	}
+}
+
+// TestNotificationWrap checks ADR 0031 decision 11 and plan M9 decision 12: the api AppRole encrypts destination
+// secrets with notification-wrap and cannot decrypt them; the notifier AppRole decrypts and cannot encrypt; no other
+// role decrypts.
+func TestNotificationWrap(t *testing.T) {
+	b := baotest.Start(t)
+	ctx := context.Background()
+	client := func(name string) *bao.Client {
+		role := b.AppRole(t, name)
+		c, err := bao.New(b.Addr, role.RoleID, role.SecretID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	api, notifier, worker := client("paddock-api"), client("paddock-notifier"), client("paddock-worker")
+	secret := []byte("https://hooks.slack.com/services/T0/B0/secret")
+	ct, err := api.Encrypt(ctx, "notification-wrap", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rest, ok := strings.CutPrefix(ct, "vault:v1:")
+	if !ok || strings.Contains(ct, string(secret)) {
+		t.Fatalf("ciphertext %q", ct)
+	}
+	plain, err := notifier.Decrypt(ctx, "notification-wrap", 1, rest)
+	if err != nil || string(plain) != string(secret) {
+		t.Fatalf("decrypt: %q %v", plain, err)
+	}
+	if _, err := api.Decrypt(ctx, "notification-wrap", 1, rest); err == nil {
+		t.Fatal("the api may decrypt destination secrets")
+	}
+	if _, err := worker.Decrypt(ctx, "notification-wrap", 1, rest); err == nil {
+		t.Fatal("the worker may decrypt destination secrets")
+	}
+	if _, err := notifier.Encrypt(ctx, "notification-wrap", secret); err == nil {
+		t.Fatal("the notifier may encrypt")
 	}
 }
