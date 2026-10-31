@@ -206,6 +206,10 @@ const (
 	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
 	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
 
+	// Read-access recording, coalesced per actor and window (ADR 0032 §4, plan M10 §6.4).
+	CodeAuditSearched         Code = "audit.searched"
+	CodeDeviceInventoryViewed Code = "device.inventory_viewed"
+
 	// Evidence export (ADR 0032 §5, plan M10 §6.4).
 	CodeAuditExportRequested  Code = "audit.export_requested"
 	CodeAuditExportCompleted  Code = "audit.export_completed"
@@ -1290,6 +1294,20 @@ var registry = map[Code]Definition{
 		Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
 		Params:      []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeAuditSearched: {
+		Code: CodeAuditSearched, Emitted: true,
+		Description: "An administrator, auditor or API token searched the audit log; recorded once per actor, clock hour and set of filters (the search text is not part of the set) and only while the organization's audit_search_recorded setting is on. Filters are recorded, never results or the search text; codes outside this registry are only counted (codes_unknown); a target_id that is not a device of the organization is not recorded, only target_id_used.",
+		Params:      []string{"from", "to", "codes", "codes_unknown", "outcomes", "actor_types", "target_id", "target_id_used", "q_used", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators whatever the setting. While the setting is on, failure with the reason of a refused search (invalid_request, page_out_of_range, range_too_large), canceled for a search the client gave up after the setting was read, or internal for a window that could not be claimed; the search is then refused. When the setting cannot be read, nothing is recorded and the search fails.",
+	},
+	CodeDeviceInventoryViewed: {
+		Code: CodeDeviceInventoryViewed, Emitted: true,
+		Description: "An organization member viewed the software or vulnerabilities of a device; recorded once per actor, device and UTC day and only while inventory_view_recorded is on. view is the first view of the day. The device is the target only when it is a device of the organization; otherwise only target_id_used is recorded.",
+		Params:      []string{"hostname", "view", "target_id_used", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "While the setting is on, failure with the reason of a refused view (not_found for a missing or foreign device, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a device lookup or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails.",
 	},
 	CodeAuditExportRequested: {
 		Code: CodeAuditExportRequested, Emitted: true,

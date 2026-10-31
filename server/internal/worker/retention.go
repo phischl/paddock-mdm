@@ -76,6 +76,9 @@ func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool,
 				n, err := a.PurgeRetiredInventory(ctx, now, round)
 				return int64(n), err
 			}},
+			{store: app.StoreReadAuditWindow, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
+				return a.PurgeReadWindows(ctx, now)
+			}},
 		},
 		pool: pool, platform: platform, interval: interval, now: time.Now,
 	}

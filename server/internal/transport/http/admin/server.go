@@ -56,8 +56,10 @@ type Deps struct {
 	Inventory      *app.Inventory
 	Updates        *app.Updates
 	Privacy        *app.Privacy
-	Attention      *app.Attention
-	Overview       *app.Overview
+	// ReadAudit records the audit searches and inventory views the organization switched on (plan M10 decision 20).
+	ReadAudit *app.ReadAudit
+	Attention *app.Attention
+	Overview  *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
@@ -235,7 +237,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, updates: d.Updates, privacy: d.Privacy, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
+		inventory: d.Inventory, updates: d.Updates, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,

@@ -404,6 +404,54 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 	return recorded, nil
 }
 
+// RecordReadOnce records a read of sensitive data at most once per window: authorization as in RunTx (a denied role
+// is recorded as denied), then one organization transaction runs enabled and, when it reports the recording switched
+// on, claim. claim returns false when the window key existed, and then nothing is recorded (no action, no outbox
+// row); true records outcome success in the same transaction. A claim error (a refused read, a failed claim) rolls
+// back, so no window is claimed, and is recorded as failure (plan M10 decision 18, amendment 2026-10-30 PDK-139 round
+// 2). Any error before enabled has read the switch (a cancellation, a failed transaction start or settings read)
+// records nothing and is returned, so the read fails: whether it was to be recorded is not known then. Once the
+// switch was read as off, nothing is recorded whatever fails afterwards (amendment 2026-10-31, PDK-139 round 3).
+func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
+	enabled func(ctx context.Context, q *pgstore.Queries) (bool, error),
+	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok {
+		return false, problem.Unauthenticated
+	}
+	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
+	if err := r.authorize(p, ScopeOrg, spec, rec); err != nil {
+		r.recordFinal(ctx, p, ScopeOrg, rec, err)
+		return false, err
+	}
+	defer r.recordPanic(ctx, p, ScopeOrg, rec)
+	recorded, on := false, false
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		switchedOn, err := enabled(ctx, q)
+		if err != nil {
+			return err
+		}
+		if on = switchedOn; !on {
+			return nil
+		}
+		fresh, err := claim(ctx, q, rec)
+		if err != nil || !fresh {
+			return err
+		}
+		recorded = true
+		return r.insertFinished(ctx, q, rec, nil)
+	})
+	if err != nil {
+		// on is set only once the switch was read as on: before that, or with it off, the read is not recorded.
+		if !on {
+			return false, err
+		}
+		r.recordFinal(ctx, p, ScopeOrg, rec, err)
+		return false, err
+	}
+	return recorded, nil
+}
+
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
 // login) and reports false.
