@@ -189,6 +189,9 @@ done
 # Placeholder for the Caddy root certificate; the caddy-ca-export service overwrites it.
 [[ -e "$SECRETS_DIR/caddy-root.crt" ]] || { : >"$SECRETS_DIR/caddy-root.crt"; chmod 666 "$SECRETS_DIR/caddy-root.crt"; }
 
+# The SMTP relay's password: the development relay (the acceptance sink) takes no credentials, so it stays empty.
+[[ -e "$SECRETS_DIR/smtp_password" ]] || { : >"$SECRETS_DIR/smtp_password"; chmod 644 "$SECRETS_DIR/smtp_password"; }
+
 # AppRole credential directories are filled by openbao-bootstrap.sh; they must exist for the bind mounts.
 for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader \
   paddock-revocation-issuer paddock-backup paddock-notifier; do

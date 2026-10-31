@@ -18,6 +18,8 @@ scrape_configs:
         labels: { role: paddock-escrow-reader }
       - targets: ["paddock-revocation-issuer:9090"]
         labels: { role: paddock-revocation-issuer }
+      - targets: ["paddock-notifier:9090"]
+        labels: { role: paddock-notifier }
 
   # Queue depths and consumers of the vhost paddock (rabbitmq_prometheus plugin).
   - job_name: rabbitmq
