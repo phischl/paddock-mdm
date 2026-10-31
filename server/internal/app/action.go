@@ -33,7 +33,7 @@ type Scope int
 
 const (
 	ScopeOrg      Scope = iota // OrgPool.InOrg
-	ScopePlatform              // PlatformPool.InPlatform
+	ScopePlatform              // PlatformPool.InPlatform, or the transactions of WithPlatformScope
 )
 
 // ActionSpec describes one privileged action.
@@ -97,6 +97,8 @@ type ActionRunner struct {
 	// externalDelay is the development-only test hook PADDOCK_TEST_EXTERNAL_DELAY (plan M0 §8, A3).
 	externalDelay time.Duration
 	stepUpWindow  time.Duration
+	// platformTx replaces platform.InPlatform for ScopePlatform (WithPlatformScope).
+	platformTx func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error
 }
 
 // RunnerOption configures an ActionRunner.
@@ -115,6 +117,13 @@ func WithStepUpWindow(d time.Duration) RunnerOption {
 
 // StepUpWindow is how long a step-up satisfies RequiresStepUp.
 func (r *ActionRunner) StepUpWindow() time.Duration { return r.stepUpWindow }
+
+// WithPlatformScope makes ScopePlatform actions run in the transactions of tx instead of PlatformPool.InPlatform: the
+// notifier records the events of platform destinations in the same transaction as their delivery state, which only its
+// own role may write (db.NotifierPool.InPlatformScope, plan M9 amendment section E).
+func WithPlatformScope(tx func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error) RunnerOption {
+	return func(r *ActionRunner) { r.platformTx = tx }
+}
 
 // WithClock replaces time.Now (tests).
 func WithClock(now func() time.Time) RunnerOption { return func(r *ActionRunner) { r.now = now } }
@@ -477,6 +486,50 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 	return recorded, nil
 }
 
+// RecordAllOnce records the successful events of specs (none is allowed) in one transaction of scope together with
+// the state change claim makes. Contract:
+//   - system principals only: any other principal is refused with problem.Unauthenticated, and ScopeOrg without an
+//     organization with problem.NoOrganization (a missing context fails closed);
+//   - all events or none: they are recorded exactly when claim reports true and the transaction commits; claim false
+//     (or an error) records nothing, not even a failure event;
+//   - claim false means its guarded change no longer applies: another replica, or an earlier attempt, already made
+//     that transition and recorded its events, or another change overtook it.
+//
+// It serves system-observed transitions that must be recorded exactly once, such as the notifier's delivery, stall
+// and resumption events (plan M9 decision 22).
+func (r *ActionRunner) RecordAllOnce(ctx context.Context, scope Scope, specs []ActionSpec,
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return false, problem.Unauthenticated
+	}
+	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
+		return false, problem.NoOrganization
+	}
+	recs := make([]*recorder, len(specs))
+	for i, spec := range specs {
+		recs[i] = r.newRecorder(ctx, p, scope, spec)
+	}
+	recorded := false
+	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
+		fresh, err := claim(ctx, q)
+		if err != nil || !fresh {
+			return err
+		}
+		for _, rec := range recs {
+			if err := r.insertFinished(ctx, q, rec, nil); err != nil {
+				return err
+			}
+		}
+		recorded = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return recorded, nil
+}
+
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
 // login) and reports false. After (optional) runs when the event was recorded.
@@ -683,6 +736,9 @@ func (r *ActionRunner) inScope(ctx context.Context, p principal.Principal, scope
 	fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	if scope == ScopeOrg && p.OrganizationID != uuid.Nil {
 		return r.org.InOrg(ctx, fn)
+	}
+	if r.platformTx != nil {
+		return r.platformTx(ctx, fn)
 	}
 	return r.platform.InPlatform(ctx, fn)
 }

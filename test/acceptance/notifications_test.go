@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/sink"
 )
 
 type notificationDestination struct {
@@ -64,14 +66,14 @@ func TestNotificationDestinations(t *testing.T) {
 		if d.Secret == nil || len(*d.Secret) != 43 {
 			t.Fatalf("201 without a 43-character secret: %s", res.Body)
 		}
-		if d.URLDisplay == nil || *d.URLDisplay != "https://93.184.215.14/…" || d.State.Status != "active" {
+		if d.URLDisplay == nil || *d.URLDisplay != "https://192.0.2.1/…" || d.State.Status != "active" {
 			t.Fatalf("created %+v", d)
 		}
 		if loc := res.Header.Get("Location"); loc != collection+"/"+d.ID {
 			t.Fatalf("Location %q", loc)
 		}
 		ev := expectOneEvent(t, admin.Portal, res.RequestID, "notification.destination_created", "success")
-		if ev.Params["url_display"] != "https://93.184.215.14/…" || !ev.Actor.StepUp {
+		if ev.Params["url_display"] != "https://192.0.2.1/…" || !ev.Actor.StepUp {
 			t.Fatalf("event params %v step-up %t", ev.Params, ev.Actor.StepUp)
 		}
 		for _, get := range []string{collection + "/" + d.ID, collection + "?page_size=100"} {
@@ -152,13 +154,17 @@ func TestNotificationDestinations(t *testing.T) {
 	})
 
 	t.Run("update, enable with cursor, rotate, test", func(t *testing.T) {
+		// The sink holds its answer, so that the test delivery the notifier attempts stays pending for the second
+		// request below.
+		held := sink.Start(t)
+		held.Hold(30 * time.Second)
 		d, _ := createDestination(t, as, collection, webhookBody(destinationName("upd"), notificationURL))
 		path := collection + "/" + d.ID
 		admin.stepUp(t)
 		res := call(t, admin.Portal, http.MethodPut, path, map[string]any{"name": d.Name, "enabled": false, "filter_mode": "all"})
 		expectStatus(t, res, http.StatusOK, "")
 		var got notificationDestination
-		if err := res.JSON(&got); err != nil || got.Enabled || got.URLDisplay == nil || *got.URLDisplay != "https://93.184.215.14/…" {
+		if err := res.JSON(&got); err != nil || got.Enabled || got.URLDisplay == nil || *got.URLDisplay != "https://192.0.2.1/…" {
 			t.Fatalf("update without url: %s", res.Body)
 		}
 		res = call(t, admin.Portal, http.MethodPut, path, map[string]any{"name": d.Name, "enabled": false, "filter_mode": "all",
@@ -167,7 +173,7 @@ func TestNotificationDestinations(t *testing.T) {
 		res = call(t, admin.Portal, http.MethodPut, path, map[string]any{"name": d.Name, "enabled": true, "filter_mode": "all"})
 		expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 		res = call(t, admin.Portal, http.MethodPut, path, map[string]any{"name": d.Name, "enabled": true, "filter_mode": "all",
-			"cursor": "skip", "url": "https://93.184.215.14/"})
+			"cursor": "skip", "url": held.URL()})
 		expectStatus(t, res, http.StatusOK, "")
 		ev := expectOneEvent(t, admin.Portal, res.RequestID, "notification.destination_updated", "success")
 		if ev.Params["cursor"] != "skip" || fmt.Sprint(ev.Params["changed"]) != "[enabled url]" {
@@ -213,17 +219,45 @@ func TestNotificationDestinations(t *testing.T) {
 			t.Fatalf("resolve: %s", res.Body)
 		}
 		deleteLookupOnCleanup(t, lookup.LookupID)
+		lookupPath := collection + "/" + d.ID + "/resolve-pseudonym/"
 		res2 := call(t, admin.Portal, http.MethodPost, collection+"/"+d.ID+"/resolve-pseudonym", map[string]any{"pseudonym": pseudonym})
-		expectStatus(t, res2, http.StatusConflict, "invalid_state")
+		if res2.Status == http.StatusAccepted {
+			// The stack's notifier answered the first lookup between the two requests: a resolved lookup does not
+			// block the next one. The refusal while it is unresolved is integration-tested (TestNotificationPseudonymLookup).
+			if err := res2.JSON(&lookup); err != nil || lookup.LookupID == "" {
+				t.Fatalf("second resolve: %s", res2.Body)
+			}
+			deleteLookupOnCleanup(t, lookup.LookupID)
+			t.Logf("the notifier resolved the first lookup before the second request")
+		} else {
+			expectStatus(t, res2, http.StatusConflict, "invalid_state")
+		}
 		ev := expectOneEvent(t, admin.Portal, res.RequestID, "notification.pseudonym_resolved", "success")
 		if ev.Params["pseudonym"] != pseudonym || ev.Target == nil || ev.Target.Type != "organization" {
 			t.Fatalf("resolve event %+v", ev)
 		}
-		got := call(t, admin.Portal, http.MethodGet, collection+"/"+d.ID+"/resolve-pseudonym/"+lookup.LookupID, nil)
-		expectStatus(t, got, http.StatusOK, "")
-		if !bytes.Contains(got.Body, []byte(`"resolved":false`)) {
-			t.Fatalf("lookup before the notifier ran: %s", got.Body)
+		// The notifier resolves the lookup within a round; the pseudonym stands for nobody, so the name is empty, and
+		// the answer is shown once.
+		var got env.Response
+		deadline := time.Now().Add(time.Minute)
+		for {
+			got = call(t, admin.Portal, http.MethodGet, lookupPath+lookup.LookupID, nil)
+			expectStatus(t, got, http.StatusOK, "")
+			if bytes.Contains(got.Body, []byte(`"resolved":true`)) || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Second)
 		}
+		var answer struct {
+			Pseudonym string  `json:"pseudonym"`
+			Username  *string `json:"username"`
+			Resolved  bool    `json:"resolved"`
+		}
+		if err := got.JSON(&answer); err != nil || !answer.Resolved || answer.Pseudonym != pseudonym ||
+			(answer.Username != nil && *answer.Username != "") {
+			t.Fatalf("lookup answer %s", got.Body)
+		}
+		expectStatus(t, call(t, admin.Portal, http.MethodGet, lookupPath+lookup.LookupID, nil), http.StatusNotFound, "not_found")
 	})
 
 	t.Run("another organization", func(t *testing.T) {

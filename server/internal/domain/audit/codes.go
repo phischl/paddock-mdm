@@ -244,6 +244,10 @@ const (
 	CodeAuditExportRequested  Code = "audit.export_requested"
 	CodeAuditExportCompleted  Code = "audit.export_completed"
 	CodeAuditExportDownloaded Code = "audit.export_downloaded"
+	// The notifier's deliveries (plan M9 decision 22).
+	CodeNotificationDelivered          Code = "notification.delivered"
+	CodeNotificationDestinationStalled Code = "notification.destination_stalled"
+	CodeNotificationDestinationResumed Code = "notification.destination_resumed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1487,6 +1491,27 @@ var registry = map[Code]Definition{
 		Description: "The audit writer finished building an evidence package (actor: system). verify_ok tells whether the chain of the range verified; a package with problems is still delivered so that the auditor sees them. failure carries the error and error_code export_failed; reason export_too_large marks a build whose events.jsonl or package exceeded PADDOCK_AUDIT_EXPORT_MAX_BYTES.",
 		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error", "reason"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeNotificationDelivered: {
+		Code: CodeNotificationDelivered, Emitted: true,
+		Description: "The notifier delivered a batch of audit events to a notification destination; forward_from and forward_to are the destination's contiguous forward sequence numbers of the batch, attempts counts the tries of this batch.",
+		Params:      []string{"destination", "destination_id", "kind", "forward_from", "forward_to", "count", "attempts", "resumed"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Only for event batches: heartbeats and test deliveries are not recorded as delivered. resumed is true for the delivery that ended a stall.",
+	},
+	CodeNotificationDestinationStalled: {
+		Code: CodeNotificationDestinationStalled, Emitted: true,
+		Description: "Deliveries to a notification destination have failed for longer than the stall threshold (PADDOCK_NOTIFY_STALL_AFTER); the notifier keeps retrying the pending batch with backoff and nothing is lost.",
+		Params:      []string{"destination", "destination_id", "since_s", "last_error", "forward_seq"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per stall. last_error is the error class only (dns, dial, tls, timeout, http_<status>, redirect, denied_address, or internal when the destination cannot be served at all, e.g. its URL does not decrypt), never the URL; forward_seq is the first forward sequence number not yet delivered.",
+	},
+	CodeNotificationDestinationResumed: {
+		Code: CodeNotificationDestinationResumed, Emitted: true,
+		Description: "A stalled notification destination accepted a delivery again; stalled_for_s is how long it was stalled.",
+		Params:      []string{"destination", "destination_id", "stalled_for_s", "forward_from", "forward_to"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per stall. forward_from and forward_to name the batch that arrived (absent when a heartbeat ended the stall).",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

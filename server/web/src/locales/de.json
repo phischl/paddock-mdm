@@ -554,7 +554,10 @@
       "destination_secret_rotated": "{actor} hat das Signaturgeheimnis des Benachrichtigungsziels {name} ersetzt",
       "test_requested": "{actor} hat eine Testbenachrichtigung an {name} angefordert",
       "test_sent": "Testbenachrichtigung an {name}, angefordert von {requested_by}",
-      "pseudonym_resolved": "{actor} hat das Pseudonym {pseudonym} aufgelöst"
+      "pseudonym_resolved": "{actor} hat das Pseudonym {pseudonym} aufgelöst",
+      "delivered": "{count} Ereignisse an {destination} zugestellt",
+      "destination_stalled": "Zustellungen an {destination} stocken ({last_error})",
+      "destination_resumed": "Zustellungen an {destination} laufen nach {stalled_for_s} s wieder"
     }
   },
   "organizations": {
