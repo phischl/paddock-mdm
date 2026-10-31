@@ -8,19 +8,6 @@ import (
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
-// currentRolloutSettings returns p's rollout settings as an update body (unchanged values).
-func currentRolloutSettings(t *testing.T, p *env.Portal) map[string]any {
-	t.Helper()
-	res := call(t, p, http.MethodGet, "/api/v1/settings/rollout", nil)
-	expectStatus(t, res, http.StatusOK, "")
-	var s map[string]any
-	if err := res.JSON(&s); err != nil {
-		t.Fatal(err)
-	}
-	delete(s, "updated_at")
-	return s
-}
-
 // rolloutSettingsCases are the A3 cases of PUT /api/v1/settings/rollout; success writes acme's current settings back.
 func rolloutSettingsCases() []auditCase {
 	const path, code = "/api/v1/settings/rollout", "settings.rollout_changed"
