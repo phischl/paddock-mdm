@@ -755,6 +755,11 @@ func TestReadAuditVulnerabilityDevicesViewed(t *testing.T) {
 	if n := len(w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed)); n != 4 {
 		t.Fatalf("%d events, want one per CVE, hour and actor", n)
 	}
+	for _, e := range w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed) {
+		if e.Params["cve"] == "CVE-2026-0002" && e.Params["device_count"] != float64(1) {
+			t.Fatalf("CVE-2026-0002 event %+v, want 1 device", e)
+		}
+	}
 	if n := len(w.events(t, other, audit.CodeVulnerabilityDevicesViewed)); n != 0 {
 		t.Fatalf("%d events in the other organization", n)
 	}

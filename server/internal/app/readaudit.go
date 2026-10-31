@@ -249,8 +249,9 @@ func (r *ReadAudit) VulnerabilityDevicesViewed(ctx context.Context, cve string, 
 }
 
 // claimReadWindow claims the window key of the context's principal; key is the device of an inventory view, the CVE
-// of a vulnerability view or the filter hash of an audit search. The actor is the principal: its account, or its API token when it authenticated
-// with one (plan M10 amendment A5), so a portal and an MCP session of the same account share their windows.
+// of a vulnerability view or the filter hash of an audit search. The actor is the principal: its account, or its API
+// token when it authenticated with one (plan M10 amendment A5), so a portal and an MCP session of the same account
+// share their windows.
 func claimReadWindow(ctx context.Context, q *pgstore.Queries, code audit.Code, key string, window time.Time) (bool, error) {
 	p, _ := principal.From(ctx)
 	actor := p.ID
