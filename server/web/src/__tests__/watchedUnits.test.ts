@@ -127,6 +127,16 @@ describe('WatchedUnits (plan M9 decision 38)', () => {
     expect(invalidAttr()).not.toBe('true')
   })
 
+  it('announces a saved list politely and an error assertively', async () => {
+    setWatchedUnits.mockResolvedValueOnce(stored)
+    const w = await mountPage()
+    await submit()
+    expect(w.get('[data-testid="watched-saved"]').attributes('role')).toBe('status')
+    setWatchedUnits.mockResolvedValueOnce('invalid_request')
+    await submit()
+    expect(w.get('[data-testid="watched-problem"]').attributes('role')).toBe('alert')
+  })
+
   it('marks the input invalid while a client-side error shows', async () => {
     await mountPage()
     await addUnit('foo.timer')

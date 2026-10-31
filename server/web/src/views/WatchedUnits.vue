@@ -113,6 +113,7 @@ onMounted(async () => {
       type="success"
       variant="tonal"
       class="conflict"
+      role="status"
       data-testid="watched-saved"
     >
       {{ t('watchedUnits.saved') }}
