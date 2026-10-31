@@ -145,6 +145,9 @@ const remove = vi.fn()
 const rotate = vi.fn()
 const test = vi.fn()
 const getOne = vi.fn()
+const requestPseudo = vi.fn()
+const lookup = vi.fn()
+let pseudonymizing: NotificationDestination[] = []
 let items: NotificationDestination[] = []
 let email = true
 vi.mock('../lib/notifications', async (importOriginal) => {
@@ -154,7 +157,9 @@ vi.mock('../lib/notifications', async (importOriginal) => {
   destinationLister: () => () => Promise.resolve({ items, page: 1, page_size: 25, total: items.length, total_capped: false, sort: 'name' }),
   loadEmailCapability: () => Promise.resolve(email),
   loadLatestSeq: () => Promise.resolve(100),
-  listPseudonymizing: () => Promise.resolve([]),
+  listPseudonymizing: () => Promise.resolve(pseudonymizing),
+  requestPseudonym: (...a: unknown[]) => requestPseudo(...a),
+  getPseudonymLookup: (...a: unknown[]) => lookup(...a),
   createDestination: (...a: unknown[]) => created(...a),
   updateDestination: (...a: unknown[]) => update(...a),
   deleteDestination: (...a: unknown[]) => remove(...a),
@@ -170,7 +175,8 @@ const assign = vi.fn()
 
 beforeEach(() => {
   sessionStorage.clear()
-  for (const f of [created, update, remove, rotate, test, getOne, assign]) f.mockReset()
+  for (const f of [created, update, remove, rotate, test, getOne, requestPseudo, lookup, assign]) f.mockReset()
+  pseudonymizing = []
   items = [destination()]
   email = true
   Object.defineProperty(window, 'location', {
@@ -356,5 +362,123 @@ describe('notification pages', () => {
     await flushPromises()
     expect(test).toHaveBeenCalledWith('organization', 'd1')
     expect(document.querySelector('[data-testid="notification-test-result"]')?.textContent).toContain('failed: http_5xx')
+  })
+
+  it('shows a specific message when a test is still pending', async () => {
+    test.mockResolvedValue({ code: 'invalid_state' })
+    getOne.mockResolvedValue(destination())
+    const w = await mountPage('org_admin')
+    await click('[aria-label="Send test to SIEM"]')
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(w.find('[data-testid="notification-page-problem"]').text()).toContain('earlier test of this destination is still waiting')
+  })
+})
+
+describe('pseudonym dialog', () => {
+  const pseudonym = 'u_0123456789abcdef01234567'
+
+  async function openDialog(): Promise<void> {
+    pseudonymizing = [destination({ pseudonymize_users: true })]
+    await mountPage('org_admin')
+    await click('[data-testid="resolve-pseudonym"]')
+  }
+
+  async function submitPseudonym(value: string): Promise<void> {
+    const el = document.querySelector('#notification-pseudonym') as HTMLInputElement
+    el.value = value
+    el.dispatchEvent(new Event('input'))
+    await flushPromises()
+    await click('[data-testid="pseudonym-submit"]')
+    await new Promise((r) => setTimeout(r, 30))
+    await flushPromises()
+  }
+
+  it('says there is nothing to resolve without a pseudonymizing destination', async () => {
+    await mountPage('org_admin')
+    await click('[data-testid="resolve-pseudonym"]')
+    expect(document.querySelector('[data-testid="pseudonym-none"]')).not.toBeNull()
+  })
+
+  it('refuses a malformed pseudonym without a request', async () => {
+    await openDialog()
+    await submitPseudonym('u_nothex')
+    expect(requestPseudo).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Enter u_ followed by 24 lowercase hexadecimal characters.')
+  })
+
+  it('shows the user name once the notifier resolved the lookup', async () => {
+    requestPseudo.mockResolvedValue('l1')
+    lookup.mockResolvedValueOnce({ resolved: false, username: '' }).mockResolvedValue({ resolved: true, username: 'bob' })
+    await openDialog()
+    await submitPseudonym(pseudonym)
+    expect(requestPseudo).toHaveBeenCalledWith('d1', pseudonym)
+    expect(document.querySelector('[data-testid="pseudonym-result"]')?.textContent).toContain('stands for bob')
+  })
+
+  it('shows that no user matches', async () => {
+    requestPseudo.mockResolvedValue('l1')
+    lookup.mockResolvedValue({ resolved: true, username: '' })
+    await openDialog()
+    await submitPseudonym(pseudonym)
+    expect(document.querySelector('[data-testid="pseudonym-result"]')?.textContent).toContain('No user matches')
+  })
+
+  it('names a pending lookup when the server answers invalid_state', async () => {
+    requestPseudo.mockResolvedValue({ code: 'invalid_state' })
+    await openDialog()
+    await submitPseudonym(pseudonym)
+    expect(document.body.textContent).toContain('Another pseudonym lookup of this organization is still pending')
+  })
+
+  it('starts the step-up without keeping anything secret and resumes it on return', async () => {
+    requestPseudo.mockResolvedValue({ code: 'step_up_required' })
+    await openDialog()
+    await submitPseudonym(pseudonym)
+    expect(assign).toHaveBeenCalledWith('/api/auth/stepup?return_to=%2Fsettings%2Fnotifications')
+    const stored = JSON.parse(sessionStorage.getItem('paddock.stepup') ?? '{}') as { action: string; target: string }
+    expect(stored).toMatchObject({ action: 'notification-resolve', target: 'organization' })
+    wrapper?.unmount()
+    wrapper = null
+    document.body.innerHTML = ''
+
+    requestPseudo.mockReset()
+    requestPseudo.mockResolvedValue('l1')
+    lookup.mockResolvedValue({ resolved: true, username: 'bob' })
+    pseudonymizing = [destination({ pseudonymize_users: true })]
+    await mountPage('org_admin')
+    await new Promise((r) => setTimeout(r, 30))
+    await flushPromises()
+    expect(requestPseudo).toHaveBeenCalledTimes(1)
+    expect(requestPseudo).toHaveBeenCalledWith('d1', pseudonym)
+    expect(document.querySelector('[data-testid="pseudonym-result"]')?.textContent).toContain('stands for bob')
+    expect(sessionStorage.getItem('paddock.stepup')).toBeNull()
+  })
+
+  it('does not fire a stored lookup when the dialog is opened later', async () => {
+    requestPseudo.mockResolvedValue('l1')
+    sessionStorage.setItem('paddock.stepup', JSON.stringify({
+      action: 'notification-resolve', target: 'organization', at: Date.now(), payload: { id: 'd1', pseudonym },
+    }))
+    pseudonymizing = [destination({ pseudonymize_users: true })]
+    lookup.mockResolvedValue({ resolved: true, username: 'bob' })
+    await mountPage('org_admin')
+    await new Promise((r) => setTimeout(r, 30))
+    await flushPromises()
+    expect(requestPseudo).toHaveBeenCalledTimes(1)
+    expect(sessionStorage.getItem('paddock.stepup')).toBeNull()
+  })
+
+  it('reports a refused step-up in the dialog', async () => {
+    sessionStorage.setItem('paddock.stepup', JSON.stringify({
+      action: 'notification-resolve', target: 'organization', at: Date.now(), payload: { id: 'd1', pseudonym },
+    }))
+    Object.defineProperty(window, 'location', {
+      value: { ...window.location, assign, href: 'https://admin.test/settings/notifications?stepup=failed', search: '?stepup=failed' }, writable: true,
+    })
+    pseudonymizing = [destination({ pseudonymize_users: true })]
+    await mountPage('org_admin')
+    expect(requestPseudo).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('identity confirmation failed')
   })
 })

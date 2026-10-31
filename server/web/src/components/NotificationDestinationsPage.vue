@@ -14,11 +14,11 @@ import { usePending } from '../composables/usePending'
 import type { ListColumn } from '../lib/listQuery'
 import {
   backlogOf, createDestination, deleteDestination, destinationLister, getDestination, isProblem, lagParts,
-  loadEmailCapability, loadLatestSeq, notificationFilters, pollUntil, requestTest, rotateSecret, stateStatus,
+  loadEmailCapability, loadLatestSeq, notificationFilters, pollUntil, pseudonymStepUpAction, requestTest, rotateSecret, stateStatus,
   updateDestination, type NotificationDestination, type NotificationInput, type NotificationProblem, type NotificationScope,
 } from '../lib/notifications'
 import { useProblemText } from '../lib/problems'
-import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
+import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam, type Resumed } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 
 /**
@@ -61,6 +61,7 @@ const secret = ref<{ name: string; value: string } | null>(null)
 const copied = ref(false)
 const cursorAsk = ref<{ destination: NotificationDestination; input: NotificationInput; backlog: number | null } | null>(null)
 const pseudonymOpen = ref(false)
+const pseudonymResumed = ref<Resumed<{ id: string; pseudonym: string }> | null>(null)
 const testing = ref<{ name: string; phase: 'waiting' | 'ok' | 'error' | 'timeout'; error: string } | null>(null)
 let cancelled = false
 
@@ -77,6 +78,15 @@ const columns = computed<ListColumn[]>(() => [
 
 onMounted(async () => {
   emailAvailable.value = await loadEmailCapability()
+  if (props.scope === 'organization') {
+    const lookup = resumeStepUp<{ id: string; pseudonym: string }>(pseudonymStepUpAction, props.scope)
+    if (lookup) {
+      await router.replace(withoutStepUpParam())
+      pseudonymResumed.value = lookup
+      pseudonymOpen.value = true
+      return
+    }
+  }
   const resumed = resumeStepUp<Operation>(stepUpAction, props.scope)
   if (!resumed) return
   await router.replace(withoutStepUpParam())
@@ -153,6 +163,7 @@ async function execute(operation: Operation, stepUp: boolean): Promise<void> {
     return
   }
   if (operation.op === 'create' || operation.op === 'update') formProblem.value = answer
+  else if (operation.op === 'test' && answer.code === 'invalid_state') pageProblem.value = 'notification_test_pending'
   else pageProblem.value = answer.code
 }
 
@@ -280,6 +291,7 @@ function openPseudonym(event?: Event): void {
 
 function closePseudonym(): void {
   pseudonymOpen.value = false
+  pseudonymResumed.value = null
   focusReturn.restore()
 }
 
@@ -554,6 +566,7 @@ const dialogTitle = computed(() => (dialog.value?.editing ? t('notifications.edi
     />
     <NotificationPseudonymDialog
       v-if="pseudonymOpen"
+      :resumed="pseudonymResumed"
       @close="closePseudonym"
     />
   </section>

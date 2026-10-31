@@ -3,24 +3,23 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePending } from '../composables/usePending'
 import {
-  getPseudonymLookup, isProblem, listPseudonymizing, pollUntil, pseudonymPattern, requestPseudonym,
+  getPseudonymLookup, isProblem, listPseudonymizing, pollUntil, pseudonymPattern, pseudonymStepUpAction, requestPseudonym,
   type NotificationDestination,
 } from '../lib/notifications'
 import { useProblemText } from '../lib/problems'
-import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
-import { useRouter } from 'vue-router'
+import { startStepUp, stepUpRequired, type Resumed } from '../lib/stepUp'
 
 /**
  * Resolves a pseudonym of the organization's notifications to a user name (plan M9 decision 36): the notifier answers
- * in its next round, so the result is polled. Needs a step-up, which sends the browser away and back.
+ * in its next round, so the result is polled. Needs a step-up, which sends the browser away and back; the page takes
+ * the pending action on return (the dialog is not mounted yet) and hands it over as resumed.
  */
+const props = defineProps<{ resumed?: Resumed<{ id: string; pseudonym: string }> | null }>()
 const emit = defineEmits<{ close: [] }>()
 
-const stepUpAction = 'notification-resolve'
 const { t } = useI18n()
 const { pending, run } = usePending()
 const problemText = useProblemText()
-const router = useRouter()
 
 const destinations = ref<NotificationDestination[]>([])
 const destinationId = ref('')
@@ -37,9 +36,8 @@ const invalid = computed(() => touched.value && !pseudonymPattern.test(pseudonym
 onMounted(async () => {
   destinations.value = await listPseudonymizing()
   destinationId.value = destinations.value[0]?.id ?? ''
-  const resumed = resumeStepUp<{ id: string; pseudonym: string }>(stepUpAction, stepUpAction)
+  const resumed = props.resumed
   if (!resumed) return
-  await router.replace(withoutStepUpParam())
   if (resumed.failed) {
     problem.value = 'step_up_failed'
     return
@@ -58,10 +56,10 @@ async function resolve(stepUp: boolean): Promise<void> {
   const lookup = await requestPseudonym(destinationId.value, value)
   if (isProblem(lookup)) {
     if (lookup.code === stepUpRequired && stepUp) {
-      startStepUp(stepUpAction, stepUpAction, { id: destinationId.value, pseudonym: value })
+      startStepUp(pseudonymStepUpAction, 'organization', { id: destinationId.value, pseudonym: value })
       return
     }
-    problem.value = lookup.code
+    problem.value = lookup.code === 'invalid_state' ? 'notification_lookup_pending' : lookup.code
     return
   }
   waiting.value = true

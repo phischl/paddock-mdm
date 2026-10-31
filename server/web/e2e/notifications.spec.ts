@@ -29,7 +29,17 @@ test('organization admin manages a webhook destination', async ({ page }) => {
   await dialog.getByLabel('Name').fill(name)
   await dialog.getByLabel('Webhook URL').fill('https://example.com/paddock-e2e')
   await expectAccessible(page)
-  await withStepUp(page, () => dialog.getByTestId('notification-submit').click())
+  const submit = () => dialog.getByTestId('notification-submit').click()
+  // A fresh login holds no step-up: the portal steps up, never keeps the URL meanwhile and asks for it again.
+  const me = await (await page.request.get('/api/v1/me')).json() as { step_up_valid_until: string | null }
+  const valid = me.step_up_valid_until !== null && Date.parse(me.step_up_valid_until) - Date.now() > 10_000
+  await withStepUp(page, submit)
+  if (!valid) {
+    await expect(page.getByTestId('notification-reenter-url')).toBeVisible()
+    await expect(page.getByRole('dialog', { name: 'New notification destination' }).getByLabel('Name')).toHaveValue(name)
+    await page.getByRole('dialog', { name: 'New notification destination' }).getByLabel('Webhook URL').fill('https://example.com/paddock-e2e')
+    await submit()
+  }
 
   const secret = page.getByTestId('notification-secret').locator('input')
   await expect(secret).not.toHaveValue('')

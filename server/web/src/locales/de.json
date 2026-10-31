@@ -260,7 +260,9 @@
     "mcp_login_required": "Melde dich erneut mit paddockctl mcp login an.",
     "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal.",
     "email_not_configured": "Diese Installation hat kein E-Mail-Relay, daher können E-Mail-Ziele nicht aktiviert werden.",
-    "unknown_code": "Einer der Audit-Codes ist nicht registriert."
+    "unknown_code": "Einer der Audit-Codes ist nicht registriert.",
+    "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
+    "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal."
   },
   "audit": {
     "vulnerability": {

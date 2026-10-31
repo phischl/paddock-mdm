@@ -41,6 +41,9 @@ export const maxRecipients = 20
 export const pollIntervalMs = 2000
 export const pollTimeoutMs = 30_000
 
+/** The step-up action of a pseudonym lookup; the page resumes it, the dialog repeats the request. */
+export const pseudonymStepUpAction = 'notification-resolve'
+
 export const pseudonymPattern = /^u_[0-9a-f]{24}$/
 
 const csrf = { 'X-Paddock-CSRF': '1' } as const

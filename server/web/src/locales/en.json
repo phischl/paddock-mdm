@@ -260,7 +260,9 @@
     "mcp_login_required": "Sign in again with paddockctl mcp login.",
     "rate_limited": "Too many requests. Try again shortly.",
     "email_not_configured": "This installation has no e-mail relay, so e-mail destinations cannot be enabled.",
-    "unknown_code": "One of the audit codes is not registered."
+    "unknown_code": "One of the audit codes is not registered.",
+    "notification_test_pending": "An earlier test of this destination is still waiting for its result. Try again in a moment.",
+    "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment."
   },
   "audit": {
     "vulnerability": {
