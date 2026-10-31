@@ -153,8 +153,8 @@ reinstalled with the autoinstall: `docs/operations/autoinstall.md`, "Encrypting 
 Create a first managed file under *Managed files* (for example `/etc/motd` for every device, or for one device group).
 Alternatively export the organization with `paddockctl get config > paddock.yml`, edit the file and apply it with
 `paddockctl apply -f paddock.yml` (`--dry-run` shows the plan first; `docs/operations/paddockctl.md`,
-`docs/operations/api-tokens.md` for the token). The device receives the signed bundle at its next check-in and applies it; the
-device page shows the result.
+`docs/operations/api-tokens.md` for the token). The device receives the signed bundle at its next check-in and applies it;
+the device page shows the result.
 
 ## 10. First user login on the device
 
