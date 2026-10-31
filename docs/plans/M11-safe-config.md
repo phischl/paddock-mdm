@@ -1004,3 +1004,195 @@ organization and round when > 0, `paddock_retention_stores` + 1) and keeps the `
 before_purged_at)` of decision 17 in its own migration. The non-goal "no retention or purge of `change_set.before`"
 in §4 is narrowed accordingly; the matrix row stays with ADR 0032. The migration number `00046` of decision 17 is
 historical: PDK-154 takes the number main's registry assigns at ticket start.
+
+## Amendment 2026-10-31 (refresh)
+
+Architect refresh against `origin/main` at `986df91f` (branch `cluster/config-software`; cluster H of the alpha.7
+plan) and against plan M9 (branch `cluster/getting-started-notifications`, migrations `00085`–`00088`, audit `00010`),
+which lands on `main` before cluster H and is treated as present. Decided text above is not rewritten; **where this
+amendment and §2–§12 differ, this amendment wins.** Numbers in bold refer to the decisions of §3.
+
+### R1. Migration numbers (binding)
+
+`main` has paddock migrations up to `00084` and audit migrations up to `00009`. M9 reserves paddock `00085`–`00088`
+and audit `00010`. Paddock `00089` and audit `00011` stay free as a buffer for hotfixes on `main`. Cluster H starts at
+paddock **`00090`** and audit **`00012`**. Neither M11 nor M13a needs an audit migration; audit `00012` stays
+reserved for cluster H and is otherwise free.
+
+| Ticket | Migration | Replaces |
+| --- | --- | --- |
+| PDK-151 | `server/migrations/paddock/00090_config_status.sql` | `00045` of **12** |
+| PDK-154 | `server/migrations/paddock/00091_change_set_before.sql` | `00046` of **17** |
+| PDK-156 | `server/migrations/paddock/00092_rollout_settings.sql` | `00047` of **23** |
+| PDK-157 | `server/migrations/paddock/00093_config_rollout.sql` | `00048` of **27** |
+| PDK-160 | `server/migrations/paddock/00094_adoption.sql` | `00049` of **39** |
+| M13a (PDK-408, 409, 411) | `00095`–`00097` (plan M13a, amendment 2026-10-31) | `00068`–`00070` |
+
+goose runs without `AllowMissing`: a migration whose number is lower than one already applied is never applied. The
+numbers therefore **are** the merge order into `cluster/config-software`: PDK-151 → 154 → 156 → 157 → 160 → 408 → 409
+→ 411. A ticket that is ready to merge out of this order takes the lowest free number greater than every migration
+on the cluster branch at that moment, renames its file before merging, records the number in its result document and
+in this table (a dated line below this paragraph); the displaced tickets shift. Every `00045`–`00049` in §3, §5, §7,
+§8 and §10 is historical. A development database that applied `00090`+ before M9's `00085`–`00088` were merged is
+reset with `make down V=1` and `make up` (alpha: no upgrade path).
+
+### R2. Interfaces and files that changed since 2026-10-15 (binding corrections)
+
+1. **Privileged route table.** It is `var privileged` in `server/internal/transport/http/admin/server.go`, not
+   `handlers.go` (§2, §5, PDK-155/156/157/158/160 references). `spec_test.go` checks two things: every
+   `x-paddock-audit` is registered and in the table, and `x-paddock-step-up: true` is present **iff** the spec has
+   `RequiresStepUp: true` (`checkStepUpAnnotations`). No M11 spec has `RequiresStepUp: true` — the urgent opt-out
+   (**26**) and the revert (**21**) use the conditional `rec.RequireStepUp()` / `configExec.requireStepUp` — so no M11
+   operation carries `x-paddock-step-up`, and nothing is added to the table under `## What the assistant cannot do`
+   in `skills/operate-paddock/SKILL.md` (`test/skill_test.sh` keeps that table equal to the catalog's step-up
+   operations). Every state-changing operation of §6.1 MUST have a `privileged` entry (spec_test: every exposed MCP
+   write tool is in the table). `make gen` regenerates the MCP catalog (`pkg/mcpcatalog/catalog.gen.go`,
+   `skills/operate-paddock/references/tools.md`); "`make gen` no diff" covers it.
+2. **MCP exposure (ADR 0044).** New operations are MCP tools by default. `POST /api/v1/devices/{id}/enforce` MUST
+   carry `x-paddock-mcp: { expose: false }`: it is confirmed with a typed hostname in the portal (ADR 0018 high-risk
+   class) and an assistant cannot give that confirmation; it stays a portal and API action. Every other M11 operation
+   is exposed (reads as `read` tools; revert, halt, resume, advance, complete, settings as `write` tools that the MCP
+   write policy governs). The implementer checks in `pkg/mcpcatalog/catalog.gen.go` that `revertChangeSet`,
+   `haltConfigRollout`, `completeConfigRollout` are generated with `Destructive: true`; if the generator's rule does
+   not mark them, stop and report (§11).
+3. **Worker rounds** are started in `server/cmd/paddock-server/worker.go` (the `jobs` list; the agent-rollout round
+   `worker.NewRollouts(...)` is the pattern), not in `worker/worker.go` (**33**, §5, PDK-158). The leader lock is the
+   `LeaderLocker` interface (`WithLeaderLock(ctx, key, fn)`) the other rounds use.
+4. **Retention pass of PDK-154** (amendment 2026-10-29 made concrete): `worker.NewRetention` has eight passes today
+   (`device_login_event`, `device_user_seen`, `retired_inventory`, `read_audit_window`, `device_command`,
+   `device_alert`, `device_event_gap`, `action`). PDK-154 appends the ninth and last pass `{store:
+   app.StoreChangeSetBefore, purge: a.PurgeChangeSetBefore}` with `const StoreChangeSetBefore = "change_set_before"`
+   in `server/internal/app/retention.go` and `func (a *Retention) PurgeChangeSetBefore(ctx context.Context, now
+   time.Time) (int64, error)` shaped like `PurgeUserSeen` (batches of 1 000 in one `RunTx` per organization, cutoff
+   `applied_at < now - 90 × a.unit`, sets `before = NULL, before_purged_at = now()` where `before IS NOT NULL`, one
+   `retention.purged` with param `store` per organization and round when > 0). `paddock_retention_stores` is
+   `len(r.passes)` and needs no change. `docs/compliance/retention.md` already carries the row and the clause
+   "`change_set_before` only once M11 (PDK-154) adds …" (line 71): PDK-154 removes that clause. The comment header of
+   `00090_config_status.sql` (**12**) cites "ADR 0032 §1, row `device_bundle_report`/`device_resource_status`:
+   current state only, overwritten by the device's next report; rows of a retired device stay with the device
+   record" instead of "owned by M10".
+5. **Declarative sections.** `declarative.Sections()` has ten sections on `main` (`device_groups`,
+   `permission_profiles`, `managed_files`, `managed_units`, `package_holds`, `profile_assignments`,
+   `settings.updates`, `settings.login`, `settings.managed_files`, `settings.privacy`) and eleven after M9
+   (`settings.watched_units`, `declarative.SectionSettingsWatched`). "The eight sections" in **19** and PDK-154 reads
+   "every section of `declarative.Sections()`". The per-resource use cases that MUST record a change set therefore
+   also include `ManagedConfig.SetOperatorRoots` (`app/managedfilesettings.go`, section `settings.managed_files`),
+   `Privacy.Update` (`app/privacy.go`, `settings.privacy`) and M9's `WatchedUnits.Set` (`app/watchedunits.go`,
+   `settings.watched_units`). The before item of a settings section is the settings object as `GET /api/v1/config`
+   exports it. The revert (**21**) runs through `configExec`, so each section's own refusal rules apply unchanged
+   (`requireAdminStepUp` for `settings.managed_files` and `settings.watched_units`, `requireStepUp` for a
+   root-equivalent profile). The rollout-able sections of **1** are unchanged (none of the three is rollout-able).
+6. **Bundle sections and the applier.** M9 adds the section `watch` (`bundle.TypeWatch`, `WatchSpec`,
+   `WatchResource`; `apply.Applier.WithWatch`, appended after the inventory resource in `sorted`; `apply.order` is
+   unchanged). **7**: `Resources` lists the inventory and the watch resource like every other. **9**: the report-only
+   apply MUST NOT call `Apply` of the inventory or watch reconciler either; their `Plan` is side-effect free (the
+   implementer proves it with `fakesys`, stop condition §11 otherwise). `agent.go` writes `Layout.LastCheckin()` at
+   line 515 and builds the check-in at `checkinRequest` (line 465); informational.
+7. **Ingest (`devicereports.go`).** After M9, `app.OnceEntry` has a third field `After` and `eventEntry` returns
+   `After: tamperFindingAfter(...)`; PDK-151 rebases on M9 before touching `eventEntry`. The allow lists
+   `eventParams` (`devicereports.go`) and `audit.deviceEventParams` (`codes.go`) already contain `mode`: **13**'s
+   "the audit params of `device.bundle_applied` gain `mode`" needs no list change, only the registry Description/Note
+   of `device.bundle_applied`. `resources` is never added to either list.
+8. **Attention view and findings.** The latest definition of `attention_condition` is `00069_event_gaps.sql`; M9 does
+   not replace the view but grants `SELECT ON attention_condition TO paddock_worker` (`00086_findings.sql`) and its
+   findings round turns every attention condition into a finding (`finding.KindAttention`, key `attention:<id>`).
+   `00094_adoption.sql` (**39**) MUST `CREATE OR REPLACE VIEW attention_condition` from the `00069` definition plus
+   the `report_only` branch (same columns in the same order; grants survive). A report-only device therefore also gets
+   an attention finding — intended: it is a device waiting for a decision. The kind list lives in
+   `api/openapi/admin.yaml` (schema `AttentionKind`) and in the view; there is no kinds list in
+   `server/internal/app/attention.go` (PDK-160 reference corrected). The portal has two maps with one key per kind
+   in `en.json`/`de.json` (the kind label and the action label next to `agent_rollback_pending`); both gain
+   `report_only`.
+9. **Compiler.** `compileTarget` (`compiler.go:154`) has `id, state, seq, suspended, v2, agent, forced, request,
+   name`; `ListCompileTargets` (`queries/bundle.sql:11`) selects from `device d LEFT JOIN device_status s`. PDK-160
+   adds `d.config_mode` → `compileTarget.reportOnly bool`; M13a (PDK-410) later adds `d.os_release` and `s.arch` to
+   the same query. M9 adds `compiler/watch.go` (watch section render) — `render` has one more section call to keep.
+10. **Overlay and M13a holds (**30**).** `rolloutOverlay.apply(defs, updates)` keeps `*orgUpdates` as its second
+    input and output. M13a's `UpdatesSection(settings, holds, softwareHolds, groups)` receives the **overlaid**
+    settings and holds and the un-overlaid software holds (software is not rollout-able before M13c); PDK-410
+    implements that order in `render`, PDK-157 leaves `orgUpdates` as the overlay's input type.
+11. **Problem codes.** Existing and used: `invalid_request`, `not_found`, `invalid_state`, `plan_changed`,
+    `step_up_required`, `already_exists`, `in_use`. New as planned: `rollout_conflict`, `rollout_running`. Request
+    bodies above `maxBodyBytes` (256 KiB, `limitBody` in `server.go`) are refused `400 invalid_request`; there is no
+    413 code.
+12. **Portal files.** The tab list is `components/DeviceTabs.vue` with `lib/deviceDetailPage.ts`; `views/DeviceDetail.vue`
+    hosts it. M9 edits `views/Overview.vue`, `views/DeviceOverview.vue`, `lib/navigation.ts` and `router.ts`
+    (findings, watched services); PDK-152/156/159/160/164 rebase on M9. `components/KpiStrip.vue`, `DangerZone.vue`,
+    `StatusChip.vue`, `ChangeSetPlan.vue`, `ConfirmDialog.vue` exist as referenced; `UrgentOptOut.vue` does not yet.
+13. **Audit registry and routes after M9.** M9 adds about 200 lines to `codes.go`, 117 to `server.go` and 86 to
+    `handlers.go` (notifications, findings, feed). Every M11 ticket touching these files rebases on M9; conflicts are
+    additive. `config_rollout.halted` is a preset event of M9's notification rules (plan M9 §6.9): the code name is
+    frozen.
+14. **CHANGELOG.** `CHANGELOG.md [Unreleased]` is no longer edited (PDK-518): every ticket with an operator-visible
+    change adds `changelog.d/<ticket-id>.<section>.md` (`added`, `changed`, …; `make changelog-check` is part of
+    `make lint`). **45**'s "`CHANGELOG.md [Unreleased]`" and PDK-163's consolidated block become one fragment per
+    ticket; PDK-163 adds `changelog.d/PDK-163.added.md` for the two guides and the `bundle.applied` change goes into
+    `changelog.d/PDK-150.changed.md`.
+15. **Metric name.** The gauge of **33** is `paddock_config_rollouts{status}`; the `paddock_config_rollouts_total` of
+    §10 is a typo. No agent-rollout gauge exists to mirror.
+16. **Acceptance shards.** New acceptance tests SHOULD add a measured line to `test/acceptance/shard-weights.txt`
+    (default weight 60 s otherwise).
+17. **Preflight port (**11**).** `reconcile.System` provides `ReadFile`, `ReadDir`, `PackageInstalled`,
+    `PackageVersion`, `Timedatectl`, `Getent`, `SudoVersion`, `EvalSymlinks`; `reconcile.SudoFlavor(ctx, sys)` and
+    `luks.TPM2Present(root string) bool` exist as referenced.
+
+### R3. Cross-cutting rules now in force (no plan change, stated for the implementer)
+
+- **ADR 0045 (role switch):** decision 4 — one role per request, authorisation unchanged. Acceptance `login(t, user)`
+  lands in the organization role. `actorName(ctx)` / `started_by` show the principal's display name. Nothing to do.
+- **PostgreSQL 18 (PDK-343):** every statement of §3 is valid on PG 18 (plpgsql functions, partial unique indexes,
+  `CREATE OR REPLACE VIEW` with appended rows); integration tests run on the compose image. Nothing to do.
+- **M10 (ADR 0032, retention and evidence):** `action` rows are immutable once finished (`00082`–`00084`); the
+  `ActionRunner` handles it. The new tables of **12**, **23**, **27** and the columns of **17**, **39** are covered by
+  ADR 0032 §1 (rows `change_set`, `change_set.before`, `device_bundle_report`/`device_resource_status`);
+  `organization_rollout_settings` and `config_rollout` are configuration and operational history like `change_set`
+  (no purge). `docs/compliance/privacy.md` row of **45** stays with PDK-163. No erase path exists for organization
+  data; nothing to add.
+- **ADR 0044 (MCP):** see R2.1–R2.2. Read-access recording (`readaudit`) is per route class and needs no change for
+  new `GET`s.
+
+### R4. Ticket order, dependencies, lanes, risk
+
+Risk per ticket as stated in the tickets: low — 152, 153, 156, 163, 164; medium — 150, 151, 154, 159, 162;
+high — 155, 157, 158, 160, 161.
+
+| Step | Ticket | Lane | Depends on | Migration |
+| --- | --- | --- | --- | --- |
+| 1 | PDK-150 | agent/pkg | — | — |
+| 2 | PDK-151 | server | 150 (protocol types) | 00090 |
+| 2′ | PDK-153 | agent + docs | — (parallel to 1–4) | — |
+| 3 | PDK-154 | server | 151 merged (migration order); M9 on the branch | 00091 |
+| 3′ | PDK-152 | portal | 151 | — |
+| 4 | PDK-155 | server + portal | 154 | — |
+| 4′ | PDK-156 | server + portal | — (parallel to 154/155; merges after 154) | 00092 |
+| 5 | PDK-157 | server/compiler | 154, 155, 156 | 00093 |
+| 6 | PDK-158 | server/worker | 157 | — |
+| 6′ | PDK-161 | agent | 150 (parallel to 157/158) | — |
+| 7 | PDK-159 | portal + CLI | 158 | — |
+| 8 | PDK-160 | server + portal + CLI | 151, 157 | 00094 |
+| 9 | PDK-164 | server + portal | 158, 160 | — |
+| 10 | PDK-162 | system gates | 158, 160, 161 | — |
+| 11 | PDK-163 | docs | 162 (parallel to 164) | — |
+
+Three lanes run in parallel: agent (150 → 161; 153), server (151 → 154 → 155 → 157 → 158 → 160, with 156 beside
+154/155), portal (152 after 151; 159 after 158; 164 after 160). Merge order of the migration tickets is R1; tickets
+without a migration merge as soon as their dependencies are on the branch. The VM gate (PDK-162) runs once per cluster
+(alpha.7 plan, cluster H row), together with M13a's `TestSoftwareGates` at the end of the cluster.
+
+### R5. Open questions for the maintainer (default chosen; blocks only what is named)
+
+1. **`paddockctl apply --urgent` can never succeed** (**26** + **38**): an API token never satisfies a step-up (ADR
+   0034 decision 3, ADR 0044), so `--urgent` always answers 403 `step_up_required`. Options: (a) keep the flags as
+   documented refusal; (b) drop `--urgent`/`--reason` from `paddockctl apply` and `docs/operations/paddockctl.md`,
+   keep the `Rollout:` output line, state in `configuration-rollouts.md` that the urgent opt-out is portal-only;
+   (c) let API tokens opt out (contradicts ADR 0034). **Recommendation: (b).** Blocks the CLI part of PDK-159 only;
+   default (b) applies unless overruled before PDK-159 starts.
+2. **MCP exposure of `enforceDevice`** (R2.2): (a) hide (typed-name class); (b) expose like every write tool.
+   **Recommendation: (a)**, default chosen; PDK-160 proceeds.
+3. **Change sets for the three settings sections** (R2.5: `settings.managed_files`, `settings.privacy`,
+   `settings.watched_units`): (a) include — ADR 0011 "every configuration change is a change set"; (b) exclude and
+   keep them audit-only. **Recommendation: (a)**, default chosen; PDK-154 proceeds.
+4. **Report-only devices as findings** (R2.8): (a) keep — every attention condition is a finding; (b) exclude the
+   kind in M9's findings round. **Recommendation: (a)**, default chosen; nothing blocked.
+5. Unchanged from §12 with their defaults: `settings.rollout` not in the declarative document; minimum wave duration
+   15 minutes in production; profiles not staged.

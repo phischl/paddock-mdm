@@ -1035,3 +1035,147 @@ Open questions (default chosen; the maintainer may overrule):
   per device group, exportable), a platform-wide shared catalog (low priority, maintainer decision 7), the
   declarative sections `software_sources` (without step-up it is refused — the GitOps two-step of ADR 0034),
   `software_catalog` and `software_assignments` in `PUT /api/v1/config` and `paddockctl`.
+
+## Amendment 2026-10-31 (refresh)
+
+Architect refresh against `origin/main` at `986df91f` (branch `cluster/config-software`; cluster H of the alpha.7
+plan: M11 first, then M13a) and against plan M9 (branch `cluster/getting-started-notifications`, migrations
+`00085`–`00088`, audit `00010`), which lands on `main` before cluster H and is treated as present. Decided text above
+is not rewritten; **where this amendment and §2–§13 differ, this amendment wins.** Bold numbers refer to §3.
+
+### R1. Migration numbers (binding)
+
+`main` has paddock migrations up to `00084`, audit up to `00009`; M9 reserves paddock `00085`–`00088` and audit
+`00010`; `00089` and audit `00011` stay free as a hotfix buffer. Cluster H uses paddock from `00090` (M11:
+`00090`–`00094`, plan M11 amendment 2026-10-31) and audit from `00012`. M13a needs no audit migration.
+
+| Ticket | Migration | Replaces |
+| --- | --- | --- |
+| PDK-408 | `server/migrations/paddock/00095_software_sources.sql` | `00068` (**1**, §6.5) |
+| PDK-409 | `server/migrations/paddock/00096_software_catalog.sql` | `00069` (**7**, **9**, §6.5) |
+| PDK-411 | `server/migrations/paddock/00097_device_software_status.sql` | `00070` (**17**, §6.5) |
+
+goose runs without `AllowMissing`: a migration with a number lower than one already applied is never applied, so the
+numbers are the merge order into `cluster/config-software` (after M11's PDK-160 = `00094`): PDK-408 → 409 → 411. A
+ticket that merges out of order takes the lowest free number greater than every migration on the branch at that
+moment, renames the file before merging and records it in its result document and in a dated line under this table;
+the displaced tickets shift. The stop condition "main already has `00068`, `00069` or `00070`" in §11 is replaced by
+this rule. §5 "MUST NOT be touched: `00001`–`00067`" reads "`00001`–`00094` and M9's `00085`–`00088`".
+
+### R2. Interfaces and files that changed since 2026-10-24 (binding corrections)
+
+1. **Step-up markers and the skill table.** The three source specs have `RequiresStepUp: true` (**4**). Therefore
+   `createSoftwareSource`, `updateSoftwareSource` and `deleteSoftwareSource` MUST carry `x-paddock-step-up: true` in
+   `api/openapi/admin.yaml` (`spec_test.go::checkStepUpAnnotations` keeps the flag equal to the route table in both
+   directions) and MUST be added as one row to the table under `## What the assistant cannot do` in
+   `skills/operate-paddock/SKILL.md`: `| Add, change or remove an APT package source | \`createSoftwareSource\`,
+   \`updateSoftwareSource\`, \`deleteSoftwareSource\` | *Package sources* |` (`test/skill_test.sh` fails when a
+   catalog step-up operation is missing there or a listed one is not a step-up operation). Both belong to PDK-408.
+   `make gen` regenerates `pkg/mcpcatalog/catalog.gen.go` and `skills/operate-paddock/references/tools.md`; "`make
+   gen` no diff" covers them.
+2. **MCP exposure (ADR 0044).** Catalog and assignment operations are exposed MCP tools by default (reads as `read`,
+   writes as `write`, governed by the MCP write policy); every write operation MUST have an entry in `var
+   privileged` of `server/internal/transport/http/admin/server.go` (spec_test: every exposed write tool is in the
+   table). `PUT /api/v1/software-catalog/{id}/icon` has a non-JSON body and is never exposed, but is privileged and
+   audited like every write. The implementer checks that `deleteSoftwareCatalogEntry` and
+   `deleteSoftwareAssignment` are generated with `Destructive: true`; if the generator's rule does not mark them,
+   stop and report (§11).
+3. **No 413.** `problem.PayloadTooLarge` does not exist. Request bodies above `maxBodyBytes` (256 KiB, `limitBody`
+   in `server.go`) are refused `400 invalid_request` before the handler. The icon rule of **11** becomes: the handler
+   reads the body through `http.MaxBytesReader(w, r.Body, 65536+1)` and answers `400 invalid_request` with detail
+   `icon exceeds 65536 bytes` for a larger body; §6.1 "413 payload_too_large", §9 "70 KiB PNG → 413" and PDK-409's
+   criterion read `400 invalid_request`. No new problem code for it.
+4. **Bundle and applier after M9.** M9 adds the section `watch` (`bundle.TypeWatch`, `WatchSpec`, `WatchResource`;
+   `apply.Applier.WithWatch`; the watch resource is appended after the inventory resource in `sorted`, outside
+   `apply.order`). **26** stands: `order = [hostname, time, file, systemd_unit, updates, software, login, sudo]`,
+   inventory and watch follow as today. The architecture sentence of §7 (§11.3) is unchanged.
+5. **Report-only devices (plan M11, PDK-161).** On a device in `report_only` mode the applier runs `Plan` only and
+   reports the software resource as `pending` with the plan lines of **22**. `Software.Plan` MUST NOT call `AptGet`,
+   `AptMark`, `Dpkg`, `WriteFileAtomic` or `Remove` (already **22**; PDK-412 proves it with a `fakesys` test that
+   records no such call during `Plan`). Per-resource outcomes (plan M11 **7**) list the resource with ID and type
+   `software`; the server derives the type `software` from the whole ID (plan M11 **14**); nothing to add.
+6. **Compiler with the rollout overlay (plan M11 **30**).** `compiler.render` applies `rolloutOverlay.apply(defs,
+   updates)` first and then calls `UpdatesSection(overlaidSettings, overlaidHolds, softwareHolds, groups)` with the
+   un-overlaid software holds: software is not rollout-able before M13c. `compileTarget` (`compiler.go:154`: `id,
+   state, seq, suspended, v2, agent, forced, request, name`, plus M11's `reportOnly`) gains `osID, versionID, arch
+   string` from `ListCompileTargets` (`queries/bundle.sql:11`, `device d LEFT JOIN device_status s`: add
+   `d.os_release`, `coalesce(s.arch, '')`). `paddock_compiler` already reads `device_status` (policy
+   `tenant_compiler`, `00007`). M9 adds `compiler/watch.go`; `render` keeps its call.
+7. **Context corrections (§2).** `agent.go` writes `LastCheckin()` at line 515 (not 505). `reconcile.System`
+   (`agent/internal/reconcile/reconcile.go`) has `ReadFile`, `WriteFileAtomic`, `Remove`, `Rename`, `ReadDir`,
+   `AptGet`, `AptMark`, `Dpkg`, `PackageInstalled`, `PackageVersion`, `Systemctl`, `Getent` as referenced; `fakesys`
+   is `agent/internal/reconcile/fakesys/fakesys.go` (M9 touched it; rebase). `uninstall/steps.go` has
+   `updateConfiguration`, `updateFiles`, `himmelblauPaths`, `packages` as referenced; M9 touched
+   `agent/internal/uninstall/uninstall.go` (rebase for **29**). `himmelblauKey` is at `login.go:39`, `managedHeader`
+   at `notice.go:34`. `app.RolesRead/RolesWrite/RolesAdmin` are in `server/internal/app/app.go`. The privileged
+   route map is `server.go` (as written). `test/acceptance/list_contract_test.go` is the acceptance list gate and
+   `server/internal/transport/http/admin/listspec_test.go` the unit one; both must pass.
+8. **Ingest after M9.** `app.OnceEntry` has a third field `After`; `eventEntry` returns `After:
+   tamperFindingAfter(...)` so tamper events become findings — `tamper.protected_file_changed` from the software
+   reconciler (**23**) therefore creates findings without any M13a change. The event→code map in `devicereports.go`
+   gains the four software types (**24**); `eventParams` and `audit.deviceEventParams` MUST gain the keys `package`,
+   `intent`, `catalog_entry_id`, `source` (`reason`, `stage`, `error`, `version` exist). `eventParams` also gained
+   `state` in M9 (rebase).
+9. **Attention findings (M9) and software failures.** §12 open question 5 keeps its default (no attention kind for
+   failed software in M13a). M9's findings round makes a later `software_apply_failed` attention kind cheap; M13c.
+10. **Residual risks.** `docs/compliance/residual-risks.md` ends at RR-97 (M10 took RR-94–96); RR-77 to RR-83 are
+    unassigned on `main` and stay reserved for M13a (§2, §6.7). The "not assigned" sentence of the file is unchanged.
+11. **Retention and privacy (M10, ADR 0032).** The matrix of ADR 0032 §1 has no rows for `software_source`,
+    `software_catalog_entry`, `software_assignment` (configuration like `package_hold`: kept while the organization
+    exists, no purge) and `device_software_status` (current state only, replaced by the device's next report, like
+    `device_bundle_report`). Adding rows needs a dated amendment of ADR 0032 by the architect (R5.2); PDK-414 copies
+    the rows into `docs/compliance/retention.md` once the amendment exists and adds the row "software status
+    (catalog entry, package name, state, reason, error text that may name paths)" to the agent-data table of
+    `docs/compliance/privacy.md`. No erase path exists for organization data; nothing to add.
+12. **CHANGELOG.** `CHANGELOG.md [Unreleased]` is not edited any more (PDK-518): every ticket adds
+    `changelog.d/<ticket-id>.<section>.md` (`make changelog-check` is part of `make lint`). Every "`CHANGELOG.md`" in
+    §3, §5 and §8 reads so.
+13. **Portal files.** The device tabs live in `components/DeviceTabs.vue` with `lib/deviceDetailPage.ts`
+    (`views/DeviceDetail.vue` hosts them; `views/DeviceSoftware.vue` is the inventory tab and stays). M9 edits
+    `lib/navigation.ts`, `router.ts`, `views/DeviceOverview.vue`; PDK-413 rebases.
+14. **Acceptance shards.** New acceptance tests SHOULD add a measured line to `test/acceptance/shard-weights.txt`.
+
+### R3. Cross-cutting rules now in force (no plan change)
+
+- **ADR 0045 (role switch):** one role per request, authorisation unchanged; acceptance `login(t, user)` lands in
+  the organization role; `adminUser`/`withoutStepUp` (`stepup_helpers_test.go`) exist as referenced. Nothing to do.
+- **PostgreSQL 18 (PDK-343):** `UNIQUE NULLS NOT DISTINCT` (PG 15+), the `CHECK` constraints and the composite
+  foreign keys of §6.5 are valid; nothing to do.
+- **ADR 0042 status** is still *Proposed*. The maintainer accepts it with PDK-408 (R5.1); PDK-414's "ask in the
+  result document" step is thereby moved to the start of the milestone.
+- **M11 reuse (alpha.7 plan, phase 7).** Within what this plan allows, M13a reuses: the per-resource outcomes and
+  status store of M11 (PDK-150/151) for the `software` resource without change; the overlay-aware `render` order
+  (R2.6); `ListCompileTargets` extended once by PDK-160 and once by PDK-410. Waves, change sets and revert for software
+  stay M13c (§4).
+
+### R4. Ticket order, dependencies, lanes, risk
+
+Risk per ticket as stated: high — 408, 410, 412, 414; medium — 409, 411, 413.
+
+| Step | Ticket | Lane | Depends on | Migration |
+| --- | --- | --- | --- | --- |
+| 1 | PDK-408 | server (+ `pkg/openpgpkey`) | M11 complete on the branch (PDK-160 = `00094`) | 00095 |
+| 2 | PDK-409 | server | 408 | 00096 |
+| 3 | PDK-410 | pkg/bundle + compiler | 409 | — |
+| 4 | PDK-411 | server | 410 (bundle intents), 409 | 00097 |
+| 4′ | PDK-412 | agent | 410; `pkg/protocol` types of 411 (whoever merges first adds them) | — |
+| 5 | PDK-413 | portal | 408, 409, 411 (sources and catalog views may start after 409) | — |
+| 6 | PDK-414 | gates + docs | 412, 413 | — |
+
+PDK-411 and PDK-412 run in parallel after PDK-410 (server lane and agent lane); PDK-413 starts its sources and
+catalog views after PDK-409 and finishes after PDK-411. The VM gate `TestSoftwareGates` runs once per cluster
+together with M11's `TestPreflight|TestAdoptionGates|TestConfigRolloutGates` (alpha.7 plan, cluster H row).
+
+### R5. Open questions for the maintainer (default chosen; blocks only what is named)
+
+1. **Accept ADR 0042.** Options: (a) accept as written (status line → `Accepted (<date>)`, a one-line edit the
+   orchestrator makes at PDK-408 start); (b) keep *Proposed* and accept at PDK-414 as §8 says. **Recommendation:
+   (a)** — the first merged ticket already builds on it. Blocks PDK-408 formally.
+2. **ADR 0032 amendment for the four new tables** (R2.11): (a) architect adds a dated amendment with the two rows
+   (configuration tables: no purge; `device_software_status`: current state only) before PDK-414; (b) leave the
+   matrix without them. **Recommendation: (a)**; blocks the retention document part of PDK-414 only.
+3. **Own OpenPGP reader** (§12 open question 1): reaffirmed — stdlib-only `pkg/openpgpkey` with fuzzing; the two
+   library alternatives would add a dependency. Default kept; PDK-408 proceeds.
+4. **Icon size refusal as 400** (R2.3) instead of a new 413 code: default 400; PDK-409 proceeds.
+5. Unchanged from §12 with their defaults: no step-up for assignments; `StateChanged(ScopeOrg)`; `apt-get remove`
+   without purge; no attention kind for failed software; per-package audit events; keyring files; immutable slugs.
