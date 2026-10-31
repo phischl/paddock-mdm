@@ -101,7 +101,7 @@ func newRetentionWorld(t *testing.T) retentionWorld {
 	}
 	t.Cleanup(func() { _ = super.Close(ctx) })
 	fleet := &fakeInventoryAdmin{}
-	return retentionWorld{retention: app.NewRetention(app.NewActionRunner(pool, platform, httpx.RequestID), pool, platform, fleet, time.Second),
+	return retentionWorld{retention: app.NewRetention(app.NewActionRunner(pool, platform, httpx.RequestID), pool, platform, fleet, time.Second, 400),
 		fleet: fleet, super: super}
 }
 
@@ -168,6 +168,8 @@ type purgedEvent struct {
 	outcome, store, cutoff string
 	deleted                int64
 	sameTx                 bool
+	// indexDays is the index_days param of the stores kept by the audit index, empty for the others.
+	indexDays string
 }
 
 // purgedEvents returns org's retention.purged events of store device_user_seen; sameTx reports whether the event was

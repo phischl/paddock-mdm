@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -26,6 +28,20 @@ const StoreRetiredInventory = "retired_inventory"
 
 // StoreReadAuditWindow is the store name of the read-access coalescing keys in retention.purged (plan M10 decision 21).
 const StoreReadAuditWindow = "read_audit_window"
+
+// StoreDeviceCommand is the store name of the finished device commands in retention.purged (ADR 0032 amendments
+// 2026-10-18 and 2026-10-31, PDK-180).
+const StoreDeviceCommand = "device_command"
+
+// StoreDeviceAlert is the store name of the cleared device alerts in retention.purged (ADR 0032 amendment 2026-10-18).
+const StoreDeviceAlert = "device_alert"
+
+// StoreDeviceEventGap is the store name of the filled event gaps in retention.purged (ADR 0032 amendment 2026-10-31).
+const StoreDeviceEventGap = "device_event_gap"
+
+// StoreAction is the store name of the finished actions, the control-plane origin of audit events, in retention.purged
+// (ADR 0032 amendments 2026-10-18 and 2026-10-31, PDK-180).
+const StoreAction = "action"
 
 // ReadWindowRetention is how long the coalescing keys of read-access events are kept (plan M10 decision 21).
 const ReadWindowRetention = 48 * time.Hour
@@ -105,12 +121,17 @@ func (r *RetentionRound) fleetSkipped() bool { return r.fleetFailures >= fleetBr
 
 // Retention deletes the expired rows of an organization's stores with deletion evidence (ADR 0032, plan M10 §3.3).
 type Retention struct {
-	runner    *ActionRunner
-	org       *db.OrgPool
+	runner *ActionRunner
+	org    *db.OrgPool
+	// platform reaches the platform pseudo-organization's actions (PurgePlatformActions).
+	platform  *db.PlatformPool
 	hosts     hostUsers
 	inventory ports.InventoryAdmin
 	// unit is the length of a retention day: 24 hours, a second in development (PADDOCK_RETENTION_UNIT).
 	unit time.Duration
+	// indexDays is the audit index retention (PADDOCK_AUDIT_INDEX_RETENTION_DAYS): the rows that explain audit events
+	// are kept as long as the index shows them (ADR 0032 amendments 2026-10-18 and 2026-10-31, indexCutoff).
+	indexDays int
 	// budget bounds one pass (retentionPassBudget).
 	budget time.Duration
 	// lockTimeout bounds the row-lock wait of one batch (retentionLockTimeout).
@@ -122,10 +143,13 @@ type Retention struct {
 	holdNotice int32
 }
 
-// NewRetention creates the use cases.
-func NewRetention(runner *ActionRunner, org *db.OrgPool, hosts hostUsers, inventory ports.InventoryAdmin, unit time.Duration) *Retention {
-	return &Retention{runner: runner, org: org, hosts: hosts, inventory: inventory, unit: unit, budget: retentionPassBudget,
-		lockTimeout: retentionLockTimeout, page: retiredInventoryDevices, holdNotice: holdNoticeRounds}
+// NewRetention creates the use cases; platform also answers the Fleet host check (hostUsers), indexDays is
+// PADDOCK_AUDIT_INDEX_RETENTION_DAYS. With indexDays below auditwriter.MinRetentionDays the passes kept by the index
+// fail without deleting anything.
+func NewRetention(runner *ActionRunner, org *db.OrgPool, platform *db.PlatformPool, inventory ports.InventoryAdmin, unit time.Duration,
+	indexDays int) *Retention {
+	return &Retention{runner: runner, org: org, platform: platform, hosts: platform, inventory: inventory, unit: unit, indexDays: indexDays,
+		budget: retentionPassBudget, lockTimeout: retentionLockTimeout, page: retiredInventoryDevices, holdNotice: holdNoticeRounds}
 }
 
 // PurgeUserSeen deletes the users seen on the context's organization's devices whose last login is older than
@@ -173,6 +197,147 @@ func (r *Retention) PurgeReadWindows(ctx context.Context, now time.Time) (int64,
 	return purgeBatches(ctx, r.runner, r.org, StoreReadAuditWindow, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 		return q.DeleteExpiredReadAuditWindows(ctx, cutoff)
 	})
+}
+
+// PurgeActions deletes the context's organization's actions that finished more than the audit index retention before
+// now, never ahead of the index (system principal, ADR 0032 amendment 2026-10-31, indexCutoff); started actions stay.
+// Without expired rows it records nothing. It returns the number of deleted rows (purgeBatches).
+func (r *Retention) PurgeActions(ctx context.Context, now time.Time) (int64, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return 0, problem.Unauthenticated
+	}
+	return r.purgeAfterIndex(ctx, now, StoreAction, func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error) {
+		return q.HasExpiredActions(ctx, pgstore.HasExpiredActionsParams{OrganizationID: p.OrganizationID, Cutoff: cutoff})
+	},
+		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
+			return q.DeleteExpiredActions(ctx, pgstore.DeleteExpiredActionsParams{OrganizationID: p.OrganizationID, Cutoff: cutoff})
+		})
+}
+
+// PurgePlatformActions is PurgeActions for the platform pseudo-organization through the platform pool; its
+// retention.purged event is recorded there (system principal, ADR 0032 amendment 2026-10-31).
+func (r *Retention) PurgePlatformActions(ctx context.Context, now time.Time) (int64, error) {
+	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
+		return 0, problem.Unauthenticated
+	}
+	cutoff, err := r.indexCutoff(now)
+	if err != nil {
+		return 0, err
+	}
+	org := audit.PlatformOrganizationID
+	var found bool
+	err = r.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		found, err = q.HasExpiredActions(ctx, pgstore.HasExpiredActionsParams{OrganizationID: org, Cutoff: cutoff})
+		return err
+	})
+	if err != nil || !found {
+		return 0, err
+	}
+	return purgeBatchesIn(ctx, r.runner, ScopePlatform, r.platform.InPlatform, StoreAction, cutoff, r.indexParams(), r.budget,
+		r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+			return q.DeleteExpiredActions(ctx, pgstore.DeleteExpiredActionsParams{OrganizationID: org, Cutoff: cutoff})
+		})
+}
+
+// PurgeDeviceCommands deletes the context's organization's commands that finished (succeeded, failed, expired or
+// cancelled) more than the audit index retention before now, never ahead of the index (system principal, ADR 0032
+// amendments 2026-10-18 and 2026-10-31, indexCutoff); a command a disk conversion or a device's uninstall still
+// references stays. Without expired rows it records nothing. It returns the number of deleted rows (purgeBatches).
+func (r *Retention) PurgeDeviceCommands(ctx context.Context, now time.Time) (int64, error) {
+	return r.purgeAfterIndex(ctx, now, StoreDeviceCommand, func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error) {
+		return q.HasExpiredDeviceCommands(ctx, cutoff)
+	},
+		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
+			return q.DeleteExpiredDeviceCommands(ctx, cutoff)
+		})
+}
+
+// PurgeDeviceAlerts deletes the context's organization's alerts cleared more than the audit index retention before
+// now, never ahead of the index (system principal, ADR 0032 amendments 2026-10-18 and 2026-10-31, indexCutoff); open
+// alerts stay. Without expired rows it records nothing. It returns the number of deleted rows (purgeBatches).
+func (r *Retention) PurgeDeviceAlerts(ctx context.Context, now time.Time) (int64, error) {
+	return r.purgeAfterIndex(ctx, now, StoreDeviceAlert, func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error) {
+		return q.HasExpiredDeviceAlerts(ctx, cutoff)
+	},
+		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
+			return q.DeleteExpiredDeviceAlerts(ctx, cutoff)
+		})
+}
+
+// PurgeEventGaps deletes the context's organization's event gaps filled more than the audit index retention before
+// now, never ahead of the index (system principal, ADR 0032 amendment 2026-10-31, indexCutoff); unfilled gaps stay.
+// Without expired rows it records nothing. It returns the number of deleted rows (purgeBatches).
+func (r *Retention) PurgeEventGaps(ctx context.Context, now time.Time) (int64, error) {
+	return r.purgeAfterIndex(ctx, now, StoreDeviceEventGap, func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error) {
+		return q.HasExpiredEventGaps(ctx, cutoff)
+	},
+		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
+			return q.DeleteExpiredEventGaps(ctx, cutoff)
+		})
+}
+
+// indexCutoff is the cutoff of the stores kept as long as the audit index shows their events (ADR 0032 amendment
+// 2026-10-31, keptByIndex). It fails when the index retention is below auditwriter.MinRetentionDays.
+func (r *Retention) indexCutoff(now time.Time) (time.Time, error) {
+	if r.indexDays < auditwriter.MinRetentionDays {
+		return time.Time{}, fmt.Errorf("the audit index retention of %d days is below the minimum of %d days",
+			r.indexDays, auditwriter.MinRetentionDays)
+	}
+	return keptByIndex(now, r.indexDays, r.unit), nil
+}
+
+// indexParams are the retention.purged params of the stores kept by the audit index beyond store, cutoff and deleted.
+func (r *Retention) indexParams() map[string]any { return map[string]any{"index_days": r.indexDays} }
+
+// indexMarginDays covers the audit index purge running late, audit events reaching the index late after an outage of
+// the audit pipeline, and the clocks of the worker and the audit host differing (ADR 0032 amendment 2026-10-31).
+const indexMarginDays = 7
+
+// indexYoungest is the age below which no store kept by the index loses a row, so a development installation that
+// counts days in seconds does not delete rows a running gate or session still reads; production cutoffs lie hundreds
+// of days back and never reach it.
+const indexYoungest = time.Hour
+
+// keptByIndex is the start of the UTC month containing now − (indexDays + indexMarginDays), counted in unit, and never
+// later than now − indexYoungest. The index drops whole months only, after the month ended more than the index
+// retention ago, so a row older than that month's start has no event left in the index, and a younger one may still
+// have.
+func keptByIndex(now time.Time, indexDays int, unit time.Duration) time.Time {
+	t := now.Add(-time.Duration(indexDays+indexMarginDays) * unit).UTC()
+	cutoff := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+	if youngest := now.Add(-indexYoungest); youngest.Before(cutoff) {
+		cutoff = youngest
+	}
+	return cutoff
+}
+
+// purgeAfterIndex deletes a store's rows older than indexCutoff at now in batches (purgeBatches) when expired finds
+// any.
+func (r *Retention) purgeAfterIndex(ctx context.Context, now time.Time, store string,
+	expired func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error),
+	batch func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error)) (int64, error) {
+	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
+		return 0, problem.Unauthenticated
+	}
+	cutoff, err := r.indexCutoff(now)
+	if err != nil {
+		return 0, err
+	}
+	var found bool
+	err = r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		found, err = expired(ctx, q, cutoff)
+		return err
+	})
+	if err != nil || !found {
+		return 0, err
+	}
+	return purgeBatchesIn(ctx, r.runner, ScopeOrg, r.org.InOrg, store, cutoff, r.indexParams(), r.budget, r.lockTimeout,
+		func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+			return batch(ctx, q, cutoff)
+		})
 }
 
 // PurgeRetiredInventory deletes the inventory of the context's organization's devices retired longer than the
@@ -540,16 +705,25 @@ func (r *Retention) setLockTimeout(ctx context.Context, q *pgstore.Queries) erro
 // lockTimeout for a row lock rolls back alone and ends the pass the same way.
 func purgeBatches(ctx context.Context, runner *ActionRunner, org *db.OrgPool, store string, cutoff time.Time, budget, lockTimeout time.Duration,
 	batch func(ctx context.Context, q *pgstore.Queries) (int64, error)) (int64, error) {
+	return purgeBatchesIn(ctx, runner, ScopeOrg, org.InOrg, store, cutoff, nil, budget, lockTimeout, batch)
+}
+
+// purgeBatchesIn is purgeBatches in scope, with every batch's transaction opened by in and params added to the event's.
+func purgeBatchesIn(ctx context.Context, runner *ActionRunner, scope Scope,
+	in func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error,
+	store string, cutoff time.Time, params map[string]any, budget, lockTimeout time.Duration,
+	batch func(ctx context.Context, q *pgstore.Queries) (int64, error)) (int64, error) {
 	spec := SpecRetentionPurged
 	spec.Params = map[string]any{"store": store, "cutoff": audit.Timestamp(cutoff).Format(time.RFC3339Nano)}
+	maps.Copy(spec.Params, params)
 	var deleted int64
-	err := runner.RunExternal(ctx, ScopeOrg, spec,
+	err := runner.RunExternal(ctx, scope, spec,
 		func(context.Context, *pgstore.Queries, Recorder) error { return nil },
 		func(ctx context.Context) error {
 			start := time.Now()
 			for {
 				var n int64
-				if err := org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+				if err := in(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 					if err := q.SetRetentionLockTimeout(ctx, fmt.Sprintf("%dms", lockTimeout.Milliseconds())); err != nil {
 						return err
 					}

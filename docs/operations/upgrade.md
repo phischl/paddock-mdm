@@ -47,6 +47,14 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   more than 60 s off appear on the attention list as `clock_drift`, and the nightly audit chain verification starts
   (alerts `PaddockAuditChainBroken`, `PaddockAuditVerifyStale`). Schema: migrations 00068–00071 and audit migrations
   00004–00006 (new tables and columns only; no data rewrite).
+- From 0.1.0-alpha.7: the control plane's `.env` (and a lab host's) must set `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, the
+  audit index retention in days. It has no default there: the worker's retention round deletes finished actions and
+  commands, cleared alerts and filled event gaps no earlier than the audit index drops their month, and the worker
+  does not start without the variable, or with a value below 400 days or below `PADDOCK_AUDIT_RETENTION_DAYS`. Set
+  it to the value the audit host uses (an audit host whose `.env` does not set it uses its
+  `PADDOCK_AUDIT_RETENTION_DAYS`, by default 400) and keep both variables the same on both hosts. `./paddock check`
+  reports a missing or invalid value (item `audit index retention of the retention round`); `./paddock pull` and the
+  other commands keep working until it is set.
 
 ## Upgrade (each host)
 
