@@ -123,6 +123,8 @@ services:
       # Webhook destinations may point at the acceptance sinks on the host (private addresses, plain http); plan M9
       # gate N5. Honoured only with PADDOCK_ENV=development.
       PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE: "true"
+    # The api resolves a webhook host when a destination is saved; the acceptance sinks run on the test host.
+    extra_hosts: ["acceptance-host:host-gateway"]
 
   # The revocation path is enabled in development and test stacks only (plan M4c decision 1); gate R5 runs with
   # PADDOCK_REVOCATION_ENABLED=false.
