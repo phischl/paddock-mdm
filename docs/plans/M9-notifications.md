@@ -1512,3 +1512,10 @@ once at the end.
   `notification.test_sent` with the delivery result. `notification.test_requested` is not in the security preset.
 - **Decision 37 (PDK-129), known limitation.** The daily summary windows on `first_seen_at`; a vulnerability re-rated
   to critical later is not summarized in alpha.7 (follow-up ticket).
+- **Decision 22 (PDK-124), dated 2026-10-31.** The notifier records `notification.delivered`, `destination_stalled`
+  and `destination_resumed` through `app.ActionRunner.RecordAllOnce`: system principals only, all events of one state
+  change or none, each state update guarded (`delivered_at IS NULL`, the pending delivery the engine sent). A guard
+  mismatch rolls back without an event because another replica already made and recorded the change; the audit
+  invariant (one event per state change) still holds, since a no-event rollback happens only when the state change
+  did not happen. Each destination gets a 60 s budget per round: no new delivery starts after 60 s, so the worst case
+  is about 120 s per destination and round.
