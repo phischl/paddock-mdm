@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useConfirm } from '../composables/useConfirm'
@@ -25,9 +25,13 @@ const units = ref<string[]>([])
 const updatedAt = ref('')
 const problem = ref('')
 const saved = ref(false)
+// Set on a 422 unit_not_allowed; it describes the list that was sent, so any change of the list clears it.
+const refused = ref(false)
 
 const invalid = computed(() => validateWatchedUnits(units.value))
 const invalidText = computed(() => (invalid.value ? t(invalid.value.key, invalid.value.values) : ''))
+const errorText = computed(() => invalidText.value || (refused.value ? t('problems.unit_not_allowed') : ''))
+watch(units, () => { refused.value = false })
 
 function apply(list: string[], at: string | null): void {
   units.value = list
@@ -42,9 +46,14 @@ async function load(): Promise<void> {
 
 async function save(list: string[]): Promise<void> {
   saved.value = false
+  refused.value = false
   const r = await setWatchedUnits(list)
   if (r === stepUpRequired) {
     startStepUp('watched-units', 'settings', list)
+    return
+  }
+  if (r === 'unit_not_allowed') {
+    refused.value = true
     return
   }
   if (typeof r === 'string') {
@@ -104,6 +113,7 @@ onMounted(async () => {
       type="success"
       variant="tonal"
       class="conflict"
+      role="status"
       data-testid="watched-saved"
     >
       {{ t('watchedUnits.saved') }}
@@ -126,7 +136,8 @@ onMounted(async () => {
         :items="[]"
         :delimiters="[',', ' ']"
         :readonly="!session.canDelete"
-        :error-messages="invalidText ? [invalidText] : []"
+        :error-messages="errorText ? [errorText] : []"
+        :aria-invalid="errorText ? 'true' : undefined"
         data-testid="watched-units"
       />
       <p
