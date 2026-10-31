@@ -45,6 +45,7 @@ export const router = createRouter({
     { path: '/settings/login', name: 'login-settings', component: () => import('./views/LoginSettings.vue') },
     { path: '/settings/dms', name: 'dms-settings', component: () => import('./views/DMSSettings.vue') },
     { path: '/settings/managed-files', name: 'managed-file-settings', component: () => import('./views/ManagedFileSettings.vue') },
+    { path: '/settings/watched-units', name: 'watched-units', component: () => import('./views/WatchedUnits.vue') },
     { path: '/settings/updates', name: 'update-settings', component: () => import('./views/UpdateSettings.vue') },
     { path: '/settings/mcp', name: 'mcp-settings', component: () => import('./views/McpSettings.vue') },
     { path: '/package-holds', name: 'package-holds', component: () => import('./views/PackageHolds.vue') },

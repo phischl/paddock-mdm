@@ -727,3 +727,31 @@ func TestHostnameSection(t *testing.T) {
 		t.Fatalf("cleared: version %d, hostname %+v", w.version(named), b.Hostname)
 	}
 }
+
+// TestWatchSection (plan M9 decision 39): a v2 bundle carries the organization's watched units, an organization
+// without any has no section, a v1 bundle never does, and a changed list publishes a new version.
+func TestWatchSection(t *testing.T) {
+	w := newWorld(t)
+	v2, v1 := w.v2Device("{1,2}"), w.v2Device("{1}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if b := w.fetch(v2); b.Watch != nil {
+		t.Fatalf("no watched units: watch %+v", b.Watch)
+	}
+	before := w.version(v2)
+	w.exec("INSERT INTO watched_unit (organization_id, unit) VALUES ($1, 'wazuh-agent.service'), ($1, 'falcon-sensor.service')", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := w.fetch(v2).Watch; got == nil || !slices.Equal(got.Units, []string{"falcon-sensor.service", "wazuh-agent.service"}) {
+		t.Fatalf("watch %+v", got)
+	}
+	if w.version(v2) != before+1 {
+		t.Fatalf("version %d, want %d", w.version(v2), before+1)
+	}
+	if b := w.fetch(v1); b.Watch != nil {
+		t.Fatalf("v1 bundle with watch %+v", b.Watch)
+	}
+	w.exec("DELETE FROM watched_unit WHERE organization_id = $1", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if b := w.fetch(v2); b.Watch != nil || w.version(v2) != before+2 {
+		t.Fatalf("cleared: version %d, watch %+v", w.version(v2), b.Watch)
+	}
+}

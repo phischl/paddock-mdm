@@ -185,6 +185,7 @@ Decline, say why in one sentence, and name the portal page:
 | Encrypt a device in place or cancel it, uninstall Paddock | `encryptDevice`, `cancelDeviceEncryption`, `uninstallDevice` | *Devices › <device>* |
 | Create an API token, confirm a root grant or a sensitive file, change the operator roots | `createApiToken`, `confirmPermissionProfileRootGrant`, `confirmManagedFileSensitive`, `updateManagedFileSettings` | *API tokens*, *Permission profiles*, *Managed files*, *Operator roots* |
 | IP allow list, automatic unseal, import an agent release, end all sessions | `createIpAllowlistEntry`, `updateIpAllowlistEntry`, `deleteIpAllowlistEntry`, `enableAutoUnseal`, `disableAutoUnseal`, `importAgentRelease`, `endAllSessions` | *Platform › IP allow list*, *OpenBao*, *Agent releases*, *Sessions* |
+| Change the watched units of the presence policy | `updateWatchedUnits` | *Settings › Watched units* |
 | Change the MCP policy or your own write access | `updateMcpSettings`, `updatePlatformMcpSettings`, `enableMcpWrite` | *Settings › MCP*, *Platform › MCP policy*, account menu *AI assistant (MCP)* |
 
 The complete, generated list is in [`references/tools.md`](references/tools.md) under *Step-up operations*. A change
