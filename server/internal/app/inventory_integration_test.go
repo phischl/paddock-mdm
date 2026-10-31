@@ -215,4 +215,18 @@ func TestReportAgentNotRunning(t *testing.T) {
 	if err != nil || !slices.Equal(got, []uuid.UUID{silent}) {
 		t.Fatalf("second failure %v, %v", got, err)
 	}
+	// Both reports count against the device's open tamper finding, written with each event (plan M9 decision 31).
+	var occurrences int
+	var lastEvent, latest uuid.UUID
+	if err := h.super.QueryRow(ctx, `SELECT occurrences, last_event_id FROM finding
+		WHERE device_id = $1 AND kind = 'tamper' AND code = 'device.tamper_agent_not_running' AND closed_at IS NULL`, silent).Scan(&occurrences, &lastEvent); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.super.QueryRow(ctx, `SELECT id FROM action WHERE target ->> 'id' = $1 AND code = 'device.tamper_agent_not_running'
+		ORDER BY started_at DESC LIMIT 1`, silent.String()).Scan(&latest); err != nil {
+		t.Fatal(err)
+	}
+	if occurrences != 2 || lastEvent != latest {
+		t.Fatalf("finding: %d occurrences, last event %s; want 2 and %s", occurrences, lastEvent, latest)
+	}
 }

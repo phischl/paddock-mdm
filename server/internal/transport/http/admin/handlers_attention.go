@@ -37,6 +37,11 @@ func (h *handlers) ListAttention(ctx context.Context, req adminapi.ListAttention
 	for i, c := range res.Items {
 		items[i] = adminapi.Attention{Id: c.ID, Kind: adminapi.AttentionKind(c.Kind), DeviceId: c.DeviceID, Hostname: c.Hostname,
 			Since: c.Since.UTC(), Detail: c.Detail}
+		if c.FindingID.Valid && c.FindingStatus != nil {
+			items[i].Finding = &adminapi.AttentionFinding{
+				Id: c.FindingID.UUID, Status: adminapi.FindingStatus(*c.FindingStatus), AssigneeDisplay: c.FindingAssigneeDisplay,
+			}
+		}
 	}
 	return adminapi.ListAttention200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }

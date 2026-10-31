@@ -80,6 +80,9 @@ type Recorder interface {
 	// RequireStepUp is RequiresStepUp for actions that need a step-up only for some inputs (e.g. assigning a full
 	// profile): it returns problem.StepUpRequired, recorded as denied, unless the step-up is fresh.
 	RequireStepUp() error
+	// ActionID is the ID of the action, which is also the event ID of its audit event, e.g. for a finding that names
+	// the event that opened it (plan M9 decision 31).
+	ActionID() uuid.UUID
 }
 
 // CorrelationIDFunc extracts the request ID from ctx (set by the httpx middleware).
@@ -167,6 +170,8 @@ func (r *recorder) CommandIssued(id uuid.UUID) { r.commands = append(r.commands,
 func (r *recorder) RevocationApproved(id uuid.UUID) { r.approved = append(r.approved, id) }
 
 func (r *recorder) RequireStepUp() error { return r.stepUp() }
+
+func (r *recorder) ActionID() uuid.UUID { return r.id }
 
 var secretParamWords = []string{"password", "secret", "token"}
 
@@ -370,20 +375,37 @@ func (r *ActionRunner) RunTxRefusal(ctx context.Context, scope Scope, spec Actio
 	return refusal
 }
 
+// AfterFunc runs in the transaction of an event recorded once, after a fresh claim and the insert of its action,
+// with the event's ID: state that names the event, such as a tamper finding (plan M9 decision 31).
+type AfterFunc func(ctx context.Context, q *pgstore.Queries, eventID uuid.UUID) error
+
+// runAfter runs the AfterFuncs of a freshly recorded event; nil entries are skipped.
+func runAfter(ctx context.Context, q *pgstore.Queries, eventID uuid.UUID, after []AfterFunc) error {
+	for _, fn := range after {
+		if fn == nil {
+			continue
+		}
+		if err := fn(ctx, q, eventID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RecordOnce records a successful event reported by a device exactly once per natural key: claim runs first in the
 // same transaction and inserts the key with ON CONFLICT DO NOTHING; when the key existed (a redelivered message)
-// nothing is recorded and RecordOnce returns false.
+// nothing is recorded and RecordOnce returns false. after runs only when the event was recorded.
 func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
-	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error), after ...AfterFunc) (bool, error) {
 	return r.RecordOnceWith(ctx, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) (bool, error) {
 		return claim(ctx, q)
-	})
+	}, after...)
 }
 
 // RecordOnceWith is RecordOnce for a claim that also changes state through the recorder (target, params, state
 // changes), such as a system transition that must be recorded at most once.
 func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
-	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error), after ...AfterFunc) (bool, error) {
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -396,7 +418,10 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 			return err
 		}
 		recorded = true
-		return r.insertFinished(ctx, q, rec, nil)
+		if err := r.insertFinished(ctx, q, rec, nil); err != nil {
+			return err
+		}
+		return runAfter(ctx, q, rec.id, after)
 	})
 	if err != nil {
 		return false, err
@@ -406,10 +431,11 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
-// login) and reports false.
+// login) and reports false. After (optional) runs when the event was recorded.
 type OnceEntry struct {
 	Spec  ActionSpec
 	Claim func(ctx context.Context, q *pgstore.Queries) (bool, error)
+	After AfterFunc
 }
 
 // RecordOnceBatch is RecordOnce for several events in one transaction, so a batch of device events costs one commit
@@ -442,6 +468,9 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 			if err := r.insertFinished(ctx, q, recs[i], nil); err != nil {
 				return err
 			}
+			if err := runAfter(ctx, q, recs[i].id, []AfterFunc{e.After}); err != nil {
+				return err
+			}
 			recorded[i] = true
 		}
 		return nil
@@ -461,7 +490,7 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 			}
 			continue
 		}
-		fresh, err := r.RecordOnce(ctx, e.Spec, e.Claim)
+		fresh, err := r.RecordOnce(ctx, e.Spec, e.Claim, e.After)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("entry %d: %w", i, err))
 			continue
@@ -472,9 +501,10 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 }
 
 // RecordOnceRefusal is RecordOnce for an event refused with refusal (recorded with its outcome and error code):
-// claim inserts the natural key in the same transaction, and a key that existed records nothing.
+// claim inserts the natural key in the same transaction, and a key that existed records nothing. after runs only when
+// the event was recorded.
 func (r *ActionRunner) RecordOnceRefusal(ctx context.Context, spec ActionSpec, refusal error,
-	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error), after ...AfterFunc) (bool, error) {
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -487,7 +517,10 @@ func (r *ActionRunner) RecordOnceRefusal(ctx context.Context, spec ActionSpec, r
 			return err
 		}
 		recorded = true
-		return r.insertFinished(ctx, q, rec, refusal)
+		if err := r.insertFinished(ctx, q, rec, refusal); err != nil {
+			return err
+		}
+		return runAfter(ctx, q, rec.id, after)
 	})
 	if err != nil {
 		return false, err

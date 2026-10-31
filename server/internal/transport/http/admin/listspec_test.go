@@ -38,6 +38,8 @@ var lists = map[string]struct {
 	"listManagedUnits":       {managedUnitList, "postgres/queries/managed_config.sql", "ListManagedUnits", "id"},
 	"listAttention":          {attentionList, "postgres/queries/attention.sql", "ListAttention", "id"},
 	"listAttentionDevices":   {attentionDeviceList, "postgres/queries/attention.sql", "ListAttentionDevices", "hostname, device_id"},
+	"listFindings":           {findingRecordList, "postgres/queries/findings.sql", "ListFindings", `f\.id`},
+	"listAccounts":           {accountList, "postgres/queries/accounts.sql", "ListOrgAccounts", "id"},
 	"listPackageHolds":       {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
@@ -66,6 +68,10 @@ var lists = map[string]struct {
 // their SemVer key (PDK-025).
 var sortColumns = map[string]map[string]string{
 	"listAgentReleases": {"version": "version_key"},
+	"listFindings": {
+		"last_seen_at": "f.last_seen_at", "opened_at": "f.opened_at", "status": "f.status", "hostname": "d.hostname",
+		"code": "f.code",
+	},
 }
 
 // TestListSpecsMatchContract keeps the handlers' list definitions equal to x-paddock-list and the sort enum of the

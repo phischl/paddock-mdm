@@ -1459,3 +1459,9 @@ once at the end.
 - **Decision 38 / §6.5 (PDK-130).** A refused unit returns the existing problem `unit_not_allowed` with status
   **422** (since M1, managed units), not 400; duplicates and more than 32 units return 400 `invalid_request`.
 
+- **§6.5 feed item (PDK-121).** `AuditEventStored` carries `organization_id` (decision 6 wins over the shorthand
+  "AuditEvent without device" of §6.5); every item's `organization_id` equals the organization of the token. The
+  feed format `paddock.audit.feed.v1` is frozen with it.
+- **Decision 40 (PDK-131), accepted behaviours.** A watched unit that changes from stopped to missing produces no
+  second event. The agent holds the reported state in memory only, so a unit that is still stopped is reported once
+  more after an agent restart.
