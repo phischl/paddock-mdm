@@ -87,6 +87,16 @@ describe('SetupChecklist', () => {
     expect(item.get('a').attributes('href')).toMatch(/docs\/operations\/getting-started\.md$/)
   })
 
+  it('does not count optional steps towards the progress', async () => {
+    steps = [
+      { key: 'organization', label: 'setup.steps.organization', state: 'done', to: { name: 'devices' } },
+      { key: 'allowlist', label: 'setup.steps.allowlist', state: 'open', to: { name: 'devices' }, optional: true },
+    ]
+    const w = await mountChecklist(admin)
+    expect(w.get('[data-testid="setup-progress"]').text()).toBe('1 of 1 steps done')
+    expect(w.find('[data-testid="setup-step-allowlist"]').exists()).toBe(true)
+  })
+
   it('renders in German', async () => {
     const w = await mountChecklist(admin, 'de')
     expect(w.get('[data-testid="setup-progress"]').text()).toBe('1 von 3 Schritten erledigt')

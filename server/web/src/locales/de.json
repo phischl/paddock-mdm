@@ -2244,7 +2244,7 @@
     "title": "Paddock einrichten",
     "progress": "{done} von {total} Schritten erledigt",
     "dismiss": "Ausblenden",
-    "guide": "Anleitung",
+    "guide": "Anleitung lesen",
     "states": {
       "done": "Erledigt",
       "open": "Offen",

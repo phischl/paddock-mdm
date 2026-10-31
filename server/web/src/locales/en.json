@@ -2244,7 +2244,7 @@
     "title": "Set up Paddock",
     "progress": "{done} of {total} steps done",
     "dismiss": "Dismiss",
-    "guide": "How to (guide)",
+    "guide": "Read the guide",
     "states": {
       "done": "Done",
       "open": "To do",

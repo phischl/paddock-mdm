@@ -17,6 +17,8 @@ export interface SetupStep {
   state: StepState
   /** The portal page that completes the step; absent for steps that need the host shell. */
   to?: RouteLocationRaw
+  /** Optional steps are listed but do not count towards the progress. */
+  optional?: boolean
 }
 
 /** What the signed-in role may open; the checklist lists only steps whose page it can reach. */
@@ -51,10 +53,11 @@ async function platformSteps(): Promise<SetupStep[]> {
     { key: 'organization', label: 'setup.steps.organization', state: organization, to: { name: 'organizations' } },
     { key: 'orgAdmin', label: 'setup.steps.orgAdmin', state: 'manual' },
     { key: 'release', label: 'setup.steps.release', state: release, to: { name: 'agent-releases' } },
-    { key: 'allowlist', label: 'setup.steps.allowlist', state: allowlist, to: { name: 'ip-allowlist' } },
+    { key: 'allowlist', label: 'setup.steps.allowlist', state: allowlist, to: { name: 'ip-allowlist' }, optional: true },
   ]
 }
 
+// The list has no status filter, so the newest 100 tokens are filtered here; an older active token is not seen.
 async function activeTokens(): Promise<{ total: number } | undefined> {
   const { data } = await api.GET('/api/v1/enrollment-tokens', { params: { query: { page_size: 100 } } })
   return data ? { total: data.items.filter((t) => t.status === 'active').length } : undefined

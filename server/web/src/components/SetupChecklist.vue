@@ -26,7 +26,7 @@ async function ensureLoaded(): Promise<void> {
 onMounted(ensureLoaded)
 watch(() => setup.dismissed, ensureLoaded)
 
-const checked = computed(() => steps.value.filter((s) => s.state !== 'manual'))
+const checked = computed(() => steps.value.filter((s) => s.state !== 'manual' && !s.optional))
 const doneCount = computed(() => checked.value.filter((s) => s.state === 'done').length)
 const visible = computed(() => !!session.me && !setup.dismissed)
 </script>
