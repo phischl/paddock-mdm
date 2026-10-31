@@ -190,3 +190,12 @@ func SetExportWriteTimeout(e *Exporter, d time.Duration) { e.writeTimeout = d }
 
 // ExportTimeouts returns the bound of one build and of the exporter's writes.
 func ExportTimeouts(e *Exporter) (build, write time.Duration) { return e.buildTimeout, e.writeTimeout }
+
+// SetExportMaxObject lowers the read limit of one object of the exporter.
+func SetExportMaxObject(e *Exporter, n int64) { e.maxObject = n }
+
+// SetExportMaxBytes lowers the size limit of events.jsonl and the package.
+func SetExportMaxBytes(e *Exporter, n int64) { e.maxBytes = n }
+
+// SetVerifierMaxObject lowers the read limit of one object of the verifier.
+func SetVerifierMaxObject(v *Verifier, n int64) { v.maxObject = n }

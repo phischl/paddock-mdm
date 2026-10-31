@@ -84,7 +84,14 @@ services:
     <<: *paddock-audit
     restart: unless-stopped
     command: ["serve", "audit-writer"]
+    # An evidence export writes its decoded events to TMPDIR: a disk volume instead of the tmpfs keeps a large export
+    # off the host's memory; PADDOCK_AUDIT_EXPORT_MAX_BYTES bounds it (PDK-593, docs/operations/audit-bucket.md).
+    tmpfs: []
+    volumes:
+      - audit-writer-tmp:/tmp
     environment:
+      TMPDIR: /tmp
+      PADDOCK_AUDIT_EXPORT_MAX_BYTES: ${PADDOCK_AUDIT_EXPORT_MAX_BYTES:-4294967296}
       PADDOCK_ENV: ${PADDOCK_ENV:-production}
       PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
       PADDOCK_OPS_ADDR: ":9090"
@@ -130,6 +137,7 @@ networks:
 volumes:
   audit-postgres-data: {}
   audit-rustfs-data: {}
+  audit-writer-tmp: {}
 
 secrets:
   audit_postgres_superuser_password: { file: ./.secrets/audit_postgres_superuser_password }

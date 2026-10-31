@@ -62,6 +62,17 @@ const (
 // The margin lets the server's own timeout error arrive first.
 const exportWriteTimeout = db.WriterTransactionTimeout + 30*time.Second
 
+// DefaultExportMaxBytes is the default of PADDOCK_AUDIT_EXPORT_MAX_BYTES: the most events.jsonl and the whole package
+// of one export may hold.
+const DefaultExportMaxBytes int64 = 4 << 30
+
+// ReasonExportTooLarge is the reason param of the failure event of an export that exceeded its size limit.
+const ReasonExportTooLarge = "export_too_large"
+
+// errExportTooLarge fails a build whose events.jsonl or package exceeds the size limit; its text starts the error
+// stored with the export, so the portal shows the reason.
+var errExportTooLarge = errors.New(ReasonExportTooLarge)
+
 // exportMaxDecodedObject: an object holds at most MaxBatch events, so 256 MiB leaves over 500 KiB per event; anything
 // larger is treated as a decompression bomb and reported as undecodable instead of exhausting the writer's memory.
 const exportMaxDecodedObject = 256 << 20
@@ -95,6 +106,10 @@ type Exporter struct {
 	chunkSize int
 	// maxDecoded bounds the decompressed size of one object.
 	maxDecoded uint64
+	// maxObject bounds one read from the bucket.
+	maxObject int64
+	// maxBytes bounds events.jsonl and the package (PADDOCK_AUDIT_EXPORT_MAX_BYTES).
+	maxBytes int64
 	// buildTimeout bounds one build; it is ExportStuckAfter. It is measured from the start of Build, the stuck check
 	// from started_at, so the stuck check usually fails a hung export first; the bound then mainly frees the goroutine.
 	buildTimeout time.Duration
@@ -112,16 +127,18 @@ type Exporter struct {
 	endRead func(ctx context.Context, id uuid.UUID, err error) error
 }
 
-// NewExporter creates an exporter; version names the generator in the package.
+// NewExporter creates an exporter; version names the generator in the package and maxBytes bounds events.jsonl and the
+// package.
 func NewExporter(pool *db.AuditWriterPool, writer *Writer, store ObjectStore, signer Signer, keys PublicKeys,
-	verifier *Verifier, version string, poll time.Duration) *Exporter {
+	verifier *Verifier, version string, poll time.Duration, maxBytes int64) *Exporter {
 	// increase() of PaddockAuditExportFailed needs a sample before the first failure.
 	for _, result := range []string{"ready", "failed", "expired"} {
 		metricExport.WithLabelValues(result)
 	}
 	return &Exporter{pool: pool, writer: writer, store: store, signer: signer, keys: keys, verifier: verifier,
 		version: version, poll: poll, now: time.Now, chunkSize: ExportChunkSize,
-		maxDecoded: exportMaxDecodedObject, buildTimeout: ExportStuckAfter, writeTimeout: exportWriteTimeout}
+		maxDecoded: exportMaxDecodedObject, maxObject: MaxObjectSize, maxBytes: maxBytes, buildTimeout: ExportStuckAfter,
+		writeTimeout: exportWriteTimeout}
 }
 
 // Run builds pending exports and, in its own loop, expires old ones every poll interval until ctx ends.
@@ -278,7 +295,11 @@ func (e *Exporter) Build(ctx context.Context, export auditstore.AuditExport) err
 			return errors.Join(err, errNotRunning)
 		}
 		metricExport.WithLabelValues("failed").Inc()
-		e.recordSelf(ctx, completedEvent(export, nil, exportErrorText(err)))
+		ev := completedEvent(export, nil, exportErrorText(err))
+		if errors.Is(err, errExportTooLarge) {
+			ev.Params["reason"] = ReasonExportTooLarge
+		}
+		e.recordSelf(ctx, ev)
 		return err
 	}
 	e.ready(ctx, export, res, start)
@@ -606,7 +627,9 @@ type packDay struct {
 	digest   [32]byte
 	manifest auditevidence.Manifest
 	objects  []auditevidence.Object
-	events   int
+	// sizes holds the byte size of each of objects as read in the first pass.
+	sizes  []int64
+	events int
 }
 
 // collected is everything the first pass learned; the second pass writes the tar from it.
@@ -671,9 +694,14 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 	if err != nil {
 		return built{}, err
 	}
-	defer func() { _ = tmp.Close(); _ = os.Remove(tmp.Name()) }()
+	defer func() { _ = tmp.Close() }()
+	// TMPDIR is a volume, not a tmpfs (PDK-593): unlinked right away, the file leaves nothing behind when the writer
+	// is killed in the middle of a build, and its space is freed with the last open handle.
+	if err := os.Remove(tmp.Name()); err != nil {
+		return built{}, err
+	}
 	c := &collected{problems: append([]string{}, report.Problems...)}
-	if err := e.collect(ctx, org, from, to, byDay, tmp, c); err != nil {
+	if err := e.collect(ctx, org, from, to, byDay, &cappedWriter{w: tmp, max: e.maxBytes, name: "events.jsonl"}, c); err != nil {
 		return built{}, err
 	}
 
@@ -745,10 +773,10 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 }
 
 // collect reads every manifest and object of the range in order, appends the decoded events to events and records
-// the hashes. A modified object is a problem, not an error; an unreadable one fails the build, because the package
-// cannot hold it.
+// the hashes and sizes. A modified object is a problem, not an error; an unreadable one fails the build, because the
+// package cannot hold it.
 func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Time, byDay map[string]auditstore.AuditManifest,
-	events *os.File, c *collected) error {
+	events *cappedWriter, c *collected) error {
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(e.maxDecoded))
 	if err != nil {
 		return err
@@ -756,13 +784,15 @@ func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Tim
 	defer dec.Close()
 	h := sha256.New()
 	out := io.MultiWriter(events, h)
+	var body bytes.Buffer
 	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
 		name := d.Format(time.DateOnly)
 		m := byDay[name]
-		raw, err := e.store.Get(ctx, m.ObjectKey)
-		if err != nil {
+		var manifest bytes.Buffer
+		if _, _, err := streamObject(ctx, e.store, m.ObjectKey, e.maxObject, &manifest); err != nil {
 			return fmt.Errorf("day %s: manifest %s unreadable: %w", name, m.ObjectKey, err)
 		}
+		raw := manifest.Bytes()
 		pd := packDay{day: name, key: m.ObjectKey, raw: raw}
 		var file auditevidence.ManifestFile
 		if err := json.Unmarshal(raw, &file); err != nil {
@@ -783,16 +813,18 @@ func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Tim
 			if err != nil {
 				return fmt.Errorf("day %s: %w", name, err)
 			}
-			body, err := e.store.Get(ctx, o.Key)
+			// The decoder only gets bytes whose hash matched, so the body is held until the hash is known; the read limit
+			// bounds that buffer.
+			body.Reset()
+			sum, size, err := streamObject(ctx, e.store, o.Key, e.maxObject, &body)
 			if err != nil {
 				return fmt.Errorf("day %s: object %s unreadable: %w", name, o.Key, err)
 			}
-			sum := sha256.Sum256(body)
 			n := 0
 			if hex.EncodeToString(sum[:]) != o.SHA256 {
 				// Bytes the chain does not vouch for are packed for the auditor but never decompressed.
 				c.addProblem(fmt.Sprintf("%s: object %s was modified (SHA-256 mismatch)", name, o.Key))
-			} else if plain, err := dec.DecodeAll(body, nil); err != nil {
+			} else if plain, err := dec.DecodeAll(body.Bytes(), nil); err != nil {
 				c.addProblem(fmt.Sprintf("%s: object %s cannot be decoded", name, o.Key))
 			} else {
 				if _, err := out.Write(plain); err != nil {
@@ -801,16 +833,13 @@ func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Tim
 				n = bytes.Count(plain, []byte("\n"))
 			}
 			pd.objects = append(pd.objects, auditevidence.Object{Key: o.Key, Path: path, SHA256: hex.EncodeToString(sum[:]), EventCount: n})
+			pd.sizes = append(pd.sizes, size)
 			pd.events += n
 		}
 		c.events += pd.events
 		c.days = append(c.days, pd)
 	}
-	info, err := events.Stat()
-	if err != nil {
-		return err
-	}
-	c.eventsSz = info.Size()
+	c.eventsSz = events.n
 	copy(c.eventsH[:], h.Sum(nil))
 	return nil
 }
@@ -869,7 +898,7 @@ func (e *Exporter) exportDoc(export auditstore.AuditExport, c *collected, runs [
 // writeTar writes the members of plan M10 §6.5 in order through cw.
 func (e *Exporter) writeTar(ctx context.Context, cw *chunkWriter, mtime time.Time, readme []byte, c *collected,
 	events *os.File, exportJSON, sigFile []byte) error {
-	tw := tar.NewWriter(cw)
+	tw := tar.NewWriter(&cappedWriter{w: cw, max: e.maxBytes, name: "the package"})
 	member := func(name string, size int64) error {
 		return tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: size, ModTime: mtime, Typeflag: tar.TypeReg})
 	}
@@ -889,16 +918,22 @@ func (e *Exporter) writeTar(ctx context.Context, cw *chunkWriter, mtime time.Tim
 		}
 	}
 	for _, d := range c.days {
-		for _, o := range d.objects {
-			body, err := e.store.Get(ctx, o.Key)
-			if err != nil {
-				return fmt.Errorf("day %s: object %s unreadable: %w", d.day, o.Key, err)
+		for i, o := range d.objects {
+			// The object streams into the package; a changed one fails the build after the fact, and its chunks are
+			// deleted with the rest of the package.
+			if err := member(o.Path, d.sizes[i]); err != nil {
+				return err
 			}
-			if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != o.SHA256 {
+			out := &errWriter{w: tw}
+			sum, _, err := streamObject(ctx, e.store, o.Key, d.sizes[i], out)
+			if out.err != nil {
+				return out.err
+			}
+			if errors.Is(err, errObjectTooLarge) || err == nil && hex.EncodeToString(sum[:]) != o.SHA256 {
 				return fmt.Errorf("day %s: object %s changed during the build", d.day, o.Key)
 			}
-			if err := write(o.Path, body); err != nil {
-				return err
+			if err != nil {
+				return fmt.Errorf("day %s: object %s unreadable: %w", d.day, o.Key, err)
 			}
 		}
 	}
@@ -921,6 +956,38 @@ func (e *Exporter) writeTar(ctx context.Context, cw *chunkWriter, mtime time.Tim
 		return err
 	}
 	return cw.Close()
+}
+
+// errWriter keeps the error of a failed write, so a failure of the package side is told apart from a failed read.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (w *errWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if err != nil && w.err == nil {
+		w.err = err
+	}
+	return n, err
+}
+
+// cappedWriter fails with errExportTooLarge before the bytes written through it would exceed max; n counts what it
+// wrote.
+type cappedWriter struct {
+	w    io.Writer
+	max  int64
+	n    int64
+	name string
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > c.max-c.n {
+		return 0, fmt.Errorf("%w: %s exceeds PADDOCK_AUDIT_EXPORT_MAX_BYTES (%d bytes)", errExportTooLarge, c.name, c.max)
+	}
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // chunkWriter cuts a stream into rows of exactly size bytes (the last may be shorter) and hashes the whole stream.

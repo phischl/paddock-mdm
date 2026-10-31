@@ -29,7 +29,8 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   `no-new-privileges:true`); Caddy keeps only `NET_BIND_SERVICE` for 80 and 443; every service has a `pids_limit`.
   `./paddock check` fails the item `container hardening` when a Compose edit removes one of these settings.
 - Control plane: 4 vCPU, 16 GB RAM, 100 GB disk for 100 devices. Audit domain: 2 vCPU, 4 GB RAM, disk for 400 days
-  of audit evidence (about 1 GB per 100 devices and year).
+  of audit evidence (about 1 GB per 100 devices and year) plus free space for one evidence export of up to
+  `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default 4 GiB) on the audit writer's temp volume (`audit-bucket.md` section 4).
 - A **private interconnect** between the hosts (VPN such as WireGuard, or a private network), each host with a fixed
   address on it. Only these endpoints are published there, all with TLS from the internal CAs:
   - control plane → audit host: RabbitMQ `amqps` 5671 (the audit writer consumes), OpenBao 8200 (the audit writer

@@ -177,6 +177,18 @@ its log for the 00:45 UTC cycle.
   48 hours.
 - `paddock-server audit verify --org <id> --from <day> --to <day>` (run in the audit-writer container) checks the
   signed manifest chain and every object hash of an organization.
+- **Evidence export size and disk.** The audit writer builds one export at a time. It spools the decoded
+  `events.jsonl` of the export in `TMPDIR`, which is the Docker volume `audit-writer-tmp` mounted at `/tmp` (the
+  container root stays read-only); the file is unlinked as soon as it is created, so it never shows up in a listing
+  and nothing is left after a crash, and its space is freed when the build ends. The finished package is stored in
+  chunks in the audit index database until it expires. `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default `4294967296`,
+  4 GiB) bounds both `events.jsonl` and the whole package; an export that exceeds it fails with an error starting
+  with `export_too_large` (shown on the *Evidence exports* page) and an `audit.export_completed` failure event with
+  `reason: export_too_large`, and leaves no chunks behind. Ask the auditor for a shorter range, or raise the limit
+  after checking the disk. Sizing: the volume needs free space for one `events.jsonl` of the limit, and the audit
+  database for the packages of the open exports (at most two per organization, kept 7 days). A single object or
+  manifest larger than 256 MiB is never read into memory: the export fails and the verification reports it as
+  unreadable. The volume holds no state and needs no backup.
 - **Signing key fingerprints.** After every seal and every evidence package the audit writer records the public key of
   the `audit-chain` version it signed with in `paddock_audit.audit_signing_key` (insert-only, so a published key never
   changes; the writer reads OpenBao at most every 10 minutes for this and fails the seal or export if the key cannot be

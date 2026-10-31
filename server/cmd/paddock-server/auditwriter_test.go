@@ -59,6 +59,39 @@ func TestIndexRetentionBelowWORMRetentionIsInvalid(t *testing.T) {
 	}
 }
 
+// TestExportMaxBytes: PADDOCK_AUDIT_EXPORT_MAX_BYTES defaults to 4 GiB, takes a positive byte count and rejects zero,
+// negative and non-numeric values by name.
+func TestExportMaxBytes(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int64
+		valid bool
+	}{
+		{"", auditwriter.DefaultExportMaxBytes, true},
+		{"1048576", 1 << 20, true},
+		{"0", 0, false},
+		{"-1", 0, false},
+		{"4GiB", 0, false},
+	} {
+		env := map[string]string{}
+		if tc.value != "" {
+			env["PADDOCK_AUDIT_EXPORT_MAX_BYTES"] = tc.value
+		}
+		l := config.NewLoaderFrom(env)
+		got := exportMaxBytes(l)
+		err := l.Err()
+		if tc.valid && (err != nil || got != tc.want) {
+			t.Errorf("%q: %d, %v; want %d", tc.value, got, err, tc.want)
+		}
+		if !tc.valid && (err == nil || !strings.Contains(err.Error(), "PADDOCK_AUDIT_EXPORT_MAX_BYTES")) {
+			t.Errorf("%q: err = %v, want it to name PADDOCK_AUDIT_EXPORT_MAX_BYTES", tc.value, err)
+		}
+	}
+	if auditwriter.DefaultExportMaxBytes != 4<<30 {
+		t.Errorf("default = %d, want 4 GiB", auditwriter.DefaultExportMaxBytes)
+	}
+}
+
 // TestIndexRetentionDefaultsToWORMRetention: without the variable, and with a longer index retention, the loader
 // accepts the configuration (it fails later, on the unreachable database).
 func TestIndexRetentionDefaultsToWORMRetention(t *testing.T) {
