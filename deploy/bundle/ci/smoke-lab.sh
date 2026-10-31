@@ -194,6 +194,9 @@ check_with_warning "$W/check.txt"
 check_with_warning "$W/check-online.txt" --online
 lab_paddock up
 lab_paddock ps
+# The notifier (plan M9 decision 41) is one of the roles `./paddock up` waited for.
+grep -qx 'paddock-notifier healthy' <<<"$(lab_paddock ps --format '{{.Service}} {{.Health}}' </dev/null)" ||
+  fail "./paddock ps does not list paddock-notifier as healthy"
 "$here/assert-hardening.sh" paddock-lab
 
 step "9 probes"

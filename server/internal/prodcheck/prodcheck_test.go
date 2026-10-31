@@ -1023,3 +1023,107 @@ func TestAuthentikWebWorkersItem(t *testing.T) {
 		}
 	})
 }
+
+// withNotifier adds paddock-notifier without a relay, its empty smtp_password and the api's presence flag false, as
+// the secret scripts and the templates leave them (plan M9 decision 41).
+func withNotifier(t *testing.T, f *fixture) {
+	t.Helper()
+	p := filepath.Join(f.dir, "secrets", "smtp_password")
+	if err := os.WriteFile(p, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.Secrets["smtp_password"] = prodcheck.Secret{File: p}
+	f.cfg.Services["paddock-notifier"] = prodcheck.Service{
+		Environment: map[string]*string{
+			"PADDOCK_ENV":                ptr("production"),
+			"PADDOCK_OPENBAO_ADDR":       ptr("https://openbao:8200"),
+			"PADDOCK_SMTP_PASSWORD_FILE": ptr("/run/secrets/smtp_password"),
+			"PADDOCK_SMTP_HOST":          ptr(""),
+			"PADDOCK_SMTP_TLS":           ptr(""),
+			"PADDOCK_SMTP_USERNAME":      ptr(""),
+		},
+		Secrets: []prodcheck.ServiceSecret{{Source: "smtp_password"}},
+	}
+	harden(f.cfg)
+	f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "false")
+}
+
+// TestNotifierPasses: the notifier as the templates leave it, without a relay and with an empty smtp_password, and
+// with a relay with credentials, passes; the presence flag item exists only with the notifier.
+func TestNotifierPasses(t *testing.T) {
+	const item = "notifications: SMTP presence flag matches the relay"
+	f := newFixture(t)
+	if _, out := run(t, f.cfg, prodcheck.Options{}); strings.Contains(out, item) {
+		t.Fatalf("item %q without paddock-notifier:\n%s", item, out)
+	}
+	withNotifier(t, f)
+	if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok || !strings.Contains(out, "PASS  "+item) {
+		t.Fatalf("the notifier without a relay must pass:\n%s", out)
+	}
+	if err := os.WriteFile(f.cfg.Secrets["smtp_password"].File, []byte("relay-password"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
+	f.setEnv("paddock-notifier", "PADDOCK_SMTP_TLS", "starttls")
+	f.setEnv("paddock-notifier", "PADDOCK_SMTP_USERNAME", "paddock")
+	f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "true")
+	if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok {
+		t.Fatalf("the notifier with a relay must pass:\n%s", out)
+	}
+}
+
+// TestNotifierFindings: each finding of the notifier fails prod-check naming its cause (plan M9 decision 26, §6.7).
+func TestNotifierFindings(t *testing.T) {
+	cases := map[string]struct {
+		set  func(f *fixture)
+		want string
+	}{
+		"private outbound addresses": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE", "true")
+		}, "paddock-notifier: PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE"},
+		"relay without TLS": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_TLS", "none")
+			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "true")
+		}, "paddock-notifier: smtp: TLS is none (PADDOCK_SMTP_TLS)"},
+		"flag true without a relay": {func(f *fixture) {
+			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "true")
+		}, "PADDOCK_SMTP_ENABLED is true but paddock-notifier has no PADDOCK_SMTP_HOST"},
+		"relay with the flag false": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
+		}, "paddock-notifier has PADDOCK_SMTP_HOST but PADDOCK_SMTP_ENABLED is not true"},
+		"relay without the flag": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
+			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "")
+		}, "paddock-notifier has PADDOCK_SMTP_HOST but PADDOCK_SMTP_ENABLED is not true"},
+		"flag not a boolean": {func(f *fixture) {
+			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "maybe")
+		}, `paddock-api: PADDOCK_SMTP_ENABLED is "maybe", not true or false`},
+		"username with an empty password": {func(f *fixture) {
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_HOST", "smtp.example.org")
+			f.setEnv("paddock-notifier", "PADDOCK_SMTP_USERNAME", "paddock")
+			f.setEnv("paddock-api", "PADDOCK_SMTP_ENABLED", "true")
+		}, "smtp_password: empty"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			withNotifier(t, f)
+			tc.set(f)
+			ok, out := run(t, f.cfg, prodcheck.Options{})
+			if ok {
+				t.Fatalf("expected FAIL:\n%s", out)
+			}
+			failLine(t, out, tc.want)
+		})
+	}
+	t.Run("an empty secret other than smtp_password still fails", func(t *testing.T) {
+		f := newFixture(t)
+		withNotifier(t, f)
+		if err := os.WriteFile(f.cfg.Secrets["db_paddock_api_url"].File, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, out := run(t, f.cfg, prodcheck.Options{})
+		failLine(t, out, "db_paddock_api_url: empty")
+	})
+}

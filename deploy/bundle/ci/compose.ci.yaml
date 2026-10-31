@@ -31,6 +31,8 @@ services:
 
   paddock-revocation-issuer: *caddy-trust
 
+  paddock-notifier: *caddy-trust
+
   paddock-worker:
     environment:
       SSL_CERT_FILE: /run/secrets/caddy_root_crt

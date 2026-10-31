@@ -156,11 +156,28 @@ SQL
 ```
 
 The password reaches `psql` through the container's environment, never a command line. The step is idempotent.
-After step 5, run `./paddock bootstrap openbao` once with a root token (`docs/operations/openbao.md` section 1): it
-adds the Transit keys `notification-wrap` and `notification-pseudonym`, the permissions of `paddock-api` on them, the
-policy and AppRole `paddock-notifier`, and keeps every existing secret ID. The same release adds the commit sequence of the audit index:
-its audit migration backfills every existing event, so stop the audit writer first (step 4; duration in
-`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
+
+Still before step 5, with A's stack running and OpenBao unsealed, run `./paddock bootstrap openbao` once in B's
+directory with a root token (`docs/operations/openbao.md` section 1; revoke the token afterwards). It adds the Transit
+keys `notification-wrap` and `notification-pseudonym`, the permissions of `paddock-api` on them, the policy and
+AppRole `paddock-notifier`, and keeps every existing secret ID. It writes the notifier's AppRole files to
+`.secrets/approle/paddock-notifier/role_id` and `secret_id` of B's directory; the notifier runs on the control plane,
+so nothing goes to the audit host. If you ran the bootstrap in another directory, copy that directory's
+`.secrets/approle/paddock-notifier/` to B's `.secrets/approle/` (`cp -a`) before step 5: B's `./paddock up` starts the
+new role `paddock-notifier` and waits for it, and it cannot become healthy with empty AppRole files.
+
+`./paddock secrets` in B's directory also creates the empty `.secrets/smtp_password` and the notifier's database URL.
+B's `.env.example` brings new keys; copy them into `.env`:
+
+- `PADDOCK_SMTP_ENABLED=false`, or, with an SMTP relay for e-mail destinations, `true` together with
+  `PADDOCK_SMTP_HOST`, `PADDOCK_SMTP_PORT`, `PADDOCK_SMTP_TLS`, `PADDOCK_SMTP_FROM` and, for a relay with
+  authentication, `PADDOCK_SMTP_USERNAME` with the password in `.secrets/smtp_password` (`docs/operations/install.md`,
+  *E-mail relay*). `./paddock check` fails while `PADDOCK_SMTP_ENABLED` and `PADDOCK_SMTP_HOST` disagree.
+
+The same release adds the commit sequence of the audit index: its audit migration backfills every existing event, so
+stop the audit writer first (step 4). The backfill takes about 1.5 minutes per million events in the index (measured:
+1 000 000 events in 1 min 26 s on PostgreSQL 18); count them with `SELECT count(*) FROM audit_event` on
+`paddock_audit` (`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
 
 ## Rollback
 

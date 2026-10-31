@@ -163,6 +163,8 @@ controlplane_secrets() {
   secret fleet_admin_password "$(rand)1!"
   secret fleet_enroll_secret
   placeholder fleet_api_token
+  # The SMTP relay's password (docs/operations/install.md); stays empty for a relay without PADDOCK_SMTP_USERNAME.
+  placeholder smtp_password
 
   # Backups (docs/operations/restore.md): the encryption key MUST also be kept offline with the custodians, else a
   # lost host takes the means to read its backups with it. The bucket credentials come from the backup S3 provider.
