@@ -64,6 +64,18 @@ func ValidateDestination(d Destination) error {
 // ValidateDestination checks d: the name, the filter (custom: 1–200 distinct registered codes) and, by type, the
 // webhook URL under p and the heartbeat interval, or the recipients and the e-mail interval.
 func (p Policy) ValidateDestination(ctx context.Context, d Destination) error {
+	if err := ValidateSettings(d); err != nil {
+		return err
+	}
+	if d.Type == TypeWebhook {
+		return p.Validate(ctx, d.URL)
+	}
+	return nil
+}
+
+// ValidateSettings checks every rule of ValidateDestination except the webhook URL: an update that keeps the stored
+// URL cannot validate it, because the api can encrypt the URL but never decrypt it (plan M9 decision 16).
+func ValidateSettings(d Destination) error {
 	if !namePattern.MatchString(d.Name) {
 		return ErrInvalidName
 	}
@@ -72,9 +84,6 @@ func (p Policy) ValidateDestination(ctx context.Context, d Destination) error {
 	}
 	switch d.Type {
 	case TypeWebhook:
-		if err := p.Validate(ctx, d.URL); err != nil {
-			return err
-		}
 		if d.HeartbeatIntervalS != 0 &&
 			(d.HeartbeatIntervalS < MinHeartbeatSeconds || d.HeartbeatIntervalS > MaxHeartbeatSeconds) {
 			return ErrInvalidHeartbeat

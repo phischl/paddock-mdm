@@ -116,7 +116,8 @@ func TestExposedExcludesStepUpAndHidden(t *testing.T) {
 	for _, name := range []string{
 		"feedAuditEvents", "lockDevice", "destroyDevice", "revealDeviceLocalAdmin", "revealDeviceRecoveryKey", "endAllSessions",
 		"createApiToken", "revokeApiToken", "updateMe", "uploadAgentArtifact", "uploadAgentPackage",
-		"generateAutoinstall", "downloadDeviceHeader",
+		"generateAutoinstall", "downloadDeviceHeader", "getNotificationPseudonymLookup", "createNotificationDestination",
+		"resolveNotificationPseudonym", "createPlatformNotificationDestination",
 	} {
 		if _, ok := ByName(name); !ok {
 			t.Errorf("%s is missing from the catalog", name)

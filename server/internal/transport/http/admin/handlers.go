@@ -63,8 +63,10 @@ type handlers struct {
 	// findings and the account list of their assignee picker (plan M9 decision 34).
 	findings    *app.Findings
 	accountList *app.AccountList
-	ipAllowlist *app.IPAllowlist
-	overview    *app.Overview
+	// notifications are the notification destinations (plan M9 decisions 14–19).
+	notifications *app.Notifications
+	ipAllowlist   *app.IPAllowlist
+	overview      *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).

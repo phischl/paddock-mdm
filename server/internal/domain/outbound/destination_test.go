@@ -94,3 +94,24 @@ func TestValidateDestination(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateSettings: every rule except the webhook URL applies, so an update that keeps the stored (encrypted) URL
+// is still checked.
+func TestValidateSettings(t *testing.T) {
+	d := outbound.Destination{Type: outbound.TypeWebhook, Name: "SIEM ingest", FilterMode: outbound.FilterSecurity}
+	if err := outbound.ValidateSettings(d); err != nil {
+		t.Errorf("webhook without URL: %v", err)
+	}
+	d.URL = "http://127.0.0.1/"
+	if err := outbound.ValidateSettings(d); err != nil {
+		t.Errorf("the URL is not checked: %v", err)
+	}
+	d.HeartbeatIntervalS = 30
+	if err := outbound.ValidateSettings(d); !errors.Is(err, outbound.ErrInvalidHeartbeat) {
+		t.Errorf("heartbeat 30: %v", err)
+	}
+	e := outbound.Destination{Type: outbound.TypeEmail, Name: "secops", FilterMode: outbound.FilterAll, EmailMinIntervalS: 300}
+	if err := outbound.ValidateSettings(e); !errors.Is(err, outbound.ErrInvalidRecipients) {
+		t.Errorf("email without recipients: %v", err)
+	}
+}

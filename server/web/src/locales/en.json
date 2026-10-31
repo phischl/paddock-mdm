@@ -512,6 +512,15 @@
       "assigned": "{actor} assigned the finding {code} on {hostname}",
       "closed": "{actor} closed the finding {code} on {hostname} as {resolution, select, resolved {resolved} accepted_risk {accepted risk} false_positive {false positive} other {{resolution}}}",
       "reopened": "{actor} reopened the finding {code} on {hostname}"
+    },
+    "notification": {
+      "destination_created": "{actor} created the notification destination {name} ({type, select, webhook {webhook} other {e-mail}})",
+      "destination_updated": "{actor} changed the notification destination {name}",
+      "destination_deleted": "{actor} deleted the notification destination {name}",
+      "destination_secret_rotated": "{actor} replaced the signing secret of the notification destination {name}",
+      "test_requested": "{actor} requested a test notification to {name}",
+      "test_sent": "Test notification to {name}, requested by {requested_by}",
+      "pseudonym_resolved": "{actor} resolved the pseudonym {pseudonym}"
     }
   },
   "organizations": {

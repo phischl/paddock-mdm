@@ -1507,3 +1507,8 @@ once at the end.
     organization) under its own role.
   - The webhook deny list gains `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`, `100::/64` and the
     documentation ranges (ADR 0031 amendment 2026-10-31).
+- **Decision 17 (PDK-123).** The test route is a privileged, audited operation: the api records
+  `notification.test_requested` (one event per attempt through `app.ActionRunner`), and the notifier records
+  `notification.test_sent` with the delivery result. `notification.test_requested` is not in the security preset.
+- **Decision 37 (PDK-129), known limitation.** The daily summary windows on `first_seen_at`; a vulnerability re-rated
+  to critical later is not summarized in alpha.7 (follow-up ticket).

@@ -1661,6 +1661,185 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notification-destinations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_auditor. The organization's notification destinations: signed webhooks and e-mail address lists that
+         *     receive the organization's security events (ADR 0031). Never shows a webhook URL or a signing secret;
+         *     url_display has scheme, host and a masked path.
+         */
+        get: operations["listNotificationDestinations"];
+        put?: never;
+        /**
+         * @description Roles: org_admin. Creates a destination. A webhook needs an https URL without user information on port 443
+         *     or 1024–65535 whose host is a public address (400 invalid_request naming the rule); the URL and a new signing
+         *     secret are stored encrypted and the secret is returned once in this response. An e-mail destination needs 1 to
+         *     20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
+         *     GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
+         *     unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
+         *     duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history.
+         *     Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+         */
+        post: operations["createNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-destinations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_auditor. One destination with its delivery state; 404 not_found for another organization's. */
+        get: operations["getNotificationDestination"];
+        /**
+         * @description Roles: org_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
+         *     secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+         *     Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
+         *     resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
+         *     is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+         *     disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
+         */
+        put: operations["updateNotificationDestination"];
+        post?: never;
+        /**
+         * @description Roles: org_admin. Deletes the destination with its delivery state and history. Needs a step-up within the last
+         *     5 minutes (403 step_up_required).
+         */
+        delete: operations["deleteNotificationDestination"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-destinations/{id}/rotate-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Replaces the signing secret of a webhook destination and returns the new one once; deliveries
+         *     are signed with it from the notifier's next round. 409 invalid_state for an e-mail destination. Needs a step-up
+         *     within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["rotateNotificationDestinationSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-destinations/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
+         *     secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
+         *     message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
+         *     409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+         *     minutes (403 step_up_required).
+         */
+        post: operations["testNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-destinations/{id}/resolve-pseudonym": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's
+         *     notifications stands for. The api never decrypts the pseudonym key: the notifier resolves the lookup in its next
+         *     round; GET …/resolve-pseudonym/{lookup_id} returns the result once. 400 invalid_request for a malformed
+         *     pseudonym (never recorded), 409 invalid_state while no destination pseudonymizes user names or while another
+         *     lookup of the organization is pending. Needs a step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["resolveNotificationPseudonym"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-destinations/{id}/resolve-pseudonym/{lookup_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                lookup_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin. The result of a pseudonym lookup: resolved false until the notifier has resolved it; once
+         *     resolved, username is the matching user name ("" when none matches) and the lookup is deleted with this read,
+         *     so a second read is 404 not_found. Unread lookups are deleted after 10 minutes.
+         */
+        get: operations["getNotificationPseudonymLookup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_auditor, platform_admin. The destination types this installation supports: email is true
+         *     only with an SMTP relay (PADDOCK_SMTP_ENABLED).
+         */
+        get: operations["getNotificationCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/findings": {
         parameters: {
             query?: never;
@@ -2981,6 +3160,116 @@ export interface paths {
         put?: never;
         /** @description Roles: platform_admin. halted → running in the wave where it stopped; a rollout that had completed returns to completed (the current release); failures reported before the resume no longer count. */
         post: operations["resumeAgentRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/notification-destinations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The platform's notification destinations: signed webhooks and e-mail address lists that
+         *     receive platform events (rollouts, releases, OSV, IP allow list) (ADR 0031). Never shows a webhook URL or a signing secret;
+         *     url_display has scheme, host and a masked path.
+         */
+        get: operations["listPlatformNotificationDestinations"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Creates a destination. A webhook needs an https URL without user information on port 443
+         *     or 1024–65535 whose host is a public address (400 invalid_request naming the rule); the URL and a new signing
+         *     secret are stored encrypted and the secret is returned once in this response. An e-mail destination needs 1 to
+         *     20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
+         *     GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
+         *     unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
+         *     duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
+         *     Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+         */
+        post: operations["createPlatformNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/notification-destinations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: platform_admin. One destination with its delivery state; 404 not_found for another scope's. */
+        get: operations["getPlatformNotificationDestination"];
+        /**
+         * @description Roles: platform_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
+         *     secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+         *     Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
+         *     resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
+         *     is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+         *     disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
+         */
+        put: operations["updatePlatformNotificationDestination"];
+        post?: never;
+        /**
+         * @description Roles: platform_admin. Deletes the destination with its delivery state and history. Needs a step-up within the last
+         *     5 minutes (403 step_up_required).
+         */
+        delete: operations["deletePlatformNotificationDestination"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/notification-destinations/{id}/rotate-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Replaces the signing secret of a webhook destination and returns the new one once; deliveries
+         *     are signed with it from the notifier's next round. 409 invalid_state for an e-mail destination. Needs a step-up
+         *     within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["rotatePlatformNotificationDestinationSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/notification-destinations/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
+         *     secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
+         *     message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
+         *     409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+         *     minutes (403 step_up_required).
+         */
+        post: operations["testPlatformNotificationDestination"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4586,6 +4875,159 @@ export interface components {
              */
             cleared_at: string | null;
         };
+        /** @enum {string} */
+        NotificationDestinationType: "webhook" | "email";
+        /**
+         * @description security forwards the security preset of ADR 0031, all every event, custom the listed codes.
+         * @enum {string}
+         */
+        NotificationFilterMode: "security" | "all" | "custom";
+        NotificationDestination: {
+            /** Format: uuid */
+            id: string;
+            type: components["schemas"]["NotificationDestinationType"];
+            name: string;
+            enabled: boolean;
+            filter_mode: components["schemas"]["NotificationFilterMode"];
+            /** @description The codes of filter_mode custom; empty otherwise. */
+            codes: string[];
+            pseudonymize_users: boolean;
+            include_params: boolean;
+            /** @description Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail. */
+            url_display: string | null;
+            heartbeat_interval_s: number;
+            recipients: string[];
+            email_min_interval_s: number;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            state: components["schemas"]["NotificationDestinationState"];
+        };
+        NotificationDestinationState: {
+            /** @enum {string} */
+            status: "active" | "stalled";
+            /**
+             * Format: int64
+             * @description The commit sequence of the last delivered event position.
+             */
+            cursor_commit_seq: number;
+            /**
+             * Format: int64
+             * @description The last forwarded sequence number.
+             */
+            forward_seq: number;
+            /** Format: date-time */
+            last_success_at: string | null;
+            /** Format: date-time */
+            last_attempt_at: string | null;
+            /** Format: date-time */
+            next_attempt_at: string | null;
+            /** Format: date-time */
+            stalled_since: string | null;
+            last_error: string | null;
+            /**
+             * Format: int64
+             * @description Seconds since the first failure of the current series of failed deliveries; 0 while deliveries succeed.
+             */
+            lag_seconds: number;
+            last_test: {
+                /** Format: date-time */
+                at: string;
+                ok: boolean;
+                error: string | null;
+            } | null;
+        };
+        NotificationDestinationCreate: {
+            type: components["schemas"]["NotificationDestinationType"];
+            name: string;
+            enabled: boolean;
+            filter_mode: components["schemas"]["NotificationFilterMode"];
+            /** @description Registered audit codes; filter_mode custom only. */
+            codes?: string[];
+            /** @default false */
+            pseudonymize_users: boolean;
+            /** @default false */
+            include_params: boolean;
+            /** @description Webhook only; required for a webhook. Stored encrypted, never returned. */
+            url?: string;
+            /**
+             * @description Webhook; 0 (off) or 60–3600.
+             * @default 0
+             */
+            heartbeat_interval_s: number;
+            /** @description E-mail only; 1–20 plain addresses. */
+            recipients?: string[];
+            /**
+             * @description E-mail only; 60–3600.
+             * @default 300
+             */
+            email_min_interval_s: number;
+        };
+        NotificationDestinationUpdate: {
+            type?: components["schemas"]["NotificationDestinationType"];
+            name: string;
+            enabled: boolean;
+            filter_mode: components["schemas"]["NotificationFilterMode"];
+            codes?: string[];
+            /** @default false */
+            pseudonymize_users: boolean;
+            /** @default false */
+            include_params: boolean;
+            /** @description Webhook only; absent keeps the stored URL. */
+            url?: string;
+            /** @default 0 */
+            heartbeat_interval_s: number;
+            recipients?: string[];
+            /** @default 300 */
+            email_min_interval_s: number;
+            /**
+             * @description Required when the update enables a disabled destination.
+             * @enum {string}
+             */
+            cursor?: "continue" | "skip";
+        };
+        NotificationDestinationCreated: components["schemas"]["NotificationDestination"] & {
+            /** @description Webhook only: the signing secret, shown once; keep it like a password. */
+            secret?: string;
+        };
+        NotificationDestinationSecret: {
+            /** @description The new signing secret, shown once. */
+            secret: string;
+        };
+        NotificationTestRequested: {
+            /** Format: uuid */
+            delivery_id: string;
+        };
+        NotificationPseudonymResolve: {
+            /** @description u_ and 24 lowercase hexadecimal characters. */
+            pseudonym: string;
+        };
+        NotificationPseudonymRequested: {
+            /** Format: uuid */
+            lookup_id: string;
+        };
+        NotificationPseudonymLookup: {
+            pseudonym: string;
+            /** @description The user name once resolved; "" when no user matches. */
+            username: string | null;
+            resolved: boolean;
+        };
+        NotificationCapabilities: {
+            email: boolean;
+        };
+        NotificationDestinationPage: {
+            items: components["schemas"]["NotificationDestination"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         FindingPage: {
             items: components["schemas"]["Finding"][];
             page: number;
@@ -5608,6 +6050,8 @@ export interface components {
          *     printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
          */
         McpClient: string;
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        NotificationDestinationSort: "name" | "-name" | "type" | "-type" | "created_at" | "-created_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         FindingListSort: "last_seen_at" | "-last_seen_at" | "opened_at" | "-opened_at" | "status" | "-status" | "hostname" | "-hostname" | "code" | "-code";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -8752,6 +9196,294 @@ export interface operations {
             403: components["responses"]["Problem"];
         };
     };
+    listNotificationDestinations: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["NotificationDestinationSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                type?: components["schemas"]["NotificationDestinationType"][];
+                enabled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of destinations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationDestinationCreate"];
+            };
+        };
+        responses: {
+            /** @description Created; secret is shown only here (webhook). */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationCreated"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getNotificationDestination: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The destination. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestination"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationDestinationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestination"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    deleteNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    rotateNotificationDestinationSecret: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new secret, shown only here. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationSecret"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    testNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTestRequested"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    resolveNotificationPseudonym: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationPseudonymResolve"];
+            };
+        };
+        responses: {
+            /** @description Requested. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPseudonymRequested"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getNotificationPseudonymLookup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                lookup_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The lookup. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPseudonymLookup"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    getNotificationCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The capabilities. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationCapabilities"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
     listFindings: {
         parameters: {
             query?: {
@@ -10980,6 +11712,213 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    listPlatformNotificationDestinations: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["NotificationDestinationSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                type?: components["schemas"]["NotificationDestinationType"][];
+                enabled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of destinations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createPlatformNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationDestinationCreate"];
+            };
+        };
+        responses: {
+            /** @description Created; secret is shown only here (webhook). */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationCreated"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getPlatformNotificationDestination: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The destination. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestination"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updatePlatformNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationDestinationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestination"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    deletePlatformNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    rotatePlatformNotificationDestinationSecret: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new secret, shown only here. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationSecret"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    testPlatformNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTestRequested"];
                 };
             };
             400: components["responses"]["Problem"];

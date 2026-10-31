@@ -40,7 +40,11 @@ var lists = map[string]struct {
 	"listAttentionDevices":   {attentionDeviceList, "postgres/queries/attention.sql", "ListAttentionDevices", "hostname, device_id"},
 	"listFindings":           {findingRecordList, "postgres/queries/findings.sql", "ListFindings", `f\.id`},
 	"listAccounts":           {accountList, "postgres/queries/accounts.sql", "ListOrgAccounts", "id"},
-	"listPackageHolds":       {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
+	"listNotificationDestinations": {notificationDestinationList, "postgres/queries/notifications.sql",
+		"ListNotificationDestinations", `d\.id`},
+	"listPlatformNotificationDestinations": {notificationDestinationList, "postgres/queries/notifications.sql",
+		"ListNotificationDestinations", `d\.id`},
+	"listPackageHolds": {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
 	"listIpAllowlist":   {ipAllowlistList, "postgres/queries/ip_allowlist.sql", "ListIPAllowlistEntries", "id"},
