@@ -52,10 +52,21 @@ var TOTPKeyFiles = map[string]string{
 var (
 	totpMu sync.Mutex
 	totps  = map[string]*authflow.TOTP{}
+	// tempPasswords are the passwords of the temporary users made known with AddUser.
+	tempPasswords = map[string]string{}
 )
 
-// TOTP returns the TOTP generator of a dev user, shared by every caller of this process so that no code is used
-// twice (Authentik refuses a replayed code).
+// AddUser makes a temporary Authentik user with a TOTP authenticator known to Password, TOTP and Login, so the
+// helpers for dev users (step-up, device login) serve it too.
+func AddUser(user, password string, totp *authflow.TOTP) {
+	totpMu.Lock()
+	defer totpMu.Unlock()
+	totps[user] = totp
+	tempPasswords[user] = password
+}
+
+// TOTP returns the TOTP generator of a dev user or of a user added with AddUser, shared by every caller of this
+// process so that no code is used twice (Authentik refuses a replayed code).
 func TOTP(user string) (*authflow.TOTP, error) {
 	totpMu.Lock()
 	defer totpMu.Unlock()
@@ -146,8 +157,14 @@ func (t headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(r)
 }
 
-// Password returns the password of a dev user.
+// Password returns the password of a dev user or of a user added with AddUser.
 func Password(user string) (string, error) {
+	totpMu.Lock()
+	pw, ok := tempPasswords[user]
+	totpMu.Unlock()
+	if ok {
+		return pw, nil
+	}
 	f, ok := passwordFiles[user]
 	if !ok {
 		return "", fmt.Errorf("env: unknown dev user %s", user)

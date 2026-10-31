@@ -2,12 +2,8 @@ package acceptance
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base32"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -46,26 +42,29 @@ func gateOrganization(t *testing.T) (string, uuid.UUID) {
 	return org["slug"], responseID(t, res)
 }
 
-// newGateAdmin creates an administrator of slug with a TOTP authenticator (installed in Authentik's shell like
-// make dev-seed does; the key travels on stdin) and signs it in.
+// newGateAdmin creates an administrator of slug with a TOTP authenticator and signs it in.
 func newGateAdmin(t *testing.T, slug string) *gateAdmin {
 	t.Helper()
-	username, password := tempUser(t, "revoke", env.RoleGroup(slug, "admins"))
-	key := make([]byte, 20)
-	_, _ = rand.Read(key)
-	script := fmt.Sprintf("from authentik.core.models import User\nfrom authentik.stages.authenticator_totp.models import TOTPDevice\n"+
-		"TOTPDevice.objects.create(user=User.objects.get(username=%q), name=\"paddock-gate\", key=%q, confirmed=True)\nprint(\"gate totp ok\")\n",
-		username, hex.EncodeToString(key))
-	out, err := stack.ComposeInput(testContext(t, 2*time.Minute), strings.NewReader(script), "exec", "-T", "authentik-worker", "ak", "shell")
-	if err != nil || !strings.Contains(out, "gate totp ok") {
-		t.Fatalf("TOTP authenticator of %s: %v %s", username, err, out)
+	return newGateAdmins(t, slug, 1)[0]
+}
+
+// newGateAdmins creates n administrators of slug with TOTP authenticators, installed in one `ak shell`, and signs them
+// in.
+func newGateAdmins(t *testing.T, slug string, n int) []*gateAdmin {
+	t.Helper()
+	users, passwords := make([]string, n), make([]string, n)
+	for i := range users {
+		users[i], passwords[i] = tempUser(t, "revoke", env.RoleGroup(slug, "admins"))
 	}
-	p, err := loginAs(t, username, password)
-	if err != nil {
-		t.Fatal(err)
+	admins := make([]*gateAdmin, n)
+	for i, totp := range installTOTPs(t, 2*time.Minute, users...) {
+		p, err := loginAs(t, users[i], passwords[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		admins[i] = &gateAdmin{portal: p, username: users[i], password: passwords[i], totp: totp}
 	}
-	return &gateAdmin{portal: p, username: username, password: password,
-		totp: &authflow.TOTP{Secret: base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)}}
+	return admins
 }
 
 // stepUp runs a step-up of the administrator's session. A step-up within Authentik's maximum auth age of the
@@ -505,17 +504,19 @@ func revocationRequestCases(verb string) []auditCase {
 			expectOneEvent(t, w.alice, res.RequestID, code, "denied")
 		}},
 		{"not found", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			stepUp(t, alice, env.Alice, true)
-			res := call(t, alice, http.MethodPost, path(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
+			user := w.admins.take()
+			admin := login(t, user)
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, path(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
 			expectStatus(t, res, http.StatusNotFound, "not_found")
 			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
+			user := w.admins.take()
+			admin := login(t, user)
 			id := activeID(t, w)
-			stepUp(t, alice, env.Alice, true)
-			res := call(t, alice, http.MethodPost, path(id), map[string]any{"confirm_hostname": "not-" + uniqueSuffix()})
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, path(id), map[string]any{"confirm_hostname": "not-" + uniqueSuffix()})
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
 		}},
@@ -542,7 +543,8 @@ func (w *auditWorld) sharedGateOrganization(t *testing.T) string {
 func pendingDestroy(t *testing.T, w *auditWorld) (a1, a2 *gateAdmin, id, hostname string) {
 	t.Helper()
 	slug := w.sharedGateOrganization(t)
-	a1, a2 = newGateAdmin(t, slug), newGateAdmin(t, slug)
+	admins := newGateAdmins(t, slug, 2)
+	a1, a2 = admins[0], admins[1]
 	d := activeDevice(t, a1.portal, "", "a3-destroy-"+uniqueSuffix())
 	return a1, a2, a1.revoke(t, "destroy", d).ID, getDevice(t, a1.portal, d.DeviceID).Hostname
 }
@@ -588,9 +590,10 @@ func revocationReviewCases(verb, code string) []auditCase {
 			expectOneEvent(t, w.alice, res.RequestID, code, "denied")
 		}},
 		{"not found", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			stepUp(t, alice, env.Alice, true)
-			res := call(t, alice, http.MethodPost, path(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
+			user := w.admins.take()
+			admin := login(t, user)
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, path(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
 			expectStatus(t, res, http.StatusNotFound, "not_found")
 			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
 		}},
