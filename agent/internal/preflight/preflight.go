@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ type Options struct {
 	Root       string
 	EUID       int
 	ConfigPath string
+	Proxy      string
 	HTTP       *http.Client
 }
 
@@ -180,7 +182,8 @@ func himmelblauCheck(sys reconcile.System) Check {
 	return Check{Name: "himmelblau", Status: Info, Detail: "not installed; the agent installs it"}
 }
 
-// sudoersDCheck names what the sudo reconciler will quarantine at the first enforced apply.
+// sudoersDCheck names what the sudo reconciler quarantines at the first enforced apply: every entry except its own
+// paddock-u-* files and the default allow list (README); an organization's allow list is unknown before enrollment.
 func sudoersDCheck(sys reconcile.System) Check {
 	c := Check{Name: "sudoers_d"}
 	names, err := sys.ReadDir("/etc/sudoers.d")
@@ -190,10 +193,7 @@ func sudoersDCheck(sys reconcile.System) Check {
 	}
 	var foreign []string
 	for _, n := range names {
-		if strings.HasPrefix(n, "paddock-") || n == "README" {
-			continue
-		}
-		if _, info, err := sys.ReadFile("/etc/sudoers.d/" + n); err != nil || info == nil || !info.Mode().IsRegular() {
+		if strings.HasPrefix(n, "paddock-u-") || n == "README" {
 			continue
 		}
 		foreign = append(foreign, n)
@@ -202,7 +202,7 @@ func sudoersDCheck(sys reconcile.System) Check {
 		c.Status, c.Detail = OK, "no foreign file in /etc/sudoers.d"
 		return c
 	}
-	c.Status, c.Detail = Warn, "the first enforced apply quarantines: "+strings.Join(foreign, ", ")
+	c.Status, c.Detail = Warn, "the first enforced apply quarantines, unless the organization allows it: "+strings.Join(foreign, ", ")
 	return c
 }
 
@@ -245,30 +245,53 @@ func serverCheck(ctx context.Context, o Options) Check {
 		c.Status, c.Detail = Fail, "the enrollment configuration has no server_url"
 		return c
 	}
-	url := strings.TrimRight(cfg.ServerURL, "/") + "/healthz"
+	// The device gateway has no health route (/healthz is on the internal ops listener). A plain unauthenticated GET
+	// of an unrouted /v1 path (the gateway's problem+json catch-all) has no body, token or side effect and causes no
+	// audit noise beyond any unauthenticated request; only a Paddock problem answer proves that TLS works and that the
+	// gateway, not a captive portal or a proxy error page, answers.
+	target := strings.TrimRight(cfg.ServerURL, "/") + "/v1/preflight"
 	ctx, cancel := context.WithTimeout(ctx, serverTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 	if err != nil {
 		c.Status, c.Detail = Fail, err.Error()
 		return c
 	}
-	client := o.HTTP
-	if client == nil {
-		client = http.DefaultClient
+	client, err := httpClient(o)
+	if err != nil {
+		c.Status, c.Detail = Fail, err.Error()
+		return c
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		c.Status, c.Detail = Fail, "GET "+url+": "+err.Error()
+		c.Status, c.Detail = Fail, "GET "+target+": "+err.Error()
 		return c
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		c.Status, c.Detail = Fail, fmt.Sprintf("GET %s: status %d", url, resp.StatusCode)
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/problem+json") {
+		c.Status, c.Detail = Fail, fmt.Sprintf("GET %s: status %d, but not a Paddock gateway answer (a proxy or captive portal?)", target, resp.StatusCode)
 		return c
 	}
-	c.Status, c.Detail = OK, url+" answers 200"
+	c.Status, c.Detail = OK, "the Paddock gateway at "+cfg.ServerURL+" answers"
 	return c
+}
+
+// httpClient is the injected client or one that uses only the proxy of the options, like paddockd enroll: the
+// environment of sudo is not configuration.
+func httpClient(o Options) (*http.Client, error) {
+	if o.HTTP != nil {
+		return o.HTTP, nil
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	if o.Proxy != "" {
+		u, err := url.Parse(o.Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("proxy: %w", err)
+		}
+		tr.Proxy = http.ProxyURL(u)
+	}
+	return &http.Client{Transport: tr}, nil
 }
 
 func clockCheck(ctx context.Context, sys reconcile.System) Check {

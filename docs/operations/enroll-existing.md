@@ -9,7 +9,8 @@ Use it for an installed Ubuntu 24.04 or 26.04 laptop that runs systemd. Adoption
 enrolls the device; it does not reinstall anything.
 
 - **What adoption does:** the device receives its configuration, reports its inventory and is managed like any other
-  device. The device records that it was adopted, not autoinstalled.
+  device. From the agent release that ships PDK-160 the device also records that it was adopted, not autoinstalled;
+  devices enrolled with an older agent have an `unknown` method and are enforced at once.
 - **What it does not do:** the disk stays `unmanaged` (RR-04): Paddock reports an existing LUKS volume but does not
   take over its keyslots, and an unencrypted disk is reported `not_encrypted`. Only a reinstall with the autoinstall
   gives a Paddock-managed disk.
@@ -30,15 +31,18 @@ enrolls the device; it does not reinstall anything.
 
 ## 3. Pre-flight
 
-Copy `paddockd` to the device (it is part of the `paddock-agent` package, section 4, and also available from the
-release) and run it as root. It only reads; nothing on the device changes.
+Copy the release asset `paddockd_<version>_linux_<arch>` to the device, make it executable and run it as root (a
+copied binary is not on `PATH`; after section 4 the installed `paddockd` is). It only reads; nothing on the device
+changes.
 
 ```sh
-sudo paddockd preflight [--json] [--config /etc/paddock/enroll.json]
+chmod +x paddockd_<version>_linux_<arch>
+sudo ./paddockd_<version>_linux_<arch> preflight [--json] [--config /etc/paddock/enroll.json] [--proxy URL]
 ```
 
 It prints one line per check; `--json` prints `[{"name","status","detail"}]`. The exit code is 1 if and only if a
-check is `fail`. `--config` adds the server check once you have the enrollment configuration (section 5).
+check is `fail`. `--config` adds the server check once you have the enrollment configuration (section 5); `--proxy` is the proxy for
+that check, as for `paddockd enroll` (`sudo` drops `HTTPS_PROXY`).
 
 | Check | Result | Meaning and what to fix |
 | --- | --- | --- |
@@ -50,9 +54,9 @@ check is `fail`. `--config` adds the server check once you have the enrollment c
 | `luks` | `warn` unless the root file system is on LUKS; detail: the disk state the agent will report | Adoption never changes the disk. `unmanaged` is expected for an encrypted laptop. |
 | `sssd` | `warn` when package `sssd` is installed | It conflicts with Himmelblau's NSS and PAM configuration. Remove it before enforcement. |
 | `himmelblau` | `info`: installed version or `not installed; the agent installs it` | Nothing to fix. |
-| `sudoers_d` | `warn` listing the files in `/etc/sudoers.d` that the first enforced apply quarantines (every regular file not named `paddock-*` or `README`) | Decide per file: keep the access as a break-glass account, or accept the quarantine. |
+| `sudoers_d` | `warn` listing every entry of `/etc/sudoers.d` except `paddock-u-*` and `README`; the first enforced apply quarantines each of them unless the organization allows it | To keep a file, add it to the *sudoers.d allow list* in *Login & privileges* ([device login](device-login.md)); otherwise accept the quarantine. |
 | `privileged_groups` | `warn` listing every member of `sudo` and `admin` | The organization's break-glass accounts are unknown before enrollment, so all members are listed. Members that are no break-glass account lose these groups when enforced. |
-| `server` | `fail` unless `GET <server_url>/healthz` answers 200 within 10 s; `info` (skipped) without `--config` | Check DNS, proxy and firewall to `device.<domain>`. |
+| `server` | `fail` unless the Paddock device gateway at `server_url` answers within 10 s (TLS succeeds and the answer is a Paddock problem response); `info` (skipped) without `--config` | Check DNS, TLS trust, proxy (`--proxy`) and firewall to `device.<domain>`; a captive portal or proxy error page fails the check. |
 | `clock` | `warn` when time synchronization is off | Enable NTP (`timedatectl set-ntp true`); a wrong clock fails enrollment with `clock_skew`. |
 
 Fix every `fail` before you continue. A `warn` does not block adoption but tells you what will happen.
@@ -126,10 +130,13 @@ names what will change.
 
 ## 8. Rollback of an adoption
 
-1. Retire the device in the portal.
-2. Remove the packages: `sudo apt remove paddock-agent paddock-supervisor paddock-revoke`.
+1. A device that is active: in the portal use *Danger zone* → *Remove Paddock* with mode `leave`
+   ([uninstall](uninstall.md)). It removes Paddock's sudoers files, apt holds, login deny list, notices and
+   `fleet-osquery` and keeps the quarantine copy. Retiring the device first makes this impossible.
+2. A device that never became active or is unreachable: retire it in the portal and remove the packages by hand,
+   `sudo apt remove paddock-agent paddock-supervisor` (add `paddock-revoke` only if you installed it).
 3. Left on the device: the quarantine directory `/var/lib/paddock/quarantine/` (restore sudoers files by hand) and
-   `/var/lib/paddock`. Remove them when you no longer need them. See also [uninstall](uninstall.md).
+   `/var/lib/paddock`. Remove them when you no longer need them.
 
 ## 9. Troubleshooting
 

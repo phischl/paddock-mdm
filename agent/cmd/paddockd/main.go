@@ -44,7 +44,7 @@ const usage = `usage: paddockd [--root DIR] <command> [flags]
 commands:
   enroll --config FILE [--remove-config] [--no-wait] [--proxy URL]
                  enroll this device (root only); exit 0 active, 2 pending, 3 rejected, 1 error
-  preflight [--json] [--config FILE]
+  preflight [--json] [--config FILE] [--proxy URL]
                  check this device before adopting it (read-only; with --config also the server); exit 0 when no
                  check fails, 1 otherwise
   run            run the agent (started by paddock-supervisor)
@@ -148,11 +148,12 @@ func runPreflight(ctx context.Context, layout paths.Layout, args []string, stdou
 	fs := flag.NewFlagSet("preflight", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "print the checks as JSON")
 	cfg := fs.String("config", "", "enrollment configuration; enables the server check")
+	proxy := fs.String("proxy", "", "HTTP(S) proxy for the server check")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 1
 	}
 	checks := preflight.Run(ctx, preflight.Options{
-		Sys: reconcile.OS{Root: layout.Root}, LUKS: luks.OS{}, Root: layout.Root, EUID: os.Geteuid(), ConfigPath: *cfg,
+		Sys: reconcile.OS{Root: layout.Root}, LUKS: luks.OS{}, Root: layout.Root, EUID: os.Geteuid(), ConfigPath: *cfg, Proxy: *proxy,
 	})
 	if *asJSON {
 		if err := preflight.WriteJSON(stdout, checks); err != nil {

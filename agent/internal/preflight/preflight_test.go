@@ -153,16 +153,17 @@ func TestSSSDAndHimmelblau(t *testing.T) {
 	}
 }
 
-func TestSudoersDListsForeignRegularFiles(t *testing.T) {
+func TestSudoersDListsEveryEntryTheReconcilerQuarantines(t *testing.T) {
 	s := healthy()
-	s.Files["/etc/sudoers.d/paddock-alice"] = &fakesys.File{Data: []byte("x")}
+	s.Files["/etc/sudoers.d/paddock-u-alice"] = &fakesys.File{Data: []byte("x")}
 	s.Files["/etc/sudoers.d/README"] = &fakesys.File{Data: []byte("x")}
 	s.Files["/etc/sudoers.d/90-cloud-init-users"] = &fakesys.File{Data: []byte("x")}
 	s.Files["/etc/sudoers.d/ops"] = &fakesys.File{Data: []byte("x")}
+	s.Files["/etc/sudoers.d/paddock-other"] = &fakesys.File{Data: []byte("x")}
 	s.Files["/etc/sudoers.d/link"] = &fakesys.File{Symlink: true}
 	c := status(t, run(t, s, luksTools{lsblk: plain}, nil), "sudoers_d", preflight.Warn)
-	if !strings.Contains(c.Detail, "90-cloud-init-users, ops") || strings.Contains(c.Detail, "paddock-alice") ||
-		strings.Contains(c.Detail, "README") || strings.Contains(c.Detail, "link") {
+	if !strings.Contains(c.Detail, "90-cloud-init-users, link, ops, paddock-other") || strings.Contains(c.Detail, "paddock-u-alice") ||
+		strings.Contains(c.Detail, "README") {
 		t.Errorf("detail %q", c.Detail)
 	}
 }
@@ -188,12 +189,25 @@ func TestClockWarnsWithoutNTP(t *testing.T) {
 	}
 }
 
+// gateway models the device gateway: only /v1 routes and a 404 problem catch-all, no /healthz.
+func gateway(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(`{"code":"not_found"}`))
+}
+
 func TestServer(t *testing.T) {
 	var path string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path = r.URL.Path
-		if r.URL.Query().Get("down") != "" {
-			w.WriteHeader(http.StatusServiceUnavailable)
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/portal"):
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html>sign in</html>"))
+		case strings.HasPrefix(r.URL.Path, "/ok200"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			gateway(w, r)
 		}
 	}))
 	defer srv.Close()
@@ -211,15 +225,36 @@ func TestServer(t *testing.T) {
 		}
 	}
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(srv.URL)), "server", preflight.OK)
-	if path != "/healthz" {
+	if strings.HasPrefix(path, "/healthz") {
 		t.Errorf("requested %q", path)
 	}
-	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(srv.URL+"/?down=1")), "server", preflight.Fail)
+	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(srv.URL+"/portal")), "server", preflight.Fail)
+	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(srv.URL+"/ok200")), "server", preflight.Fail)
 	closed := httptest.NewServer(http.NotFoundHandler())
 	closed.Close()
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, cfg(closed.URL)), "server", preflight.Fail)
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath = write(`{}`) }), "server", preflight.Fail)
 	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath = "/nonexistent" }), "server", preflight.Fail)
+}
+
+// TestServerProxy: the probe goes through the proxy of the options and never the environment's.
+func TestServerProxy(t *testing.T) {
+	var via string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		via = r.Host
+		gateway(w, r)
+	}))
+	defer proxy.Close()
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	p := filepath.Join(t.TempDir(), "enroll.json")
+	if err := os.WriteFile(p, []byte(`{"server_url":"http://device.example.test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath, o.Proxy = p, proxy.URL }), "server", preflight.OK)
+	if via != "device.example.test" {
+		t.Errorf("proxy saw host %q", via)
+	}
+	status(t, run(t, healthy(), luksTools{lsblk: plain}, func(o *preflight.Options) { o.ConfigPath, o.Proxy = p, "://bad" }), "server", preflight.Fail)
 }
 
 func TestFailedAndOutput(t *testing.T) {
