@@ -1930,6 +1930,27 @@ Architect decisions after review 2 of PDK-139 and the external review. Where thi
 9. **The search text stays out of the filter hash** because it can contain personal data (a searched employee's name):
    neither the event nor its window key may tell two texts apart.
 
+### Amendment 2026-10-31 (PDK-606, CVE device-list view)
+
+Architect decision (d) of PDK-139 round 2, with the window of round 3.
+
+1. **New code `vulnerability.devices_viewed`** (registry, outcomes success, failure, denied; params `cve`,
+   `device_count`, `window_start`). It is recorded by `GET /api/v1/vulnerabilities/{cve}/devices` through
+   `RecordReadOnce` before the list, while `inventory_view_recorded` is on. The switch off records nothing, an
+   unreadable switch records nothing and fails the read (round 3 item 1), a refused read (malformed CVE, listing
+   error, CVE without finding in the organization → `not_found`) is a failure with its problem code, a role outside
+   the read roles is denied. Authorization is that of the list (`RolesRead`), so recording does not change who may read.
+2. **Window `(actor, cve, UTC clock hour)`** in `read_audit_window`: the CVE is stored in the key's `target_id` column;
+   no migration. The CVE is a public identifier that matched the CVE pattern. The search text `q`, paging and sort are
+   not part of the key and never recorded.
+3. **`device_count` is the number of distinct devices of the caller's organization** (active or quarantined) with a
+   finding of the CVE, counted in the claim transaction under row-level security (query
+   `CountDevicesWithVulnerability`) and only after the switch was read as on. It is the devices, not the finding
+   rows the list pages over, and no device ID or name enters the event.
+4. **Failure events stay uncoalesced** as for the other read codes (round 3 item 7).
+5. The privacy pack (transparency notice, works-council annex, DPIA input, `privacy.md`) and the portal hint name the
+   new event.
+
 ### Amendment 2026-10-31 (PDK-608: export builder hardening)
 
 Implemented in PDK-608, which folds in PDK-595 and PDK-596. Where this amendment and decisions 31, 32 or 34 differ,

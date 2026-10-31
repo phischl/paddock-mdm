@@ -91,6 +91,21 @@ func (q *Queries) CountDeviceVulnerabilities(ctx context.Context, arg CountDevic
 	return count, err
 }
 
+const countDevicesWithVulnerability = `-- name: CountDevicesWithVulnerability :one
+SELECT count(DISTINCT f.device_id)::int FROM vulnerability_finding f
+JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+WHERE f.cve = $1
+`
+
+// The organization's devices (not findings) that carry cve; the count of a recorded CVE device-list view
+// (plan M10 amendment 2026-10-31, PDK-606).
+func (q *Queries) CountDevicesWithVulnerability(ctx context.Context, cve string) (int32, error) {
+	row := q.db.QueryRow(ctx, countDevicesWithVulnerability, cve)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countInventoryHoldRound = `-- name: CountInventoryHoldRound :one
 UPDATE retention_inventory_hold SET unchanged_rounds = unchanged_rounds + 1
 WHERE device_id = $1 AND last_answer = $2

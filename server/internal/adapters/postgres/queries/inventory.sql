@@ -229,6 +229,13 @@ SELECT count(*) FROM (
   LIMIT @count_limit
 ) matching;
 
+-- The organization's devices (not findings) that carry cve; the count of a recorded CVE device-list view
+-- (plan M10 amendment 2026-10-31, PDK-606).
+-- name: CountDevicesWithVulnerability :one
+SELECT count(DISTINCT f.device_id)::int FROM vulnerability_finding f
+JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+WHERE f.cve = @cve;
+
 -- The dashboard tile (plan M5a decision 10): devices with critical or high findings, and devices with findings of
 -- unknown severity.
 -- name: VulnerabilitySummary :one

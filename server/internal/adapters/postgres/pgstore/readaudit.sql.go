@@ -30,8 +30,9 @@ type ClaimReadAuditWindowParams struct {
 
 // Coalescing keys of read-access audit events (ADR 0032 §4, plan M10 decisions 18–21).
 // Claims the window of one actor, code and target; no row comes back when the window was claimed before, so the read
-// records no event (ActionRunner.RecordReadOnce). target_id is the device of an inventory view and the filter hash of
-// an audit search (plan M10 amendment 2026-10-30, PDK-139 round 2).
+// records no event (ActionRunner.RecordReadOnce). target_id is the device of an inventory view, the CVE of a
+// vulnerability device-list view (PDK-606) and the filter hash of an audit search (plan M10 amendment 2026-10-30,
+// PDK-139 round 2).
 func (q *Queries) ClaimReadAuditWindow(ctx context.Context, arg ClaimReadAuditWindowParams) (bool, error) {
 	row := q.db.QueryRow(ctx, claimReadAuditWindow,
 		arg.OrganizationID,

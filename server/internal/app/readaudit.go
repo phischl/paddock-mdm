@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,9 @@ var SpecAuditSearched = ActionSpec{Code: audit.CodeAuditSearched, AllowedRoles: 
 
 // SpecInventoryViewed records a view of a device's software or vulnerabilities (plan M10 decision 19).
 var SpecInventoryViewed = ActionSpec{Code: audit.CodeDeviceInventoryViewed, AllowedRoles: RolesRead}
+
+// SpecVulnerabilityDevicesViewed records a view of the devices affected by a CVE (plan M10 amendment 2026-10-31).
+var SpecVulnerabilityDevicesViewed = ActionSpec{Code: audit.CodeVulnerabilityDevicesViewed, AllowedRoles: RolesRead}
 
 // ReadAudit records reads of the audit log and of device inventory, at most once per actor and window and only while
 // the organization's privacy settings switch them on (ADR 0032 §4, plan M10 §3.4).
@@ -206,9 +210,48 @@ func (r *ReadAudit) InventoryViewed(ctx context.Context, deviceID uuid.UUID, vie
 	})
 }
 
-// claimReadWindow claims the window key of the context's principal; key is the device of an inventory view or the
-// filter hash of an audit search. The actor is the principal: its account, or its API token when it authenticated
-// with one (plan M10 amendment A5), so a portal and an MCP session of the same account share their windows.
+// VulnerabilityDevicesViewed records the view of the devices affected by cve as vulnerability.devices_viewed, once per
+// actor, CVE and clock hour, while inventory_view_recorded is on. While recording is on, a refused view is recorded as
+// failure and refused: invalid is the input error the handler found (or nil), a malformed CVE is invalid_request and a
+// CVE without finding in the organization is not_found. device_count is the number of the caller's own devices with a
+// finding of the CVE (counted under row-level security in the claim transaction, so only with the switch on), the
+// cve of the event is a public identifier that matched the CVE pattern, and no device appears in the event.
+func (r *ReadAudit) VulnerabilityDevicesViewed(ctx context.Context, cve string, invalid error) (bool, error) {
+	now := r.now()
+	enabled := func(ctx context.Context, qs *pgstore.Queries) (bool, error) {
+		s, err := LoadPrivacySettings(ctx, qs)
+		return s.InventoryViewRecorded, err
+	}
+	return r.runner.RecordReadOnce(ctx, SpecVulnerabilityDevicesViewed, enabled, func(ctx context.Context, qs *pgstore.Queries, rec Recorder) (bool, error) {
+		if invalid != nil {
+			return false, invalid
+		}
+		cve = strings.ToUpper(cve)
+		if !cvePattern.MatchString(cve) {
+			return false, problem.InvalidRequest.WithDetail("cve must be a CVE ID such as CVE-2024-3094")
+		}
+		rec.SetParam("cve", cve)
+		n, err := qs.CountDevicesWithVulnerability(ctx, cve)
+		if err != nil {
+			return false, fmt.Errorf("count devices of the vulnerability view: %w", err)
+		}
+		if n == 0 {
+			return false, problem.NotFound
+		}
+		window := now.UTC().Truncate(time.Hour)
+		if fresh, err := claimReadWindow(ctx, qs, audit.CodeVulnerabilityDevicesViewed, cve, window); err != nil || !fresh {
+			return false, err
+		}
+		rec.SetParam("device_count", n)
+		rec.SetParam("window_start", window.Format(time.RFC3339))
+		return true, nil
+	})
+}
+
+// claimReadWindow claims the window key of the context's principal; key is the device of an inventory view, the CVE
+// of a vulnerability view or the filter hash of an audit search. The actor is the principal: its account, or its API
+// token when it authenticated with one (plan M10 amendment A5), so a portal and an MCP session of the same account
+// share their windows.
 func claimReadWindow(ctx context.Context, q *pgstore.Queries, code audit.Code, key string, window time.Time) (bool, error) {
 	p, _ := principal.From(ctx)
 	actor := p.ID

@@ -11,7 +11,7 @@
     "auditSearchRecorded": "Suchen im Audit-Protokoll protokollieren",
     "auditSearchRecordedHint": "Die erste Suche im Audit-Protokoll pro Administrator, Stunde und Filterkombination wird als Audit-Ereignis protokolliert, weitere Suchen in diesem Zeitfenster nicht. Protokolliert werden die Filter, nie die Ergebnisse oder der Suchtext.",
     "inventoryViewRecorded": "Ansichten des Geräteinventars protokollieren",
-    "inventoryViewRecordedHint": "Die erste Ansicht der Software und Schwachstellen eines Geräts pro Administrator, Gerät und Tag wird als Audit-Ereignis protokolliert, weitere Ansichten in diesem Zeitfenster nicht.",
+    "inventoryViewRecordedHint": "Die erste Ansicht der Software und Schwachstellen eines Geräts pro Administrator, Gerät und Tag wird als Audit-Ereignis protokolliert, weitere Ansichten in diesem Zeitfenster nicht. Die erste Ansicht der von einer CVE betroffenen Geräte pro Administrator und Stunde wird ebenso protokolliert.",
     "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",
     "saved": "Die Datenschutzeinstellungen wurden gespeichert."
   },
@@ -413,6 +413,9 @@
       "event_seq_reset": "Die Ereignisnummerierung des Geräts {target} wurde zurückgesetzt: höchste Nummer {reported_high} nach {previous_high} (Zählerrücksetzung)",
       "clock_drift": "Die Uhr des Geräts {target} weicht um {offset_s, number} Sekunden von der des Servers ab (Schwelle {threshold_s, number} Sekunden)",
       "clock_drift_cleared": "Die Uhr des Geräts {target} weicht wieder um höchstens {threshold_s, number} Sekunden von der des Servers ab"
+    },
+    "vulnerability": {
+      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})"
     },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
