@@ -559,6 +559,115 @@ func TestRetentionActionOrganizationImmutable(t *testing.T) {
 	})
 }
 
+// TestRetentionActionFinishTimeFromDatabase (ADR 0032 amendment 2026-10-31, migration 00084): a role that finishes a
+// started organization action cannot backdate its finish time, so a retention round right afterwards keeps the row;
+// the database sets the finish time, whatever the statement wrote.
+func TestRetentionActionFinishTimeFromDatabase(t *testing.T) {
+	w := newRetentionWorld(t)
+	env := pgtest.SharedPaddock(t)
+	org, _ := w.orgWithDevice(t)
+	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	const backdated = `UPDATE action SET status = 'finished', outcome = 'success', finished_at = '2000-01-01T00:00:00Z'
+		WHERE id = $1`
+	dbNow := func() time.Time {
+		t.Helper()
+		var at time.Time
+		if err := w.super.QueryRow(context.Background(), "SELECT clock_timestamp()").Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+
+	for _, r := range []struct {
+		role string
+		url  string
+	}{
+		{"paddock_platform", env.Platform},
+		{"paddock_relay", env.Relay},
+	} {
+		t.Run(r.role, func(t *testing.T) {
+			started := w.action(t, org, long, nil)
+			before := dbNow()
+			if n := affected(t, r.url, nil, backdated, started); n != 1 {
+				t.Fatalf("finished %d started actions, want 1", n)
+			}
+			after := dbNow()
+			var finished time.Time
+			if err := w.super.QueryRow(context.Background(), "SELECT finished_at FROM action WHERE id = $1", started).Scan(&finished); err != nil {
+				t.Fatal(err)
+			}
+			if finished.Before(before) || finished.After(after) {
+				t.Fatalf("finished_at %s, want the database's time between %s and %s", finished, before, after)
+			}
+
+			if n, err := w.retention.PurgeActions(systemCtx(org), time.Now()); err != nil || n != 0 {
+				t.Fatalf("retention round purged %d (%v), want 0", n, err)
+			}
+			if !w.exists(t, "action", started) {
+				t.Fatal("want the just finished action kept by the retention round")
+			}
+		})
+	}
+}
+
+// TestRetentionActionIdentityImmutable (ADR 0032 amendment 2026-10-31, migration 00084): no role, the owner and the
+// superuser included, rewrites an action's id, code, actor, source, correlation ID or start time — of a started action,
+// alone or while finishing it, nor of a finished one. A rewritten start time would let the outbox reaper close a running
+// action as unknown.
+func TestRetentionActionIdentityImmutable(t *testing.T) {
+	w := newRetentionWorld(t)
+	env := pgtest.SharedPaddock(t)
+	org, _ := w.orgWithDevice(t)
+	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	const finish = ", status = 'finished', outcome = 'success'"
+	rewrites := []struct{ column, set string }{
+		{"id", "id = gen_random_uuid()"},
+		{"code", "code = 'test.rewritten'"},
+		{"actor", `actor = '{"kind":"rewritten"}'`},
+		{"source", "source = 'api'"},
+		{"correlation_id", "correlation_id = 'rewritten'"},
+		{"started_at", "started_at = started_at - interval '1 hour'"},
+	}
+	unchanged := func(t *testing.T, id uuid.UUID, status string) {
+		t.Helper()
+		if countRows(t, w.super, `SELECT count(*) FROM action WHERE id = $1 AND code = 'test.retention'
+			AND actor = '{"kind":"system"}' AND source IS NULL AND correlation_id = 'retention-test' AND started_at = $2
+			AND status = $3`, id, long, status) != 1 {
+			t.Errorf("want action %s unchanged", id)
+		}
+	}
+	refused := func(t *testing.T, err error) {
+		t.Helper()
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+			t.Errorf("got %v, want check_violation", err)
+		}
+	}
+
+	for _, c := range rewrites {
+		t.Run(c.column, func(t *testing.T) {
+			for _, r := range []struct {
+				role string
+				url  string
+			}{
+				{"paddock_platform", env.Platform},
+				{"paddock_relay", env.Relay},
+			} {
+				for _, set := range []string{c.set, c.set + finish} {
+					started := w.action(t, org, long, nil)
+					_, err := tryAffected(t, r.url, nil, "UPDATE action SET "+set+" WHERE id = $1", started)
+					refused(t, err)
+					unchanged(t, started, "started")
+				}
+			}
+			finished := w.action(t, org, long, at(long.Add(time.Minute)))
+			_, err := w.super.Exec(context.Background(), "UPDATE action SET "+c.set+" WHERE id = $1", finished)
+			refused(t, err)
+			unchanged(t, finished, "finished")
+		})
+	}
+}
+
 // TestRetentionActionPoliciesBindEveryRole (ADR 0032 amendment 2026-10-31, migration 00083): the restrictive UPDATE
 // and DELETE policies on action hold for every role, also one no migration names (M9's paddock_notifier, say). A
 // temporary role with UPDATE and DELETE on action and an organization policy rewrites no finished action and deletes

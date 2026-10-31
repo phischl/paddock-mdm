@@ -292,6 +292,17 @@ pseudo-organization (nil UUID), where organization creation starts its action an
 organization; and the restrictive policies become `TO PUBLIC` with the same expressions (`finished_immutable` for
 `UPDATE`; `delete_finished`, `USING (status = 'finished')`, replaces the worker's `DELETE` policy; the platform role's
 `platform_delete` stays), so a role added later with `UPDATE` or `DELETE` on `action` (M9's `paddock_notifier`) is
-bound without naming it. Residual: a role with `UPDATE` can still finish a started action of an organization it may
-update, with another outcome or params, before its use case does; the action stays in that organization, its use
-case's finish then fails and the original outcome never reaches the outbox.
+bound without naming it. Migration `00084` (PDK-635) extends that trigger to every `UPDATE`, for every role: on
+`started` → `finished` the database sets `finished_at` to `clock_timestamp()`, whatever the statement wrote, so no
+role can backdate a finish to have the next retention round delete the row; and `id`, `code`, `actor`, `source`,
+`correlation_id` and `started_at` never change, so no role can rewrite a started action's start time to have the outbox
+reaper close it as unknown. `clock_timestamp()`, not `now()`: the audit event's `occurred_at` comes from the
+application clock inside the finishing transaction, after it began and before the update, so the transaction start
+would lie just before `occurred_at` and could fall into the previous UTC month, deleting the row while the index still
+shows its event; the finish time after it keeps the row at least as long as the index. This holds for one clock: a
+database clock behind the application's by more than the finishing transaction lasts can still put the finish time
+into the previous month for an action finished within that skew of a month boundary; with synchronised clocks that is
+milliseconds, accepted. Residual: a role with `UPDATE` can still finish a started action of
+an organization it may update, with another outcome or params, before its use case does; the action stays in that
+organization with the database's finish time, so the retention round keeps it for the full period, but its use case's
+finish then fails and the original outcome never reaches the outbox.

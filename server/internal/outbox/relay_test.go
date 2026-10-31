@@ -404,6 +404,15 @@ func TestReaperFinalizesStuckAction(t *testing.T) {
 		ev.Source != audit.SourcePlatform || ev.Params["slug"] != "acme" {
 		t.Fatalf("unexpected reaper event %+v", ev)
 	}
+	// Migration 00084 sets finished_at in the database, never before the event's occurred_at (retention by finished_at
+	// must not run ahead of the audit index by occurred_at).
+	var finished time.Time
+	if err := h.super.QueryRow(ctx, "SELECT finished_at FROM action WHERE id = $1", stuck).Scan(&finished); err != nil {
+		t.Fatal(err)
+	}
+	if finished.Before(ev.OccurredAt) || finished.Sub(ev.OccurredAt) > time.Minute {
+		t.Fatalf("finished_at %s, want at or just after occurred_at %s", finished, ev.OccurredAt)
+	}
 
 	// Idempotent: a second run finds nothing.
 	if n, err := reaper.RunOnce(ctx); err != nil || n != 0 {
