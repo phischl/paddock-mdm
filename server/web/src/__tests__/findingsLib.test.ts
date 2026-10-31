@@ -102,6 +102,11 @@ describe('findingTitle', () => {
     }
   })
 
+  it('appends the subject when the message has no slot for it', () => {
+    const keyslot = { kind: 'tamper' as const, code: 'device.tamper_keyslot_changed', subject: '/dev/sda2', hostname: 'lt-1' }
+    for (const locale of ['en', 'de'] as const) expect(titleIn(locale, keyslot)).toContain('(/dev/sda2)')
+  })
+
   it('names an attention finding by its condition label and device, and falls back to an unknown code', () => {
     expect(titleIn('en', { kind: 'attention', code: 'stale_critical', subject: '', hostname: 'lt-1' })).toBe('Silent (critical) – lt-1')
     expect(titleIn('en', { ...tamper, code: 'device.unknown_thing' })).toBe('device.unknown_thing')

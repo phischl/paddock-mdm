@@ -236,27 +236,90 @@ describe('findings page', () => {
 })
 
 describe('focus after a findings dialog', () => {
-  it('returns to the button that opened the assign dialog on Cancel', async () => {
+  const escape = () => document.body.querySelector('.v-overlay__content')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+
+  it('returns to the button that opened the assign dialog on Cancel and on Escape', async () => {
     const w = await mountFindings()
     const button = rows(w)[0].findAll('button')[1]
-    ;(button.element as HTMLElement).focus()
-    await button.trigger('click')
-    await flushPromises()
-    body('finding-assign-cancel')!.click()
-    await flushPromises()
-    expect(document.activeElement).toBe(button.element)
+    for (const dismiss of [() => body('finding-assign-cancel')!.click(), escape]) {
+      ;(button.element as HTMLElement).focus()
+      await button.trigger('click')
+      await flushPromises()
+      dismiss()
+      await flushPromises()
+      expect(body('finding-assign-dialog')).toBeNull()
+      expect(document.activeElement).toBe(button.element)
+    }
   })
 
-  it('returns to the button that opened the close dialog on Cancel', async () => {
+  it('returns to the button that opened the close dialog on Cancel and on Escape', async () => {
+    const w = await mountFindings()
+    const button = rows(w)[0].findAll('button')[2]
+    for (const dismiss of [() => body('finding-close-cancel')!.click(), escape]) {
+      ;(button.element as HTMLElement).focus()
+      await button.trigger('click')
+      await flushPromises()
+      dismiss()
+      await flushPromises()
+      expect(body('finding-close-dialog')).toBeNull()
+      expect(document.activeElement).toBe(button.element)
+    }
+  })
+
+  it('moves focus to the result message after a Close that removes the row from the list', async () => {
+    calls.close.mockImplementation(() => {
+      items = [tamper, closedFinding]
+      return Promise.resolve({ ...base, status: 'resolved', closed_at: '2026-10-31T12:00:00Z' })
+    })
     const w = await mountFindings()
     const button = rows(w)[0].findAll('button')[2]
     ;(button.element as HTMLElement).focus()
     await button.trigger('click')
     await flushPromises()
-    body('finding-close-cancel')!.click()
+    const reason = body('finding-reason')!.querySelector('textarea')!
+    reason.value = 'fixed'
+    reason.dispatchEvent(new Event('input'))
     await flushPromises()
-    expect(body('finding-close-dialog')).toBeNull()
-    expect(document.activeElement).toBe(button.element)
+    body('finding-close-submit')!.click()
+    await flushPromises()
+    expect(button.element.isConnected).toBe(false)
+    expect(document.activeElement).toBe(w.find('[data-testid="finding-done"]').element)
+  })
+
+  it('moves focus to the result message after an Assign that removes the row from the list', async () => {
+    calls.assign.mockImplementation(() => {
+      items = [tamper, closedFinding]
+      return Promise.resolve({ ...base, status: 'in_progress' })
+    })
+    const w = await mountFindings()
+    const button = rows(w)[0].findAll('button')[1]
+    ;(button.element as HTMLElement).focus()
+    await button.trigger('click')
+    await flushPromises()
+    body('finding-assign-submit')!.click()
+    await flushPromises()
+    expect(document.activeElement).toBe(w.find('[data-testid="finding-done"]').element)
+  })
+})
+
+describe('findings of one device and code', () => {
+  const keyslot = (id: string, volume: string): Finding => ({
+    ...tamper, id, code: 'device.tamper_keyslot_changed', subject: volume, status: 'open', assignee: null,
+  })
+
+  it('tells two keyslot findings apart in the row, the aria-label and the dialog', async () => {
+    items = [keyslot('k1', '/dev/nvme0n1p3'), keyslot('k2', '/dev/sda2')]
+    const w = await mountFindings()
+    const r = rows(w)
+    expect(r[0].text()).toContain('/dev/nvme0n1p3')
+    expect(r[1].text()).toContain('/dev/sda2')
+    const label = (i: number) => r[i].findAll('button')[2].attributes('aria-label')
+    expect(label(0)).toContain('/dev/nvme0n1p3')
+    expect(label(1)).toContain('/dev/sda2')
+    expect(label(0)).not.toBe(label(1))
+    await r[1].findAll('button')[2].trigger('click')
+    await flushPromises()
+    expect(body('finding-close-dialog')!.textContent).toContain('/dev/sda2')
   })
 })
 

@@ -36,10 +36,13 @@ const closing = ref<Finding | null>(null)
 const dialogProblem = ref('')
 const focusReturn = useFocusReturn()
 
+const doneAlert = ref<{ $el: HTMLElement } | null>(null)
+
 function closeDialogs(): void {
   assigning.value = null
   closing.value = null
-  focusReturn.restore()
+  // A closed finding leaves the default list, so the result message is where focus continues.
+  focusReturn.restore(() => doneAlert.value?.$el ?? document.querySelector<HTMLElement>('[data-testid="finding-list"]'))
 }
 
 const columns = computed<ListColumn[]>(() => [
@@ -60,7 +63,7 @@ const canClose = (f: Finding) => !closed(f)
 const title = (f: Finding) => findingTitle(f, t, te)
 
 /** Shows the outcome inline: the new status of the finding or the problem; the list reloads on success. */
-function settle(result: FindingResult, f: Finding): boolean {
+async function settle(result: FindingResult, f: Finding): Promise<boolean> {
   if (typeof result === 'string') {
     pageProblem.value = result
     done.value = ''
@@ -68,7 +71,7 @@ function settle(result: FindingResult, f: Finding): boolean {
   }
   pageProblem.value = ''
   done.value = t('findings.done', { finding: title(f), status: t('findings.status.' + result.status) })
-  void list.value?.reload()
+  await list.value?.reload()
   return true
 }
 
@@ -78,7 +81,7 @@ async function acknowledge(f: Finding): Promise<void> {
     message: t('findings.acknowledge.message', { finding: title(f) }),
     confirmLabel: t('findings.acknowledge.confirm'),
   })
-  if (ok) settle(await acknowledgeFinding(f.id), f)
+  if (ok) void settle(await acknowledgeFinding(f.id), f)
 }
 
 async function reopen(f: Finding): Promise<void> {
@@ -88,7 +91,7 @@ async function reopen(f: Finding): Promise<void> {
     confirmLabel: t('findings.reopen.confirm'),
     reason: { label: t('findings.reopen.reason'), hint: t('findings.close.reasonHint'), required: true, maxLength: maxFindingReason },
   })
-  if (answer) settle(await reopenFinding(f.id, answer.reason), f)
+  if (answer) void settle(await reopenFinding(f.id, answer.reason), f)
 }
 
 function openAssign(f: Finding, event: Event): void {
@@ -108,7 +111,7 @@ async function submitAssign(assigneeID: string | null): Promise<void> {
   if (!f) return
   const result = await assignFinding(f.id, assigneeID)
   if (typeof result === 'string') dialogProblem.value = result
-  else if (settle(result, f)) closeDialogs()
+  else if (await settle(result, f)) closeDialogs()
 }
 
 async function submitClose(input: CloseInput): Promise<void> {
@@ -116,7 +119,7 @@ async function submitClose(input: CloseInput): Promise<void> {
   if (!f) return
   const result = await closeFinding(f.id, input)
   if (typeof result === 'string') dialogProblem.value = result
-  else if (settle(result, f)) closeDialogs()
+  else if (await settle(result, f)) closeDialogs()
 }
 </script>
 
@@ -128,6 +131,8 @@ async function submitClose(input: CloseInput): Promise<void> {
     </p>
     <v-alert
       v-if="done"
+      ref="doneAlert"
+      tabindex="-1"
       type="success"
       variant="tonal"
       closable
@@ -169,7 +174,7 @@ async function submitClose(input: CloseInput): Promise<void> {
           :title="title(item)"
         >{{ item.kind === 'attention' ? t('attention.kinds.' + item.code) : title(item) }}</span>
         <span class="pd-type-caption pd-muted pd-block">
-          {{ t('findings.kinds.' + item.kind) }} · <span class="mono">{{ item.code }}</span>
+          {{ t('findings.kinds.' + item.kind) }} · <span class="mono">{{ item.code }}</span><template v-if="item.subject"> · <span class="mono">{{ item.subject }}</span></template>
         </span>
       </template>
       <template #[`item.status`]="{ item }: { item: Finding }">

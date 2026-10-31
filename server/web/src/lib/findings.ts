@@ -47,7 +47,10 @@ export function findingTitle(f: Pick<Finding, 'kind' | 'code' | 'subject' | 'hos
     group: f.subject, file: f.subject, field: f.subject, volume: f.subject, unit: f.subject,
   }
   try {
-    return t(key, values)
+    const text = t(key, values)
+    // Findings of one device and code differ by their subject (e.g. two disk volumes); a message without a slot for it
+    // would render both alike.
+    return f.subject && !text.includes(f.subject) ? `${text} (${f.subject})` : text
   } catch {
     return f.code
   }
