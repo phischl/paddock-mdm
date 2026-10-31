@@ -1797,8 +1797,7 @@
     "errors": {
       "notService": "{unit} ist kein Dienstname. Verwenden Sie einen Namen mit der Endung .service.",
       "duplicate": "{unit} ist doppelt aufgeführt.",
-      "tooMany": "Höchstens {max} Dienste können überwacht werden.",
-      "refused": "{unit} ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt."
+      "tooMany": "Höchstens {max} Dienste können überwacht werden."
     }
   },
   "dms": {
