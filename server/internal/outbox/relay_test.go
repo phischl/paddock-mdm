@@ -356,7 +356,7 @@ func TestReaperFinalizesStuckAction(t *testing.T) {
 		id  uuid.UUID
 		age time.Duration
 	}{{stuck, 11 * time.Minute}, {fresh, time.Minute}} {
-		_, err := h.super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, actor, target, params, correlation_id, started_at)
+		err := pgtest.ExecUntriggered(ctx, h.super, `INSERT INTO action (id, organization_id, code, status, actor, target, params, correlation_id, started_at)
 			VALUES ($1, $2, 'organization.created', 'started', '{"type":"platform_admin","id":"p1","step_up":false}',
 			        '{"type":"organization","id":"o1"}', '{"slug":"acme"}', $3, now() - $4::interval)`,
 			a.id, org, "corr-"+a.id.String(), fmt.Sprintf("%d seconds", int(a.age.Seconds())))
@@ -404,6 +404,15 @@ func TestReaperFinalizesStuckAction(t *testing.T) {
 		ev.Source != audit.SourcePlatform || ev.Params["slug"] != "acme" {
 		t.Fatalf("unexpected reaper event %+v", ev)
 	}
+	// Migration 00084 sets finished_at in the database, never before the event's occurred_at (retention by finished_at
+	// must not run ahead of the audit index by occurred_at).
+	var finished time.Time
+	if err := h.super.QueryRow(ctx, "SELECT finished_at FROM action WHERE id = $1", stuck).Scan(&finished); err != nil {
+		t.Fatal(err)
+	}
+	if finished.Before(ev.OccurredAt) || finished.Sub(ev.OccurredAt) > time.Minute {
+		t.Fatalf("finished_at %s, want at or just after occurred_at %s", finished, ev.OccurredAt)
+	}
 
 	// Idempotent: a second run finds nothing.
 	if n, err := reaper.RunOnce(ctx); err != nil || n != 0 {
@@ -420,11 +429,10 @@ func TestReaperKeepsTheStoredSource(t *testing.T) {
 	ctx := context.Background()
 	org, stuck := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	insert := func(id uuid.UUID, source string) error {
-		_, err := h.super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, actor, target, params, correlation_id,
-			started_at, source)
+		return pgtest.ExecUntriggered(ctx, h.super, `INSERT INTO action (id, organization_id, code, status, actor, target, params,
+			correlation_id, started_at, source)
 			VALUES ($1, $2, 'device_group.created', 'started', '{"type":"admin","id":"a1","step_up":false,"client":"claude-code/2.1"}',
 			        NULL, '{"name":"g"}', $3, now() - interval '11 minutes', $4)`, id, org, "corr-"+id.String(), source)
-		return err
 	}
 	if err := insert(stuck, audit.SourceMCP); err != nil {
 		t.Fatal(err)

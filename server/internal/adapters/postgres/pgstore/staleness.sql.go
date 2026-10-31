@@ -38,6 +38,23 @@ func (q *Queries) ClearPresumedLost(ctx context.Context, deviceID uuid.UUID) err
 	return err
 }
 
+const deleteExpiredDeviceAlerts = `-- name: DeleteExpiredDeviceAlerts :execrows
+DELETE FROM device_alert WHERE id IN (
+  SELECT id FROM device_alert WHERE cleared_at < $1::timestamptz LIMIT 1000
+)
+`
+
+// One batch of alerts cleared before the cutoff (ADR 0032 amendment 2026-10-18, PDK-180); an open alert has no
+// cleared_at and never matches. The retention round runs each batch in its own transaction until one deletes fewer
+// than 1 000 rows (plan M10 amendment 2026-10-30).
+func (q *Queries) DeleteExpiredDeviceAlerts(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredDeviceAlerts, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getDeviceGroupStaleness = `-- name: GetDeviceGroupStaleness :one
 SELECT coalesce(max(g.staleness_warning_h), 0)::int AS group_warning_h,
        coalesce(max(g.staleness_critical_h), 0)::int AS group_critical_h
@@ -78,6 +95,17 @@ func (q *Queries) GetOpenDeviceAlertKind(ctx context.Context, deviceID uuid.UUID
 	var kind string
 	err := row.Scan(&kind)
 	return kind, err
+}
+
+const hasExpiredDeviceAlerts = `-- name: HasExpiredDeviceAlerts :one
+SELECT EXISTS (SELECT 1 FROM device_alert WHERE cleared_at < $1::timestamptz)
+`
+
+func (q *Queries) HasExpiredDeviceAlerts(ctx context.Context, cutoff time.Time) (bool, error) {
+	row := q.db.QueryRow(ctx, hasExpiredDeviceAlerts, cutoff)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const listStalenessCandidates = `-- name: ListStalenessCandidates :many

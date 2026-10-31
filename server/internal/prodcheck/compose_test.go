@@ -359,6 +359,75 @@ func TestContainerHardening(t *testing.T) {
 	})
 }
 
+// TestComposeConfigsRotateContainerLogs renders every host's file set (plan M10 decision 40): every service logs with
+// json-file at 50m x 10, and the item container logs are rotated passes; a service whose logging block is removed
+// fails the item naming it.
+func TestComposeConfigsRotateContainerLogs(t *testing.T) {
+	cases := map[string]struct {
+		host     string
+		files    []string
+		envFiles []string
+	}{
+		"production control plane": {prodcheck.HostControlPlane, prodFiles(t, "controlplane"), []string{"prod.env.example"}},
+		"production audit host":    {prodcheck.HostAudit, prodFiles(t, "audit"), []string{"prod.env.example"}},
+		"lab":                      {prodcheck.HostLab, prodFiles(t, "lab"), []string{"lab.env.example"}},
+		"lab with backups": {prodcheck.HostLab, append(prodFiles(t, "lab"), libFiles(t, "LAB_BACKUP_FILES")...),
+			[]string{"lab.env.example"}},
+		"control plane with automatic unseal": {prodcheck.HostControlPlane,
+			append(prodFiles(t, "controlplane"), libFiles(t, "AUTO_UNSEAL_FILES")...), []string{"prod.env.example"}},
+		"lab with automatic unseal and backups": {prodcheck.HostLab, append(append(prodFiles(t, "lab"),
+			libFiles(t, "AUTO_UNSEAL_FILES")...), libFiles(t, "LAB_BACKUP_FILES")...), []string{"lab.env.example"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := renderConfig(t, tc.files, tc.envFiles...)
+			if len(cfg.Services) == 0 {
+				t.Fatal("no services rendered")
+			}
+			for _, svc := range sortedNames(cfg) {
+				l := cfg.Services[svc].Logging
+				if l.Driver != "json-file" || l.Options["max-size"] != "50m" || l.Options["max-file"] != "10" {
+					t.Errorf("%s: logging %+v, want json-file max-size=50m max-file=10", svc, l)
+				}
+			}
+			if r := logRotationResult(t, cfg, tc.host); !r.OK {
+				t.Fatalf("%s:\n%s", r.Item, r.Detail)
+			}
+		})
+	}
+
+	t.Run("removed logging block", func(t *testing.T) {
+		cfg := renderConfig(t, prodFiles(t, "audit"), "prod.env.example")
+		s := cfg.Services["paddock-audit-writer"]
+		s.Logging = prodcheck.Logging{}
+		cfg.Services["paddock-audit-writer"] = s
+		r := logRotationResult(t, cfg, prodcheck.HostAudit)
+		if r.OK || !strings.Contains(r.Detail, "paddock-audit-writer: logging driver") {
+			t.Errorf("no finding for paddock-audit-writer in\n%s", r.Detail)
+		}
+	})
+}
+
+func sortedNames(cfg prodcheck.Config) []string {
+	names := make([]string, 0, len(cfg.Services))
+	for n := range cfg.Services {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func logRotationResult(t *testing.T, cfg prodcheck.Config, host string) prodcheck.Result {
+	t.Helper()
+	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: host}) {
+		if r.Item == "container logs are rotated" {
+			return r
+		}
+	}
+	t.Fatal("no item container logs are rotated")
+	return prodcheck.Result{}
+}
+
 // TestStepUpBlueprintWebAuthnOnly (plan M8s decision 40): the shipped step-up flow validates with WebAuthn only; only
 // the development blueprint adds a stage that accepts TOTP.
 // TestPortalBlueprintBindsMFAOnTheDefaultFlow: the portal blueprint adds a second factor at order 31 of Authentik's
@@ -569,7 +638,7 @@ func TestPortalBlueprintEmitsMFAClasses(t *testing.T) {
 	}
 	portal := string(b)
 	for _, want := range []string{"managed: io.paddock/scope-login-mfa", "scope_name: paddock_mfa\n",
-		"return {\"paddock_mfa_classes\": classes}", "        - !KeyOf scope-mfa\n", "get_login_event(token.session)"} {
+		"return {\"paddock_mfa_classes\": classes}", "        - !KeyOf scope-mfa\n", "request.context.get(\"token\")", "get_login_event(grant.session)"} {
 		if !strings.Contains(portal, want) {
 			t.Errorf("paddock-portal.yaml lacks %q", want)
 		}
@@ -588,7 +657,7 @@ func TestStepUpBlueprintEmitsMFAClasses(t *testing.T) {
 	}
 	stepup := string(b)
 	for _, want := range []string{"managed: io.paddock/scope-stepup-mfa", "scope_name: paddock_stepup",
-		"paddock_mfa_classes", "        - !KeyOf scope-stepup-mfa\n", "get_login_event(token.session)"} {
+		"paddock_mfa_classes", "        - !KeyOf scope-stepup-mfa\n", "request.context.get(\"token\")", "get_login_event(grant.session)"} {
 		if !strings.Contains(stepup, want) {
 			t.Errorf("paddock-stepup.yaml lacks %q", want)
 		}

@@ -47,6 +47,7 @@ func withUnsealer(t *testing.T, f *fixture, mode os.FileMode) string {
 			{Source: "db_paddock_unsealer_url"}, {Source: "openbao_auto_unseal_shares"}, {Source: "internal_ca_bundle"},
 		},
 		CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, PidsLimit: 256,
+		Logging: prodcheck.Logging{Driver: "json-file", Options: map[string]string{"max-size": "50m", "max-file": "10"}},
 	}
 	f.cfg.Prod.AutoUnseal = "yes"
 	return shares

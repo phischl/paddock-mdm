@@ -36,9 +36,6 @@ WHERE device_id = @device_id AND clock_drift_since IS NULL AND abs(clock_offset_
 UPDATE device_status SET clock_drift_since = NULL
 WHERE device_id = @device_id AND clock_drift_since IS NOT NULL AND abs(clock_offset_s) <= @threshold_s::bigint;
 
--- name: ListDeviceSeqs :many
-SELECT device_id, last_seq FROM device_status WHERE last_seq > 0 ORDER BY device_id;
-
 -- Device events are deduplicated by (device_id, event_seq) (plan M2a decision 14); received_at is the gateway's
 -- receipt time of the event's batch (plan M8b amendment of 2026-10-24).
 -- name: InsertDeviceEventSeen :execrows

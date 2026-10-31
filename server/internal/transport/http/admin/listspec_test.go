@@ -26,6 +26,7 @@ var lists = map[string]struct {
 	"listAuditEvents":           {auditEventList, "auditpg/queries/audit.sql", "ListAuditEvents", "event_id"},
 	"listAuditVerificationRuns": {auditVerificationRunList, "auditpg/queries/audit.sql", "ListAuditVerificationRuns", "id"},
 	"listAuditManifests":        {auditManifestList, "auditpg/queries/audit.sql", "ListAuditManifestsWithVerification", "day"},
+	"listAuditExports":          {auditExportList, "auditpg/queries/export.sql", "ListAuditExports", "id"},
 	"listOrganizations":         {organizationList, "postgres/queries/organization.sql", "ListOrganizations", "id"},
 
 	"listEnrollmentTokens":   {enrollmentTokenList, "postgres/queries/enrollment_token.sql", "ListEnrollmentTokens", "id"},

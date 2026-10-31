@@ -39,8 +39,9 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/device"
 )
 
-// fakePublisher records published messages; nack makes the broker refuse them, fail (if set) is a connection-level
-// error such as a confirm the request stopped waiting for.
+// fakePublisher records published messages; nack makes the broker refuse them, fail (if set) returns a
+// connection-level error such as a confirm the request stopped waiting for, or nil to let the publish go through. It
+// runs outside the lock, so a stalled publish can send another request from inside it.
 type fakePublisher struct {
 	mu   sync.Mutex
 	msgs map[string][]mq.Message // by exchange
@@ -50,10 +51,15 @@ type fakePublisher struct {
 
 func (f *fakePublisher) PublishBatch(_ context.Context, exchange string, msgs []mq.Message) ([]error, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.fail != nil {
-		return nil, f.fail()
+	fail := f.fail
+	f.mu.Unlock()
+	if fail != nil {
+		if err := fail(); err != nil {
+			return nil, err
+		}
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	res := make([]error, len(msgs))
 	for i, m := range msgs {
 		if f.nack {
@@ -158,6 +164,7 @@ type request struct {
 	signedAt                 time.Time
 	mutate                   func(r *http.Request, body *[]byte)
 	skipReqCheck             bool
+	skipRespCheck            bool // the device contract documents no 500
 }
 
 type result struct {
@@ -220,6 +227,9 @@ func (e *env) send(c client, rq request) result {
 	out := &openapi3filter.ResponseValidationInput{RequestValidationInput: in, Status: res.status, Header: res.header,
 		Options: &openapi3filter.Options{IncludeResponseStatus: true}}
 	out.SetBodyBytes(res.body)
+	if rq.skipRespCheck {
+		return res
+	}
 	if err := openapi3filter.ValidateResponse(context.Background(), out); err != nil {
 		e.t.Fatalf("%s %s: response %d violates the contract: %v\n%s", rq.method, rq.path, res.status, err, res.body)
 	}
@@ -261,7 +271,7 @@ func (e *env) enrolled(c client, status string) uuid.UUID {
 	id := uuid.New()
 	if err := e.cache.PutDeviceKey(context.Background(), c.keyID, devicecache.DeviceKey{
 		DeviceID: id, OrganizationID: e.org, Status: status, PublicKey: c.spki,
-	}); err != nil {
+	}, 0); err != nil {
 		e.t.Fatal(err)
 	}
 	return id
@@ -315,7 +325,7 @@ func TestEnrollFlow(t *testing.T) {
 	}
 	// An administrator approves: the worker caches the key, which makes the enrollment active.
 	if err := e.cache.PutDeviceKey(context.Background(), c.keyID, devicecache.DeviceKey{DeviceID: id, OrganizationID: e.org,
-		Status: "active", PublicKey: c.spki}); err != nil {
+		Status: "active", PublicKey: c.spki}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if s := status(); s.Status != "active" {
@@ -547,6 +557,36 @@ func TestCheckinSeqBundleAndClone(t *testing.T) {
 	}
 }
 
+// TestCheckinSeqNotRestored (PDK-475): after Valkey lost its data, a check-in that arrives before the worker restored
+// the counter from device_status.last_seq is deferred with a 503 instead of restarting the sequence at 1, and the
+// counter stays missing so the restore still applies.
+func TestCheckinSeqNotRestored(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	if err := e.valkey.Do(ctx, e.valkey.B().Del().Key("seq:"+id.String()).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 41})
+	e.expectProblem(r, http.StatusServiceUnavailable, "backpressure")
+	if r.header.Get("Retry-After") == "" {
+		t.Fatal("no Retry-After on a deferred check-in")
+	}
+	if err := e.cache.RestoreSeq(ctx, id, 41); err != nil {
+		t.Fatal(err)
+	}
+	r = e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 41})
+	if r.status != http.StatusOK {
+		t.Fatalf("checkin after the restore: %d %s", r.status, r.body)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.Seq != 42 || hb.CloneSuspected {
+		t.Fatalf("heartbeat after the restore: %+v", hb)
+	}
+}
+
 // TestCheckinFailureKeepsSeq: a check-in that fails after the gateway drew its sequence number (ingest queue full, a
 // confirm the device stopped waiting for) carries no seq, so the number does not count as issued. Two such failures in
 // a row once left a lab laptop two behind and quarantined it as a clone.
@@ -580,9 +620,14 @@ func TestCheckinFailureKeepsSeq(t *testing.T) {
 		t.Fatalf("failed check-ins consumed sequence numbers: %+v", hb)
 	}
 
-	// A number another holder of the identity drew meanwhile is never taken back.
-	if _, err := e.cache.NextSeq(context.Background(), id); err != nil {
-		t.Fatal(err)
+	// A number another holder of the identity drew and received meanwhile is never taken back. A bare draw no longer
+	// counts for clone detection, so the other holder's check-in is delivered (PDK-590).
+	if r := checkin(2); r.status != http.StatusOK {
+		t.Fatalf("other holder's checkin: %d %s", r.status, r.body)
+	}
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.Seq != 3 || hb.CloneSuspected {
+		t.Fatalf("other holder's checkin: %+v", hb)
 	}
 	if ok, err := e.cache.ReleaseSeq(context.Background(), id, 2); err != nil || ok {
 		t.Fatalf("superseded number released: %v %v", ok, err)
@@ -593,6 +638,84 @@ func TestCheckinFailureKeepsSeq(t *testing.T) {
 	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
 	if !hb.CloneSuspected || hb.Seq != 4 {
 		t.Fatalf("clone not suspected: %+v", hb)
+	}
+}
+
+// TestCheckinAmbiguousPublishThenReconcile (PDK-475): a heartbeat whose publish was ambiguous (the device stopped
+// waiting for the confirm after the frame was sent) can still be persisted as last_seq although the gateway released
+// its number. The reconcile that follows leaves the live counter unchanged: raising it to that last_seq for two such
+// rounds in a row would hand out numbers the device never received and quarantine it as a clone.
+func TestCheckinAmbiguousPublishThenReconcile(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	if r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 0}); r.status != http.StatusOK {
+		t.Fatalf("first checkin: %d %s", r.status, r.body)
+	}
+	for round := 1; round <= 2; round++ {
+		cur, err := e.valkey.Do(ctx, e.valkey.B().Get().Key("seq:"+id.String()).Build()).AsInt64()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reqCtx, cancel := context.WithCancel(ctx)
+		e.pub.fail = func() error { cancel(); return &net.OpError{Op: "read", Net: "tcp", Err: reqCtx.Err()} }
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1,
+			mutate: func(r *http.Request, _ *[]byte) { *r = *r.WithContext(reqCtx) }})
+		e.expectProblem(r, http.StatusServiceUnavailable, "backpressure")
+		e.pub.fail = nil
+		// The broker routed the heartbeat anyway: ingest persists the drawn number as last_seq, and the reconcile
+		// restores the counter from it (PutDeviceKey → RestoreSeq).
+		if err := e.cache.RestoreSeq(ctx, id, cur+1); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+	}
+	if r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1}); r.status != http.StatusOK {
+		t.Fatalf("checkin after the ambiguous rounds: %d %s", r.status, r.body)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.CloneSuspected || hb.ReportedSeq != 1 {
+		t.Fatalf("healthy device suspected as a clone: %+v", hb)
+	}
+}
+
+// TestCheckinStaleRestoreThenDrain (PDK-475, Review 3): after a cache loss the counter is restored from a last_seq that
+// lags behind the device (heartbeats still queued), so the device receives numbers below the true last_seq. When the
+// backlog drains and a reconcile runs, the live counter must not be raised to the drained last_seq: that would put it
+// more than one ahead of the device and quarantine a healthy device as a clone. The reissued numbers are RR-97.
+func TestCheckinStaleRestoreThenDrain(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	checkin := func(seq int64) ingest.Heartbeat {
+		t.Helper()
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin with seq %d: %d %s", seq, r.status, r.body)
+		}
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+		return hb
+	}
+	// The device holds 10; Valkey lost the counter and the restore reads a stale last_seq of 6 (PutDeviceKey →
+	// RestoreSeq on the missing key).
+	if err := e.valkey.Do(ctx, e.valkey.B().Del().Key("seq:"+id.String()).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cache.RestoreSeq(ctx, id, 6); err != nil {
+		t.Fatal(err)
+	}
+	if hb := checkin(10); hb.Seq != 7 || hb.CloneSuspected {
+		t.Fatalf("checkin after the stale restore: %+v", hb)
+	}
+	// The backlog drains, so last_seq becomes 10, and the next reconcile restores the counter from it.
+	if err := e.cache.RestoreSeq(ctx, id, 10); err != nil {
+		t.Fatal(err)
+	}
+	if hb := checkin(7); hb.CloneSuspected || hb.ReportedSeq != 7 || hb.Seq != 8 {
+		t.Fatalf("healthy device suspected as a clone after drain and reconcile: %+v", hb)
 	}
 }
 
@@ -1032,4 +1155,306 @@ func TestEscrowHeaderVolume(t *testing.T) {
 		"ciphertext": base64.StdEncoding.EncodeToString([]byte("x")), "volume": volume}
 	e.expectProblem(e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: secret, skipReqCheck: true}),
 		http.StatusBadRequest, "invalid_request")
+}
+
+// TestCheckinRetryWhileStalledKeepsSeq (PDK-590): a check-in stalls after the gateway drew its number (an AMQP write
+// the broker blocks is not context-aware), the device gives up and retries, and the retry draws the next number before
+// the stalled request fails. Its release then misses, because the counter has moved on. Two such rounds in a row leave
+// two drawn numbers the device never received; the check-in that finally succeeds must not flag the genuine device as
+// a clone, and a genuinely stale number must still be flagged afterwards.
+func TestCheckinRetryWhileStalledKeepsSeq(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	checkin := func(seq int64) ingest.Heartbeat {
+		t.Helper()
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin with seq %d: %d %s", seq, r.status, r.body)
+		}
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+		return hb
+	}
+	if hb := checkin(0); hb.Seq != 1 {
+		t.Fatalf("first checkin: %+v", hb)
+	}
+	// The device holds 1. Every stalled request sends the device's retry from inside its publish and fails only after
+	// the retry returned, with its context cancelled, as the device stopped waiting long before:
+	// draw 2 → draw 3 → draw 4 → 4 delivered → release of 3 misses → release of 2 misses.
+	var cancels []context.CancelFunc
+	send := func() result {
+		reqCtx, cancel := context.WithCancel(ctx)
+		cancels = append(cancels, cancel)
+		return e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1,
+			mutate: func(r *http.Request, _ *[]byte) { *r = *r.WithContext(reqCtx) }})
+	}
+	attempt := 0
+	var retries [2]result // by attempt: the first retry stalls as well, the second one goes through
+	e.pub.fail = func() error {
+		attempt++
+		if attempt > 2 {
+			return nil
+		}
+		stalled, retry := cancels[attempt-1], attempt-1
+		retries[retry] = send()
+		stalled()
+		return &net.OpError{Op: "write", Net: "tcp", Err: context.Canceled}
+	}
+	first := send()
+	e.pub.fail = nil
+	if attempt != 3 {
+		t.Fatalf("%d publish attempts, want 3", attempt)
+	}
+	e.expectProblem(first, http.StatusServiceUnavailable, "backpressure")
+	e.expectProblem(retries[0], http.StatusServiceUnavailable, "backpressure")
+	if retries[1].status != http.StatusOK {
+		t.Fatalf("second retry: %d %s", retries[1].status, retries[1].body)
+	}
+	if cur, err := e.valkey.Do(ctx, e.valkey.B().Get().Key("seq:"+id.String()).Build()).AsInt64(); err != nil || cur != 4 {
+		t.Fatalf("counter after the stalled rounds: %d %v, want 4 (both releases miss)", cur, err)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.CloneSuspected || hb.Seq != 4 || hb.ReportedSeq != 1 {
+		t.Fatalf("genuine device suspected as a clone after two stalled check-ins: %+v", hb)
+	}
+	// Clone detection stays effective: the device holds 4; one lost response is tolerated, an older number is not.
+	if hb := checkin(3); hb.CloneSuspected || hb.Seq != 5 {
+		t.Fatalf("one lost response not tolerated: %+v", hb)
+	}
+	if hb := checkin(2); !hb.CloneSuspected || hb.Seq != 6 {
+		t.Fatalf("stale number not flagged: %+v", hb)
+	}
+}
+
+// TestCheckinAbandonedAfterPublishKeepsSeq (PDK-590): a publish that goes through after the device gave up does not
+// count as delivered; the number is released and the device's next check-in with its old number is not flagged, even
+// after two such rounds.
+func TestCheckinAbandonedAfterPublishKeepsSeq(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	checkin := func(seq int64) ingest.Heartbeat {
+		t.Helper()
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin with seq %d: %d %s", seq, r.status, r.body)
+		}
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+		return hb
+	}
+	delivered := func() string {
+		t.Helper()
+		v, err := e.valkey.Do(ctx, e.valkey.B().Get().Key("sd:"+id.String()).Build()).ToString()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	counter := func() int64 {
+		t.Helper()
+		n, err := e.valkey.Do(ctx, e.valkey.B().Get().Key("seq:"+id.String()).Build()).AsInt64()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	abandoned := func() {
+		t.Helper()
+		reqCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		e.pub.fail = func() error { cancel(); return nil }
+		defer func() { e.pub.fail = nil }()
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1,
+			mutate: func(r *http.Request, _ *[]byte) { *r = *r.WithContext(reqCtx) }})
+		e.expectProblem(r, http.StatusServiceUnavailable, "backpressure")
+		if r.header.Get("Retry-After") != "" {
+			t.Fatalf("Retry-After %q on an abandoned request", r.header.Get("Retry-After"))
+		}
+	}
+	if hb := checkin(0); hb.Seq != 1 || delivered() != "1" {
+		t.Fatalf("first checkin: %+v", hb)
+	}
+	abandoned()
+	if delivered() != "1" || counter() != 1 {
+		t.Fatalf("abandoned check-in counted: sd %s, counter %d", delivered(), counter())
+	}
+	if hb := checkin(1); hb.CloneSuspected || hb.Seq != 2 || hb.ExpectedSeq != 1 {
+		t.Fatalf("checkin after the abandoned one: %+v", hb)
+	}
+	abandoned()
+	abandoned()
+	if delivered() != "2" || counter() != 2 {
+		t.Fatalf("abandoned check-ins counted: sd %s, counter %d", delivered(), counter())
+	}
+	if hb := checkin(1); hb.CloneSuspected || hb.Seq != 3 || hb.ExpectedSeq != 2 {
+		t.Fatalf("genuine device suspected after two abandoned check-ins: %+v", hb)
+	}
+}
+
+// TestCheckinWithoutDeliveredSeqNotFlagged (PDK-590, option a): without sd:<device> (a device not seen since the
+// upgrade, a cache loss) a check-in is never flagged and seeds sd:; the next round with a gap is flagged again.
+func TestCheckinWithoutDeliveredSeqNotFlagged(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	checkin := func(seq int64) ingest.Heartbeat {
+		t.Helper()
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin with seq %d: %d %s", seq, r.status, r.body)
+		}
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+		return hb
+	}
+	checkin(0)
+	checkin(1)
+	if hb := checkin(2); hb.Seq != 3 || hb.CloneSuspected {
+		t.Fatalf("checkin: %+v", hb)
+	}
+	if err := e.valkey.Do(ctx, e.valkey.B().Del().Key("sd:"+id.String()).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	if hb := checkin(1); hb.CloneSuspected || hb.Seq != 4 || hb.ExpectedSeq != 0 {
+		t.Fatalf("flagged without sd: %+v", hb)
+	}
+	if v, err := e.valkey.Do(ctx, e.valkey.B().Get().Key("sd:"+id.String()).Build()).AsInt64(); err != nil || v != 4 {
+		t.Fatalf("sd: not seeded: %d %v", v, err)
+	}
+	if hb := checkin(2); !hb.CloneSuspected || hb.Seq != 5 || hb.ExpectedSeq != 4 {
+		t.Fatalf("gap after seeding sd: not flagged: %+v", hb)
+	}
+}
+
+// TestCheckinCacheLossAfterAbandonedPublishes (PDK-590, external review finding 1): a stalled check-in and its stalled
+// retry both publish after the device gave up, so ingest persists their numbers as last_seq although both were
+// released and the device still holds 1. Valkey is then lost: PDK-475 restores seq: from that last_seq, sd: is gone.
+// The genuine device reporting its real, lower number must not be flagged.
+func TestCheckinCacheLossAfterAbandonedPublishes(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	checkin := func(seq int64) ingest.Heartbeat {
+		t.Helper()
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin with seq %d: %d %s", seq, r.status, r.body)
+		}
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+		return hb
+	}
+	if hb := checkin(0); hb.Seq != 1 {
+		t.Fatalf("first checkin: %+v", hb)
+	}
+	// Draw 2 (stalled) → the retry draws 3 and stalls too; both publishes go through after the device gave up.
+	var cancels []context.CancelFunc
+	send := func() result {
+		reqCtx, cancel := context.WithCancel(ctx)
+		cancels = append(cancels, cancel)
+		return e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1,
+			mutate: func(r *http.Request, _ *[]byte) { *r = *r.WithContext(reqCtx) }})
+	}
+	attempt := 0
+	var retry result
+	e.pub.fail = func() error {
+		attempt++
+		own := attempt
+		if own == 1 {
+			retry = send()
+		}
+		cancels[own-1]()
+		return nil
+	}
+	first := send()
+	e.pub.fail = nil
+	e.expectProblem(first, http.StatusServiceUnavailable, "backpressure")
+	e.expectProblem(retry, http.StatusServiceUnavailable, "backpressure")
+	var lastSeq int64 // what ingest persists: greatest(seq) over the published heartbeats
+	e.pub.mu.Lock()
+	for _, m := range e.pub.msgs[mq.ExchangeIngest] {
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(m.Body, &hb)
+		lastSeq = max(lastSeq, hb.Seq)
+	}
+	e.pub.mu.Unlock()
+	if lastSeq != 3 {
+		t.Fatalf("persisted last_seq %d, want 3", lastSeq)
+	}
+	for _, key := range []string{"seq:", "sd:"} {
+		if err := e.valkey.Do(ctx, e.valkey.B().Del().Key(key+id.String()).Build()).Error(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.cache.RestoreSeq(ctx, id, lastSeq); err != nil {
+		t.Fatal(err)
+	}
+	if hb := checkin(1); hb.CloneSuspected || hb.Seq != 4 || hb.ReportedSeq != 1 {
+		t.Fatalf("genuine device suspected as a clone after a cache loss: %+v", hb)
+	}
+	if hb := checkin(2); !hb.CloneSuspected || hb.Seq != 5 {
+		t.Fatalf("stale number not flagged once sd: is seeded: %+v", hb)
+	}
+}
+
+// TestCheckinDeliveredSeqCacheErrors (PDK-590): a failed read of sd: fails the check-in before a number is drawn; a
+// failed raise of sd: is logged only and the check-in still succeeds (fail safe).
+func TestCheckinDeliveredSeqCacheErrors(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	sd := "sd:" + id.String()
+	checkin := func() result {
+		return e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0), seq: 1, skipRespCheck: true})
+	}
+	counter := func() int64 {
+		t.Helper()
+		n, err := e.valkey.Do(ctx, e.valkey.B().Get().Key("seq:"+id.String()).Build()).AsInt64()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0)}); r.status != http.StatusOK {
+		t.Fatalf("first checkin: %d %s", r.status, r.body)
+	}
+	published := len(e.pub.msgs[mq.ExchangeIngest])
+
+	if err := e.valkey.Do(ctx, e.valkey.B().Set().Key(sd).Value("not a number").Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	if r := checkin(); r.status != http.StatusInternalServerError {
+		t.Fatalf("checkin with an unreadable sd: %d %s", r.status, r.body)
+	}
+	if counter() != 1 || len(e.pub.msgs[mq.ExchangeIngest]) != published {
+		t.Fatalf("a number was drawn or published: counter %d", counter())
+	}
+
+	// sd: becomes unwritable while the publish is in flight, after it was read.
+	if err := e.valkey.Do(ctx, e.valkey.B().Set().Key(sd).Value("1").Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	e.pub.fail = func() error {
+		return e.valkey.Do(ctx, e.valkey.B().Set().Key(sd).Value("not a number").Build()).Error()
+	}
+	r := checkin()
+	e.pub.fail = nil
+	if r.status != http.StatusOK {
+		t.Fatalf("checkin with a failed raise of sd: %d %s", r.status, r.body)
+	}
+	var out protocol.CheckinResponse
+	if err := json.Unmarshal(r.body, &out); err != nil || out.Seq != 2 {
+		t.Fatalf("response %+v %v", out, err)
+	}
+	if v, err := e.valkey.Do(ctx, e.valkey.B().Get().Key(sd).Build()).ToString(); err != nil || v != "not a number" {
+		t.Fatalf("sd: %q %v", v, err)
+	}
 }

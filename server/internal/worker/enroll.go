@@ -62,7 +62,7 @@ func (e *Enrollment) process(ctx context.Context, messageID string, body []byte)
 		if res.State != device.StatePending {
 			key := devicecache.DeviceKey{DeviceID: res.DeviceID, OrganizationID: req.OrganizationID,
 				Status: devicecache.KeyStatus(res.KeyStatus, res.State), PublicKey: req.PublicKey}
-			if err := e.cache.PutDeviceKey(ctx, req.KeyID, key); err != nil {
+			if err := e.cache.PutDeviceKey(ctx, req.KeyID, key, res.LastSeq); err != nil {
 				slog.WarnContext(ctx, "caching device key failed; retrying", "enrollment_id", req.EnrollmentID, "error", err)
 				return retry
 			}

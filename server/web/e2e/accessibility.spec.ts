@@ -21,7 +21,7 @@ for (const theme of ['light', 'dark'] as const) {
     try {
       await chooseTheme(page, theme)
       const devices = await (await page.request.get('/api/v1/devices?page_size=10&sort=hostname&state=active')).json() as { items: { id: string }[] }
-      const pages = ['/', '/devices', '/attention', '/audit', '/vulnerabilities', '/settings/updates']
+      const pages = ['/', '/devices', '/attention', '/audit', '/audit/exports', '/vulnerabilities', '/settings/updates']
       if (devices.items[0]) pages.push(`/devices/${devices.items[0].id}`, `/devices/${devices.items[0].id}/access`)
       for (const path of pages) {
         await page.goto(path)

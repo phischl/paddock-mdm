@@ -29,8 +29,9 @@ type Enroll struct {
 }
 
 // Heartbeat is one check-in (routing key ingest.heartbeat.<org>, message_id random). Seq is the sequence number the
-// gateway issued; ReportedSeq the Paddock-Seq the device sent. CloneSuspected is set when ReportedSeq is older than
-// the last issued value minus one (architecture §6.4).
+// gateway issued; ReportedSeq the Paddock-Seq the device sent. CloneSuspected is set when ReportedSeq < ExpectedSeq
+// - 1 (architecture §6.4). ExpectedSeq is the last delivered number (sd:<device>); it is 0 and CloneSuspected is
+// false when none is cached (plan M2a amendment PDK-590).
 type Heartbeat struct {
 	DeviceID             uuid.UUID `json:"device_id"`
 	OrganizationID       uuid.UUID `json:"organization_id"`
@@ -44,6 +45,7 @@ type Heartbeat struct {
 	EventSeqHigh   int64           `json:"event_seq_high"`
 	Seq            int64           `json:"seq"`
 	ReportedSeq    int64           `json:"reported_seq"`
+	ExpectedSeq    int64           `json:"expected_seq"`
 	CloneSuspected bool            `json:"clone_suspected"`
 	// ClockOffsetS is server time minus the device's signed timestamp in seconds (plan M8b decision 11).
 	ClockOffsetS int64 `json:"clock_offset_s"`
