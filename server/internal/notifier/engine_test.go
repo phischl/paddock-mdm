@@ -642,15 +642,17 @@ func TestDestinationBudget(t *testing.T) {
 // internal: backoff, then the stall with its event; nothing is sent.
 func TestInternalFailureStalls(t *testing.T) {
 	for _, c := range []struct {
-		name  string
-		setup func(h *harness, r *Row)
+		name    string
+		setup   func(h *harness, r *Row)
+		forward float64
 	}{
-		{"decrypt denied", func(h *harness, r *Row) { r.URLCiphertext = "denied" }},
+		{"decrypt denied", func(h *harness, r *Row) { r.URLCiphertext = "denied"; r.State.ForwardSeq = 7 }, 8},
 		{"pending batch unreadable", func(h *harness, r *Row) {
 			h.store.pendingErr = errors.New("connection reset")
 			r.State.Pending = uuid.Must(uuid.NewV7())
-			r.State.ForwardSeq = 4
-		}},
+			r.State.PendingFrom, r.State.ForwardSeq = 2, 5
+		}, 2},
+		{"pseudonym key missing", func(h *harness, r *Row) { r.Destination.Pseudonymize = true; r.State.ForwardSeq = 3 }, 4},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -666,14 +668,17 @@ func TestInternalFailureStalls(t *testing.T) {
 					h.now = h.now.Add(5 * time.Second)
 				}
 			}
-			if len(h.tr.sent) != 0 {
+			if c.name != "pseudonym key missing" && len(h.tr.sent) != 0 {
 				t.Fatalf("%d messages sent", len(h.tr.sent))
+			}
+			if c.name == "pseudonym key missing" && len(h.tr.kinds(outbound.KindEvents)) != 0 {
+				t.Fatalf("events sent without their pseudonyms")
 			}
 			st := h.state(d)
 			stalled := h.store.recordsOf(audit.CodeNotificationDestinationStalled)
 			if st.Status != StatusStalled || st.ConsecutiveFailures < 3 || len(stalled) != 1 ||
-				stalled[0].Params["last_error"] != "internal" {
-				t.Fatalf("state %+v, stalled %+v", st, stalled)
+				stalled[0].Params["last_error"] != "internal" || float64(stalled[0].Params["forward_seq"].(int64)) != c.forward {
+				t.Fatalf("state %+v, stalled %+v, want forward_seq %v", st, stalled, c.forward)
 			}
 			if v := testutil.ToFloat64(h.metrics.stalled.WithLabelValues(d.Destination.ID.String(), "webhook")); v != 1 {
 				t.Errorf("stalled gauge %v", v)
@@ -752,4 +757,53 @@ func TestStaleStateChange(t *testing.T) {
 			t.Fatalf("fail %v: state changed %+v", fail, st)
 		}
 	}
+}
+
+// TestLagWithoutBatch: the lag rises also for a destination that fails before any batch is cut: one whose URL does
+// not decrypt, and one stalled by failed heartbeats that receives an event during its backoff.
+func TestLagWithoutBatch(t *testing.T) {
+	t.Run("decrypt denied", func(t *testing.T) {
+		h := newHarness(t)
+		d := h.webhook(h.org, State{})
+		h.store.rows[d.Destination.ID].URLCiphertext = "denied"
+		lag := func() float64 { return testutil.ToFloat64(h.metrics.lag.WithLabelValues(d.Destination.ID.String())) }
+		h.index.append(h.org, tamper, 1)
+		h.now = h.now.Add(2 * time.Second)
+		_ = h.e.Round(context.Background())
+		if v := lag(); v != 2 {
+			t.Fatalf("lag after the first failure %v, want 2", v)
+		}
+		for _, want := range []float64{4, 7} {
+			h.now = h.now.Add(time.Duration(want-lag()) * time.Second)
+			_ = h.e.Round(context.Background())
+			if v := lag(); v != want {
+				t.Fatalf("lag %v, want %v", v, want)
+			}
+		}
+	})
+	t.Run("heartbeat stall", func(t *testing.T) {
+		h := newHarness(t)
+		d := h.webhook(h.org, State{})
+		h.store.rows[d.Destination.ID].Destination.HeartbeatInterval = time.Minute
+		lag := func() float64 { return testutil.ToFloat64(h.metrics.lag.WithLabelValues(d.Destination.ID.String())) }
+		h.tr.fail = &DeliveryError{Class: "dial"}
+		h.round()
+		if n := len(h.tr.kinds(outbound.KindHeartbeat)); n != 1 || h.state(d).NextAttemptAt == nil {
+			t.Fatalf("%d heartbeats, state %+v", n, h.state(d))
+		}
+		h.index.append(h.org, tamper, 1)
+		h.now = h.now.Add(2 * time.Second)
+		h.round()
+		if v := lag(); v != 2 {
+			t.Fatalf("lag of the event recorded during the backoff %v, want 2", v)
+		}
+		h.now = h.now.Add(time.Second)
+		h.round()
+		if len(h.tr.kinds(outbound.KindEvents)) != 0 {
+			t.Fatal("delivered during the backoff")
+		}
+		if v := lag(); v != 3 {
+			t.Fatalf("lag one second later %v, want 3", v)
+		}
+	})
 }

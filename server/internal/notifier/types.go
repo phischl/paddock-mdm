@@ -46,11 +46,13 @@ type Destination struct {
 
 // State is the delivery state of a destination.
 type State struct {
-	Cursor              int64
-	StartAtLatest       bool
-	ForwardSeq          int64
-	Status              string
-	Pending             uuid.UUID // uuid.Nil without a pending batch
+	Cursor        int64
+	StartAtLatest bool
+	ForwardSeq    int64
+	Status        string
+	Pending       uuid.UUID // uuid.Nil without a pending batch
+	// PendingFrom is the first forward sequence number of the pending batch, 0 without one.
+	PendingFrom         int64
 	ConsecutiveFailures int
 	FirstFailureAt      *time.Time
 	StalledSince        *time.Time

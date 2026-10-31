@@ -325,6 +325,15 @@ func TestPGStoreExactlyOnce(t *testing.T) {
 	if s.pending == nil {
 		t.Fatal("no pending batch")
 	}
+	data, err := w.e.store.Load(context.Background(), Scope{Org: w.org})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range data.Rows {
+		if r.Destination.ID == dest && (r.State.Pending != *s.pending || r.State.PendingFrom != 1) {
+			t.Fatalf("loaded pending %s from %d, want %s from 1", r.State.Pending, r.State.PendingFrom, *s.pending)
+		}
+	}
 	w.exec(`UPDATE notification_destination_state SET status = 'stalled', stalled_since = now() WHERE destination_id = $1`, dest)
 	store := w.e.store
 	rec := &Record{Code: audit.CodeNotificationDelivered, Params: map[string]any{"destination": "d"}}

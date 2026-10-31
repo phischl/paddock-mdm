@@ -32,8 +32,10 @@ const (
 	ScanWindow = 500
 	// MaxDeliveriesPerRound bounds the deliveries of one destination in one round.
 	MaxDeliveriesPerRound = 20
-	// DestinationBudget bounds the time one destination's deliveries take in a round besides MaxDeliveriesPerRound; a
-	// slow receiver continues in the next round instead of holding the round up for everyone.
+	// DestinationBudget bounds one destination's deliveries in a round besides MaxDeliveriesPerRound: no new delivery
+	// starts after it, and a slow receiver continues in the next round instead of holding the round up for everyone. It
+	// bounds the start, not the end: a requested test before the events and a delivery started just before the bound
+	// may each still take the 30 s transport timeout, so the worst case is about 120 s per destination and round.
 	DestinationBudget = 60 * time.Second
 	// MaxParallelDestinations bounds the destinations served at the same time; destinations are independent, so a
 	// slow or failing receiver does not hold up the others (plan M9 decision 21).
@@ -181,11 +183,11 @@ func (e *Engine) setOldest(id uuid.UUID, at time.Time) {
 	e.oldest[id] = at
 }
 
-func (e *Engine) oldestKnown(id uuid.UUID) bool {
+// oldestPending reports whether the oldest undelivered event of the destination is known (a non-zero time).
+func (e *Engine) oldestPending(id uuid.UUID) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_, ok := e.oldest[id]
-	return ok
+	return !e.oldest[id].IsZero()
 }
 
 // lagOf is now minus the commit time of the destination's oldest undelivered event, 0 when caught up or unknown.
@@ -317,7 +319,7 @@ func (e *Engine) serveDestination(ctx context.Context, r *scopeRound, row Row) e
 		return nil
 	}
 	if err := e.unseal(ctx, dr, row); err != nil {
-		return e.internal(ctx, dr, err)
+		return e.internal(ctx, dr, err, e.firstUndelivered(dr))
 	}
 	err := e.serveTest(ctx, dr)
 	if err == nil {
@@ -337,31 +339,52 @@ func (e *Engine) serveDestination(ctx context.Context, r *scopeRound, row Row) e
 	return err
 }
 
-// learnOldest finds the oldest undelivered event of a destination waiting for its backoff whose lag is not known yet
-// (after a restart), so the lag keeps rising while it waits.
+// learnOldest finds the oldest undelivered event of a destination that is not served this round (it waits for its
+// backoff, or failed before anything was sent), so the lag keeps rising meanwhile: the pending batch's first event, or
+// else the first event after the cursor that matches its filter. It reads only while no undelivered event is known.
 func (e *Engine) learnOldest(ctx context.Context, dr *destRound) {
-	if dr.st.Pending == uuid.Nil || e.oldestKnown(dr.d.ID) {
+	if e.oldestPending(dr.d.ID) {
 		return
 	}
-	if b, err := e.pendingBatch(ctx, dr); err == nil && len(b.events) > 0 {
-		e.setOldest(dr.d.ID, b.events[0].Event.RecordedAt)
+	if dr.st.Pending != uuid.Nil {
+		if b, err := e.pendingBatch(ctx, dr); err == nil && len(b.events) > 0 {
+			e.setOldest(dr.d.ID, b.events[0].Event.RecordedAt)
+			return
+		}
+	}
+	events, err := e.index.After(ctx, dr.sc, dr.st.Cursor, ScanWindow)
+	if err != nil {
+		slog.WarnContext(ctx, "notification lag unknown: index unreadable", "destination_id", dr.d.ID, "error", err)
+		return
+	}
+	for _, ev := range events {
+		if outbound.Matches(dr.d.Filter, dr.d.Codes, ev.Event) {
+			e.setOldest(dr.d.ID, ev.Event.RecordedAt)
+			return
+		}
 	}
 }
 
 // internal records a failure that happened before anything was sent (a ciphertext that does not decrypt, a pending
 // batch that cannot be read) as a failed attempt of class internal, so it backs off and stalls like a refused
 // delivery and the stall alert fires; the cause is logged, never recorded.
-func (e *Engine) internal(ctx context.Context, dr *destRound, cause error) error {
+// forward is the first forward sequence number not delivered yet (the stall event's forward_seq).
+func (e *Engine) internal(ctx context.Context, dr *destRound, cause error, forward int64) error {
 	slog.WarnContext(ctx, "notification destination cannot be served", "destination_id", dr.d.ID, "error", cause)
-	forward := dr.st.ForwardSeq + 1
-	if dr.st.Pending != uuid.Nil {
-		forward = dr.st.ForwardSeq
-	}
 	err := e.failed(ctx, dr, uuid.Nil, forward, &DeliveryError{Class: "internal"})
+	e.learnOldest(ctx, dr)
 	if errors.Is(err, errStale) {
 		return nil
 	}
 	return errors.Join(cause, err)
+}
+
+// firstUndelivered is the first forward sequence number not delivered yet: the pending batch's first, or the next one.
+func (e *Engine) firstUndelivered(dr *destRound) int64 {
+	if dr.st.Pending != uuid.Nil && dr.st.PendingFrom > 0 {
+		return dr.st.PendingFrom
+	}
+	return dr.st.ForwardSeq + 1
 }
 
 // startAtLatest resolves a skip request before anything is delivered: the cursor moves to the scope's newest commit
@@ -375,7 +398,7 @@ func (e *Engine) startAtLatest(ctx context.Context, dr *destRound) (bool, error)
 	if err != nil || !ok {
 		return false, err
 	}
-	dr.st.Cursor, dr.st.StartAtLatest, dr.st.Pending, dr.st.NextAttemptAt = cursor, false, uuid.Nil, nil
+	dr.st.Cursor, dr.st.StartAtLatest, dr.st.Pending, dr.st.PendingFrom, dr.st.NextAttemptAt = cursor, false, uuid.Nil, 0, nil
 	return true, nil
 }
 
@@ -449,7 +472,7 @@ func (e *Engine) serveEvents(ctx context.Context, dr *destRound) error {
 		if dr.st.Pending != uuid.Nil {
 			var err error
 			if b, err = e.pendingBatch(ctx, dr); err != nil {
-				return e.internal(ctx, dr, err)
+				return e.internal(ctx, dr, err, e.firstUndelivered(dr))
 			}
 		} else {
 			scans++
@@ -542,7 +565,7 @@ func (e *Engine) cut(ctx context.Context, dr *destRound) (b batch, found, more b
 	if err := e.store.CreateBatch(ctx, dr.sc, dr.d.ID, NewBatch{ID: b.id, Refs: b.refs}); err != nil {
 		return batch{}, false, false, fmt.Errorf("create batch: %w", err)
 	}
-	dr.st.ForwardSeq, dr.st.Pending = b.to(), b.id
+	dr.st.ForwardSeq, dr.st.Pending, dr.st.PendingFrom = b.to(), b.id, b.from()
 	return b, true, false, nil
 }
 
@@ -558,7 +581,7 @@ func (e *Engine) deliverBatch(ctx context.Context, dr *destRound, b batch) (bool
 	for _, ev := range b.events {
 		me, err := e.messageEvent(ctx, dr, ev)
 		if err != nil {
-			return false, e.internal(ctx, dr, err)
+			return false, e.internal(ctx, dr, err, b.from())
 		}
 		me.ForwardSeq = forward[ev.Event.EventID]
 		m.Events = append(m.Events, me)
@@ -580,7 +603,7 @@ func (e *Engine) deliverBatch(ctx context.Context, dr *destRound, b batch) (bool
 	}}, map[string]any{"forward_from": b.from(), "forward_to": b.to()}); err != nil {
 		return false, err
 	}
-	dr.st.Cursor, dr.st.Pending = advance, uuid.Nil
+	dr.st.Cursor, dr.st.Pending, dr.st.PendingFrom = advance, uuid.Nil, 0
 	e.setOldest(dr.d.ID, time.Time{})
 	return true, nil
 }

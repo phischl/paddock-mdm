@@ -438,20 +438,25 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 	return recorded, nil
 }
 
-// RecordAllOnce records the successful events of specs (none is allowed) in one transaction together with the state
-// change claim makes, and records nothing when claim reports false because that change no longer applies (made
-// already, or overtaken by another change). Each event therefore exists at most once per state change, as the
-// notifier's delivery, stall and resumption events require (plan M9 decision 22). The scope is the system principal's
-// organization, or the platform when it has none.
-func (r *ActionRunner) RecordAllOnce(ctx context.Context, specs []ActionSpec,
+// RecordAllOnce records the successful events of specs (none is allowed) in one transaction of scope together with
+// the state change claim makes. Contract:
+//   - system principals only: any other principal is refused with problem.Unauthenticated, and ScopeOrg without an
+//     organization with problem.NoOrganization (a missing context fails closed);
+//   - all events or none: they are recorded exactly when claim reports true and the transaction commits; claim false
+//     (or an error) records nothing, not even a failure event;
+//   - claim false means its guarded change no longer applies: another replica, or an earlier attempt, already made
+//     that transition and recorded its events, or another change overtook it.
+//
+// It serves system-observed transitions that must be recorded exactly once, such as the notifier's delivery, stall
+// and resumption events (plan M9 decision 22).
+func (r *ActionRunner) RecordAllOnce(ctx context.Context, scope Scope, specs []ActionSpec,
 	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
 	}
-	scope := ScopeOrg
-	if p.OrganizationID == uuid.Nil {
-		scope = ScopePlatform
+	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
+		return false, problem.NoOrganization
 	}
 	recs := make([]*recorder, len(specs))
 	for i, spec := range specs {

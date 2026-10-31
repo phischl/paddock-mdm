@@ -514,14 +514,14 @@ func TestRecordAllOnce(t *testing.T) {
 	}
 	specs := []app.ActionSpec{spec(audit.CodeNotificationDelivered), spec(audit.CodeNotificationDestinationResumed)}
 	stale := func(context.Context, *pgstore.Queries) (bool, error) { return false, nil }
-	if ok, err := h.runner.RecordAllOnce(ctx, specs, stale); ok || err != nil {
+	if ok, err := h.runner.RecordAllOnce(ctx, app.ScopeOrg, specs, stale); ok || err != nil {
 		t.Fatalf("stale claim: %t %v", ok, err)
 	}
 	if actions, _ := h.recorded(t, "corr-"+t.Name()); len(actions) != 0 {
 		t.Fatalf("a stale claim recorded %d actions", len(actions))
 	}
 	fresh := func(context.Context, *pgstore.Queries) (bool, error) { return true, nil }
-	if ok, err := h.runner.RecordAllOnce(ctx, specs, fresh); !ok || err != nil {
+	if ok, err := h.runner.RecordAllOnce(ctx, app.ScopeOrg, specs, fresh); !ok || err != nil {
 		t.Fatalf("fresh claim: %t %v", ok, err)
 	}
 	actions, events := h.recorded(t, "corr-"+t.Name())
@@ -530,14 +530,14 @@ func TestRecordAllOnce(t *testing.T) {
 		t.Fatalf("actions %+v events %d", actions, len(events))
 	}
 	failing := func(context.Context, *pgstore.Queries) (bool, error) { return true, errors.New("boom") }
-	if ok, err := h.runner.RecordAllOnce(ctx, specs, failing); ok || err == nil {
+	if ok, err := h.runner.RecordAllOnce(ctx, app.ScopeOrg, specs, failing); ok || err == nil {
 		t.Fatalf("failing claim: %t %v", ok, err)
 	}
 	if actions, _ := h.recorded(t, "corr-"+t.Name()); len(actions) != 2 {
 		t.Fatalf("a failing claim recorded events (%d actions)", len(actions))
 	}
 	platform := principal.With(context.Background(), principal.Principal{Kind: principal.KindSystem, Display: "notifier"})
-	if ok, err := h.runner.RecordAllOnce(platform, specs[:1], fresh); !ok || err != nil {
+	if ok, err := h.runner.RecordAllOnce(platform, app.ScopePlatform, specs[:1], fresh); !ok || err != nil {
 		t.Fatalf("platform: %t %v", ok, err)
 	}
 	actions, _ = h.recorded(t, "corr-"+t.Name())
@@ -550,7 +550,13 @@ func TestRecordAllOnce(t *testing.T) {
 	if len(actions) != 3 || platformActions != 1 {
 		t.Fatalf("platform action %+v", actions)
 	}
-	if _, err := h.runner.RecordAllOnce(h.admin(principal.RoleOrgAdmin), specs, fresh); err == nil {
-		t.Fatal("an administrator recorded system events")
+	if _, err := h.runner.RecordAllOnce(h.admin(principal.RoleOrgAdmin), app.ScopeOrg, specs, fresh); !errors.Is(err, problem.Unauthenticated) {
+		t.Fatalf("an administrator recorded system events: %v", err)
+	}
+	if _, err := h.runner.RecordAllOnce(platform, app.ScopeOrg, specs, fresh); !errors.Is(err, problem.NoOrganization) {
+		t.Fatalf("an organization scope without organization: %v", err)
+	}
+	if actions, _ := h.recorded(t, "corr-"+t.Name()); len(actions) != 3 {
+		t.Fatalf("a refused call recorded events (%d actions)", len(actions))
 	}
 }

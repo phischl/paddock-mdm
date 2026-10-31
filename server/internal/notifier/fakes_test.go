@@ -110,7 +110,7 @@ func (f *fakeStore) StartAtLatest(_ context.Context, sc Scope, dest uuid.UUID, l
 		return 0, false, nil
 	}
 	f.setCursor(r, max(r.State.Cursor, latest))
-	r.State.StartAtLatest, r.State.Pending, r.State.NextAttemptAt = false, uuid.Nil, nil
+	r.State.StartAtLatest, r.State.Pending, r.State.PendingFrom, r.State.NextAttemptAt = false, uuid.Nil, 0, nil
 	if d := f.deliveries[dropped]; d != nil && !d.delivered {
 		d.lastError = "skipped"
 	}
@@ -167,7 +167,7 @@ func (f *fakeStore) CreateBatch(_ context.Context, sc Scope, dest uuid.UUID, b N
 		return fmt.Errorf("forward_seq gap: %d after %d", b.Refs[0].ForwardSeq, r.State.ForwardSeq)
 	}
 	f.deliveries[b.ID] = &fakeDelivery{dest: dest, kind: outbound.KindEvents, refs: b.Refs}
-	r.State.ForwardSeq, r.State.Pending = b.Refs[len(b.Refs)-1].ForwardSeq, b.ID
+	r.State.ForwardSeq, r.State.Pending, r.State.PendingFrom = b.Refs[len(b.Refs)-1].ForwardSeq, b.ID, b.Refs[0].ForwardSeq
 	return nil
 }
 
@@ -199,7 +199,7 @@ func (f *fakeStore) Succeeded(_ context.Context, sc Scope, s Success) (bool, err
 	at := s.At
 	if s.Cursor != nil {
 		f.setCursor(r, *s.Cursor)
-		r.State.Pending, r.State.LastSuccessAt = uuid.Nil, &at
+		r.State.Pending, r.State.PendingFrom, r.State.LastSuccessAt = uuid.Nil, 0, &at
 	} else {
 		r.State.LastHeartbeatAt = &at
 	}

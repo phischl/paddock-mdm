@@ -129,6 +129,9 @@ func toRow(r pgstore.ListNotifierDestinationsRow) Row {
 	if r.PendingDeliveryID.Valid {
 		row.State.Pending = r.PendingDeliveryID.UUID
 	}
+	if r.PendingForwardFrom != nil {
+		row.State.PendingFrom = *r.PendingForwardFrom
+	}
 	if r.UrlCiphertext != nil {
 		row.URLCiphertext = *r.UrlCiphertext
 	}
@@ -288,7 +291,11 @@ func (s *PGStore) once(ctx context.Context, sc Scope, dest uuid.UUID, name strin
 		}
 		specs = append(specs, spec)
 	}
-	ok, err := s.runner.RecordAllOnce(scopeContext(ctx, sc), specs, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+	scope := app.ScopeOrg
+	if sc.Platform() {
+		scope = app.ScopePlatform
+	}
+	ok, err := s.runner.RecordAllOnce(scopeContext(ctx, sc), scope, specs, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
 		ok, err := claim(ctx, q)
 		if err == nil && !ok {
 			return false, errStaleClaim

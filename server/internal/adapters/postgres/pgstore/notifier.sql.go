@@ -184,9 +184,10 @@ SELECT d.id, d.organization_id, d.type, d.name, d.filter_mode, d.codes, d.pseudo
        d.url_ciphertext, d.secret_ciphertext, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s,
        s.cursor_commit_seq, s.start_at_latest, s.forward_seq, s.status, s.pending_delivery_id,
        s.consecutive_failures, s.first_failure_at, s.stalled_since, s.last_success_at, s.next_attempt_at,
-       s.last_heartbeat_at
+       s.last_heartbeat_at, p.forward_from AS pending_forward_from
 FROM notification_destination d
 JOIN notification_destination_state s ON s.destination_id = d.id AND s.organization_id = d.organization_id
+LEFT JOIN notification_delivery p ON p.id = s.pending_delivery_id AND p.organization_id = s.organization_id
 WHERE d.enabled
 ORDER BY d.id
 `
@@ -216,6 +217,7 @@ type ListNotifierDestinationsRow struct {
 	LastSuccessAt       *time.Time
 	NextAttemptAt       *time.Time
 	LastHeartbeatAt     *time.Time
+	PendingForwardFrom  *int64
 }
 
 // The notifier's delivery state (plan M9 decisions 21–23), role paddock_notifier: an organization's rows under its
@@ -255,6 +257,7 @@ func (q *Queries) ListNotifierDestinations(ctx context.Context) ([]ListNotifierD
 			&i.LastSuccessAt,
 			&i.NextAttemptAt,
 			&i.LastHeartbeatAt,
+			&i.PendingForwardFrom,
 		); err != nil {
 			return nil, err
 		}
