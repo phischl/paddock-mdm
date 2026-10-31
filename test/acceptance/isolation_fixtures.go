@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
@@ -46,6 +49,8 @@ type isolationWorld struct {
 	globexAPIToken string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
+	// globexExport is an evidence export of globex (seedGlobexExport).
+	globexExport string
 }
 
 // seedGlobexChangeSet applies, as carol, a document with only globex's update settings and a changed daily time, so
@@ -303,6 +308,27 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/audit/manifests": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/audit/manifests?page_size=100", nil
 	}},
+	// Evidence exports (plan M10 decision 30): alice requests one of acme's sealed days, the item is globex's export.
+	"GET /api/v1/audit/exports": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/audit/exports?page_size=100", nil
+	}},
+	"POST /api/v1/audit/exports": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		day := acmeSealedDay(t, w)
+		finishOpenExports(t, orgOf(t, w.alice))
+		return "/api/v1/audit/exports", map[string]string{"from_day": day, "to_day": day, "purpose": "acme isolation gate"}
+	}},
+	// Signing keys (plan M10 decision 36) are the audit chain's public keys, shared by every organization.
+	"GET /api/v1/audit/keys": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/audit/keys", nil
+	}},
+	"GET /api/v1/audit/exports/{id}": {kind: isoItem, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		seedGlobexExport(t, w)
+		return "/api/v1/audit/exports/" + w.globexExport, nil
+	}},
+	"GET /api/v1/audit/exports/{id}/download": {kind: isoItem, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		seedGlobexExport(t, w)
+		return "/api/v1/audit/exports/" + w.globexExport + "/download", nil
+	}},
 
 	"GET /api/v1/enrollment-tokens": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/enrollment-tokens?page_size=100", nil
@@ -538,6 +564,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"PUT /api/v1/settings/updates": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/settings/updates", currentUpdateSettings(t, w.alice)
 	}},
+	"GET /api/v1/settings/privacy": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/privacy", nil
+	}},
+	"PUT /api/v1/settings/privacy": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/privacy", currentPrivacySettings(t, w.alice)
+	}},
 	"GET /api/v1/package-holds": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/package-holds?page_size=100", nil
 	}},
@@ -672,6 +704,11 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {isolationVerifyDay + ": no manifest"}, "page_size": {"100"}},
 		{"trigger": {"cli"}, "ok": {"false"}, "sort": {"-started_at"}, "page_size": {"100"}},
 	},
+	// globex's evidence export (seedGlobexExport).
+	"/api/v1/audit/exports": {
+		{"q": {"globex-iso"}, "page_size": {"100"}},
+		{"status": {"pending", "running", "ready", "failed", "expired"}, "sort": {"-requested_at"}, "page_size": {"100"}},
+	},
 	// globex's sealed current day (seedGlobexManifest); the manifest's object key carries the globex ID.
 	"/api/v1/audit/manifests": {
 		{"q": {"manifests"}, "page_size": {"100"}},
@@ -725,12 +762,103 @@ func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 	return s
 }
 
+// currentPrivacySettings returns acme's privacy settings as an update body (unchanged values).
+func currentPrivacySettings(t *testing.T, p *env.Portal) map[string]any {
+	t.Helper()
+	res := call(t, p, http.MethodGet, "/api/v1/settings/privacy", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var s map[string]any
+	if err := res.JSON(&s); err != nil {
+		t.Fatal(err)
+	}
+	delete(s, "updated_at")
+	return s
+}
+
 // listSeeds seed globex data of a collection GET right before the gate checks it: data the development stack's
 // retention purges within minutes.
 var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
 	"/api/v1/devices/{id}/logins":     seedGlobexLogin,
 	"/api/v1/audit/verification-runs": seedGlobexVerificationRun,
 	"/api/v1/audit/manifests":         seedGlobexManifest,
+	"/api/v1/audit/exports":           seedGlobexExport,
+}
+
+// seedGlobexExport makes sure globex has an evidence export and adds its ID to the globex IDs: the one of an earlier
+// run, or a new one of globex's sealed current day (seedGlobexManifest) requested by carol after a step-up.
+func seedGlobexExport(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	if w.globexExport != "" {
+		return
+	}
+	var page struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	res := call(t, w.carol, http.MethodGet, "/api/v1/audit/exports?q=globex-iso&page_size=10", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	if err := res.JSON(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) > 0 {
+		w.globexExport = page.Items[0].ID
+	} else {
+		seedGlobexManifest(t, w)
+		finishOpenExports(t, orgOf(t, w.carol))
+		stepUp(t, w.carol, env.Carol, true)
+		today := time.Now().UTC().Format(time.DateOnly)
+		res := call(t, w.carol, http.MethodPost, "/api/v1/audit/exports",
+			map[string]string{"from_day": today, "to_day": today, "purpose": "globex-iso evidence export"})
+		expectStatus(t, res, http.StatusAccepted, "")
+		w.globexExport = responseID(t, res).String()
+	}
+	w.globexIDs = append(w.globexIDs, w.globexExport)
+}
+
+// acmeSealedDay returns acme's latest sealed day; before acme's first seal it seals acme's days through today with the
+// development-only `audit seal --day --org`, as seedGlobexManifest does for globex.
+func acmeSealedDay(t *testing.T, w *isolationWorld) string {
+	t.Helper()
+	var page struct {
+		Items []struct {
+			Day string `json:"day"`
+		} `json:"items"`
+	}
+	res := call(t, w.alice, http.MethodGet, "/api/v1/audit/manifests?sort=-day&page_size=10", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	if err := res.JSON(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) > 0 {
+		return page.Items[0].Day
+	}
+	today := time.Now().UTC().Format(time.DateOnly)
+	acme := orgOf(t, w.alice)
+	if code, out, err := stack.PaddockServer(testContext(t, 2*time.Minute), "audit", "seal", "--day", today, "--org", acme.String()); err != nil || code != 0 {
+		t.Fatalf("audit seal for acme: exit %d, %v\n%s", code, err, out)
+	}
+	return today
+}
+
+// finishOpenExports marks the pending and running exports of org as failed, as the audit writer does with a stuck
+// export, so that the gate's own requests on the long-lived development stack stay below the limit of open exports.
+func finishOpenExports(t *testing.T, org uuid.UUID) {
+	t.Helper()
+	dsn, err := stack.AuditWriterDSN()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t, time.Minute)
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if _, err := conn.Exec(ctx, `UPDATE audit_export SET status = 'failed', error = 'finished by the isolation gate'
+		WHERE organization_id = $1 AND status IN ('pending', 'running')`, org); err != nil {
+		t.Fatalf("finish open exports of %s: %v", org, err)
+	}
 }
 
 // seedGlobexManifest seals globex's unsealed days through today with the development-only `audit seal --day --org`.

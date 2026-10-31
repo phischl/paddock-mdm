@@ -226,3 +226,94 @@ disappear while the index still shows them. The escrow of retired devices stays 
   The period (90 days) and the event (`retention.purged`, store `change_set_before`) are unchanged.
 - Decision 6: "the version the `server` module already pins" is binding, not the number quoted (v1.20.3 on
   2026-10-29).
+
+## Amendment 2026-10-30 (plan M10, index purge time)
+
+- Decision 1, row "Audit index" and decision 3: the audit writer drops index partitions nightly at **01:15 UTC**, not
+  00:45 UTC. Plan M10 decision 23 schedules the purge after the seal (00:15 UTC) and the nightly chain verification
+  (00:45 UTC); that later decision is binding.
+  `docs/compliance/retention.md` and `docs/operations/audit-bucket.md` state 01:15 UTC.
+
+## Amendment 2026-10-31 (architect-authorised, PDK-180)
+
+The table of the amendment 2026-10-18 does not match the schema in six places. Decided for PDK-180:
+
+1. **Role members are not purged.** `organization_role_member` and `platform_role_member` (migrations 00070/00071)
+   hold the current baseline of every role group, one row per current member; a revoked member is already deleted by
+   the sync, and the snapshot time lives in `*_role_snapshot`. Deleting rows by age would drop current members and
+   make the next sync record false `admin.role_granted`. The store `role_member_snapshot` is dropped.
+2. **Event gaps by `filled_at`.** `device_event_gap` rows are purged `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after
+   `filled_at`; unfilled gaps are kept, like open alerts. `device_event_dropped` has no timestamp and leaves this
+   ticket (follow-up ticket).
+3. **`action` by `finished_at`.** Rows with status `started` (the outbox reaper's input) are never purged; rows of the
+   platform pseudo-organization go through the platform pool, once per round, with their `retention.purged` event in
+   the pseudo-organization.
+4. **Referenced rows are skipped.** A finished `device_command` that `device_disk_conversion.command_id` or
+   `abort_command_id`, or `device.uninstall_command_id` still references stays; it explains that row.
+5. **Status names.** The final statuses of `device_command` are `succeeded`, `failed`, `expired` and `cancelled`
+   (the table's `done` is a typo).
+6. **Revocation tables are excluded.** `revocation_request` and `revocation_approval` belong to the revocation domain
+   (ADR 0014); giving the worker `DELETE` on them widens that domain's writers. They leave this ticket (follow-up
+   ticket that names the ADR 0014 boundary).
+
+**Cutoff never ahead of the index, for all four stores** (`action`, `device_command`, `device_alert`,
+`device_event_gap`). The index drops whole UTC months only, a month once it ended more than
+`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` ago, so the oldest month it may still show is the one containing
+now − that period. The cutoff is the start of the UTC month containing now − that period − 7 days, and never later
+than one hour before now, so a development installation that counts retention days in seconds does not delete rows
+a running session still reads; the store's own period equals the index retention and no longer enters the cutoff.
+The worker computes it from its own clock and the shared variable and reads nothing from the audit database (no new
+boundary); every `retention.purged` event of these stores records the index retention as `index_days`. Residual:
+when the index purge lags (the audit writer down, a partition kept after a lock timeout), the portal shows fewer
+rows than the index shows events; the failure direction is keeping data longer, never deleting it early.
+The margin is 7 days, not the 2 a late index purge and clock skew alone would need: after an outage of the audit
+pipeline (the audit writer, the broker or the audit host down for days), the backlog of audit events reaches the index
+late, and these late events keep their month in the index longer than the month's end plus the index retention; the
+margin covers an outage of about a week. The cost: in the first seven days of a month instead of two, the cutoff stays
+one month further back, so these rows are kept at most one month longer, never deleted earlier.
+
+The worker reads the audit writer's variables `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` and `PADDOCK_AUDIT_RETENTION_DAYS`,
+which the Compose files pass to both from the same `.env` values; it has no default of its own for the index
+retention and refuses to start when that variable is missing or empty, not a number, below the bucket default of 400
+days (`auditwriter.MinRetentionDays`) or below `PADDOCK_AUDIT_RETENTION_DAYS`, and a retention configured below the
+bucket default deletes nothing. Compose passes a missing variable as an empty one instead of failing, so every other
+`./paddock` command of an installation whose `.env` predates the variable keeps working; `./paddock check` reports
+it. Whether the control plane's value equals the audit host's is not checked across hosts (follow-up ticket).
+Migration `00080` grants the worker `DELETE` on `device_command`, `device_alert` and `device_event_gap`;
+migration `00081` grants `DELETE` on `action` to the worker and the platform role, limited by restrictive policies to
+finished actions and, for the platform role, to the platform pseudo-organization's. Migration `00082` makes a
+finished action read-only for every runtime role with `UPDATE` on `action` (`paddock_api`, `paddock_platform`,
+`paddock_relay`, `paddock_worker`, `paddock_compiler`, `paddock_revocation`): a restrictive `FOR UPDATE` policy with
+`USING (status = 'started')` and `WITH CHECK (status IN ('started', 'finished'))`, so no role can move an
+organization's finished action into the pseudo-organization, or rewrite its params or outcome, and then delete it.
+No runtime role has `BYPASSRLS`; only the table owner `paddock_owner` does. Migration `00083` closes the started
+window: a `BEFORE UPDATE` trigger rejects every change of `organization_id` for every role, except out of the platform
+pseudo-organization (nil UUID), where organization creation starts its action and finishes it in the new
+organization; and the restrictive policies become `TO PUBLIC` with the same expressions (`finished_immutable` for
+`UPDATE`; `delete_finished`, `USING (status = 'finished')`, replaces the worker's `DELETE` policy; the platform role's
+`platform_delete` stays), so a role added later with `UPDATE` or `DELETE` on `action` (M9's `paddock_notifier`) is
+bound without naming it. Migration `00084` (PDK-635) replaces that trigger with `action_integrity`, which runs before
+every `INSERT` and `UPDATE`, for every role. The finish time, on `started` → `finished` and on an insert as
+`finished`, is `GREATEST(clock_timestamp(), LEAST(finished_at, clock_timestamp() + 5 minutes))`: no role can backdate
+a finish to have the next retention round delete the row, and the application's time, which the use case and the
+outbox reaper also write as the audit event's `occurred_at`, stays when the database clock lags behind it, so the row,
+purged by `finished_at`, stays at least as long as the index, purged by `occurred_at`, shows its event. Only an
+application clock more than five minutes ahead of the database's loses its time to the cap; within that month-boundary
+window its row can go before its event, accepted. A started action is inserted without a finish time and with a
+`started_at` within five minutes of the database's time (an application clock further off fails the action instead),
+and `CHECK ((status = 'finished') = (finished_at IS NOT NULL))` ties the finish time to the status. On `UPDATE`, `id`,
+`code`, `actor`, `source`, `correlation_id` and `started_at` never change, and every update that leaves an action
+`started` is refused: a started action changes only by finishing, so no role rewrites its start time to have the
+outbox reaper close it as unknown, or its target, params, error code or organization, which the reaper copies into the
+event it writes. `organization_id` never changes, for every role and in every status, so an action stays in its
+organization without exception; this drops the exception of `00083` out of the platform pseudo-organization, which no
+code path uses: organization creation inserts its started action in the new organization already. The table owner
+`paddock_owner` is out of scope: it runs the migrations only, bypasses row-level security and may disable the trigger,
+and no service connects as it. Residual: a role with `UPDATE` can still finish a started action of an organization it may update,
+with another outcome or params, before its use case does; the action stays in that organization with a finish time
+the database bounds, so the retention round keeps it for the full period, but its use case's finish then fails and
+the original outcome never reaches the outbox. And `paddock_relay` holds `DELETE` on `outbox`, so it can remove an
+audit event before it is published (follow-up PDK-642). And the restrictive `DELETE` policies on `action`
+(`platform_delete`, `delete_finished`) have no time bound: a finished action can be deleted before the retention cutoff.
+The platform role deletes only finished actions of the pseudo-organization, and the worker is an internal role whose
+only `DELETE` on `action` is the retention round (follow-up PDK-643).

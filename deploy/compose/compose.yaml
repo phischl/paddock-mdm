@@ -26,8 +26,17 @@ x-paddock-env: &paddock-env
   # network is not fixed, and the roles' ports are never published in production.
   PADDOCK_TRUSTED_PROXY_CIDRS: ${PADDOCK_TRUSTED_PROXY_CIDRS:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 fc00::/7 ::1/128}
 
+# Container logs rotate at 50 MB x 10 files per service (ADR 0032, plan M10 decision 40); ./paddock check fails a
+# service without max-size.
+x-paddock-logging: &paddock-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+
 services:
   caddy:
+    logging: *paddock-logging
     image: ${CADDY_IMAGE}
     restart: unless-stopped
     cap_drop: [ALL]
@@ -74,6 +83,7 @@ services:
 
   # Exports the root certificate of Caddy's internal CA so that containers trust the public URLs.
   caddy-ca-export:
+    logging: *paddock-logging
     image: ${CADDY_IMAGE}
     restart: "no"
     cap_drop: [ALL]
@@ -89,6 +99,7 @@ services:
         condition: service_healthy
 
   postgres:
+    logging: *paddock-logging
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
     pids_limit: 512
@@ -125,6 +136,7 @@ services:
       retries: 20
 
   rabbitmq:
+    logging: *paddock-logging
     image: ${RABBITMQ_IMAGE}
     restart: unless-stopped
     pids_limit: 1024
@@ -146,6 +158,7 @@ services:
 
   # Cache and coordination store of the device control plane; never a source of truth (architecture §8.3).
   valkey:
+    logging: *paddock-logging
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
     pids_limit: 256
@@ -163,6 +176,7 @@ services:
 
   # Control-plane object store: bucket paddock-bundles (plan M2a decision 3). Separate from the audit store.
   rustfs:
+    logging: *paddock-logging
     image: ${RUSTFS_IMAGE}
     restart: unless-stopped
     pids_limit: 512
@@ -183,6 +197,7 @@ services:
       retries: 20
 
   openbao:
+    logging: *paddock-logging
     image: ${OPENBAO_IMAGE}
     restart: unless-stopped
     pids_limit: 256
@@ -201,6 +216,7 @@ services:
       retries: 20
 
   authentik-postgres:
+    logging: *paddock-logging
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
     pids_limit: 512
@@ -219,6 +235,7 @@ services:
       retries: 20
 
   authentik-server: &authentik
+    logging: *paddock-logging
     image: ${AUTHENTIK_IMAGE}
     restart: unless-stopped
     pids_limit: 512
@@ -264,6 +281,7 @@ services:
         condition: service_healthy
 
   authentik-worker:
+    logging: *paddock-logging
     <<: *authentik
     command: ["worker"]
     pids_limit: 1024
@@ -278,6 +296,7 @@ services:
   # network cp only (paddock-worker); Caddy publishes the device paths alone under fleet.<domain>. MySQL and Redis
   # are on the internal network fleet.
   fleet-mysql:
+    logging: *paddock-logging
     image: ${FLEET_MYSQL_IMAGE}
     restart: unless-stopped
     pids_limit: 512
@@ -299,6 +318,7 @@ services:
 
   # Fleet speaks the Redis protocol; Valkey serves it (plan M5a decision 1).
   fleet-redis:
+    logging: *paddock-logging
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
     pids_limit: 256
@@ -318,6 +338,7 @@ services:
       retries: 20
 
   fleet:
+    logging: *paddock-logging
     image: ${FLEET_IMAGE}
     restart: unless-stopped
     pids_limit: 512
@@ -363,6 +384,7 @@ services:
       start_period: 60s
 
   paddock-migrate:
+    logging: *paddock-logging
     <<: *paddock
     restart: "no"
     command: ["migrate", "paddock", "+", "provision", "rabbitmq"]
@@ -383,6 +405,7 @@ services:
         condition: service_healthy
 
   paddock-api:
+    logging: *paddock-logging
     <<: *paddock
     command: ["serve", "api"]
     environment:
@@ -467,6 +490,7 @@ services:
   # published port does. It verifies the step-up proof itself, so code execution in the api decrypts nothing without
   # a fresh step-up of an administrator.
   paddock-escrow-reader:
+    logging: *paddock-logging
     <<: *paddock
     command: ["serve", "escrow-reader"]
     environment:
@@ -506,6 +530,7 @@ services:
   # of the AppRole paddock-revocation-issuer, the only one that can sign with revocation-signing. It verifies the
   # step-up proofs itself and enforces the limits of ADR 0014; no port, no other role reaches it.
   paddock-revocation-issuer:
+    logging: *paddock-logging
     <<: *paddock
     command: ["serve", "revocation-issuer"]
     environment:
@@ -548,6 +573,7 @@ services:
         condition: service_healthy
 
   paddock-outbox-relay:
+    logging: *paddock-logging
     <<: *paddock
     command: ["serve", "outbox-relay"]
     environment:
@@ -564,6 +590,7 @@ services:
 
   # Device API. No database credentials: the gateway reads Valkey and writes RabbitMQ only (plan M2a decision 1).
   paddock-gateway:
+    logging: *paddock-logging
     <<: *paddock
     command: ["serve", "gateway"]
     environment:
@@ -594,6 +621,7 @@ services:
         condition: service_healthy
 
   paddock-compiler:
+    logging: *paddock-logging
     <<: *paddock
     # A separate image with visudo (plan M3a decision 17).
     image: ${PADDOCK_COMPILER_IMAGE:-paddock-compiler:dev}
@@ -641,6 +669,7 @@ services:
         condition: service_healthy
 
   paddock-worker:
+    logging: *paddock-logging
     <<: *paddock
     command: ["serve", "worker"]
     environment:
@@ -668,6 +697,14 @@ services:
       PADDOCK_FLEET_URL: http://fleet:8080
       PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_FLEET_TOKEN_FILE: /run/secrets/fleet_api_token
+      # The retention round keeps the rows that explain audit events as long as the audit index shows them (ADR 0032
+      # amendments 2026-10-18 and 2026-10-31): the audit writer's variables. No fallback for the index retention: on a
+      # two-host installation the control-plane and the audit host read separate .env files, and a silent default on
+      # the control plane would delete these rows before an audit host with a longer index retention drops their
+      # events. Unset, it stays empty and the worker alone refuses to start; a Compose error (:?) would stop every
+      # ./paddock command of an installation whose .env predates the variable.
+      PADDOCK_AUDIT_RETENTION_DAYS: ${PADDOCK_AUDIT_RETENTION_DAYS:-400}
+      PADDOCK_AUDIT_INDEX_RETENTION_DAYS: ${PADDOCK_AUDIT_INDEX_RETENTION_DAYS:-}
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
       - fleet_api_token
@@ -695,6 +732,7 @@ services:
   # Metrics and alert rules (plan M6a decision 8, docs/operations/monitoring.md): `--profile observability`. Not
   # published; Alertmanager and Grafana are not bundled.
   prometheus:
+    logging: *paddock-logging
     image: ${PROMETHEUS_IMAGE}
     profiles: [observability]
     restart: unless-stopped

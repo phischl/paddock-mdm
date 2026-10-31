@@ -10,6 +10,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -43,6 +44,9 @@ type AuditQuery struct {
 	// TargetID selects the events of one target (for example a device), exact match on target.id.
 	TargetID *uuid.UUID
 	Page     ListPage
+	// Now is the clock the default range ends resolve against; zero means the use case's clock. A request sets it once
+	// so its recording and its list search the same range (PDK-139).
+	Now time.Time
 }
 
 // AuditDevice is the device an event concerns; Hostname is nil when the organization has no such device.
@@ -58,32 +62,48 @@ type AuditListed struct {
 	Count   int
 }
 
+// effectiveRange is the range the query searches at now (or at f.Now when set): to defaults to now, from to
+// DefaultAuditRange before to, both truncated to the millisecond of audit timestamps, so the recorded range, its filter
+// hash and the list search the same bounds (PDK-139). An empty or reversed range and one longer than MaxAuditRange are
+// refused.
+func (f AuditQuery) effectiveRange(now time.Time) (from, to time.Time, err error) {
+	if !f.Now.IsZero() {
+		now = f.Now
+	}
+	to = now
+	if f.To != nil {
+		to = *f.To
+	}
+	from = to.Add(-DefaultAuditRange)
+	if f.From != nil {
+		from = *f.From
+	}
+	from, to = audit.Timestamp(from), audit.Timestamp(to)
+	if !from.Before(to) {
+		return from, to, problem.InvalidRequest.WithDetail("from must be before to")
+	}
+	if to.Sub(from) > MaxAuditRange {
+		return from, to, problem.RangeTooLarge.WithDetail("the range may span at most 92 days")
+	}
+	return from, to, nil
+}
+
 // List returns one page of events and the capped number of matches (ADR 0018).
 func (l *AuditLog) List(ctx context.Context, f AuditQuery) (AuditListed, error) {
 	var out AuditListed
 	if _, err := RequireOrg(ctx, RolesAudit); err != nil {
 		return out, err
 	}
-	to := l.now()
-	if f.To != nil {
-		to = *f.To
-	}
-	from := to.Add(-DefaultAuditRange)
-	if f.From != nil {
-		from = *f.From
-	}
-	if !from.Before(to) {
-		return out, problem.InvalidRequest.WithDetail("from must be before to")
-	}
-	if to.Sub(from) > MaxAuditRange {
-		return out, problem.RangeTooLarge.WithDetail("the range may span at most 92 days")
+	from, to, err := f.effectiveRange(l.now())
+	if err != nil {
+		return out, err
 	}
 	var targetID *string
 	if f.TargetID != nil {
 		id := f.TargetID.String()
 		targetID = &id
 	}
-	err := l.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+	err = l.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		n, err := q.CountAuditEvents(ctx, auditstore.CountAuditEventsParams{
 			FromTime: from, ToTime: to, Codes: f.Codes, Outcomes: f.Outcomes, ActorTypes: f.ActorTypes, TargetID: targetID,
 			QPattern: f.Page.QPattern, CountLimit: countLimit,

@@ -28,12 +28,14 @@ type Deps struct {
 	AuditLog      *app.AuditLog
 	// AuditIntegrity reads the sealed days and the chain verification runs (plan M8b decision 31).
 	AuditIntegrity *app.AuditIntegrity
-	Tokens         *app.EnrollmentTokens
-	APITokens      *app.APITokens
-	Declarative    *app.Declarative
-	Devices        *app.Devices
-	Managed        *app.ManagedConfig
-	Releases       *app.AgentReleases
+	// AuditExports requests and reads the evidence exports (plan M10 decision 29).
+	AuditExports *app.AuditExports
+	Tokens       *app.EnrollmentTokens
+	APITokens    *app.APITokens
+	Declarative  *app.Declarative
+	Devices      *app.Devices
+	Managed      *app.ManagedConfig
+	Releases     *app.AgentReleases
 	// ReleaseImports import agent releases from the configured release source (ADR 0043).
 	ReleaseImports *app.ReleaseImports
 	Users          *app.Users
@@ -53,8 +55,11 @@ type Deps struct {
 	DMS            *app.DMS
 	Inventory      *app.Inventory
 	Updates        *app.Updates
-	Attention      *app.Attention
-	Overview       *app.Overview
+	Privacy        *app.Privacy
+	// ReadAudit records the audit searches and inventory views the organization switched on (plan M10 decision 20).
+	ReadAudit *app.ReadAudit
+	Attention *app.Attention
+	Overview  *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
@@ -183,6 +188,9 @@ var privileged = map[string]struct {
 	"PUT /api/v1/settings/dms":                                             {app.ScopeOrg, app.SpecDMSUpdate},
 	"PUT /api/v1/settings/managed-files":                                   {app.ScopeOrg, app.SpecManagedFileSettingsChange},
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
+	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
+	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
+	"GET /api/v1/audit/exports/{id}/download":                              {app.ScopeOrg, app.SpecAuditExportDownload},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
 	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
 	"DELETE /api/v1/package-holds/{id}":                                    {app.ScopeOrg, app.SpecPackageHoldDelete},
@@ -225,11 +233,11 @@ func NewHandler(d Deps) http.Handler {
 
 	api := http.NewServeMux()
 	h := &handlers{
-		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, tokens: d.Tokens,
+		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, exports: d.AuditExports, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
+		inventory: d.Inventory, updates: d.Updates, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
@@ -248,7 +256,7 @@ func NewHandler(d Deps) http.Handler {
 		})
 	adminapi.HandlerWithOptions(strict, adminapi.StdHTTPServerOptions{
 		BaseRouter:       api,
-		Middlewares:      []adminapi.MiddlewareFunc{s.csrf, s.mcpGuard, limitBody},
+		Middlewares:      []adminapi.MiddlewareFunc{s.refuseHead, s.csrf, s.mcpGuard, limitBody},
 		ErrorHandlerFunc: s.rejected,
 	})
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { httpx.WriteProblem(w, r, problem.NotFound) })
@@ -361,6 +369,21 @@ func (s *server) csrf(next http.Handler) http.Handler {
 			}
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// refuseHead answers HEAD on a privileged route with 405 and Allow: GET, audited like any other request rejected before
+// its handler. net/http routes HEAD to a GET pattern, so the evidence download would otherwise record a download and
+// read the whole package for a body that is never sent.
+func (s *server) refuseHead(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := privileged[r.Pattern]; r.Method != http.MethodHead || !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Allow", http.MethodGet)
+		s.rejected(w, r, &problem.Error{Code: problem.InvalidRequest.Code, Status: http.StatusMethodNotAllowed,
+			Detail: "HEAD is not supported on this route; use GET"})
 	})
 }
 

@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +44,38 @@ func enrollFleetHostWithHardware(t *testing.T, uuid, hostname string, hw devices
 	h := enrollFleetHost(t, uuid, hostname, nil)
 	h.Hardware = &hw
 	return h
+}
+
+// fleetHostExists asks Fleet's admin API on the development host whether a host with the hardware UUID is enrolled.
+func fleetHostExists(t *testing.T, uuid string) bool {
+	t.Helper()
+	dir, err := stack.SecretsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := os.ReadFile(filepath.Join(dir, "fleet_api_token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(testContext(t, time.Minute), http.MethodGet,
+		stack.FleetAdminURL()+"/api/latest/fleet/hosts/identifier/"+url.PathEscape(uuid), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true
+	case http.StatusNotFound:
+		return false
+	}
+	t.Fatalf("Fleet host %s: HTTP %d", uuid, resp.StatusCode)
+	return false
 }
 
 // triggerFleetVulnerabilities runs Fleet's vulnerability job now instead of at its next period, as the development

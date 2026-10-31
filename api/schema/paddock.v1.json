@@ -15,7 +15,8 @@
       "properties": {
         "login": { "$ref": "#/$defs/loginSettings" },
         "updates": { "$ref": "#/$defs/updateSettings" },
-        "managed_files": { "$ref": "#/$defs/managedFileSettings" }
+        "managed_files": { "$ref": "#/$defs/managedFileSettings" },
+        "privacy": { "$ref": "#/$defs/privacySettings" }
       }
     },
     "device_groups": {
@@ -107,6 +108,17 @@
       "required": ["operator_roots"],
       "properties": {
         "operator_roots": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 1024 } }
+      }
+    },
+    "privacySettings": {
+      "description": "When present, every field is required (same constraints as PUT /api/v1/settings/privacy: organization administrator).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"],
+      "properties": {
+        "retired_inventory_days": { "type": "integer", "minimum": 1, "maximum": 365 },
+        "audit_search_recorded": { "type": "boolean" },
+        "inventory_view_recorded": { "type": "boolean" }
       }
     },
     "deviceGroup": {

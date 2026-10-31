@@ -635,6 +635,138 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/audit/keys:
+    get:
+      operationId: listAuditEvidenceKeys
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor. The public keys the audit chain and the evidence packages are signed with, by
+        key version, with their SHA-256 fingerprints. A version appears after the first manifest or package signed
+        with it. Compare the fingerprint of a package with a value recorded independently, for example the output of
+        `paddock-server audit keys`.
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEvidenceKeys" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/exports:
+    get:
+      operationId: listAuditExports
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor. The organization's evidence exports (ADR 0032 §5). q matches the purpose and the
+        requester's display name.
+      x-paddock-list:
+        sort: [requested_at, status, from_day, to_day]
+        default_sort: -requested_at
+        search: [purpose, requested_by.display]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AuditExportSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AuditExportStatus" }
+      responses:
+        "200":
+          description: One page of exports.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExportPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createAuditExport
+      x-paddock-step-up: true
+      tags: [audit]
+      description: |
+        Roles: org_admin, org_auditor, with a step-up within the last 300 s (403 step_up_required). Requests a signed
+        evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at
+        most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose
+        or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or
+        bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). At most two exports of the organization
+        may be pending or running (409 too_many_exports). The audit writer builds the package on the audit host; it is ready within
+        minutes for small ranges and expires 7 days after it is ready.
+        Recorded as audit.export_requested; every download as audit.export_downloaded.
+      x-paddock-audit: audit.export_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuditExportCreate" }
+      responses:
+        "202":
+          description: The pending export.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExport" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/exports/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getAuditExport
+      tags: [audit]
+      description: "Roles: org_admin, org_auditor. One evidence export of the organization."
+      responses:
+        "200":
+          description: The export.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExport" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/exports/{id}/download:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: downloadAuditExport
+      tags: [audit]
+      description: |
+        Roles: org_admin, org_auditor. Streams the package (a tar archive) of a ready export; 409 export_not_ready
+        while it is pending, running, failed or expired, 404 for an unknown export or one of another organization.
+        The response carries Content-Length (the package size), Content-Disposition (paddock-audit-export-<organization
+        slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar) and X-Paddock-Package-SHA256 (the lowercase hex SHA-256
+        of the body). Recorded as audit.export_downloaded before the first byte is sent; a transfer that breaks later
+        is not recorded again. No range requests. HEAD is refused with 405 (Allow: GET) and is audited as a rejected
+        request; a transfer whose stored chunks are damaged ends without a body error, so the client detects it by
+        the short body against Content-Length and X-Paddock-Package-SHA256.
+      x-paddock-audit: audit.export_downloaded
+      responses:
+        "200":
+          description: The package.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+            X-Paddock-Package-SHA256: { schema: { type: string } }
+          content:
+            application/x-tar:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /api/v1/device-groups/{id}/devices:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -2330,6 +2462,46 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/settings/privacy:
+    get:
+      operationId: getPrivacySettings
+      tags: [settings]
+      description: "Roles: org_admin, org_operator, org_auditor. The privacy settings (ADR 0032 §2); the defaults until changed."
+      responses:
+        "200":
+          description: The privacy settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PrivacySettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updatePrivacySettings
+      tags: [settings]
+      description: |
+        Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired
+        device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches
+        of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and
+        inventory_view_recorded (views of a device's software and vulnerabilities are recorded as
+        device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.
+      x-paddock-audit: settings.privacy_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PrivacySettingsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PrivacySettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /api/v1/package-holds:
     get:
@@ -4394,6 +4566,14 @@ components:
         type: string
         enum: [day, -day]
         default: -day
+    AuditExportSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [requested_at, -requested_at, status, -status, from_day, -from_day, to_day, -to_day]
+        default: -requested_at
     IpAllowlistSort:
       name: sort
       in: query
@@ -5324,6 +5504,67 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    AuditExportStatus:
+      type: string
+      enum: [pending, running, ready, failed, expired]
+    AuditExportCreate:
+      type: object
+      required: [from_day, to_day, purpose]
+      properties:
+        from_day: { type: string, format: date }
+        to_day: { type: string, format: date }
+        purpose: { type: string, minLength: 1, maxLength: 500 }
+    AuditEvidenceKey:
+      type: object
+      required: [key_version, public_key, fingerprint, first_seen_at]
+      properties:
+        key_version: { type: integer }
+        public_key: { type: string, format: byte, description: Base64 of the raw 32-byte ed25519 public key. }
+        fingerprint: { type: string, description: Lowercase hex SHA-256 of the raw public key. }
+        first_seen_at: { type: string, format: date-time }
+    AuditEvidenceKeys:
+      type: object
+      required: [keys]
+      properties:
+        keys: { type: array, items: { $ref: "#/components/schemas/AuditEvidenceKey" } }
+    AuditExport:
+      type: object
+      required: [id, status, from_day, to_day, purpose, requested_by, requested_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, key_version, error]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/AuditExportStatus" }
+        from_day: { type: string, format: date }
+        to_day: { type: string, format: date }
+        purpose: { type: string }
+        requested_by:
+          allOf:
+            - $ref: "#/components/schemas/AuditActor"
+          description: The requester; never carries the client address (ip).
+        requested_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        event_count: { type: integer, format: int64, nullable: true }
+        object_count: { type: integer, nullable: true }
+        size: { type: integer, format: int64, nullable: true }
+        package_sha256: { type: string, nullable: true, description: Lowercase hex. }
+        verify_ok: { type: boolean, nullable: true }
+        verify_problems:
+          type: array
+          items: { type: string }
+        key_version: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+    AuditExportPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditExport" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     AuditIntegrity:
       type: object
       required: [sealed_through, manifests, verification_window_days, last_run, last_success_at, last_failure_at]
@@ -6210,6 +6451,21 @@ components:
           description: Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it.
           allOf:
             - $ref: "#/components/schemas/AgentUpdatePolicy"
+    PrivacySettings:
+      type: object
+      required: [retired_inventory_days, audit_search_recorded, inventory_view_recorded, updated_at]
+      properties:
+        retired_inventory_days: { type: integer, minimum: 1, maximum: 365 }
+        audit_search_recorded: { type: boolean }
+        inventory_view_recorded: { type: boolean }
+        updated_at: { type: string, format: date-time }
+    PrivacySettingsUpdate:
+      type: object
+      required: [retired_inventory_days, audit_search_recorded, inventory_view_recorded]
+      properties:
+        retired_inventory_days: { type: integer, minimum: 1, maximum: 365 }
+        audit_search_recorded: { type: boolean }
+        inventory_view_recorded: { type: boolean }
     UpdateSettings:
       type: object
       required: [security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h,

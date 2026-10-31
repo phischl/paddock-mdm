@@ -50,6 +50,15 @@ type Settings struct {
 	Updates *UpdateSettings `json:"updates,omitempty"`
 	// ManagedFiles are the operator roots of the managed files (plan M8s decision 7c).
 	ManagedFiles *ManagedFileSettings `json:"managed_files,omitempty"`
+	// Privacy are the privacy settings (plan M10 decision 9).
+	Privacy *PrivacySettings `json:"privacy,omitempty"`
+}
+
+// PrivacySettings are the fields of PUT /api/v1/settings/privacy.
+type PrivacySettings struct {
+	RetiredInventoryDays  int  `json:"retired_inventory_days"`
+	AuditSearchRecorded   bool `json:"audit_search_recorded"`
+	InventoryViewRecorded bool `json:"inventory_view_recorded"`
 }
 
 // ManagedFileSettings are the fields of PUT /api/v1/settings/managed-files.

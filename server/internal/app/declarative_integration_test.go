@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -169,6 +170,40 @@ func TestDeclarativeApplyChanges(t *testing.T) {
 	}
 	if again := h.export(t, admin); len(declarative.Diff(again, doc).Changes) != 0 {
 		t.Fatalf("export after apply differs: %+v", declarative.Diff(again, doc))
+	}
+}
+
+// TestDeclarativePrivacySettings: settings.privacy is exported with the defaults, planned and applied like
+// settings.updates, and changed only by an organization administrator (plan M10 decision 9).
+func TestDeclarativePrivacySettings(t *testing.T) {
+	h := newConfigHarness(t)
+	admin := h.account(t, principal.RoleOrgAdmin, false)
+	operator := h.account(t, principal.RoleOrgOperator, false)
+	doc := h.export(t, admin)
+	if p := doc.Settings.Privacy; p == nil || *p != (declarative.PrivacySettings{RetiredInventoryDays: 30}) {
+		t.Fatalf("exported privacy settings %+v", p)
+	}
+	doc.Settings.Privacy.RetiredInventoryDays = 14
+	if _, _, err := h.config.Apply(principal.With(context.Background(), operator), raw(t, doc), ""); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator changing privacy settings = %v", err)
+	}
+	ctx := principal.With(context.Background(), admin)
+	plan, err := h.config.Plan(ctx, raw(t, doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Changes) != 1 || plan.Changes[0].Section != declarative.SectionSettingsPrivacy || len(plan.Changes[0].Fields) != 1 ||
+		fmt.Sprint(plan.Changes[0].Fields[0]) != "{retired_inventory_days 30 14}" {
+		t.Fatalf("plan %+v", plan)
+	}
+	if _, _, err := h.config.Apply(ctx, raw(t, doc), ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.count(t, "SELECT count(*) FROM organization_privacy_settings WHERE organization_id = $1 AND retired_inventory_days = 14 AND updated_by = $2", h.org, admin.ID); n != 1 {
+		t.Fatal("privacy settings not changed")
+	}
+	if again := h.export(t, admin); again.Settings.Privacy.RetiredInventoryDays != 14 {
+		t.Fatalf("export after apply %+v", again.Settings.Privacy)
 	}
 }
 

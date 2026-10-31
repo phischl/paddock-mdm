@@ -57,6 +57,10 @@ Operator steps for the bucket:
 Settings in `.env`: `PADDOCK_BACKUP_S3_ENDPOINT` (https URL), `PADDOCK_BACKUP_S3_BUCKET`, `PADDOCK_BACKUP_S3_REGION`,
 `PADDOCK_BACKUP_S3_CA_FILE` (a CA file inside the containers, only for an endpoint with a private CA).
 
+**Deletion lag.** A row that a retention purge deletes still exists in the backups for up to 30 days (14 full backups,
+noncurrent versions and `openbao/`, `fleet/` objects expire after 30 days), and a restore brings it back until the next
+purge run deletes it again (ADR 0032, residual risk RR-94).
+
 ## How the backups run
 
 The overlay `deploy/compose/compose.backup.yaml` (part of the production configuration of the control plane):

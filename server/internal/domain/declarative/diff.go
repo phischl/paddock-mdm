@@ -20,12 +20,14 @@ const (
 	SectionSettingsUpdates    = "settings.updates"
 	SectionSettingsLogin      = "settings.login"
 	SectionSettingsManaged    = "settings.managed_files"
+	SectionSettingsPrivacy    = "settings.privacy"
 )
 
 // Sections returns the sections in application order (plan M6c decision 14); deletions run in reverse order first.
 func Sections() []string {
 	return []string{SectionDeviceGroups, SectionPermissionProfiles, SectionManagedFiles, SectionManagedUnits,
-		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin, SectionSettingsManaged}
+		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin, SectionSettingsManaged,
+		SectionSettingsPrivacy}
 }
 
 // Actions of a change.
@@ -122,6 +124,11 @@ func section(d Document, name string) (bool, []entry) {
 			return false, nil
 		}
 		return true, []entry{{fields: d.Settings.ManagedFiles.fields()}}
+	case SectionSettingsPrivacy:
+		if d.Settings == nil || d.Settings.Privacy == nil {
+			return false, nil
+		}
+		return true, []entry{{fields: d.Settings.Privacy.fields()}}
 	}
 	return false, nil
 }
@@ -181,6 +188,8 @@ func Path(section string, index int) string {
 		return "/settings/login"
 	case SectionSettingsManaged:
 		return "/settings/managed_files"
+	case SectionSettingsPrivacy:
+		return "/settings/privacy"
 	}
 	return "/" + section + "/" + strconv.Itoa(index)
 }
@@ -237,7 +246,8 @@ func Diff(current, desired Document) Plan {
 }
 
 func isSettings(s string) bool {
-	return s == SectionSettingsLogin || s == SectionSettingsUpdates || s == SectionSettingsManaged
+	return s == SectionSettingsLogin || s == SectionSettingsUpdates || s == SectionSettingsManaged ||
+		s == SectionSettingsPrivacy
 }
 
 func sorted(items []entry) []entry {
@@ -417,6 +427,11 @@ func (s UpdateSettings) fields() []field {
 		{"regular_updates_enabled", s.RegularUpdatesEnabled}, {"max_random_delay_min", s.MaxRandomDelayMin},
 		{"staleness_warning_h", s.StalenessWarningH}, {"staleness_critical_h", s.StalenessCriticalH},
 		{"agent_update_policy", s.AgentUpdatePolicy}}
+}
+
+func (s PrivacySettings) fields() []field {
+	return []field{{"retired_inventory_days", s.RetiredInventoryDays}, {"audit_search_recorded", s.AuditSearchRecorded},
+		{"inventory_view_recorded", s.InventoryViewRecorded}}
 }
 
 func (s ManagedFileSettings) fields() []field {

@@ -6,6 +6,7 @@ toolchain go1.27.3
 
 require (
 	github.com/google/jsonschema-go v0.4.3
+	github.com/klauspost/compress v1.20.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oasdiff/yaml v0.1.1
 	github.com/phischl/paddock-mdm/pkg v0.0.0
@@ -13,6 +14,7 @@ require (
 )
 
 require (
+	github.com/gowebpki/jcs v1.0.2 // indirect
 	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect

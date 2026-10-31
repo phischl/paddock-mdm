@@ -26,6 +26,37 @@ type AuditEvent struct {
 	ObjectKey      string
 }
 
+type AuditExport struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Status         string
+	FromDay        time.Time
+	ToDay          time.Time
+	Purpose        string
+	RequestedBy    json.RawMessage
+	RequestedAt    time.Time
+	StartedAt      *time.Time
+	ReadyAt        *time.Time
+	ExpiresAt      *time.Time
+	EventCount     *int64
+	ObjectCount    *int32
+	Size           *int64
+	PackageSha256  []byte
+	VerifyOk       *bool
+	VerifyProblems json.RawMessage
+	Signature      *string
+	KeyVersion     *int32
+	Error          *string
+	CorrelationID  string
+}
+
+type AuditExportChunk struct {
+	ExportID       uuid.UUID
+	OrganizationID uuid.UUID
+	Seq            int32
+	Data           []byte
+}
+
 type AuditManifest struct {
 	OrganizationID uuid.UUID
 	Day            time.Time
@@ -43,6 +74,12 @@ type AuditObject struct {
 	EventCount     int32
 	Sha256         []byte
 	CreatedAt      time.Time
+}
+
+type AuditSigningKey struct {
+	KeyVersion  int32
+	PublicKey   []byte
+	FirstSeenAt time.Time
 }
 
 type AuditVerificationRun struct {

@@ -30,7 +30,7 @@ Fleet's features that could collect such data are switched off and kept off by `
 | Update runs (`updates.run`): kind (security or regular), start and end, result, number of upgraded packages, held-back package names, reboot required | after each run | audit log, device update status |
 | Revocation results: per volume the device path and the keyslot counts before and after, unresolved crypttab entries, refusals with their reason | after a Lock, Destroy or refused token | audit log, revocation request |
 | Tamper events: changed sudoers files or privileged group members (file names, user names, hashes), changed protected files (file name), changed LUKS keyslots (kinds), changed local administrator account (which field), a stopped `orbit.service` (unit name) | when they happen | audit log |
-| `session.login`: the directory user's name and the time, at most once per user and 24 hours; every session start while the organization's login history is on | at a directory user's login | device_user_seen (no session, terminal or remote host); while the login history is on also `device_login_event` |
+| `session.login`: the directory user's name and the time, at most once per user and 24 hours; every session start while the organization's login history is on | at a directory user's login | device_user_seen (no session, terminal or remote host), kept 365 days after the last login (ADR 0032); while the login history is on also `device_login_event` |
 | Login history (`device_login_event`, ADR 0037 decision 6): user name, device and start time of every session of a directory user | only while the organization has switched the login history on (off by default), and only sessions that started after the switch-on; a start time in the future is capped at the server's time plus 5 minutes | `login_history_days` (7–365, default 90), deleted by the worker every 6 hours (`retention.purged`); switching it off deletes every row of the organization at once |
 | `local_admin.login`: the PAM service and the time of a login of the managed local administrator | at such a login | audit log (no terminal or remote host) |
 | Escrowed secrets: LUKS recovery key and header, local administrator password, encrypted to `escrow-wrap` | when they change | escrow (decrypted only after a step-up) |
@@ -92,7 +92,8 @@ device's organization (row-level security, `docs/operations/fleet.md`):
 
 Hosts that map to no device or to several are never stored. Free disk space, uptime and network addresses stay in
 Fleet. The serial number identifies a person's laptop indirectly; it is shown to and searchable by every member of the
-device's organization (residual risk RR-49).
+device's organization (residual risk RR-49). Inventory of a retired device is deleted, in Paddock and in Fleet,
+`retired_inventory_days` after retirement (default 30).
 
 Fleet free matches CVEs but reports no CVSS score, severity or fixed version. Paddock fills severity and fixed version
 from Ubuntu's public vulnerability data (OSV), which the server downloads (`docs/operations/vulnerability-data.md`):
@@ -106,7 +107,8 @@ source) only when a platform administrator checks for or imports an agent releas
 data. `PADDOCK_AGENT_RELEASE_SOURCE_REPO=off` switches it off.
 
 Organization members see the stored inventory of their organization's devices in the portal (*Software* and
-*Vulnerabilities*); reading it is not audited. Fleet's own UI and API are not published; only platform operators reach
+*Vulnerabilities*); reading it is recorded as `device.inventory_viewed` when the organization switches *Record
+inventory views* on (`/api/v1/settings/privacy`), coalesced per administrator, device and day; the list of devices affected by a CVE is recorded as `vulnerability.devices_viewed` (CVE and device count, once per administrator, CVE and hour). Fleet's own UI and API are not published; only platform operators reach
 them, through a local port forward (`docs/operations/fleet.md`).
 
 ## Administrators
@@ -114,7 +116,9 @@ them, through a local port forward (`docs/operations/fleet.md`).
 Paddock stores of its administrators the account (user name, display name, organization, role, portal language),
 and in every audit event of their actions the actor's name, the client IP address and whether the action had a
 step-up. API tokens (`paddockctl`) are stored only as hashes, with their name, creator and expiry. Audit events are kept for
-the retention of the WORM store (at least 400 days) and cannot be deleted earlier.
+the retention of the WORM store (at least 400 days) and cannot be deleted earlier. Searches of the audit log are
+recorded as `audit.searched` when the organization switches it on; evidence exports are always recorded
+(`audit.export_requested`, `audit.export_downloaded`). How long each store is kept: `docs/compliance/retention.md`.
 
 Paddock snapshots the membership of its portal role groups (`paddock.<slug>.admins`, `.operators`, `.auditors`,
 `paddock.platform.admins`) and the set of Authentik superusers every 5 minutes: user name and Authentik ID per role,

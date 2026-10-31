@@ -58,6 +58,18 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   them once with `./paddock compose run --rm --no-deps pgbackrest stanza-upgrade` and `./paddock compose run --rm
   --no-deps pgbackrest-authentik stanza-upgrade`; the old backups expire with retention and cannot be restored into
   the new clusters. Fleet's MySQL stays on the 8.4 line.
+- From 0.1.0-alpha.7: the control plane's `.env` (and a lab host's) must set `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, the
+  audit index retention in days. It has no default there: the worker's retention round deletes finished actions and
+  commands, cleared alerts and filled event gaps no earlier than the audit index drops their month, and the worker
+  does not start without the variable, or with a value below 400 days or below `PADDOCK_AUDIT_RETENTION_DAYS`. Set
+  it to the value the audit host uses (an audit host whose `.env` does not set it uses its
+  `PADDOCK_AUDIT_RETENTION_DAYS`, by default 400) and keep both variables the same on both hosts. `./paddock check`
+  reports a missing or invalid value (item `audit index retention of the retention round`); `./paddock pull` and the
+  other commands keep working until it is set.
+- From 0.1.0-alpha.7 (audit host and lab): `./paddock up` creates the new Docker volume `audit-writer-tmp` for the
+  audit writer's evidence export temp space (`docs/operations/audit-bucket.md` section 4); nothing to migrate. Check
+  that Docker's data-root (`docker info -f '{{.DockerRootDir}}'`) has free space for one export of
+  `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default 4 GiB). A rollback leaves the volume unused; `docker volume rm` removes it.
 
 ## Upgrade (each host)
 

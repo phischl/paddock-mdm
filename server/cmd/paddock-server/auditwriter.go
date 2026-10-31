@@ -5,14 +5,19 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -21,12 +26,13 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 )
 
-// auditDeps are the dependencies shared by serve audit-writer, audit seal and audit verify.
+// auditDeps are the dependencies shared by serve audit-writer, audit seal, audit verify and audit purge.
 type auditDeps struct {
-	pool   *db.AuditWriterPool
-	store  *objectstore.Store
-	bao    *bao.Client
-	writer *auditwriter.Writer
+	pool           *db.AuditWriterPool
+	store          *objectstore.Store
+	bao            *bao.Client
+	writer         *auditwriter.Writer
+	indexRetention int
 }
 
 func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
@@ -36,10 +42,7 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 	accessKey := l.SecretFile("PADDOCK_AUDIT_S3_ACCESS_KEY_FILE")
 	secretKey := l.SecretFile("PADDOCK_AUDIT_S3_SECRET_KEY_FILE")
 	bucket := l.String("PADDOCK_AUDIT_S3_BUCKET", "paddock-audit")
-	retention := l.Int("PADDOCK_AUDIT_RETENTION_DAYS", auditwriter.MinRetentionDays)
-	if retention < auditwriter.MinRetentionDays {
-		l.Invalid("PADDOCK_AUDIT_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days", auditwriter.MinRetentionDays))
-	}
+	retention, indexRetention := auditRetention(l)
 	if err := l.Err(); err != nil {
 		return nil, err
 	}
@@ -58,19 +61,66 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &auditDeps{pool: pool, store: store, bao: baoClient, writer: writer}, nil
+	return &auditDeps{pool: pool, store: store, bao: baoClient, writer: writer, indexRetention: indexRetention}, nil
+}
+
+// auditRetention reads the audit writer's WORM retention and audit index retention in days.
+func auditRetention(l *config.Loader) (retention, index int) {
+	retention = wormRetention(l)
+	// The index is purged after, never ahead of, the WORM retention (ADR 0032, plan M10 decision 23).
+	index = l.Int("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", retention)
+	if index < retention {
+		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least PADDOCK_AUDIT_RETENTION_DAYS (%d days)", retention))
+	}
+	return retention, index
+}
+
+// wormRetention reads the audit writer's WORM retention in days, at least the bucket default.
+func wormRetention(l *config.Loader) int {
+	retention := l.Int("PADDOCK_AUDIT_RETENTION_DAYS", auditwriter.MinRetentionDays)
+	if retention < auditwriter.MinRetentionDays {
+		l.Invalid("PADDOCK_AUDIT_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days, got %d", auditwriter.MinRetentionDays, retention))
+	}
+	return retention
+}
+
+// workerIndexRetention reads the audit index retention in days for the worker, whose retention round keeps the rows
+// that explain audit events as long as the index shows them (ADR 0032 amendments 2026-10-18 and 2026-10-31, PDK-180).
+// The worker reads the audit writer's variables but has no default for the index retention: a worker that guessed a
+// value other than the writer's would purge ahead of the index. Missing or empty, not an integer, below the bucket
+// default or below PADDOCK_AUDIT_RETENTION_DAYS (the writer's own limits), the worker does not start.
+func workerIndexRetention(l *config.Loader) int {
+	retention := wormRetention(l)
+	if l.Required("PADDOCK_AUDIT_INDEX_RETENTION_DAYS") == "" {
+		return 0
+	}
+	index := l.Int("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", 0)
+	switch {
+	case index < auditwriter.MinRetentionDays:
+		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days, got %d", auditwriter.MinRetentionDays, index))
+	case index < retention:
+		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least PADDOCK_AUDIT_RETENTION_DAYS (%d days), got %d", retention, index))
+	}
+	return index
 }
 
 // verifier checks the hash chain with the audit-chain public keys from OpenBao.
 func (d *auditDeps) verifier() *auditwriter.Verifier {
-	keys := func(ctx context.Context) (map[int][]byte, error) {
-		return d.bao.PublicKeys(ctx, auditwriter.SigningKey)
-	}
-	return auditwriter.NewVerifier(d.pool, d.store, keys)
+	return auditwriter.NewVerifier(d.pool, d.store, d.publicKeys)
+}
+
+// publicKeys reads the audit-chain public keys from OpenBao.
+func (d *auditDeps) publicKeys(ctx context.Context) (map[int][]byte, error) {
+	return d.bao.PublicKeys(ctx, auditwriter.SigningKey)
 }
 
 func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Common) error {
 	amqpCfg := config.LoadAMQP(l)
+	poll := l.Duration("PADDOCK_AUDIT_EXPORT_POLL_INTERVAL", 30*time.Second)
+	if poll <= 0 {
+		l.Invalid("PADDOCK_AUDIT_EXPORT_POLL_INTERVAL", "must be positive")
+	}
+	maxBytes := exportMaxBytes(l)
 	deps, err := loadAuditDeps(ctx, l)
 	if err != nil {
 		return err
@@ -78,12 +128,16 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	defer deps.pool.Close()
 	consumer := mq.NewConsumer(mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password},
 		mq.QueueAudit, auditwriter.Prefetch)
-	sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao)
+	publisher := auditwriter.NewKeyPublisher(deps.publicKeys)
+	sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao, publisher)
 	recorder := auditwriter.NewRecorder(deps.pool, deps.writer, time.Now)
 	if err := prometheus.Register(recorder.Collector()); err != nil {
 		return err
 	}
 	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
+	purger := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention)
+	exporter := auditwriter.NewExporter(deps.pool, deps.writer, deps.store, deps.bao, deps.publicKeys, deps.verifier(),
+		buildinfo.Version, poll, maxBytes)
 	slog.InfoContext(ctx, "audit-writer starting", "bucket", deps.store.Bucket())
 
 	return runAll(ctx,
@@ -97,12 +151,52 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 			})
 		},
 		func(ctx context.Context) error { return consumer.Run(ctx, deps.writer.Handle) },
+		func(ctx context.Context) error { publishCurrentKey(ctx, publisher, deps.pool); return nil },
 		func(ctx context.Context) error { sealer.RunDaily(ctx); return nil },
 		func(ctx context.Context) error { nightly.RunNightly(ctx); return nil },
+		func(ctx context.Context) error { purger.RunDaily(ctx); return nil },
+		exporter.Run,
 	)
 }
 
-// runAudit implements `audit seal [--day YYYY-MM-DD]` and `audit verify --org <id> --from <day> --to <day>`.
+// publishCurrentKey publishes the current audit-chain key once OpenBao and the audit database answer, so the portal
+// lists its fingerprint before the first seal (PDK-652), and then waits for ctx: runAll stops every loop as soon as one
+// function returns. A mismatch is not retried: it persists until the key is rotated, and every seal and export reports
+// it again.
+func publishCurrentKey(ctx context.Context, publisher *auditwriter.KeyPublisher, pool *db.AuditWriterPool) {
+	retryUntilDone(ctx, "publishing the current audit signing key", time.Second, time.Minute, func(ctx context.Context) error {
+		err := publisher.EnsureCurrent(ctx, pool)
+		if errors.Is(err, auditwriter.ErrSigningKeyMismatch) {
+			return nil
+		}
+		return err
+	})
+	<-ctx.Done()
+}
+
+// exportMaxBytes reads PADDOCK_AUDIT_EXPORT_MAX_BYTES, the limit of events.jsonl and of the package of one evidence
+// export (PDK-593).
+func exportMaxBytes(l *config.Loader) int64 {
+	const name = "PADDOCK_AUDIT_EXPORT_MAX_BYTES"
+	v := l.String(name, "")
+	if v == "" {
+		return auditwriter.DefaultExportMaxBytes
+	}
+	// ParseInt with 64 bits, not Loader.Int: the limit is a byte count that must not wrap on a 32-bit int.
+	n, err := strconv.ParseInt(v, 10, 64)
+	switch {
+	case errors.Is(err, strconv.ErrRange):
+		l.Invalid(name, fmt.Sprintf("out of range: %q", v))
+	case err != nil:
+		l.Invalid(name, fmt.Sprintf("not an integer: %q", v))
+	case n <= 0:
+		l.Invalid(name, "must be positive")
+	}
+	return n
+}
+
+// runAudit implements `audit seal [--day YYYY-MM-DD]`, `audit verify --org <id> --from <day> --to <day>` and
+// `audit keys` and `audit purge [--dry-run]`.
 func runAudit(ctx context.Context, l *config.Loader, common config.Common, args []string) error {
 	if len(args) == 0 {
 		return errUsage
@@ -141,7 +235,7 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 			return err
 		}
 		defer deps.pool.Close()
-		sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao)
+		sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao, auditwriter.NewKeyPublisher(deps.publicKeys))
 		var n int
 		if only != uuid.Nil {
 			n, err = sealer.SealOrganizationThrough(ctx, only, last)
@@ -196,7 +290,77 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 			return fmt.Errorf("audit chain verified, but the run was not recorded: %w", recordErr)
 		}
 		return nil
+	case "keys":
+		if len(args) != 1 {
+			return errUsage
+		}
+		baoCfg := config.LoadOpenBao(l)
+		if err := l.Err(); err != nil {
+			return err
+		}
+		baoClient, err := bao.New(baoCfg.Addr, baoCfg.RoleID, baoCfg.SecretID)
+		if err != nil {
+			return err
+		}
+		keys, err := baoClient.PublicKeys(ctx, auditwriter.SigningKey)
+		if err != nil {
+			return err
+		}
+		printAuditKeys(os.Stdout, keys)
+		return nil
+	case "purge":
+		fs := flag.NewFlagSet("audit purge", flag.ContinueOnError)
+		dryRun := fs.Bool("dry-run", false, "only report which partitions would be dropped")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+			return errUsage
+		}
+		deps, err := loadAuditDeps(ctx, l)
+		if err != nil {
+			return err
+		}
+		defer deps.pool.Close()
+		report, err := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention).Run(ctx, *dryRun)
+		if err == nil || len(report.Partitions) > 0 {
+			printPurgeReport(os.Stdout, report)
+		}
+		return err
 	default:
 		return errUsage
+	}
+}
+
+// printAuditKeys prints one line per audit-chain key version, the ISB's out-of-band copy of the fingerprints that the
+// auditor compares with the ones in an evidence package (plan M10 decision 36).
+func printAuditKeys(w io.Writer, keys map[int][]byte) {
+	versions := make([]int, 0, len(keys))
+	for v := range keys {
+		versions = append(versions, v)
+	}
+	slices.Sort(versions)
+	for _, v := range versions {
+		fmt.Fprintf(w, "%s v%d %s\n", auditwriter.SigningKey, v, auditevidence.Fingerprint(keys[v]))
+	}
+}
+
+// printPurgeReport prints one line per partition that was due or unexpected (DROP, KEEP or FAIL), or
+// "nothing to purge" when there is none (plan M10 decision 23).
+func printPurgeReport(w io.Writer, report auditwriter.PurgeReport) {
+	printed := false
+	for _, p := range report.Partitions {
+		if !p.Due && p.Reason != auditwriter.PurgeReasonUnknownName {
+			continue
+		}
+		printed = true
+		switch {
+		case p.Failed:
+			fmt.Fprintf(w, "FAIL %s: %s\n", p.Name, p.Reason)
+		case p.Dropped:
+			fmt.Fprintf(w, "DROP %s: %d events\n", p.Name, p.Events)
+		default:
+			fmt.Fprintf(w, "KEEP %s: %s\n", p.Name, p.Reason)
+		}
+	}
+	if !printed {
+		fmt.Fprintln(w, "nothing to purge")
 	}
 }

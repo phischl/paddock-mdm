@@ -21,6 +21,22 @@ func (q *Queries) DeleteDeviceLoginAssignments(ctx context.Context, deviceID uui
 	return err
 }
 
+const deleteExpiredDeviceUserSeen = `-- name: DeleteExpiredDeviceUserSeen :execrows
+DELETE FROM device_user_seen WHERE ctid IN (
+  SELECT ctid FROM device_user_seen WHERE last_seen_at < $1::timestamptz LIMIT 1000
+)
+`
+
+// One batch of rows older than the cutoff (plan M10 decision 13); the retention round runs each batch in its own
+// transaction until one deletes fewer than 1 000 rows (plan M10 amendment 2026-10-30).
+func (q *Queries) DeleteExpiredDeviceUserSeen(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredDeviceUserSeen, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteLoginAssignmentsOfSubject = `-- name: DeleteLoginAssignmentsOfSubject :many
 DELETE FROM device_login_assignment WHERE subject_id = $1 RETURNING device_id
 `
@@ -44,6 +60,17 @@ func (q *Queries) DeleteLoginAssignmentsOfSubject(ctx context.Context, subjectID
 		return nil, err
 	}
 	return items, nil
+}
+
+const hasExpiredDeviceUserSeen = `-- name: HasExpiredDeviceUserSeen :one
+SELECT EXISTS (SELECT 1 FROM device_user_seen WHERE last_seen_at < $1::timestamptz)
+`
+
+func (q *Queries) HasExpiredDeviceUserSeen(ctx context.Context, cutoff time.Time) (bool, error) {
+	row := q.db.QueryRow(ctx, hasExpiredDeviceUserSeen, cutoff)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const insertDeviceLoginAssignment = `-- name: InsertDeviceLoginAssignment :exec
@@ -222,6 +249,17 @@ func (q *Queries) SetDeviceLoginsSuspended(ctx context.Context, arg SetDeviceLog
 		&i.Name,
 	)
 	return i, err
+}
+
+const setRetentionLockTimeout = `-- name: SetRetentionLockTimeout :exec
+SELECT set_config('lock_timeout', $1::text, true)
+`
+
+// Bounds the row-lock wait of one retention batch, so a blocked DELETE cannot hold a pass past the outbox reaper's
+// threshold (plan M10 amendment 2026-10-30); the transaction-local setting ends with the batch.
+func (q *Queries) SetRetentionLockTimeout(ctx context.Context, timeout string) error {
+	_, err := q.db.Exec(ctx, setRetentionLockTimeout, timeout)
+	return err
 }
 
 const upsertDeviceUserSeen = `-- name: UpsertDeviceUserSeen :exec

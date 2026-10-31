@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"time"
@@ -56,7 +57,7 @@ const (
 // ObjectStore is the subset of objectstore.Store the writer needs.
 type ObjectStore interface {
 	PutLocked(ctx context.Context, key, contentType string, body []byte, retainUntil time.Time) error
-	Get(ctx context.Context, key string) ([]byte, error)
+	Open(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
 var _ ObjectStore = (*objectstore.Store)(nil)
@@ -69,6 +70,7 @@ type Writer struct {
 	txTimeout     time.Duration       // db.WriterTransactionTimeout; lowered only by tests
 	dayChosen     func(day time.Time) // nil; tests seal the chosen day here to race the audit_object trigger
 	rowInserted   func(day time.Time) // nil; tests seal here to race the sealer's audit-day lock
+	ensured       func()              // nil; tests drop a partition here to race the index purge
 }
 
 // NewWriter creates a writer. retentionDays below MinRetentionDays is an error.
@@ -135,7 +137,8 @@ func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, err
 
 // sealedDayAttempts bounds the transactions of one organization's group when the audit_object trigger refuses a day
 // that was sealed after the writer chose it. Each retry reads the newest manifest again, so a second attempt only
-// fails if another day is sealed in between.
+// fails if another day is sealed in between. It also bounds the retries after the index purge dropped an event's
+// partition between ensurePartitions and the insert; the next attempt creates the partition again.
 const sealedDayAttempts = 3
 
 func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.Event) (int, error) {
@@ -143,6 +146,11 @@ func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.E
 	events = dedupe(events)
 	for attempt := 1; ; attempt++ {
 		n, err := w.writeGroupOnce(ctx, org, events)
+		if db.IsNoPartition(err) && attempt < sealedDayAttempts {
+			slog.InfoContext(ctx, "audit index partition purged during the write; retrying", "organization_id", org,
+				"attempt", attempt)
+			continue
+		}
 		if !db.IsAuditDaySealed(err) || attempt == sealedDayAttempts {
 			return n, err
 		}
@@ -164,6 +172,9 @@ func (w *Writer) writeGroupOnce(ctx context.Context, org uuid.UUID, events []aud
 		recordedAt = audit.Timestamp(recordedAt)
 		if err := ensurePartitions(ctx, q, events); err != nil {
 			return err
+		}
+		if w.ensured != nil {
+			w.ensured()
 		}
 		fresh, err := w.withoutExisting(ctx, q, events)
 		if err != nil {

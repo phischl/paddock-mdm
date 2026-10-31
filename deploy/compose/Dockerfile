@@ -45,6 +45,9 @@ ARG PADDOCK_VERSION=0.0.0-dev
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -ldflags="-s -w -X github.com/phischl/paddock-mdm/server/internal/buildinfo.Version=${PADDOCK_VERSION}" -o /out/paddock-server ./server/cmd/paddock-server
+# The audit writer's export temp volume (PDK-593): a fresh named volume copies this directory's owner, so nonroot can
+# write to it; distroless has no shell to create it.
+RUN mkdir -p /out/export-tmp
 
 # Compiler: the same binary in a Debian image whose visudo validates every rendered sudoers file (plan M3a decision
 # 17). The compiler never runs sudo, so the image keeps no setuid binaries; visudo refuses to run for a uid without a
@@ -63,6 +66,7 @@ ENTRYPOINT ["/paddock-server"]
 
 FROM ${RUNTIME_IMAGE}
 COPY --from=build /out/paddock-server /paddock-server
+COPY --from=build --chown=nonroot:nonroot /out/export-tmp /var/lib/paddock/export-tmp
 USER nonroot:nonroot
 EXPOSE 8080 9090
 ENTRYPOINT ["/paddock-server"]

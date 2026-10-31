@@ -401,7 +401,9 @@ func TestEventGapTablesWriteOnlyForWorker(t *testing.T) {
 		}
 		grants = append(grants, g)
 	}
-	if len(grants) != 2 || grants[0] != "device_event_dropped:paddock_worker" || grants[1] != "device_event_seen:paddock_worker" {
+	// The worker's DELETE on device_event_gap is the retention round's (migration 00080, PDK-180).
+	if len(grants) != 3 || grants[0] != "device_event_dropped:paddock_worker" || grants[1] != "device_event_gap:paddock_worker" ||
+		grants[2] != "device_event_seen:paddock_worker" {
 		t.Fatalf("DELETE grants %v", grants)
 	}
 	var reads bool
