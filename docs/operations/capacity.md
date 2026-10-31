@@ -258,8 +258,19 @@ Every portal login, step-up, device login and every call of the worker's identit
 ## Audit index commit sequence backfill
 
 Audit migration `00010_commit_seq` (PDK-120) gives every event of the audit index a per-organization `commit_seq`
-and numbers the existing rows in one transaction. The audit writer cannot write while it runs; the writer's queue
-has no TTL and absorbs the pause, so no event is lost.
+and numbers the existing rows in one transaction that locks `audit_event`. The new audit writer starts only after
+the migration (`depends_on` `paddock-audit-migrate` in `compose.audit.yaml`), but during `./paddock up` the previous
+writer keeps running until compose replaces it: its transactions wait for the migration's lock and then fail, and the
+queue redelivers their events. The queue dead-letters an event after 20 deliveries (`dlq.audit.writer`), so a long
+backfill is not guaranteed to be absorbed. Unless the index is small (see the planning figure below), stop the writer
+before the upgrade's `./paddock up` on the audit host, so that new events wait in the queue instead:
+
+```sh
+./paddock compose stop paddock-audit-writer   # in the old bundle directory; ./paddock up starts B's writer again
+```
+
+A fresh installation, including the move to 0.1.0-alpha.7 (`docs/operations/upgrade.md`), applies the migration to an
+empty index and needs none of this.
 
 - **Measured:** 1 000 000 synthetic events (50 organizations, 12 monthly partitions, typical row size) took
   **1 min 26 s** for the whole migration (column, backfill, `NOT NULL`, index, `audit_org_seq`). Measured on
