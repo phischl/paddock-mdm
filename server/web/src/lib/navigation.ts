@@ -39,6 +39,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     items: [
       { to: '/', label: 'nav.overview', icon: 'layout-dashboard', shortcut: 'g o', visible: () => true },
       { to: '/attention', label: 'nav.attention', icon: 'bell', shortcut: 'g a', visible: orgReader, testid: 'nav-attention' },
+      { to: '/findings', label: 'nav.findings', icon: 'search', visible: orgReader, testid: 'nav-findings' },
     ],
   },
   {

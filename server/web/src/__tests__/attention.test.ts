@@ -101,6 +101,20 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
     expect(nameContainsVisibleText(action.element)).toBe(true)
   })
 
+  it('shows the finding status chip after the condition that has a finding (plan M9 decision 35)', async () => {
+    items = [{
+      ...item, conditions: [
+        { kind: 'stale_critical', since: '2026-10-08T10:00:00Z', detail: '', finding: { id: 'f1', status: 'in_progress', assignee_display: 'Bob Builder' } },
+        { kind: 'agent_outdated', since: '2026-10-08T10:00:00Z', detail: '', finding: null },
+      ],
+    }]
+    const w = await mountAttention()
+    const chips = w.findAll('[data-testid="attention-list"] tbody tr .pd-chip')
+    expect(chips.map((c) => c.text())).toEqual(['Silent (critical)', 'In progress', 'Agent outdated'])
+    expect(chips[1].attributes('title')).toBe('Bob Builder')
+    expect(w.findAll('[data-testid="condition-finding"]')).toHaveLength(1)
+  })
+
   it('explains the empty list', async () => {
     items = []
     const w = await mountAttention()

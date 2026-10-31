@@ -86,6 +86,7 @@
     "software": "Software",
     "vulnerabilities": "Vulnerabilities",
     "attention": "Attention",
+    "findings": "Findings",
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
@@ -1991,6 +1992,93 @@
     },
     "device": "Device",
     "conditions": "Conditions"
+  },
+  "findings": {
+    "title": "Findings",
+    "summary": "Tamper events and attention conditions of your devices. Take a finding, assign it and close it with a reason; every step is recorded in the audit log.",
+    "code": "Finding",
+    "statusColumn": "Status",
+    "kind": "Kind",
+    "device": "Device",
+    "subject": "Subject",
+    "occurrences": "Occurrences",
+    "assignee": "Assignee",
+    "lastSeen": "Last seen",
+    "cleared": "Cleared",
+    "clearedHint": "The condition is gone; the finding stays until someone closes it.",
+    "done": "{code} on {hostname} is now {status}.",
+    "deviceTitle": "Findings",
+    "openList": "Open the findings",
+    "status": {
+      "open": "Open",
+      "acknowledged": "Acknowledged",
+      "in_progress": "In progress",
+      "resolved": "Resolved",
+      "accepted_risk": "Accepted risk",
+      "false_positive": "False positive"
+    },
+    "kinds": {
+      "tamper": "Tamper event",
+      "attention": "Attention condition"
+    },
+    "resolutions": {
+      "resolved": "Resolved",
+      "accepted_risk": "Accepted risk",
+      "false_positive": "False positive"
+    },
+    "filters": {
+      "status": "Status",
+      "statusHint": "Without a selection: open, acknowledged and in progress.",
+      "kind": "Kind",
+      "cleared": "Cleared",
+      "clearedHint": "Without a selection, cleared findings are hidden.",
+      "clearedOnly": "Only cleared findings"
+    },
+    "acknowledge": {
+      "action": "Acknowledge",
+      "label": "Acknowledge {code} on {hostname}",
+      "title": "Acknowledge finding",
+      "message": "Mark {code} on {hostname} as seen. It stays open until it is closed.",
+      "confirm": "Acknowledge"
+    },
+    "assign": {
+      "action": "Assign",
+      "label": "Assign {code} on {hostname}",
+      "title": "Assign finding",
+      "message": "Who takes care of {code} on {hostname}?",
+      "assignee": "Assignee",
+      "hint": "Administrators and operators of your organization. Clear the field to remove the assignee.",
+      "submit": "Assign",
+      "unassign": "Remove assignee"
+    },
+    "close": {
+      "action": "Close",
+      "label": "Close {code} on {hostname}",
+      "title": "Close finding",
+      "message": "Close {code} on {hostname} with a resolution and a reason. The audit log keeps both.",
+      "resolution": "Resolution",
+      "acceptedRiskHint": "Accepted risk needs an organization administrator.",
+      "reason": "Reason",
+      "reasonHint": "Facts and ticket references, no personal judgements.",
+      "reasonRequired": "Enter a reason.",
+      "reasonTooLong": "The reason is too long.",
+      "externalRef": "External reference (optional)",
+      "externalRefHint": "A ticket or change number in another system.",
+      "externalRefTooLong": "The reference is too long.",
+      "submit": "Close finding"
+    },
+    "reopen": {
+      "action": "Reopen",
+      "label": "Reopen {code} on {hostname}",
+      "title": "Reopen finding",
+      "message": "Reopen {code} on {hostname}. A reason is required and recorded in the audit log.",
+      "reason": "Reason",
+      "confirm": "Reopen"
+    },
+    "empty": {
+      "title": "No findings",
+      "description": "Nothing needs a decision. Tamper events and attention conditions appear here as soon as they happen."
+    }
   },
   "palette": {
     "title": "Command palette",

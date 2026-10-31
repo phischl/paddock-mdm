@@ -5,7 +5,7 @@ export interface ConfirmReason {
   label: string
   hint?: string
   required: boolean
-  maxLength: 500
+  maxLength: number
 }
 
 /** What a confirmation asks; texts are already translated. */

@@ -15,7 +15,7 @@ import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { healthRows } from '../lib/deviceHealth'
 import { formatDateTime, formatGB, formatGiB } from '../lib/format'
 import { listDeviceVulnerabilities } from '../lib/inventory'
-import { componentStatus } from '../lib/status'
+import { attentionStatus, componentStatus, findingStatus } from '../lib/status'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
 
@@ -25,7 +25,7 @@ import { usePending } from '../composables/usePending'
  */
 const page = inject(deviceDetailKey)
 if (!page) throw new Error('DeviceOverview outside the device frame')
-const { device, groups, selectedGroups, saved, diskState, updates, conditions, refresh, saveGroups } = page
+const { device, groups, selectedGroups, saved, diskState, updates, conditions, findingConditions, refresh, saveGroups } = page
 const { t, locale } = useI18n()
 const { pending, run } = usePending()
 const session = useSessionStore()
@@ -95,6 +95,42 @@ async function copyId(): Promise<void> {
             <StatusChip
               :status="row.view.status"
               :label="t(row.view.label)"
+            />
+          </li>
+        </ul>
+      </section>
+      <section
+        v-if="findingConditions.length > 0"
+        class="pd-panel"
+        data-testid="device-attention-findings"
+        aria-labelledby="device-attention-findings-title"
+      >
+        <header class="pd-panel-header">
+          <h2
+            id="device-attention-findings-title"
+            class="pd-type-section"
+          >
+            {{ t('findings.deviceTitle') }}
+          </h2>
+          <RouterLink
+            :to="{ name: 'findings', query: { q: d.hostname } }"
+            class="pd-panel-link"
+          >
+            {{ t('findings.openList') }}
+          </RouterLink>
+        </header>
+        <ul class="pd-health">
+          <li
+            v-for="c in findingConditions"
+            :key="c.kind"
+            :data-testid="'device-finding-' + c.kind"
+          >
+            <span class="pd-health-label">{{ t(attentionStatus(c.kind).label) }}</span>
+            <StatusChip
+              v-if="c.finding"
+              :status="findingStatus(c.finding.status).status"
+              :label="t(findingStatus(c.finding.status).label)"
+              :title="c.finding.assignee_display || undefined"
             />
           </li>
         </ul>
