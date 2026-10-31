@@ -56,6 +56,27 @@ check "lib.sh: project of the second checkout" "$(unset PADDOCK_PROJECT PADDOCK_
 repo="$(cd "$src/../.." && pwd)"
 check "make: another instance refused" "$(PADDOCK_INSTANCE=9 refused make -s -n -C "$repo" down)" refused
 check "make: no instance runs" "$(unset PADDOCK_INSTANCE; refused make -s -n -C "$repo" down)" ran
+# make -n prints the docker build without running it.
+mkrepo() {
+  local dir="$work/repo-$1"
+  mkdir -p "$dir/deploy"
+  cp "$repo/Makefile" "$dir/"
+  cp -r "$repo/deploy/compose" "$dir/deploy/compose"
+  rm -rf "$dir/deploy/compose/.env" "$dir/deploy/compose/.secrets"
+  printf '%s' "$dir"
+}
+# make test exports its own variables (a bare `export`), IMAGE and the other dev image tags among them; the cases
+# below test the defaults, so none may come from the caller.
+unset PADDOCK_IMAGE PADDOCK_COMPILER_IMAGE PADDOCK_PGBACKREST_IMAGE IMAGE COMPILER_IMAGE PGBACKREST_IMAGE
+r3="$(mkrepo 3)"
+printf 'PADDOCK_IMAGE=paddock-server:dev-3\nPADDOCK_COMPILER_IMAGE=paddock-compiler:dev-3\nPADDOCK_PGBACKREST_IMAGE=paddock-pgbackrest:dev-3\n' >"$r3/deploy/compose/.env"
+r0="$(mkrepo none)"
+check "make image: instance 3 tag" "$(make -s -n -C "$r3" image 2>/dev/null | sed -n 's/.* -t \([^ ]*\)[ ].*/\1/p;s/.* -t \([^ ]*\)$/\1/p' | head -1)" paddock-server:dev-3
+check "make image: no .env tag" "$(make -s -n -C "$r0" image 2>/dev/null | sed -n 's/.* -t \([^ ]*\)[ ].*/\1/p;s/.* -t \([^ ]*\)$/\1/p' | head -1)" paddock-server:dev
+check "make image: explicit IMAGE wins" "$(make -s -n -C "$r3" image IMAGE=x:y 2>/dev/null | grep -c -- '-t x:y')" 1
+check "make image-compiler: instance 3 tag" "$(make -s -n -C "$r3" image-compiler 2>/dev/null | grep -c -- '-t paddock-compiler:dev-3')" 1
+check "make image-pgbackrest: instance 3 tag" "$(make -s -n -C "$r3" image-pgbackrest 2>/dev/null | grep -c -- '-t paddock-pgbackrest:dev-3')" 1
+check "make image-compiler: no .env tag" "$(make -s -n -C "$r0" image-compiler 2>/dev/null | grep -c -- '-t paddock-compiler:dev ')" 1
 check "invalid instance refused" "$(PADDOCK_INSTANCE=x refused bash "$(checkout third)/scripts/gen-dev-secrets.sh")" refused
 
 if ((failures > 0)); then
