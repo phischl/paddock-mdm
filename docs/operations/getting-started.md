@@ -57,8 +57,9 @@ import it (needs a step-up). Otherwise, on the **Host**:
 ./paddock agent-release <version> <dir>
 ```
 
-where `<dir>` holds the signed files in the layout of `docs/operations/install.md` section 10. A published release does
-nothing yet: start its staged rollout so that devices receive it. In the portal use *Start rollout* on the release
+where `<dir>` holds the signed files in the layout of `docs/operations/install.md` section 10. The autoinstall and
+route 8b install the newest published release; the staged rollout governs updates, so start it for the
+releases that enrolled devices are to receive. In the portal use *Start rollout* on the release
 page, or on the **Host**:
 
 ```sh
@@ -100,9 +101,11 @@ administrator approves it on the device's page (*Approve*).
 
 *Why: this is the point where the control plane meets real hardware. Choose one of the two routes.*
 
-### 8a. New installation with the autoinstall (Portal, then Device)
+### 8a. New installation with the autoinstall (admin API, then Device)
 
-Generate the user-data for the device from the enrollment configuration and install from it. It sets up full-disk
+The portal has no page for the autoinstall. Generate the user-data for the device with `POST /api/v1/autoinstall`,
+sent with your portal session from a workstation and the enrollment configuration of step 7 (the curl example is in
+`docs/operations/autoinstall.md`, "Generate the user-data"), and install from it. It sets up full-disk
 encryption with TPM2 and a boot PIN, installs the agent and enrolls the device itself. The device needs UEFI with
 Secure Boot, a TPM 2.0 and a connection to `https://bundles.<domain>/packages/` during the installation. The
 user-data is a secret (temporary disk passphrase and enrollment token). Steps, first boot and the boot PIN:
@@ -132,10 +135,12 @@ separate decision afterwards.*
    sudo paddockd enroll --config /root/enroll.json --remove-config
    ```
 
-   Exit code 0 means active, 2 pending approval (with `--no-wait` it returns at once), 3 rejected, 1 an error.
-   `--remove-config` deletes the file once the device is enrolled or pending; add `--proxy <url>` behind an HTTP
-   proxy.
-4. If the token does not approve automatically, approve the device in the portal under *Devices*.
+   Exit code 0 means active, 2 pending approval, 3 rejected, 1 an error. `--remove-config` deletes the file once
+   the device is enrolled or pending; add `--proxy <url>` behind an HTTP proxy.
+4. If the token does not approve automatically, the command keeps waiting for the approval (for up to 24 hours): approve
+   the device in the portal under *Devices* (*Approve*) while it waits. Alternatively run it with `--no-wait`, which
+   returns with exit code 2 at once; approve the device, then run the same command again, which resumes the
+   enrollment.
 
 An unencrypted device then shows *Not encrypted* in the portal. Whether it can be encrypted in place or has to be
 reinstalled with the autoinstall: `docs/operations/autoinstall.md`, "Encrypting an installed device", and
@@ -146,16 +151,17 @@ reinstalled with the autoinstall: `docs/operations/autoinstall.md`, "Encrypting 
 *Why: an enrolled device only checks in until the organization defines something for it.*
 
 Create a first managed file under *Managed files* (for example `/etc/motd` for every device, or for one device group).
-Alternatively export the organization with `paddockctl get config`, edit `paddock.yml` and apply it with
-`paddockctl apply -f paddock.yml` (`--dry-run` shows the plan first; `docs/operations/paddockctl.md`, `docs/operations/api-tokens.md`
-for the token). The device receives the signed bundle at its next check-in and applies it; the device page shows
-the result.
+Alternatively export the organization with `paddockctl get config > paddock.yml`, edit the file and apply it with
+`paddockctl apply -f paddock.yml` (`--dry-run` shows the plan first; `docs/operations/paddockctl.md`,
+`docs/operations/api-tokens.md` for the token). The device receives the signed bundle at its next check-in and applies it; the
+device page shows the result.
 
 ## 10. First user login on the device
 
 *Why: directory users sign in through Himmelblau, not with a local password.*
 
-Assign the users to the device (or its device group) in the portal, then on the device choose *Not listed?* at the
+Optionally restrict who may sign in on the device page (*Login*: users and groups); without an assignment every
+user of the organization may sign in. Then on the device choose *Not listed?* at the
 login screen and type `name@domain`. The screen shows a code; sign in with it on a second device and set a Hello PIN.
 Details and troubleshooting: `docs/operations/device-login.md`, "Signing in (users)".
 
