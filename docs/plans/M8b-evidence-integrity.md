@@ -1093,3 +1093,58 @@ a precise probe.
 - **Unchanged.** The platform scope keeps its rule: an empty superuser listing refuses it. `ReconcilePlatform` keeps
   its refusal of an empty `paddock.platform.admins` while platform administrators exist (follow-up ticket). No
   migration.
+
+## Amendment 2026-10-30 (PDK-476)
+
+**Reason.** Decision 17 counts a number as delivered when it is in `device_event_seen`. Only the audited event types
+claimed their number there. The agent also numbers `session.login`, which is not audited, so every login left a
+permanent false hole and, two check-ins later, a `device.event_gap` on a genuine device.
+
+- **Decision 17/19:** every numbered event claims its `(device_id, event_seq)` in `device_event_seen`, `session.login`
+  included. A login updates `device_user_seen` and the login history only when its claim is new, so a redelivery
+  changes nothing. A malformed login only claims its number. Logins stay unaudited. No protocol, agent or migration
+  change. Not retroactive: holes from earlier logins stay open until they are closed by hand or by a counter reset.
+
+## Amendment 2026-10-30 (PDK-534, main as architect lead)
+
+**Reason.** The amendment of 2026-10-29 (PDK-424) left `ReconcilePlatform` refusing an empty `paddock.platform.admins`
+while platform administrators exist. When the last platform administrator really left the group, the round failed
+every interval and the worker never ended that administrator's portal sessions. Main, as architect lead, chose option a
+on 2026-10-30: the platform path reuses the PDK-424 probe.
+
+- **Supersedes** the sentence of the 2026-10-29 amendment that `ReconcilePlatform` keeps its refusal of an empty
+  `paddock.platform.admins`. The rest of that "Unchanged" item stands: an empty superuser listing still refuses the
+  platform scope in `SyncPlatform`.
+- **Probe holds.** When the listing of `paddock.platform.admins` has no member with a UID, `ReconcilePlatform` runs
+  `RoleGroups.DirectoryVisible`: the group can be read by name, and a user listing returns at least one user who is
+  not a service account. If the probe holds, the emptying is real. Each platform administrator with open sessions is
+  confirmed by the direct read of decision 22 (M8s), its sessions end in that round, and one
+  `admin.sessions_revoked` is recorded in the platform pseudo-organization. `SyncPlatform` compares the single emptied
+  role as before, so `admin.role_revoked` is recorded after two consecutive rounds miss the member.
+- **Probe fails.** The round is refused with `ErrDirectoryEmpty`, and no session is ended or read. A failed probe read
+  is a plain round error and is not counted as a refusal.
+- **Metric and alert.** A refused platform round counts once in `paddock_identity_directory_refusals_total`, even when
+  both consumers refused it. Its streak of refusals is kept under the nil organization ID, and the warning after
+  three refusals in a row names that ID. The alert `PaddockRoleDirectoryRefused` covers the platform round.
+- **Residual.** A token with partial scope can pass the probe: the group is readable and some user is visible, but the
+  platform administrators are not. The direct read then finds no platform administrator, so every platform
+  administrator with sessions loses them as removed. Nobody is locked out, because the next login is decided by the
+  OIDC groups claim. This gap is inherited unchanged from the PDK-424 probe. Using a non-empty superuser listing as an
+  additional sign that the token can see the directory is left to follow-up ticket PDK-547.
+- No migration.
+
+## Amendment 2026-10-30 (PDK-535, main as architect lead)
+
+**Reason.** An audit-writer replica that starts while another replica runs its nightly cycle seeded both gauges once
+from the rows recorded so far, a mix of that night's and the previous night's results, and kept them until its own
+next cycle, up to 24 h. During that time `paddock_audit_verify_failed_organizations` could raise a false
+`PaddockAuditChainBroken` or hide a real one. The amendment 2026-10-29 (PDK-421) closed the same gap only for a
+replica that loses the `audit-verify` lock.
+
+- **Decision 27, start-up seed (option a):** after the first successful seed (at start or on a later retry while the
+  read failed), the writer re-reads both gauges every minute until the next cycle is due, exactly as a locked replica
+  does (amendment 2026-10-29, PDK-421), then runs that cycle as usual. The re-reads use the locked-replica rules: with
+  no recorded nightly run they leave both gauges as they are while some organization has a sealable day.
+- **Unchanged:** the start-up seed itself keeps the start-time fallback when no nightly row exists (amendment
+  2026-10-25), and a failed read still leaves both gauges unset and is retried every minute. A start outside another
+  replica's cycle only re-reads unchanged rows. The alert rules are unchanged; no migration.

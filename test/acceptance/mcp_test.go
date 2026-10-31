@@ -119,8 +119,9 @@ func TestMCP(t *testing.T) {
 		expectStatus(t, call(t, mp, http.MethodGet, "/api/v1/devices", nil), http.StatusForbidden, "mcp_disabled")
 		res = call(t, mp, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": uniqueName("mcp m0")})
 		expectMCPRefusal(t, alice, res, http.StatusForbidden, "mcp_disabled", "device_group.created")
-		if r := aliceCLI.run(t, nil, "mcp", "tools", "-o", "json"); r.code != 0 || strings.TrimSpace(r.stdout) != "[]" {
-			t.Fatalf("paddockctl mcp tools with the MCP off: %+v, want an empty list", r)
+		if r := aliceCLI.run(t, nil, "mcp", "tools", "-o", "json"); r.code != 0 || strings.TrimSpace(r.stdout) != "[]" ||
+			!strings.Contains(r.stderr, "the MCP is switched off for this scope") {
+			t.Fatalf("paddockctl mcp tools with the MCP off: %+v, want an empty list and the switched-off hint on stderr", r)
 		}
 		srv := aliceCLI.serve(t)
 		if tools := srv.toolNames(t); len(tools) != 0 {

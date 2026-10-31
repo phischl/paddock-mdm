@@ -98,6 +98,8 @@ func waitForEvents(t *testing.T, p *env.Portal, n int) {
 	t.Helper()
 	ctx := testContext(t, time.Minute)
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		events, err := p.AuditEvents(ctx, "")
 		if err != nil {
 			t.Fatal(err)
@@ -105,7 +107,7 @@ func waitForEvents(t *testing.T, p *env.Portal, n int) {
 		if len(events) >= n {
 			return
 		}
-		if time.Now().After(deadline) {
+		if polled.After(deadline) {
 			t.Fatalf("%d audit events after 30 s, want %d", len(events), n)
 		}
 	}

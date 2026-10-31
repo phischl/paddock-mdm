@@ -1,12 +1,15 @@
 package device
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -149,56 +152,98 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, err)
 		return
 	}
+	expected, known, err := g.d.Cache.LastDelivered(r.Context(), dev.id)
+	if err != nil {
+		g.fail(w, r, err)
+		return
+	}
 	seq, err := g.d.Cache.NextSeq(r.Context(), dev.id)
 	if err != nil {
 		g.fail(w, r, err)
 		return
 	}
+	// A failed check-in carries no seq, so the number is taken back (PDK-471). The release is hygiene only: it misses
+	// when a retry drew meanwhile, and clone detection compares against delivered numbers, which a failed check-in
+	// never raises (PDK-590).
+	fail := func(err error) {
+		g.releaseSeq(r, dev.id, seq)
+		g.fail(w, r, err)
+	}
 	out := protocol.CheckinResponse{Seq: seq, ServerTime: g.d.Now().UTC(), NextCheckinS: g.d.CheckinDelay(), Commands: []json.RawMessage{}}
 	var delivered []uuid.UUID
 	if dev.key.Status == devicecache.KeyActive {
 		if out.Bundle, err = g.bundleRef(r, dev, req.AppliedBundleVersion); err != nil {
-			g.fail(w, r, err)
+			fail(err)
 			return
 		}
 		if out.AgentUpdate, err = g.agentUpdate(r, dev, req); err != nil {
-			g.fail(w, r, err)
+			fail(err)
 			return
 		}
 		if out.Commands, delivered, err = g.commands(r, dev); err != nil {
-			g.fail(w, r, err)
+			fail(err)
 			return
 		}
 	}
 	// The time ticket proves the contact to the dead man's switch (plan M4c decision 14); quarantined devices get it
 	// too (fail safe).
 	if out.TimeTicket, err = g.d.Cache.TimeTicket(r.Context(), dev.key.OrganizationID); err != nil {
-		g.fail(w, r, err)
+		fail(err)
 		return
 	}
-	issued := seq - 1 // the value the device should have sent
 	received := g.d.Now().UTC()
 	hb := ingest.Heartbeat{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: received,
 		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion, Arch: boundedArch(req.Arch),
 		SchemaVersions: boundedSchemaVersions(req.SchemaVersions), Health: req.Health,
-		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq,
-		CloneSuspected: dev.headers.Seq < issued-1, DeliveredCommands: delivered,
+		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq, ExpectedSeq: expected,
+		// Without a cached delivery (upgrade, Valkey loss) nothing is flagged: a counter restored from last_seq can
+		// include published but undelivered numbers, and a real clone is caught on the next round (contract 8, PDK-590).
+		CloneSuspected: known && dev.headers.Seq < expected-1, DeliveredCommands: delivered,
 		ClockOffsetS: received.Unix() - dev.headers.Timestamp,
 	}
 	body, err := json.Marshal(hb)
 	if err != nil {
-		g.fail(w, r, err)
+		fail(err)
 		return
 	}
 	if err := g.publish(r.Context(), mq.ExchangeIngest, mq.Message{
 		RoutingKey: mq.IngestRoutingKey(mq.IngestHeartbeat, dev.key.OrganizationID),
 		MessageID:  uuid.Must(uuid.NewV7()).String(), Body: body,
 	}); err != nil {
-		g.fail(w, r, err)
+		fail(err)
 		return
 	}
+	if err := r.Context().Err(); err != nil {
+		fail(err) // the device gave up while the publish was in flight; the number must not count as delivered
+		return
+	}
+	g.markDelivered(r, dev.id, seq)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// markDelivered records seq as delivered right before the response. A failure is logged only (fail safe): a lower
+// sd: can only suppress a clone flag, never raise one, and the next successful check-in repairs it.
+func (g *gateway) markDelivered(r *http.Request, device uuid.UUID, seq int64) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), releaseTimeout)
+	defer cancel()
+	if err := g.d.Cache.MarkDelivered(ctx, device, seq); err != nil {
+		slog.WarnContext(ctx, "recording the delivered sequence number failed", "device_id", device, "seq", seq, "error", err)
+	}
+}
+
+// releaseTimeout bounds taking back or recording a sequence number; it runs detached from the request, whose failure is often the
+// device giving up (a cancelled context).
+const releaseTimeout = 5 * time.Second
+
+// releaseSeq takes back the sequence number of a failed check-in. A failure to do so is logged only: the device is
+// then one further behind, as before.
+func (g *gateway) releaseSeq(r *http.Request, device uuid.UUID, seq int64) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), releaseTimeout)
+	defer cancel()
+	if _, err := g.d.Cache.ReleaseSeq(ctx, device, seq); err != nil {
+		slog.WarnContext(ctx, "taking back the sequence number of a failed check-in failed", "device_id", device, "seq", seq, "error", err)
+	}
 }
 
 // maxCommands bounds the commands of one check-in response; the rest follow with the next check-ins.

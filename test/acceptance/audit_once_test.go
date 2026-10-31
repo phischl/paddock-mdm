@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,9 @@ type auditWorld struct {
 	alice, bob, root *env.Portal
 	acme             uuid.UUID
 	idx              *env.AuditIndex
+
+	gateOrgMu   sync.Mutex
+	gateOrgSlug string
 }
 
 // auditCase is one request against a privileged operation and the single audit event it must produce.

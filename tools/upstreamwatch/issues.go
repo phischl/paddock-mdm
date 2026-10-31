@@ -14,13 +14,16 @@ func Title(r Result) string {
 
 func titlePrefix(name string) string { return "upstream: " + name + " " }
 
-// Body is the issue body of an outdated pin: the pinned line, the latest version, the classification, the release
-// notes and the gates to run before the bump.
+// Body is the issue body of an outdated pin: the pinned line, the latest version, the classification, the followed
+// line when the pin has one, the release notes and the gates to run before the bump.
 func Body(r Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Pinned** in `%s`:\n\n```\n%s\n```\n\n", r.Pin.File, r.Pin.Line)
 	fmt.Fprintf(&b, "**Latest:** `%s`\n\n", r.Latest)
 	fmt.Fprintf(&b, "**Classification:** %s\n\n", r.Class)
+	if r.Pin.Info.Line != "" {
+		fmt.Fprintf(&b, "**Line:** this pin follows the `%s` line only; newer lines are not reported (plan M6d decision 10).\n\n", r.Pin.Info.Line)
+	}
 	if notes := r.ReleaseNotes(); notes != "" {
 		fmt.Fprintf(&b, "**Release notes:** %s\n\n", notes)
 	} else {

@@ -9,9 +9,12 @@
 #   info      pgbackrest info
 #   restore   restore the latest backup into the empty data directory and stage the WAL up to the newest archived
 #             segment, so that PostgreSQL recovers to the latest point when it starts
+#   stanza-upgrade
+#             point the stanza at the running cluster when the repository holds it for another cluster (a fresh
+#             installation into a kept bucket); run once by the operator (docs/operations/upgrade.md)
 #
 # One container per database (stanza): pgBackRest requires the data directory at the path the server reports
-# (/var/lib/postgresql/data). PostgreSQL runs in its own image without pgBackRest, so its archive_command copies each
+# (/var/lib/postgresql/18/docker). PostgreSQL runs in its own image without pgBackRest, so its archive_command copies each
 # WAL file into the spool volume (/pgbackrest-spool/<stanza>) and this container pushes it.
 #
 # Settings: PADDOCK_BACKUP_STANZA (paddock or authentik), PADDOCK_BACKUP_PG_USER (the superuser that connects over
@@ -52,7 +55,9 @@ export PGBACKREST_REPO1_S3_KEY PGBACKREST_REPO1_S3_KEY_SECRET PGBACKREST_REPO1_C
 if [[ -n "${PADDOCK_BACKUP_S3_CA_FILE:-}" ]]; then export PGBACKREST_REPO1_STORAGE_CA_FILE="$PADDOCK_BACKUP_S3_CA_FILE"; fi
 export PGBACKREST_REPO1_CIPHER_TYPE=aes-256-cbc
 export PGBACKREST_REPO1_RETENTION_FULL="${PADDOCK_BACKUP_RETENTION_FULL:-14}"
-export PGBACKREST_PG1_PATH=/var/lib/postgresql/data
+# The 18 image keeps the cluster below the volume mount (/var/lib/postgresql/<major>/docker); pgBackRest needs the
+# path the server reports (plan M6d decision 4).
+export PGBACKREST_PG1_PATH=/var/lib/postgresql/18/docker
 export PGBACKREST_PG1_SOCKET_PATH=/var/run/postgresql
 export PGBACKREST_PG1_USER="${PADDOCK_BACKUP_PG_USER:-postgres}"
 export PGBACKREST_LOG_LEVEL_CONSOLE=info
@@ -83,9 +88,20 @@ push_spool() {
   done
 }
 
+# ensure_stanza creates the stanza once. A repository that holds the stanza for another cluster (other system
+# identifier or major) is refused, never upgraded here: on a rebuilt host the service would otherwise start backing up
+# the empty new cluster, and its newest set would be what a disaster restore brings back (plan M6d, amendment
+# 2026-10-30). The operator runs `stanza-upgrade` once when the bucket is kept on purpose.
 ensure_stanza() {
   [[ -f "$STATE/stanza" ]] && return 0
-  pgb stanza-create && : >"$STATE/stanza"
+  local rc=0
+  pgb stanza-create || rc=$?
+  if ((rc == 28)); then
+    echo "pgbackrest: the repository holds stanza $STANZA for another cluster; no backups. Restoring this host?" \
+      "Restore first (docs/operations/restore.md), never run stanza-upgrade. Only a fresh installation into a" \
+      "deliberately kept bucket runs stanza-upgrade once (docs/operations/upgrade.md)" >&2
+  fi
+  ((rc == 0)) && : >"$STATE/stanza"
 }
 
 # full_backup takes a full backup and reads it back with `pgbackrest verify`, so a set with a missing or damaged
@@ -117,13 +133,13 @@ case "${1:-serve}" in
   serve)
     pusher &
     while true; do
-      if ensure_stanza >/dev/null 2>&1; then
+      if ensure_stanza; then
         last="$(cat "$STATE/last-full" 2>/dev/null || echo 0)"
         if (($(date +%s) - last >= 86400)); then
           full_backup || echo "pgbackrest: full backup of $STANZA failed; retrying in the next round" >&2
         fi
       else
-        echo "pgbackrest: stanza $STANZA not ready (PostgreSQL starting?); retrying" >&2
+        echo "pgbackrest: stanza $STANZA not ready; retrying" >&2
       fi
       sleep 10
     done
@@ -159,6 +175,9 @@ case "${1:-serve}" in
     ;;
   info)
     pgb info
+    ;;
+  stanza-upgrade)
+    pgb stanza-upgrade
     ;;
   restore)
     restore_dir="$SPOOL/restore"
@@ -206,7 +225,7 @@ case "${1:-serve}" in
     echo "restored $STANZA from backup $label; staged $n WAL segments from $start to ${last:-none}"
     ;;
   *)
-    echo "usage: paddock-pgbackrest serve|backup|flush|info|restore" >&2
+    echo "usage: paddock-pgbackrest serve|backup|flush|info|restore|stanza-upgrade" >&2
     exit 2
     ;;
 esac

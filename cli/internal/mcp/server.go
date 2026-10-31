@@ -90,9 +90,7 @@ func (s *Server) Register(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !acc.Enabled {
-		_, _ = fmt.Fprintln(s.errw, "paddockctl mcp: the MCP is switched off for this scope; an administrator enables it in the portal")
-	}
+	s.hintSwitchedOff(acc)
 	for _, t := range mcpcatalog.Exposed() {
 		if !slices.Contains(acc.AllowedOperations, t.Name) {
 			continue
@@ -116,12 +114,14 @@ func (s *Server) Run(ctx context.Context, t mcp.Transport) error {
 	return s.srv.Run(ctx, t)
 }
 
-// Tools lists the exposed catalog entries in allowed_operations, for paddockctl mcp tools.
+// Tools lists the exposed catalog entries in allowed_operations, for paddockctl mcp tools; with the MCP switched off
+// for the scope it writes the same hint as Register to errw (plan M14 §9.3 M0).
 func (s *Server) Tools(ctx context.Context) ([]ToolListEntry, error) {
 	acc, err := s.fetchAccess(ctx, s.selfClient())
 	if err != nil {
 		return nil, err
 	}
+	s.hintSwitchedOff(acc)
 	out := []ToolListEntry{}
 	for _, t := range mcpcatalog.Exposed() {
 		if slices.Contains(acc.AllowedOperations, t.Name) {
@@ -129,6 +129,13 @@ func (s *Server) Tools(ctx context.Context) ([]ToolListEntry, error) {
 		}
 	}
 	return out, nil
+}
+
+// hintSwitchedOff tells the user on errw why no tool is offered when no saved policy enables the MCP.
+func (s *Server) hintSwitchedOff(acc access) {
+	if !acc.Enabled {
+		_, _ = fmt.Fprintln(s.errw, "paddockctl mcp: the MCP is switched off for this scope; an administrator enables it in the portal")
+	}
 }
 
 func (s *Server) selfClient() string { return "paddockctl/" + s.version }

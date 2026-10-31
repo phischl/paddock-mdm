@@ -5,11 +5,15 @@ package objectstore
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -281,10 +285,52 @@ func (p *Presigner) PresignPut(ctx context.Context, key string, size int64, ttl 
 	return req.URL, nil
 }
 
-// Put writes an object without retention (bundles bucket).
+// ErrRejected marks a write the object store answered with a client error (HTTP 4xx) on its only attempt: it did not
+// store the object. Every other failed write may still complete on the store's side (PDK-496).
+var ErrRejected = errors.New("objectstore: write rejected")
+
+// Put writes an object without retention (bundles bucket). A write the store answered with a client error on its only
+// attempt carries ErrRejected.
 func (s *Store) Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error {
+	retries := 0
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &s.bucket, Key: &key, Body: bytes.NewReader(body), ContentType: &contentType, CacheControl: &cacheControl,
-	})
+	}, func(o *s3.Options) { o.Retryer = retryCounter{Retryer: o.Retryer, retries: &retries} })
+	var res *awshttp.ResponseError
+	// A retried attempt may have failed after the store received the body (a reset, a 5xx); that write can still
+	// complete even though the last attempt got a 4xx.
+	if retries == 0 && errors.As(err, &res) && res.HTTPStatusCode() >= 400 && res.HTTPStatusCode() < 500 {
+		return fmt.Errorf("%w: %w", ErrRejected, err)
+	}
 	return err
+}
+
+// retryCounter counts the retries of one call.
+type retryCounter struct {
+	aws.Retryer
+	retries *int
+}
+
+func (r retryCounter) GetRetryToken(ctx context.Context, opErr error) (func(error) error, error) {
+	*r.retries++
+	return r.Retryer.GetRetryToken(ctx, opErr)
+}
+
+// SHA256 returns the hex SHA-256 of the current version of an object, hashed while it streams; found is false if it
+// does not exist.
+func (s *Store) SHA256(ctx context.Context, key string) (sum string, found bool, err error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
+	if err != nil {
+		var noSuchKey *types.NoSuchKey
+		if errors.As(err, &noSuchKey) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	defer func() { _ = out.Body.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, out.Body); err != nil {
+		return "", false, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), true, nil
 }

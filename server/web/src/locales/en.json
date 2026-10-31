@@ -401,6 +401,7 @@
       "uninstall_requested": "{actor} asked to remove Paddock from {hostname} ({mode})",
       "uninstall_cancelled": "{actor} cancelled the removal of Paddock from {hostname}",
       "uninstalled": "The device {target} removed Paddock ({mode}, {outcome})",
+      "uninstall_failed": "The device {target} refused the removal of Paddock ({reason}); the request ended",
       "encrypt_requested": "{actor} asked to encrypt the disk of {hostname} in place",
       "encrypt_cancelled": "{actor} cancelled the in-place encryption of {hostname} ({mode})",
       "disk_conversion_prepared": "The device {target} prepared the in-place encryption of its disk and waits for a restart",
@@ -408,6 +409,9 @@
       "disk_conversion_completed": "The device {target} finished encrypting its disk in place",
       "disk_conversion_failed": "The in-place encryption of the device {target} failed ({stage}: {reason})",
       "disk_conversion_aborted": "The device {target} abandoned the in-place encryption of its disk ({by})",
+      "disk_conversion_completed_after_cancel": "The device {target} encrypted its disk at a restart although the in-place encryption had been cancelled; the conversion continues and the escrowed recovery key opens the disk",
+      "disk_conversion_neutralize_failed": "The device {target} cancelled the in-place encryption but could not disarm its start-up images ({reason}); a restart before the cleanup finishes may still encrypt the disk",
+      "disk_conversion_unlock_restore_failed": "The device {target} could not reinstall the unlock path of its converted disk ({reason}); a kernel whose start-up image was disarmed at the cancel cannot open the disk until this succeeds",
       "event_gap": "Events {from_seq} to {to_seq} of the device {target} never arrived (event gap)",
       "event_gap_filled": "The missing events {from_seq} to {to_seq} of the device {target} arrived later",
       "event_seq_reset": "The event numbering of the device {target} was reset: highest number {reported_high} after {previous_high} (counter reset)",
@@ -1181,7 +1185,14 @@
       },
       "confirmLabel": "Remove Paddock",
       "typed": "Type the hostname to confirm. The device is retired once it reports the removal.",
-      "pending": "Removal requested ({mode}) — {status}. The device removes Paddock at its next check-in and is then retired.",
+      "pending": "Removal requested ({mode}) — {status}.",
+      "running": "The device removes Paddock at its next check-in and is then retired.",
+      "stopped": "The command will not run any more. Cancel the request and request it again.",
+      "refused": "The device refused the removal: {reason}. Cancel the request and request it again once the cause is resolved.",
+      "refusedReasons": {
+        "conversion_pending": "an in-place encryption of its disk is pending",
+        "revocation_pending": "a Lock or Destroy is pending"
+      },
       "modes": {
         "leave": "leave as is",
         "reset": "reset"

@@ -9,7 +9,9 @@ child process of the MCP client and talks to it over stdio; Paddock itself offer
 
 - **Sign-in through Authentik.** `paddockctl mcp login` signs the administrator in with Authentik's device
   authorization grant on the public OIDC provider `paddock-mcp`: the browser opens Authentik's device page, which runs
-  the portal's login flow (password and second factor) and confirms the code `paddockctl` shows. There is no client
+  the portal's login flow (password and passkey) and confirms the code `paddockctl` shows. Like the portal sign-in, the
+  login must have validated a passkey (WebAuthn): a sign-in with TOTP only is refused with `passkey_required`
+  (PDK-531). There is no client
   secret on the workstation and no API token. The api verifies the ID and access token, resolves the role from the
   Paddock groups exactly like a portal sign-in, records `admin.login` with `channel: mcp` and keeps an MCP session record
   in Valkey next to the portal sessions.
@@ -61,10 +63,10 @@ client (or the server in it) after a change of the policy or of the write access
 ## Off until a policy is saved
 
 The MCP is switched off in every organization and on the platform until an administrator saves a policy: without a
-saved policy every MCP request of that scope answers 403 `mcp_disabled`, `paddockctl mcp tools` lists nothing and
-`paddockctl mcp` prints `the MCP is switched off for this scope`. Only `GET /api/v1/me`, `GET /api/v1/mcp/access` and
-`GET /api/v1/mcp/catalog` answer, so that the client can tell the administrator why. The settings page says *No policy
-saved yet* until then.
+saved policy every MCP request of that scope answers 403 `mcp_disabled`, `paddockctl mcp tools` lists nothing, and
+both `paddockctl mcp tools` and `paddockctl mcp` print `the MCP is switched off for this scope` on stderr. Only
+`GET /api/v1/me`, `GET /api/v1/mcp/access` and `GET /api/v1/mcp/catalog` answer, so that the client can tell the
+administrator why. The settings page says *No policy saved yet* until then.
 
 ## Connect Claude Code
 
@@ -138,7 +140,7 @@ account gets up to that many per replica. Portal sessions and API tokens are not
 
 | Path | Effect |
 | --- | --- |
-| `paddockctl mcp logout` | Deletes the local file, ends the session of the current access token at the api and revokes the refresh token at Authentik. Records of earlier access tokens of the same sign-in stay valid until those tokens expire (at most 30 minutes; RR-87). |
+| `paddockctl mcp logout` | Deletes the local file, ends the session of the current access token at the api and revokes the refresh token at Authentik. The sessions of the earlier access tokens of the same sign-in end with it. |
 | Deactivation in Authentik | Authentik deletes the user's tokens; the api ends the account's sessions at the next identity sync round (`admin.sessions_revoked`, reason `deactivated`) and refuses the account's next request once Paddock has disabled it. |
 | Role change | The account's sessions end at the next identity sync round (reason `role_changed`) or at the account's next request, whichever comes first; the renewal under the old sign-in is refused. |
 | *End all sessions* (*Platform › Sessions*) | Ends every MCP session together with the portal sessions. |
@@ -160,6 +162,9 @@ account gets up to that many per replica. Portal sessions and API tokens are not
 | `mcp_write_not_enabled` (403) | The policy does not allow changes, or the administrator's write access is off; the detail says which. |
 | `rate_limited` (429) | The account exceeded its per-minute budget; wait `Retry-After` seconds. |
 | `step_up_required` (403) | The change needs an interactive administrator in the portal; `error.portal_path` names the page. |
+| `mcp_login_required` right after a `session_store_unavailable` (503) | The failed call already used the sign-in's tokens once, and a token is never accepted twice. A renewal recovers on its own with the next refreshed token; after a store outage, the first session of a device login needs `paddockctl mcp login` again. |
+| `passkey_required` at sign-in | The sign-in validated no passkey (for example TOTP only, or an Authentik session from such a sign-in). Sign out of Authentik, then run `paddockctl mcp login` again and confirm with a passkey. |
+| `login_required` or `mcp_login_required` right after the upgrade to the passkey requirement (PDK-531) | Sessions opened before the upgrade do not record that their sign-in validated a passkey and are not renewed. Run `paddockctl mcp login` once. |
 | `login timed out` at sign-in | The code was not confirmed before it expired. Run the login again. |
 
 `paddockctl mcp` logs to stderr only and never logs a token, tool arguments or results.

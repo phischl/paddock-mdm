@@ -401,6 +401,7 @@
       "uninstall_requested": "{actor} hat angefordert, Paddock von {hostname} zu entfernen ({mode})",
       "uninstall_cancelled": "{actor} hat die Entfernung von Paddock von {hostname} zurückgezogen",
       "uninstalled": "Das Gerät {target} hat Paddock entfernt ({mode}, {outcome})",
+      "uninstall_failed": "Das Gerät {target} hat die Entfernung von Paddock abgelehnt ({reason}); die Anforderung ist beendet",
       "encrypt_requested": "{actor} hat angefordert, die Festplatte von {hostname} nachträglich zu verschlüsseln",
       "encrypt_cancelled": "{actor} hat die nachträgliche Verschlüsselung von {hostname} abgebrochen ({mode})",
       "disk_conversion_prepared": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte vorbereitet und wartet auf einen Neustart",
@@ -408,6 +409,9 @@
       "disk_conversion_completed": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte abgeschlossen",
       "disk_conversion_failed": "Die nachträgliche Verschlüsselung des Geräts {target} ist fehlgeschlagen ({stage}: {reason})",
       "disk_conversion_aborted": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte abgebrochen ({by})",
+      "disk_conversion_completed_after_cancel": "Das Gerät {target} hat seine Festplatte bei einem Neustart verschlüsselt, obwohl die nachträgliche Verschlüsselung abgebrochen war; die Umstellung läuft weiter, und der hinterlegte Wiederherstellungsschlüssel öffnet die Festplatte",
+      "disk_conversion_neutralize_failed": "Das Gerät {target} hat die nachträgliche Verschlüsselung abgebrochen, konnte seine Startabbilder aber nicht entschärfen ({reason}); ein Neustart vor Abschluss der Bereinigung kann die Festplatte noch verschlüsseln",
+      "disk_conversion_unlock_restore_failed": "Das Gerät {target} konnte den Entsperrpfad seiner verschlüsselten Festplatte nicht wieder einrichten ({reason}); ein Kernel, dessen Startabbild beim Abbruch entschärft wurde, kann die Festplatte erst danach öffnen",
       "event_gap": "Die Ereignisse {from_seq} bis {to_seq} des Geräts {target} sind nie angekommen (Ereignislücke)",
       "event_gap_filled": "Die fehlenden Ereignisse {from_seq} bis {to_seq} des Geräts {target} sind nachträglich angekommen",
       "event_seq_reset": "Die Ereignisnummerierung des Geräts {target} wurde zurückgesetzt: höchste Nummer {reported_high} nach {previous_high} (Zählerrücksetzung)",
@@ -1181,7 +1185,14 @@
       },
       "confirmLabel": "Paddock entfernen",
       "typed": "Geben Sie den Hostnamen zur Bestätigung ein. Das Gerät wird außer Betrieb genommen, sobald es die Entfernung meldet.",
-      "pending": "Entfernung angefordert ({mode}) — {status}. Das Gerät entfernt Paddock beim nächsten Check-in und wird dann außer Betrieb genommen.",
+      "pending": "Entfernung angefordert ({mode}) — {status}.",
+      "running": "Das Gerät entfernt Paddock beim nächsten Check-in und wird dann außer Betrieb genommen.",
+      "stopped": "Der Befehl wird nicht mehr ausgeführt. Brechen Sie die Anforderung ab und fordern Sie sie erneut an.",
+      "refused": "Das Gerät hat die Entfernung abgelehnt: {reason}. Brechen Sie die Anforderung ab und fordern Sie sie erneut an, sobald die Ursache behoben ist.",
+      "refusedReasons": {
+        "conversion_pending": "eine nachträgliche Verschlüsselung der Festplatte steht aus",
+        "revocation_pending": "eine Sperre oder Vernichtung steht aus"
+      },
       "modes": {
         "leave": "so lassen",
         "reset": "zurücksetzen"

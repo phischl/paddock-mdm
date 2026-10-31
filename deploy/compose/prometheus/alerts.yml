@@ -199,8 +199,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Role changes of one or more organizations are not recorded"
-          description: "The admin-accounts round has refused one or more organizations in every round for 15 minutes: every role group listing is empty and the directory probe does not show that the Authentik service token sees the directory. Role changes are not recorded and administrator accounts are not followed until the paddock-service role can read users and groups again; the worker log names the organizations (docs/operations/monitoring.md)."
+          summary: "Role changes of one or more organizations or of the platform are not recorded"
+          description: "The admin-accounts round has refused one or more organizations, or the platform-admins round the platform, in every round for 15 minutes: every role group listing is empty and the directory probe does not show that the Authentik service token sees the directory. Role changes are not recorded and administrator accounts are not followed until the paddock-service role can read users and groups again; the worker log names the organizations, the nil ID standing for the platform (docs/operations/monitoring.md)."
       - alert: PaddockBackupStale
         expr: time() - max by (kind) (paddock_backup_last_success_timestamp_seconds) > 26 * 3600
         labels:

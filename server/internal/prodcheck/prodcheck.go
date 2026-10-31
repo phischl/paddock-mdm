@@ -186,6 +186,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	if _, ok := c.Services["paddock-worker"]; ok {
 		results = append(results, checkAuditIndexRetention(c))
 	}
+	if _, ok := c.Services["authentik-server"]; ok {
+		results = append(results, checkAuthentikWebWorkers(c))
+	}
 	if usesAny(c, releaseKeyVars) {
 		results = append(results, checkReleaseKeys(c, o))
 	}
@@ -1091,6 +1094,19 @@ func checkAuditIndexRetention(c Config) Result {
 			"(the bucket default and PADDOCK_AUDIT_RETENTION_DAYS)", v, least))
 	}
 	return result("audit index retention of the retention round", f)
+}
+
+// checkAuthentikWebWorkers fails unless authentik-server's AUTHENTIK_WEB__WORKERS is an integer of at least 1:
+// Authentik falls back to its 2 workers on a value it cannot parse, under which simultaneous logins time out, and starts
+// without a single web worker on 0, so the server is up but serves no login.
+func checkAuthentikWebWorkers(c Config) Result {
+	var f []string
+	v := env(c.Services["authentik-server"], "AUTHENTIK_WEB__WORKERS")
+	if n, err := strconv.Atoi(v); err != nil || n < 1 {
+		f = append(f, fmt.Sprintf("authentik-server: AUTHENTIK_WEB__WORKERS is %q, not an integer of at least 1 "+
+			"(set PADDOCK_AUTHENTIK_WEB_WORKERS in .env, default 4)", v))
+	}
+	return result("authentik web workers", f)
 }
 
 func checkReleaseKeys(c Config, o Options) Result {

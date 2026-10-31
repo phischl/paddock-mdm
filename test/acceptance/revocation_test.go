@@ -481,14 +481,13 @@ func TestRevocationDisabled(t *testing.T) {
 }
 
 // revocationRequestCases are the A3 cases of POST /api/v1/devices/{id}/<verb> (lock, destroy). Successful requests
-// run in a gate organization, so the A3 gate never counts against the limits of the dev users.
+// run in the shared gate organization, so the A3 gate never counts against the limits of the dev users.
 func revocationRequestCases(verb string) []auditCase {
 	const code = "revocation.requested"
 	path := func(id string) string { return "/api/v1/devices/" + id + "/" + verb }
 	return []auditCase{
-		{"success", func(t *testing.T, _ *auditWorld) {
-			slug, _ := gateOrganization(t)
-			a := newGateAdmin(t, slug)
+		{"success", func(t *testing.T, w *auditWorld) {
+			a := newGateAdmin(t, w.sharedGateOrganization(t))
 			d := activeDevice(t, a.portal, "", "a3-revoke-"+uniqueSuffix())
 			a.stepUp(t)
 			res := call(t, a.portal, http.MethodPost, path(d.DeviceID), map[string]any{"confirm_hostname": getDevice(t, a.portal, d.DeviceID).Hostname})
@@ -523,11 +522,26 @@ func revocationRequestCases(verb string) []auditCase {
 	}
 }
 
-// pendingDestroy creates a gate organization with two administrators and a Destroy of the first that waits for its
-// approval.
-func pendingDestroy(t *testing.T) (a1, a2 *gateAdmin, id, hostname string) {
+// sharedGateOrganization returns the slug of the gate organization the revocation cases of the A3 gate share, created
+// by the first case that needs it. Each case still has administrators of its own, and only lock/success and
+// approve/success issue a request, so the shared organization stays far below the limits of ADR 0014. One
+// organization per case had up to eight cases provision an organization in Authentik at once, which on a 4-vCPU
+// runner outlasted the 30 s client timeout (PDK-602).
+func (w *auditWorld) sharedGateOrganization(t *testing.T) string {
 	t.Helper()
-	slug, _ := gateOrganization(t)
+	w.gateOrgMu.Lock()
+	defer w.gateOrgMu.Unlock()
+	if w.gateOrgSlug == "" {
+		w.gateOrgSlug, _ = gateOrganization(t)
+	}
+	return w.gateOrgSlug
+}
+
+// pendingDestroy creates two administrators of the shared gate organization and a Destroy of the first that waits
+// for its approval.
+func pendingDestroy(t *testing.T, w *auditWorld) (a1, a2 *gateAdmin, id, hostname string) {
+	t.Helper()
+	slug := w.sharedGateOrganization(t)
 	a1, a2 = newGateAdmin(t, slug), newGateAdmin(t, slug)
 	d := activeDevice(t, a1.portal, "", "a3-destroy-"+uniqueSuffix())
 	return a1, a2, a1.revoke(t, "destroy", d).ID, getDevice(t, a1.portal, d.DeviceID).Hostname
@@ -544,16 +558,16 @@ func revocationReviewCases(verb, code string) []auditCase {
 		return a2
 	}
 	return []auditCase{
-		{"success", func(t *testing.T, _ *auditWorld) {
-			a1, a2, id, hostname := pendingDestroy(t)
+		{"success", func(t *testing.T, w *auditWorld) {
+			a1, a2, id, hostname := pendingDestroy(t, w)
 			a := actor(a1, a2)
 			a.stepUp(t)
 			res := call(t, a.portal, http.MethodPost, path(id), map[string]any{"confirm_hostname": hostname})
 			expectStatus(t, res, http.StatusOK, "")
 			expectOneEvent(t, a.portal, res.RequestID, code, "success")
 		}},
-		{"conflict", func(t *testing.T, _ *auditWorld) {
-			a1, a2, id, hostname := pendingDestroy(t)
+		{"conflict", func(t *testing.T, w *auditWorld) {
+			a1, a2, id, hostname := pendingDestroy(t, w)
 			a1.stepUp(t)
 			expectStatus(t, call(t, a1.portal, http.MethodPost, "/api/v1/revocation-requests/"+id+"/cancel",
 				map[string]any{"confirm_hostname": hostname}), http.StatusOK, "")

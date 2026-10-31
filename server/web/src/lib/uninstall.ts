@@ -20,6 +20,14 @@ export function uninstallPending(u: DeviceUninstall | null | undefined): u is De
   return !!u && !u.uninstalled_at
 }
 
+/** Statuses of the uninstall command that end it without a removal: the request stays open until it is cancelled (PDK-403). */
+const stopped = ['failed', 'expired', 'cancelled']
+
+/** Whether the command of a pending uninstall can still remove Paddock: it was not refused, did not fail and did not expire. */
+export function uninstallRunning(u: DeviceUninstall | null | undefined): boolean {
+  return uninstallPending(u) && !stopped.includes(u.command_status)
+}
+
 /** Whether a pending uninstall can be cancelled: its command has not reached the device, or its removal report is overdue. */
 export function uninstallCancellable(u: DeviceUninstall | null | undefined): boolean {
   return uninstallPending(u) && (cancellable.includes(u.command_status) || u.report_overdue)

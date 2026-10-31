@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"aead.dev/minisign"
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -18,13 +19,17 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
-// ArtifactStore stores agent binaries in the bucket paddock-agent-artifacts (objectstore.Store).
+// ArtifactStore stores agent binaries in the bucket paddock-agent-artifacts (objectstore.Store). Publishing hashes the
+// stored objects to compare them with their checksums (PDK-496). A write the store rejected carries
+// objectstore.ErrRejected.
 type ArtifactStore interface {
 	Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error
+	SHA256(ctx context.Context, key string) (sum string, found bool, err error)
 }
 
 // VerifyRelease checks a minisign signature file over a binary with the configured release public key and returns
@@ -52,6 +57,9 @@ type AgentReleases struct {
 	verifyRevoke VerifyRelease
 	// development allows waves shorter than agentrelease.MinWaveMinutesProduction (PADDOCK_ENV=development).
 	development bool
+	// storeTimeout and verifyTimeout bound the object store write of an upload and the checksum verification of a
+	// publish (agentrelease.UploadStoreTimeout, agentrelease.PublishVerifyTimeout); tests shorten them.
+	storeTimeout, verifyTimeout time.Duration
 }
 
 // NewAgentReleases creates the use cases. verify checks with the agent release key, verifyRevoke the paddock-revoke
@@ -60,7 +68,7 @@ type AgentReleases struct {
 func NewAgentReleases(runner *ActionRunner, platform *db.PlatformPool, store ArtifactStore, verify, verifyRevoke VerifyRelease,
 	development bool) *AgentReleases {
 	return &AgentReleases{runner: runner, platform: platform, store: store, verify: verify, verifyRevoke: verifyRevoke,
-		development: development}
+		development: development, storeTimeout: agentrelease.UploadStoreTimeout, verifyTimeout: agentrelease.PublishVerifyTimeout}
 }
 
 // Privileged actions of agent releases.
@@ -181,24 +189,34 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 	}
 	spec := uploadSpec(version, arch, binary, "binary", "", "")
 	var out pgstore.AgentArtifact
+	var lease uploadLease
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 			comment, err := a.checkUpload(ctx, q, a.verify, version, arch, binary, minisigB64)
 			if err != nil {
 				return err
 			}
-			return checkBinaryComment(comment, version, arch)
+			if err := checkBinaryComment(comment, version, arch); err != nil {
+				return err
+			}
+			lease, err = takeUploadLease(ctx, q, version, art.ObjectKey, a.storeTimeout)
+			return err
 		},
 		func(ctx context.Context) error {
-			return a.store.Put(ctx, art.ObjectKey, "application/octet-stream", "no-store", binary)
+			return lease.store(ctx, func(ctx context.Context) error {
+				return a.store.Put(ctx, art.ObjectKey, "application/octet-stream", "no-store", binary)
+			})
 		},
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder, externalErr error) error {
 			if externalErr != nil {
-				return nil
+				return lease.abandon(ctx, q, externalErr)
 			}
 			var err error
 			out, err = q.UpsertAgentArtifact(ctx, art)
-			return publishedRace(err, "artifacts of a published release cannot change")
+			if err != nil {
+				return publishedRace(err, "artifacts of a published release cannot change")
+			}
+			return lease.drop(ctx, q)
 		})
 	if err != nil && problem.From(err) == problem.Internal {
 		slog.ErrorContext(ctx, "storing an agent artifact failed", "version", version, "arch", arch, "error", err)
@@ -223,24 +241,34 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 		pkg.PackageVersion = &packageVersion
 	}
 	var out pgstore.AgentPackage
+	var lease uploadLease
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 			if err := agentrelease.ValidatePackage(name, packageVersion); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
-			_, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, arch, deb, minisigB64)
+			if _, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, arch, deb, minisigB64); err != nil {
+				return err
+			}
+			var err error
+			lease, err = takeUploadLease(ctx, q, version, pkg.ObjectKey, a.storeTimeout)
 			return err
 		},
 		func(ctx context.Context) error {
-			return a.store.Put(ctx, pkg.ObjectKey, "application/vnd.debian.binary-package", "no-store", deb)
+			return lease.store(ctx, func(ctx context.Context) error {
+				return a.store.Put(ctx, pkg.ObjectKey, "application/vnd.debian.binary-package", "no-store", deb)
+			})
 		},
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder, externalErr error) error {
 			if externalErr != nil {
-				return nil
+				return lease.abandon(ctx, q, externalErr)
 			}
 			var err error
 			out, err = q.UpsertAgentPackage(ctx, pkg)
-			return publishedRace(err, "artifacts of a published release cannot change")
+			if err != nil {
+				return publishedRace(err, "artifacts of a published release cannot change")
+			}
+			return lease.drop(ctx, q)
 		})
 	if err != nil && problem.From(err) == problem.Internal {
 		slog.ErrorContext(ctx, "storing an agent package failed", "version", version, "name", name, "arch", arch, "error", err)
@@ -323,7 +351,71 @@ func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, ver
 	return comment, nil
 }
 
-// Publish makes a draft release with at least one artifact available for rollouts.
+// uploadLease is an upload's lease on the object of its release file (PDK-496): publishing refuses while it is
+// unexpired, and the object store write must end before it does.
+type uploadLease struct {
+	id       uuid.UUID
+	deadline time.Time
+}
+
+// takeUploadLease leases the object of a release file for an upload whose write may take storeTimeout. The release
+// must still be a draft — the guard of PDK-432 — and no other unexpired lease may hold the object; an expired one is
+// taken over.
+func takeUploadLease(ctx context.Context, q *pgstore.Queries, version, objectKey string, storeTimeout time.Duration) (uploadLease, error) {
+	l := uploadLease{id: uuid.New(), deadline: time.Now().Add(storeTimeout)}
+	_, err := q.TakeAgentUploadLease(ctx, pgstore.TakeAgentUploadLeaseParams{
+		ID: l.id, ObjectKey: objectKey, LeaseSeconds: int32(agentrelease.UploadLeaseTTL / time.Second), Version: version,
+	})
+	if !db.IsNoRows(err) {
+		return l, err
+	}
+	r, err := q.GetAgentRelease(ctx, version)
+	if err != nil {
+		return l, notFound(err)
+	}
+	if r.Status != agentrelease.StatusDraft {
+		return l, problem.InvalidState.WithDetail("artifacts of a published release cannot change")
+	}
+	return l, problem.InvalidState.WithDetail("another upload of this file is in progress; try again when it has finished")
+}
+
+// store runs the object store write put within the lease's deadline. An interrupted write carries the context's
+// error, because the store may still complete it.
+func (l uploadLease) store(ctx context.Context, put func(ctx context.Context) error) error {
+	ctx, cancel := context.WithDeadline(ctx, l.deadline)
+	defer cancel()
+	err := put(ctx)
+	if err != nil && ctx.Err() != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	return err
+}
+
+// abandon ends the lease of an upload whose write failed. Only a write the store rejected drops it; after any other
+// failure — an interrupted write, a transport error, a server error — the store may still complete the write, so the
+// lease stays until it expires and publishing does not start before then.
+func (l uploadLease) abandon(ctx context.Context, q *pgstore.Queries, writeErr error) error {
+	if !errors.Is(writeErr, objectstore.ErrRejected) {
+		return nil
+	}
+	if _, err := q.DropAgentUploadLease(ctx, l.id); err != nil && !db.IsNoRows(err) {
+		return err
+	}
+	return nil
+}
+
+// drop ends the lease of an upload that recorded its file, in the same transaction. A lease that expired — or was
+// taken over after expiry — refuses the commit: publishing may have read the object meanwhile.
+func (l uploadLease) drop(ctx context.Context, q *pgstore.Queries) error {
+	valid, err := q.DropAgentUploadLease(ctx, l.id)
+	if db.IsNoRows(err) || (err == nil && !valid) {
+		return problem.InvalidState.WithDetail("the upload outlasted its lease; upload the file again")
+	}
+	return err
+}
+
+// Publish makes a draft release with at least one artifact available for rollouts. It refuses while an upload holds a
+// lease on one of the release's files and verifies every stored object against its checksum (PDK-496).
 func (a *AgentReleases) Publish(ctx context.Context, version string) (pgstore.AgentRelease, error) {
 	spec := SpecAgentReleasePublish
 	spec.Params = map[string]any{"version": version}
@@ -331,12 +423,22 @@ func (a *AgentReleases) Publish(ctx context.Context, version string) (pgstore.Ag
 	spec.Target = &t
 	var out pgstore.AgentRelease
 	err := a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		r, err := q.GetAgentRelease(ctx, version)
+		r, err := q.LockAgentRelease(ctx, version)
 		if err != nil {
 			return notFound(err)
 		}
 		if r.Status != agentrelease.StatusDraft {
 			return problem.InvalidState.WithDetail("the release is already published")
+		}
+		if err := q.DeleteExpiredAgentUploadLeases(ctx, version); err != nil {
+			return err
+		}
+		leases, err := q.CountAgentUploadLeases(ctx, version)
+		if err != nil {
+			return err
+		}
+		if leases > 0 {
+			return problem.InvalidState.WithDetail("an upload of this release is in progress; publish when it has finished")
 		}
 		arts, err := q.ListAgentArtifacts(ctx, version)
 		if err != nil {
@@ -346,14 +448,54 @@ func (a *AgentReleases) Publish(ctx context.Context, version string) (pgstore.Ag
 			return problem.InvalidState.WithDetail("upload at least one artifact before publishing")
 		}
 		arches := make([]string, len(arts))
+		stored := make([]storedFile, 0, len(arts))
 		for i, art := range arts {
 			arches[i] = art.Arch
+			stored = append(stored, storedFile{objectKey: art.ObjectKey, sha256: art.Sha256})
 		}
 		rec.SetParam("arches", arches)
+		pkgs, err := q.ListAgentPackages(ctx, version)
+		if err != nil {
+			return err
+		}
+		for _, p := range pkgs {
+			stored = append(stored, storedFile{objectKey: p.ObjectKey, sha256: p.Sha256})
+		}
+		if err := a.verifyStored(ctx, rec, version, stored); err != nil {
+			return err
+		}
 		out, err = q.PublishAgentRelease(ctx, version)
 		return publishedRace(err, "the release is already published")
 	})
 	return out, err
+}
+
+// storedFile is the object of a recorded release file with the checksum of its row.
+type storedFile struct{ objectKey, sha256 string }
+
+// verifyStored compares every stored object of a release with the checksum of its row. A mismatch — a write the store
+// completed after its upload gave up on the lease — refuses the publish and names the objects in its audit event. It
+// runs under the release's row lock, so it is bounded by verifyTimeout: a slow store must not hold the lock.
+func (a *AgentReleases) verifyStored(ctx context.Context, rec Recorder, version string, files []storedFile) error {
+	ctx, cancel := context.WithTimeout(ctx, a.verifyTimeout)
+	defer cancel()
+	var mismatched []string
+	for _, f := range files {
+		sum, found, err := a.store.SHA256(ctx, f.objectKey)
+		if err != nil {
+			slog.ErrorContext(ctx, "reading a stored release file failed", "version", version, "object", f.objectKey, "error", err)
+			return problem.UpstreamUnavailable.WithDetail("the artifact store is unavailable")
+		}
+		if !found || sum != f.sha256 {
+			mismatched = append(mismatched, f.objectKey)
+		}
+	}
+	if len(mismatched) == 0 {
+		return nil
+	}
+	rec.SetParam("mismatched_objects", mismatched)
+	slog.WarnContext(ctx, "stored release files do not match their checksums", "version", version, "objects", mismatched)
+	return problem.InvalidState.WithDetail("stored files do not match their checksums; upload them again before publishing")
 }
 
 // publishedRace maps the missing row of a draft-guarded write to invalid_state: the release was published after the

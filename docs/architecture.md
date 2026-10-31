@@ -47,7 +47,7 @@ needs a documented reason to deviate, **MAY** is a genuine degree of freedom.
 | Topic | Decision | ADR |
 | --- | --- | --- |
 | Server language | Go (same toolchain as agent, CLI, shared protocol packages) | [0001](adr/0001-go-for-server-agent-and-cli.md) |
-| Persistence and org isolation | PostgreSQL 17, isolation by Row-Level Security set in one repository layer | [0002](adr/0002-postgresql-with-row-level-security.md) |
+| Persistence and org isolation | PostgreSQL 18, isolation by Row-Level Security set in one repository layer | [0002](adr/0002-postgresql-with-row-level-security.md) |
 | Queue and async processing (A8) | RabbitMQ (quorum queues, no plugins) for ingest and internal events; Valkey for the gateway's hot read path, nonces and locks. Both map 1:1 to managed AWS services (Amazon MQ for RabbitMQ, ElastiCache for Valkey) | [0003](adr/0003-rabbitmq-and-valkey.md) |
 | Agent–server protocol and identity (A5, A6) | HTTPS on 443, per-request signatures with a device key (TPM-bound where available), end-to-end signed payloads | [0004](adr/0004-device-identity-and-protocol.md) |
 | State compilation (A9) | Event-driven compiler, DSSE-signed per-device bundles in object storage, served through short-lived presigned URLs | [0005](adr/0005-state-compilation-and-bundle-format.md) |
@@ -478,8 +478,11 @@ the device record.
 Each check-in response carries `seq`, a per-device counter incremented by the worker that processes
 the check-in. The device stores it and sends it back as `Paddock-Seq`. A cloned disk image runs two
 devices with one identity; their sequence values diverge. The worker detects a `Paddock-Seq` that is
-older than the last one it issued **and** older than the one before (tolerance of one for a lost
-response) and raises `device.clone_suspected` (alert + audit event). The device record moves to
+older than the last one delivered **and** older than the one before (tolerance of one for a lost
+response) and raises `device.clone_suspected` (alert + audit event). *Amended 2026-10-30 (PDK-590):* only a number
+a check-in response carried counts as delivered (`sd:<device_id>`, §6.7); the rule applies only while `sd:` is known.
+`sd:` is not restored after a Valkey loss, so the first check-in after it (or of a device not seen since the upgrade)
+is not flagged and seeds `sd:`; a clone is caught on the next round (RR-97). The device record moves to
 `quarantined`: check-ins are still answered (fail safe), but no new commands or secrets are issued
 until an admin resolves it. With a TPM-resident key a clone cannot sign at all and is rejected outright.
 
@@ -574,7 +577,25 @@ sequenceDiagram
   computation in the gateway and needs no network call.
 - The `seq` value is issued by the gateway with an atomic `INCR seq:<device>` in Valkey; the worker persists
   `last_seq` from the heartbeat (rebuild source after a Valkey loss). A request whose `Paddock-Seq` is lower than
-  the stored value minus 1 raises `clone_suspected` (§6.4). *(Amended 2026-10-04, M2a.)*
+  the last delivered number minus 1 (`sd:<device>`) raises `clone_suspected` (§6.4); the rule applies only when
+  `sd:` is known. *(Amended 2026-10-04, M2a; 2026-10-30, PDK-590.)*
+
+  *Note 2026-10-30 (PDK-590):* the gateway raises `sd:<device>` (never lowers it) after the heartbeat publish
+  succeeded and only while the request is still alive, right before the response; a check-in that failed, stalled or
+  was abandoned by the device never counts, whether or not its release of `seq:` succeeds. `sd:` is not restored after
+  a cache loss: a counter restored from `last_seq` can include numbers of abandoned check-ins whose heartbeat ingest
+  persisted, so while `sd:` is missing nothing is flagged and the next successful check-in seeds it (RR-97).
+
+  *Note 2026-10-30 (PDK-475):* the increment is conditional: an atomic script increments `seq:<device>` only if it
+  exists and never creates it, so a counter lost with Valkey cannot restart at 1. While it is missing, the gateway
+  issues no number and answers 503 `backpressure` with `Retry-After` (`ErrSeqMissing`). The worker restores the
+  counter together with the identity key: every write of `dk:<key_id>` (change notification, reconcile, enrollment)
+  first restores `seq:<device>` from `device_status.last_seq` if it is missing (`SET NX`). A live counter is never
+  raised or lowered: `last_seq` can include a number the gateway released after an ambiguous heartbeat publish, or
+  lag behind numbers the device already received after a restore from a stale value, so raising from it could put the
+  counter more than one ahead of the device and quarantine a healthy device as a clone. Residual (RR-97): a counter
+  restored from a stale `last_seq` (heartbeats still queued) or rolled back by an AOF replay reissues numbers up to
+  the depth of that lag until it catches up, which weakens clone detection for the device meanwhile.
 - **Event-triggered check-ins:** besides the timer, the agent checks in immediately (with 0–15 s random delay) when network connectivity becomes available (NetworkManager `Connectivity` = `FULL` via D-Bus, or `systemd-networkd` state change), after resume from suspend (logind `PrepareForSleep(false)`), and at boot. A laptop that comes online therefore receives a pending user lock within seconds, not after up to five minutes. Event-triggered check-ins are rate-limited to one per 60 s.
 - `next_checkin_s` = 300 × random(0.8, 1.2). Failure back-off: 30 s, 60 s, 2 min, 5 min, 10 min,
   30 min (cap), each with ±20 % jitter. The server MAY raise `next_checkin_s` under load (backpressure, §8).
@@ -781,6 +802,7 @@ is a drop-in target.
 | `tt:<org>` | string (signed time ticket) | compiler | gateway | 30 min |
 | `ar:<org>` | string (rollout state) | worker | gateway | none |
 | `seq:<device_id>` | string counter | worker | gateway | none |
+| `sd:<device_id>` | string (last delivered seq) | gateway | gateway | none |
 | `et:<token_hash>` | hash (enrollment token: org, status, uses) | api (right after commit, best effort) + worker (NOTIFY/reconcile) | gateway | token expiry |
 | `lock:compile:<device_id>`, `lock:<job>` | string | compiler, scheduler | – | 30 s |
 

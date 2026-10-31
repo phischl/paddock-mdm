@@ -464,7 +464,7 @@ func TestStateChangeWithItsEvent(t *testing.T) {
 
 	f = preparedFixture(t)
 	f.store.goneAfter = stopAfter(state.ConversionCancelled)
-	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByAdmin, false); !aborted {
+	if aborted, _ := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByAdmin, false, nil); !aborted {
 		t.Fatal("not aborted")
 	}
 	if types := f.store.types(); len(types) != 1 || types[0] != protocol.EventDiskConversionAborted {
@@ -473,7 +473,7 @@ func TestStateChangeWithItsEvent(t *testing.T) {
 
 	f = preparedFixture(t)
 	f.store.saveErr = func(*state.DiskConversion) error { return errors.New("disk full") }
-	if aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByAdmin, false); aborted ||
+	if aborted, reason := encrypt.Abort(context.Background(), f.dev, f.dev.layout, f.store, "", encrypt.ByAdmin, false, nil); aborted ||
 		reason != encrypt.ReasonNotAbortable {
 		t.Fatalf("save failed: %v %s", aborted, reason)
 	}

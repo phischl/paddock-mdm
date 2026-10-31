@@ -2,6 +2,7 @@ package acceptance
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,28 @@ func deviceLogins(t *testing.T, p *env.Portal, deviceID, query string) loginPage
 	return page
 }
 
+// waitUserSeen waits until the worker recorded the device's session login of username at the time at. The worker
+// upserts device_user_seen and, while the history is on, inserts the history row in the same transaction
+// (app.sessionLoginEntry), so once the newest login is seen, a wrongly stored history row is visible as well.
+func waitUserSeen(t *testing.T, deviceID, username string, at time.Time) {
+	t.Helper()
+	ctx := testContext(t, time.Minute)
+	db := ownerDB(t)
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(250 * time.Millisecond) {
+		var seen bool
+		if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM device_user_seen
+			WHERE device_id = $1 AND username = $2 AND last_seen_at >= $3)`, deviceID, strings.ToLower(username), at).Scan(&seen); err != nil {
+			t.Fatal(err)
+		}
+		if seen {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session login of %s at %s on %s not recorded within 30 s", username, at, deviceID)
+		}
+	}
+}
+
 // TestLoginHistory is gate A4 of plan M8d (AC4, server part): off by default and nothing recorded; enabled, every
 // session start of the device is listed (sorted, filtered); the development stack's seconds unit lets the purge round
 // delete rows older than login_history_days with one retention.purged; switching it off deletes the rest.
@@ -48,7 +71,7 @@ func TestLoginHistory(t *testing.T) {
 	d := activeDevice(t, admin, "", "a4-"+uniqueSuffix())
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	sendSessionLogins(t, d, 1, "dave@"+slug+".test", now.Add(-3*time.Second), now.Add(-2*time.Second), now.Add(-time.Second))
-	time.Sleep(5 * time.Second)
+	waitUserSeen(t, d.DeviceID, "dave@"+slug+".test", now.Add(-time.Second))
 	if page := deviceLogins(t, admin, d.DeviceID, ""); page.Total != 0 {
 		t.Fatalf("history off lists %+v", page)
 	}
