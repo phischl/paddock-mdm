@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,7 +46,7 @@ func TestParseFixtures(t *testing.T) {
 		{
 			file: "himmelblau.gpg",
 			want: openpgpkey.Key{
-				Fingerprint: himmelblauFP, Algorithm: openpgpkey.RSA, Bits: 4096,
+				Fingerprint: himmelblauFP, Params: openpgpkey.Params{Algorithm: openpgpkey.RSA, Bits: 4096},
 				Created: *unix(1761166251), Expires: unix(1824238251),
 				UserIDs: []string{"Himmelblau Build (2025) <build@himmelblau-idm.org>"},
 			},
@@ -53,28 +54,28 @@ func TestParseFixtures(t *testing.T) {
 		{
 			file: "rsa.asc", armored: true,
 			want: openpgpkey.Key{
-				Fingerprint: rsaFP, Algorithm: openpgpkey.RSA, Bits: 3072,
+				Fingerprint: rsaFP, Params: openpgpkey.Params{Algorithm: openpgpkey.RSA, Bits: 3072},
 				Created: *unix(1793479615), Expires: unix(1893495600),
 				UserIDs: []string{"Paddock Test RSA <rsa@example.invalid>"},
-				Subkeys: []openpgpkey.Subkey{{Algorithm: openpgpkey.RSA, Bits: 2048}},
+				Subkeys: []openpgpkey.Params{{Algorithm: openpgpkey.RSA, Bits: 2048}},
 			},
 		},
 		{
 			file: "rsa.gpg",
 			want: openpgpkey.Key{
-				Fingerprint: rsaFP, Algorithm: openpgpkey.RSA, Bits: 3072,
+				Fingerprint: rsaFP, Params: openpgpkey.Params{Algorithm: openpgpkey.RSA, Bits: 3072},
 				Created: *unix(1793479615), Expires: unix(1893495600),
 				UserIDs: []string{"Paddock Test RSA <rsa@example.invalid>"},
-				Subkeys: []openpgpkey.Subkey{{Algorithm: openpgpkey.RSA, Bits: 2048}},
+				Subkeys: []openpgpkey.Params{{Algorithm: openpgpkey.RSA, Bits: 2048}},
 			},
 		},
 		{
 			file: "ed25519.asc", armored: true,
 			want: openpgpkey.Key{
-				Fingerprint: ed25519FP, Algorithm: openpgpkey.EdDSA, Curve: "Ed25519",
+				Fingerprint: ed25519FP, Params: openpgpkey.Params{Algorithm: openpgpkey.EdDSA, Curve: "Ed25519"},
 				Created: *unix(1793479615),
 				UserIDs: []string{"Paddock Test Ed25519 <ed25519@example.invalid>", "Second UID <second@example.invalid>"},
-				Subkeys: []openpgpkey.Subkey{{Algorithm: openpgpkey.ECDH, Curve: "Curve25519"}},
+				Subkeys: []openpgpkey.Params{{Algorithm: openpgpkey.ECDH, Curve: "Curve25519"}},
 			},
 		},
 	}
@@ -92,7 +93,7 @@ func TestParseFixtures(t *testing.T) {
 			got.Keyring = nil
 			if got.Fingerprint != tt.want.Fingerprint || got.Algorithm != tt.want.Algorithm ||
 				got.Bits != tt.want.Bits || got.Curve != tt.want.Curve || !got.Created.Equal(tt.want.Created) ||
-				!slices.Equal(got.Subkeys, tt.want.Subkeys) || strings.Join(got.UserIDs, "|") != strings.Join(tt.want.UserIDs, "|") {
+				!slices.Equal(shapes(got.Subkeys), shapes(tt.want.Subkeys)) || strings.Join(got.UserIDs, "|") != strings.Join(tt.want.UserIDs, "|") {
 				t.Errorf("got %+v, want %+v", got, tt.want)
 			}
 			switch {
@@ -102,6 +103,33 @@ func TestParseFixtures(t *testing.T) {
 				t.Errorf("Expires = %v, want %v", got.Expires, tt.want.Expires)
 			}
 		})
+	}
+}
+
+// shapes reduces parameters to algorithm, size and curve, the part the fixture table states.
+func shapes(ps []openpgpkey.Params) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, fmt.Sprintf("%s/%d/%s", p.Algorithm, p.Bits, p.Curve))
+	}
+	return out
+}
+
+func TestRSAAndKDFParametersExposed(t *testing.T) {
+	k, err := openpgpkey.Parse(fixture(t, "rsa.gpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(k.RSAExponent, []byte{1, 0, 1}) || len(k.RSAModulus) != 384 || k.RSAModulus[0]&0x80 == 0 {
+		t.Errorf("RSA e = %x, n of %d bytes", k.RSAExponent, len(k.RSAModulus))
+	}
+	k, err = openpgpkey.Parse(fixture(t, "ed25519.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// GnuPG's defaults for a Curve25519 subkey: SHA-256 (8) and AES-128 (7).
+	if sub := k.Subkeys[0]; sub.KDFHash != 8 || sub.KDFCipher != 7 || sub.RSAModulus != nil {
+		t.Errorf("ECDH subkey KDF = %d/%d", sub.KDFHash, sub.KDFCipher)
 	}
 }
 
@@ -339,14 +367,20 @@ func TestMPIBitCountMustMatch(t *testing.T) {
 
 func TestUserIDControlAndBidiRunesReplaced(t *testing.T) {
 	tests := map[string]string{
-		"Vendor \x1b[31mred\x1b[0m":        "Vendor \ufffd[31mred\ufffd[0m",
-		"evil\u202Egpj.exe":                "evil\ufffdgpj.exe",
-		"a\u202Ab\u202Bc\u202Cd\u202De":    "a\ufffdb\ufffdc\ufffdd\ufffde",
-		"\u2066isolate\u2069 \u2067\u2068": "\ufffdisolate\ufffd \ufffd\ufffd",
-		"mark\u200E\u200F":                 "mark\ufffd\ufffd",
-		"tab\tnl\ndel\x7fc1\u0085":         "tab\ufffdnl\ufffddel\ufffdc1\ufffd",
-		"bad utf8 \xff":                    "bad utf8 \ufffd",
-		"Ümlaut <ü@example.invalid>":       "Ümlaut <ü@example.invalid>",
+		"Vendor \x1b[31mred\x1b[0m":                   "Vendor \ufffd[31mred\ufffd[0m",
+		"evil\u202Egpj.exe":                           "evil\ufffdgpj.exe",
+		"a\u202Ab\u202Bc\u202Cd\u202De":               "a\ufffdb\ufffdc\ufffdd\ufffde",
+		"\u2066isolate\u2069 \u2067\u2068":            "\ufffdisolate\ufffd \ufffd\ufffd",
+		"mark\u200E\u200F":                            "mark\ufffd\ufffd",
+		"tab\tnl\ndel\x7fc1\u0085":                    "tab\ufffdnl\ufffddel\ufffdc1\ufffd",
+		"bad utf8 \xff":                               "bad utf8 \ufffd",
+		"Ümlaut <ü@example.invalid>":                  "Ümlaut <ü@example.invalid>",
+		"arabic\u061Cmark":                            "arabic\ufffdmark",
+		"line\u2028para\u2029":                        "line\ufffdpara\ufffd",
+		"zero\u200Bwidth\u200C\u200D\u2060":           "zero\ufffdwidth\ufffd\ufffd\ufffd",
+		"\uFEFFbom soft\u00ADhyphen":                  "\ufffdbom soft\ufffdhyphen",
+		"tag\U000E0000\U000E0001\U000E0041\U000E007F": "tag\ufffd\ufffd\ufffd\ufffd",
+		"private\uE000\U000F0000":                     "private\ufffd\ufffd",
 	}
 	for in, want := range tests {
 		k, err := openpgpkey.Parse(cat(ed25519Key(4), uid(in)))
@@ -396,48 +430,49 @@ func TestRefused(t *testing.T) {
 	}
 	manySubpackets := bytes.Repeat(sub(2, 0, 0, 0, 1), openpgpkey.MaxSubpackets+1)
 	tests := map[string][]byte{
-		"empty":                       nil,
-		"truncated binary":            rsaGPG[:len(rsaGPG)/2],
-		"truncated armor":             []byte(asc[:len(asc)/2]),
-		"wrong checksum":              []byte(badCRC),
-		"secret key block":            mutate(rsaGPG, 0, 0x95),
-		"secret subkey":               cat(ed25519Key(4), uid("a"), pkt(7, keyBody(4, 27, make([]byte, 32)))),
-		"private armor header":        []byte(strings.ReplaceAll(asc, "PUBLIC KEY BLOCK", "PRIVATE KEY BLOCK")),
-		"v3 key":                      mutate(rsaGPG, 3, 3),
-		"v5 key":                      ed25519Key(5),
-		"v6 key":                      cat(ed25519Key(6), uid("a")),
-		"v3 subkey":                   cat(ed25519Key(4), uid("a"), pkt(14, keyBody(3, 27, make([]byte, 32)))),
-		"v3 signature":                cat(ed25519Key(4), uid("a"), sig(3, 0x13, nil, nil)),
-		"v6 signature":                cat(ed25519Key(4), uid("a"), sig(6, 0x13, nil, nil)),
-		"user ID first":               cat(uid("a"), ed25519Key(4)),
-		"two primary keys":            cat(ed25519Key(4), uid("a"), ed25519Key(4), uid("b")),
-		"literal data packet":         cat(ed25519Key(4), uid("a"), pkt(11, []byte("x"))),
-		"trust packet":                cat(ed25519Key(4), uid("a"), pkt(12, []byte{0})),
-		"no user ID":                  ed25519Key(4),
-		"empty user ID":               cat(ed25519Key(4), uid("")),
-		"user ID too long":            cat(ed25519Key(4), longUID),
-		"too many user IDs":           manyUIDs,
-		"too many packets":            manyPackets,
-		"too many subpackets":         cat(ed25519Key(4), uid("a"), sig(4, 0x13, manySubpackets, nil)),
-		"user ID after subkey":        cat(ed25519Key(4), uid("a"), pkt(14, keyBody(4, 27, make([]byte, 32))), uid("b")),
-		"unknown algorithm":           cat(pkt(6, keyBody(4, 99, make([]byte, 32))), uid("a")),
-		"encryption-only primary":     cat(pkt(6, keyBody(4, 25, make([]byte, 32))), uid("a")),
-		"trailing key material":       cat(pkt(6, keyBody(4, 27, make([]byte, 33))), uid("a")),
-		"short native key":            cat(pkt(6, keyBody(4, 27, make([]byte, 31))), uid("a")),
-		"unknown curve":               cat(pkt(6, keyBody(4, 19, []byte{3, 1, 2, 3, 0, 8, 0xFF})), uid("a")),
-		"zero-length MPI":             cat(pkt(6, keyBody(4, 1, []byte{0, 0, 0, 1, 1})), uid("a")),
-		"oversized MPI":               cat(pkt(6, keyBody(4, 1, []byte{0x40, 0x01})), uid("a")),
-		"subpacket overruns area":     cat(ed25519Key(4), uid("a"), sig(4, 0x13, []byte{9, 2, 0}, nil)),
-		"zero-length subpacket":       cat(ed25519Key(4), uid("a"), sig(4, 0x13, []byte{0}, nil)),
-		"hashed area overruns packet": cat(ed25519Key(4), uid("a"), pkt(2, []byte{4, 0x13, 27, 10, 0xFF, 0xFF})),
-		"partial body length":         cat(ed25519Key(4), []byte{0xCD, 0xE1, 'a', 'b'}),
-		"indeterminate old length":    cat(ed25519Key(4), []byte{0xB7, 'a'}),
-		"packet length beyond input":  cat(ed25519Key(4), []byte{0xCD, 0xFF, 0x7F, 0xFF, 0xFF, 0xFF}),
-		"not a packet":                []byte("hello"),
-		"text before armor":           []byte("key:\n" + asc),
-		"two armored blocks":          []byte(asc + asc),
-		"oversized input":             append(cat(ed25519Key(4), uid("a")), make([]byte, openpgpkey.MaxInput)...),
-		"non-base64 armor body":       []byte(strings.Replace(asc, "\n\n", "\n\n!!!!", 1)),
+		"empty":                        nil,
+		"truncated binary":             rsaGPG[:len(rsaGPG)/2],
+		"truncated armor":              []byte(asc[:len(asc)/2]),
+		"wrong checksum":               []byte(badCRC),
+		"secret key block":             mutate(rsaGPG, 0, 0x95),
+		"secret subkey":                cat(ed25519Key(4), uid("a"), pkt(7, keyBody(4, 27, make([]byte, 32)))),
+		"private armor header":         []byte(strings.ReplaceAll(asc, "PUBLIC KEY BLOCK", "PRIVATE KEY BLOCK")),
+		"v3 key":                       mutate(rsaGPG, 3, 3),
+		"v5 key":                       ed25519Key(5),
+		"v6 key":                       cat(ed25519Key(6), uid("a")),
+		"v3 subkey":                    cat(ed25519Key(4), uid("a"), pkt(14, keyBody(3, 27, make([]byte, 32)))),
+		"v3 signature":                 cat(ed25519Key(4), uid("a"), sig(3, 0x13, nil, nil)),
+		"v6 signature":                 cat(ed25519Key(4), uid("a"), sig(6, 0x13, nil, nil)),
+		"user ID first":                cat(uid("a"), ed25519Key(4)),
+		"two primary keys":             cat(ed25519Key(4), uid("a"), ed25519Key(4), uid("b")),
+		"literal data packet":          cat(ed25519Key(4), uid("a"), pkt(11, []byte("x"))),
+		"trust packet":                 cat(ed25519Key(4), uid("a"), pkt(12, []byte{0})),
+		"no user ID":                   ed25519Key(4),
+		"empty user ID":                cat(ed25519Key(4), uid("")),
+		"user ID too long":             cat(ed25519Key(4), longUID),
+		"too many user IDs":            manyUIDs,
+		"too many packets":             manyPackets,
+		"too many subpackets":          cat(ed25519Key(4), uid("a"), sig(4, 0x13, manySubpackets, nil)),
+		"user ID after subkey":         cat(ed25519Key(4), uid("a"), pkt(14, keyBody(4, 27, make([]byte, 32))), uid("b")),
+		"unknown algorithm":            cat(pkt(6, keyBody(4, 99, make([]byte, 32))), uid("a")),
+		"encryption-only primary":      cat(pkt(6, keyBody(4, 25, make([]byte, 32))), uid("a")),
+		"trailing key material":        cat(pkt(6, keyBody(4, 27, make([]byte, 33))), uid("a")),
+		"short native key":             cat(pkt(6, keyBody(4, 27, make([]byte, 31))), uid("a")),
+		"unknown curve":                cat(pkt(6, keyBody(4, 19, []byte{3, 1, 2, 3, 0, 8, 0xFF})), uid("a")),
+		"ECDH KDF reserved byte not 1": cat(ed25519Key(4), uid("a"), pkt(14, keyBody(4, 18, cat(cv25519OID, mpi(263), []byte{3, 2, 8, 7})))),
+		"zero-length MPI":              cat(pkt(6, keyBody(4, 1, []byte{0, 0, 0, 1, 1})), uid("a")),
+		"oversized MPI":                cat(pkt(6, keyBody(4, 1, []byte{0x40, 0x01})), uid("a")),
+		"subpacket overruns area":      cat(ed25519Key(4), uid("a"), sig(4, 0x13, []byte{9, 2, 0}, nil)),
+		"zero-length subpacket":        cat(ed25519Key(4), uid("a"), sig(4, 0x13, []byte{0}, nil)),
+		"hashed area overruns packet":  cat(ed25519Key(4), uid("a"), pkt(2, []byte{4, 0x13, 27, 10, 0xFF, 0xFF})),
+		"partial body length":          cat(ed25519Key(4), []byte{0xCD, 0xE1, 'a', 'b'}),
+		"indeterminate old length":     cat(ed25519Key(4), []byte{0xB7, 'a'}),
+		"packet length beyond input":   cat(ed25519Key(4), []byte{0xCD, 0xFF, 0x7F, 0xFF, 0xFF, 0xFF}),
+		"not a packet":                 []byte("hello"),
+		"text before armor":            []byte("key:\n" + asc),
+		"two armored blocks":           []byte(asc + asc),
+		"oversized input":              append(cat(ed25519Key(4), uid("a")), make([]byte, openpgpkey.MaxInput)...),
+		"non-base64 armor body":        []byte(strings.Replace(asc, "\n\n", "\n\n!!!!", 1)),
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {

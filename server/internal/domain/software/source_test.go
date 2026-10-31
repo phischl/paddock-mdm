@@ -55,7 +55,8 @@ func TestValidateSourceAccepts(t *testing.T) {
 		"eight suites":                func(in *software.SourceInput) { in.Suites = strings.Fields("a b c d e f g h") },
 		"suite with dots and slashes": func(in *software.SourceInput) { in.Suites = []string{"noble-updates/stable_1.0"} },
 		"flat repository":             func(in *software.SourceInput) { in.Suites, in.Components = []string{"./"}, nil },
-		"no components":               func(in *software.SourceInput) { in.Components = nil },
+		"two flat suites":             func(in *software.SourceInput) { in.Suites, in.Components = []string{"./", "amd64/"}, nil },
+		"name with umlauts and emoji": func(in *software.SourceInput) { in.Name = "Hersteller Ä 📦" },
 		"eight components":            func(in *software.SourceInput) { in.Components = strings.Fields("a b c d e f g h") },
 		"both architectures":          func(in *software.SourceInput) { in.Architectures = []string{"amd64", "arm64"} },
 		"ed25519 key":                 func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "ed25519.asc"), ed25519FP },
@@ -90,6 +91,16 @@ func TestValidateSourceRefuses(t *testing.T) {
 		{"slug with a slash", func(in *software.SourceInput) { in.Slug = "a/b" }, "slug"},
 		{"blank name", func(in *software.SourceInput) { in.Name = "   " }, "name"},
 		{"name too long", func(in *software.SourceInput) { in.Name = strings.Repeat("a", 101) }, "name"},
+		{"name with invalid UTF-8", func(in *software.SourceInput) { in.Name = "Vendor \xff" }, "valid UTF-8"},
+		{"name with a newline", func(in *software.SourceInput) { in.Name = "Vendor\nOther" }, "control"},
+		{"name with a bidi override", func(in *software.SourceInput) { in.Name = "Vendor\u202Erodnev" }, "control"},
+		{"name with a zero-width space", func(in *software.SourceInput) { in.Name = "Ven\u200Bdor" }, "control"},
+		{"name with a byte order mark", func(in *software.SourceInput) { in.Name = "\uFEFFVendor" }, "control"},
+		{"name with a line separator", func(in *software.SourceInput) { in.Name = "Vendor\u2028x" }, "control"},
+		{"name with a paragraph separator", func(in *software.SourceInput) { in.Name = "Vendor\u2029x" }, "control"},
+		{"non-flat suite without components", func(in *software.SourceInput) { in.Components = nil }, "at least one entry"},
+		{"flat and non-flat suites", func(in *software.SourceInput) { in.Suites, in.Components = []string{"stable", "./"}, nil }, "all flat"},
+		{"flat and non-flat suites with components", func(in *software.SourceInput) { in.Suites = []string{"stable", "./"} }, "all flat"},
 		{"no uris", func(in *software.SourceInput) { in.URIs = nil }, "uris must have"},
 		{"five uris", func(in *software.SourceInput) {
 			in.URIs = strings.Fields("https://a https://b https://c https://d https://e")
@@ -173,47 +184,82 @@ func TestNormalizeFingerprint(t *testing.T) {
 	}
 }
 
-func TestKeyPolicy(t *testing.T) {
-	rsa := func(bits int) openpgpkey.Subkey { return openpgpkey.Subkey{Algorithm: openpgpkey.RSA, Bits: bits} }
-	ec := func(alg openpgpkey.Algorithm, curve string) openpgpkey.Subkey {
-		return openpgpkey.Subkey{Algorithm: alg, Curve: curve}
+func TestNormalizeName(t *testing.T) {
+	if got := software.NormalizeName("  Vendor Repo \t\n"); got != "Vendor Repo" {
+		t.Errorf("NormalizeName = %q", got)
 	}
-	native := func(alg openpgpkey.Algorithm) openpgpkey.Subkey { return openpgpkey.Subkey{Algorithm: alg} }
+}
+
+// rsaParams is an RSA key of the given size with an odd modulus and the given exponent.
+func rsaParams(bits int, e ...byte) openpgpkey.Params {
+	n := make([]byte, bits/8)
+	n[0], n[len(n)-1] = 0x80, 0x01
+	return openpgpkey.Params{Algorithm: openpgpkey.RSA, Bits: bits, RSAModulus: n, RSAExponent: e}
+}
+
+func TestKeyPolicy(t *testing.T) {
+	rsa := func(bits int) openpgpkey.Params { return rsaParams(bits, 1, 0, 1) }
+	ec := func(alg openpgpkey.Algorithm, curve string) openpgpkey.Params {
+		p := openpgpkey.Params{Algorithm: alg, Curve: curve}
+		if alg == openpgpkey.ECDH {
+			p.KDFHash, p.KDFCipher = 8, 7
+		}
+		return p
+	}
+	kdf := func(curve string, hash, cipher byte) openpgpkey.Params {
+		return openpgpkey.Params{Algorithm: openpgpkey.ECDH, Curve: curve, KDFHash: hash, KDFCipher: cipher}
+	}
+	evenModulus := rsaParams(3072, 1, 0, 1)
+	evenModulus.RSAModulus[len(evenModulus.RSAModulus)-1] = 0x02
+	ed := ec(openpgpkey.EdDSA, "Ed25519")
+	native := func(alg openpgpkey.Algorithm) openpgpkey.Params { return openpgpkey.Params{Algorithm: alg} }
 	tests := []struct {
 		name    string
-		primary openpgpkey.Subkey
-		subkeys []openpgpkey.Subkey
+		primary openpgpkey.Params
+		subkeys []openpgpkey.Params
 		ok      bool
 	}{
 		{"rsa 3072", rsa(3072), nil, true},
-		{"rsa 4096 with rsa 3072 subkey", rsa(4096), []openpgpkey.Subkey{rsa(3072)}, true},
+		{"rsa 4096 with rsa 3072 subkey", rsa(4096), []openpgpkey.Params{rsa(3072)}, true},
 		{"rsa 3071", rsa(3071), nil, false},
 		{"rsa 2048", rsa(2048), nil, false},
-		{"rsa 4096 with rsa 2048 subkey", rsa(4096), []openpgpkey.Subkey{rsa(2048)}, false},
-		{"eddsa ed25519 with ecdh curve25519", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Subkey{ec(openpgpkey.ECDH, "Curve25519")}, true},
-		{"eddsa ed448 with ecdh x448", ec(openpgpkey.EdDSA, "Ed448"), []openpgpkey.Subkey{ec(openpgpkey.ECDH, "X448")}, true},
-		{"native ed25519 with x25519", native(openpgpkey.Ed25519), []openpgpkey.Subkey{native(openpgpkey.X25519)}, true},
-		{"native ed448 with x448", native(openpgpkey.Ed448), []openpgpkey.Subkey{native(openpgpkey.X448)}, true},
-		{"ecdsa p-256", ec(openpgpkey.ECDSA, "NIST P-256"), []openpgpkey.Subkey{ec(openpgpkey.ECDH, "NIST P-256")}, true},
-		{"ecdsa p-384", ec(openpgpkey.ECDSA, "NIST P-384"), []openpgpkey.Subkey{ec(openpgpkey.ECDH, "NIST P-384")}, true},
-		{"ecdsa p-521", ec(openpgpkey.ECDSA, "NIST P-521"), []openpgpkey.Subkey{ec(openpgpkey.ECDSA, "NIST P-521")}, true},
-		{"rsa primary with ed25519 signing subkey", rsa(3072), []openpgpkey.Subkey{ec(openpgpkey.EdDSA, "Ed25519")}, true},
+		{"rsa 4096 with rsa 2048 subkey", rsa(4096), []openpgpkey.Params{rsa(2048)}, false},
+		{"eddsa ed25519 with ecdh curve25519", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDH, "Curve25519")}, true},
+		{"eddsa ed448 with ecdh x448", ec(openpgpkey.EdDSA, "Ed448"), []openpgpkey.Params{ec(openpgpkey.ECDH, "X448")}, true},
+		{"native ed25519 with x25519", native(openpgpkey.Ed25519), []openpgpkey.Params{native(openpgpkey.X25519)}, true},
+		{"native ed448 with x448", native(openpgpkey.Ed448), []openpgpkey.Params{native(openpgpkey.X448)}, true},
+		{"ecdsa p-256", ec(openpgpkey.ECDSA, "NIST P-256"), []openpgpkey.Params{ec(openpgpkey.ECDH, "NIST P-256")}, true},
+		{"ecdsa p-384", ec(openpgpkey.ECDSA, "NIST P-384"), []openpgpkey.Params{ec(openpgpkey.ECDH, "NIST P-384")}, true},
+		{"ecdsa p-521", ec(openpgpkey.ECDSA, "NIST P-521"), []openpgpkey.Params{ec(openpgpkey.ECDSA, "NIST P-521")}, true},
+		{"rsa primary with ed25519 signing subkey", rsa(3072), []openpgpkey.Params{ec(openpgpkey.EdDSA, "Ed25519")}, true},
 		{"ecdsa brainpool", ec(openpgpkey.ECDSA, "brainpoolP256r1"), nil, false},
 		{"ecdsa brainpool 512", ec(openpgpkey.ECDSA, "brainpoolP512r1"), nil, false},
 		{"ecdsa secp256k1", ec(openpgpkey.ECDSA, "secp256k1"), nil, false},
-		{"ecdh brainpool subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Subkey{ec(openpgpkey.ECDH, "brainpoolP384r1")}, false},
+		{"ecdh brainpool subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDH, "brainpoolP384r1")}, false},
 		{"ecdh curve25519 as primary", ec(openpgpkey.ECDH, "Curve25519"), nil, false},
 		{"native x25519 as primary", native(openpgpkey.X25519), nil, false},
 		{"native x448 as primary", native(openpgpkey.X448), nil, false},
 		{"eddsa on a nist curve", ec(openpgpkey.EdDSA, "NIST P-256"), nil, false},
 		{"ecdsa on ed25519", ec(openpgpkey.ECDSA, "Ed25519"), nil, false},
-		{"ecdsa curve25519 signing subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Subkey{ec(openpgpkey.ECDSA, "Curve25519")}, false},
+		{"ecdsa curve25519 signing subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDSA, "Curve25519")}, false},
 		{"dsa", native(openpgpkey.DSA), nil, false},
-		{"elgamal subkey", rsa(3072), []openpgpkey.Subkey{native(openpgpkey.ElGamal)}, false},
+		{"elgamal subkey", rsa(3072), []openpgpkey.Params{native(openpgpkey.ElGamal)}, false},
+		{"rsa exponent 2^32+1", rsaParams(3072, 1, 0, 0, 0, 1), nil, true},
+		{"rsa even modulus", evenModulus, nil, false},
+		{"rsa even exponent", rsaParams(3072, 1, 0, 2), nil, false},
+		{"rsa exponent 3", rsaParams(3072, 3), nil, false},
+		{"rsa exponent 65535", rsaParams(3072, 0xFF, 0xFF), nil, false},
+		{"rsa subkey exponent 3", rsa(4096), []openpgpkey.Params{rsaParams(3072, 3)}, false},
+		{"ecdh sha-512 aes-256", ed, []openpgpkey.Params{kdf("Curve25519", 10, 9)}, true},
+		{"ecdh sha-384 aes-192", ed, []openpgpkey.Params{kdf("NIST P-384", 9, 8)}, true},
+		{"ecdh sha-1 kdf", ed, []openpgpkey.Params{kdf("Curve25519", 2, 7)}, false},
+		{"ecdh sha-224 kdf", ed, []openpgpkey.Params{kdf("Curve25519", 11, 7)}, false},
+		{"ecdh camellia kdf", ed, []openpgpkey.Params{kdf("Curve25519", 8, 11)}, false},
+		{"ecdh triple-des kdf", ed, []openpgpkey.Params{kdf("Curve25519", 8, 2)}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			k := &openpgpkey.Key{Algorithm: tt.primary.Algorithm, Bits: tt.primary.Bits, Curve: tt.primary.Curve, Subkeys: tt.subkeys}
+			k := &openpgpkey.Key{Params: tt.primary, Subkeys: tt.subkeys}
 			err := software.KeyPolicy(k)
 			if tt.ok && err != nil {
 				t.Errorf("err = %v, want accepted", err)

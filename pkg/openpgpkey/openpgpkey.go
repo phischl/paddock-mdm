@@ -63,32 +63,35 @@ const (
 type Key struct {
 	// Fingerprint is the v4 fingerprint as 40 uppercase hexadecimal characters.
 	Fingerprint string
-	Algorithm   Algorithm
-	// Bits is the modulus or prime size for RSA, DSA and ElGamal; zero for elliptic-curve keys.
-	Bits int
-	// Curve names the curve of an elliptic-curve key; empty otherwise.
-	Curve   string
+	Params
 	Created time.Time
 	// Expires is the key expiration the newest self-certification of the primary user ID advertises, nil when it
 	// advertises none. The signature carrying it is NOT verified: the value is display-only and must never gate a
 	// security decision.
 	Expires *time.Time
-	// UserIDs lists the user IDs in packet order; invalid UTF-8, control characters and bidirectional formatting
-	// characters are replaced with U+FFFD.
+	// UserIDs lists the user IDs in packet order; invalid UTF-8 and every rune in the categories Cc, Cf, Zl, Zp and Co
+	// (plus the tag block U+E0000–U+E007F) are replaced with U+FFFD.
 	UserIDs []string
 	// Subkeys lists the public subkeys in packet order.
-	Subkeys []Subkey
+	Subkeys []Params
 	// Keyring is the binary (dearmored) transferable public key, exactly as read.
 	Keyring []byte
 }
 
-// Subkey is the inspected algorithm of a public subkey.
-type Subkey struct {
+// Params are the inspected public parameters of a primary key or subkey. The reader accepts every value RFC 9580
+// allows; stricter rules, such as minimum sizes or the allowed KDF algorithms, belong to the caller's policy.
+type Params struct {
 	Algorithm Algorithm
 	// Bits is the modulus or prime size for RSA, DSA and ElGamal; zero for elliptic-curve keys.
 	Bits int
 	// Curve names the curve of an elliptic-curve key; empty otherwise.
 	Curve string
+	// RSAModulus and RSAExponent are the RSA public values n and e, big-endian without leading zeros; nil for other
+	// algorithms.
+	RSAModulus, RSAExponent []byte
+	// KDFHash and KDFCipher are the hash and key-wrap cipher identifiers of an ECDH key's KDF parameters (RFC 9580
+	// §9.5, §9.3); zero for other algorithms.
+	KDFHash, KDFCipher byte
 }
 
 // Fingerprint reads an ASCII-armored public key block and returns its fingerprint and binary keyring (plan M13a
@@ -334,7 +337,7 @@ func parsePackets(raw []byte) (*Key, error) {
 	if err != nil {
 		return nil, err
 	}
-	k := &Key{Algorithm: params.Algorithm, Bits: params.Bits, Curve: params.Curve, Created: created}
+	k := &Key{Params: params, Created: created}
 	fp := v4Fingerprint(first.body)
 	k.Fingerprint = strings.ToUpper(hex.EncodeToString(fp))
 
@@ -434,8 +437,9 @@ func primaryCert(uids []userID) *selfCert {
 	return first
 }
 
-// displayable turns a user ID into text that is safe to show: invalid UTF-8, control characters and the bidirectional
-// formatting characters that can reorder what an administrator reads (Trojan Source, CVE-2021-42574) become U+FFFD.
+// displayable turns a user ID into text that is safe to show: invalid UTF-8, control and format characters (among
+// them the bidirectional controls that can reorder what an administrator reads, Trojan Source, CVE-2021-42574, and
+// zero-width characters), line and paragraph separators, private-use characters and the tag block become U+FFFD.
 // Replacing rather than refusing keeps a vendor key with such a user ID usable.
 func displayable(b []byte) string {
 	s := string(b)
@@ -443,8 +447,8 @@ func displayable(b []byte) string {
 		s = strings.ToValidUTF8(s, string(utf8.RuneError))
 	}
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || r == '\u200E' || r == '\u200F' || (r >= '\u202A' && r <= '\u202E') ||
-			(r >= '\u2066' && r <= '\u2069') {
+		// The tag block is listed explicitly because its unassigned code points are not in Cf.
+		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Co) || (r >= 0xE0000 && r <= 0xE007F) {
 			return utf8.RuneError
 		}
 		return r
@@ -522,18 +526,18 @@ func curveFitsAlgorithm(alg byte, curve string) bool {
 
 // inspectKeyMaterial checks a v4 public-key or public-subkey packet body (RFC 4880 §5.5.2) and returns its algorithm
 // and creation time. The algorithm-specific fields must consume the body exactly.
-func inspectKeyMaterial(body []byte, primary bool) (Subkey, time.Time, error) {
+func inspectKeyMaterial(body []byte, primary bool) (Params, time.Time, error) {
 	if len(body) < 1 {
-		return Subkey{}, time.Time{}, notKey("empty key packet")
+		return Params{}, time.Time{}, notKey("empty key packet")
 	}
 	if body[0] != 4 {
-		return Subkey{}, time.Time{}, notKey(fmt.Sprintf("key packet version %d is not 4", body[0]))
+		return Params{}, time.Time{}, notKey(fmt.Sprintf("key packet version %d is not 4", body[0]))
 	}
 	if len(body) > maxKeyPacketBody {
-		return Subkey{}, time.Time{}, notKey("key packet too long")
+		return Params{}, time.Time{}, notKey("key packet too long")
 	}
 	if len(body) < 6 {
-		return Subkey{}, time.Time{}, notKey("truncated key packet")
+		return Params{}, time.Time{}, notKey("truncated key packet")
 	}
 	created := time.Unix(int64(binary.BigEndian.Uint32(body[1:5])), 0).UTC()
 	alg := body[5]
@@ -541,11 +545,13 @@ func inspectKeyMaterial(body []byte, primary bool) (Subkey, time.Time, error) {
 	var name Algorithm
 	var size int
 	var curve string
+	var out Params
 	switch alg {
 	case algRSA, algRSAEncrypt, algRSASign:
 		name = RSA
-		size = bitLen(r.mpi())
-		r.mpi()
+		out.RSAModulus = bytes.Clone(r.mpi())
+		out.RSAExponent = bytes.Clone(r.mpi())
+		size = bitLen(out.RSAModulus)
 	case algDSA:
 		name = DSA
 		size = bitLen(r.mpi())
@@ -568,7 +574,7 @@ func inspectKeyMaterial(body []byte, primary bool) (Subkey, time.Time, error) {
 		}
 		curve = r.oid()
 		if r.err == nil && !curveFitsAlgorithm(alg, curve) {
-			return Subkey{}, time.Time{}, notKey(fmt.Sprintf("curve %s does not fit algorithm %s", curve, name))
+			return Params{}, time.Time{}, notKey(fmt.Sprintf("curve %s does not fit algorithm %s", curve, name))
 		}
 		r.mpi()
 		if alg == algECDH {
@@ -576,7 +582,12 @@ func inspectKeyMaterial(body []byte, primary bool) (Subkey, time.Time, error) {
 			if l := r.byte(); l != 3 {
 				r.fail("ECDH KDF parameters")
 			}
-			r.take(3)
+			if kdf := r.take(3); kdf != nil {
+				if kdf[0] != 1 {
+					r.fail("ECDH KDF parameters")
+				}
+				out.KDFHash, out.KDFCipher = kdf[1], kdf[2]
+			}
 		}
 	case algX25519:
 		name = X25519
@@ -591,21 +602,22 @@ func inspectKeyMaterial(body []byte, primary bool) (Subkey, time.Time, error) {
 		name = Ed448
 		r.take(57)
 	default:
-		return Subkey{}, time.Time{}, notKey(fmt.Sprintf("unsupported public-key algorithm %d", alg))
+		return Params{}, time.Time{}, notKey(fmt.Sprintf("unsupported public-key algorithm %d", alg))
 	}
 	if r.err != nil {
-		return Subkey{}, time.Time{}, r.err
+		return Params{}, time.Time{}, r.err
 	}
 	if len(r.b) != 0 {
-		return Subkey{}, time.Time{}, notKey("trailing bytes in key packet")
+		return Params{}, time.Time{}, notKey("trailing bytes in key packet")
 	}
 	if primary {
 		switch alg {
 		case algRSAEncrypt, algElGamal, algECDH, algX25519, algX448:
-			return Subkey{}, time.Time{}, notKey(fmt.Sprintf("encryption-only algorithm %s as primary key", name))
+			return Params{}, time.Time{}, notKey(fmt.Sprintf("encryption-only algorithm %s as primary key", name))
 		}
 	}
-	return Subkey{Algorithm: name, Bits: size, Curve: curve}, created, nil
+	out.Algorithm, out.Bits, out.Curve = name, size, curve
+	return out, created, nil
 }
 
 // Signature subpacket types (RFC 9580 §5.2.3.7).

@@ -5,6 +5,7 @@ package software
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"net/url"
 	"regexp"
 	"slices"
@@ -57,8 +58,8 @@ func ValidateSource(in SourceInput) (fingerprint string, keyring []byte, err err
 	if !slugPattern.MatchString(in.Slug) {
 		return "", nil, fmt.Errorf("%w: slug must match ^[a-z0-9][a-z0-9-]{1,40}$", ErrSource)
 	}
-	if n := utf8.RuneCountInString(strings.TrimSpace(in.Name)); n < 1 || n > MaxNameLength {
-		return "", nil, fmt.Errorf("%w: name must be 1 to %d characters", ErrSource, MaxNameLength)
+	if err := validateName(in.Name); err != nil {
+		return "", nil, err
 	}
 	if err := validateURIs(in.URIs); err != nil {
 		return "", nil, err
@@ -67,6 +68,30 @@ func ValidateSource(in SourceInput) (fingerprint string, keyring []byte, err err
 		return "", nil, err
 	}
 	return validateSigningKey(in.SigningKey, in.Fingerprint)
+}
+
+// NormalizeName trims surrounding white space from a source name, the form ValidateSource checks and a name is stored
+// in.
+func NormalizeName(name string) string {
+	return strings.TrimSpace(name)
+}
+
+// validateName checks the trimmed name. Control and format characters and line or paragraph separators are refused
+// because the name is shown in the portal and the audit log, where bidi controls or line breaks could disguise it.
+func validateName(name string) error {
+	name = NormalizeName(name)
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("%w: name must be valid UTF-8", ErrSource)
+	}
+	if n := utf8.RuneCountInString(name); n < 1 || n > MaxNameLength {
+		return fmt.Errorf("%w: name must be 1 to %d characters", ErrSource, MaxNameLength)
+	}
+	if strings.ContainsFunc(name, func(r rune) bool {
+		return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp)
+	}) {
+		return fmt.Errorf("%w: name must not contain control, format or line separator characters", ErrSource)
+	}
+	return nil
 }
 
 // NormalizeFingerprint removes all white space from a typed fingerprint and upper-cases it, the form fingerprints
@@ -106,12 +131,14 @@ func validateDistribution(suites, components, archs []string) error {
 	if len(suites) < 1 || len(suites) > MaxSuites {
 		return fmt.Errorf("%w: suites must have 1 to %d entries", ErrSource, MaxSuites)
 	}
-	flat := false
+	flat := 0
 	for _, s := range suites {
 		if !suitePattern.MatchString(s) {
 			return fmt.Errorf("%w: suites must match ^[A-Za-z0-9./_-]{1,64}$", ErrSource)
 		}
-		flat = flat || strings.HasSuffix(s, "/")
+		if strings.HasSuffix(s, "/") {
+			flat++
+		}
 	}
 	if len(components) > MaxComponents {
 		return fmt.Errorf("%w: components must have at most %d entries", ErrSource, MaxComponents)
@@ -121,9 +148,15 @@ func validateDistribution(suites, components, archs []string) error {
 			return fmt.Errorf("%w: components must match ^[a-z0-9-]{1,32}$", ErrSource)
 		}
 	}
-	// apt treats a suite ending in "/" as a flat repository and rejects components next to it.
-	if flat && len(components) > 0 {
+	// apt treats a suite ending in "/" as a flat repository and refuses components next to it, and refuses a
+	// non-flat suite without components; either error stops every apt run on the device, not only this source's.
+	switch {
+	case flat > 0 && flat < len(suites):
+		return fmt.Errorf("%w: suites must be either all flat (ending in /) or none", ErrSource)
+	case flat > 0 && len(components) > 0:
 		return fmt.Errorf("%w: a flat repository (suite ending in /) must have no components", ErrSource)
+	case flat == 0 && len(components) == 0:
+		return fmt.Errorf("%w: components must have at least one entry unless the repository is flat", ErrSource)
 	}
 	if len(archs) > MaxArchitectures {
 		return fmt.Errorf("%w: architectures must have at most %d entries", ErrSource, MaxArchitectures)
@@ -169,23 +202,39 @@ var (
 // the allowed curves; DSA and ElGamal are refused. It applies to the primary key and to every subkey, as apt accepts
 // a repository signature made by any signing subkey. Violations wrap ErrSource.
 func KeyPolicy(k *openpgpkey.Key) error {
-	if err := checkAlgorithm("primary key", k.Algorithm, k.Bits, k.Curve, false); err != nil {
+	if err := checkAlgorithm("primary key", k.Params, false); err != nil {
 		return err
 	}
 	for i, s := range k.Subkeys {
-		if err := checkAlgorithm(fmt.Sprintf("subkey %d", i+1), s.Algorithm, s.Bits, s.Curve, true); err != nil {
+		if err := checkAlgorithm(fmt.Sprintf("subkey %d", i+1), s, true); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func checkAlgorithm(which string, alg openpgpkey.Algorithm, bits int, curve string, subkey bool) error {
+// KDF algorithms an ECDH subkey may name (RFC 9580 §9.5 hash and §9.3 cipher identifiers): SHA-256/384/512 and
+// AES-128/192/256. The reader accepts every identifier RFC 9580 allows; the upload is stricter.
+var (
+	kdfHashes  = []byte{8, 9, 10}
+	kdfCiphers = []byte{7, 8, 9}
+)
+
+// minRSAExponent is the smallest public exponent accepted; smaller ones (3, 17) invite known attacks on padding.
+const minRSAExponent = 65537
+
+func checkAlgorithm(which string, p openpgpkey.Params, subkey bool) error {
+	alg, curve := p.Algorithm, p.Curve
 	switch alg {
 	case openpgpkey.RSA:
-		if bits < MinRSABits {
+		if p.Bits < MinRSABits {
 			return fmt.Errorf("%w: signing_key %s is RSA %d bits; at least %d bits are required", ErrSource, which,
-				bits, MinRSABits)
+				p.Bits, MinRSABits)
+		}
+		n, e := new(big.Int).SetBytes(p.RSAModulus), new(big.Int).SetBytes(p.RSAExponent)
+		if n.Bit(0) == 0 || e.Bit(0) == 0 || e.Cmp(big.NewInt(minRSAExponent)) < 0 {
+			return fmt.Errorf("%w: signing_key %s is not a plausible RSA key (odd modulus and odd exponent >= 65537 "+
+				"required)", ErrSource, which)
 		}
 		return nil
 	case openpgpkey.Ed25519, openpgpkey.Ed448:
@@ -201,6 +250,10 @@ func checkAlgorithm(which string, alg openpgpkey.Algorithm, bits int, curve stri
 		return fmt.Errorf("%w: signing_key %s uses %s on curve %s, which is not allowed", ErrSource, which, alg, curve)
 	case openpgpkey.ECDH:
 		if subkey && slices.Contains(encryptionCurves, curve) {
+			if !slices.Contains(kdfHashes, p.KDFHash) || !slices.Contains(kdfCiphers, p.KDFCipher) {
+				return fmt.Errorf("%w: signing_key %s has ECDH KDF parameters other than SHA-2 and AES", ErrSource,
+					which)
+			}
 			return nil
 		}
 		return fmt.Errorf("%w: signing_key %s uses %s on curve %s, which is not allowed", ErrSource, which, alg, curve)
