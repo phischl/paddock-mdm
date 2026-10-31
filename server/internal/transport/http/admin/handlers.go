@@ -44,6 +44,7 @@ type handlers struct {
 	userGroups    *app.UserGroups
 	logins        *app.Logins
 	loginSettings *app.LoginSettings
+	watchedUnits  *app.WatchedUnits
 	loginHistory  *app.LoginHistory
 	agentUpdates  *app.AgentUpdates
 	uninstalls    *app.Uninstalls

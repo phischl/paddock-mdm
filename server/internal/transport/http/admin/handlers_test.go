@@ -414,6 +414,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		UserGroups:     app.NewUserGroups(runner, orgPool, idp),
 		Logins:         app.NewLogins(runner, orgPool, idp),
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
+		WatchedUnits:   app.NewWatchedUnits(runner, orgPool),
 		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
 		Commands:       app.NewDeviceCommands(runner, orgPool),

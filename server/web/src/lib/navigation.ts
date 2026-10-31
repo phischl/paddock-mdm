@@ -69,6 +69,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/security-review', label: 'nav.securityReview', icon: 'triangle-alert', visible: orgReader },
       { to: '/revocations', label: 'nav.revocations', icon: 'lock', visible: (a) => a.canDelete },
       { to: '/settings/dms', label: 'nav.dms', icon: 'timer', visible: orgReader },
+      { to: '/settings/watched-units', label: 'nav.watchedUnits', icon: 'shield-check', visible: orgReader },
       { to: '/settings/login', label: 'nav.loginSettings', icon: 'log-in', visible: orgReader },
     ],
   },

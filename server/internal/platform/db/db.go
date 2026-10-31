@@ -15,6 +15,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
@@ -291,6 +292,21 @@ func (r *AuditReader) InOrg(ctx context.Context, fn func(ctx context.Context, q 
 				return err
 			}
 			return setOrg(ctx, tx, org)
+		},
+		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
+}
+
+// InPlatformScope runs fn in a read-only transaction scoped to the platform pseudo-organization
+// (audit.PlatformOrganizationID), independent of any principal in ctx. Its only callers are the notifier's platform
+// round and test fixtures (plan M9 decision 5); it MUST NOT be reachable from an HTTP handler, which
+// platformscope_lint_test.go asserts for server/internal/transport/.
+func (r *AuditReader) InPlatformScope(ctx context.Context, fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	return inTx(ctx, r.p,
+		func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SET TRANSACTION READ ONLY"); err != nil {
+				return err
+			}
+			return setOrg(ctx, tx, audit.PlatformOrganizationID)
 		},
 		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
 }

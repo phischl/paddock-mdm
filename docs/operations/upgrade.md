@@ -87,7 +87,19 @@ This section does not apply to the move to 0.1.0-alpha.7, which is a fresh insta
    ./paddock compose run --rm --no-deps fleet-backup once   # fleet-backup-upload uploads it within a minute
    ```
 
-4. Start B:
+4. Audit host only, when the release notes of a version between A and B name **audit migrations** (`Schema: … audit
+   migrations …`): stop the running audit writer first, in A's directory:
+
+   ```sh
+   ./paddock compose stop paddock-audit-writer
+   ```
+
+   B's writer starts only after the audit migrations, but A's writer would keep running while they hold their table
+   locks; its writes fail and are redelivered until the queue dead-letters them. Stopped, new audit events wait in the
+   queue, and `./paddock up` starts B's writer, which writes them. A backfill can take minutes on a large index
+   (`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
+
+5. Start B:
 
    ```sh
    ./paddock up        # recreates the containers with B's images; paddock-migrate applies the schema migrations
@@ -101,7 +113,7 @@ This section does not apply to the move to 0.1.0-alpha.7, which is a fresh insta
    if it timed out, unseal and run `./paddock up` again. With automatic unseal on (`docs/operations/openbao.md`
    section 6) the unsealer does this. `./paddock up` never unseals by itself: the shares are not on the host.
 
-5. Watch the readiness of the roles and the alerts for an hour (`docs/operations/monitoring.md`). Keep A's directory
+6. Watch the readiness of the roles and the alerts for an hour (`docs/operations/monitoring.md`). Keep A's directory
    until the next upgrade: it is the rollback. A's `.secrets/` stays a full copy of the secrets, including the
    OpenBao shares file `.secrets/openbao/auto-unseal-shares` when automatic unseal is on. When you disable automatic
    unseal later, delete that file in A's directory as well (`docs/operations/openbao.md` section 6, *Disabling*) —

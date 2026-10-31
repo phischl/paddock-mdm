@@ -106,6 +106,7 @@
     "shortcut": "Shortcut: {keys}",
     "securityReview": "Security review",
     "operatorRoots": "Operator roots",
+    "watchedUnits": "Watched units",
     "mcpSettings": "MCP"
   },
   "roles": {
@@ -461,7 +462,8 @@
       "login_changed": "{actor} changed the login settings",
       "dms_changed": "{actor} {enabled, select, true {turned on the dead man's switch with a period of {period_days, number} days} other {turned off the dead man's switch}}",
       "updates_changed": "{actor} changed the update settings",
-      "managed_files_changed": "{actor} changed the operator roots of the managed files"
+      "managed_files_changed": "{actor} changed the operator roots of the managed files",
+      "watched_units_changed": "{actor} changed the watched units of the presence policy"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",
@@ -1779,6 +1781,23 @@
     "empty": {
       "title": "No revocations",
       "description": "Lock and Destroy requests of this organization appear here with their progress."
+    }
+  },
+  "watchedUnits": {
+    "title": "Watched units",
+    "intro": "Third-party agents such as an EDR or SIEM agent run as systemd services that Paddock does not deploy. List them here and every device reports it when one of them stops or is missing, the same way it does for Paddock's own agent.",
+    "info": "Paddock only reports. It never installs, starts or restarts a watched unit.",
+    "label": "Services",
+    "hint": "Names ending in .service, for example wazuh-agent.service. Press Enter after each name. At most {max}.",
+    "placeholder": "wazuh-agent.service",
+    "saved": "The watched units were saved. Every device receives them with its next configuration.",
+    "updatedAt": "Last saved {at}",
+    "confirmTitle": "Save the watched units?",
+    "confirm": "{count, plural, =0 {No unit will be watched on any device.} one {# unit will be watched on every device.} other {# units will be watched on every device.}}",
+    "errors": {
+      "notService": "{unit} is not a service name. Use a name ending in .service.",
+      "duplicate": "{unit} is listed twice.",
+      "tooMany": "At most {max} units can be watched."
     }
   },
   "dms": {

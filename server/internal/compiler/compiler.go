@@ -206,6 +206,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Disk, err = loadDisk(ctx, q); err != nil {
 			return err
 		}
+		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
+			return err
+		}
 		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err
@@ -389,6 +392,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	}
 	if t.v2 {
 		b.Hostname = hostnameSection(ctx, t)
+		b.Watch = v2.Watch
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -427,6 +431,9 @@ type v2Trust struct {
 	// Disk is the organization's disk unlock mode and its groups' overrides (plan M8d decision 46), not part of the
 	// digest.
 	Disk *orgDisk `json:"-"`
+	// Watch is the organization's presence policy (plan M9 decision 39), nil without watched units; not part of the
+	// digest.
+	Watch *bundle.WatchSpec `json:"-"`
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap

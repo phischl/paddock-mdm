@@ -295,6 +295,10 @@ func normalize(doc *declarative.Document) {
 	if doc.Settings != nil && doc.Settings.ManagedFiles != nil {
 		doc.Settings.ManagedFiles.OperatorRoots = sortedRoots(doc.Settings.ManagedFiles.OperatorRoots)
 	}
+	if doc.Settings != nil && doc.Settings.WatchedUnits != nil {
+		units := sortedUnits(*doc.Settings.WatchedUnits)
+		doc.Settings.WatchedUnits = &units
+	}
 }
 
 // configState is the current configuration and the IDs behind its natural keys.
@@ -329,11 +333,15 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	if err != nil {
 		return st, fmt.Errorf("managed-file settings: %w", err)
 	}
+	watched, err := loadWatchedUnits(ctx, q)
+	if err != nil {
+		return st, fmt.Errorf("watched units: %w", err)
+	}
 	doc.Settings = &declarative.Settings{Login: loginDocOfRow(login), Updates: &declarative.UpdateSettings{
 		SecurityDailyAt: upd.SecurityDailyAt, RegularSchedule: upd.RegularSchedule, RegularUpdatesEnabled: upd.RegularUpdatesEnabled,
 		MaxRandomDelayMin: upd.MaxRandomDelayMin, StalenessWarningH: upd.StalenessWarningH, StalenessCriticalH: upd.StalenessCriticalH,
 		AgentUpdatePolicy: upd.AgentUpdatePolicy,
-	}, ManagedFiles: &declarative.ManagedFileSettings{OperatorRoots: roots}}
+	}, ManagedFiles: &declarative.ManagedFileSettings{OperatorRoots: roots}, WatchedUnits: &watched.Units}
 
 	groups, err := q.ListAllDeviceGroups(ctx)
 	if err != nil {

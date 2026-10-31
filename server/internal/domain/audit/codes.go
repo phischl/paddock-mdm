@@ -178,6 +178,7 @@ const (
 	CodeOrganizationSecurityReviewRequired  Code = "organization.security_review_required"
 	CodeDeviceHeaderObjectRejected          Code = "device.header_object_rejected"
 	CodeSettingsManagedFilesChanged         Code = "settings.managed_files_changed"
+	CodeSettingsWatchedUnitsChanged         Code = "settings.watched_units_changed"
 
 	// Automatic unseal of OpenBao (ADR 0035, plan M8u §6.4).
 	CodePlatformAutoUnsealEnabled   Code = "platform.auto_unseal_enabled"
@@ -1165,6 +1166,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"old_operator_roots", "operator_roots"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up and for API tokens, forbidden for another role; failure with path_not_allowed for a root outside the rules of ADR 0034 (amendment 2026-10-16).",
+	},
+	CodeSettingsWatchedUnitsChanged: {
+		Code: CodeSettingsWatchedUnitsChanged, Emitted: true,
+		Description: "An organization administrator changed, with a step-up, the third-party systemd units of the presence policy: the units the agents report when they stop (plan M9 decision 38).",
+		Params:      []string{"added", "removed", "units"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up and for API tokens, forbidden for another role; failure with unit_not_allowed for a reserved or non-service unit and invalid_request for more than 32 units or a duplicate.",
 	},
 	CodePlatformAutoUnsealEnabled: {
 		Code: CodePlatformAutoUnsealEnabled, Emitted: true,

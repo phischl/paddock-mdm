@@ -1058,16 +1058,17 @@ above, the amendment wins. Every statement below was checked against the code on
   `goose.WithAllowMissing()`: a database that has applied version N refuses a file with a version < N that it has
   not applied. Numbers are therefore taken in **merge order**, never reused, and a lower number MUST NOT merge after a
   higher one. Gaps between numbers are allowed (fresh databases apply what exists).
-- M9 numbering: paddock from **00081**, audit from **00010**. Reserved for M9: paddock 00081–00086, audit 00010–00011.
+- M9 numbering (corrected by the lead the same day, see section E): paddock from **00085**, audit from **00010**.
+  Reserved for M9: paddock 00085–00090, audit 00010–00011.
   M11 and M13a renumber behind these (their plans say so).
 
 | Ticket | File (binding) | Content |
 | --- | --- | --- |
 | PDK-120 | `server/migrations/audit/00010_commit_seq.sql` | decision 1 |
-| PDK-122 | `server/migrations/paddock/00081_notifications.sql` | §6.2 notification tables, `paddock_notifier` policies on `action` and `outbox` |
-| PDK-126 | `server/migrations/paddock/00082_findings.sql` | §6.2 `finding` |
-| PDK-129 | `server/migrations/paddock/00083_vulnerability_summary.sql` | §6.2 `vulnerability_summary` |
-| PDK-130 | `server/migrations/paddock/00084_watched_units.sql` | §6.2 `watched_unit` |
+| PDK-122 | `server/migrations/paddock/00085_notifications.sql` | §6.2 notification tables, `paddock_notifier` policies on `action` and `outbox` |
+| PDK-126 | `server/migrations/paddock/00086_findings.sql` | §6.2 `finding` |
+| PDK-129 | `server/migrations/paddock/00087_vulnerability_summary.sql` | §6.2 `vulnerability_summary` |
+| PDK-130 | `server/migrations/paddock/00088_watched_units.sql` | §6.2 `watched_unit` |
 
 The other M9 tickets ship no migration. If the tickets merge in a different order than §7 (refreshed in section C),
 the ticket that merges takes the **next free number at merge time** within the reserved range and states the final
@@ -1290,7 +1291,7 @@ Corrections are listed per ticket; a statement "unchanged" means the plan's refe
 - B10.1 `worker/inventory.go::RunSync` runs `Round` under `WithLeaderLock(inventorySyncLockKey)`; the summary is
   recorded at the end of `Round` per organization (unchanged). `vulnerability_finding` has the software index of
   `00067`; M10 purges the rows of retired devices (`device.inventory_purged`), which only lowers the counts.
-- B10.2 Migration number: `00083` (section A). Retention row: B0.4.
+- B10.2 Migration number: `00087` (section A). Retention row: B0.4.
 
 **PDK-130 — presence policy, server**
 
@@ -1305,7 +1306,7 @@ Corrections are listed per ticket; a statement "unchanged" means the plan's refe
   `declarative.go` / `declarative_exec.go`.
 - B11.3 `policy.reservedUnitPrefixes` is `{"paddock", "himmelblau", "fleet", "orbit", "ssh", "gdm", "systemd-"}`
   (`pkg/policy/policy.go:229`), `ValidateUnit` at :248. Unchanged.
-- B11.4 Migration number `00084`. B0.2: `PUT /api/v1/settings/watched-units` is `privileged` with
+- B11.4 Migration number `00088`. B0.2: `PUT /api/v1/settings/watched-units` is `privileged` with
   `x-paddock-step-up: true`; the GET is exposed to MCP.
 
 **PDK-131 — presence policy, agent**
@@ -1430,3 +1431,31 @@ once at the end.
 - E6 `InPlatformScope` is guarded by a source-scan test, not by `rlslint_test.go` (B1.5).
 - E7 Migration files are numbered per section A; tickets state their final number in their result.
 - E8 Changelog fragments replace `CHANGELOG.md` entries in every M9 ticket (B0.1).
+
+### E. Decisions and corrections of 2026-10-31 (lead and orchestrator)
+
+- **Migration numbers.** M10 uses paddock migrations up to 00083 (PDK-180 takes 00081). M9 starts at paddock
+  **00085**; the numbers in section A (00085 PDK-122, 00086 PDK-126, 00087 PDK-129, 00088 PDK-130) are fixed per
+  ticket. The cluster reaches `main` in one merge, after M10 is on `main`; inside the cluster branch the merge order
+  of the tickets therefore does not matter, and the cluster's development database is re-created before the final
+  gate run. Section C's renumbering rule and question 6 are superseded.
+- **Questions 1–5 answered** as recommended, with conditions:
+  1. E-mail via the standard library only. TLS is mandatory (STARTTLS required, or implicit TLS on 465); AUTH is
+     never sent over an unencrypted connection; certificates are verified (an optional custom CA is allowed, no
+     skip-verify in production); tests prove that plaintext AUTH is refused.
+  3. Follow-up ticket for the retention of the M9 tables (ADR 0032, after PDK-180).
+  4. The findings verbs are exposed as MCP write tools only through `app.ActionRunner` (one audit event each), with
+     the role checks of the REST endpoints and the existing MCP write-tool rules; feed and resolve-pseudonym stay
+     hidden.
+  5. PDK-200 is split into the guide (200a) and a portal checklist (200b) without a new API; the dismiss state lives
+     in `localStorage`, every storage access is guarded, and the page works without storage.
+- **Decision 1 (PDK-120).** Migrations run as `audit_owner`, which has no policy on the forced-RLS `audit_event`;
+  the backfill therefore runs between `ALTER TABLE audit_event NO FORCE ROW LEVEL SECURITY` and `… FORCE ROW LEVEL
+  SECURITY` in the same migration transaction. No other session can observe the intermediate state.
+- **Decision 30 (PDK-126).** The attention view is `security_invoker`; the findings round in the worker therefore
+  needs `SELECT` on `attention_condition`, a column grant `SELECT (device_id, organization_id, version, created_at)`
+  on `bundle`, `paddock_worker` in the `tenant` policy of `bundle`, and `EXECUTE` on
+  `paddock_current_agent_version()`. No write access on `bundle`.
+- **Decision 38 / §6.5 (PDK-130).** A refused unit returns the existing problem `unit_not_allowed` with status
+  **422** (since M1, managed units), not 400; duplicates and more than 32 units return 400 `invalid_request`.
+

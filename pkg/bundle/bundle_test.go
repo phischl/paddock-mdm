@@ -327,3 +327,32 @@ func TestHostnameResource(t *testing.T) {
 		t.Error("the hostname section is not part of the content hash")
 	}
 }
+
+func TestWatchResource(t *testing.T) {
+	r, err := WatchResource(WatchSpec{Units: []string{"wazuh-agent.service"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ID != "watch" || r.Type != TypeWatch || string(r.Spec) != `{"units":["wazuh-agent.service"]}` {
+		t.Errorf("resource %s/%s spec %s", r.ID, r.Type, r.Spec)
+	}
+	a := sample(t)
+	b := a
+	b.Watch = &WatchSpec{Units: []string{"wazuh-agent.service"}}
+	ha, _ := ContentSHA256(a)
+	hb, err := ContentSHA256(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ha == hb {
+		t.Error("the watch section is not part of the content hash")
+	}
+	enc, err := Encode(b)
+	if err != nil || !strings.Contains(string(enc), `"watch":{"units":["wazuh-agent.service"]}`) {
+		t.Errorf("encoded bundle lacks the watch section: %s (%v)", enc, err)
+	}
+	enc, err = Encode(a)
+	if err != nil || strings.Contains(string(enc), `"watch"`) {
+		t.Errorf("a bundle without watched units must carry no watch section: %s (%v)", enc, err)
+	}
+}

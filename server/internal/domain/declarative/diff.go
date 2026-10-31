@@ -20,12 +20,14 @@ const (
 	SectionSettingsUpdates    = "settings.updates"
 	SectionSettingsLogin      = "settings.login"
 	SectionSettingsManaged    = "settings.managed_files"
+	SectionSettingsWatched    = "settings.watched_units"
 )
 
 // Sections returns the sections in application order (plan M6c decision 14); deletions run in reverse order first.
 func Sections() []string {
 	return []string{SectionDeviceGroups, SectionPermissionProfiles, SectionManagedFiles, SectionManagedUnits,
-		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin, SectionSettingsManaged}
+		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin, SectionSettingsManaged,
+		SectionSettingsWatched}
 }
 
 // Actions of a change.
@@ -122,6 +124,11 @@ func section(d Document, name string) (bool, []entry) {
 			return false, nil
 		}
 		return true, []entry{{fields: d.Settings.ManagedFiles.fields()}}
+	case SectionSettingsWatched:
+		if d.Settings == nil || d.Settings.WatchedUnits == nil {
+			return false, nil
+		}
+		return true, []entry{{fields: []field{{"units", list(*d.Settings.WatchedUnits)}}}}
 	}
 	return false, nil
 }
@@ -181,6 +188,8 @@ func Path(section string, index int) string {
 		return "/settings/login"
 	case SectionSettingsManaged:
 		return "/settings/managed_files"
+	case SectionSettingsWatched:
+		return "/settings/watched_units"
 	}
 	return "/" + section + "/" + strconv.Itoa(index)
 }
@@ -237,7 +246,7 @@ func Diff(current, desired Document) Plan {
 }
 
 func isSettings(s string) bool {
-	return s == SectionSettingsLogin || s == SectionSettingsUpdates || s == SectionSettingsManaged
+	return s == SectionSettingsLogin || s == SectionSettingsUpdates || s == SectionSettingsManaged || s == SectionSettingsWatched
 }
 
 func sorted(items []entry) []entry {
