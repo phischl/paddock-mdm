@@ -26,12 +26,19 @@ export function useFocusReturn(): { remember: (event?: Event) => void; restore: 
 
 /**
  * The page is inert while a dialog is open and the portal lifts that a render after the dialog closed; focus() on an
- * inert element is ignored, so the focus waits for the attribute to go. After inertWait it is tried anyway.
+ * inert element is ignored, so the focus waits for the attribute to go. The same holds for a control that is still
+ * disabled while its action runs (:disabled="pending"): focus() on it is dropped and the focus would fall to the body,
+ * so it waits until the control is enabled again. A control that left the page meanwhile is replaced by the fallback on
+ * the next attempt. After inertWait it is tried anyway.
  */
+function isDisabled(el: HTMLElement): boolean {
+  return 'disabled' in el && (el as HTMLButtonElement).disabled === true
+}
+
 function focusWhenInteractive(resolve: () => HTMLElement | null | undefined): void {
   const attempt = (): boolean => {
     const target = resolve()
-    if (!target || target.closest('[inert]')) return false
+    if (!target || target.closest('[inert]') || isDisabled(target)) return false
     target.focus()
     return true
   }
@@ -47,5 +54,5 @@ function focusWhenInteractive(resolve: () => HTMLElement | null | undefined): vo
     observer.disconnect()
     clearTimeout(timer)
   }
-  observer.observe(document.body, { attributes: true, attributeFilter: ['inert'], subtree: true, childList: true })
+  observer.observe(document.body, { attributes: true, attributeFilter: ['inert', 'disabled'], subtree: true, childList: true })
 }
