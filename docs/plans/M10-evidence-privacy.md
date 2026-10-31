@@ -1868,6 +1868,7 @@ the export" differ, this amendment wins.
    `TestAuditExportDownloadChunkRemovedMidStream`.
 5. **HEAD is refused with 405 (`Allow: GET`)** before the use case and audited as one rejected request, because
    net/http would otherwise run the download for a body that is never sent.
+
 ### Amendment 2026-10-30 (PDK-139 round 2, read-access recording)
 
 Architect decisions after review 1 of PDK-139. Where this amendment and decisions 18–21, §6.4 or §6.6 differ, this
@@ -1928,3 +1929,45 @@ Architect decisions after review 2 of PDK-139 and the external review. Where thi
    `target_id_used` only.
 9. **The search text stays out of the filter hash** because it can contain personal data (a searched employee's name):
    neither the event nor its window key may tell two texts apart.
+
+### Amendment 2026-10-31 (PDK-608: export builder hardening)
+
+Implemented in PDK-608, which folds in PDK-595 and PDK-596. Where this amendment and decisions 31, 32 or 34 differ,
+this amendment wins. No migration and no change to the API, the events or the package format.
+
+1. **Expiry runs in its own loop (decision 31).** `Run` calls `Expire` every poll interval in a loop of its own, next
+   to the pending-age loop, instead of after the claim/build loop, so a hung build delays neither expiry nor the stuck
+   check. `Expire` deletes the chunks of failed and expired exports first, then expires and fails as in decision 34,
+   so an error in those passes cannot skip the sweep.
+2. **A build is bounded by `ExportStuckAfter` (decision 32).** The whole build, including every object-store read,
+   runs under a deadline of 2 h; when it passes, the export fails with `error: "the build took longer than 2h0m0s: …"`
+   and one failure event, unless the stuck check failed it first (then its event is the only one). The deadline counts
+   from the start of the build, the stuck check from `started_at`, so the stuck check usually fails a hung export
+   first; the bound then mainly ends the hung build and frees its goroutine.
+3. **Chunks are inserted only while the export is running (decision 32 step 4).** `InsertAuditExportChunk` inserts
+   only when the export is `running`, read under a share lock in the same statement, so it either waits for a stuck
+   check in flight or sees its result. An insert that inserts nothing fails the build like `errNotRunning`: no
+   further reads, no event (the stuck check recorded the outcome).
+4. **The status read after a failed ready update is final (decision 32 steps 5–6).** It reads under the row lock
+   (`GetAuditExportLocked`, `FOR UPDATE`, 30 s, outliving a shutdown), so a COMMIT still in flight is waited out.
+   When it fails or still sees `running`, the build reads once more after `failRunning` matched no row; a `ready`
+   export then takes the success path. When the first read failed, the build also reads once more before it gives
+   up on a shutdown or on a failed `failRunning`. Every export that a build marked ready ends with exactly one
+   `audit.export_completed` success event, unless no status read succeeds at all, in which case the export stays
+   ready with its chunks.
+5. **A failure or expiry whose COMMIT outcome is lost records its event exactly once (decisions 32 and 34).** The
+   update of `failRunning` (build and stuck check) and the expiry update return the row's `xmin`, the id of the
+   writing transaction. Only when the transaction's statements all succeeded and its COMMIT returned an error is the
+   outcome unknown; then the caller reads the export under the row lock (as in item 4, `GetAuditExportLocked` also
+   returns `xmin`) and records its one failure or `retention.purged` event only if the visible version carries its own
+   `xmin`. A caller whose update matched no row, or whose transaction failed before the COMMIT, never reads and never
+   records. So a rollback of this caller's write followed by another replica's identical write (same status, same
+   `exporter restarted`) does not record twice. A failed read is retried once; if both reads fail the export stays
+   `failed`/`expired` without its event (neither list query sees it again) and the pass reports the error.
+6. **The exporter's writes are bounded on the client side** by the writer transaction timeout plus 30 s:
+   `markReady`, `failRunning`, the expiry update, every chunk delete (also the ones that outlive a shutdown) and the
+   list queries of `Expire`. A hung connection or a lost acknowledgement cannot block the build or the stuck check
+   beyond that bound; the locked status reads of items 4 and 5 have their own bound of 30 s.
+7. **A failing expiry or stuck-check failure does not stop the pass.** `Expire` records the error, continues with the
+   next due export, then runs the stuck check, which likewise continues with the next stuck export; the pass returns
+   all errors joined.

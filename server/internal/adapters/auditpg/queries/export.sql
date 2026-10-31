@@ -8,6 +8,11 @@ RETURNING *;
 -- name: GetAuditExport :one
 SELECT * FROM audit_export WHERE id = @id;
 
+-- name: GetAuditExportLocked :one
+-- The row lock waits out a transaction still updating the export, so the status read is final. xmin names the
+-- transaction whose write is visible, so a writer whose COMMIT outcome was lost can tell whether that was its own.
+SELECT sqlc.embed(audit_export), audit_export.xmin::text AS xmin FROM audit_export WHERE id = @id FOR UPDATE;
+
 -- name: ListAuditExports :many
 SELECT * FROM audit_export
 WHERE (sqlc.narg(statuses)::text[] IS NULL OR status = ANY(sqlc.narg(statuses)::text[]))
@@ -56,11 +61,13 @@ UPDATE audit_export SET status = 'ready', ready_at = @ready_at, expires_at = @ex
   verify_problems = @verify_problems, signature = @signature, key_version = @key_version
 WHERE id = @id AND status = 'running';
 
--- name: UpdateAuditExportFailed :execrows
-UPDATE audit_export SET status = 'failed', error = @error WHERE id = @id AND status = 'running';
+-- name: UpdateAuditExportFailed :many
+-- xmin of the new row version is this transaction's id; see GetAuditExportLocked.
+UPDATE audit_export SET status = 'failed', error = @error WHERE id = @id AND status = 'running' RETURNING xmin::text;
 
--- name: UpdateAuditExportExpired :execrows
-UPDATE audit_export SET status = 'expired' WHERE id = @id AND status = 'ready' AND expires_at < @now;
+-- name: UpdateAuditExportExpired :many
+-- xmin of the new row version is this transaction's id; see GetAuditExportLocked.
+UPDATE audit_export SET status = 'expired' WHERE id = @id AND status = 'ready' AND expires_at < @now RETURNING xmin::text;
 
 -- name: ListExpiredAuditExports :many
 SELECT * FROM audit_export WHERE status = 'ready' AND expires_at < @now ORDER BY expires_at LIMIT 100;
@@ -68,8 +75,12 @@ SELECT * FROM audit_export WHERE status = 'ready' AND expires_at < @now ORDER BY
 -- name: ListStuckAuditExports :many
 SELECT * FROM audit_export WHERE status = 'running' AND started_at < @started_before ORDER BY started_at LIMIT 100;
 
--- name: InsertAuditExportChunk :exec
-INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES (@export_id, @organization_id, @seq, @data);
+-- name: InsertAuditExportChunk :execrows
+-- Only a running export takes chunks. The share lock makes a concurrent failure wait for this insert, so its chunk
+-- delete sees the row, or makes this insert see the failed status once the failure committed.
+INSERT INTO audit_export_chunk (export_id, organization_id, seq, data)
+SELECT @export_id::uuid, @organization_id::uuid, @seq::int4, @data::bytea
+WHERE EXISTS (SELECT 1 FROM audit_export WHERE id = @export_id::uuid AND status = 'running' FOR SHARE);
 
 -- name: DeleteAuditExportChunks :execrows
 DELETE FROM audit_export_chunk WHERE export_id = @export_id;
