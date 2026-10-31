@@ -22,6 +22,15 @@ const (
 	WatchMissing  = "missing"
 )
 
+// Observed states of a watched unit besides the reported ones.
+const (
+	watchRunning = ""
+	// watchTransition is a plain start or stop in progress (activating, deactivating): the unit keeps its state.
+	watchTransition = "transition"
+	// watchRestarting is systemd waiting to restart the unit after it exited (SubState auto-restart).
+	watchRestarting = "restarting"
+)
+
 // Watch is the organization's presence policy (plan M9 decision 40): it reports a watched third-party unit that is not
 // running as tamper.service_stopped, once per stop, with its state. It only reads the units: starting, stopping,
 // enabling, masking or installing them would make the agent act on its own initiative (agent design contract 8); a
@@ -30,10 +39,42 @@ type Watch struct {
 	Sys    System
 	Events *Events
 
-	// mu guards stopped: the drift loop applies while the agent socket may plan.
+	// mu guards marks: the drift loop applies while the agent socket may plan.
 	mu sync.Mutex
-	// stopped holds the units reported as stopped and not seen running since.
-	stopped map[string]bool
+	// marks are the units reported as stopped and not seen running since, and the units seen restarting on the last
+	// pass.
+	marks map[string]watchMark
+}
+
+// watchMark is what the watch remembers of a unit between passes.
+type watchMark struct {
+	stopped    bool // reported, not seen running since
+	restarting bool // seen in auto-restart on the last pass
+}
+
+// next is the mark after a pass that observed state, and the state to report ("" for none). A transition keeps the
+// state; an auto-restart is a crash loop only when the next pass sees it again, so a single restart is not reported.
+func (m watchMark) next(state string) (watchMark, string) {
+	switch state {
+	case watchRunning:
+		return watchMark{}, ""
+	case watchTransition:
+		return watchMark{stopped: m.stopped}, ""
+	case watchRestarting:
+		switch {
+		case m.stopped:
+			return watchMark{stopped: true}, ""
+		case m.restarting:
+			return watchMark{stopped: true}, WatchFailed
+		default:
+			return watchMark{restarting: true}, ""
+		}
+	default:
+		if m.stopped {
+			return watchMark{stopped: true}, ""
+		}
+		return watchMark{stopped: true}, state
+	}
 }
 
 // Type implements Reconciler.
@@ -60,9 +101,10 @@ func watchSpec(r bundle.Resource) (bundle.WatchSpec, error) {
 	return s, nil
 }
 
-// watchState returns the state of a watched unit: "" while it runs, otherwise WatchInactive, WatchFailed or
-// WatchMissing. Only systemd's own "not-found" makes a unit missing: a query that fails (bus error, timeout) is an
-// error, so that a busy or restarting systemd is never reported as tampering.
+// watchState returns the observed state of a watched unit: watchRunning, watchTransition, watchRestarting,
+// WatchInactive, WatchFailed or WatchMissing. Only systemd's own "not-found" makes a unit missing: a query that fails
+// (bus error, timeout) or an answer without LoadState and ActiveState is an error, so that a busy or restarting
+// systemd is never reported as tampering.
 func watchState(ctx context.Context, sys System, unit string) (string, error) {
 	out, exit, err := sys.Systemctl(ctx, "show", "-p", "LoadState", "-p", "ActiveState", "-p", "SubState", "--", unit)
 	if err != nil {
@@ -83,18 +125,22 @@ func watchState(ctx context.Context, sys System, unit string) (string, error) {
 		return "", fmt.Errorf("systemctl show %s: unexpected answer %q", unit, firstLine(out))
 	case load == "not-found":
 		return WatchMissing, nil
-	// A crash loop waits in activating/auto-restart between the attempts: it is not running.
-	case active == "failed" || strings.HasPrefix(sub, "auto-restart"):
+	case strings.HasPrefix(sub, "auto-restart"):
+		return watchRestarting, nil
+	case active == "failed":
 		return WatchFailed, nil
-	case slices.Contains(activeStates, active):
-		return "", nil
+	case active == "active" || active == "reloading" || active == "refreshing":
+		return watchRunning, nil
+	case active == "activating" || active == "deactivating":
+		return watchTransition, nil
 	default:
 		return WatchInactive, nil
 	}
 }
 
-// Plan implements Reconciler: a unit not running that was not reported yet is to be reported, a reported unit that
-// runs again is to be cleared. Both are changes so that the drift pass applies the resource.
+// Plan implements Reconciler: a stop to report, a reported unit that runs again and a change of the restart mark are
+// changes, so that the drift pass applies the resource. A unit whose state cannot be read is logged and skipped; the
+// error is returned only when no unit has a change, because the applier drops the changes of a plan with an error.
 func (w *Watch) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	s, err := watchSpec(r)
 	if err != nil {
@@ -103,23 +149,35 @@ func (w *Watch) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var changes []string
+	var errs []error
 	for _, u := range s.Units {
 		state, err := watchState(ctx, w.Sys, u)
 		if err != nil {
-			return nil, err
+			slog.WarnContext(ctx, "watched unit state unknown", "unit", u, "error", err)
+			errs = append(errs, err)
+			continue
 		}
+		prev := w.marks[u]
+		next, report := prev.next(state)
 		switch {
-		case state != "" && !w.stopped[u]:
-			changes = append(changes, "report "+u+" "+state)
-		case state == "" && w.stopped[u]:
+		case report != "":
+			changes = append(changes, "report "+u+" "+report)
+		case prev.stopped && !next.stopped:
+			changes = append(changes, "clear "+u)
+		case next.restarting && !prev.restarting:
+			changes = append(changes, "observe "+u+" restarting")
+		case prev.restarting && !next.restarting:
 			changes = append(changes, "clear "+u)
 		}
+	}
+	if len(changes) == 0 {
+		return nil, errors.Join(errs...)
 	}
 	return changes, nil
 }
 
 // Apply implements Reconciler. It reports and never changes the system, so its status is OK; a unit whose state
-// cannot be read is an error and the other units are still checked.
+// cannot be read keeps its mark and is an error, and the other units are still checked.
 func (w *Watch) Apply(ctx context.Context, r bundle.Resource) Result {
 	s, err := watchSpec(r)
 	if err != nil {
@@ -127,48 +185,37 @@ func (w *Watch) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	seen := map[string]bool{}
+	marks := map[string]watchMark{}
 	var errs []error
 	for _, u := range s.Units {
+		prev := w.marks[u]
 		state, err := watchState(ctx, w.Sys, u)
 		if err != nil {
+			slog.WarnContext(ctx, "watched unit state unknown", "unit", u, "error", err)
 			errs = append(errs, err)
-			seen[u] = w.stopped[u]
+			marks[u] = prev
 			continue
 		}
+		next, report := prev.next(state)
 		switch {
-		case state != "" && !w.stopped[u]:
-			slog.WarnContext(ctx, "watched unit not running", "unit", u, "state", state)
-			w.Events.emit(protocol.EventTamperServiceStopped, protocol.TamperServiceStopped{Unit: u, State: state})
-			seen[u] = true
-		case state != "":
-			seen[u] = true
-		case w.stopped[u]:
+		case report != "":
+			slog.WarnContext(ctx, "watched unit not running", "unit", u, "state", report)
+			w.Events.emit(protocol.EventTamperServiceStopped, protocol.TamperServiceStopped{Unit: u, State: report})
+		case prev.stopped && !next.stopped:
 			slog.InfoContext(ctx, "watched unit running again", "unit", u)
 		}
+		marks[u] = next
 	}
-	for u := range w.stopped {
-		if !seen[u] {
-			delete(w.stopped, u)
-		}
-	}
-	for u, stopped := range seen {
-		if stopped {
-			if w.stopped == nil {
-				w.stopped = map[string]bool{}
-			}
-			w.stopped[u] = true
-		}
-	}
+	w.marks = marks
 	if err := errors.Join(errs...); err != nil {
 		return errorResult(r.ID, err)
 	}
 	return Result{ID: r.ID, Status: OK}
 }
 
-// Forget drops every reported stop, for a bundle without watch section: a unit watched again later is reported anew.
+// Forget drops every mark, for a bundle without watch section: a unit watched again later is reported anew.
 func (w *Watch) Forget() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.stopped = nil
+	w.marks = nil
 }

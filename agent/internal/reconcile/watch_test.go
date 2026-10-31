@@ -194,12 +194,111 @@ func TestWatchQueryFailure(t *testing.T) {
 	}
 }
 
-// TestWatchCrashLoop: a unit that systemd keeps restarting (activating, auto-restart) is not running: failed.
+// TestWatchCrashLoop: a unit systemd restarts after it exited (activating, auto-restart) is a crash loop only when the
+// next pass still sees it restarting: then it is reported once as failed; a single restart is not reported.
 func TestWatchCrashLoop(t *testing.T) {
+	ctx := context.Background()
 	sys, w, events := watchFixture(t)
-	sys.Units["wazuh-agent.service"] = &fakesys.Unit{State: "enabled", Restarting: true}
-	applyWatch(t, w, watchResource(t, "wazuh-agent.service"))
+	r := watchResource(t, "wazuh-agent.service")
+	u := sys.Units["wazuh-agent.service"]
+
+	u.Active, u.Restarting = false, true
+	if plan, err := w.Plan(ctx, r); err != nil || !slices.Equal(plan, []string{"observe wazuh-agent.service restarting"}) {
+		t.Fatalf("plan of a first restart %v (%v)", plan, err)
+	}
+	applyWatch(t, w, r)
+	u.Active, u.Restarting = true, false
+	applyWatch(t, w, r)
+	if got := takeEvents(events); len(got) != 0 {
+		t.Fatalf("a single restart was reported: %v", got)
+	}
+
+	u.Active, u.Restarting = false, true
+	applyWatch(t, w, r)
+	if plan, err := w.Plan(ctx, r); err != nil || !slices.Equal(plan, []string{"report wazuh-agent.service failed"}) {
+		t.Fatalf("plan of a crash loop %v (%v)", plan, err)
+	}
+	applyWatch(t, w, r)
+	applyWatch(t, w, r)
 	if got := takeEvents(events); !slices.Equal(got, []event{stopped("wazuh-agent.service", "failed")}) {
+		t.Fatalf("events of a crash loop %v", got)
+	}
+}
+
+// TestWatchTransitions: activating and deactivating keep the unit's state: a normal restart is no event, and a
+// reported unit that is started and stopped again before a pass sees it running is not reported twice.
+func TestWatchTransitions(t *testing.T) {
+	ctx := context.Background()
+	sys, w, events := watchFixture(t)
+	r := watchResource(t, "wazuh-agent.service")
+	show := func(active, sub string) {
+		sys.Shows["wazuh-agent.service"] = "LoadState=loaded\nActiveState=" + active + "\nSubState=" + sub + "\n"
+	}
+	for _, st := range [][2]string{{"active", "running"}, {"deactivating", "stop-sigterm"}, {"activating", "start"}, {"active", "running"}} {
+		show(st[0], st[1])
+		if st[0] != "active" {
+			if plan, err := w.Plan(ctx, r); err != nil || len(plan) != 0 {
+				t.Fatalf("plan while %s: %v (%v)", st[0], plan, err)
+			}
+		}
+		applyWatch(t, w, r)
+	}
+	if got := takeEvents(events); len(got) != 0 {
+		t.Fatalf("a normal restart was reported: %v", got)
+	}
+
+	show("inactive", "dead")
+	applyWatch(t, w, r)
+	show("activating", "start")
+	applyWatch(t, w, r)
+	show("inactive", "dead")
+	applyWatch(t, w, r)
+	if got := takeEvents(events); !slices.Equal(got, []event{stopped("wazuh-agent.service", "inactive")}) {
+		t.Fatalf("events %v", got)
+	}
+}
+
+// TestWatchShowAnswers: an empty or garbled answer of systemctl show is an error and no event; a unit systemd no
+// longer knows is missing even while its process still runs.
+func TestWatchShowAnswers(t *testing.T) {
+	ctx := context.Background()
+	for _, out := range []string{"", "garbage\n", "ActiveState=inactive\n", "LoadState=loaded\n"} {
+		sys, w, events := watchFixture(t)
+		sys.Shows["wazuh-agent.service"] = out
+		r := watchResource(t, "wazuh-agent.service")
+		if _, err := w.Plan(ctx, r); err == nil {
+			t.Errorf("plan of answer %q succeeded", out)
+		}
+		if res := w.Apply(ctx, r); res.Status != reconcile.Error {
+			t.Errorf("apply of answer %q: %+v", out, res)
+		}
+		if got := takeEvents(events); len(got) != 0 {
+			t.Errorf("answer %q reported: %v", out, got)
+		}
+	}
+	sys, w, events := watchFixture(t)
+	sys.Shows["wazuh-agent.service"] = "LoadState=not-found\nActiveState=active\nSubState=running\n"
+	applyWatch(t, w, watchResource(t, "wazuh-agent.service"))
+	if got := takeEvents(events); !slices.Equal(got, []event{stopped("wazuh-agent.service", "missing")}) {
+		t.Fatalf("events %v", got)
+	}
+}
+
+// TestWatchPlanSkipsFailingUnit: a unit whose state cannot be read does not hide another unit's change from the drift
+// pass, and Apply still reports the other unit.
+func TestWatchPlanSkipsFailingUnit(t *testing.T) {
+	ctx := context.Background()
+	sys, w, events := watchFixture(t)
+	r := watchResource(t, "falcon-sensor.service", "wazuh-agent.service")
+	sys.FailCmd = "systemctl show -p LoadState -p ActiveState -p SubState -- falcon-sensor.service"
+	sys.Units["wazuh-agent.service"].Active = false
+	if plan, err := w.Plan(ctx, r); err != nil || !slices.Equal(plan, []string{"report wazuh-agent.service inactive"}) {
+		t.Fatalf("plan %v (%v)", plan, err)
+	}
+	if res := w.Apply(ctx, r); res.Status != reconcile.Error || !strings.Contains(res.Message, "falcon-sensor.service") {
+		t.Fatalf("apply %+v", res)
+	}
+	if got := takeEvents(events); !slices.Equal(got, []event{stopped("wazuh-agent.service", "inactive")}) {
 		t.Fatalf("events %v", got)
 	}
 }
