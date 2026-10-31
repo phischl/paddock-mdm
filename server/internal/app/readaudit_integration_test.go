@@ -703,6 +703,130 @@ func TestReadAuditInventoryViewed(t *testing.T) {
 	expectRecorded(t, recorded, err, false)
 }
 
+// finding gives dev a finding of cve in package pkg.
+func (h harness) finding(t *testing.T, org, dev uuid.UUID, cve, pkg string) {
+	t.Helper()
+	if _, err := h.super.Exec(context.Background(), `INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version)
+		VALUES ($1, $2, $3, $4, '1.0')`, dev, org, cve, pkg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReadAuditVulnerabilityDevicesViewed (plan M10 amendment 2026-10-31, PDK-606): the device list of a CVE is recorded
+// once per actor, CVE and clock hour with the CVE and the number of the organization's own devices (not finding rows,
+// not another organization's devices); another CVE and the next hour open new windows; a refused view is a failure
+// with its reason and claims no window; a role outside the read roles is denied; the search text and device never
+// enter the event.
+func TestReadAuditVulnerabilityDevicesViewed(t *testing.T) {
+	w := newReadWorld(t, false, true)
+	alice := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7())})
+	other := w.otherOrg(t)
+	one, two := w.device(t, w.org, "ws-one"), w.device(t, w.org, "ws-two")
+	w.finding(t, w.org, one, "CVE-2026-0001", "openssl")
+	w.finding(t, w.org, one, "CVE-2026-0001", "libssl")
+	w.finding(t, w.org, two, "CVE-2026-0001", "openssl")
+	w.finding(t, w.org, one, "CVE-2026-0002", "curl")
+	w.finding(t, other, w.device(t, other, "globex-1"), "CVE-2026-0001", "openssl")
+	w.finding(t, other, w.device(t, other, "globex-2"), "CVE-2026-0003", "zlib")
+
+	recorded, err := w.reads.VulnerabilityDevicesViewed(alice, "cve-2026-0001", nil)
+	expectRecorded(t, recorded, err, true)
+	w.now = w.now.Add(30 * time.Minute)
+	recorded, err = w.reads.VulnerabilityDevicesViewed(alice, "CVE-2026-0001", nil)
+	expectRecorded(t, recorded, err, false)
+	events := w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed)
+	if len(events) != 1 {
+		t.Fatalf("%d events in one hour, want 1", len(events))
+	}
+	ev := events[0]
+	if ev.Outcome != audit.OutcomeSuccess || ev.Target != nil || ev.Params["cve"] != "CVE-2026-0001" || ev.Params["device_count"] != float64(2) ||
+		ev.Params["window_start"] != "2026-10-30T10:00:00Z" || len(ev.Params) != 3 {
+		t.Fatalf("event %+v, want cve, 2 devices (two of three rows of one device, none of the other organization) and the window", ev)
+	}
+
+	recorded, err = w.reads.VulnerabilityDevicesViewed(alice, "CVE-2026-0002", nil)
+	expectRecorded(t, recorded, err, true)
+	w.now = w.now.Add(time.Hour)
+	recorded, err = w.reads.VulnerabilityDevicesViewed(alice, "CVE-2026-0001", nil)
+	expectRecorded(t, recorded, err, true)
+	bob := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Role: principal.RoleOrgAuditor})
+	recorded, err = w.reads.VulnerabilityDevicesViewed(bob, "CVE-2026-0001", nil)
+	expectRecorded(t, recorded, err, true)
+	if n := len(w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed)); n != 4 {
+		t.Fatalf("%d events, want one per CVE, hour and actor", n)
+	}
+	if n := len(w.events(t, other, audit.CodeVulnerabilityDevicesViewed)); n != 0 {
+		t.Fatalf("%d events in the other organization", n)
+	}
+
+	cases := []struct {
+		name   string
+		cve    string
+		bad    error
+		reason string
+	}{
+		{"cve without finding in the organization", "CVE-2026-0003", nil, "not_found"},
+		{"cve nobody has", "CVE-2026-9999", nil, "not_found"},
+		{"malformed cve", "'; DROP TABLE device; --", nil, "invalid_request"},
+		{"listing input", "CVE-2026-0001", problem.InvalidRequest.WithDetail("page_size"), "invalid_request"},
+	}
+	for _, c := range cases {
+		before := len(w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed))
+		recorded, err := w.reads.VulnerabilityDevicesViewed(alice, c.cve, c.bad)
+		if recorded || err == nil {
+			t.Fatalf("%s: recorded %v (%v), want refused", c.name, recorded, err)
+		}
+		events := w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed)
+		if len(events) != before+1 {
+			t.Fatalf("%s: %d new events, want 1", c.name, len(events)-before)
+		}
+		if ev := events[before]; ev.Outcome != audit.OutcomeFailure || ev.ErrorCode != c.reason || strings.Contains(fmt.Sprint(ev.Params), "DROP") {
+			t.Fatalf("%s: %+v, want failure/%s without the input", c.name, ev, c.reason)
+		}
+	}
+	if n := countRows(t, w.super, "SELECT count(*) FROM read_audit_window WHERE organization_id = $1 AND code = $2", w.org,
+		string(audit.CodeVulnerabilityDevicesViewed)); n != 4 {
+		t.Fatalf("%d windows, want 4: refused views claim none", n)
+	}
+
+	platform := as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7()), Role: principal.RolePlatform})
+	if _, err := w.reads.VulnerabilityDevicesViewed(platform, "CVE-2026-0001", nil); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("platform role: %v, want forbidden", err)
+	}
+	denied := w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed)
+	if last := denied[len(denied)-1]; last.Outcome != audit.OutcomeDenied || last.ErrorCode != "forbidden" {
+		t.Fatalf("last event %+v, want denied", last)
+	}
+
+	w.switches(t, w.org, false, false)
+	before := len(denied)
+	w.now = w.now.Add(24 * time.Hour)
+	for _, cve := range []string{"CVE-2026-0001", "CVE-2026-0003", "nonsense"} {
+		recorded, err = w.reads.VulnerabilityDevicesViewed(alice, cve, nil)
+		expectRecorded(t, recorded, err, false)
+	}
+	if n := len(w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed)); n != before {
+		t.Fatalf("switch off: %d new events", n-before)
+	}
+}
+
+// TestReadAuditVulnerabilityDevicesViewedSwitchUnknown (plan M10 amendment 2026-10-31, PDK-139 round 3): when the
+// switch cannot be read the view is refused and nothing is recorded, so no device count is read either.
+func TestReadAuditVulnerabilityDevicesViewedSwitchUnknown(t *testing.T) {
+	w := newReadWorld(t, false, true)
+	dev := w.device(t, w.org, "ws-1")
+	w.finding(t, w.org, dev, "CVE-2026-0001", "openssl")
+	ctx, cancel := context.WithCancel(as(w.org, principal.Principal{ID: uuid.Must(uuid.NewV7())}))
+	cancel()
+	recorded, err := w.reads.VulnerabilityDevicesViewed(ctx, "CVE-2026-0001", nil)
+	if recorded || err == nil {
+		t.Fatalf("recorded %v (%v), want an error", recorded, err)
+	}
+	if n := len(w.events(t, w.org, audit.CodeVulnerabilityDevicesViewed)); n != 0 {
+		t.Fatalf("%d events with the switch unknown", n)
+	}
+}
+
 // TestReadAuditOrganizations: windows belong to their organization. The same account claims its window in each
 // organization it reads, a search in one organization never coalesces with or shows up in the other, and the API role
 // sees only its own organization's windows.

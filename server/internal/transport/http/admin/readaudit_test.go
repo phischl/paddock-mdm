@@ -101,6 +101,81 @@ func TestReadAccessRecording(t *testing.T) {
 	}
 }
 
+// TestReadAccessRecordingVulnerabilityDevices (plan M10 amendment 2026-10-31, PDK-606): with inventory_view_recorded off
+// the device list of a CVE records nothing; on, repeated views by one actor in the hour (also with a search text) record
+// one vulnerability.devices_viewed with the CVE and the organization's device count, another CVE a second one; a CVE
+// without finding is 404 with a failure event, a refused listing a failure, a platform session is denied.
+func TestReadAccessRecordingVulnerabilityDevices(t *testing.T) {
+	e := newEnv(t)
+	org := e.org("cvereads")
+	for host, cves := range map[string][]string{"ws-1": {"CVE-2026-0001", "CVE-2026-0002"}, "ws-2": {"CVE-2026-0001"}} {
+		dev := uuid.Must(uuid.NewV7())
+		if _, err := e.super.Exec(context.Background(), "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, 'active')", dev, org, host); err != nil {
+			t.Fatal(err)
+		}
+		for _, cve := range cves {
+			if _, err := e.super.Exec(context.Background(), `INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version)
+				VALUES ($1, $2, $3, 'openssl', '1.0')`, dev, org, cve); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	count := func() int {
+		var n int
+		if err := e.super.QueryRow(context.Background(), "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'vulnerability.devices_viewed'", org).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	alice := e.session(org, principal.RoleOrgAdmin)
+	get := func(path string, want int) result {
+		t.Helper()
+		r := e.do(call{method: http.MethodGet, path: path, cookie: alice})
+		if r.status != want {
+			t.Fatalf("GET %s: %d %s", path, r.status, r.body)
+		}
+		return r
+	}
+	const list = "/api/v1/vulnerabilities/CVE-2026-0001/devices"
+
+	get(list, http.StatusOK)
+	get("/api/v1/vulnerabilities/CVE-2026-9999/devices", http.StatusNotFound)
+	if n := count(); n != 0 {
+		t.Fatalf("switch off: %d events", n)
+	}
+
+	if _, err := e.super.Exec(context.Background(), "UPDATE organization_privacy_settings SET inventory_view_recorded = true WHERE organization_id = $1", org); err != nil {
+		t.Fatal(err)
+	}
+	e.expectEvent(get(list, http.StatusOK), "vulnerability.devices_viewed:success:")
+	get(list+"?q=ws-1", http.StatusOK)
+	get(list, http.StatusOK)
+	if n := count(); n != 1 {
+		t.Fatalf("%d events for three views in one window, want 1", n)
+	}
+	var params []byte
+	if err := e.super.QueryRow(context.Background(), "SELECT payload->'params' FROM outbox WHERE organization_id = $1 AND payload->>'code' = 'vulnerability.devices_viewed'", org).Scan(&params); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(params, &got); err != nil || got["cve"] != "CVE-2026-0001" || got["device_count"] != float64(2) || strings.Contains(string(params), "ws-") {
+		t.Fatalf("params %s (%v), want CVE-2026-0001 and 2 devices without hostnames or text", params, err)
+	}
+	get("/api/v1/vulnerabilities/CVE-2026-0002/devices", http.StatusOK)
+	if n := count(); n != 2 {
+		t.Fatalf("%d events after a second CVE, want 2", n)
+	}
+
+	e.expectEvent(get("/api/v1/vulnerabilities/CVE-2026-9999/devices", http.StatusNotFound), "vulnerability.devices_viewed:failure:not_found")
+	e.expectEvent(get(list+"?page=101&page_size=100", http.StatusBadRequest), "vulnerability.devices_viewed:failure:page_out_of_range")
+
+	platform := e.do(call{method: http.MethodGet, path: list, cookie: e.platformSession()})
+	if platform.status != http.StatusForbidden {
+		t.Fatalf("platform session: %d %s", platform.status, platform.body)
+	}
+	e.expectEvent(platform, "vulnerability.devices_viewed:denied:no_organization")
+}
+
 // TestReadAccessRecordingOneRange (PDK-139): the recording and the list search the same range, so a from just after
 // the recording's clock cannot be refused by the recording and served by the list. The handler's clock runs a minute
 // ahead of the use cases' clocks; a from between both is served and recorded.
@@ -138,7 +213,7 @@ func TestReadAccessRecordingSwitchUnknown(t *testing.T) {
 	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 	for _, path := range []string{"/api/v1/audit-events", "/api/v1/devices/" + dev.String() + "/software",
-		"/api/v1/devices/" + dev.String() + "/vulnerabilities"} {
+		"/api/v1/devices/" + dev.String() + "/vulnerabilities", "/api/v1/vulnerabilities/CVE-2026-0001/devices"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequestWithContext(expired, http.MethodGet, "https://admin.test"+path, nil)
 		req.AddCookie(alice)

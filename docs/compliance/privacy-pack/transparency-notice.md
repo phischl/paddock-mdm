@@ -132,6 +132,8 @@ According to [Organization]'s privacy settings, Paddock records in the audit log
 
 - views of a device's *Software* and *Vulnerabilities* pages: [recorded, the first view per administrator, device and
   day | not recorded];
+- views of the list of devices affected by a vulnerability (CVE): [recorded, the first view per administrator, CVE and
+  hour, with the CVE and the number of affected devices | not recorded];
 - searches of the audit log: [recorded, the first search per administrator, hour and set of filters, with its filters
   but without a search term | not recorded].
 

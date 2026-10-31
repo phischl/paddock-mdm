@@ -210,6 +210,8 @@ const (
 	CodeAuditSearched         Code = "audit.searched"
 	CodeDeviceInventoryViewed Code = "device.inventory_viewed"
 
+	CodeVulnerabilityDevicesViewed Code = "vulnerability.devices_viewed"
+
 	// Evidence export (ADR 0032 §5, plan M10 §6.4).
 	CodeAuditExportRequested  Code = "audit.export_requested"
 	CodeAuditExportCompleted  Code = "audit.export_completed"
@@ -1308,6 +1310,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"hostname", "view", "target_id_used", "window_start"},
 		Outcomes:    adminOutcomes,
 		Note:        "While the setting is on, failure with the reason of a refused view (not_found for a missing or foreign device, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a device lookup or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails.",
+	},
+	CodeVulnerabilityDevicesViewed: {
+		Code: CodeVulnerabilityDevicesViewed, Emitted: true,
+		Description: "An organization member listed the devices affected by a CVE; recorded once per actor, CVE and clock hour and only while inventory_view_recorded is on. device_count is the number of the organization's devices with a finding of the CVE when the window opened; the search text of the list is never recorded.",
+		Params:      []string{"cve", "device_count", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "While the setting is on, failure with the reason of a refused view (not_found for a CVE without finding in the organization, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a count or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails.",
 	},
 	CodeAuditExportRequested: {
 		Code: CodeAuditExportRequested, Emitted: true,

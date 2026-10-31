@@ -108,7 +108,7 @@ data. `PADDOCK_AGENT_RELEASE_SOURCE_REPO=off` switches it off.
 
 Organization members see the stored inventory of their organization's devices in the portal (*Software* and
 *Vulnerabilities*); reading it is recorded as `device.inventory_viewed` when the organization switches *Record
-inventory views* on (`/api/v1/settings/privacy`), coalesced per administrator, device and day. Fleet's own UI and API are not published; only platform operators reach
+inventory views* on (`/api/v1/settings/privacy`), coalesced per administrator, device and day; the list of devices affected by a CVE is recorded as `vulnerability.devices_viewed` (CVE and device count, once per administrator, CVE and hour). Fleet's own UI and API are not published; only platform operators reach
 them, through a local port forward (`docs/operations/fleet.md`).
 
 ## Administrators

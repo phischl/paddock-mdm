@@ -168,4 +168,5 @@ export const auditCodes = [
   'user_group.member_added',
   'user_group.member_removed',
   'user_group.updated',
+  'vulnerability.devices_viewed',
 ] as const

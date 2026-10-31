@@ -126,6 +126,9 @@ func (h *handlers) ListVulnerabilityDevices(ctx context.Context, req adminapi.Li
 	params, err := listing.Parse(vulnerableDeviceList, listing.Query{
 		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
 	})
+	if _, rerr := h.readAudit.VulnerabilityDevicesViewed(ctx, req.Cve, err); rerr != nil {
+		return nil, rerr
+	}
 	if err != nil {
 		return nil, err
 	}

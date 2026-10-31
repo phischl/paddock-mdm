@@ -11,7 +11,7 @@
     "auditSearchRecorded": "Record searches of the audit log",
     "auditSearchRecordedHint": "The first search of the audit log per administrator, hour and set of filters is recorded as an audit event; further searches in that window are not. The filters are recorded, never the results or the search text.",
     "inventoryViewRecorded": "Record views of device inventory",
-    "inventoryViewRecordedHint": "The first view of a device's software and vulnerabilities per administrator, device and day is recorded as an audit event; further views in that window are not.",
+    "inventoryViewRecordedHint": "The first view of a device's software and vulnerabilities per administrator, device and day is recorded as an audit event; further views in that window are not. The first view of the devices affected by a CVE per administrator and hour is recorded in the same way.",
     "readOnly": "Only organization administrators can change the privacy settings.",
     "saved": "The privacy settings were saved."
   },
@@ -413,6 +413,9 @@
       "event_seq_reset": "The event numbering of the device {target} was reset: highest number {reported_high} after {previous_high} (counter reset)",
       "clock_drift": "The clock of the device {target} differs from the server's by {offset_s, number} seconds (threshold {threshold_s, number} seconds)",
       "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's"
+    },
+    "vulnerability": {
+      "devices_viewed": "{actor} viewed the devices affected by {cve} ({device_count, plural, one {# device} other {# devices}})"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
