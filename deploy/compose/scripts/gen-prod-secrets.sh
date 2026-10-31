@@ -97,7 +97,7 @@ controlplane_secrets() {
 
   secret postgres_superuser_password
   for role in paddock_owner paddock_api paddock_platform paddock_relay paddock_worker paddock_compiler \
-    paddock_escrow_reader paddock_revocation paddock_unsealer; do
+    paddock_escrow_reader paddock_revocation paddock_unsealer paddock_notifier; do
     secret "db_${role}_password"
     # Local to this host's internal network.
     secret "db_${role}_url" "postgres://${role}:$(read_secret "db_${role}_password")@postgres:5432/paddock?sslmode=disable"
@@ -174,7 +174,7 @@ controlplane_secrets() {
 
   # The audit writer's AppRole is created on this host's OpenBao as well, then copied to the audit host.
   for role in paddock-api paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer paddock-backup \
-    paddock-audit-writer; do
+    paddock-audit-writer paddock-notifier; do
     placeholder "approle/$role/role_id"
     placeholder "approle/$role/secret_id"
   done

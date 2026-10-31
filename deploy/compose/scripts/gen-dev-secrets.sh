@@ -75,7 +75,7 @@ fi
 # Control-plane PostgreSQL
 secret postgres_superuser_password
 for role in paddock_owner paddock_api paddock_platform paddock_relay paddock_worker paddock_compiler paddock_escrow_reader \
-  paddock_revocation paddock_unsealer; do
+  paddock_revocation paddock_unsealer paddock_notifier; do
   secret "db_${role}_password"
   secret "db_${role}_url" "postgres://${role}:$(read_secret "db_${role}_password")@postgres:5432/paddock?sslmode=disable"
 done
@@ -180,7 +180,7 @@ done
 
 # AppRole credential directories are filled by openbao-bootstrap.sh; they must exist for the bind mounts.
 for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader \
-  paddock-revocation-issuer paddock-backup; do
+  paddock-revocation-issuer paddock-backup paddock-notifier; do
   mkdir -p "$SECRETS_DIR/approle/$role"
   for f in role_id secret_id; do
     [[ -e "$SECRETS_DIR/approle/$role/$f" ]] || { : >"$SECRETS_DIR/approle/$role/$f"; chmod 644 "$SECRETS_DIR/approle/$role/$f"; }
