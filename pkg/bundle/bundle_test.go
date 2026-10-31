@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -354,5 +355,28 @@ func TestWatchResource(t *testing.T) {
 	enc, err = Encode(a)
 	if err != nil || strings.Contains(string(enc), `"watch"`) {
 		t.Errorf("a bundle without watched units must carry no watch section: %s (%v)", enc, err)
+	}
+}
+
+// TestWatchSectionDecodes (plan M9 decision 39): a signed v2 bundle carries the watch section to the agent, and the
+// decoder ignores a section it does not know, which is how an older agent applies a bundle with watch section.
+func TestWatchSectionDecodes(t *testing.T) {
+	v2 := sample(t)
+	v2.SchemaVersion = SchemaVersion2
+	v2.Watch = &WatchSpec{Units: []string{"wazuh-agent.service"}}
+	b, err := VerifyVersions(seal(t, v2, signingKey, PayloadType), trust(), device, org, 0, []int{SchemaVersion, SchemaVersion2})
+	if err != nil || b.Watch == nil || !slices.Equal(b.Watch.Units, v2.Watch.Units) {
+		t.Fatalf("watch section %+v (%v)", b, err)
+	}
+	payload, err := Encode(v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := bytes.Replace(payload, []byte(`"watch":`), []byte(`"watch_next":{"units":["x.service"]},"watch":`), 1)
+	if bytes.Equal(future, payload) {
+		t.Fatal("payload has no watch section")
+	}
+	if b, err = VerifyVersions(sealRaw(t, future), trust(), device, org, 0, []int{SchemaVersion2}); err != nil || len(b.Resources) != len(v2.Resources) {
+		t.Fatalf("a bundle with an unknown section: %+v (%v)", b, err)
 	}
 }

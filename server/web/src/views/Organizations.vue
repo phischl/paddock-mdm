@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import SetupChecklist from '../components/SetupChecklist.vue'
 import DataList from '../components/DataList.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
@@ -116,6 +117,7 @@ async function saveDomains(): Promise<void> {
         {{ t('organizations.create') }}
       </v-btn>
     </div>
+    <SetupChecklist />
     <DataList
       ref="list"
       :columns="columns"

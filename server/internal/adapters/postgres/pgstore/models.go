@@ -420,6 +420,30 @@ type EscrowSecret struct {
 	Volume         uuid.NullUUID
 }
 
+type Finding struct {
+	ID                uuid.UUID
+	OrganizationID    uuid.UUID
+	Kind              string
+	Key               string
+	DeviceID          uuid.UUID
+	Code              string
+	Subject           string
+	Status            string
+	AssigneeAccountID uuid.NullUUID
+	OpenedAt          time.Time
+	LastSeenAt        time.Time
+	Occurrences       int32
+	FirstEventID      uuid.NullUUID
+	LastEventID       uuid.NullUUID
+	AcknowledgedAt    *time.Time
+	ClosedAt          *time.Time
+	ClosedBy          *string
+	Reason            *string
+	ExternalRef       *string
+	ClearedAt         *time.Time
+	UpdatedAt         time.Time
+}
+
 type InstalledSoftware struct {
 	DeviceID       uuid.UUID
 	OrganizationID uuid.UUID

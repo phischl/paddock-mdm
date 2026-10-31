@@ -77,6 +77,17 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `listEnrollmentTokens` | read | no | GET /api/v1/enrollment-tokens |
 | `revokeEnrollmentToken` | write | yes | Idempotent: revoking a revoked token keeps the first revocation time. |
 
+## findings
+
+| Tool | Class | Destructive | Summary |
+| --- | --- | --- | --- |
+| `acknowledgeFinding` | write | no | Acknowledges an open finding (status acknowledged); 409 invalid_state for any other status. |
+| `assignFinding` | write | no | Assigns an open, acknowledged or in-progress finding to an administrator or operator of the organization, or removes the assignee (assignee_id null); the finding is in progress afterwards. |
+| `closeFinding` | write | no | Closes an open, acknowledged or in-progress finding with a resolution and a reason (1 to 1000 characters, 400 invalid_request otherwise) and an optional external reference (at most 200 characters). |
+| `getFinding` | read | no | One finding; 404 not_found for another organization's. |
+| `listFindings` | read | no | Findings: tamper events and attention conditions of devices with their status, assignee and reason (plan M9 decisions 30–34). |
+| `reopenFinding` | write | no | Reopens a closed finding with a reason (1 to 1000 characters, 400 invalid_request otherwise): a tamper finding always, unless a newer finding of the same device and subject is open; an attention finding only while its condition is still open. |
+
 ## inventory
 
 | Tool | Class | Destructive | Summary |
@@ -197,6 +208,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `deleteUserGroup` | write | yes | Deletes the group in Authentik and Paddock with its login and profile assignments. |
 | `getUser` | read | no | GET /api/v1/users/{id} |
 | `getUserGroup` | read | no | GET /api/v1/user-groups/{id} |
+| `listAccounts` | read | no | The organization's administrator accounts that are not disabled (the assignee picker of findings, plan M9 decision 34). |
 | `listUpstreamGroups` | read | no | Authentik groups outside Paddock's namespace with at least one member of the organization; they can be imported. |
 | `listUserDevices` | read | no | The devices the user owns (plan M8d decision 4). |
 | `listUserGroupMembers` | read | no | The members of a user group. |
@@ -249,6 +261,7 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | --- | --- | --- |
 | `checkAgentReleaseSource` | platform | Lists the releases of the source and compares the latest with the newest published release (ADR 0043 decision 3); changes nothing and is not audited. |
 | `disableMcpWrite` | mcp | Disables MCP write access for the caller's own account; no step-up is needed. |
+| `feedAuditEvents` | audit | Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. |
 | `generateAutoinstall` | enrollment-tokens | Generates the Ubuntu autoinstall user-data that installs one device with Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. |
 | `getMcpAccess` | mcp | What the caller's MCP sessions may do under the MCP policy of its scope (the organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and write_enabled, and the account opted in) and the caller's role may perform them. |
 | `getMcpCatalog` | mcp | The MCP tool catalog shared by paddockctl mcp and the server's MCP guard: one entry per admin API operation outside the tag auth, with its class, scope and whether the MCP offers it at all (ADR 0044 decision 5). |
