@@ -1582,6 +1582,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/rollout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The settings of staged configuration rollouts (plan M11 decision 24); the defaults (rollouts off) until changed. */
+        get: operations["getRolloutSettings"];
+        /**
+         * @description Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1
+         *     and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent
+         *     (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first.
+         *     An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404
+         *     not_found. A rollout that is already running keeps the values it started with.
+         */
+        put: operations["updateRolloutSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/privacy": {
         parameters: {
             query?: never;
@@ -4347,6 +4371,35 @@ export interface components {
             staleness_critical_h: number;
             /** @description Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it. */
             agent_update_policy?: components["schemas"]["AgentUpdatePolicy"];
+        };
+        RolloutSettings: {
+            /** @description Staged configuration rollouts are off by default. */
+            enabled: boolean;
+            waves: number[];
+            min_wave_minutes: number;
+            failure_threshold_percent: number;
+            failure_threshold_min: number;
+            /**
+             * Format: uuid
+             * @description Devices of this group always go first; null = none.
+             */
+            canary_device_group_id: string | null;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        RolloutSettingsUpdate: {
+            enabled: boolean;
+            /** @description Strictly increasing, ending with 100. */
+            waves: number[];
+            /** @description At least 15 (1 in a development stack). */
+            min_wave_minutes: number;
+            failure_threshold_percent: number;
+            failure_threshold_min: number;
+            /**
+             * Format: uuid
+             * @description Omit or null for none.
+             */
+            canary_device_group_id?: string | null;
         };
         PrivacySettings: {
             retired_inventory_days: number;
@@ -8370,6 +8423,58 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    getRolloutSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rollout settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolloutSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateRolloutSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RolloutSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolloutSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
         };
     };
     getPrivacySettings: {

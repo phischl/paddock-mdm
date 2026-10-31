@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "1596d6f2f4103a085aa33c83c08f19d149f7b484c68f4f7834800bebbca07766"
+const Version = "5bd60e1466000d0ff76bce4f3c9dcc2d97c3b886ec668176153d9f3d2534d2a6"
 
 var tools = []Tool{
 	{
@@ -1375,6 +1375,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getRolloutSettings",
+		Method:      "GET",
+		Path:        "/api/v1/settings/rollout",
+		Pattern:     "GET /api/v1/settings/rollout",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The settings of staged configuration rollouts (plan M11 decision 24); the defaults (rollouts off) until changed.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "getSecurityReview",
@@ -2905,6 +2923,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Changes the device group scope (null = every device). The assignment of a profile that is effectively Full needs a step-up within the last 300 s (403 step_up_required); API tokens cannot satisfy it.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"description\":\"A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that\\ngives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a\\nstep-up (403 step_up_required); API tokens cannot satisfy it.\\n\",\"properties\":{\"device_group_id\":{\"format\":\"uuid\",\"type\":[\"string\",\"null\"]}},\"required\":[\"device_group_id\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "updateRolloutSettings",
+		Method:      "PUT",
+		Path:        "/api/v1/settings/rollout",
+		Pattern:     "PUT /api/v1/settings/rollout",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "settings.rollout_changed",
+		Summary:     "",
+		Description: "Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first. An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404 not_found. A rollout that is already running keeps the values it started with.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"canary_device_group_id\":{\"description\":\"Omit or null for none.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"enabled\":{\"type\":\"boolean\"},\"failure_threshold_min\":{\"minimum\":0,\"type\":\"integer\"},\"failure_threshold_percent\":{\"maximum\":100,\"minimum\":0,\"type\":\"integer\"},\"min_wave_minutes\":{\"description\":\"At least 15 (1 in a development stack).\",\"type\":\"integer\"},\"waves\":{\"description\":\"Strictly increasing, ending with 100.\",\"items\":{\"maximum\":100,\"minimum\":1,\"type\":\"integer\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"enabled\",\"waves\",\"min_wave_minutes\",\"failure_threshold_percent\",\"failure_threshold_min\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "updateUpdateSettings",

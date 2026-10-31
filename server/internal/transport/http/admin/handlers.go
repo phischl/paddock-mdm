@@ -52,19 +52,20 @@ type handlers struct {
 	conversions   *app.DiskConversions
 	privileges    *app.Privileges
 
-	commands    *app.DeviceCommands
-	localAdmin  *app.LocalAdmin
-	autoinstall *app.Autoinstall
-	disk        *app.Disk
-	revocations *app.Revocations
-	dms         *app.DMS
-	inventory   *app.Inventory
-	updates     *app.Updates
-	privacy     *app.Privacy
-	readAudit   *app.ReadAudit
-	attention   *app.Attention
-	ipAllowlist *app.IPAllowlist
-	overview    *app.Overview
+	commands        *app.DeviceCommands
+	localAdmin      *app.LocalAdmin
+	autoinstall     *app.Autoinstall
+	disk            *app.Disk
+	revocations     *app.Revocations
+	dms             *app.DMS
+	inventory       *app.Inventory
+	updates         *app.Updates
+	rolloutSettings *app.RolloutSettings
+	privacy         *app.Privacy
+	readAudit       *app.ReadAudit
+	attention       *app.Attention
+	ipAllowlist     *app.IPAllowlist
+	overview        *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).

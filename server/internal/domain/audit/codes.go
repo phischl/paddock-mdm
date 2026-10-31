@@ -213,6 +213,9 @@ const (
 	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
 	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
 
+	// Rollout settings per organization (plan M11 decisions 23 and 24).
+	CodeSettingsRolloutChanged Code = "settings.rollout_changed"
+
 	// Read-access recording, coalesced per actor and window (ADR 0032 §4, plan M10 §6.4).
 	CodeAuditSearched         Code = "audit.searched"
 	CodeDeviceInventoryViewed Code = "device.inventory_viewed"
@@ -1332,6 +1335,14 @@ var registry = map[Code]Definition{
 		Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
 		Params:      []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeSettingsRolloutChanged: {
+		Code: CodeSettingsRolloutChanged, Emitted: true,
+		Description: "An organization administrator changed the settings of staged configuration rollouts: whether they are on, the waves, the minimum wave duration, the failure threshold and the canary device group. A running rollout keeps the values it started with.",
+		Params: []string{"enabled", "waves", "min_wave_minutes", "failure_threshold_percent", "failure_threshold_min",
+			"canary_device_group_id"},
+		Outcomes: adminOutcomes,
+		Note:     "failure with invalid_request for invalid waves, a minimum wave duration below the minimum or a threshold out of range, and with not_found for an unknown or foreign canary device group.",
 	},
 	CodeAuditSearched: {
 		Code: CodeAuditSearched, Emitted: true,

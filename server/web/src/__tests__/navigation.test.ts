@@ -102,7 +102,7 @@ describe('navigation drawer', () => {
       'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package holds', 'Change sets',
       'Security review', 'Revocations', "Dead man's switch", 'Login & privileges',
       'Software', 'Vulnerabilities',
-      'Users', 'Groups', 'API tokens', 'MCP', 'Updates', 'Privacy', 'Audit log', 'Evidence integrity', 'Evidence exports',
+      'Users', 'Groups', 'API tokens', 'MCP', 'Updates', 'Rollouts', 'Privacy', 'Audit log', 'Evidence integrity', 'Evidence exports',
     ])
     const security = w.find('[data-testid="nav-group-security"]')
     expect(security.attributes('role')).toBe('group')
@@ -198,10 +198,10 @@ describe('navigation drawer', () => {
   it('is one Tab stop with a roving tabindex: Up/Down move, Home/End jump', async () => {
     const { w } = await mountApp(admin, '/managed-files')
     const links = drawer(w).findAll('a.pd-nav-item')
-    expect(links.length).toBe(26)
+    expect(links.length).toBe(27)
     const stops = links.filter((a) => a.attributes('tabindex') === '0')
     expect(stops.map((a) => a.attributes('href'))).toEqual(['/managed-files'])
-    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(25)
+    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(26)
 
     ;(stops[0].element as HTMLElement).focus()
     await stops[0].trigger('keydown', { key: 'ArrowDown' })

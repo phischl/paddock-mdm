@@ -159,6 +159,7 @@ export const auditCodes = [
   'settings.login_changed',
   'settings.managed_files_changed',
   'settings.privacy_changed',
+  'settings.rollout_changed',
   'settings.updates_changed',
   'user.created',
   'user.deleted',
