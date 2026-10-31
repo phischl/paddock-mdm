@@ -553,10 +553,13 @@ const (
 	BundleModeReportOnly = "report_only"
 )
 
-// Per-resource statuses of bundle.applied; drifted and pending are derived by the server.
+// Per-resource statuses (plan M11 decision 3). The agent reports applied and failed in bundle.applied; pending is
+// reported by a report-only apply and drift_corrected is set by the server from config.drift_corrected.
 const (
-	ResourceApplied = "applied"
-	ResourceFailed  = "failed"
+	ResourceApplied        = "applied"
+	ResourceFailed         = "failed"
+	ResourcePending        = "pending"
+	ResourceDriftCorrected = "drift_corrected"
 )
 
 // BundleAppliedResource is the outcome of one resource in the data of bundle.applied. Changes lists what a

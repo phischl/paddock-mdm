@@ -197,13 +197,16 @@ func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.
 		}
 		rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: res.ID, Status: protocol.ResourceApplied})
 	}
-	if !hasLogin(b) && keep(bundle.Resource{ID: reconcile.DenyListID}) {
+	if !hasLogin(b) && keep(bundle.Resource{ID: reconcile.DenyListID}) && a.login.DenyListManaged() {
 		switch written, err := a.login.EnsureDenyList(); {
 		case err != nil:
 			rep.fail(reconcile.DenyListID, err.Error())
-		case written:
-			rep.Changed++
-			rep.ChangedIDs = append(rep.ChangedIDs, reconcile.DenyListID)
+		default:
+			if written {
+				rep.Changed++
+				rep.ChangedIDs = append(rep.ChangedIDs, reconcile.DenyListID)
+			}
+			// Also when already in place: the server drops status rows that are missing from the next report.
 			rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: reconcile.DenyListID, Status: protocol.ResourceApplied})
 		}
 	}

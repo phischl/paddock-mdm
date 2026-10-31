@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -352,4 +354,45 @@ func TestStaleFileOutcomes(t *testing.T) {
 	if e := got["file:/etc/edited"]; e.Status != protocol.ResourceFailed || e.Message != "left_modified_file" {
 		t.Errorf("kept file: %+v", e)
 	}
+}
+
+func denyListOutcome(rep apply.Report) (protocol.BundleAppliedResource, bool) {
+	for _, r := range rep.Resources {
+		if r.ID == reconcile.DenyListID {
+			return r, true
+		}
+	}
+	return protocol.BundleAppliedResource{}, false
+}
+
+func TestDenyListOutcomes(t *testing.T) {
+	ctx := context.Background()
+	sys, a := fixture(t)
+	b := newBundle(t, 1, nil)
+	if _, ok := denyListOutcome(a.Apply(ctx, b)); ok {
+		t.Fatal("deny list reported without the PAM profile")
+	}
+	sys.Files["/etc/pam.d/common-auth"] = &fakesys.File{Data: []byte(reconcile.DenyAuthLine + "\n"), Mode: 0o644}
+	want := protocol.BundleAppliedResource{ID: reconcile.DenyListID, Status: protocol.ResourceApplied}
+	for _, step := range []string{"written", "already in place"} {
+		if got, ok := denyListOutcome(a.Apply(ctx, b)); !ok || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: %+v, %v", step, got, ok)
+		}
+	}
+	delete(sys.Files, reconcile.DenyList)
+	m, err := reconcile.LoadManaged(filepath.Join(t.TempDir(), "managed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := apply.New(failingWrites{sys}, m, nil).Apply(ctx, b)
+	if got, ok := denyListOutcome(rep); !ok || got.Status != protocol.ResourceFailed || got.Message == "" || len(rep.Errors) != 1 {
+		t.Fatalf("failed: %+v, %v, errors %+v", got, ok, rep.Errors)
+	}
+}
+
+// failingWrites makes every write fail like a full disk.
+type failingWrites struct{ *fakesys.System }
+
+func (failingWrites) WriteFileAtomic(string, []byte, fs.FileMode, int, int) error {
+	return errors.New("disk full")
 }

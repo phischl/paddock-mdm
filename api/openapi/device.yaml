@@ -389,6 +389,9 @@ components:
         version: { type: integer, format: int64 }
         sha256: { type: string, description: Hex SHA-256 of the DSSE envelope object. }
         url: { type: string, description: "Presigned GET URL on bundles.<domain>, valid for 120 s." }
+      description: >-
+        The signed bundle the URL serves may carry mode: report_only (plan M11); absent means enforce and any other
+        value is rejected by the agent as a schema error.
     CheckinResponse:
       type: object
       required: [seq, server_time, bundle, next_checkin_s]
@@ -530,7 +533,7 @@ components:
       required: [id, status]
       properties:
         id: { type: string, description: "Resource ID, e.g. file:/etc/motd." }
-        status: { type: string, enum: [applied, failed], description: "Outcome of the apply of this resource." }
+        status: { type: string, enum: [applied, failed], description: "Outcome of the apply of this resource; pending follows with the report-only apply (PDK-161)." }
         message: { type: string, description: Error message of a failed resource. }
         changes: { type: array, items: { type: string }, description: What a report-only apply would change. }
     EventsRequest:
