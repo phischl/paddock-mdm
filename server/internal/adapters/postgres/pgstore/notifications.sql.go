@@ -53,15 +53,6 @@ func (q *Queries) DeleteNotificationDestination(ctx context.Context, id uuid.UUI
 	return result.RowsAffected(), nil
 }
 
-const deleteNotificationPseudonymLookup = `-- name: DeleteNotificationPseudonymLookup :exec
-DELETE FROM notification_pseudonym_lookup WHERE id = $1
-`
-
-func (q *Queries) DeleteNotificationPseudonymLookup(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteNotificationPseudonymLookup, id)
-	return err
-}
-
 const getNotificationDestination = `-- name: GetNotificationDestination :one
 SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.codes, d.pseudonymize_users,
        d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.created_by,
@@ -438,6 +429,16 @@ func (q *Queries) LockNotificationDestination(ctx context.Context, id uuid.UUID)
 	return i, err
 }
 
+const lockNotificationPseudonymLookups = `-- name: LockNotificationPseudonymLookups :exec
+SELECT pg_advisory_xact_lock(hashtextextended('paddock.notification_pseudonym_lookup:' || CAST($1::uuid AS text), 0))
+`
+
+// Serializes the pending check and the insert of lookup requests of one organization.
+func (q *Queries) LockNotificationPseudonymLookups(ctx context.Context, organizationID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockNotificationPseudonymLookups, organizationID)
+	return err
+}
+
 const notificationPseudonymKeyExists = `-- name: NotificationPseudonymKeyExists :one
 SELECT EXISTS (SELECT 1 FROM notification_pseudonym_key) AS present
 `
@@ -447,6 +448,36 @@ func (q *Queries) NotificationPseudonymKeyExists(ctx context.Context) (bool, err
 	var present bool
 	err := row.Scan(&present)
 	return present, err
+}
+
+const pendingNotificationPseudonymLookupExists = `-- name: PendingNotificationPseudonymLookupExists :one
+SELECT EXISTS (
+  SELECT 1 FROM notification_pseudonym_lookup WHERE resolved_at IS NULL AND created_at > now() - interval '10 minutes'
+) AS pending
+`
+
+// An unresolved pseudonym lookup of the organization (lookups belong to the organization, not to a destination)
+// younger than the 10 minutes after which the notifier deletes lookups.
+func (q *Queries) PendingNotificationPseudonymLookupExists(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, pendingNotificationPseudonymLookupExists)
+	var pending bool
+	err := row.Scan(&pending)
+	return pending, err
+}
+
+const pendingNotificationTestExists = `-- name: PendingNotificationTestExists :one
+SELECT EXISTS (
+  SELECT 1 FROM notification_delivery
+  WHERE destination_id = $1 AND kind = 'test' AND delivered_at IS NULL AND last_error IS NULL
+) AS pending
+`
+
+// A test delivery of the destination the notifier has not attempted yet.
+func (q *Queries) PendingNotificationTestExists(ctx context.Context, destinationID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, pendingNotificationTestExists, destinationID)
+	var pending bool
+	err := row.Scan(&pending)
+	return pending, err
 }
 
 const startNotificationDestinationAtLatest = `-- name: StartNotificationDestinationAtLatest :one
@@ -471,6 +502,24 @@ func (q *Queries) StartPlatformNotificationDestinationAtLatest(ctx context.Conte
 	var started bool
 	err := row.Scan(&started)
 	return started, err
+}
+
+const takeResolvedNotificationPseudonymLookup = `-- name: TakeResolvedNotificationPseudonymLookup :one
+DELETE FROM notification_pseudonym_lookup WHERE id = $1 AND resolved_at IS NOT NULL
+RETURNING pseudonym, resolved_username
+`
+
+type TakeResolvedNotificationPseudonymLookupRow struct {
+	Pseudonym        string
+	ResolvedUsername *string
+}
+
+// Reads and deletes a resolved lookup in one statement: of concurrent reads exactly one receives the user name.
+func (q *Queries) TakeResolvedNotificationPseudonymLookup(ctx context.Context, id uuid.UUID) (TakeResolvedNotificationPseudonymLookupRow, error) {
+	row := q.db.QueryRow(ctx, takeResolvedNotificationPseudonymLookup, id)
+	var i TakeResolvedNotificationPseudonymLookupRow
+	err := row.Scan(&i.Pseudonym, &i.ResolvedUsername)
+	return i, err
 }
 
 const updateNotificationDestination = `-- name: UpdateNotificationDestination :exec

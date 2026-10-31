@@ -194,6 +194,8 @@ func TestNotificationDestinations(t *testing.T) {
 			t.Fatalf("test: %s", res.Body)
 		}
 		expectOneEvent(t, admin.Portal, res.RequestID, "notification.test_requested", "success")
+		res = call(t, admin.Portal, http.MethodPost, path+"/test", nil)
+		expectStatus(t, res, http.StatusConflict, "invalid_state")
 	})
 
 	t.Run("resolve pseudonym", func(t *testing.T) {
@@ -210,6 +212,9 @@ func TestNotificationDestinations(t *testing.T) {
 		if err := res.JSON(&lookup); err != nil || lookup.LookupID == "" {
 			t.Fatalf("resolve: %s", res.Body)
 		}
+		deleteLookupOnCleanup(t, lookup.LookupID)
+		res2 := call(t, admin.Portal, http.MethodPost, collection+"/"+d.ID+"/resolve-pseudonym", map[string]any{"pseudonym": pseudonym})
+		expectStatus(t, res2, http.StatusConflict, "invalid_state")
 		ev := expectOneEvent(t, admin.Portal, res.RequestID, "notification.pseudonym_resolved", "success")
 		if ev.Params["pseudonym"] != pseudonym || ev.Target == nil || ev.Target.Type != "organization" {
 			t.Fatalf("resolve event %+v", ev)

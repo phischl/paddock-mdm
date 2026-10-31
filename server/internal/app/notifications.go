@@ -220,7 +220,7 @@ func (n *Notifications) Create(ctx context.Context, scope Scope, in Notification
 	var secret string
 	spec := withDestinationParams(scopedSpec(scope, SpecNotificationCreate, SpecPlatformNotificationCreate), in)
 	err := n.runner.RunTx(ctx, scope, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		if err := n.validate(ctx, scope, in, true); err != nil {
+		if err := n.validate(ctx, scope, in, true, true); err != nil {
 			return err
 		}
 		org := scopeOrganization(ctx, scope)
@@ -286,6 +286,10 @@ func (n *Notifications) Update(ctx context.Context, scope Scope, id uuid.UUID, i
 	var out NotificationDestination
 	spec := withDestinationParams(scopedSpec(scope, SpecNotificationUpdate, SpecPlatformNotificationUpdate), in)
 	spec.Params["cursor"] = in.Cursor
+	// The type-dependent params come from the stored destination: the body may omit the type and the URL.
+	for _, k := range []string{"type", "url_display", "recipient_count"} {
+		delete(spec.Params, k)
+	}
 	err := n.runner.RunTx(ctx, scope, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if _, err := q.LockNotificationDestination(ctx, id); err != nil {
 			return notFound(err)
@@ -295,14 +299,28 @@ func (n *Notifications) Update(ctx context.Context, scope Scope, id uuid.UUID, i
 			return err
 		}
 		rec.SetTarget(destinationTarget(id, cur.Name))
+		rec.SetParam("type", cur.Type)
+		switch outbound.Type(cur.Type) {
+		case outbound.TypeWebhook:
+			display := ""
+			if cur.UrlDisplay != nil {
+				display = *cur.UrlDisplay
+			}
+			if in.URL != nil {
+				display = outbound.DisplayURL(*in.URL)
+			}
+			rec.SetParam("url_display", display)
+		case outbound.TypeEmail:
+			rec.SetParam("recipient_count", len(in.Recipients))
+		}
 		if in.Type != "" && string(in.Type) != cur.Type {
 			return problem.InvalidRequest.WithDetail("the type of a destination cannot change; create a new destination")
 		}
 		in.Type = outbound.Type(cur.Type)
-		if err := n.validate(ctx, scope, in, in.URL != nil); err != nil {
+		enabling := in.Enabled && !cur.Enabled
+		if err := n.validate(ctx, scope, in, in.URL != nil, enabling); err != nil {
 			return err
 		}
-		enabling := in.Enabled && !cur.Enabled
 		switch {
 		case enabling && in.Cursor != CursorContinue && in.Cursor != CursorSkip:
 			return problem.InvalidRequest.WithDetail("enabling a disabled destination requires cursor continue or skip")
@@ -415,13 +433,20 @@ func (n *Notifications) Test(ctx context.Context, scope Scope, id uuid.UUID) (uu
 	spec := scopedSpec(scope, SpecNotificationTest, SpecPlatformNotificationTest)
 	spec.Params = map[string]any{"destination_id": id.String()}
 	err := n.runner.RunTx(ctx, scope, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		cur, err := q.GetNotificationDestination(ctx, id)
+		cur, err := q.LockNotificationDestination(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
 		rec.SetTarget(destinationTarget(id, cur.Name))
 		rec.SetParam("name", cur.Name)
 		rec.SetParam("type", cur.Type)
+		pending, err := q.PendingNotificationTestExists(ctx, id)
+		if err != nil {
+			return err
+		}
+		if pending {
+			return problem.InvalidState.WithDetail("a test delivery of this destination is still pending; wait for its result")
+		}
 		requestedBy := actorDisplay(ctx)
 		return foreignNotFound(q.InsertNotificationTestDelivery(ctx, pgstore.InsertNotificationTestDeliveryParams{
 			ID: deliveryID, DestinationID: id, OrganizationID: scopeOrganization(ctx, scope), RequestedBy: &requestedBy,
@@ -439,7 +464,10 @@ func (n *Notifications) Test(ctx context.Context, scope Scope, id uuid.UUID) (uu
 func (n *Notifications) ResolvePseudonym(ctx context.Context, id uuid.UUID, pseudonym string) (uuid.UUID, error) {
 	lookupID := uuid.Must(uuid.NewV7())
 	spec := SpecNotificationResolvePseudonym
-	spec.Params = map[string]any{"pseudonym": pseudonym}
+	// A malformed value is never recorded: it may be anything the caller typed, including a real user name.
+	if pseudonymPattern.MatchString(pseudonym) {
+		spec.Params = map[string]any{"pseudonym": pseudonym}
+	}
 	err := n.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		org := scopeOrganization(ctx, ScopeOrg)
 		rec.SetTarget(audit.Target{Type: "organization", ID: org.String()})
@@ -455,6 +483,16 @@ func (n *Notifications) ResolvePseudonym(ctx context.Context, id uuid.UUID, pseu
 		}
 		if !present {
 			return problem.InvalidState.WithDetail("the organization has no pseudonym key: no destination pseudonymizes user names")
+		}
+		if err := q.LockNotificationPseudonymLookups(ctx, org); err != nil {
+			return err
+		}
+		pending, err := q.PendingNotificationPseudonymLookupExists(ctx)
+		if err != nil {
+			return err
+		}
+		if pending {
+			return problem.InvalidState.WithDetail("a pseudonym lookup of the organization is still pending; wait for its result")
 		}
 		return q.InsertNotificationPseudonymLookup(ctx, pgstore.InsertNotificationPseudonymLookupParams{
 			ID: lookupID, OrganizationID: org, Pseudonym: pseudonym, RequestedBy: actorDisplay(ctx),
@@ -477,27 +515,33 @@ func (n *Notifications) PseudonymLookup(ctx context.Context, id, lookupID uuid.U
 		if _, err := q.GetNotificationDestination(ctx, id); err != nil {
 			return notFound(err)
 		}
+		taken, err := q.TakeResolvedNotificationPseudonymLookup(ctx, lookupID)
+		if err == nil {
+			out.Pseudonym, out.Resolved, out.Username = taken.Pseudonym, true, taken.ResolvedUsername
+			if out.Username == nil {
+				none := ""
+				out.Username = &none
+			}
+			return nil
+		}
+		if !db.IsNoRows(err) {
+			return err
+		}
 		row, err := q.GetNotificationPseudonymLookup(ctx, lookupID)
 		if err != nil {
 			return notFound(err)
 		}
 		out.Pseudonym = row.Pseudonym
-		if row.ResolvedAt == nil {
-			return nil
-		}
-		out.Resolved, out.Username = true, row.ResolvedUsername
-		if out.Username == nil {
-			none := ""
-			out.Username = &none
-		}
-		return q.DeleteNotificationPseudonymLookup(ctx, lookupID)
+		return nil
 	})
 	return out, err
 }
 
-// validate checks a destination: type, e-mail availability, custom codes against the registry, the remaining rules of
-// plan M9 decision 9, and the URL when checkURL is set. Platform destinations never pseudonymize (decision 18).
-func (n *Notifications) validate(ctx context.Context, scope Scope, in NotificationDestinationInput, checkURL bool) error {
+// validate checks a destination: type, custom codes against the registry, the remaining rules of plan M9 decision 9,
+// the URL when checkURL is set, and the SMTP relay when requireEmail is set (creating or enabling an e-mail
+// destination; disabling or renaming one works without a relay). Platform destinations never pseudonymize
+// (decision 18).
+func (n *Notifications) validate(ctx context.Context, scope Scope, in NotificationDestinationInput, checkURL, requireEmail bool) error {
 	switch in.Type {
 	case outbound.TypeWebhook:
 		if checkURL && in.URL == nil {
@@ -507,7 +551,7 @@ func (n *Notifications) validate(ctx context.Context, scope Scope, in Notificati
 		if in.URL != nil {
 			return problem.InvalidRequest.WithDetail("an e-mail destination has no url")
 		}
-		if !n.emailEnabled {
+		if requireEmail && !n.emailEnabled {
 			return problem.EmailNotConfigured.WithDetail("this installation has no SMTP relay (PADDOCK_SMTP_ENABLED)")
 		}
 	default:

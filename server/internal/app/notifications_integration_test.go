@@ -58,6 +58,8 @@ type notificationWorld struct {
 	n     *app.Notifications
 	keys  *fakeKeys
 	other uuid.UUID
+	// with builds the use cases on the same pools with another SMTP setting.
+	with func(emailEnabled bool) *app.Notifications
 }
 
 func newNotificationWorld(t *testing.T, emailEnabled bool) notificationWorld {
@@ -80,8 +82,10 @@ func newNotificationWorld(t *testing.T, emailEnabled bool) notificationWorld {
 		"hooks.example.org":    {netip.MustParseAddr("93.184.215.14")},
 		"intranet.example.org": {netip.MustParseAddr("10.1.2.3")},
 	}}
-	w := notificationWorld{harness: h, keys: keys, other: uuid.Must(uuid.NewV7()),
-		n: app.NewNotifications(h.runner, orgPool, platformPool, keys, policy, emailEnabled)}
+	with := func(emailEnabled bool) *app.Notifications {
+		return app.NewNotifications(h.runner, orgPool, platformPool, keys, policy, emailEnabled)
+	}
+	w := notificationWorld{harness: h, keys: keys, other: uuid.Must(uuid.NewV7()), n: with(emailEnabled), with: with}
 	if _, err := h.super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Other', 'active')",
 		w.other, "o"+w.other.String()[24:]); err != nil {
 		t.Fatal(err)
@@ -264,6 +268,31 @@ func TestNotificationDestinationEmail(t *testing.T) {
 	in.Recipients = []string{"Sec Ops <secops@example.org>"}
 	_, _, err = w.n.Create(ctx, app.ScopeOrg, in)
 	wantProblem(t, err, problem.InvalidRequest, "display name")
+
+	// Without a relay an existing e-mail destination can still be renamed and disabled, but not enabled again.
+	off := w.with(false)
+	upd := app.NotificationDestinationInput{Name: "secops renamed", Enabled: true, FilterMode: outbound.FilterAll,
+		Recipients: []string{"a@example.org"}, EmailMinIntervalS: 600}
+	if got, err := off.Update(ctx, app.ScopeOrg, d.ID, upd); err != nil || got.Name != "secops renamed" {
+		t.Fatalf("rename without SMTP: %+v %v", got, err)
+	}
+	upd.Enabled = false
+	if got, err := off.Update(ctx, app.ScopeOrg, d.ID, upd); err != nil || got.Enabled {
+		t.Fatalf("disable without SMTP: %+v %v", got, err)
+	}
+	upd.Enabled, upd.Cursor = true, app.CursorContinue
+	_, err = off.Update(ctx, app.ScopeOrg, d.ID, upd)
+	wantProblem(t, err, problem.EmailNotConfigured, "enabling without SMTP")
+	if _, err := w.n.Update(ctx, app.ScopeOrg, d.ID, upd); err != nil {
+		t.Fatalf("enabling with SMTP: %v", err)
+	}
+	_, events := w.recorded(t, "corr-"+t.Name())
+	for _, ev := range events {
+		if ev.Code == audit.CodeNotificationDestinationUpdated && ev.Outcome == audit.OutcomeSuccess &&
+			(ev.Params["type"] != "email" || ev.Params["recipient_count"] != float64(1)) {
+			t.Fatalf("e-mail update params %v", ev.Params)
+		}
+	}
 }
 
 // TestNotificationDestinationUpdate: the URL is kept without url and replaced with one, the type never changes, and
@@ -348,8 +377,9 @@ func TestNotificationDestinationUpdate(t *testing.T) {
 			last = ev
 		}
 	}
-	if last.Params["cursor"] != "skip" || fmt.Sprint(last.Params["changed"]) != "[enabled]" {
-		t.Fatalf("last update params %v", last.Params)
+	if last.Params["cursor"] != "skip" || fmt.Sprint(last.Params["changed"]) != "[enabled]" ||
+		last.Params["type"] != "webhook" || last.Params["url_display"] != "https://hooks.example.org" {
+		t.Fatalf("last update params %v, want the stored type and URL display of a PUT without type and url", last.Params)
 	}
 }
 
@@ -542,6 +572,14 @@ func TestNotificationDestinationSecretTestAndDelete(t *testing.T) {
 	if kind != "test" || requestedBy != "alice" || delivered != nil {
 		t.Fatalf("delivery %s %s %v", kind, requestedBy, delivered)
 	}
+	_, err = w.n.Test(ctx, app.ScopeOrg, d.ID)
+	wantProblem(t, err, problem.InvalidState, "a second test while the first is pending")
+	if _, err := w.super.Exec(bg, "UPDATE notification_delivery SET delivered_at = now(), attempts = 1 WHERE id = $1", deliveryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.n.Test(ctx, app.ScopeOrg, d.ID); err != nil {
+		t.Fatalf("a test after the first was delivered: %v", err)
+	}
 	_, events := w.recorded(t, "corr-"+t.Name())
 	for _, ev := range events {
 		if ev.Code == audit.CodeNotificationTestRequested && ev.Params["destination_id"] != d.ID.String() {
@@ -607,6 +645,8 @@ func TestNotificationPseudonymLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = w.n.ResolvePseudonym(ctx, plain.ID, "u_ffffffffffffffffffffffff")
+	wantProblem(t, err, problem.InvalidState, "a second lookup while the first is pending")
 	got, err := w.n.PseudonymLookup(ctx, plain.ID, lookupID)
 	if err != nil || got.Resolved || got.Username != nil || got.Pseudonym != pseudonym {
 		t.Fatalf("unresolved lookup %+v %v", got, err)
@@ -620,24 +660,60 @@ func TestNotificationPseudonymLookup(t *testing.T) {
 	if _, err := w.super.Exec(bg, "UPDATE notification_pseudonym_lookup SET resolved_username = 'jdoe', resolved_at = now() WHERE id = $1", lookupID); err != nil {
 		t.Fatal(err)
 	}
-	got, err = w.n.PseudonymLookup(ctx, plain.ID, lookupID)
-	if err != nil || !got.Resolved || got.Username == nil || *got.Username != "jdoe" {
-		t.Fatalf("resolved lookup %+v %v", got, err)
+	// Of concurrent reads of a resolved lookup exactly one receives the user name; the others find it gone.
+	const readers = 8
+	results := make(chan error, readers)
+	names := make(chan string, readers)
+	var start sync.WaitGroup
+	start.Add(1)
+	for range readers {
+		go func() {
+			start.Wait()
+			got, err := w.n.PseudonymLookup(ctx, plain.ID, lookupID)
+			if err == nil && got.Resolved && got.Username != nil {
+				names <- *got.Username
+			}
+			results <- err
+		}()
 	}
-	if _, err := w.n.PseudonymLookup(ctx, plain.ID, lookupID); !errors.Is(err, problem.NotFound) {
-		t.Fatalf("second read: %v", err)
+	start.Done()
+	notFound := 0
+	for range readers {
+		if err := <-results; errors.Is(err, problem.NotFound) {
+			notFound++
+		} else if err != nil {
+			t.Fatalf("concurrent read: %v", err)
+		}
+	}
+	close(names)
+	var got1 []string
+	for n := range names {
+		got1 = append(got1, n)
+	}
+	if len(got1) != 1 || got1[0] != "jdoe" || notFound != readers-1 {
+		t.Fatalf("names %v, %d not found; want exactly one reader to get jdoe", got1, notFound)
+	}
+	if _, err := w.n.ResolvePseudonym(ctx, plain.ID, "u_ffffffffffffffffffffffff"); err != nil {
+		t.Fatalf("a lookup after the first was resolved: %v", err)
 	}
 	_, events := w.recorded(t, "corr-"+t.Name())
 	resolved := 0
 	for _, ev := range events {
 		if ev.Code == audit.CodeNotificationPseudonymResolved && ev.Outcome == audit.OutcomeSuccess {
 			resolved++
-			if ev.Params["pseudonym"] != pseudonym || ev.Target == nil || ev.Target.Type != "organization" || ev.Target.ID != w.org.String() {
+			if (ev.Params["pseudonym"] != pseudonym && ev.Params["pseudonym"] != "u_ffffffffffffffffffffffff") || ev.Target == nil || ev.Target.Type != "organization" || ev.Target.ID != w.org.String() {
 				t.Fatalf("resolve event %+v", ev)
 			}
 		}
 	}
-	if resolved != 1 {
-		t.Fatalf("%d successful resolve events, want 1", resolved)
+	if resolved != 2 {
+		t.Fatalf("%d successful resolve events, want 2", resolved)
+	}
+	for _, ev := range events {
+		if ev.Code == audit.CodeNotificationPseudonymResolved && ev.Outcome == audit.OutcomeFailure && ev.ErrorCode == "invalid_request" {
+			if _, ok := ev.Params["pseudonym"]; ok {
+				t.Fatalf("a malformed pseudonym was recorded: %v", ev.Params)
+			}
+		}
 	}
 }

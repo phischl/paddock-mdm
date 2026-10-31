@@ -2718,7 +2718,8 @@ paths:
         secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
         Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
         resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
-        is refused otherwise). Needs a step-up within the last 5 minutes (403 step_up_required).
+        is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+        disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
       x-paddock-audit: notification.destination_updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -2790,7 +2791,8 @@ paths:
         Roles: org_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
         secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
         message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
-        Needs a step-up within the last 5 minutes (403 step_up_required).
+        409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+        minutes (403 step_up_required).
       x-paddock-audit: notification.test_requested
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -2804,6 +2806,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/notification-destinations/{id}/resolve-pseudonym:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -2815,8 +2818,8 @@ paths:
         Roles: org_admin. Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's
         notifications stands for. The api never decrypts the pseudonym key: the notifier resolves the lookup in its next
         round; GET …/resolve-pseudonym/{lookup_id} returns the result once. 400 invalid_request for a malformed
-        pseudonym, 409 invalid_state while no destination pseudonymizes user names. Needs a step-up within the last 5
-        minutes (403 step_up_required).
+        pseudonym (never recorded), 409 invalid_state while no destination pseudonymizes user names or while another
+        lookup of the organization is pending. Needs a step-up within the last 5 minutes (403 step_up_required).
       x-paddock-audit: notification.pseudonym_resolved
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -4950,7 +4953,8 @@ paths:
         secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
         Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
         resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
-        is refused otherwise). Needs a step-up within the last 5 minutes (403 step_up_required).
+        is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+        disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
       x-paddock-audit: notification.destination_updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -5022,7 +5026,8 @@ paths:
         Roles: platform_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
         secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
         message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
-        Needs a step-up within the last 5 minutes (403 step_up_required).
+        409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+        minutes (403 step_up_required).
       x-paddock-audit: notification.test_requested
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -5036,6 +5041,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
 components:
   securitySchemes:
@@ -7285,7 +7291,7 @@ components:
       additionalProperties: false
       required: [pseudonym]
       properties:
-        pseudonym: { type: string, description: "u_ and 24 lowercase hexadecimal characters." }
+        pseudonym: { type: string, pattern: '^u_[0-9a-f]{24}$', maxLength: 26, description: "u_ and 24 lowercase hexadecimal characters." }
     NotificationPseudonymRequested:
       type: object
       required: [lookup_id]

@@ -1708,7 +1708,8 @@ export interface paths {
          *     secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
          *     Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
          *     resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
-         *     is refused otherwise). Needs a step-up within the last 5 minutes (403 step_up_required).
+         *     is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+         *     disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
          */
         put: operations["updateNotificationDestination"];
         post?: never;
@@ -1760,7 +1761,8 @@ export interface paths {
          * @description Roles: org_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
          *     secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
          *     message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
-         *     Needs a step-up within the last 5 minutes (403 step_up_required).
+         *     409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+         *     minutes (403 step_up_required).
          */
         post: operations["testNotificationDestination"];
         delete?: never;
@@ -1784,8 +1786,8 @@ export interface paths {
          * @description Roles: org_admin. Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's
          *     notifications stands for. The api never decrypts the pseudonym key: the notifier resolves the lookup in its next
          *     round; GET …/resolve-pseudonym/{lookup_id} returns the result once. 400 invalid_request for a malformed
-         *     pseudonym, 409 invalid_state while no destination pseudonymizes user names. Needs a step-up within the last 5
-         *     minutes (403 step_up_required).
+         *     pseudonym (never recorded), 409 invalid_state while no destination pseudonymizes user names or while another
+         *     lookup of the organization is pending. Needs a step-up within the last 5 minutes (403 step_up_required).
          */
         post: operations["resolveNotificationPseudonym"];
         delete?: never;
@@ -3211,7 +3213,8 @@ export interface paths {
          *     secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
          *     Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
          *     resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
-         *     is refused otherwise). Needs a step-up within the last 5 minutes (403 step_up_required).
+         *     is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+         *     disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
          */
         put: operations["updatePlatformNotificationDestination"];
         post?: never;
@@ -3263,7 +3266,8 @@ export interface paths {
          * @description Roles: platform_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
          *     secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
          *     message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
-         *     Needs a step-up within the last 5 minutes (403 step_up_required).
+         *     409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+         *     minutes (403 step_up_required).
          */
         post: operations["testPlatformNotificationDestination"];
         delete?: never;
@@ -9396,6 +9400,7 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     resolveNotificationPseudonym: {
@@ -11920,6 +11925,7 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
 }

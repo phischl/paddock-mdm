@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "4b13bf2204ab4fd3e4ee230fc5e5d9599e9c7bbf4179e20c8ae10cbb5231a057"
+const Version = "4fc75c8145e6e96a5607d61e2f9612c3efb33108bec2a135d4c0a2fe3c66cb5c"
 
 var tools = []Tool{
 	{
@@ -2579,8 +2579,8 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "notification.pseudonym_resolved",
 		Summary:     "",
-		Description: "Roles: org_admin. Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's notifications stands for. The api never decrypts the pseudonym key: the notifier resolves the lookup in its next round; GET …/resolve-pseudonym/{lookup_id} returns the result once. 400 invalid_request for a malformed pseudonym, 409 invalid_state while no destination pseudonymizes user names. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
-		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"pseudonym\":{\"description\":\"u_ and 24 lowercase hexadecimal characters.\",\"type\":\"string\"}},\"required\":[\"pseudonym\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+		Description: "Roles: org_admin. Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's notifications stands for. The api never decrypts the pseudonym key: the notifier resolves the lookup in its next round; GET …/resolve-pseudonym/{lookup_id} returns the result once. 400 invalid_request for a malformed pseudonym (never recorded), 409 invalid_state while no destination pseudonymizes user names or while another lookup of the organization is pending. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"pseudonym\":{\"description\":\"u_ and 24 lowercase hexadecimal characters.\",\"maxLength\":26,\"pattern\":\"^u_[0-9a-f]{24}$\",\"type\":\"string\"}},\"required\":[\"pseudonym\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "resumeAgentRollout",
@@ -2885,7 +2885,7 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "notification.test_requested",
 		Summary:     "",
-		Description: "Roles: org_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test. 409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -2903,7 +2903,7 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "notification.test_requested",
 		Summary:     "",
-		Description: "Roles: platform_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: platform_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test. 409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -3137,7 +3137,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "notification.destination_updated",
 		Summary:     "",
-		Description: "Roles: org_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it. Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor is refused otherwise). Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it. Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay; disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"codes\":{\"items\":{\"type\":\"string\"},\"maxItems\":200,\"type\":\"array\"},\"cursor\":{\"description\":\"Required when the update enables a disabled destination.\",\"enum\":[\"continue\",\"skip\"],\"type\":\"string\"},\"email_min_interval_s\":{\"default\":300,\"type\":\"integer\"},\"enabled\":{\"type\":\"boolean\"},\"filter_mode\":{\"description\":\"security forwards the security preset of ADR 0031, all every event, custom the listed codes.\",\"enum\":[\"security\",\"all\",\"custom\"],\"type\":\"string\"},\"heartbeat_interval_s\":{\"default\":0,\"type\":\"integer\"},\"include_params\":{\"default\":false,\"type\":\"boolean\"},\"name\":{\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$\",\"type\":\"string\"},\"pseudonymize_users\":{\"default\":false,\"type\":\"boolean\"},\"recipients\":{\"items\":{\"type\":\"string\"},\"maxItems\":20,\"type\":\"array\"},\"type\":{\"enum\":[\"webhook\",\"email\"],\"type\":\"string\"},\"url\":{\"description\":\"Webhook only; absent keeps the stored URL.\",\"type\":\"string\"}},\"required\":[\"name\",\"enabled\",\"filter_mode\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -3227,7 +3227,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "notification.destination_updated",
 		Summary:     "",
-		Description: "Roles: platform_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it. Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor is refused otherwise). Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: platform_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it. Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay; disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"codes\":{\"items\":{\"type\":\"string\"},\"maxItems\":200,\"type\":\"array\"},\"cursor\":{\"description\":\"Required when the update enables a disabled destination.\",\"enum\":[\"continue\",\"skip\"],\"type\":\"string\"},\"email_min_interval_s\":{\"default\":300,\"type\":\"integer\"},\"enabled\":{\"type\":\"boolean\"},\"filter_mode\":{\"description\":\"security forwards the security preset of ADR 0031, all every event, custom the listed codes.\",\"enum\":[\"security\",\"all\",\"custom\"],\"type\":\"string\"},\"heartbeat_interval_s\":{\"default\":0,\"type\":\"integer\"},\"include_params\":{\"default\":false,\"type\":\"boolean\"},\"name\":{\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$\",\"type\":\"string\"},\"pseudonymize_users\":{\"default\":false,\"type\":\"boolean\"},\"recipients\":{\"items\":{\"type\":\"string\"},\"maxItems\":20,\"type\":\"array\"},\"type\":{\"enum\":[\"webhook\",\"email\"],\"type\":\"string\"},\"url\":{\"description\":\"Webhook only; absent keeps the stored URL.\",\"type\":\"string\"}},\"required\":[\"name\",\"enabled\",\"filter_mode\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{

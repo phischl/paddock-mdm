@@ -38,6 +38,9 @@ func orgDestinationCases(code, suffix, method string, success int, body func() a
 			s.stepUp(t)
 			res := call(t, s.Portal, method, path, body())
 			expectStatus(t, res, success, "")
+			if suffix == "/resolve-pseudonym" {
+				deleteLookupOnCleanup(t, responseLookupID(t, res))
+			}
 			expectOneEvent(t, w.alice, res.RequestID, code, "success")
 		}},
 		{"not found", func(t *testing.T, w *auditWorld) {
@@ -181,4 +184,15 @@ var notificationAuditCases = map[string][]auditCase{
 		"notification.destination_secret_rotated", "/rotate-secret", http.MethodPost, http.StatusOK, noBody),
 	"POST /api/platform/v1/notification-destinations/{id}/test": platformDestinationCases("notification.test_requested", "/test",
 		http.MethodPost, http.StatusAccepted, noBody),
+}
+
+func responseLookupID(t *testing.T, res env.Response) string {
+	t.Helper()
+	var out struct {
+		LookupID string `json:"lookup_id"`
+	}
+	if err := res.JSON(&out); err != nil || out.LookupID == "" {
+		t.Fatalf("lookup id: %v %s", err, res.Body)
+	}
+	return out.LookupID
 }

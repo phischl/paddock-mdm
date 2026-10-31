@@ -106,5 +106,25 @@ VALUES (@id, @organization_id, @pseudonym, @requested_by);
 -- name: GetNotificationPseudonymLookup :one
 SELECT id, pseudonym, resolved_username, resolved_at FROM notification_pseudonym_lookup WHERE id = @id;
 
--- name: DeleteNotificationPseudonymLookup :exec
-DELETE FROM notification_pseudonym_lookup WHERE id = @id;
+-- name: TakeResolvedNotificationPseudonymLookup :one
+-- Reads and deletes a resolved lookup in one statement: of concurrent reads exactly one receives the user name.
+DELETE FROM notification_pseudonym_lookup WHERE id = @id AND resolved_at IS NOT NULL
+RETURNING pseudonym, resolved_username;
+
+-- name: PendingNotificationTestExists :one
+-- A test delivery of the destination the notifier has not attempted yet.
+SELECT EXISTS (
+  SELECT 1 FROM notification_delivery
+  WHERE destination_id = @destination_id AND kind = 'test' AND delivered_at IS NULL AND last_error IS NULL
+) AS pending;
+
+-- name: PendingNotificationPseudonymLookupExists :one
+-- An unresolved pseudonym lookup of the organization (lookups belong to the organization, not to a destination)
+-- younger than the 10 minutes after which the notifier deletes lookups.
+SELECT EXISTS (
+  SELECT 1 FROM notification_pseudonym_lookup WHERE resolved_at IS NULL AND created_at > now() - interval '10 minutes'
+) AS pending;
+
+-- name: LockNotificationPseudonymLookups :exec
+-- Serializes the pending check and the insert of lookup requests of one organization.
+SELECT pg_advisory_xact_lock(hashtextextended('paddock.notification_pseudonym_lookup:' || CAST(@organization_id::uuid AS text), 0));
