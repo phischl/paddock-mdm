@@ -51,6 +51,7 @@
       "comfortable": "Komfortabel"
     },
     "shortcuts": "Tastenkürzel",
+    "reopenSetup": "Einrichtungsliste anzeigen",
     "collapseNavigation": "Navigation einklappen",
     "expandNavigation": "Navigation ausklappen",
     "switchRole": "{scope, select, organization {Zu {role} ({organization}) wechseln} other {Zu {role} wechseln}}",
@@ -2237,6 +2238,29 @@
         "organization": "Organisation",
         "platform": "Plattform"
       }
+    }
+  },
+  "setup": {
+    "title": "Paddock einrichten",
+    "progress": "{done} von {total} Schritten erledigt",
+    "dismiss": "Ausblenden",
+    "guide": "Anleitung",
+    "states": {
+      "done": "Erledigt",
+      "open": "Offen",
+      "unknown": "Unbekannt",
+      "manual": "Auf dem Host"
+    },
+    "steps": {
+      "organization": "Erste Organisation anlegen",
+      "orgAdmin": "Ersten Organisationsadministrator im Identity Provider zuweisen",
+      "release": "Agent-Release veröffentlichen",
+      "allowlist": "Plattform auf eine IP-Allowlist beschränken (optional)",
+      "breakGlass": "Break-Glass-Konten benennen",
+      "users": "Identitätsquelle anbinden, die Benutzer liefert",
+      "token": "Enrollment-Token erstellen",
+      "agent": "Agent auf einem Gerät installieren und registrieren",
+      "device": "Erstes Gerät freigeben"
     }
   }
 }
