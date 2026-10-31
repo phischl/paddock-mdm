@@ -60,6 +60,9 @@ type handlers struct {
 	inventory   *app.Inventory
 	updates     *app.Updates
 	attention   *app.Attention
+	// findings and the account list of their assignee picker (plan M9 decision 34).
+	findings    *app.Findings
+	accountList *app.AccountList
 	ipAllowlist *app.IPAllowlist
 	overview    *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).

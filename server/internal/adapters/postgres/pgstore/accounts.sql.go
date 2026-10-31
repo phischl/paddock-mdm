@@ -11,6 +11,31 @@ import (
 	"github.com/google/uuid"
 )
 
+const countOrgAccounts = `-- name: CountOrgAccounts :one
+SELECT count(*) FROM (
+  SELECT 1 FROM admin_account
+  WHERE disabled_at IS NULL
+    AND ($1::text IS NULL
+         OR username ILIKE $1::text ESCAPE '\'
+         OR display_name ILIKE $1::text ESCAPE '\')
+    AND ($2::text[] IS NULL OR role = ANY($2::text[]))
+  LIMIT $3
+) matching
+`
+
+type CountOrgAccountsParams struct {
+	QPattern   *string
+	Roles      []string
+	CountLimit int32
+}
+
+func (q *Queries) CountOrgAccounts(ctx context.Context, arg CountOrgAccountsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOrgAccounts, arg.QPattern, arg.Roles, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const disableAdminAccount = `-- name: DisableAdminAccount :exec
 UPDATE admin_account SET disabled_at = now() WHERE id = $1 AND disabled_at IS NULL
 `
@@ -83,6 +108,26 @@ func (q *Queries) GetAdminAccountState(ctx context.Context, id uuid.UUID) (GetAd
 	row := q.db.QueryRow(ctx, getAdminAccountState, id)
 	var i GetAdminAccountStateRow
 	err := row.Scan(&i.Role, &i.Disabled, &i.McpWriteEnabled)
+	return i, err
+}
+
+const getAssignableAccount = `-- name: GetAssignableAccount :one
+SELECT id, username, display_name FROM admin_account
+WHERE id = $1 AND disabled_at IS NULL AND role IN ('org_admin', 'org_operator')
+`
+
+type GetAssignableAccountRow struct {
+	ID          uuid.UUID
+	Username    string
+	DisplayName string
+}
+
+// An account a finding can be assigned to: of the organization, not disabled, administrator or operator (plan M9
+// decision 33).
+func (q *Queries) GetAssignableAccount(ctx context.Context, id uuid.UUID) (GetAssignableAccountRow, error) {
+	row := q.db.QueryRow(ctx, getAssignableAccount, id)
+	var i GetAssignableAccountRow
+	err := row.Scan(&i.ID, &i.Username, &i.DisplayName)
 	return i, err
 }
 
@@ -164,6 +209,71 @@ func (q *Queries) ListAdminAccounts(ctx context.Context) ([]AdminAccount, error)
 			&i.Theme,
 			&i.DisabledAt,
 			&i.McpWriteEnabledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrgAccounts = `-- name: ListOrgAccounts :many
+SELECT id, username, display_name, role FROM admin_account
+WHERE disabled_at IS NULL
+  AND ($1::text IS NULL
+       OR username ILIKE $1::text ESCAPE '\'
+       OR display_name ILIKE $1::text ESCAPE '\')
+  AND ($2::text[] IS NULL OR role = ANY($2::text[]))
+ORDER BY
+  CASE WHEN $3::text = 'username' THEN username END ASC,
+  CASE WHEN $3::text = '-username' THEN username END DESC,
+  CASE WHEN $3::text = 'display_name' THEN display_name END ASC,
+  CASE WHEN $3::text = '-display_name' THEN display_name END DESC,
+  CASE WHEN $3::text = 'role' THEN role END ASC,
+  CASE WHEN $3::text = '-role' THEN role END DESC,
+  id
+LIMIT $5 OFFSET $4
+`
+
+type ListOrgAccountsParams struct {
+	QPattern *string
+	Roles    []string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListOrgAccountsRow struct {
+	ID          uuid.UUID
+	Username    string
+	DisplayName string
+	Role        string
+}
+
+// The organization's accounts that are not disabled, for the assignee picker of findings (plan M9 decision 34).
+func (q *Queries) ListOrgAccounts(ctx context.Context, arg ListOrgAccountsParams) ([]ListOrgAccountsRow, error) {
+	rows, err := q.db.Query(ctx, listOrgAccounts,
+		arg.QPattern,
+		arg.Roles,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrgAccountsRow{}
+	for rows.Next() {
+		var i ListOrgAccountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.DisplayName,
+			&i.Role,
 		); err != nil {
 			return nil, err
 		}
