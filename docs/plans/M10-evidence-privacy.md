@@ -1950,6 +1950,7 @@ Architect decision (d) of PDK-139 round 2, with the window of round 3.
 4. **Failure events stay uncoalesced** as for the other read codes (round 3 item 7).
 5. The privacy pack (transparency notice, works-council annex, DPIA input, `privacy.md`) and the portal hint name the
    new event.
+
 ### Amendment 2026-10-31 (PDK-608: export builder hardening)
 
 Implemented in PDK-608, which folds in PDK-595 and PDK-596. Where this amendment and decisions 31, 32 or 34 differ,
