@@ -40,6 +40,7 @@ func TestOrganizationIsolation(t *testing.T) {
 	seedGlobexOwnersAndLogins(t, w)
 	seedGlobexUpstream(t, w)
 	seedGlobexChangeSet(t, w)
+	seedGlobexNotification(t, w)
 	ctx := testContext(t, time.Minute)
 	var globexEvents []env.AuditEvent
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
