@@ -33,7 +33,7 @@ type Scope int
 
 const (
 	ScopeOrg      Scope = iota // OrgPool.InOrg
-	ScopePlatform              // PlatformPool.InPlatform
+	ScopePlatform              // PlatformPool.InPlatform, or the transactions of WithPlatformScope
 )
 
 // ActionSpec describes one privileged action.
@@ -97,6 +97,8 @@ type ActionRunner struct {
 	// externalDelay is the development-only test hook PADDOCK_TEST_EXTERNAL_DELAY (plan M0 §8, A3).
 	externalDelay time.Duration
 	stepUpWindow  time.Duration
+	// platformTx replaces platform.InPlatform for ScopePlatform (WithPlatformScope).
+	platformTx func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error
 }
 
 // RunnerOption configures an ActionRunner.
@@ -115,6 +117,13 @@ func WithStepUpWindow(d time.Duration) RunnerOption {
 
 // StepUpWindow is how long a step-up satisfies RequiresStepUp.
 func (r *ActionRunner) StepUpWindow() time.Duration { return r.stepUpWindow }
+
+// WithPlatformScope makes ScopePlatform actions run in the transactions of tx instead of PlatformPool.InPlatform: the
+// notifier records the events of platform destinations in the same transaction as their delivery state, which only its
+// own role may write (db.NotifierPool.InPlatformScope, plan M9 amendment section E).
+func WithPlatformScope(tx func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error) RunnerOption {
+	return func(r *ActionRunner) { r.platformTx = tx }
+}
 
 // WithClock replaces time.Now (tests).
 func WithClock(now func() time.Time) RunnerOption { return func(r *ActionRunner) { r.now = now } }
@@ -635,6 +644,9 @@ func (r *ActionRunner) inScope(ctx context.Context, p principal.Principal, scope
 	fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	if scope == ScopeOrg && p.OrganizationID != uuid.Nil {
 		return r.org.InOrg(ctx, fn)
+	}
+	if r.platformTx != nil {
+		return r.platformTx(ctx, fn)
 	}
 	return r.platform.InPlatform(ctx, fn)
 }

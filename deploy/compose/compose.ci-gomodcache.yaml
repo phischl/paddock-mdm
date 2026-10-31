@@ -18,3 +18,4 @@ services:
   paddock-audit-migrate: { build: *gomodcache }
   paddock-audit-writer: { build: *gomodcache }
   paddock-unsealer: { build: *gomodcache }
+  paddock-notifier: { build: *gomodcache }

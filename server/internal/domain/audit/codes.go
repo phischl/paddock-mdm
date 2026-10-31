@@ -220,6 +220,10 @@ const (
 	CodeNotificationTestRequested            Code = "notification.test_requested"
 	CodeNotificationTestSent                 Code = "notification.test_sent"
 	CodeNotificationPseudonymResolved        Code = "notification.pseudonym_resolved"
+	// The notifier's deliveries (plan M9 decision 22).
+	CodeNotificationDelivered          Code = "notification.delivered"
+	CodeNotificationDestinationStalled Code = "notification.destination_stalled"
+	CodeNotificationDestinationResumed Code = "notification.destination_resumed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1375,6 +1379,27 @@ var registry = map[Code]Definition{
 		Params:      []string{"pseudonym"},
 		Outcomes:    adminOutcomes,
 		Note:        "Target is the organization. Failure with invalid_request for a malformed pseudonym, invalid_state while the organization has no pseudonym key.",
+	},
+	CodeNotificationDelivered: {
+		Code: CodeNotificationDelivered, Emitted: true,
+		Description: "The notifier delivered a batch of audit events to a notification destination; forward_from and forward_to are the destination's contiguous forward sequence numbers of the batch, attempts counts the tries of this batch.",
+		Params:      []string{"destination", "destination_id", "kind", "forward_from", "forward_to", "count", "attempts", "resumed"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Only for event batches: heartbeats and test deliveries are not recorded as delivered. resumed is true for the delivery that ended a stall.",
+	},
+	CodeNotificationDestinationStalled: {
+		Code: CodeNotificationDestinationStalled, Emitted: true,
+		Description: "Deliveries to a notification destination have failed for longer than the stall threshold (PADDOCK_NOTIFY_STALL_AFTER); the notifier keeps retrying the pending batch with backoff and nothing is lost.",
+		Params:      []string{"destination", "destination_id", "since_s", "last_error", "forward_seq"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per stall. last_error is the error class only (dns, dial, tls, timeout, http_<status>, redirect, denied_address), never the URL; forward_seq is the first forward sequence number not yet delivered.",
+	},
+	CodeNotificationDestinationResumed: {
+		Code: CodeNotificationDestinationResumed, Emitted: true,
+		Description: "A stalled notification destination accepted a delivery again; stalled_for_s is how long it was stalled.",
+		Params:      []string{"destination", "destination_id", "stalled_for_s", "forward_from", "forward_to"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per stall. forward_from and forward_to name the batch that arrived (absent when a heartbeat ended the stall).",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,
