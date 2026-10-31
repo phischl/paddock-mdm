@@ -25,9 +25,19 @@ jobs:
       # The lint image builds, golangci-lint, govulncheck and go-licenses take the workspace's dependencies, govulncheck
       # included, from the runner's module cache instead of the module proxy (PDK-540, PDK-516, PDK-550). go.work makes
       # the download below cover every workspace module, not only server; on a setup-go cache hit it runs offline, a
-      # miss fetches here. go-licenses itself is in no go.sum and still comes from the proxy.
+      # miss fetches here. go-licenses itself is in no go.sum and still comes from the proxy. This download is the only
+      # step that talks to the proxy for the workspace, so it alone retries (PDK-592): proxy.golang.org drops streams
+      # now and then (INTERNAL_ERROR) and Go keeps what it already fetched, so each attempt only fetches the rest.
+      # GOPROXY and GOSUMDB stay at their defaults, every module is still verified against go.sum and sum.golang.org.
       - name: Go modules for the lint images, golangci-lint, govulncheck and go-licenses
-        run: cd server && go mod download
+        run: |
+          cd server
+          for attempt in 1 2 3; do
+            go mod download && exit 0
+            echo "go mod download failed (attempt $attempt of 3)" >&2
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 15))
+          done
+          exit 1
       - run: PADDOCK_CI_GOMODCACHE="$(go env GOMODCACHE)/cache/download" make lint # includes govulncheck for all modules (lint-vuln)
 
   test:
