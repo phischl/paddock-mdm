@@ -1,7 +1,7 @@
 # Retention schedule
 
 How long Paddock keeps each store, on which legal basis, and which job deletes it with which evidence (ADR 0032
-decision 1 and its amendments 2026-10-17 and 2026-10-18; plan M10). The schedule answers GDPR Art. 5(1)(e) (storage
+decision 1 and its amendments 2026-10-17, 2026-10-18 and 2026-10-31; plan M10). The schedule answers GDPR Art. 5(1)(e) (storage
 limitation) and ISO/IEC 27001:2022 A.5.33, A.5.34 and A.8.10 ([iso27001-mapping.md](iso27001-mapping.md)). What
 Paddock collects in the first place: [privacy.md](privacy.md).
 
@@ -23,16 +23,17 @@ job that deletes and the audit event that proves it. "Now" means configurable pe
 | Inventory of active and quarantined devices | Device data | As above | While the device is active; replaced by every sync round ("what the host no longer reports is deleted") | Art. 6(1)(f) (A.8.8) | Sync round | — |
 | Device record (`device`, `device_status`, `device_identity_key`, `bundle`, `device_event_seen`, `device_group_member`, `device_login_assignment`) | Device data | Hostname, hardware UUID, machine ID, state, applied versions | Lifetime of the organization; a retired device stays as the anchor of its audit trail | Art. 6(1)(c)/(f) | None in this milestone | — |
 | Escrowed secrets (`escrow_secret`, bucket `paddock-escrow`) of retired devices | Secrets | Encrypted recovery keys, LUKS headers, admin passwords | Until a Destroy (`device.escrow_destroyed`) or until the device row is deleted | Art. 6(1)(f): data recovery of a device the organization still owns | None in this milestone (open question 1 of the plan) | — |
-| `device_command` (finished rows: `done`, `failed`, `expired`, `cancelled`) | Operational history | Actor references, hostnames, reasons | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at` | Art. 6(1)(f) (A.8.9, A.8.32) | Worker; `retention.purged` (store `device_command`) | — |
-| `device_alert` (cleared rows) | Operational history | Actor references, hostnames, reasons | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `cleared_at`; open alerts never | Art. 6(1)(f) (A.8.9, A.8.32) | Worker; `retention.purged` (store `device_alert`) | — |
-| `revocation_request` with its `revocation_approval` rows (finished: `completed`, `rejected`, `cancelled`, `expired`, `failed`) | Operational history | Actor references, hostnames, reasons | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at`; unfinished requests never | Art. 6(1)(f) (A.8.9, A.8.32) | Worker; `retention.purged` (store `revocation_request`) | — |
+| `device_command` (finished rows: `succeeded`, `failed`, `expired`, `cancelled`) | Operational history | Actor references, hostnames, reasons | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at`; unfinished commands never; a command a disk conversion or a device's uninstall still references stays with that row | Art. 6(1)(f) (A.8.9, A.8.32) | Worker, every 6 h, per organization, batches of 1 000; `retention.purged` (store `device_command`, only when rows were deleted) | — |
+| `device_alert` (cleared rows) | Operational history | Actor references, hostnames, reasons | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `cleared_at`; open alerts never | Art. 6(1)(f) (A.8.9, A.8.32) | Worker, every 6 h, per organization, batches of 1 000; `retention.purged` (store `device_alert`, only when rows were deleted) | — |
+| `revocation_request` with its `revocation_approval` rows | Operational history | Actor references, hostnames, reasons | Lifetime of the organization (revocation domain, ADR 0014; ADR 0032 amendment 2026-10-31) | Art. 6(1)(f) (A.8.9, A.8.32) | None yet; follow-up ticket | — |
 | `change_set` (metadata and plan) | Operational history | Actor references, hostnames, reasons | WORM retention (they explain audit events and feed M11 revert) | Art. 6(1)(f) (A.8.9, A.8.32) | None in this milestone; follow-up ticket | — |
 | `change_set.before` (M11, ADR 0033: managed file contents before a change) | Configuration history (may hold personal data of the file contents) | Full managed file contents | **90 days** after `applied_at`; then the column is set to NULL and `before_purged_at` stamped; the change set itself stays | Art. 6(1)(f) (A.8.32 revert) | Worker, every 6 h; `retention.purged` (store `change_set_before`, per organization) | Fixed by code |
 | `device_bundle_report`, `device_resource_status` (M11) | Apply status per device | Resource IDs, error messages (may name local users and paths) | Current state only: replaced by the device's next report; rows of a retired device stay with the device record | Art. 6(1)(f) (A.8.9) | None (overwritten); retired devices: follow-up with the device record | — |
-| `organization_role_member`, `platform_role_member` (M8b, ADR 0030: snapshots of portal role groups) | Administrator data | Account identities per role | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after the snapshot's `taken_at`, keeping the newest snapshot of every group | Art. 6(1)(c)/(f) (A.5.18) | Worker; `retention.purged` (store `role_member_snapshot`) | — |
-| `device_event_dropped`, `device_event_gap` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `recorded_at` | Art. 6(1)(f) | Worker; `retention.purged` (store `device_event_gap`) | — |
+| `organization_role_member`, `platform_role_member` (M8b, ADR 0030: current members of portal role groups) | Administrator data | Account identities per role | Current state only: a revoked member is deleted by the identity sync (ADR 0032 amendment 2026-10-31) | Art. 6(1)(c)/(f) (A.5.18) | Identity sync (`admin.role_revoked`) | — |
+| `device_event_gap` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `filled_at`; unfilled gaps never | Art. 6(1)(f) | Worker, every 6 h, per organization, batches of 1 000; `retention.purged` (store `device_event_gap`, only when rows were deleted) | — |
+| `device_event_dropped` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | Lifetime of the device (no timestamp; ADR 0032 amendment 2026-10-31) | Art. 6(1)(f) | None yet; follow-up ticket | — |
 | `paddock_audit.audit_verification_run` (M8b) | Evidence metadata | Verification results per range; no personal data | Unlimited (part of the chain's evidence) | — | None | — |
-| `action` (control-plane origin of audit events) | Evidence (origin copy) | As audit events | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `occurred_at` (never ahead of the audit index) | As audit events | Worker retention round, per organization, batches of 1 000; `retention.purged` (store `action`) | — |
+| `action` (control-plane origin of audit events) | Evidence (origin copy) | As audit events | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at`, never ahead of the oldest remaining audit index partition; started actions never (ADR 0032 amendment 2026-10-31) | As audit events | None yet: worker retention round once the cutoff source is decided; `retention.purged` (store `action`) | — |
 | `outbox` | Transport | Audit payloads, state changes | 7 days after publication (existing) | — | Outbox relay (existing, not audited: transport only) | — |
 | `read_audit_window` | Coalescing keys of read-access events | Actor ID, code, target ID, window | 48 hours | Art. 6(1)(f) | Worker, every 6 h; `retention.purged` (store `read_audit_window`) | — |
 | Administrator accounts (`admin_account`), API tokens (`api_token`) | Administrator data | Name, display, role, token hash and metadata | Account: follows Authentik (synced); token: until revoked or expired, then kept as metadata for `api_token.use_denied` | Art. 6(1)(b)/(f) | None (operator removes the person in Authentik; the audit trail keeps the name) | — |
@@ -48,9 +49,10 @@ job that deletes and the audit event that proves it. "Now" means configurable pe
 The per-organization settings are *Privacy settings* (`GET`/`PUT /api/v1/settings/privacy`, section
 `settings.privacy` of `paddock.yml`: `retired_inventory_days`, `audit_search_recorded`, `inventory_view_recorded`)
 and *Login & privileges* → *Login history* (`settings.login`). Every other period is platform-wide or fixed by code.
-The periods of `action`, `device_command`, `device_alert`, `revocation_request`, the role-group snapshots and the
-device event gaps equal the audit index retention (≥ the WORM retention): these rows explain audit events and must
-not disappear while the index still shows them (ADR 0032 amendment 2026-10-18).
+The periods of `action`, `device_command`, `device_alert` and the filled device event gaps equal the audit index
+retention (≥ the WORM retention): these rows explain audit events and must
+not disappear while the index still shows them (ADR 0032 amendments 2026-10-18 and 2026-10-31). The worker reads
+`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` with the audit writer's default and validation.
 
 ## Deletion evidence
 
@@ -58,8 +60,8 @@ Every purge leaves an audit event in the same WORM chain as every other event, r
 
 - **`retention.purged`**: one event per run, organization and store when at least one row was deleted (or when the
   purge failed). Parameters: `store` (`device_login_event`, `device_user_seen`, `read_audit_window`, `audit_index`,
-  `audit_exports`, and the stores of ADR 0032 amendment 2026-10-18: `action`, `device_command`, `device_alert`,
-  `revocation_request`, `role_member_snapshot`, `device_event_gap`; `change_set_before` only once M11 (PDK-154) adds
+  `audit_exports`, `device_command`, `device_alert`, `device_event_gap` (ADR 0032 amendments 2026-10-18 and
+  2026-10-31), `action` once its pass exists; `change_set_before` only once M11 (PDK-154) adds
   that pass), `deleted` (number of rows), `cutoff` (RFC 3339;
   rows older than it were deleted) and, for the audit index, `partition` (one event per dropped partition, recorded in the
   platform pseudo-organization); an expired export carries `export_id` and is recorded in its organization.
@@ -112,9 +114,11 @@ until a later decision adds a purge:
 - `device_bundle_report` and `device_resource_status` of retired devices: they stay with the device record;
 - administrator accounts and API tokens (`admin_account`, `api_token`): they follow Authentik;
 - the chain metadata (`audit_object`, `audit_manifest`, `audit_signing_key`, `audit_verification_run`): unlimited by
-  design.
+  design;
+- `action`: the period is decided (ADR 0032 amendment 2026-10-31), the pass waits for the decision where the worker
+  learns the oldest remaining audit index partition;
+- `revocation_request` with its approvals and `device_event_dropped`: excluded by ADR 0032 amendment 2026-10-31,
+  follow-up tickets.
 
-The periods of `action`, `device_command`, `device_alert`, `revocation_request` with its approvals, the role-group
-snapshots and the device event gaps are decided (ADR 0032 amendment 2026-10-18); their purge is implemented by
-PDK-180 in the worker's retention round. The purge of `change_set.before` joins the same round with the M11 change
+Finished commands, cleared alerts and filled event gaps are purged by the worker's retention round (PDK-180). The purge of `change_set.before` joins the same round with the M11 change
 that creates the column.

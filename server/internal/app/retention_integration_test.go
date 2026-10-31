@@ -101,7 +101,7 @@ func newRetentionWorld(t *testing.T) retentionWorld {
 	}
 	t.Cleanup(func() { _ = super.Close(ctx) })
 	fleet := &fakeInventoryAdmin{}
-	return retentionWorld{retention: app.NewRetention(app.NewActionRunner(pool, platform, httpx.RequestID), pool, platform, fleet, time.Second),
+	return retentionWorld{retention: app.NewRetention(app.NewActionRunner(pool, platform, httpx.RequestID), pool, platform, fleet, time.Second, 400),
 		fleet: fleet, super: super}
 }
 

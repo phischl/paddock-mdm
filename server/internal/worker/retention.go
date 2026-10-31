@@ -79,6 +79,15 @@ func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool,
 			{store: app.StoreReadAuditWindow, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
 				return a.PurgeReadWindows(ctx, now)
 			}},
+			{store: app.StoreDeviceCommand, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
+				return a.PurgeDeviceCommands(ctx, now)
+			}},
+			{store: app.StoreDeviceAlert, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
+				return a.PurgeDeviceAlerts(ctx, now)
+			}},
+			{store: app.StoreDeviceEventGap, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
+				return a.PurgeEventGaps(ctx, now)
+			}},
 		},
 		pool: pool, platform: platform, interval: interval, now: time.Now,
 	}

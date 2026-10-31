@@ -233,3 +233,31 @@ disappear while the index still shows them. The escrow of retired devices stays 
   00:45 UTC. Plan M10 decision 23 schedules the purge after the seal (00:15 UTC) and the nightly chain verification
   (00:45 UTC); that later decision is binding.
   `docs/compliance/retention.md` and `docs/operations/audit-bucket.md` state 01:15 UTC.
+
+## Amendment 2026-10-31 (architect-authorised, PDK-180)
+
+The table of the amendment 2026-10-18 does not match the schema in six places. Decided for PDK-180:
+
+1. **Role members are not purged.** `organization_role_member` and `platform_role_member` (migrations 00070/00071)
+   hold the current baseline of every role group, one row per current member; a revoked member is already deleted by
+   the sync, and the snapshot time lives in `*_role_snapshot`. Deleting rows by age would drop current members and
+   make the next sync record false `admin.role_granted`. The store `role_member_snapshot` is dropped.
+2. **Event gaps by `filled_at`.** `device_event_gap` rows are purged `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after
+   `filled_at`; unfilled gaps are kept, like open alerts. `device_event_dropped` has no timestamp and leaves this
+   ticket (follow-up ticket).
+3. **`action` by `finished_at`.** Rows with status `started` (the outbox reaper's input) are never purged; rows of the
+   platform pseudo-organization go through the platform pool. The cutoff is the earlier of
+   now − `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` and the start of the oldest audit index partition that still exists, so
+   the purge never runs ahead of the index, which drops whole months only. Where the worker learns the oldest
+   remaining partition (it lives in the audit database) is not decided yet; the `action` store is implemented once it
+   is.
+4. **Referenced rows are skipped.** A finished `device_command` that `device_disk_conversion.command_id` or
+   `abort_command_id`, or `device.uninstall_command_id` still references stays; it explains that row.
+5. **Status names.** The final statuses of `device_command` are `succeeded`, `failed`, `expired` and `cancelled`
+   (the table's `done` is a typo).
+6. **Revocation tables are excluded.** `revocation_request` and `revocation_approval` belong to the revocation domain
+   (ADR 0014); giving the worker `DELETE` on them widens that domain's writers. They leave this ticket (follow-up
+   ticket that names the ADR 0014 boundary).
+
+The worker reads `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` with the audit writer's default and validation. Migration
+`00080` grants the worker `DELETE` on `device_command`, `device_alert` and `device_event_gap`.

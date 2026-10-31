@@ -41,15 +41,7 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 	accessKey := l.SecretFile("PADDOCK_AUDIT_S3_ACCESS_KEY_FILE")
 	secretKey := l.SecretFile("PADDOCK_AUDIT_S3_SECRET_KEY_FILE")
 	bucket := l.String("PADDOCK_AUDIT_S3_BUCKET", "paddock-audit")
-	retention := l.Int("PADDOCK_AUDIT_RETENTION_DAYS", auditwriter.MinRetentionDays)
-	if retention < auditwriter.MinRetentionDays {
-		l.Invalid("PADDOCK_AUDIT_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days", auditwriter.MinRetentionDays))
-	}
-	// The index is purged after, never ahead of, the WORM retention (ADR 0032, plan M10 decision 23).
-	indexRetention := l.Int("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", retention)
-	if indexRetention < retention {
-		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least PADDOCK_AUDIT_RETENTION_DAYS (%d days)", retention))
-	}
+	retention, indexRetention := auditRetention(l)
 	if err := l.Err(); err != nil {
 		return nil, err
 	}
@@ -69,6 +61,22 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 		return nil, err
 	}
 	return &auditDeps{pool: pool, store: store, bao: baoClient, writer: writer, indexRetention: indexRetention}, nil
+}
+
+// auditRetention reads the WORM retention and the audit index retention in days, for the audit writer and for the
+// worker, whose retention round keeps the rows that explain audit events as long as the index (ADR 0032 amendment
+// 2026-10-18, PDK-180); both validate the same way.
+func auditRetention(l *config.Loader) (retention, index int) {
+	retention = l.Int("PADDOCK_AUDIT_RETENTION_DAYS", auditwriter.MinRetentionDays)
+	if retention < auditwriter.MinRetentionDays {
+		l.Invalid("PADDOCK_AUDIT_RETENTION_DAYS", fmt.Sprintf("must be at least the bucket default of %d days", auditwriter.MinRetentionDays))
+	}
+	// The index is purged after, never ahead of, the WORM retention (ADR 0032, plan M10 decision 23).
+	index = l.Int("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", retention)
+	if index < retention {
+		l.Invalid("PADDOCK_AUDIT_INDEX_RETENTION_DAYS", fmt.Sprintf("must be at least PADDOCK_AUDIT_RETENTION_DAYS (%d days)", retention))
+	}
+	return retention, index
 }
 
 // verifier checks the hash chain with the audit-chain public keys from OpenBao.

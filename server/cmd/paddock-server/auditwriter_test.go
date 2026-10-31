@@ -75,6 +75,36 @@ func TestIndexRetentionDefaultsToWORMRetention(t *testing.T) {
 	}
 }
 
+// TestAuditRetentionForWorker (ADR 0032 amendment 2026-10-18, PDK-180): the worker reads the index retention with the
+// audit writer's default and validation, so its retention round keeps the rows as long as the index.
+func TestAuditRetentionForWorker(t *testing.T) {
+	for _, tc := range []struct {
+		env        map[string]string
+		index      int
+		invalidVar string
+	}{
+		{env: map[string]string{}, index: auditwriter.MinRetentionDays},
+		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "500"}, index: 500},
+		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "400", "PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "730"}, index: 730},
+		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "500", "PADDOCK_AUDIT_INDEX_RETENTION_DAYS": "450"},
+			invalidVar: "PADDOCK_AUDIT_INDEX_RETENTION_DAYS"},
+		{env: map[string]string{"PADDOCK_AUDIT_RETENTION_DAYS": "399"}, invalidVar: "PADDOCK_AUDIT_RETENTION_DAYS"},
+	} {
+		l := config.NewLoaderFrom(tc.env)
+		_, index := auditRetention(l)
+		err := l.Err()
+		if tc.invalidVar != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.invalidVar) {
+				t.Errorf("%v: err = %v, want it to name %s", tc.env, err, tc.invalidVar)
+			}
+			continue
+		}
+		if err != nil || index != tc.index {
+			t.Errorf("%v: index %d (%v), want %d", tc.env, index, err, tc.index)
+		}
+	}
+}
+
 // TestPrintPurgeReport: due partitions print DROP, KEEP or FAIL; partitions not yet due print nothing.
 func TestPrintPurgeReport(t *testing.T) {
 	month := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)

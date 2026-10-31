@@ -27,6 +27,16 @@ const StoreRetiredInventory = "retired_inventory"
 // StoreReadAuditWindow is the store name of the read-access coalescing keys in retention.purged (plan M10 decision 21).
 const StoreReadAuditWindow = "read_audit_window"
 
+// StoreDeviceCommand is the store name of the finished device commands in retention.purged (ADR 0032 amendments
+// 2026-10-18 and 2026-10-31, PDK-180).
+const StoreDeviceCommand = "device_command"
+
+// StoreDeviceAlert is the store name of the cleared device alerts in retention.purged (ADR 0032 amendment 2026-10-18).
+const StoreDeviceAlert = "device_alert"
+
+// StoreDeviceEventGap is the store name of the filled event gaps in retention.purged (ADR 0032 amendment 2026-10-31).
+const StoreDeviceEventGap = "device_event_gap"
+
 // ReadWindowRetention is how long the coalescing keys of read-access events are kept (plan M10 decision 21).
 const ReadWindowRetention = 48 * time.Hour
 
@@ -111,6 +121,9 @@ type Retention struct {
 	inventory ports.InventoryAdmin
 	// unit is the length of a retention day: 24 hours, a second in development (PADDOCK_RETENTION_UNIT).
 	unit time.Duration
+	// indexDays is the audit index retention (PADDOCK_AUDIT_INDEX_RETENTION_DAYS): the rows that explain audit events
+	// are kept as long as the index shows them (ADR 0032 amendment 2026-10-18).
+	indexDays int
 	// budget bounds one pass (retentionPassBudget).
 	budget time.Duration
 	// lockTimeout bounds the row-lock wait of one batch (retentionLockTimeout).
@@ -122,10 +135,11 @@ type Retention struct {
 	holdNotice int32
 }
 
-// NewRetention creates the use cases.
-func NewRetention(runner *ActionRunner, org *db.OrgPool, hosts hostUsers, inventory ports.InventoryAdmin, unit time.Duration) *Retention {
-	return &Retention{runner: runner, org: org, hosts: hosts, inventory: inventory, unit: unit, budget: retentionPassBudget,
-		lockTimeout: retentionLockTimeout, page: retiredInventoryDevices, holdNotice: holdNoticeRounds}
+// NewRetention creates the use cases; indexDays is PADDOCK_AUDIT_INDEX_RETENTION_DAYS.
+func NewRetention(runner *ActionRunner, org *db.OrgPool, hosts hostUsers, inventory ports.InventoryAdmin, unit time.Duration,
+	indexDays int) *Retention {
+	return &Retention{runner: runner, org: org, hosts: hosts, inventory: inventory, unit: unit, indexDays: indexDays,
+		budget: retentionPassBudget, lockTimeout: retentionLockTimeout, page: retiredInventoryDevices, holdNotice: holdNoticeRounds}
 }
 
 // PurgeUserSeen deletes the users seen on the context's organization's devices whose last login is older than
@@ -172,6 +186,66 @@ func (r *Retention) PurgeReadWindows(ctx context.Context, now time.Time) (int64,
 	}
 	return purgeBatches(ctx, r.runner, r.org, StoreReadAuditWindow, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 		return q.DeleteExpiredReadAuditWindows(ctx, cutoff)
+	})
+}
+
+// PurgeDeviceCommands deletes the context's organization's commands that finished (succeeded, failed, expired or
+// cancelled) more than the audit index retention before now (system principal, ADR 0032 amendments 2026-10-18 and
+// 2026-10-31); a command a disk conversion or a device's uninstall still references stays. Without expired rows it
+// records nothing. It returns the number of deleted rows (purgeBatches).
+func (r *Retention) PurgeDeviceCommands(ctx context.Context, now time.Time) (int64, error) {
+	return r.purgeAfterIndex(ctx, now, StoreDeviceCommand, func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error) {
+		return q.HasExpiredDeviceCommands(ctx, cutoff)
+	},
+		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
+			return q.DeleteExpiredDeviceCommands(ctx, cutoff)
+		})
+}
+
+// PurgeDeviceAlerts deletes the context's organization's alerts cleared more than the audit index retention before now
+// (system principal, ADR 0032 amendment 2026-10-18); open alerts stay. Without expired rows it records nothing. It
+// returns the number of deleted rows (purgeBatches).
+func (r *Retention) PurgeDeviceAlerts(ctx context.Context, now time.Time) (int64, error) {
+	return r.purgeAfterIndex(ctx, now, StoreDeviceAlert, func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error) {
+		return q.HasExpiredDeviceAlerts(ctx, cutoff)
+	},
+		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
+			return q.DeleteExpiredDeviceAlerts(ctx, cutoff)
+		})
+}
+
+// PurgeEventGaps deletes the context's organization's event gaps filled more than the audit index retention before now
+// (system principal, ADR 0032 amendment 2026-10-31); unfilled gaps stay. Without expired rows it records nothing. It
+// returns the number of deleted rows (purgeBatches).
+func (r *Retention) PurgeEventGaps(ctx context.Context, now time.Time) (int64, error) {
+	return r.purgeAfterIndex(ctx, now, StoreDeviceEventGap, func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error) {
+		return q.HasExpiredEventGaps(ctx, cutoff)
+	},
+		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
+			return q.DeleteExpiredEventGaps(ctx, cutoff)
+		})
+}
+
+// purgeAfterIndex deletes a store's rows older than the audit index retention at now in batches (purgeBatches) when
+// expired finds any.
+func (r *Retention) purgeAfterIndex(ctx context.Context, now time.Time, store string,
+	expired func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error),
+	batch func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error)) (int64, error) {
+	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
+		return 0, problem.Unauthenticated
+	}
+	cutoff := now.Add(-time.Duration(r.indexDays) * r.unit)
+	var found bool
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		found, err = expired(ctx, q, cutoff)
+		return err
+	})
+	if err != nil || !found {
+		return 0, err
+	}
+	return purgeBatches(ctx, r.runner, r.org, store, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+		return batch(ctx, q, cutoff)
 	})
 }
 

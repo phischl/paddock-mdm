@@ -45,6 +45,27 @@ func (q *Queries) CountDeviceCommands(ctx context.Context, arg CountDeviceComman
 	return count, err
 }
 
+const deleteExpiredDeviceCommands = `-- name: DeleteExpiredDeviceCommands :execrows
+DELETE FROM device_command WHERE id IN (
+  SELECT c.id FROM device_command c
+  WHERE c.status IN ('succeeded','failed','expired','cancelled') AND c.finished_at < $1::timestamptz
+    AND NOT EXISTS (SELECT 1 FROM device_disk_conversion v WHERE v.command_id = c.id OR v.abort_command_id = c.id)
+    AND NOT EXISTS (SELECT 1 FROM device d WHERE d.uninstall_command_id = c.id)
+  LIMIT 1000
+)
+`
+
+// One batch of commands that finished before the cutoff (ADR 0032 amendment 2026-10-31, PDK-180); a command a disk
+// conversion or a device's uninstall still references explains that row and stays. The retention round runs each batch
+// in its own transaction until one deletes fewer than 1 000 rows (plan M10 amendment 2026-10-30).
+func (q *Queries) DeleteExpiredDeviceCommands(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredDeviceCommands, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const expireDeviceCommands = `-- name: ExpireDeviceCommands :many
 UPDATE device_command SET status = 'expired', finished_at = $1::timestamptz
 WHERE status IN ('pending','delivered') AND expires_at <= $1::timestamptz
@@ -128,6 +149,23 @@ func (q *Queries) GetDeviceCommand(ctx context.Context, id uuid.UUID) (DeviceCom
 		&i.Result,
 	)
 	return i, err
+}
+
+const hasExpiredDeviceCommands = `-- name: HasExpiredDeviceCommands :one
+SELECT EXISTS (
+  SELECT 1 FROM device_command c
+  WHERE c.status IN ('succeeded','failed','expired','cancelled') AND c.finished_at < $1::timestamptz
+    AND NOT EXISTS (SELECT 1 FROM device_disk_conversion v WHERE v.command_id = c.id OR v.abort_command_id = c.id)
+    AND NOT EXISTS (SELECT 1 FROM device d WHERE d.uninstall_command_id = c.id)
+)
+`
+
+// Whether the retention round has a batch of finished commands to delete (DeleteExpiredDeviceCommands).
+func (q *Queries) HasExpiredDeviceCommands(ctx context.Context, cutoff time.Time) (bool, error) {
+	row := q.db.QueryRow(ctx, hasExpiredDeviceCommands, cutoff)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const insertDeviceCommand = `-- name: InsertDeviceCommand :one
