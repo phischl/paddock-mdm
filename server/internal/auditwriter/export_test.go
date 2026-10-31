@@ -156,3 +156,37 @@ func SetReadyCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, e
 
 // SetKeyPublisherClock replaces the publisher's clock.
 func SetKeyPublisherClock(p *KeyPublisher, now func() time.Time) { p.now = now }
+
+// SetStatusRead replaces the outcome of each status read that follows a failed ready update.
+func SetStatusRead(e *Exporter, fn func(ctx context.Context, id uuid.UUID, status string, err error) (string, error)) {
+	e.statusRead = fn
+}
+
+// SetExportChunkSize lowers the size of one chunk row.
+func SetExportChunkSize(e *Exporter, n int) { e.chunkSize = n }
+
+// SetExportBuildTimeout lowers the bound of one build.
+func SetExportBuildTimeout(e *Exporter, d time.Duration) { e.buildTimeout = d }
+
+// SetFailCommitted replaces the error of the transaction that fails a running export after it ended, to simulate a
+// COMMIT whose outcome the client never learned.
+func SetFailCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
+	e.failCommitted = fn
+}
+
+// SetExpiredCommitted replaces the error of the transaction that expires a ready export after it ended, to simulate a
+// COMMIT whose outcome the client never learned.
+func SetExpiredCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
+	e.expiredCommitted = fn
+}
+
+// SetEndRead replaces the error of each locked read that follows a failure or expiry whose COMMIT outcome is unknown.
+func SetEndRead(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
+	e.endRead = fn
+}
+
+// SetExportWriteTimeout lowers the bound of the exporter's writes and of the list queries of Expire.
+func SetExportWriteTimeout(e *Exporter, d time.Duration) { e.writeTimeout = d }
+
+// ExportTimeouts returns the bound of one build and of the exporter's writes.
+func ExportTimeouts(e *Exporter) (build, write time.Duration) { return e.buildTimeout, e.writeTimeout }

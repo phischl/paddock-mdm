@@ -178,6 +178,47 @@ func (q *Queries) GetAuditExportChunk(ctx context.Context, arg GetAuditExportChu
 	return data, err
 }
 
+const getAuditExportLocked = `-- name: GetAuditExportLocked :one
+SELECT audit_export.id, audit_export.organization_id, audit_export.status, audit_export.from_day, audit_export.to_day, audit_export.purpose, audit_export.requested_by, audit_export.requested_at, audit_export.started_at, audit_export.ready_at, audit_export.expires_at, audit_export.event_count, audit_export.object_count, audit_export.size, audit_export.package_sha256, audit_export.verify_ok, audit_export.verify_problems, audit_export.signature, audit_export.key_version, audit_export.error, audit_export.correlation_id, audit_export.xmin::text AS xmin FROM audit_export WHERE id = $1 FOR UPDATE
+`
+
+type GetAuditExportLockedRow struct {
+	AuditExport AuditExport
+	Xmin        string
+}
+
+// The row lock waits out a transaction still updating the export, so the status read is final. xmin names the
+// transaction whose write is visible, so a writer whose COMMIT outcome was lost can tell whether that was its own.
+func (q *Queries) GetAuditExportLocked(ctx context.Context, id uuid.UUID) (GetAuditExportLockedRow, error) {
+	row := q.db.QueryRow(ctx, getAuditExportLocked, id)
+	var i GetAuditExportLockedRow
+	err := row.Scan(
+		&i.AuditExport.ID,
+		&i.AuditExport.OrganizationID,
+		&i.AuditExport.Status,
+		&i.AuditExport.FromDay,
+		&i.AuditExport.ToDay,
+		&i.AuditExport.Purpose,
+		&i.AuditExport.RequestedBy,
+		&i.AuditExport.RequestedAt,
+		&i.AuditExport.StartedAt,
+		&i.AuditExport.ReadyAt,
+		&i.AuditExport.ExpiresAt,
+		&i.AuditExport.EventCount,
+		&i.AuditExport.ObjectCount,
+		&i.AuditExport.Size,
+		&i.AuditExport.PackageSha256,
+		&i.AuditExport.VerifyOk,
+		&i.AuditExport.VerifyProblems,
+		&i.AuditExport.Signature,
+		&i.AuditExport.KeyVersion,
+		&i.AuditExport.Error,
+		&i.AuditExport.CorrelationID,
+		&i.Xmin,
+	)
+	return i, err
+}
+
 const getAuditSigningKey = `-- name: GetAuditSigningKey :one
 SELECT public_key FROM audit_signing_key WHERE key_version = $1
 `
@@ -244,8 +285,10 @@ func (q *Queries) InsertAuditExport(ctx context.Context, arg InsertAuditExportPa
 	return i, err
 }
 
-const insertAuditExportChunk = `-- name: InsertAuditExportChunk :exec
-INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, $3, $4)
+const insertAuditExportChunk = `-- name: InsertAuditExportChunk :execrows
+INSERT INTO audit_export_chunk (export_id, organization_id, seq, data)
+SELECT $1::uuid, $2::uuid, $3::int4, $4::bytea
+WHERE EXISTS (SELECT 1 FROM audit_export WHERE id = $1::uuid AND status = 'running' FOR SHARE)
 `
 
 type InsertAuditExportChunkParams struct {
@@ -255,14 +298,19 @@ type InsertAuditExportChunkParams struct {
 	Data           []byte
 }
 
-func (q *Queries) InsertAuditExportChunk(ctx context.Context, arg InsertAuditExportChunkParams) error {
-	_, err := q.db.Exec(ctx, insertAuditExportChunk,
+// Only a running export takes chunks. The share lock makes a concurrent failure wait for this insert, so its chunk
+// delete sees the row, or makes this insert see the failed status once the failure committed.
+func (q *Queries) InsertAuditExportChunk(ctx context.Context, arg InsertAuditExportChunkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertAuditExportChunk,
 		arg.ExportID,
 		arg.OrganizationID,
 		arg.Seq,
 		arg.Data,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const listAuditExports = `-- name: ListAuditExports :many
@@ -478,8 +526,8 @@ func (q *Queries) OldestPendingAuditExportAge(ctx context.Context) (float64, err
 	return age_seconds, err
 }
 
-const updateAuditExportExpired = `-- name: UpdateAuditExportExpired :execrows
-UPDATE audit_export SET status = 'expired' WHERE id = $1 AND status = 'ready' AND expires_at < $2
+const updateAuditExportExpired = `-- name: UpdateAuditExportExpired :many
+UPDATE audit_export SET status = 'expired' WHERE id = $1 AND status = 'ready' AND expires_at < $2 RETURNING xmin::text
 `
 
 type UpdateAuditExportExpiredParams struct {
@@ -487,16 +535,29 @@ type UpdateAuditExportExpiredParams struct {
 	Now *time.Time
 }
 
-func (q *Queries) UpdateAuditExportExpired(ctx context.Context, arg UpdateAuditExportExpiredParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateAuditExportExpired, arg.ID, arg.Now)
+// xmin of the new row version is this transaction's id; see GetAuditExportLocked.
+func (q *Queries) UpdateAuditExportExpired(ctx context.Context, arg UpdateAuditExportExpiredParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, updateAuditExportExpired, arg.ID, arg.Now)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var xmin string
+		if err := rows.Scan(&xmin); err != nil {
+			return nil, err
+		}
+		items = append(items, xmin)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-const updateAuditExportFailed = `-- name: UpdateAuditExportFailed :execrows
-UPDATE audit_export SET status = 'failed', error = $1 WHERE id = $2 AND status = 'running'
+const updateAuditExportFailed = `-- name: UpdateAuditExportFailed :many
+UPDATE audit_export SET status = 'failed', error = $1 WHERE id = $2 AND status = 'running' RETURNING xmin::text
 `
 
 type UpdateAuditExportFailedParams struct {
@@ -504,12 +565,25 @@ type UpdateAuditExportFailedParams struct {
 	ID    uuid.UUID
 }
 
-func (q *Queries) UpdateAuditExportFailed(ctx context.Context, arg UpdateAuditExportFailedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateAuditExportFailed, arg.Error, arg.ID)
+// xmin of the new row version is this transaction's id; see GetAuditExportLocked.
+func (q *Queries) UpdateAuditExportFailed(ctx context.Context, arg UpdateAuditExportFailedParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, updateAuditExportFailed, arg.Error, arg.ID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var xmin string
+		if err := rows.Scan(&xmin); err != nil {
+			return nil, err
+		}
+		items = append(items, xmin)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateAuditExportReady = `-- name: UpdateAuditExportReady :execrows

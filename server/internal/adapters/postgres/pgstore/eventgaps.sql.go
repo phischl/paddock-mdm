@@ -96,6 +96,23 @@ func (q *Queries) DeleteDeviceEventSeenBefore(ctx context.Context, arg DeleteDev
 	return result.RowsAffected(), nil
 }
 
+const deleteExpiredEventGaps = `-- name: DeleteExpiredEventGaps :execrows
+DELETE FROM device_event_gap WHERE id IN (
+  SELECT id FROM device_event_gap WHERE filled_at < $1::timestamptz LIMIT 1000
+)
+`
+
+// One batch of gaps filled before the cutoff (ADR 0032 amendment 2026-10-31, PDK-180); an unfilled gap has no
+// filled_at and never matches. The retention round runs each batch in its own transaction until one deletes fewer than
+// 1 000 rows (plan M10 amendment 2026-10-30).
+func (q *Queries) DeleteExpiredEventGaps(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredEventGaps, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const fillDeviceEventGap = `-- name: FillDeviceEventGap :execrows
 UPDATE device_event_gap SET filled_at = $1 WHERE id = $2 AND filled_at IS NULL
 `
@@ -112,6 +129,17 @@ func (q *Queries) FillDeviceEventGap(ctx context.Context, arg FillDeviceEventGap
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const hasExpiredEventGaps = `-- name: HasExpiredEventGaps :one
+SELECT EXISTS (SELECT 1 FROM device_event_gap WHERE filled_at < $1::timestamptz)
+`
+
+func (q *Queries) HasExpiredEventGaps(ctx context.Context, cutoff time.Time) (bool, error) {
+	row := q.db.QueryRow(ctx, hasExpiredEventGaps, cutoff)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const insertDeviceEventGap = `-- name: InsertDeviceEventGap :exec

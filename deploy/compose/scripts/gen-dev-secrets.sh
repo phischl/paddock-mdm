@@ -71,6 +71,17 @@ if [[ ! -f "$COMPOSE_DIR/.env" ]]; then
     echo "deploy/compose/.env: development stack instance $PADDOCK_INSTANCE (project paddock$PADDOCK_INSTANCE)"
   fi
 fi
+# The worker does not start without the audit index retention (compose.yaml), which a .env copied from an older
+# .env.example lacks. Without it the audit writer uses its WORM retention, so the backfill takes that value and keeps
+# what the stack's index retention already was.
+if ! grep -q '^PADDOCK_AUDIT_INDEX_RETENTION_DAYS=' "$COMPOSE_DIR/.env"; then
+  # Compose reads `730 # comment`, `"730"` and `'730'` as 730, so the backfill does too instead of falling back to 400.
+  index_days="$(sed -n 's/^PADDOCK_AUDIT_RETENTION_DAYS=//p' "$COMPOSE_DIR/.env" | tail -1 |
+    sed -E "s/[[:space:]]+#.*\$//; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\\1/; s/^'(.*)'\$/\\1/")"
+  [[ "$index_days" =~ ^[0-9]+$ ]] || index_days=400
+  set_env PADDOCK_AUDIT_INDEX_RETENTION_DAYS "$index_days"
+  echo "deploy/compose/.env: added PADDOCK_AUDIT_INDEX_RETENTION_DAYS=$index_days"
+fi
 
 # Control-plane PostgreSQL
 secret postgres_superuser_password
