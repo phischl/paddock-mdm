@@ -49,6 +49,7 @@ export const router = createRouter({
     { path: '/settings/watched-units', name: 'watched-units', component: () => import('./views/WatchedUnits.vue') },
     { path: '/settings/updates', name: 'update-settings', component: () => import('./views/UpdateSettings.vue') },
     { path: '/settings/mcp', name: 'mcp-settings', component: () => import('./views/McpSettings.vue') },
+    { path: '/settings/notifications', name: 'notification-destinations', component: () => import('./views/NotificationDestinations.vue') },
     { path: '/package-holds', name: 'package-holds', component: () => import('./views/PackageHolds.vue') },
     { path: '/revocations', name: 'revocations', component: () => import('./views/RevocationRequests.vue') },
     { path: '/audit', name: 'audit', component: () => import('./views/Audit.vue') },
@@ -60,6 +61,7 @@ export const router = createRouter({
     { path: '/platform/sessions', name: 'platform-sessions', component: () => import('./views/PlatformSessions.vue') },
     { path: '/platform/openbao', name: 'platform-openbao', component: () => import('./views/PlatformOpenBao.vue') },
     { path: '/platform/mcp', name: 'platform-mcp', component: () => import('./views/PlatformMcp.vue') },
+    { path: '/platform/notifications', name: 'platform-notifications', component: () => import('./views/PlatformNotifications.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFound.vue') },
   ],
 })

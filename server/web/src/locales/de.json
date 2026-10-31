@@ -109,7 +109,9 @@
     "securityReview": "Sicherheitsprüfung",
     "operatorRoots": "Freigegebene Verzeichnisse",
     "watchedUnits": "Überwachte Dienste",
-    "mcpSettings": "MCP"
+    "mcpSettings": "MCP",
+    "notifications": "Benachrichtigungen",
+    "platformNotifications": "Plattform-Benachrichtigungen"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -256,7 +258,9 @@
     "mcp_tool_not_allowed": "Diese Operation ist über den MCP nicht erlaubt.",
     "mcp_write_not_enabled": "Änderungen über den MCP sind nicht freigegeben.",
     "mcp_login_required": "Melde dich erneut mit paddockctl mcp login an.",
-    "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal."
+    "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal.",
+    "email_not_configured": "Diese Installation hat kein E-Mail-Relay, daher können E-Mail-Ziele nicht aktiviert werden.",
+    "unknown_code": "Einer der Audit-Codes ist nicht registriert."
   },
   "audit": {
     "vulnerability": {
@@ -2384,6 +2388,124 @@
       "token": "Enrollment-Token erstellen",
       "agent": "Agent auf einem Gerät installieren und registrieren",
       "device": "Erstes Gerät freigeben"
+    }
+  },
+  "notifications": {
+    "title": "Benachrichtigungen",
+    "platformTitle": "Plattform-Benachrichtigungen",
+    "summary": "Sendet Sicherheitsereignisse dieser Organisation an einen signierten Webhook oder eine E-Mail-Liste. Zustellung mindestens einmal; das Geheimnis eines Webhooks wird nur beim Anlegen oder Ersetzen angezeigt.",
+    "platformSummary": "Sendet Plattformereignisse (Rollouts, Releases, Schwachstellendaten, IP-Zulassungsliste) an einen signierten Webhook oder eine E-Mail-Liste.",
+    "create": "Ziel hinzufügen",
+    "createTitle": "Neues Benachrichtigungsziel",
+    "editTitle": "Benachrichtigungsziel bearbeiten",
+    "editLabel": "{name} bearbeiten",
+    "testLabel": "Test an {name} senden",
+    "rotateLabel": "Signaturgeheimnis von {name} ersetzen",
+    "deleteLabel": "{name} löschen",
+    "type": "Typ",
+    "types": {
+      "webhook": "Webhook",
+      "email": "E-Mail"
+    },
+    "enabled": "Aktiv",
+    "on": "An",
+    "off": "Aus",
+    "state": "Zustand",
+    "states": {
+      "active": "Aktiv",
+      "stalled": "Blockiert",
+      "disabled": "Deaktiviert"
+    },
+    "lastSuccess": "Letzte Zustellung",
+    "never": "Nie",
+    "lag": "Verzug",
+    "lagValue": {
+      "s": "{value} s",
+      "min": "{value} min",
+      "h": "{value} Std.",
+      "d": "{value} T."
+    },
+    "filterMode": "Ereignisse",
+    "modes": {
+      "security": "Sicherheitsereignisse",
+      "all": "Alle Ereignisse",
+      "custom": "Ausgewählte Ereignisse"
+    },
+    "modeHints": {
+      "security": "Das Sicherheitsprofil: Manipulationen, Befunde, Widerrufe, Anmeldungen und Änderungen geschützter Einstellungen.",
+      "all": "Jedes Audit-Ereignis, auch routinemäßige Änderungen.",
+      "custom": "Nur die aufgeführten Audit-Codes."
+    },
+    "codes": "Audit-Codes",
+    "codesHint": "Registrierte Audit-Codes eingeben oder auswählen, zum Beispiel finding.closed.",
+    "codesCount": "Wählen Sie 1 bis 200 Audit-Codes.",
+    "codesUnknown": "Einer der Codes ist kein registrierter Audit-Code.",
+    "nameHint": "Buchstaben, Ziffern, Leerzeichen, Punkte, Unterstriche und Bindestriche; höchstens 64 Zeichen.",
+    "nameInvalid": "Der Name muss mit einem Buchstaben oder einer Ziffer beginnen und höchstens 64 Zeichen aus Buchstaben, Ziffern, Leerzeichen, '.', '_' und '-' haben.",
+    "url": "Webhook-URL",
+    "urlHint": "Eine https-Adresse, die der Paddock-Server erreicht. Paddock speichert sie verschlüsselt und zeigt sie nie wieder an.",
+    "urlCurrent": "Aktuelle Adresse: {url}. Leer lassen, um sie zu behalten.",
+    "urlUnchanged": "unverändert",
+    "urlRequired": "Geben Sie die Webhook-URL ein.",
+    "urlHttps": "Die URL muss mit https:// beginnen.",
+    "reenterUrl": "Ihre Identität ist bestätigt. Die Webhook-URL wird während der Bestätigung nie aufbewahrt: Geben Sie sie erneut ein und speichern Sie.",
+    "recipients": "Empfänger",
+    "recipientsHint": "Eine E-Mail-Adresse pro Zeile, höchstens 20.",
+    "recipientsCount": "Geben Sie 1 bis 20 E-Mail-Adressen ein.",
+    "recipientsInvalid": "Eine der Adressen ist keine einfache E-Mail-Adresse.",
+    "pseudonymize": "Benutzernamen durch Pseudonyme ersetzen",
+    "includeParams": "Ereignisparameter mitsenden",
+    "heartbeat": "Heartbeat-Intervall (Sekunden)",
+    "heartbeatHint": "0 schaltet den Heartbeat aus; sonst 60 bis 3600.",
+    "heartbeatInvalid": "Geben Sie 0 oder eine Zahl von 60 bis 3600 ein.",
+    "minInterval": "Mindestabstand zwischen E-Mails (Sekunden)",
+    "minIntervalHint": "Ereignisse innerhalb des Abstands werden in einer Nachricht zusammengefasst; 60 bis 3600.",
+    "intervalInvalid": "Geben Sie eine Zahl von 60 bis 3600 ein.",
+    "saved": "Benachrichtigungsziel gespeichert.",
+    "deleted": "Benachrichtigungsziel {name} gelöscht.",
+    "close": "Schließen",
+    "secretTitle": "Signaturgeheimnis",
+    "secret": "Signaturgeheimnis",
+    "shownOnce": "Das Signaturgeheimnis von {name} wird nur jetzt angezeigt. Kopieren Sie es und bewahren Sie es wie ein Passwort auf; Paddock kann es nicht erneut anzeigen.",
+    "deleteTitle": "Benachrichtigungsziel löschen",
+    "deleteConfirm": "{name} mit seinem Zustellzustand löschen? Ereignisse werden dann nicht mehr dorthin gesendet.",
+    "rotateTitle": "Signaturgeheimnis ersetzen",
+    "rotate": "Geheimnis ersetzen",
+    "rotateConfirm": "Das Signaturgeheimnis von {name} ersetzen? Zustellungen werden ab der nächsten Runde mit dem neuen Geheimnis signiert; der Empfänger muss angepasst werden.",
+    "testTitle": "Testbenachrichtigung senden",
+    "test": "Test senden",
+    "testConfirm": "Eine Testzustellung an {name} senden?",
+    "testWaiting": "Test an {name} angefordert. Warte auf das Ergebnis (bis zu 30 Sekunden) …",
+    "testOk": "Die Testzustellung an {name} war erfolgreich.",
+    "testError": "Die Testzustellung an {name} ist fehlgeschlagen: {error}",
+    "testUnknown": "unbekannter Fehler",
+    "testTimeout": "Noch kein Ergebnis für den Test an {name}. Prüfen Sie den Zustand des Ziels gleich noch einmal.",
+    "cursor": {
+      "title": "Ziel aktivieren",
+      "message": "{name} war deaktiviert. Wo soll die Zustellung fortgesetzt werden?",
+      "continue": "{count, plural, one {Das # Ereignis seit der Deaktivierung zustellen} other {Die # Ereignisse seit der Deaktivierung zustellen}}",
+      "continueUnknown": "Die Ereignisse seit der Deaktivierung zustellen",
+      "skip": "Überspringen und mit dem neuesten Ereignis fortfahren",
+      "enable": "Aktivieren"
+    },
+    "pseudonym": {
+      "open": "Pseudonym auflösen",
+      "title": "Pseudonym auflösen",
+      "summary": "Benachrichtigungen können Pseudonyme statt Benutzernamen enthalten. Geben Sie ein Pseudonym ein, um den Benutzer zu sehen; das Ergebnis wird nur einmal angezeigt.",
+      "none": "Kein Ziel ersetzt Benutzernamen durch Pseudonyme, daher gibt es nichts aufzulösen.",
+      "destination": "Ziel",
+      "label": "Pseudonym",
+      "hint": "u_ gefolgt von 24 hexadezimalen Zeichen.",
+      "invalid": "Geben Sie u_ gefolgt von 24 hexadezimalen Kleinbuchstaben ein.",
+      "resolve": "Auflösen",
+      "waiting": "Warte auf das Ergebnis (bis zu 30 Sekunden) …",
+      "match": "Das Pseudonym steht für {username}.",
+      "noMatch": "Kein Benutzer passt zu diesem Pseudonym.",
+      "timeout": "Noch kein Ergebnis. Versuchen Sie es gleich noch einmal."
+    },
+    "empty": {
+      "title": "Keine Benachrichtigungsziele",
+      "description": "Fügen Sie einen Webhook oder eine E-Mail-Liste hinzu, um Sicherheitsereignisse außerhalb des Portals zu erhalten."
     }
   }
 }

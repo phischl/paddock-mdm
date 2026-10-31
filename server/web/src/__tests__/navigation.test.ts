@@ -102,7 +102,7 @@ describe('navigation drawer', () => {
       'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package holds', 'Change sets',
       'Security review', 'Revocations', "Dead man's switch", 'Watched units', 'Login & privileges',
       'Software', 'Vulnerabilities',
-      'Users', 'Groups', 'API tokens', 'MCP', 'Updates', 'Audit log', 'Evidence integrity',
+      'Users', 'Groups', 'API tokens', 'Notifications', 'MCP', 'Updates', 'Audit log', 'Evidence integrity',
     ])
     const security = w.find('[data-testid="nav-group-security"]')
     expect(security.attributes('role')).toBe('group')
@@ -173,7 +173,7 @@ describe('navigation drawer', () => {
 
     const platform = await mountApp({ ...admin, role: 'platform_admin', organization: null }, '/platform/organizations')
     expect(groupLabels(platform.w)).toEqual(['Overview', 'Platform'])
-    expect(linkLabels(platform.w)).toEqual(['Overview', 'Organizations', 'Agent releases', 'IP allow list', 'Sessions', 'OpenBao', 'MCP policy'])
+    expect(linkLabels(platform.w)).toEqual(['Overview', 'Organizations', 'Agent releases', 'IP allow list', 'Sessions', 'OpenBao', 'Platform notifications', 'MCP policy'])
     expect(platform.w.find('[data-testid="app-bar-attention"]').exists()).toBe(false)
     expect(platform.w.find('[data-testid="org-name"]').exists()).toBe(false)
   })
@@ -196,10 +196,10 @@ describe('navigation drawer', () => {
   it('is one Tab stop with a roving tabindex: Up/Down move, Home/End jump', async () => {
     const { w } = await mountApp(admin, '/managed-files')
     const links = drawer(w).findAll('a.pd-nav-item')
-    expect(links.length).toBe(26)
+    expect(links.length).toBe(27)
     const stops = links.filter((a) => a.attributes('tabindex') === '0')
     expect(stops.map((a) => a.attributes('href'))).toEqual(['/managed-files'])
-    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(25)
+    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(26)
 
     ;(stops[0].element as HTMLElement).focus()
     await stops[0].trigger('keydown', { key: 'ArrowDown' })

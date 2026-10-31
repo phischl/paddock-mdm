@@ -109,7 +109,9 @@
     "securityReview": "Security review",
     "operatorRoots": "Operator roots",
     "watchedUnits": "Watched units",
-    "mcpSettings": "MCP"
+    "mcpSettings": "MCP",
+    "notifications": "Notifications",
+    "platformNotifications": "Platform notifications"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -256,7 +258,9 @@
     "mcp_tool_not_allowed": "This operation is not allowed through the MCP.",
     "mcp_write_not_enabled": "Changes through the MCP are not enabled.",
     "mcp_login_required": "Sign in again with paddockctl mcp login.",
-    "rate_limited": "Too many requests. Try again shortly."
+    "rate_limited": "Too many requests. Try again shortly.",
+    "email_not_configured": "This installation has no e-mail relay, so e-mail destinations cannot be enabled.",
+    "unknown_code": "One of the audit codes is not registered."
   },
   "audit": {
     "vulnerability": {
@@ -2384,6 +2388,124 @@
       "token": "Create an enrollment token",
       "agent": "Install and enroll the agent on a device",
       "device": "Approve the first device"
+    }
+  },
+  "notifications": {
+    "title": "Notifications",
+    "platformTitle": "Platform notifications",
+    "summary": "Send security events of this organization to a signed webhook or an e-mail list. Deliveries are at least once; the secret of a webhook is shown only when it is created or replaced.",
+    "platformSummary": "Send platform events (rollouts, releases, vulnerability data, IP allow list) to a signed webhook or an e-mail list.",
+    "create": "Add destination",
+    "createTitle": "New notification destination",
+    "editTitle": "Edit notification destination",
+    "editLabel": "Edit {name}",
+    "testLabel": "Send test to {name}",
+    "rotateLabel": "Replace the signing secret of {name}",
+    "deleteLabel": "Delete {name}",
+    "type": "Type",
+    "types": {
+      "webhook": "Webhook",
+      "email": "E-mail"
+    },
+    "enabled": "Enabled",
+    "on": "On",
+    "off": "Off",
+    "state": "State",
+    "states": {
+      "active": "Active",
+      "stalled": "Stalled",
+      "disabled": "Disabled"
+    },
+    "lastSuccess": "Last delivery",
+    "never": "Never",
+    "lag": "Lag",
+    "lagValue": {
+      "s": "{value} s",
+      "min": "{value} min",
+      "h": "{value} h",
+      "d": "{value} d"
+    },
+    "filterMode": "Events",
+    "modes": {
+      "security": "Security events",
+      "all": "All events",
+      "custom": "Selected events"
+    },
+    "modeHints": {
+      "security": "The security preset: tamper events, findings, revocations, logins and changes of protected settings.",
+      "all": "Every audit event, including routine changes.",
+      "custom": "Only the audit codes you list."
+    },
+    "codes": "Audit codes",
+    "codesHint": "Type or pick registered audit codes, for example finding.closed.",
+    "codesCount": "Select 1 to 200 audit codes.",
+    "codesUnknown": "One of the codes is not a registered audit code.",
+    "nameHint": "Letters, digits, spaces, dots, underscores and hyphens; at most 64 characters.",
+    "nameInvalid": "The name must start with a letter or digit and have at most 64 characters of letters, digits, spaces, '.', '_' and '-'.",
+    "url": "Webhook URL",
+    "urlHint": "An https address that is reachable from the Paddock server. Paddock stores it encrypted and never shows it again.",
+    "urlCurrent": "Current address: {url}. Leave empty to keep it.",
+    "urlUnchanged": "unchanged",
+    "urlRequired": "Enter the webhook URL.",
+    "urlHttps": "The URL must start with https://.",
+    "reenterUrl": "Your identity is confirmed. The webhook URL is never kept while you confirm, so enter it again and save.",
+    "recipients": "Recipients",
+    "recipientsHint": "One e-mail address per line, at most 20.",
+    "recipientsCount": "Enter 1 to 20 e-mail addresses.",
+    "recipientsInvalid": "One of the addresses is not a plain e-mail address.",
+    "pseudonymize": "Replace user names with pseudonyms",
+    "includeParams": "Include event parameters",
+    "heartbeat": "Heartbeat interval (seconds)",
+    "heartbeatHint": "0 switches the heartbeat off; otherwise 60 to 3600.",
+    "heartbeatInvalid": "Enter 0 or a number from 60 to 3600.",
+    "minInterval": "Minimum interval between e-mails (seconds)",
+    "minIntervalHint": "Events inside the interval are summarized in one message; 60 to 3600.",
+    "intervalInvalid": "Enter a number from 60 to 3600.",
+    "saved": "Notification destination saved.",
+    "deleted": "Notification destination {name} deleted.",
+    "close": "Close",
+    "secretTitle": "Signing secret",
+    "secret": "Signing secret",
+    "shownOnce": "This is the only time the signing secret of {name} is shown. Copy it now and store it like a password; Paddock cannot show it again.",
+    "deleteTitle": "Delete notification destination",
+    "deleteConfirm": "Delete {name} with its delivery state? Events are no longer sent there.",
+    "rotateTitle": "Replace the signing secret",
+    "rotate": "Replace secret",
+    "rotateConfirm": "Replace the signing secret of {name}? Deliveries are signed with the new secret from the next round; the receiver must be updated.",
+    "testTitle": "Send a test notification",
+    "test": "Send test",
+    "testConfirm": "Send one test delivery to {name}?",
+    "testWaiting": "Test to {name} requested. Waiting for the result (up to 30 seconds)…",
+    "testOk": "The test delivery to {name} succeeded.",
+    "testError": "The test delivery to {name} failed: {error}",
+    "testUnknown": "unknown error",
+    "testTimeout": "No result for the test to {name} yet. Check the state of the destination in a moment.",
+    "cursor": {
+      "title": "Enable destination",
+      "message": "{name} has been disabled. Where should delivery resume?",
+      "continue": "{count, plural, one {Deliver the # event since it was disabled} other {Deliver the # events since it was disabled}}",
+      "continueUnknown": "Deliver the events since it was disabled",
+      "skip": "Skip them and continue with the newest event",
+      "enable": "Enable"
+    },
+    "pseudonym": {
+      "open": "Resolve pseudonym",
+      "title": "Resolve a pseudonym",
+      "summary": "Notifications can carry pseudonyms instead of user names. Enter a pseudonym to see which user it stands for; the result is shown once.",
+      "none": "No destination replaces user names with pseudonyms, so there is nothing to resolve.",
+      "destination": "Destination",
+      "label": "Pseudonym",
+      "hint": "u_ followed by 24 hexadecimal characters.",
+      "invalid": "Enter u_ followed by 24 lowercase hexadecimal characters.",
+      "resolve": "Resolve",
+      "waiting": "Waiting for the result (up to 30 seconds)…",
+      "match": "The pseudonym stands for {username}.",
+      "noMatch": "No user matches this pseudonym.",
+      "timeout": "No result yet. Try again in a moment."
+    },
+    "empty": {
+      "title": "No notification destinations",
+      "description": "Add a webhook or an e-mail list to receive security events outside the portal."
     }
   }
 }
