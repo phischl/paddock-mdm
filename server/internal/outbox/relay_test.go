@@ -356,7 +356,7 @@ func TestReaperFinalizesStuckAction(t *testing.T) {
 		id  uuid.UUID
 		age time.Duration
 	}{{stuck, 11 * time.Minute}, {fresh, time.Minute}} {
-		_, err := h.super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, actor, target, params, correlation_id, started_at)
+		err := pgtest.ExecUntriggered(ctx, h.super, `INSERT INTO action (id, organization_id, code, status, actor, target, params, correlation_id, started_at)
 			VALUES ($1, $2, 'organization.created', 'started', '{"type":"platform_admin","id":"p1","step_up":false}',
 			        '{"type":"organization","id":"o1"}', '{"slug":"acme"}', $3, now() - $4::interval)`,
 			a.id, org, "corr-"+a.id.String(), fmt.Sprintf("%d seconds", int(a.age.Seconds())))
@@ -429,11 +429,10 @@ func TestReaperKeepsTheStoredSource(t *testing.T) {
 	ctx := context.Background()
 	org, stuck := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	insert := func(id uuid.UUID, source string) error {
-		_, err := h.super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, actor, target, params, correlation_id,
-			started_at, source)
+		return pgtest.ExecUntriggered(ctx, h.super, `INSERT INTO action (id, organization_id, code, status, actor, target, params,
+			correlation_id, started_at, source)
 			VALUES ($1, $2, 'device_group.created', 'started', '{"type":"admin","id":"a1","step_up":false,"client":"claude-code/2.1"}',
 			        NULL, '{"name":"g"}', $3, now() - interval '11 minutes', $4)`, id, org, "corr-"+id.String(), source)
-		return err
 	}
 	if err := insert(stuck, audit.SourceMCP); err != nil {
 		t.Fatal(err)

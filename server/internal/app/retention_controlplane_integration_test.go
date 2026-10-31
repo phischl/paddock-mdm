@@ -62,7 +62,8 @@ func (w retentionWorld) gap(t *testing.T, org, dev uuid.UUID, from int64, filled
 	return id
 }
 
-// action inserts an action of org started at started, in status started (finished nil) or finished at finished.
+// action inserts an action of org started at started, in status started (finished nil) or finished at finished, with
+// the action trigger off: the times lie in the past (migration 00084).
 func (w retentionWorld) action(t *testing.T, org uuid.UUID, started time.Time, finished *time.Time) uuid.UUID {
 	t.Helper()
 	id := uuid.Must(uuid.NewV7())
@@ -71,8 +72,11 @@ func (w retentionWorld) action(t *testing.T, org uuid.UUID, started time.Time, f
 		ok := "success"
 		status, outcome = "finished", &ok
 	}
-	w.exec(t, `INSERT INTO action (id, organization_id, code, status, outcome, actor, correlation_id, started_at, finished_at)
-		VALUES ($1, $2, 'test.retention', $3, $4, '{"kind":"system"}', 'retention-test', $5, $6)`, id, org, status, outcome, started, finished)
+	if err := pgtest.ExecUntriggered(context.Background(), w.super, `INSERT INTO action (id, organization_id, code, status, outcome, actor,
+		correlation_id, started_at, finished_at)
+		VALUES ($1, $2, 'test.retention', $3, $4, '{"kind":"system"}', 'retention-test', $5, $6)`, id, org, status, outcome, started, finished); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), "DELETE FROM action WHERE id = $1", id) })
 	return id
 }
@@ -299,8 +303,9 @@ func TestRetentionPurgeActions(t *testing.T) {
 	expired := w.action(t, org, long, at(indexFloor.Add(-time.Minute)))
 	young := w.action(t, org, long, at(now.Add(-indexPeriod+time.Minute)))
 	started := w.action(t, org, long, nil)
-	// The schema does not tie finished_at to the status, so only the status guard keeps a started action out.
-	w.exec(t, "UPDATE action SET finished_at = $1 WHERE id = $2", indexFloor.Add(-time.Minute), started)
+	// Migration 00084 ties finished_at to the status, so a started action cannot carry the expired finish time that only
+	// the status guard would otherwise keep out.
+	expectRefused(t, w.super, "UPDATE action SET finished_at = $1 WHERE id = $2", indexFloor.Add(-time.Minute), started)
 
 	n, err := w.retention.PurgeActions(systemCtx(org), now)
 	if err != nil || n != 1 {
@@ -331,7 +336,7 @@ func TestRetentionPurgePlatformActions(t *testing.T) {
 	expired := w.action(t, uuid.Nil, long, at(floor.Add(-time.Minute)))
 	inMonth := w.action(t, uuid.Nil, long, at(floor.Add(time.Minute)))
 	started := w.action(t, uuid.Nil, long, nil)
-	w.exec(t, "UPDATE action SET finished_at = $1 WHERE id = $2", floor.Add(-time.Minute), started)
+	expectRefused(t, w.super, "UPDATE action SET finished_at = $1 WHERE id = $2", floor.Add(-time.Minute), started)
 	other := w.action(t, org, long, at(floor.Add(-time.Minute)))
 	t.Cleanup(func() {
 		_, _ = w.super.Exec(context.Background(), `DELETE FROM action WHERE organization_id = $1 AND code = 'retention.purged'
@@ -445,6 +450,16 @@ func inTx(t *testing.T, conn *pgx.Conn, role string, orgCtx *uuid.UUID, sql stri
 	return tag.RowsAffected(), nil
 }
 
+// expectRefused runs sql on conn and fails t unless the database refuses it with check_violation.
+func expectRefused(t *testing.T, conn *pgx.Conn, sql string, args ...any) {
+	t.Helper()
+	_, err := conn.Exec(context.Background(), sql, args...)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Errorf("%s: got %v, want check_violation", sql, err)
+	}
+}
+
 // TestRetentionActionFinishedImmutable (ADR 0032 amendment 2026-10-31, migration 00082): no runtime role with UPDATE
 // on action changes a finished action, so none can rewrite its params and outcome or move an organization's finished
 // action into the platform pseudo-organization, where the platform role could delete it. Finishing a started action,
@@ -504,10 +519,11 @@ func TestRetentionActionFinishedImmutable(t *testing.T) {
 	})
 }
 
-// TestRetentionActionOrganizationImmutable (ADR 0032 amendment 2026-10-31, migration 00083): neither the platform
-// role nor the relay role moves an organization's started action into another organization or the platform
-// pseudo-organization, where it could be finished and deleted outside the organization's audit trail. Moving a started
-// action out of the pseudo-organization, as organization creation does, keeps working.
+// TestRetentionActionOrganizationImmutable (ADR 0032 amendment 2026-10-31, migrations 00083 and 00084): neither the
+// platform role nor the relay role moves an organization's started action into another organization or the platform
+// pseudo-organization, where it could be finished and deleted outside the organization's audit trail. A started
+// platform action moves into an organization only while it is finished; moving it without finishing is refused, so the
+// reaper never writes its event into an organization the use case did not finish it in.
 func TestRetentionActionOrganizationImmutable(t *testing.T) {
 	w := newRetentionWorld(t)
 	env := pgtest.SharedPaddock(t)
@@ -547,28 +563,41 @@ func TestRetentionActionOrganizationImmutable(t *testing.T) {
 		}
 	}
 
-	t.Run("organization creation finishes its action in the new organization", func(t *testing.T) {
-		started := w.action(t, uuid.Nil, long, nil)
-		if n := affected(t, env.Platform, nil, moveAndFinish, started, org); n != 1 {
-			t.Fatalf("finished %d pseudo-organization actions in the organization, want 1", n)
-		}
-		if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2 AND status = 'finished'",
-			started, org) != 1 {
-			t.Fatal("want the action finished in the new organization")
+	t.Run("a platform action moves into an organization only on finishing", func(t *testing.T) {
+		for _, url := range []string{env.Platform, env.Relay} {
+			started := w.action(t, uuid.Nil, long, nil)
+			_, err := tryAffected(t, url, nil, move, started, org)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+				t.Errorf("moved a started platform action without finishing it: got %v, want check_violation", err)
+			}
+			if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2 AND status = 'started'",
+				started, uuid.Nil) != 1 {
+				t.Error("want the started action kept in the platform pseudo-organization")
+			}
+			if n := affected(t, url, nil, moveAndFinish, started, org); n != 1 {
+				t.Fatalf("finished %d pseudo-organization actions in the organization, want 1", n)
+			}
+			if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2 AND status = 'finished'",
+				started, org) != 1 {
+				t.Fatal("want the action finished in the organization")
+			}
 		}
 	})
 }
 
 // TestRetentionActionFinishTimeFromDatabase (ADR 0032 amendment 2026-10-31, migration 00084): a role that finishes a
-// started organization action cannot backdate its finish time, so a retention round right afterwards keeps the row;
-// the database sets the finish time, whatever the statement wrote.
+// started organization action, or inserts a finished one, cannot backdate its finish time, so a retention round right
+// afterwards keeps the row. The stored finish time is the written one, floored at the database's time and capped at five
+// minutes after it: an application clock ahead of the database keeps its time, one behind it gets the database's.
 func TestRetentionActionFinishTimeFromDatabase(t *testing.T) {
 	w := newRetentionWorld(t)
 	env := pgtest.SharedPaddock(t)
 	org, _ := w.orgWithDevice(t)
 	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	const backdated = `UPDATE action SET status = 'finished', outcome = 'success', finished_at = '2000-01-01T00:00:00Z'
-		WHERE id = $1`
+	const finish = "UPDATE action SET status = 'finished', outcome = 'success', finished_at = $2 WHERE id = $1"
+	const insert = `INSERT INTO action (id, organization_id, code, status, outcome, actor, correlation_id, started_at, finished_at)
+		VALUES ($1, $3, 'test.retention', 'finished', 'success', '{"kind":"system"}', 'retention-test', clock_timestamp(), $2)`
 	dbNow := func() time.Time {
 		t.Helper()
 		var at time.Time
@@ -576,6 +605,46 @@ func TestRetentionActionFinishTimeFromDatabase(t *testing.T) {
 			t.Fatal(err)
 		}
 		return at
+	}
+	const window = 5 * time.Minute
+	cases := []struct {
+		name string
+		// written returns the finish time the statement writes, given the database's time just before.
+		written func(dbBefore time.Time) *time.Time
+		// stored checks the stored finish time against the written one and the database's time around the statement.
+		stored func(got time.Time, written *time.Time, before, after time.Time) bool
+	}{
+		{"backdated", func(time.Time) *time.Time { return at(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)) },
+			func(got time.Time, _ *time.Time, before, after time.Time) bool {
+				return !got.Before(before) && !got.After(after)
+			}},
+		{"missing", func(time.Time) *time.Time { return nil },
+			func(got time.Time, _ *time.Time, before, after time.Time) bool {
+				return !got.Before(before) && !got.After(after)
+			}},
+		{"application clock behind", func(b time.Time) *time.Time { return at(b.Add(-time.Second)) },
+			func(got time.Time, _ *time.Time, before, after time.Time) bool {
+				return !got.Before(before) && !got.After(after)
+			}},
+		{"application clock ahead", func(b time.Time) *time.Time { return at(b.Add(2 * time.Minute)) },
+			func(got time.Time, written *time.Time, _, _ time.Time) bool {
+				d := got.Sub(*written)
+				return d > -time.Millisecond && d < time.Millisecond
+			}},
+		{"application clock ahead beyond the cap", func(b time.Time) *time.Time { return at(b.Add(time.Hour)) },
+			func(got time.Time, _ *time.Time, before, after time.Time) bool {
+				return !got.Before(before.Add(window)) && !got.After(after.Add(window))
+			}},
+	}
+	check := func(t *testing.T, id uuid.UUID, written *time.Time, before, after time.Time, ok func(time.Time, *time.Time, time.Time, time.Time) bool) {
+		t.Helper()
+		var finished time.Time
+		if err := w.super.QueryRow(context.Background(), "SELECT finished_at FROM action WHERE id = $1", id).Scan(&finished); err != nil {
+			t.Fatal(err)
+		}
+		if !ok(finished, written, before, after) {
+			t.Fatalf("finished_at %s for written %v, database time %s to %s", finished, written, before, after)
+		}
 	}
 
 	for _, r := range []struct {
@@ -585,29 +654,164 @@ func TestRetentionActionFinishTimeFromDatabase(t *testing.T) {
 		{"paddock_platform", env.Platform},
 		{"paddock_relay", env.Relay},
 	} {
-		t.Run(r.role, func(t *testing.T) {
-			started := w.action(t, org, long, nil)
-			before := dbNow()
-			if n := affected(t, r.url, nil, backdated, started); n != 1 {
-				t.Fatalf("finished %d started actions, want 1", n)
-			}
-			after := dbNow()
-			var finished time.Time
-			if err := w.super.QueryRow(context.Background(), "SELECT finished_at FROM action WHERE id = $1", started).Scan(&finished); err != nil {
-				t.Fatal(err)
-			}
-			if finished.Before(before) || finished.After(after) {
-				t.Fatalf("finished_at %s, want the database's time between %s and %s", finished, before, after)
-			}
-
-			if n, err := w.retention.PurgeActions(systemCtx(org), time.Now()); err != nil || n != 0 {
-				t.Fatalf("retention round purged %d (%v), want 0", n, err)
-			}
-			if !w.exists(t, "action", started) {
-				t.Fatal("want the just finished action kept by the retention round")
-			}
-		})
+		for _, c := range cases {
+			t.Run("finish/"+r.role+"/"+c.name, func(t *testing.T) {
+				started := w.action(t, org, long, nil)
+				before := dbNow()
+				written := c.written(before)
+				if n := affected(t, r.url, nil, finish, started, written); n != 1 {
+					t.Fatalf("finished %d started actions, want 1", n)
+				}
+				check(t, started, written, before, dbNow(), c.stored)
+			})
+		}
 	}
+	for _, r := range []struct {
+		role   string
+		url    string
+		orgCtx *uuid.UUID
+	}{
+		{"paddock_platform", env.Platform, nil},
+		{"paddock_api", env.API, &org},
+	} {
+		for _, c := range cases {
+			t.Run("insert/"+r.role+"/"+c.name, func(t *testing.T) {
+				id := uuid.Must(uuid.NewV7())
+				t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), "DELETE FROM action WHERE id = $1", id) })
+				before := dbNow()
+				written := c.written(before)
+				if n := affected(t, r.url, r.orgCtx, insert, id, written, org); n != 1 {
+					t.Fatalf("inserted %d finished actions, want 1", n)
+				}
+				check(t, id, written, before, dbNow(), c.stored)
+			})
+		}
+	}
+
+	t.Run("retention round after a backdated finish", func(t *testing.T) {
+		started := w.action(t, org, long, nil)
+		if n := affected(t, env.Platform, nil, finish, started, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)); n != 1 {
+			t.Fatalf("finished %d started actions, want 1", n)
+		}
+		if n, err := w.retention.PurgeActions(systemCtx(org), time.Now()); err != nil || n != 0 {
+			t.Fatalf("retention round purged %d (%v), want 0", n, err)
+		}
+		if !w.exists(t, "action", started) {
+			t.Fatal("want the just finished action kept by the retention round")
+		}
+	})
+}
+
+// TestRetentionActionStartedUnchangeable (ADR 0032 amendment 2026-10-31, migration 00084): a started action changes
+// only by finishing. Neither the platform role nor the relay role rewrites a started action's target, params, error code
+// or finish time, which the outbox reaper would copy into the event it writes, nor reopens it by writing started again.
+func TestRetentionActionStartedUnchangeable(t *testing.T) {
+	w := newRetentionWorld(t)
+	env := pgtest.SharedPaddock(t)
+	org, _ := w.orgWithDevice(t)
+	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, set := range []string{
+		`target = '{"type":"organization","id":"rewritten"}'`,
+		`params = '{"rewritten":true}'`,
+		"error_code = 'rewritten'",
+		"finished_at = clock_timestamp()",
+		"status = 'started'",
+	} {
+		for _, r := range []struct {
+			role string
+			url  string
+		}{
+			{"paddock_platform", env.Platform},
+			{"paddock_relay", env.Relay},
+		} {
+			started := w.action(t, org, long, nil)
+			_, err := tryAffected(t, r.url, nil, "UPDATE action SET "+set+" WHERE id = $1", started)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+				t.Errorf("%s, %s: got %v, want check_violation", r.role, set, err)
+			}
+			if countRows(t, w.super, `SELECT count(*) FROM action WHERE id = $1 AND status = 'started' AND target IS NULL
+				AND params = '{}' AND error_code IS NULL AND finished_at IS NULL`, started) != 1 {
+				t.Errorf("%s, %s: want the started action unchanged", r.role, set)
+			}
+		}
+	}
+}
+
+// TestRetentionActionInsertBounded (ADR 0032 amendment 2026-10-31, migration 00084): a started action is inserted
+// without a finish time and with a start time within five minutes of the database's, so no role inserts an action the
+// outbox reaper would take for a stuck one or one that carries a finish time; and the schema ties the finish time to the
+// status even with the trigger off.
+func TestRetentionActionInsertBounded(t *testing.T) {
+	w := newRetentionWorld(t)
+	env := pgtest.SharedPaddock(t)
+	org, _ := w.orgWithDevice(t)
+	const insert = `INSERT INTO action (id, organization_id, code, status, actor, correlation_id, started_at, finished_at)
+		VALUES ($1, $2, 'test.retention', 'started', '{"kind":"system"}', 'retention-test', clock_timestamp() + $3::interval, $4)`
+	for _, r := range []struct {
+		role   string
+		url    string
+		orgCtx *uuid.UUID
+	}{
+		{"paddock_platform", env.Platform, nil},
+		{"paddock_api", env.API, &org},
+	} {
+		for _, c := range []struct {
+			name     string
+			offset   string
+			finished *time.Time
+			accepted bool
+		}{
+			{"current", "0 seconds", nil, true},
+			{"four minutes old", "-4 minutes", nil, true},
+			{"four minutes ahead", "4 minutes", nil, true},
+			{"six minutes old", "-6 minutes", nil, false},
+			{"six minutes ahead", "6 minutes", nil, false},
+			{"with a finish time", "0 seconds", at(time.Now()), false},
+		} {
+			t.Run(r.role+"/"+c.name, func(t *testing.T) {
+				id := uuid.Must(uuid.NewV7())
+				t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), "DELETE FROM action WHERE id = $1", id) })
+				n, err := tryAffected(t, r.url, r.orgCtx, insert, id, org, c.offset, c.finished)
+				if c.accepted {
+					if err != nil || n != 1 {
+						t.Fatalf("inserted %d (%v), want 1", n, err)
+					}
+					return
+				}
+				var pgErr *pgconn.PgError
+				if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+					t.Fatalf("got %v, want check_violation", err)
+				}
+			})
+		}
+	}
+
+	t.Run("finish time tied to the status", func(t *testing.T) {
+		long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		for _, c := range []struct {
+			status, outcome string
+			finished        *time.Time
+		}{
+			{"started", "", at(long)},
+			{"finished", "success", nil},
+		} {
+			id := uuid.Must(uuid.NewV7())
+			t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), "DELETE FROM action WHERE id = $1", id) })
+			var outcome *string
+			if c.outcome != "" {
+				outcome = &c.outcome
+			}
+			err := pgtest.ExecUntriggered(context.Background(), w.super, `INSERT INTO action (id, organization_id, code, status,
+				outcome, actor, correlation_id, started_at, finished_at)
+				VALUES ($1, $2, 'test.retention', $3, $4, '{"kind":"system"}', 'retention-test', $5, $6)`,
+				id, org, c.status, outcome, long, c.finished)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "action_finished_at_status" {
+				t.Errorf("%s with finish time %v: got %v, want action_finished_at_status", c.status, c.finished, err)
+			}
+		}
+	})
 }
 
 // TestRetentionActionIdentityImmutable (ADR 0032 amendment 2026-10-31, migration 00084): no role, the owner and the

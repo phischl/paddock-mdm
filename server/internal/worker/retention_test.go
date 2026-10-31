@@ -337,7 +337,7 @@ func TestRetentionRoundControlPlane(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := f.super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, outcome, actor, correlation_id, started_at, finished_at)
+	if err := pgtest.ExecUntriggered(ctx, f.super, `INSERT INTO action (id, organization_id, code, status, outcome, actor, correlation_id, started_at, finished_at)
 		SELECT gen_random_uuid(), o, 'test.retention', 'finished', 'success', '{"kind":"system"}', 'retention-test', t, t
 		  FROM unnest(ARRAY[$2, $3]::timestamptz[]) t, unnest(ARRAY[$1, $4]::uuid[]) o`, f.org, expired, kept, uuid.Nil); err != nil {
 		t.Fatal(err)

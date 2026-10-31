@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
@@ -156,4 +157,23 @@ func dsn(hostPort, user, password, database string) string {
 	u := url.URL{Scheme: "postgres", User: url.UserPassword(user, password), Host: hostPort, Path: "/" + database,
 		RawQuery: "sslmode=disable"}
 	return u.String()
+}
+
+// ExecUntriggered runs sql on the superuser connection super with the tables' triggers off
+// (session_replication_role = replica, superuser only); constraints still apply. Fixtures use it for rows a service could
+// not write as they are, such as an action started or finished long ago (migration 00084 bounds an action's times to
+// the database clock).
+func ExecUntriggered(ctx context.Context, super *pgx.Conn, sql string, args ...any) error {
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SET LOCAL session_replication_role = replica"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

@@ -292,17 +292,24 @@ pseudo-organization (nil UUID), where organization creation starts its action an
 organization; and the restrictive policies become `TO PUBLIC` with the same expressions (`finished_immutable` for
 `UPDATE`; `delete_finished`, `USING (status = 'finished')`, replaces the worker's `DELETE` policy; the platform role's
 `platform_delete` stays), so a role added later with `UPDATE` or `DELETE` on `action` (M9's `paddock_notifier`) is
-bound without naming it. Migration `00084` (PDK-635) extends that trigger to every `UPDATE`, for every role: on
-`started` → `finished` the database sets `finished_at` to `clock_timestamp()`, whatever the statement wrote, so no
-role can backdate a finish to have the next retention round delete the row; and `id`, `code`, `actor`, `source`,
-`correlation_id` and `started_at` never change, so no role can rewrite a started action's start time to have the outbox
-reaper close it as unknown. `clock_timestamp()`, not `now()`: the audit event's `occurred_at` comes from the
-application clock inside the finishing transaction, after it began and before the update, so the transaction start
-would lie just before `occurred_at` and could fall into the previous UTC month, deleting the row while the index still
-shows its event; the finish time after it keeps the row at least as long as the index. This holds for one clock: a
-database clock behind the application's by more than the finishing transaction lasts can still put the finish time
-into the previous month for an action finished within that skew of a month boundary; with synchronised clocks that is
-milliseconds, accepted. Residual: a role with `UPDATE` can still finish a started action of
-an organization it may update, with another outcome or params, before its use case does; the action stays in that
-organization with the database's finish time, so the retention round keeps it for the full period, but its use case's
-finish then fails and the original outcome never reaches the outbox.
+bound without naming it. Migration `00084` (PDK-635) replaces that trigger with `action_integrity`, which runs before
+every `INSERT` and `UPDATE`, for every role. The finish time, on `started` → `finished` and on an insert as
+`finished`, is `GREATEST(clock_timestamp(), LEAST(finished_at, clock_timestamp() + 5 minutes))`: no role can backdate
+a finish to have the next retention round delete the row, and the application's time, which the use case and the
+outbox reaper also write as the audit event's `occurred_at`, stays when the database clock lags behind it, so the row,
+purged by `finished_at`, stays at least as long as the index, purged by `occurred_at`, shows its event. Only an
+application clock more than five minutes ahead of the database's loses its time to the cap; within that month-boundary
+window its row can go before its event, accepted. A started action is inserted without a finish time and with a
+`started_at` within five minutes of the database's time (an application clock further off fails the action instead),
+and `CHECK ((status = 'finished') = (finished_at IS NOT NULL))` ties the finish time to the status. On `UPDATE`, `id`,
+`code`, `actor`, `source`, `correlation_id` and `started_at` never change, and every update that leaves an action
+`started` is refused: a started action changes only by finishing, so no role rewrites its start time to have the
+outbox reaper close it as unknown, or its target, params, error code or organization, which the reaper copies into the
+event it writes. `organization_id` moves only out of the platform pseudo-organization and only on finishing;
+organization creation inserts its started action in the new organization already. The table owner `paddock_owner`
+is out of scope: it runs the migrations only, bypasses row-level security and may disable the trigger, and no service
+connects as it. Residual: a role with `UPDATE` can still finish a started action of an organization it may update,
+with another outcome or params, before its use case does; the action stays in that organization with a finish time
+the database bounds, so the retention round keeps it for the full period, but its use case's finish then fails and
+the original outcome never reaches the outbox. And `paddock_relay` holds `DELETE` on `outbox`, so it can remove an
+audit event before it is published (follow-up PDK-642).
