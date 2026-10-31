@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
@@ -20,6 +21,9 @@ func SetDayChosen(w *Writer, fn func(day time.Time)) { w.dayChosen = fn }
 
 // SetRowInserted runs fn in the writer transaction after it inserted the audit_object row and before the WORM put.
 func SetRowInserted(w *Writer, fn func(day time.Time)) { w.rowInserted = fn }
+
+// SetBeforeInsert runs fn in the writer transaction before it inserts ev into the index.
+func SetBeforeInsert(w *Writer, fn func(ev audit.Event)) { w.beforeInsert = fn }
 
 // SetSealerClock replaces the sealer's clock.
 func SetSealerClock(s *Sealer, now func() time.Time) { s.now = now }

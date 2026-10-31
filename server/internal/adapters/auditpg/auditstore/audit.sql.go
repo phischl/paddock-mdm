@@ -289,9 +289,9 @@ func (q *Queries) GetLatestAuditVerificationRunByOK(ctx context.Context, ok bool
 
 const insertAuditEvent = `-- name: InsertAuditEvent :one
 INSERT INTO audit_event (event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target,
-                         params, correlation_id, object_key)
+                         params, correlation_id, object_key, commit_seq)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12)
+        $10, $11, $12, $13)
 ON CONFLICT DO NOTHING
 RETURNING event_id
 `
@@ -309,6 +309,7 @@ type InsertAuditEventParams struct {
 	Params         json.RawMessage
 	CorrelationID  string
 	ObjectKey      string
+	CommitSeq      int64
 }
 
 func (q *Queries) InsertAuditEvent(ctx context.Context, arg InsertAuditEventParams) (uuid.UUID, error) {
@@ -325,6 +326,7 @@ func (q *Queries) InsertAuditEvent(ctx context.Context, arg InsertAuditEventPara
 		arg.Params,
 		arg.CorrelationID,
 		arg.ObjectKey,
+		arg.CommitSeq,
 	)
 	var event_id uuid.UUID
 	err := row.Scan(&event_id)
@@ -434,6 +436,19 @@ func (q *Queries) LatestAuditManifestDay(ctx context.Context) (time.Time, error)
 	return day, err
 }
 
+const latestCommitSeq = `-- name: LatestCommitSeq :one
+SELECT coalesce(max(commit_seq), 0)::bigint AS latest FROM audit_event
+`
+
+// max(commit_seq), not audit_org_seq: the reader has no grant on it, and the maximum stays valid after the index
+// retention dropped old partitions (amendment B1.3).
+func (q *Queries) LatestCommitSeq(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, latestCommitSeq)
+	var latest int64
+	err := row.Scan(&latest)
+	return latest, err
+}
+
 const latestNightlyRunFinished = `-- name: LatestNightlyRunFinished :one
 SELECT finished_at FROM audit_verification_run WHERE trigger = 'nightly' ORDER BY finished_at DESC LIMIT 1
 `
@@ -448,7 +463,7 @@ func (q *Queries) LatestNightlyRunFinished(ctx context.Context) (time.Time, erro
 
 const listAuditEvents = `-- name: ListAuditEvents :many
 
-SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key FROM audit_event
+SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key, commit_seq FROM audit_event
 WHERE occurred_at >= $1 AND occurred_at < $2
   AND ($3::text[] IS NULL OR code = ANY($3::text[]))
   AND ($4::text[] IS NULL OR outcome = ANY($4::text[]))
@@ -517,6 +532,51 @@ func (q *Queries) ListAuditEvents(ctx context.Context, arg ListAuditEventsParams
 			&i.Params,
 			&i.CorrelationID,
 			&i.ObjectKey,
+			&i.CommitSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEventsAfter = `-- name: ListAuditEventsAfter :many
+SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key, commit_seq FROM audit_event WHERE commit_seq > $1 ORDER BY commit_seq LIMIT $2
+`
+
+type ListAuditEventsAfterParams struct {
+	After   int64
+	MaxRows int32
+}
+
+// Commit-order read of the index (plan M9 decision 4); RLS supplies the organization.
+func (q *Queries) ListAuditEventsAfter(ctx context.Context, arg ListAuditEventsAfterParams) ([]AuditEvent, error) {
+	rows, err := q.db.Query(ctx, listAuditEventsAfter, arg.After, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditEvent{}
+	for rows.Next() {
+		var i AuditEvent
+		if err := rows.Scan(
+			&i.EventID,
+			&i.OrganizationID,
+			&i.OccurredAt,
+			&i.RecordedAt,
+			&i.Code,
+			&i.Outcome,
+			&i.Source,
+			&i.Actor,
+			&i.Target,
+			&i.Params,
+			&i.CorrelationID,
+			&i.ObjectKey,
+			&i.CommitSeq,
 		); err != nil {
 			return nil, err
 		}
@@ -865,6 +925,21 @@ func (q *Queries) LockAuditDays(ctx context.Context, organizationID uuid.UUID) e
 	return err
 }
 
+const lockOrgSeq = `-- name: LockOrgSeq :one
+INSERT INTO audit_org_seq (organization_id, last_seq) VALUES ($1, 0)
+ON CONFLICT (organization_id) DO UPDATE SET last_seq = audit_org_seq.last_seq
+RETURNING last_seq
+`
+
+// Locks the organization's sequence row for the rest of the writer transaction (plan M9 decision 2) and returns the
+// last assigned commit_seq; the no-op update takes the row lock also when the row exists.
+func (q *Queries) LockOrgSeq(ctx context.Context, organizationID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, lockOrgSeq, organizationID)
+	var last_seq int64
+	err := row.Scan(&last_seq)
+	return last_seq, err
+}
+
 const releaseAuditSealLock = `-- name: ReleaseAuditSealLock :one
 SELECT pg_advisory_unlock(hashtext('audit-seal')) AS unlocked
 `
@@ -885,6 +960,20 @@ func (q *Queries) ReleaseAuditVerifyLock(ctx context.Context) (bool, error) {
 	var unlocked bool
 	err := row.Scan(&unlocked)
 	return unlocked, err
+}
+
+const setOrgSeq = `-- name: SetOrgSeq :exec
+UPDATE audit_org_seq SET last_seq = $1 WHERE organization_id = $2
+`
+
+type SetOrgSeqParams struct {
+	LastSeq        int64
+	OrganizationID uuid.UUID
+}
+
+func (q *Queries) SetOrgSeq(ctx context.Context, arg SetOrgSeqParams) error {
+	_, err := q.db.Exec(ctx, setOrgSeq, arg.LastSeq, arg.OrganizationID)
+	return err
 }
 
 const transactionTime = `-- name: TransactionTime :one
