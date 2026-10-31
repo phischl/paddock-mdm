@@ -26,6 +26,9 @@ type auditWorld struct {
 
 	gateOrgMu   sync.Mutex
 	gateOrgSlug string
+
+	// admins are the acme administrators the cases step up as (TestAuditExactlyOnce only).
+	admins *adminPool
 }
 
 // auditCase is one request against a privileged operation and the single audit event it must produce.
@@ -134,11 +137,12 @@ var auditCases = map[string][]auditCase{
 	// Each creation signs in on its own: a step-up changes the session it runs in (plan M6c decision 4).
 	"POST /api/v1/api-tokens": {
 		{"success", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			stepUp(t, alice, env.Alice, true)
-			res := postAPIToken(t, alice, apiTokenName("audit"), "org_auditor", 2*time.Hour)
+			user := w.admins.take()
+			admin := login(t, user)
+			stepUp(t, admin, user, true)
+			res := postAPIToken(t, admin, apiTokenName("audit"), "org_auditor", 2*time.Hour)
 			expectStatus(t, res, http.StatusCreated, "")
-			removeCreated(t, alice, "/api/v1/api-tokens", res)
+			removeCreated(t, admin, "/api/v1/api-tokens", res)
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.created", "success")
 		}},
 		{"no step-up", func(t *testing.T, w *auditWorld) {
@@ -147,9 +151,10 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.created", "denied")
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			stepUp(t, alice, env.Alice, true)
-			res := postAPIToken(t, alice, apiTokenName("audit"), "org_auditor", 400*24*time.Hour)
+			user := w.admins.take()
+			admin := login(t, user)
+			stepUp(t, admin, user, true)
+			res := postAPIToken(t, admin, apiTokenName("audit"), "org_auditor", 400*24*time.Hour)
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.created", "failure")
 		}},
@@ -197,8 +202,9 @@ var auditCases = map[string][]auditCase{
 	},
 	"POST /api/v1/api-tokens/{id}/revoke": {
 		{"success", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			res := call(t, alice, http.MethodPost, "/api/v1/api-tokens/"+createAPIToken(t, alice, env.Alice, "org_auditor").Token.ID+"/revoke", nil)
+			user := w.admins.take()
+			admin := login(t, user)
+			res := call(t, admin, http.MethodPost, "/api/v1/api-tokens/"+createAPIToken(t, admin, user, "org_auditor").Token.ID+"/revoke", nil)
 			expectStatus(t, res, http.StatusOK, "")
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "success")
 		}},
@@ -208,8 +214,9 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "failure")
 		}},
 		{"wrong role", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			res := call(t, w.bob, http.MethodPost, "/api/v1/api-tokens/"+createAPIToken(t, alice, env.Alice, "org_auditor").Token.ID+"/revoke", nil)
+			user := w.admins.take()
+			admin := login(t, user)
+			res := call(t, w.bob, http.MethodPost, "/api/v1/api-tokens/"+createAPIToken(t, admin, user, "org_auditor").Token.ID+"/revoke", nil)
 			expectStatus(t, res, http.StatusForbidden, "forbidden")
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "denied")
 		}},
@@ -219,10 +226,11 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "failure")
 		}},
 		{"conflict", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			id := createAPIToken(t, alice, env.Alice, "org_auditor").Token.ID
-			expectStatus(t, call(t, alice, http.MethodPost, "/api/v1/api-tokens/"+id+"/revoke", nil), http.StatusOK, "")
-			res := call(t, alice, http.MethodPost, "/api/v1/api-tokens/"+id+"/revoke", nil)
+			user := w.admins.take()
+			admin := login(t, user)
+			id := createAPIToken(t, admin, user, "org_auditor").Token.ID
+			expectStatus(t, call(t, admin, http.MethodPost, "/api/v1/api-tokens/"+id+"/revoke", nil), http.StatusOK, "")
+			res := call(t, admin, http.MethodPost, "/api/v1/api-tokens/"+id+"/revoke", nil)
 			expectStatus(t, res, http.StatusConflict, "invalid_state")
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "failure")
 		}},
@@ -469,8 +477,9 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_enabled", "denied")
 		}},
 		{"api token", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			token := tokenPortal(t, createAPIToken(t, alice, env.Alice, "org_admin").Secret)
+			user := w.admins.take()
+			admin := login(t, user)
+			token := tokenPortal(t, createAPIToken(t, admin, user, "org_admin").Secret)
 			res := call(t, token, http.MethodPost, "/api/v1/me/mcp-write/enable", nil)
 			expectStatus(t, res, http.StatusForbidden, "forbidden")
 			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_enabled", "denied")
@@ -489,8 +498,9 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_disabled", "denied")
 		}},
 		{"api token", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			token := tokenPortal(t, createAPIToken(t, alice, env.Alice, "org_operator").Secret)
+			user := w.admins.take()
+			admin := login(t, user)
+			token := tokenPortal(t, createAPIToken(t, admin, user, "org_operator").Secret)
 			res := call(t, token, http.MethodPost, "/api/v1/me/mcp-write/disable", nil)
 			expectStatus(t, res, http.StatusForbidden, "forbidden")
 			expectOneEvent(t, w.alice, res.RequestID, "admin.mcp_write_disabled", "denied")
@@ -558,6 +568,7 @@ func TestAuditExactlyOnce(t *testing.T) {
 	doc := loadSpec(t)
 	w := newAuditWorld(t)
 	sem := parallelCases(t)
+	w.admins = newAdminPool(t, "a3-admin", cap(sem), env.RoleGroup("acme", "admins"))
 	var ops []string
 	for path, item := range doc.Paths.Map() {
 		for method, op := range item.Operations() {

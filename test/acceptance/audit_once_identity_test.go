@@ -81,7 +81,7 @@ func itemCases(method, collection, suffix, code string, okStatus int, create fun
 var identityAuditCases = map[string][]auditCase{
 	"POST /api/auth/mcp/session": {
 		{"success", func(t *testing.T, w *auditWorld) {
-			tokens := mcpDeviceTokens(t, env.Alice)
+			tokens := mcpDeviceTokens(t, w.admins.take())
 			res := mcpSession(t, tokens.IDToken, tokens.AccessToken)
 			expectStatus(t, res, http.StatusNoContent, "")
 			mcpLogout(t, tokens.AccessToken)
@@ -93,7 +93,7 @@ var identityAuditCases = map[string][]auditCase{
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "admin.login", "failure", auditPollTimeout)
 		}},
 		{"replay", func(t *testing.T, w *auditWorld) {
-			tokens := mcpDeviceTokens(t, env.Alice)
+			tokens := mcpDeviceTokens(t, w.admins.take())
 			first := mcpSession(t, tokens.IDToken, tokens.AccessToken)
 			expectStatus(t, first, http.StatusNoContent, "")
 			mcpLogout(t, tokens.AccessToken)

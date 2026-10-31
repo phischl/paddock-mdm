@@ -308,10 +308,11 @@ func diskAuditCases(verb, code string) []auditCase {
 	target := func(id string) string { return "/api/v1/devices/" + id + "/disk/" + verb }
 	return []auditCase{
 		{"success", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			d, _, _ := diskDevice(t, alice)
-			stepUp(t, alice, env.Alice, true)
-			res := call(t, alice, http.MethodPost, target(d.DeviceID), map[string]any{"confirm_hostname": getDevice(t, alice, d.DeviceID).Hostname})
+			user := w.admins.take()
+			admin := login(t, user)
+			d, _, _ := diskDevice(t, admin)
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, target(d.DeviceID), map[string]any{"confirm_hostname": getDevice(t, admin, d.DeviceID).Hostname})
 			expectStatus(t, res, http.StatusOK, "")
 			expectOneEvent(t, w.alice, res.RequestID, code, "success")
 		}},
@@ -326,20 +327,22 @@ func diskAuditCases(verb, code string) []auditCase {
 			expectOneEvent(t, w.alice, res.RequestID, code, "denied")
 		}},
 		{"validation failure and not found", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
-			stepUp(t, alice, env.Alice, true)
-			res := call(t, alice, http.MethodPost, target(activeID(t, w)), map[string]any{"confirm_hostname": "not-the-hostname"})
+			user := w.admins.take()
+			admin := login(t, user)
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, target(activeID(t, w)), map[string]any{"confirm_hostname": "not-the-hostname"})
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
-			res = call(t, alice, http.MethodPost, target(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
+			res = call(t, admin, http.MethodPost, target(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
 			expectStatus(t, res, http.StatusNotFound, "not_found")
 			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
 		}},
 		{"conflict", func(t *testing.T, w *auditWorld) {
-			alice := login(t, env.Alice)
+			user := w.admins.take()
+			admin := login(t, user)
 			id := activeID(t, w)
-			stepUp(t, alice, env.Alice, true)
-			res := call(t, alice, http.MethodPost, target(id), map[string]any{"confirm_hostname": getDevice(t, alice, id).Hostname})
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, target(id), map[string]any{"confirm_hostname": getDevice(t, admin, id).Hostname})
 			expectStatus(t, res, http.StatusConflict, "invalid_state")
 			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
 		}},

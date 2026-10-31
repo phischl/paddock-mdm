@@ -638,7 +638,7 @@ func TestPortalBlueprintEmitsMFAClasses(t *testing.T) {
 	}
 	portal := string(b)
 	for _, want := range []string{"managed: io.paddock/scope-login-mfa", "scope_name: paddock_mfa\n",
-		"return {\"paddock_mfa_classes\": classes}", "        - !KeyOf scope-mfa\n", "get_login_event(token.session)"} {
+		"return {\"paddock_mfa_classes\": classes}", "        - !KeyOf scope-mfa\n", "request.context.get(\"token\")", "get_login_event(grant.session)"} {
 		if !strings.Contains(portal, want) {
 			t.Errorf("paddock-portal.yaml lacks %q", want)
 		}
@@ -657,7 +657,7 @@ func TestStepUpBlueprintEmitsMFAClasses(t *testing.T) {
 	}
 	stepup := string(b)
 	for _, want := range []string{"managed: io.paddock/scope-stepup-mfa", "scope_name: paddock_stepup",
-		"paddock_mfa_classes", "        - !KeyOf scope-stepup-mfa\n", "get_login_event(token.session)"} {
+		"paddock_mfa_classes", "        - !KeyOf scope-stepup-mfa\n", "request.context.get(\"token\")", "get_login_event(grant.session)"} {
 		if !strings.Contains(stepup, want) {
 			t.Errorf("paddock-stepup.yaml lacks %q", want)
 		}
