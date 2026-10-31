@@ -4,6 +4,8 @@ The Paddock autoinstall installs Ubuntu Desktop 24.04 or 26.04 with full-disk en
 everything the device needs to enroll itself (plan M4b, architecture §12.4). The disk ends up unlocked by TPM2 and
 a boot PIN, with a high-entropy recovery key and the LUKS header escrowed in Paddock.
 
+For a laptop that is already installed see [enrolling an existing device](enroll-existing.md).
+
 ## Generate the user-data
 
 1. Create an enrollment token (portal *Enrollment tokens*, or `POST /api/v1/enrollment-tokens`) and keep the
