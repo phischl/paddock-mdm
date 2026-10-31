@@ -20,9 +20,10 @@
 --   fails such an action instead of recording a wrong start.
 -- - UPDATE: id, code, actor, source, correlation_id and started_at never change, and an update that leaves the action
 --   started is refused, so a started action's target, params, error code and finish time stay as its use case wrote
---   them until it finishes. organization_id changes only out of the platform pseudo-organization (nil UUID) and only on
---   started -> finished; organization creation inserts its started action in the new organization already
---   (Recorder.SetOrganization runs in prepare, before the insert), so no legitimate update moves a started action.
+--   them until it finishes. organization_id never changes, for every role and in every status, so an action stays in
+--   the organization it was inserted in; this drops the 00083 exception out of the platform pseudo-organization (nil
+--   UUID): organization creation inserts its started action in the new organization already
+--   (Recorder.SetOrganization runs in prepare, before the insert), so no legitimate update moves an action.
 -- - CHECK: an action is finished exactly when it has a finish time. No code path writes another combination.
 -- SECURITY INVOKER with a pinned search_path; the function reads nothing but OLD, NEW and the clock.
 -- Forward-only: there is no Down migration.
@@ -64,9 +65,8 @@ BEGIN
     RAISE EXCEPTION 'action: a started action changes only by finishing'
       USING ERRCODE = 'check_violation', DETAIL = format('action %s', OLD.id);
   END IF;
-  IF NEW.organization_id IS DISTINCT FROM OLD.organization_id
-    AND NOT (OLD.organization_id = '00000000-0000-0000-0000-000000000000'::uuid AND OLD.status = 'started') THEN
-    RAISE EXCEPTION 'action: organization_id never changes, except out of the platform pseudo-organization on finishing'
+  IF NEW.organization_id IS DISTINCT FROM OLD.organization_id THEN
+    RAISE EXCEPTION 'action: organization_id never changes'
       USING ERRCODE = 'check_violation',
             DETAIL = format('action %s: organization %s -> %s', OLD.id, OLD.organization_id, NEW.organization_id);
   END IF;

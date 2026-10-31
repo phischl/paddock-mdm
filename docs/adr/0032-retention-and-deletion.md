@@ -305,11 +305,16 @@ and `CHECK ((status = 'finished') = (finished_at IS NOT NULL))` ties the finish 
 `code`, `actor`, `source`, `correlation_id` and `started_at` never change, and every update that leaves an action
 `started` is refused: a started action changes only by finishing, so no role rewrites its start time to have the
 outbox reaper close it as unknown, or its target, params, error code or organization, which the reaper copies into the
-event it writes. `organization_id` moves only out of the platform pseudo-organization and only on finishing;
-organization creation inserts its started action in the new organization already. The table owner `paddock_owner`
+event it writes. `organization_id` never changes, for every role and in every status, so an action stays in its
+organization without exception; this drops the exception of `00083` out of the platform pseudo-organization, which no
+code path uses: organization creation inserts its started action in the new organization already. The table owner
+`paddock_owner`
 is out of scope: it runs the migrations only, bypasses row-level security and may disable the trigger, and no service
 connects as it. Residual: a role with `UPDATE` can still finish a started action of an organization it may update,
 with another outcome or params, before its use case does; the action stays in that organization with a finish time
 the database bounds, so the retention round keeps it for the full period, but its use case's finish then fails and
 the original outcome never reaches the outbox. And `paddock_relay` holds `DELETE` on `outbox`, so it can remove an
-audit event before it is published (follow-up PDK-642).
+audit event before it is published (follow-up PDK-642). And the restrictive `DELETE` policies on `action`
+(`platform_delete`, `delete_finished`) have no time bound: a finished action can be deleted before the retention cutoff.
+The platform role deletes only finished actions of the pseudo-organization, and the worker is an internal role whose
+only `DELETE` on `action` is the retention round (follow-up PDK-643).

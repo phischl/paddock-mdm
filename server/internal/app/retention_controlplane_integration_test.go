@@ -522,8 +522,8 @@ func TestRetentionActionFinishedImmutable(t *testing.T) {
 // TestRetentionActionOrganizationImmutable (ADR 0032 amendment 2026-10-31, migrations 00083 and 00084): neither the
 // platform role nor the relay role moves an organization's started action into another organization or the platform
 // pseudo-organization, where it could be finished and deleted outside the organization's audit trail. A started
-// platform action moves into an organization only while it is finished; moving it without finishing is refused, so the
-// reaper never writes its event into an organization the use case did not finish it in.
+// platform action does not move into an organization either, with or without finishing it: organization_id never
+// changes, so the reaper never writes its event into an organization the use case did not start it in.
 func TestRetentionActionOrganizationImmutable(t *testing.T) {
 	w := newRetentionWorld(t)
 	env := pgtest.SharedPaddock(t)
@@ -563,24 +563,26 @@ func TestRetentionActionOrganizationImmutable(t *testing.T) {
 		}
 	}
 
-	t.Run("a platform action moves into an organization only on finishing", func(t *testing.T) {
-		for _, url := range []string{env.Platform, env.Relay} {
-			started := w.action(t, uuid.Nil, long, nil)
-			_, err := tryAffected(t, url, nil, move, started, org)
-			var pgErr *pgconn.PgError
-			if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
-				t.Errorf("moved a started platform action without finishing it: got %v, want check_violation", err)
-			}
-			if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2 AND status = 'started'",
-				started, uuid.Nil) != 1 {
-				t.Error("want the started action kept in the platform pseudo-organization")
-			}
-			if n := affected(t, url, nil, moveAndFinish, started, org); n != 1 {
-				t.Fatalf("finished %d pseudo-organization actions in the organization, want 1", n)
-			}
-			if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2 AND status = 'finished'",
-				started, org) != 1 {
-				t.Fatal("want the action finished in the organization")
+	t.Run("a platform action never moves into an organization", func(t *testing.T) {
+		for _, r := range []struct {
+			role string
+			url  string
+		}{
+			{"paddock_platform", env.Platform},
+			{"paddock_relay", env.Relay},
+		} {
+			for _, sql := range []string{move, moveAndFinish} {
+				started := w.action(t, uuid.Nil, long, nil)
+				_, err := tryAffected(t, r.url, nil, sql, started, org)
+				var pgErr *pgconn.PgError
+				if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+					t.Errorf("%s moved a started platform action into an organization: got %v, want check_violation",
+						r.role, err)
+				}
+				if countRows(t, w.super, "SELECT count(*) FROM action WHERE id = $1 AND organization_id = $2 AND status = 'started'",
+					started, uuid.Nil) != 1 {
+					t.Errorf("%s: want the started action kept in the platform pseudo-organization", r.role)
+				}
 			}
 		}
 	})
