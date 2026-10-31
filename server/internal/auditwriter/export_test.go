@@ -180,8 +180,13 @@ func SetExpiredCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID,
 	e.expiredCommitted = fn
 }
 
-// SetExportWriteTimeout lowers the bound of markReady and failRunning.
+// SetEndRead replaces the error of each locked read that follows a failure or expiry whose COMMIT outcome is unknown.
+func SetEndRead(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
+	e.endRead = fn
+}
+
+// SetExportWriteTimeout lowers the bound of the exporter's writes and of the list queries of Expire.
 func SetExportWriteTimeout(e *Exporter, d time.Duration) { e.writeTimeout = d }
 
-// ExportTimeouts returns the bound of one build and of markReady and failRunning.
+// ExportTimeouts returns the bound of one build and of the exporter's writes.
 func ExportTimeouts(e *Exporter) (build, write time.Duration) { return e.buildTimeout, e.writeTimeout }

@@ -98,7 +98,8 @@ type Exporter struct {
 	// buildTimeout bounds one build; it is ExportStuckAfter. It is measured from the start of Build, the stuck check
 	// from started_at, so the stuck check usually fails a hung export first; the bound then mainly frees the goroutine.
 	buildTimeout time.Duration
-	// writeTimeout bounds markReady and failRunning; it is exportWriteTimeout.
+	// writeTimeout bounds every write of the exporter outside the build and the list queries of Expire; it is
+	// exportWriteTimeout.
 	writeTimeout time.Duration
 	// readyCommitted is nil; tests turn a committed ready update into an unknown outcome.
 	readyCommitted func(ctx context.Context, id uuid.UUID, err error) error
@@ -107,6 +108,8 @@ type Exporter struct {
 	// failCommitted and expiredCommitted are nil; tests turn a committed failure or expiry into an unknown outcome.
 	failCommitted    func(ctx context.Context, id uuid.UUID, err error) error
 	expiredCommitted func(ctx context.Context, id uuid.UUID, err error) error
+	// endRead is nil; tests replace the error of each locked read after a failure or expiry with an unknown outcome.
+	endRead func(ctx context.Context, id uuid.UUID, err error) error
 }
 
 // NewExporter creates an exporter; version names the generator in the package.
@@ -350,28 +353,33 @@ func (e *Exporter) markReady(ctx context.Context, export auditstore.AuditExport,
 // failRunning sets a running export failed and deletes its chunks in one transaction; it reports whether the export
 // was still running, that is whether this call failed it and must record the failure event.
 func (e *Exporter) failRunning(ctx context.Context, id uuid.UUID, message string) (bool, error) {
-	var updated int64
+	// xmin is set only when the closure succeeded after its update matched the row: an error before that is a certain
+	// rollback, an error after it leaves only the COMMIT outcome unknown.
+	var xmin string
 	wctx, cancel := context.WithTimeout(ctx, e.writeTimeout)
 	err := e.pool.InWriter(wctx, func(ctx context.Context, q *auditstore.Queries) error {
-		var err error
-		if updated, err = q.UpdateAuditExportFailed(ctx, auditstore.UpdateAuditExportFailedParams{ID: id, Error: &message}); err != nil || updated == 0 {
+		xmins, err := q.UpdateAuditExportFailed(ctx, auditstore.UpdateAuditExportFailedParams{ID: id, Error: &message})
+		if err != nil || len(xmins) == 0 {
 			return err
 		}
-		_, err = q.DeleteAuditExportChunks(ctx, id)
-		return err
+		if _, err = q.DeleteAuditExportChunks(ctx, id); err != nil {
+			return err
+		}
+		xmin = xmins[0]
+		return nil
 	})
 	cancel()
 	if e.failCommitted != nil {
 		err = e.failCommitted(ctx, id, err)
 	}
 	// The COMMIT may have landed although the client never learned it; the stuck check lists only running exports, so
-	// nobody else would record the failure. Only an update that matched the row can be this call's, and the error
-	// text tells it apart from a concurrent stuck check or build.
-	if err != nil && updated > 0 && e.endedAs(ctx, id, "failed", &message) {
+	// nobody else would record the failure. A concurrent stuck check or build may have written the same status and
+	// text after this transaction rolled back, so only the transaction id tells whose write is visible.
+	if err != nil && xmin != "" && e.wrote(ctx, id, xmin) {
 		slog.WarnContext(ctx, "evidence export: failed despite an error", "export_id", id, "error", err)
 		return true, nil
 	}
-	return updated > 0, err
+	return xmin != "", err
 }
 
 // becameReady reports whether the export is ready after markReady failed: the COMMIT may have succeeded although the
@@ -379,7 +387,7 @@ func (e *Exporter) failRunning(ctx context.Context, id uuid.UUID, message string
 // whether the status could be read at all.
 func (e *Exporter) becameReady(ctx context.Context, id uuid.UUID) (ready, read bool) {
 	export, err := e.lockedExport(ctx, id)
-	status := export.Status
+	status := export.AuditExport.Status
 	if e.statusRead != nil {
 		status, err = e.statusRead(ctx, id, status, err)
 	}
@@ -389,23 +397,29 @@ func (e *Exporter) becameReady(ctx context.Context, id uuid.UUID) (ready, read b
 	return err == nil && status == "ready", err == nil
 }
 
-// endedAs reports whether the export has status and, when errText is set, that error text: a write whose outcome
-// the client never learned did commit.
-func (e *Exporter) endedAs(ctx context.Context, id uuid.UUID, status string, errText *string) bool {
-	export, err := e.lockedExport(ctx, id)
-	if err != nil {
+// wrote reports whether the visible version of the export was written by the transaction xmin, that is whether a
+// write whose COMMIT outcome the client never learned did commit. A failed read is retried once: neither list query
+// sees a failed or expired export again, so nobody else would record its event.
+func (e *Exporter) wrote(ctx context.Context, id uuid.UUID, xmin string) bool {
+	for range 2 {
+		export, err := e.lockedExport(ctx, id)
+		if e.endRead != nil {
+			err = e.endRead(ctx, id, err)
+		}
+		if err == nil {
+			return export.Xmin == xmin
+		}
 		slog.ErrorContext(ctx, "evidence export: status not read", "export_id", id, "error", err)
-		return false
 	}
-	return export.Status == status && (errText == nil || export.Error != nil && *export.Error == *errText)
+	return false
 }
 
 // lockedExport reads the export under the row lock, so a COMMIT still in flight is waited out instead of read as the
 // old state. It outlives ctx for a bounded time, because a shutdown must not cost the outcome of a committed write.
-func (e *Exporter) lockedExport(ctx context.Context, id uuid.UUID) (auditstore.AuditExport, error) {
+func (e *Exporter) lockedExport(ctx context.Context, id uuid.UUID) (auditstore.GetAuditExportLockedRow, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), exportStatusTimeout)
 	defer cancel()
-	var export auditstore.AuditExport
+	var export auditstore.GetAuditExportLockedRow
 	err := e.pool.InWriterWithTimeout(ctx, exportStatusTimeout, func(ctx context.Context, q *auditstore.Queries) error {
 		var err error
 		export, err = q.GetAuditExportLocked(ctx, id)
@@ -416,6 +430,8 @@ func (e *Exporter) lockedExport(ctx context.Context, id uuid.UUID) (auditstore.A
 
 // deleteEndedChunks deletes the chunks of failed and expired exports; with a null id, of all of them.
 func (e *Exporter) deleteEndedChunks(ctx context.Context, id uuid.NullUUID) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, e.writeTimeout)
+	defer cancel()
 	var n int64
 	err := e.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		var err error
@@ -426,6 +442,8 @@ func (e *Exporter) deleteEndedChunks(ctx context.Context, id uuid.NullUUID) (int
 }
 
 func (e *Exporter) deleteChunks(ctx context.Context, id uuid.UUID) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, e.writeTimeout)
+	defer cancel()
 	var n int64
 	err := e.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		var err error
@@ -449,7 +467,9 @@ func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err 
 	}
 	var due, stuck []auditstore.AuditExport
 	stuckBefore := now.Add(-ExportStuckAfter)
-	err = e.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+	lctx, cancel := context.WithTimeout(ctx, e.writeTimeout)
+	defer cancel()
+	err = e.pool.WithSession(lctx, func(ctx context.Context, q *auditstore.Queries) error {
 		var err error
 		if due, err = q.ListExpiredAuditExports(ctx, &now); err != nil {
 			return err
@@ -462,20 +482,27 @@ func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err 
 	}
 	var errs []error
 	for _, export := range due {
-		var updated int64
-		err := e.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
-			var err error
-			if updated, err = q.UpdateAuditExportExpired(ctx, auditstore.UpdateAuditExportExpiredParams{ID: export.ID, Now: &now}); err != nil || updated == 0 {
+		// As in failRunning: set only when the closure succeeded after its update matched the row.
+		var xmin string
+		wctx, cancel := context.WithTimeout(ctx, e.writeTimeout)
+		err := e.pool.InWriter(wctx, func(ctx context.Context, q *auditstore.Queries) error {
+			xmins, err := q.UpdateAuditExportExpired(ctx, auditstore.UpdateAuditExportExpiredParams{ID: export.ID, Now: &now})
+			if err != nil || len(xmins) == 0 {
 				return err
 			}
-			_, err = q.DeleteAuditExportChunks(ctx, export.ID)
-			return err
+			if _, err = q.DeleteAuditExportChunks(ctx, export.ID); err != nil {
+				return err
+			}
+			xmin = xmins[0]
+			return nil
 		})
+		cancel()
 		if e.expiredCommitted != nil {
 			err = e.expiredCommitted(ctx, export.ID, err)
 		}
-		// As in failRunning: a lost acknowledgement must not cost the event, and only expiry writes expired.
-		if err != nil && updated > 0 && e.endedAs(ctx, export.ID, "expired", nil) {
+		// As in failRunning: a lost acknowledgement must not cost the event, and a concurrent expiry by another
+		// replica after this transaction rolled back must not add a second one.
+		if err != nil && xmin != "" && e.wrote(ctx, export.ID, xmin) {
 			slog.WarnContext(ctx, "evidence export: expired despite an error", "export_id", export.ID, "error", err)
 			err = nil
 		}
@@ -484,7 +511,7 @@ func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err 
 			errs = append(errs, fmt.Errorf("expire export %s: %w", export.ID, err))
 			continue
 		}
-		if updated == 0 {
+		if xmin == "" {
 			continue
 		}
 		expired++
@@ -501,7 +528,9 @@ func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err 
 	for _, export := range stuck {
 		failed, err := e.failRunning(ctx, export.ID, exportStuckError)
 		if err != nil {
-			return expired, errors.Join(append(errs, fmt.Errorf("fail stuck export %s: %w", export.ID, err))...)
+			// The list is ordered by started_at, so an export that keeps failing must not starve the later ones.
+			errs = append(errs, fmt.Errorf("fail stuck export %s: %w", export.ID, err))
+			continue
 		}
 		if !failed {
 			continue

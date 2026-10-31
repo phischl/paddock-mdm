@@ -1955,17 +1955,19 @@ this amendment wins. No migration and no change to the API, the events or the pa
    up on a shutdown or on a failed `failRunning`. Every export that a build marked ready ends with exactly one
    `audit.export_completed` success event, unless no status read succeeds at all, in which case the export stays
    ready with its chunks.
-5. **A failure or expiry whose COMMIT outcome is lost still records its event (decisions 32 and 34).** When the
-   transaction of `failRunning` (build and stuck check) or of the expiry update returns an error after its update
-   matched the row, the caller reads the export under the row lock (as in item 4). If it is `failed` with this
-   caller's error text, or `expired`, the write committed and this caller records the one failure or
-   `retention.purged` event; otherwise it records nothing. A caller whose update never matched the row (for example
-   because it gave up waiting for another replica's lock) never records, so the replica whose write won stays the only
-   one. Residual: if a matched update is rolled back and another replica writes the same status and text before the
-   read, both record; this needs a rollback after the update plus a concurrent stuck check or expiry of the same
-   export.
-6. **`markReady` and `failRunning` are bounded on the client side** by the writer transaction timeout plus 30 s, so a
-   hung connection or a lost acknowledgement cannot block the build or the stuck check beyond the server's own
-   `transaction_timeout`.
-7. **A failing expiry does not stop the pass.** `Expire` records the error, continues with the next due export and
-   then runs the stuck check; the pass returns all errors joined.
+5. **A failure or expiry whose COMMIT outcome is lost records its event exactly once (decisions 32 and 34).** The
+   update of `failRunning` (build and stuck check) and the expiry update return the row's `xmin`, the id of the
+   writing transaction. Only when the transaction's statements all succeeded and its COMMIT returned an error is the
+   outcome unknown; then the caller reads the export under the row lock (as in item 4, `GetAuditExportLocked` also
+   returns `xmin`) and records its one failure or `retention.purged` event only if the visible version carries its own
+   `xmin`. A caller whose update matched no row, or whose transaction failed before the COMMIT, never reads and never
+   records. So a rollback of this caller's write followed by another replica's identical write (same status, same
+   `exporter restarted`) does not record twice. A failed read is retried once; if both reads fail the export stays
+   `failed`/`expired` without its event (neither list query sees it again) and the pass reports the error.
+6. **The exporter's writes are bounded on the client side** by the writer transaction timeout plus 30 s:
+   `markReady`, `failRunning`, the expiry update, every chunk delete (also the ones that outlive a shutdown) and the
+   list queries of `Expire`. A hung connection or a lost acknowledgement cannot block the build or the stuck check
+   beyond that bound; the locked status reads of items 4 and 5 have their own bound of 30 s.
+7. **A failing expiry or stuck-check failure does not stop the pass.** `Expire` records the error, continues with the
+   next due export, then runs the stuck check, which likewise continues with the next stuck export; the pass returns
+   all errors joined.
