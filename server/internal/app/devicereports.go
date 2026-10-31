@@ -422,7 +422,7 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 		Target: &audit.Target{Type: "device", ID: deviceID.String()},
 		Params: params,
 	}
-	return OnceEntry{Spec: spec, After: tamperFindingAfter(deviceID, code, params, receivedAt), Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+	return OnceEntry{Spec: spec, After: tamperFindingAfter(deviceID, code, ev.Data, receivedAt), Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
 		org, err := orgOf(ctx)
 		if err != nil {
 			return false, err

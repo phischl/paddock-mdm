@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -16,37 +15,21 @@ import (
 const findingsLockKey = 0x7061646420666e64
 
 // Findings materializes the attention conditions of every organization as findings and clears those whose
-// condition is gone (plan M9 decision 32).
+// condition is gone (plan M9 decision 32). It runs right after the staleness round (Staleness.Then).
 type Findings struct {
 	findings *app.Findings
 	pool     *db.OrgPool
 	platform *db.PlatformPool
-	interval time.Duration
 	now      func() time.Time
 }
 
-// NewFindings creates the round; interval is the one of the staleness round.
-func NewFindings(findings *app.Findings, pool *db.OrgPool, platform *db.PlatformPool, interval time.Duration) *Findings {
-	return &Findings{findings: findings, pool: pool, platform: platform, interval: interval, now: time.Now}
+// NewFindings creates the round.
+func NewFindings(findings *app.Findings, pool *db.OrgPool, platform *db.PlatformPool) *Findings {
+	return &Findings{findings: findings, pool: pool, platform: platform, now: time.Now}
 }
 
-// Run runs the round at start and then every interval until ctx ends; only the replica holding the lock acts.
-func (f *Findings) Run(ctx context.Context) error {
-	tick := time.NewTicker(f.interval)
-	defer tick.Stop()
-	for {
-		if err := f.Round(ctx); err != nil && ctx.Err() == nil {
-			slog.WarnContext(ctx, "findings round failed; retrying next round", "error", err)
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-tick.C:
-		}
-	}
-}
-
-// Round materializes the findings of every organization; a failing organization does not stop the others.
+// Round materializes the findings of every organization; a failing organization does not stop the others. Only the
+// replica holding the lock acts.
 func (f *Findings) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	_, err := f.platform.WithLeaderLock(sys, findingsLockKey, func(ctx context.Context) error {

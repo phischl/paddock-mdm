@@ -13,7 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/finding"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -488,5 +490,109 @@ func TestAccountList(t *testing.T) {
 	}
 	if _, err := h.accounts.List(systemCtx(org), app.AccountQuery{Page: app.ListPage{Sort: "username", Limit: 10}}); !errors.Is(err, problem.Forbidden) {
 		t.Fatalf("system principal: %v, want forbidden", err)
+	}
+}
+
+// TestTamperFindingLongSubjects (PDK-126 fix round 1): file names longer than the audit param limit, which the event
+// params drop, still give one finding per name: two names that share their first 300 characters are two findings, and
+// the same long name again counts on its own.
+func TestTamperFindingLongSubjects(t *testing.T) {
+	h := newFindingsHarness(t)
+	org := h.org(t)
+	dev := h.device(t, org)
+	long := strings.Repeat("n", 300)
+	events := []protocol.Event{sudoersEvent(1, long+"-a"), sudoersEvent(2, long+"-b"), sudoersEvent(3, long+"-a")}
+	if err := h.reports.RecordEvents(systemCtx(org), dev, time.Now(), events); err != nil {
+		t.Fatal(err)
+	}
+	got := h.tamperFindings(t, dev, "device.tamper_sudoers_d_file")
+	if len(got) != 2 || got[0].occurrences+got[1].occurrences != 3 || (got[0].occurrences != 2 && got[1].occurrences != 2) {
+		t.Fatalf("findings of two long names: %+v", got)
+	}
+}
+
+// TestFindingRefusedTextIsBounded (PDK-126 fix round 1): a refused close or reopen with an oversized reason or
+// external reference records at most the limit of each text in the audit event, never the whole input.
+func TestFindingRefusedTextIsBounded(t *testing.T) {
+	h := newFindingsHarness(t)
+	org := h.org(t)
+	dev := h.device(t, org)
+	if err := h.reports.RecordEvents(systemCtx(org), dev, time.Now(), []protocol.Event{sudoersEvent(1, "evil")}); err != nil {
+		t.Fatal(err)
+	}
+	id := h.tamperFindings(t, dev, "device.tamper_sudoers_d_file")[0].id
+	operator := adminCtx(org, principal.RoleOrgOperator, "olga")
+	huge := strings.Repeat("r", 256*1024)
+	if _, err := h.api.Close(operator, id, finding.StatusResolved, huge, ""); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("close with a huge reason: %v", err)
+	}
+	if _, err := h.api.Close(operator, id, finding.StatusResolved, "ok", huge); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("close with a huge external_ref: %v", err)
+	}
+	if _, err := h.api.Close(operator, id, finding.Status(huge), "ok", ""); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("close with a huge resolution: %v", err)
+	}
+	if _, err := h.api.Close(operator, id, finding.StatusResolved, "done", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.api.Reopen(operator, id, huge); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("reopen with a huge reason: %v", err)
+	}
+	limits := map[string]int{"reason": finding.MaxReason, "external_ref": finding.MaxExternalRef, "resolution": 32}
+	events := h.findingEvents(t, org, id)
+	if len(events) != 5 {
+		t.Fatalf("%d events, want 5", len(events))
+	}
+	for i, e := range events {
+		for key, limit := range limits {
+			if v, ok := e.params[key].(string); ok && len([]rune(v)) > limit {
+				t.Errorf("event %d (%s %s): %s has %d characters, limit %d", i, e.code, e.outcome, key, len([]rune(v)), limit)
+			}
+		}
+	}
+}
+
+// TestRecordOnceRefusalRunsAfter (PDK-126 fix round 1): the AfterFunc of RecordOnceRefusal runs once, with the ID of
+// the refused event, in its transaction; a redelivery runs it no more, and its error rolls the event back.
+func TestRecordOnceRefusalRunsAfter(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, dev := h.device(t)
+	spec := app.ActionSpec{Code: audit.CodeDeviceHeaderEscrowRefused, Actor: &audit.Actor{Type: audit.ActorDevice, ID: dev.String()},
+		Target: &audit.Target{Type: "device", ID: dev.String()}, Params: map[string]any{"volumes": 9}}
+	claim := func(seq int64) func(context.Context, *pgstore.Queries) (bool, error) {
+		return func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			n, err := q.InsertDeviceEventSeen(ctx, pgstore.InsertDeviceEventSeenParams{DeviceID: dev, EventSeq: seq, OrganizationID: org})
+			return n == 1, err
+		}
+	}
+	var seen []uuid.UUID
+	after := func(_ context.Context, _ *pgstore.Queries, eventID uuid.UUID) error {
+		seen = append(seen, eventID)
+		return nil
+	}
+	for range 2 {
+		if _, err := h.runner.RecordOnceRefusal(systemCtx(org), spec, problem.TooManyVolumes, claim(1), after); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var id uuid.UUID
+	var outcome string
+	if err := h.super.QueryRow(context.Background(), "SELECT id, outcome FROM action WHERE organization_id = $1 AND code = $2",
+		org, string(audit.CodeDeviceHeaderEscrowRefused)).Scan(&id, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0] != id || outcome != "failure" {
+		t.Fatalf("after ran with %v, event %s %s", seen, id, outcome)
+	}
+	boom := errors.New("after failed")
+	recorded, err := h.runner.RecordOnceRefusal(systemCtx(org), spec, problem.TooManyVolumes, claim(2),
+		func(context.Context, *pgstore.Queries, uuid.UUID) error { return boom })
+	if !errors.Is(err, boom) || recorded {
+		t.Fatalf("failing after: %v %v", recorded, err)
+	}
+	var n int
+	if err := h.super.QueryRow(context.Background(), "SELECT (SELECT count(*) FROM action WHERE organization_id = $1) + (SELECT count(*) FROM device_event_seen WHERE device_id = $2 AND event_seq = 2)",
+		org, dev).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("after a failing after: %d rows (%v), want only the first event", n, err)
 	}
 }

@@ -2,10 +2,14 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -54,17 +58,14 @@ func UpsertTamperFinding(ctx context.Context, q *pgstore.Queries, org, device uu
 	return nil
 }
 
-// tamperFindingAfter is the AfterFunc that opens or counts the tamper finding of a device event; nil for a code that
-// opens none.
-func tamperFindingAfter(device uuid.UUID, code audit.Code, params map[string]any, at time.Time) AfterFunc {
+// tamperFindingAfter is the AfterFunc that opens or counts the tamper finding of a device event with the event data
+// data; nil for a code that opens none.
+func tamperFindingAfter(device uuid.UUID, code audit.Code, data json.RawMessage, at time.Time) AfterFunc {
 	param, ok := tamperFindingCodes[code]
 	if !ok {
 		return nil
 	}
-	subject := ""
-	if param != "" {
-		subject, _ = params[param].(string)
-	}
+	subject := findingSubject(data, param)
 	return func(ctx context.Context, q *pgstore.Queries, eventID uuid.UUID) error {
 		org, err := orgOf(ctx)
 		if err != nil {
@@ -73,6 +74,44 @@ func tamperFindingAfter(device uuid.UUID, code audit.Code, params map[string]any
 		return UpsertTamperFinding(ctx, q, org, device, code, subject, eventID, at)
 	}
 }
+
+// findingSubject is the subject of a tamper finding: the string param of the device's event data without control
+// characters. The audit params drop a string longer than maxParamString; the subject keeps it distinct instead: it is
+// cut at a character boundary and ends with a hash of the whole value, so long names that differ stay separate
+// findings and the same name always maps to the same one.
+func findingSubject(data json.RawMessage, param string) string {
+	if param == "" {
+		return ""
+	}
+	var fields map[string]any
+	if json.Unmarshal(data, &fields) != nil {
+		return ""
+	}
+	v, _ := fields[param].(string)
+	v = stripControls(v)
+	if len(v) <= maxParamString {
+		return v
+	}
+	sum := sha256.Sum256([]byte(v))
+	suffix := "…" + hex.EncodeToString(sum[:8])
+	cut := maxParamString - len(suffix)
+	for cut > 0 && !utf8.RuneStart(v[cut]) {
+		cut--
+	}
+	return v[:cut] + suffix
+}
+
+// auditText is a text an administrator gave, as an audit param: the text itself within limit, otherwise its
+// first max characters, so a refused oversized input never puts more than the limit into the audit trail.
+func auditText(s string, limit int) string {
+	if utf8.RuneCountInString(s) <= limit {
+		return s
+	}
+	return string([]rune(s)[:limit])
+}
+
+// maxResolutionParam bounds the resolution param of a refused close (the valid ones are short identifiers).
+const maxResolutionParam = 32
 
 // Findings are the use cases of findings: the list, the four status changes of administrators and operators, and
 // the worker's materialization of attention conditions (plan M9 decisions 32 and 33).
@@ -235,9 +274,9 @@ func (f *Findings) Assign(ctx context.Context, id uuid.UUID, assignee *uuid.UUID
 // accepted_risk is reserved to administrators (forbidden otherwise, recorded as denied).
 func (f *Findings) Close(ctx context.Context, id uuid.UUID, resolution finding.Status, reason, externalRef string) (FindingItem, error) {
 	return f.change(ctx, SpecFindingClose, id, func(ctx context.Context, q *pgstore.Queries, rec Recorder, row pgstore.LockFindingRow) error {
-		rec.SetParam("resolution", string(resolution))
-		rec.SetParam("reason", reason)
-		rec.SetParam("external_ref", externalRef)
+		rec.SetParam("resolution", auditText(string(resolution), maxResolutionParam))
+		rec.SetParam("reason", auditText(reason, finding.MaxReason))
+		rec.SetParam("external_ref", auditText(externalRef, finding.MaxExternalRef))
 		if !resolution.Resolution() {
 			return problem.InvalidRequest.WithDetail("resolution must be resolved, accepted_risk or false_positive")
 		}
@@ -266,7 +305,7 @@ func (f *Findings) Close(ctx context.Context, id uuid.UUID, resolution finding.S
 // only while its condition is still open. A tamper finding whose subject has a newer open finding stays closed.
 func (f *Findings) Reopen(ctx context.Context, id uuid.UUID, reason string) (FindingItem, error) {
 	return f.change(ctx, SpecFindingReopen, id, func(ctx context.Context, q *pgstore.Queries, rec Recorder, row pgstore.LockFindingRow) error {
-		rec.SetParam("reason", reason)
+		rec.SetParam("reason", auditText(reason, finding.MaxReason))
 		if !finding.ValidReason(reason) {
 			return problem.InvalidRequest.WithDetail(fmt.Sprintf("reason is required (1 to %d characters)", finding.MaxReason))
 		}

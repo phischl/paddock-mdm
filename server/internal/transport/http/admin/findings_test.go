@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
@@ -159,4 +160,51 @@ func TestFindingsAPI(t *testing.T) {
 	if linked == nil || linked.Id != attention || linked.Status != adminapi.FindingStatusAcknowledged {
 		t.Fatalf("attention device condition finding %+v", linked)
 	}
+}
+
+// TestFindingsMCP (PDK-126 fix round 1, ADR 0044): the four finding verbs are MCP write tools under the guard of every
+// write tool: refused without the account's write opt-in and for a policy without writes, each with one denied event;
+// allowed, they run the REST use case with its role rules (an operator's accepted_risk is denied), each attempt one
+// event with the source mcp.
+func TestFindingsMCP(t *testing.T) {
+	m := newMCPWorld(t)
+	dev := m.e.insertDevice(m.e.acme, "fnd-mcp-"+uuid.NewString()[:8], "active")
+	id := m.e.insertFinding(m.e.acme, dev, "tamper", "tamper:"+dev.String()+":device.tamper_sudoers_d_file:mcp", "device.tamper_sudoers_d_file", "mcp")
+	base := "/api/v1/findings/" + id.String()
+	operator := m.mcpLogin(organization.RoleGroup(m.slug, organization.GroupOperators))
+	m.setPolicy(true, true, "all")
+
+	r := m.call(operator, http.MethodPost, base+"/acknowledge", nil)
+	expectProblem(t, "without opt-in", r, http.StatusForbidden, "mcp_write_not_enabled")
+	m.e.expectMCPEvent(r, "finding.acknowledged:denied:mcp_write_not_enabled")
+	m.optIn(operator, true)
+	m.setPolicy(true, false, "all")
+	r = m.call(operator, http.MethodPost, base+"/acknowledge", nil)
+	expectProblem(t, "policy without writes", r, http.StatusForbidden, "mcp_write_not_enabled")
+	m.e.expectMCPEvent(r, "finding.acknowledged:denied:mcp_write_not_enabled")
+
+	m.setPolicy(true, true, "all")
+	r = m.call(operator, http.MethodPost, base+"/acknowledge", nil)
+	if r.status != http.StatusOK {
+		t.Fatalf("acknowledge: %d %s", r.status, r.body)
+	}
+	m.e.expectMCPEvent(r, "finding.acknowledged:success:")
+	r = m.call(operator, http.MethodPost, base+"/close", map[string]any{"resolution": "accepted_risk", "reason": "known"})
+	expectProblem(t, "operator accepts a risk", r, http.StatusForbidden, "forbidden")
+	m.e.expectMCPEvent(r, "finding.closed:denied:forbidden")
+	r = m.call(operator, http.MethodPost, base+"/close", map[string]any{"resolution": "false_positive", "reason": "test"})
+	if r.status != http.StatusOK {
+		t.Fatalf("close: %d %s", r.status, r.body)
+	}
+	m.e.expectMCPEvent(r, "finding.closed:success:")
+	r = m.call(operator, http.MethodPost, base+"/reopen", map[string]any{"reason": "again"})
+	if r.status != http.StatusOK {
+		t.Fatalf("reopen: %d %s", r.status, r.body)
+	}
+	m.e.expectMCPEvent(r, "finding.reopened:success:")
+	r = m.call(operator, http.MethodPost, base+"/assign", map[string]any{"assignee_id": nil})
+	if r.status != http.StatusOK {
+		t.Fatalf("assign: %d %s", r.status, r.body)
+	}
+	m.e.expectMCPEvent(r, "finding.assigned:success:")
 }
