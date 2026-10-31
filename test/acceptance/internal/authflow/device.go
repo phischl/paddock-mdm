@@ -28,6 +28,9 @@ type TOTP struct {
 	sem    chan struct{} // capacity 1; a channel so that queued callers can leave when their context ends
 	Secret string        // base32
 	last   int64
+	// now and after replace the wall clock and the step timer in tests; nil means the real ones.
+	now   func() time.Time
+	after func(d time.Duration) <-chan time.Time
 }
 
 // Code returns the code of the next unused 30 s step, waiting for it if necessary. The wait, in the queue of
@@ -44,16 +47,27 @@ func (t *TOTP) Code(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("authflow: totp secret: %w", err)
 	}
-	step := time.Now().Unix() / 30
+	now, after := t.now, t.after
+	if now == nil {
+		now = time.Now
+	}
+	step := now().Unix() / 30
 	if step <= t.last {
-		timer := time.NewTimer(time.Until(time.Unix((t.last+1)*30+1, 0)))
+		wait := time.Unix((t.last+1)*30+1, 0).Sub(now())
+		var fire <-chan time.Time
+		if after != nil {
+			fire = after(wait)
+		} else {
+			timer := time.NewTimer(wait)
+			defer timer.Stop()
+			fire = timer.C
+		}
 		select {
-		case <-timer.C:
+		case <-fire:
 		case <-ctx.Done():
-			timer.Stop()
 			return "", fmt.Errorf("authflow: waiting for the next TOTP code in the queue of this user: %w", ctx.Err())
 		}
-		step = time.Now().Unix() / 30
+		step = now().Unix() / 30
 	}
 	t.last = step
 	var msg [8]byte

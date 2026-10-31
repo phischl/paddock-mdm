@@ -100,8 +100,20 @@ func TestDoRepeatsAuthentikStarting(t *testing.T) {
 	}
 }
 
+// fakeClock is a TOTP clock that only moves when the test says so; its timers never fire on their own.
+type fakeClock struct{ at time.Time }
+
+func (c *fakeClock) Now() time.Time { return c.at }
+
+func (c *fakeClock) After(time.Duration) <-chan time.Time { return nil }
+
+func newFakeTOTP() (*TOTP, *fakeClock) {
+	clock := &fakeClock{at: time.Unix(1_700_000_000, 0)}
+	return &TOTP{Secret: "JBSWY3DPEHPK3PXP", now: clock.Now, after: clock.After}, clock
+}
+
 func TestTOTPCodeEndsWithContext(t *testing.T) {
-	totp := &TOTP{Secret: "JBSWY3DPEHPK3PXP"}
+	totp, _ := newFakeTOTP()
 	first, err := totp.Code(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -113,13 +125,9 @@ func TestTOTPCodeEndsWithContext(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	start := time.Now()
 	_, err = totp.Code(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "TOTP") {
-		t.Fatalf("second caller error = %v, want the TOTP queue error wrapping the deadline", err)
-	}
-	if time.Since(start) > 5*time.Second {
-		t.Fatalf("second caller took %s, want a prompt return", time.Since(start))
+		t.Fatalf("second caller error = %v, want the TOTP step-wait error wrapping the deadline", err)
 	}
 	if totp.last != lastStep {
 		t.Fatal("the cancelled caller consumed a step")
@@ -129,5 +137,42 @@ func TestTOTPCodeEndsWithContext(t *testing.T) {
 	cancel2()
 	if _, err = totp.Code(cancelled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled caller error = %v", err)
+	}
+}
+
+func TestTOTPQueueWaitEndsWithContextAndKeepsSlot(t *testing.T) {
+	totp, clock := newFakeTOTP()
+	if _, err := totp.Code(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	lastStep := totp.last
+
+	totp.sem <- struct{}{} // another caller holds the queue of this user
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := totp.Code(ctx)
+		result <- err
+	}()
+	cancel()
+	err := <-result
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "queue") {
+		t.Fatalf("queued caller error = %v, want the TOTP queue error wrapping the cancellation", err)
+	}
+	if totp.last != lastStep {
+		t.Fatal("the queued caller consumed a step")
+	}
+	if len(totp.sem) != 1 {
+		t.Fatal("the queued caller changed the queue slot of the holder")
+	}
+
+	<-totp.sem // the holder leaves
+	clock.at = clock.at.Add(30 * time.Second)
+	code, err := totp.Code(context.Background())
+	if err != nil || code == "" {
+		t.Fatalf("later caller got code %q, err %v; the queue slot leaked", code, err)
+	}
+	if totp.last != lastStep+1 {
+		t.Fatalf("later caller step = %d, want %d", totp.last, lastStep+1)
 	}
 }
