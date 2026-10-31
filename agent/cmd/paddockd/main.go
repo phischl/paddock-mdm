@@ -29,6 +29,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/osupdates"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/preflight"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/selftest"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
@@ -43,6 +44,9 @@ const usage = `usage: paddockd [--root DIR] <command> [flags]
 commands:
   enroll --config FILE [--remove-config] [--no-wait] [--proxy URL]
                  enroll this device (root only); exit 0 active, 2 pending, 3 rejected, 1 error
+  preflight [--json] [--config FILE] [--proxy URL]
+                 check this device before adopting it (read-only; with --config also the server); exit 0 when no
+                 check fails, 1 otherwise
   run            run the agent (started by paddock-supervisor)
   self-test      check this binary against the device's configuration; JSON report, exit 0 or 1
   plan           show what applying the last applied bundle again would change (read-only); JSON report
@@ -85,6 +89,8 @@ func run(args []string, stdout io.Writer) int {
 		return 0
 	case "enroll":
 		return runEnroll(ctx, layout, rest)
+	case "preflight":
+		return runPreflight(ctx, layout, rest, stdout)
 	case "run":
 		return runAgent(ctx, layout)
 	case "plan":
@@ -137,6 +143,30 @@ func runEnroll(ctx context.Context, layout paths.Layout, args []string) int {
 		slog.Error("enrollment failed", "error", err)
 	}
 	return code
+}
+
+func runPreflight(ctx context.Context, layout paths.Layout, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("preflight", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "print the checks as JSON")
+	cfg := fs.String("config", "", "enrollment configuration; enables the server check")
+	proxy := fs.String("proxy", "", "HTTP(S) proxy for the server check")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return 1
+	}
+	checks := preflight.Run(ctx, preflight.Options{
+		Sys: reconcile.OS{Root: layout.Root}, LUKS: luks.OS{}, Root: layout.Root, EUID: os.Geteuid(), ConfigPath: *cfg, Proxy: *proxy,
+	})
+	if *asJSON {
+		if err := preflight.WriteJSON(stdout, checks); err != nil {
+			return 1
+		}
+	} else {
+		preflight.WriteTable(stdout, checks)
+	}
+	if preflight.Failed(checks) {
+		return 1
+	}
+	return 0
 }
 
 // runAgent enrolls a device installed with the Paddock autoinstall (plan M4b decision 7) and waits until the
