@@ -1,18 +1,21 @@
 package acceptance
 
 import (
+	"encoding/json"
 	"net/http"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // TestWatchedUnits is the server part of gate N10 (plan M9 §9): the units of the presence policy are set by an
 // administrator with a step-up and audited with added, reserved and non-service units are refused, the next bundle of
-// an active v2 device carries them (and none without units), and the declarative document applies the same list.
+// an active v2 device carries them (and none without units), the device's report of a missing watched unit is recorded
+// with its state (PDK-131), and the declarative document applies the same list.
 func TestWatchedUnits(t *testing.T) {
 	admin, _ := gateOrg(t, "n10-admin")
 	const path = "/api/v1/settings/watched-units"
@@ -40,6 +43,21 @@ func TestWatchedUnits(t *testing.T) {
 	b := latestBundle(t, dev, 90*time.Second, hasWatch)
 	if !slices.Equal(b.Watch.Units, unit) {
 		t.Fatalf("watch section %+v", b.Watch)
+	}
+
+	// The device reports the watched unit as missing (device part of N10).
+	data, err := json.Marshal(protocol.TamperServiceStopped{Unit: unit[0], State: "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := []protocol.Event{{EventSeq: 1, Type: protocol.EventTamperServiceStopped, OccurredAt: time.Now(), Data: data}}
+	if r, err := dev.SendEvents(testContext(t, time.Minute), sent); err != nil || r.Status != http.StatusAccepted {
+		t.Fatalf("event: %v %d %s", err, r.Status, r.Body)
+	}
+	stopped := expectOneIndexEvent(t, auditIndex(t), orgOf(t, admin.Portal), "code = 'device.tamper_service_stopped' AND target->>'id' = $1",
+		dev.DeviceID, "device.tamper_service_stopped", "success", time.Minute)
+	if stopped.Params["unit"] != unit[0] || stopped.Params["state"] != "missing" {
+		t.Fatalf("tamper event params %v", stopped.Params)
 	}
 
 	// The declarative document shows the diff in a dry run and applies the list.

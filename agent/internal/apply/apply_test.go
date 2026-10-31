@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/phischl/paddock-mdm/agent/internal/apply"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 func newBundle(t *testing.T, version int64, files map[string]string, units ...bundle.UnitSpec) *bundle.Bundle {
@@ -192,6 +194,73 @@ func TestInventorySection(t *testing.T) {
 	b.Resources = append(b.Resources, bundle.Resource{ID: "inventory", Type: "inventory", Spec: []byte("{}")})
 	if err := a.CheckTypes(b); err == nil {
 		t.Fatal("a resource of type inventory was accepted")
+	}
+}
+
+// TestWatchSection (plan M9 decision 40): the watch section is planned and applied last, on every apply and drift
+// pass; it reports a stopped unit once and never counts as a change. An applier without watch reconciler (an older
+// agent) applies the bundle and ignores the section, and a bundle that names "watch" as a resource type is refused.
+func TestWatchSection(t *testing.T) {
+	ctx := context.Background()
+	sys, a := fixture(t)
+	sys.Units["wazuh-agent.service"] = &fakesys.Unit{State: "enabled"}
+	b := newBundle(t, 5, nil)
+	b.Watch = &bundle.WatchSpec{Units: []string{"wazuh-agent.service"}}
+	if rep := a.Apply(ctx, b); len(rep.Errors) != 0 || slices.Contains(rep.ChangedIDs, bundle.TypeWatch) {
+		t.Fatalf("apply without watch reconciler %+v", rep)
+	}
+	if plan := a.Plan(ctx, b); slices.ContainsFunc(plan, func(p apply.Planned) bool { return p.ID == bundle.TypeWatch }) {
+		t.Fatalf("planned without a watch reconciler: %+v", plan)
+	}
+
+	var reported []string
+	a.WithWatch(&reconcile.Watch{Sys: sys, Events: &reconcile.Events{Emit: func(typ string, data any) {
+		reported = append(reported, typ+" "+data.(protocol.TamperServiceStopped).Unit+" "+data.(protocol.TamperServiceStopped).State)
+	}}})
+	plan := a.Plan(ctx, b)
+	if last := plan[len(plan)-1]; last.ID != bundle.TypeWatch || !slices.Equal(last.Changes, []string{"report wazuh-agent.service inactive"}) {
+		t.Fatalf("plan %+v", plan)
+	}
+	if rep := a.Apply(ctx, b); len(rep.Errors) != 0 || rep.Changed != 0 {
+		t.Fatalf("apply %+v", rep)
+	}
+	want := []string{protocol.EventTamperServiceStopped + " wazuh-agent.service inactive"}
+	if !slices.Equal(reported, want) {
+		t.Fatalf("reported %v", reported)
+	}
+	if ids := apply.Drifted(a.Plan(ctx, b)); len(ids) != 0 {
+		t.Fatalf("drifted while the stop is reported: %v", ids)
+	}
+
+	// The drift pass sees the unit running again and, after the next stop, reports it again.
+	sys.Units["wazuh-agent.service"].Active = true
+	ids := apply.Drifted(a.Plan(ctx, b))
+	if !slices.Equal(ids, []string{bundle.TypeWatch}) {
+		t.Fatalf("drifted %v", ids)
+	}
+	if rep := a.ApplyResources(ctx, b, ids); len(rep.Errors) != 0 || len(rep.ChangedIDs) != 0 {
+		t.Fatalf("drift pass %+v", rep)
+	}
+	sys.Units["wazuh-agent.service"].Active = false
+	a.ApplyResources(ctx, b, apply.Drifted(a.Plan(ctx, b)))
+	if want = append(want, want[0]); !slices.Equal(reported, want) {
+		t.Fatalf("reported after the second stop %v", reported)
+	}
+
+	// A bundle without the section forgets the reported stop: watched again, the unit is reported again.
+	a.Apply(ctx, newBundle(t, 6, nil))
+	b.BundleVersion = 7
+	a.Apply(ctx, b)
+	if want = append(want, want[0]); !slices.Equal(reported, want) {
+		t.Fatalf("reported after the section returned %v", reported)
+	}
+	if sys.Units["wazuh-agent.service"].Active || slices.ContainsFunc(sys.TakeCalls(), func(c string) bool { return strings.Contains(c, "wazuh-agent") }) {
+		t.Fatal("the watch changed the watched unit")
+	}
+
+	b.Resources = append(b.Resources, bundle.Resource{ID: "watch", Type: bundle.TypeWatch, Spec: []byte("{}")})
+	if err := a.CheckTypes(b); err == nil {
+		t.Fatal("a resource of type watch was accepted")
 	}
 }
 

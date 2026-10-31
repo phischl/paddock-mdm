@@ -27,6 +27,8 @@ type File struct {
 type Unit struct {
 	State  string // enabled, disabled, static, masked
 	Active bool
+	// Failed makes `systemctl is-active` answer failed while the unit is not active.
+	Failed bool
 }
 
 // System is the fake. Fields may be changed between calls (not concurrently).
@@ -205,6 +207,9 @@ func (s *System) Systemctl(_ context.Context, args ...string) (string, int, erro
 	case "is-active":
 		if ok && u.Active {
 			return "active\n", 0, nil
+		}
+		if ok && u.Failed {
+			return "failed\n", 3, nil
 		}
 		return "inactive\n", 3, nil
 	}

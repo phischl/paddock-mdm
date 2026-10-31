@@ -229,7 +229,7 @@ var deviceEventParams = []string{
 	"generation", "service", "at", "field", "before", "after", "unit",
 	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
 	"command_id", "mode", "local_admin", "tpm", "steps",
-	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by",
+	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by", "state",
 }
 
 var registry = map[Code]Definition{
@@ -951,10 +951,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperServiceStopped: {
 		Code: CodeDeviceTamperServiceStopped, Emitted: true,
-		Description: "A device found a service Paddock keeps running stopped outside Paddock and started it again (actor: the device).",
+		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, or a watched third-party service, which it only reports (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "unit is orbit.service (fleetd, the mutual watch of agent and fleetd).",
+		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
 	},
 	CodeDeviceTamperAgentNotRunning: {
 		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,
