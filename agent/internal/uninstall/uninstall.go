@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
@@ -174,6 +175,23 @@ func (h *Helper) Execute(ctx context.Context, plan Plan) Summary {
 	slog.InfoContext(ctx, "Paddock removed", "command_id", plan.CommandID, "mode", plan.Mode, "outcome", s.Outcome,
 		"local_admin", s.LocalAdmin, "tpm", s.TPM, "reported", s.Delivered, "summary", filepath.Join(ResultDir, "result.json"))
 	return s
+}
+
+// Discard removes the preparation of a removal that does not run, then its directory if nothing else lies in it: a
+// summary or a quarantine copy of an earlier removal keeps it. Below /root nothing clears it at a reboot, unlike /run.
+func Discard(ctx context.Context, files ...string) {
+	dirs := map[string]bool{}
+	for _, f := range files {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.WarnContext(ctx, "removing the uninstall preparation failed", "file", f, "error", err)
+		}
+		dirs[filepath.Dir(f)] = true
+	}
+	for dir := range dirs {
+		if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) {
+			slog.WarnContext(ctx, "removing the uninstall directory failed", "path", dir, "error", err)
+		}
+	}
 }
 
 func skipUnless(run bool, step func() string) string {

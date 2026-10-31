@@ -559,3 +559,92 @@ func TestEventGapCheckBounded(t *testing.T) {
 		t.Fatalf("%d device.event_gap for rows that filled", n)
 	}
 }
+
+// login records a session.login with number seq and the raw event data as one batch the gateway received now.
+func (w *gapWorld) login(t *testing.T, seq int64, data string) {
+	t.Helper()
+	received := w.tick()
+	if err := w.reports.RecordEvents(systemCtx(w.org), w.dev, received, []protocol.Event{{EventSeq: seq, Type: protocol.EventSessionLogin,
+		OccurredAt: received, Data: json.RawMessage(data)}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (w *gapWorld) enableLoginHistory(t *testing.T) {
+	t.Helper()
+	if _, err := w.super.Exec(context.Background(), `UPDATE organization_login_settings SET login_history_enabled = true,
+		login_history_enabled_at = now() - interval '1 day' WHERE organization_id = $1`, w.org); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEventGapSessionLoginIsNoGap (PDK-476, plan M8b decision 20): a session login is numbered like every other event
+// and, though not audited, its number is recorded, with or without login history and also when it is malformed.
+func TestEventGapSessionLoginIsNoGap(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		history bool
+		data    string
+		users   int
+	}{
+		{"history on", true, `{"username":"dave@acme.test"}`, 1},
+		{"history off", false, `{"username":"dave@acme.test"}`, 1},
+		{"malformed", true, `{"username":"eve\u0000@acme.test"}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newGapWorld(t)
+			if tc.history {
+				w.enableLoginHistory(t)
+			}
+			w.events(t, 1)
+			w.login(t, 2, tc.data)
+			w.events(t, 3)
+			for range 3 {
+				w.checkin(t, 3)
+				w.round(t)
+			}
+			if rows := w.gapRows(t); len(rows) != 0 {
+				t.Fatalf("gap rows %+v, want none", rows)
+			}
+			if n := w.count(t, "device.event_gap"); n != 0 {
+				t.Fatalf("%d device.event_gap, want 0", n)
+			}
+			if c, _, seen := w.status(t); c != 3 || seen != 3 {
+				t.Fatalf("event_seq_contiguous %d, device_event_seen %d, want 3 and 3", c, seen)
+			}
+			var users int
+			if err := w.super.QueryRow(context.Background(), "SELECT count(*) FROM device_user_seen WHERE device_id = $1", w.dev).Scan(&users); err != nil || users != tc.users {
+				t.Fatalf("device_user_seen %d (%v), want %d", users, err, tc.users)
+			}
+			var audited int
+			if err := w.super.QueryRow(context.Background(), "SELECT count(*) FROM action WHERE organization_id = $1 AND params ->> 'event_seq' = '2'",
+				w.org).Scan(&audited); err != nil || audited != 0 {
+				t.Fatalf("%d audit events for the login (%v), want 0", audited, err)
+			}
+		})
+	}
+}
+
+// TestSessionLoginRedeliveryDeduplicated (PDK-476, plan M2a decision 14): a session login delivered again under the
+// same number changes neither device_user_seen nor the login history.
+func TestSessionLoginRedeliveryDeduplicated(t *testing.T) {
+	w := newGapWorld(t)
+	w.enableLoginHistory(t)
+	first := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Second)
+	for _, at := range []time.Time{first, first.Add(10 * time.Minute)} {
+		data, _ := json.Marshal(protocol.SessionLogin{Username: "dave@acme.test", At: at})
+		if err := w.reports.RecordEvents(systemCtx(w.org), w.dev, w.tick(), []protocol.Event{{EventSeq: 1, Type: protocol.EventSessionLogin,
+			OccurredAt: at, Data: data}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	var seen time.Time
+	if err := w.super.QueryRow(ctx, "SELECT last_seen_at FROM device_user_seen WHERE device_id = $1 AND username = 'dave@acme.test'", w.dev).Scan(&seen); err != nil || !seen.Equal(first) {
+		t.Fatalf("last_seen_at %s (%v), want %s", seen, err, first)
+	}
+	var logins int
+	if err := w.super.QueryRow(ctx, "SELECT count(*) FROM device_login_event WHERE device_id = $1", w.dev).Scan(&logins); err != nil || logins != 1 {
+		t.Fatalf("device_login_event %d (%v), want 1", logins, err)
+	}
+}

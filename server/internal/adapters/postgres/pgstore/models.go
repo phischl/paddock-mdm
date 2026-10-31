@@ -98,6 +98,14 @@ type AgentUpdateReport struct {
 	ReportedAt     time.Time
 }
 
+type AgentUploadLease struct {
+	ID        uuid.UUID
+	Version   string
+	ObjectKey string
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
 type ApiToken struct {
 	ID                        uuid.UUID
 	OrganizationID            uuid.UUID

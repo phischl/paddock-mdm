@@ -16,6 +16,23 @@ release without rollout. Every test starts from the snapshot `base-installed`
 and restores it, powered off, when it ends; with `PADDOCK_SYSTEM_KEEP=1` a failed test leaves its VM running for
 inspection. Screenshots are kept in `bin/system-evidence/<vm>/`.
 
+## Worktrees
+
+`make system-test`, `make acceptance` and `make e2e` need the checkout's `deploy/compose/.env` and
+`deploy/compose/.secrets` (git-ignored, so a fresh worktree has neither) and stop up front without them
+(`test/stack-preflight.sh`). A worktree that runs the gates against a stack started from another checkout links both
+to that checkout:
+
+```sh
+stack=/path/to/the/checkout/the/stack/runs/from
+ln -s "$stack/deploy/compose/.env" deploy/compose/.env
+ln -s "$stack/deploy/compose/.secrets" deploy/compose/.secrets
+```
+
+The check never reads the secrets; it wants `.env`, `.secrets/dev_alice_password` (`make dev-secrets`) and a non-empty
+`.secrets/caddy-root.crt` (filled by `make up`). `make e2e` mounts the resolved secrets directory into the Playwright
+container at `/secrets`, so the symlink works there too.
+
 ## Both VMs in parallel
 
 The per-VM subtests of every gate (`TestAgentGates`, `TestIdentityGates`, `TestLocalAdminGates`, `TestDiskGates`,
@@ -62,9 +79,11 @@ make system-test VM=paddock-ie-2404 T='^TestInPlaceEncryptionCleanupAdopt$$'
 ```
 
 The ISOs default to `~/Downloads/ubuntu-26.04.1-desktop-amd64.iso` and `~/Downloads/ubuntu-24.04.5.1-desktop-amd64.iso`.
-`$$` is make's escape for `$`: a bare `$` at the end of `T` is dropped, the pattern becomes a prefix match and also
-runs every test whose name starts the same; a run whose log lacks `--- PASS:` for its gate is not green, whatever its
-exit code (a filter that matches nothing passes). Never name a throwaway VM together with a base VM in `VM`: the base
+`T` reaches `go test -run` verbatim: anchors work as written, also inside subtest patterns
+(`T='^TestIdentityGates$/.*/^L1_login$'`), and the `$$` above is equivalent (`$$` in a Go pattern is a doubled `$`
+anchor). Leave out the `$` and the pattern becomes a prefix match that also runs every test whose name starts the same.
+A run whose filter matches no test fails with `no test ran` (`go test` itself would report it as passed); a run whose
+log lacks `--- PASS:` for its gate is still not green, whatever its exit code. Never name a throwaway VM together with a base VM in `VM`: the base
 gates would run on the throwaway name. The in-place encryption gates (plan M8e §9) install their VM without disk
 encryption from `test/vms/virtualbox/autoinstall/unencrypted-lvm.yaml.tmpl` (26.04, guided LVM) or
 `unencrypted-plain.yaml.tmpl` (24.04, ext4 on a partition), with GDM logging the test user in, and then install the

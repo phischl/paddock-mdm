@@ -1252,6 +1252,8 @@ blocker. What changes:
     conversion (a presumed-lost device must stay retirable). The registry entries of `device.retired` and
     `revocation.requested` (`codes.go`) gain the params `conversion_cancelled`, `conversion_id`, `conversion_phase`
     (closed values: `before_delivery`; `requested | prepared | encrypting`).
+
+    Amendment 2026-10-28 (PDK-396): Retire also closes a conversion in phase prepared or with a pending abort as cancelled and withdraws a pending encrypt_disk_abort; one audit event.
 39. **Lock and Destroy precedence** (plan M8d §15.4 decision 37, mirrored). Lock and Destroy are never blocked by
     a conversion. `Revocations.Request` (`app/revocations.go`), in its transaction and under the device's row lock:
     an undelivered `encrypt_disk` command is withdrawn as in decision 8 (`ClaimResult(cancelled)`,
@@ -1827,6 +1829,83 @@ Found while implementing PDK-245. The binding text of decisions 3, 18, 21, 22 an
     - The cleanup's reason is kept in the conversion's state (`cleanup_error`) and cleared whenever `CleanupPending`
       is set or cleared, so the health never shows the reason of an earlier cleanup.
     - The start takes dpkg's locks only when a temporary initrd is left over.
+    - Amendment 2026-10-28 (PDK-378): the deferral while supervisor-upgrade.json exists applies to the conversion
+      worker's background passes only; an explicit abort cleans up synchronously, building into temporary initrds as
+      above, and leaves CleanupPending for the worker if it is killed or fails.
+    - Amendment 2026-10-30 (PDK-482; architect decision 2026-10-30 by the orchestrator): a cancel appends an
+      uncompressed cpio segment that overrides the initrd's plan with an invalid one, written via temp copy, fsync and
+      rename; a failed write is logged and reported and the normal cleanup continues; a conversion that completes
+      after a cancel is adopted and escrowed with device.disk_conversion_completed_after_cancel and a visible notice.
+      Details, binding:
+      - The explicit abort of a prepared conversion (`encrypt_disk_abort`, `paddockd encrypt-abort`), once `cancelled`
+        and `CleanupPending` are recorded and before its cleanup, appends to the initrd of every installed kernel that
+        has one and whose listing shows the module (`carriesModule`; an initrd that never carried it is left alone,
+        because initramfs-tools' `lsinitramfs` fails on an image with the segment) a newc archive with one file, `etc/paddock/encrypt-plan.env`, whose plan has no partition and no known layout, after
+        zeros up to a multiple of 4. The kernel unpacks concatenated archives in order into the same root and
+        truncates a file a later archive names again, so `check_plan` of the init step fails, the step reports
+        `plan_invalid` and the device boots unencrypted. Verified against a 6.8 kernel in QEMU with an early
+        uncompressed archive followed by a zstd and a gzip main archive. The kernel's unpacker stops at a damaged
+        segment after the main archive is unpacked, so a defect of the segment leaves the old behaviour, never an
+        unbootable initrd. The segment is appended only behind a main archive whose decompressor reports where it
+        ends (zstd, gzip, xz; read from its magic after the early uncompressed archives) or behind an initrd that is
+        uncompressed to its end; any other compression (lz4's legacy format has no end marker) is a failure reported
+        as below.
+      - Each initrd is copied into its temporary name of item 19 (a `.next` name no bootable link refers to when one refers
+        to the first, rule B (0)), the segment appended, the file fsynced and renamed over the initrd's name, and
+        `/boot` fsynced. An initrd whose stamp changed since it was listed, checked right before the rename, is left
+        alone and the failure reported. Without dpkg's locks a kernel package's dracut can still replace the initrd
+        between that check and the rename; that residual race (microseconds) is accepted, the next disarm below
+        neutralizes what such a run built. An initrd that cannot be listed is neutralized all the same. An initrd that
+        ends with the segment already is not changed again. dpkg's locks are held when they are free but not required, because the
+        window this closes includes a cleanup that waits for them.
+      - Too little room (the initrd's size plus the segment plus 32 MiB) or any failed write leaves that initrd as it
+        is, removes the copy by rule B, logs an error and emits the device event `disk.conversion_neutralize_failed`
+        {conversion_id, reason} (audit code `device.disk_conversion_neutralize_failed`, reason `boot_space_low` or the
+        first failing kernel's error). The cleanup then runs as before.
+      - Fix round 1 (review 1 of PDK-482, architect decision 2026-10-30): (a) the cancel also runs cleanup step (1),
+        removing `ModuleConf` and `ModuleDir`, so that no later dracut run (a kernel package's) builds the init step
+        into an initrd again; `ModuleWritten` is recorded first so the cleanup still rebuilds and verifies, and the host
+        `plan.env` and the key stay for the adoption, whose `ModuleMissing`/`RestoreModule` reinstall the module.
+        (b) Every cleanup retry of the worker runs this disarm again before `RunCleanup` while the phase is `cancelled`
+        and `CleanupPending` is set, which neutralizes an initrd a dracut run already under way at the cancel built
+        and a new kernel's. (c) The agent's start runs it once as well, for a kill between recording the cancel and
+        the neutralization. Neither runs while the partition is LUKS or cannot be checked (invariant I1); a failure is
+        reported once per reason and agent start.
+      - Fix round 2 (review 2 of PDK-482, architect decision 2026-10-30, option (a)). Accepted residual: when kernel
+        A's initrd is neutralized but kernel B's neutralization fails, a boot through B converts the disk and the
+        conversion is adopted; until `RestoreModule` succeeds, A's entry cannot open the LUKS root (its plan is the
+        cancelled one, so the init step stops at `plan_invalid` before it would open the disk), and only B and any
+        other kernel still carrying the module boot. `paddock-encrypt-init.sh` is not changed for this. The window is
+        made visible: a failed `RestoreModule` (except dpkg's locks being busy) emits the device event
+        `disk.conversion_unlock_restore_failed` {conversion_id, reason} (audit code
+        `device.disk_conversion_unlock_restore_failed`; reason `kernel_not_buildable`, `no_bootable_kernel`,
+        `boot_space_low` or the first failing kernel's error) once per reason and agent start, besides the disk
+        state's initrd issue. Without dpkg's locks, removing the module can make a concurrent kernel package's dracut
+        run fail (dpkg retries its postinst); this is accepted, because keeping the module would let that run re-arm
+        an initrd, and the next disarm neutralizes whatever such a run built. The failure of the abort's own disarm
+        counts toward "once per reason", and a reason counts as reported only once its event was stored. A
+        neutralized initrd counts as carrying the module when a lister cannot read past the segment (initramfs-tools'
+        `lsinitramfs`): it carries the cancelled plan.
+      - The adoption of a conversion the device had cancelled (I2) stays: the disk needs the escrowed key. The agent
+        adds `after_cancel: true` to `disk.conversion_started`, and the server records that event as
+        `device.disk_conversion_completed_after_cancel` instead of `device.disk_conversion_started`. Deviation from the
+        decision's wording, accepted by the orchestrator on 2026-10-30: the code is named after the registry's
+        convention for device events (not `disk.conversion_completed_after_cancel`), and the visible notice is that
+        audit entry with its en/de text; the disk card gets no notice of its own, since the conversion row keeps no
+        record of the cancel and no migration is made for it.
+      - 2026-10-30 (PDK-579, architect decision 2026-10-30 by main): the same disarm applies to phase `failed` with
+        `CleanupPending`, i.e. a preparation that fails once step 7 wrote the module, and a failed or skipped init step
+        at stage init (`on_battery`, `resume_set`), whose armed initrd would otherwise convert the disk at the next
+        boot on AC power. It runs at the same three points: when the failure is recorded (the preparation's `fail`
+        before its cleanup; `initFailed` right after the failure is saved), at every cleanup retry of the worker, and
+        once at the agent's start, never on the boot that opened the converted disk nor while the partition is LUKS or
+        cannot be checked (invariant I1); a failure is reported as `disk.conversion_neutralize_failed` once per reason
+        and agent start. The segment is unchanged (its plan still reads `PADDOCK_LAYOUT=cancelled`), so that it stays
+        identical and the append idempotent. A failed conversion whose disk converted anyway is adopted as before and
+        recorded as `device.disk_conversion_started`, without a marker like `after_cancel`. Gate: S-IE2 part A3.
+      - A kernel command line switch (`paddock.encrypt=off`) was rejected.
+      - Gate: `TestInPlaceEncryptionCancelBeforeReboot` (cancel, restart before the cleanup, the disk stays
+        unencrypted, then the cleanup completes); gate S-IE4 makes the neutralization fail to reach the adoption.
 19. **Room in /boot and stuck initrd work** (review 8 of PDK-245, decided by the orchestrator as architect). This
     amends items 16 to 18.
     - Every rebuild (decision 20, the cleanup, the reinstall) works through the kernels strictly one at a time:

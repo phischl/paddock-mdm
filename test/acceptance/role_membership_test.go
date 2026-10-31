@@ -53,6 +53,8 @@ func waitRoleEvents(t *testing.T, idx *env.AuditIndex, org uuid.UUID, code, user
 	ctx := testContext(t, wait+time.Minute)
 	deadline := time.Now().Add(wait)
 	for {
+		// The deadline is checked against the poll's start, as in expectOneIndexEvent (PDK-551, PDK-561).
+		polled := time.Now()
 		found, err := idx.Events(ctx, org, "code = '"+code+"' AND params->>'username' = $1", username)
 		if err != nil {
 			t.Fatal(err)
@@ -60,7 +62,7 @@ func waitRoleEvents(t *testing.T, idx *env.AuditIndex, org uuid.UUID, code, user
 		if len(found) > 0 {
 			return found
 		}
-		if time.Now().After(deadline) {
+		if polled.After(deadline) {
 			t.Fatalf("no %s for %s in %s within %s", code, username, org, wait)
 		}
 		time.Sleep(5 * time.Second)
@@ -110,9 +112,11 @@ func TestRoleMembership(t *testing.T) {
 	if waitRoleMemberState(t, "R2 first round", acme, op.name, roleEventWait, "marked", "absent") == "marked" {
 		waitRoleMemberState(t, "R2 second round", acme, op.name, roleEventWait, "absent")
 	}
+	// Both rounds are over, so the wait below is the audit pipeline's lag and tells whether it is loaded (PDK-561).
+	start := time.Now()
 	expectRoleEvent(t, "R2", waitRoleEvents(t, idx, acme, "admin.role_revoked", op.name, roleAuditWait),
 		map[string]any{"role": "org_operator", "username": op.name, "group": operators})
-	time.Sleep(auditSettleDelay)
+	time.Sleep(auditSettle(time.Since(start)))
 	granted, err := idx.Events(ctx, acme, "code = 'admin.role_granted' AND params->>'username' = $1", op.name)
 	if err != nil || len(granted) != 1 {
 		t.Fatalf("R2: grants of %s after the revocation: %+v (%v), want still one", op.name, granted, err)

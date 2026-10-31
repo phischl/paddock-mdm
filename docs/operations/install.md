@@ -31,6 +31,9 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
 - Control plane: 4 vCPU, 16 GB RAM, 100 GB disk for 100 devices. Audit domain: 2 vCPU, 4 GB RAM, disk for 400 days
   of audit evidence (about 1 GB per 100 devices and year) plus free space for one evidence export of up to
   `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default 4 GiB) on the audit writer's temp volume (`audit-bucket.md` section 4).
+  Authentik serves logins with 4 web worker processes, one core and about 250 MiB each; raise
+  `PADDOCK_AUTHENTIK_WEB_WORKERS` with the cores for many simultaneous logins (`docs/operations/capacity.md`,
+  "Authentik web workers").
 - A **private interconnect** between the hosts (VPN such as WireGuard, or a private network), each host with a fixed
   address on it. Only these endpoints are published there, all with TLS from the internal CAs:
   - control plane → audit host: RabbitMQ `amqps` 5671 (the audit writer consumes), OpenBao 8200 (the audit writer
@@ -211,6 +214,7 @@ a service whose container log is not rotated (log driver other than `json-file` 
 on the control plane, a `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` that is missing, not a number, below 400 days or below
 `PADDOCK_AUDIT_RETENTION_DAYS`, with which the worker does not start (item `audit index retention of the retention
 round`);
+a `PADDOCK_AUTHENTIK_WEB_WORKERS` that is not an integer of at least 1 (item `authentik web workers`);
 the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
 audit bucket without Object Lock COMPLIANCE of at least 400 days.
 

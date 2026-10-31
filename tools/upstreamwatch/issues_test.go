@@ -132,6 +132,25 @@ func TestReconcileLifecycle(t *testing.T) {
 	}
 }
 
+func TestBodyNamesTheFollowedLine(t *testing.T) {
+	mysql := Pin{
+		Info: PinInfo{Name: "fleet_mysql", Line: "8.4.", Gates: []string{gateFleet}}, Kind: KindImage,
+		File: "deploy/compose/versions.env", Line: "FLEET_MYSQL_IMAGE=mysql:8.4.11@sha256:aa", Pinned: "8.4.11",
+	}
+	body := Body(Result{Pin: mysql, Latest: "8.4.13", Class: ClassPatch})
+	if want := "**Line:** this pin follows the `8.4.` line only; newer lines are not reported (plan M6d decision 10)."; !strings.Contains(body, want) {
+		t.Errorf("body lacks %q:\n%s", want, body)
+	}
+
+	postgres := Pin{
+		Info: imagePins()["POSTGRES_IMAGE"], Kind: KindImage,
+		File: "deploy/compose/versions.env", Line: "POSTGRES_IMAGE=postgres:17.6@sha256:bb", Pinned: "17.6",
+	}
+	if body := Body(Result{Pin: postgres, Latest: "18.0", Class: ClassMajor}); strings.Contains(body, "**Line:**") {
+		t.Errorf("body of a pin without a line names one:\n%s", body)
+	}
+}
+
 func TestReconcileReportsGitHubFailure(t *testing.T) {
 	gh := newFakeGitHub()
 	gh.failAll = true

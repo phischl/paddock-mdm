@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -51,12 +52,13 @@ func RegenerateInitrd(ctx context.Context, sys Host, l paths.Layout, mapping, lu
 		return err
 	}
 	// A package run holding the locks now would make the builds below useless: probe them first (they are taken
-	// again for each rename). Under the probe, temporary files a killed run left go (item 19(j)).
+	// again for each rename). Under the probe, temporary files a killed run left go (item 19(j)); one a bootable
+	// kernel's initrd links to goes after the builds, which rename over the link (rule B (0), PDK-386).
 	probe, err := sys.LockPackages()
 	if err != nil {
 		return err
 	}
-	err = removeTemps(l)
+	err = removeTempsExcept(l, linkedTemps(l))
 	probe()
 	if err != nil {
 		return err
@@ -165,9 +167,11 @@ func bootSpaceNeeded(l paths.Layout, v string) int64 {
 
 // buildInitrd builds kernel v's new initrd into its temporary file (dracut -f [args] <file> <v>), when /boot has room
 // for it, and checks it with verify; it returns the file, readable by root only. On any failure the file is removed
-// and the current initrd is untouched (amendment 2026-10-21, item 19): at most one temporary initrd exists at a time.
+// and the current initrd is untouched (amendment 2026-10-21, item 19): at most one temporary initrd exists at a time,
+// besides those a bootable kernel's initrd links to (linkedTemps).
 func buildInitrd(ctx context.Context, sys Host, l paths.Layout, v string, args []string, verify func(initrd string) error) (string, error) {
-	tmp := l.Join(tempInitrd(v))
+	// Rule B (0): neither dracut nor the removal below may touch the target of a bootable kernel's link (PDK-386).
+	tmp := buildTemp(l, v)
 	// A temporary file of this kernel a killed run left is no room taken (review 9, m7); it may carry the key (item 19,
 	// rule B).
 	if _, err := removeInitrdNames(ctx, l, []string{tmp}); err != nil {
@@ -237,13 +241,47 @@ func notPE(path string) error {
 
 // removeTemps removes every temporary initrd of tempInitrd's pattern by the rules of removeInitrdNames (they may carry
 // the conversion key); the caller holds dpkg's locks.
-func removeTemps(l paths.Layout) error {
-	stale, err := filepath.Glob(l.Join(tempInitrd("*")))
+func removeTemps(l paths.Layout) error { return removeTempsExcept(l, nil) }
+
+// removeTempsExcept is removeTemps without the temporary initrds in keep.
+func removeTempsExcept(l paths.Layout, keep map[string]bool) error {
+	temps, err := filepath.Glob(l.Join(tempInitrd("*")))
 	if err != nil {
 		return err
 	}
+	stale := slices.DeleteFunc(temps, func(tmp string) bool { return keep[tmp] })
 	_, err = removeInitrdNames(context.Background(), l, stale)
 	return err
+}
+
+// linkedTemps are the regular temporary initrds that a bootable kernel's /boot/initrd.img-* symlink refers to: rule B
+// (0) keeps them until that kernel's rebuild renames over the link (PDK-386).
+func linkedTemps(l paths.Layout) map[string]bool {
+	targets := map[inode]bool{}
+	for _, v := range bootableKernels(l) {
+		name := l.Join("/boot/initrd.img-" + v)
+		if info, err := os.Lstat(name); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		if target, err := os.Stat(name); err == nil && target.Mode().IsRegular() {
+			if id, ok := inodeOf(target); ok {
+				targets[id] = true
+			}
+		}
+	}
+	linked := map[string]bool{}
+	if len(targets) == 0 {
+		return linked
+	}
+	temps, _ := filepath.Glob(l.Join(tempInitrd("*")))
+	for _, tmp := range temps {
+		if info, err := os.Lstat(tmp); err == nil && info.Mode().IsRegular() {
+			if id, ok := inodeOf(info); ok && targets[id] {
+				linked[tmp] = true
+			}
+		}
+	}
+	return linked
 }
 
 // discardTemp removes a temporary initrd that did not go into place by the rules of removeInitrdNames: one that failed
@@ -283,8 +321,9 @@ func rebuildInitrds(ctx context.Context, sys Host, l paths.Layout, verify func(i
 		return err
 	}
 	// Temporary files a killed run left — also of a kernel removed since, which no build below would replace — carry
-	// the conversion key on the unencrypted /boot (amendment 2026-10-21, item 19).
-	if err := removeTemps(l); err != nil {
+	// the conversion key on the unencrypted /boot (amendment 2026-10-21, item 19). One a bootable kernel's initrd links
+	// to stays until the builds below rename over the link (rule B (0), PDK-386).
+	if err := removeTempsExcept(l, linkedTemps(l)); err != nil {
 		return err
 	}
 	defer func() { _ = removeTemps(l) }()
@@ -304,11 +343,39 @@ func rebuildInitrds(ctx context.Context, sys Host, l paths.Layout, verify func(i
 	if now := bootableKernels(l); !slices.Equal(now, kernels) {
 		return fmt.Errorf("the installed kernels changed during the rebuild (%v, now %v)", kernels, now)
 	}
-	return nil
+	// The temporary files kept at the start for a bootable kernel's link are free now; one that still cannot go fails
+	// the rebuild instead of staying with the key (PDK-386).
+	return removeTemps(l)
 }
 
 // tempInitrd is the temporary file a new initrd of kernel v is built into, next to the current one.
 func tempInitrd(v string) string { return "/boot/.initrd.img-" + v + ".paddock" }
+
+// buildTempNames bounds the temporary names buildTemp tries per kernel: each one a bootable link refers to takes a
+// deliberately crafted /boot, and a bound keeps that from growing without end (PDK-481).
+const buildTempNames = 8
+
+// buildTemp is the temporary file kernel v's new initrd is written into: tempInitrd(v), or, when a bootable kernel's
+// link refers to it (rule B (0), PDK-386), the first of tempInitrd(v+".next"), tempInitrd(v+".next2"), … up to
+// buildTempNames names that no such link refers to, also not through a hard link of a linked file (PDK-481). The
+// rename over the link then frees the linked file. When every name is linked it is tempInitrd(v), whose removal fails
+// closed with KeySharedBootableError. Every name matches tempInitrd("*"), so the removal of temporary initrds finds it.
+func buildTemp(l paths.Layout, v string) string {
+	linked := linkedTemps(l)
+	for i := range buildTempNames {
+		suffix := ""
+		switch {
+		case i == 1:
+			suffix = ".next"
+		case i > 1:
+			suffix = ".next" + strconv.Itoa(i)
+		}
+		if tmp := l.Join(tempInitrd(v + suffix)); !linked[tmp] {
+			return tmp
+		}
+	}
+	return l.Join(tempInitrd(v))
+}
 
 // RemoveStaleTemps removes, under dpkg's locks, temporary initrds a regeneration left when the agent was killed
 // (PDK-375): only files of tempInitrd's pattern, never another file of /boot. ErrPackagesBusy leaves them for later.

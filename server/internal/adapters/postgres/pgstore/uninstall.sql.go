@@ -91,7 +91,8 @@ type EndFailedUninstallParams struct {
 	CommandID uuid.UUID
 }
 
-// The device could not start the removal of the request's command: the request ends.
+// The device could not start the removal of the request's command, or refused it for good (PDK-403): the request
+// ends.
 func (q *Queries) EndFailedUninstall(ctx context.Context, arg EndFailedUninstallParams) (int64, error) {
 	result, err := q.db.Exec(ctx, endFailedUninstall, arg.ID, arg.CommandID)
 	if err != nil {
@@ -105,7 +106,8 @@ SELECT d.uninstall_mode::text AS mode, d.uninstall_requested_at::timestamptz AS 
        d.uninstall_command_id::uuid AS command_id, coalesce(c.status, '')::text AS command_status,
        d.uninstalled_at, coalesce(c.result ->> 'local_admin', '')::text AS local_admin,
        coalesce(c.result ->> 'tpm', '')::text AS tpm, c.delivered_at AS command_delivered_at,
-       c.finished_at AS command_finished_at
+       c.finished_at AS command_finished_at,
+       CASE WHEN c.status = 'failed' THEN left(coalesce(c.result ->> 'reason', ''), 256) ELSE '' END::text AS refused_reason
 FROM device d LEFT JOIN device_command c ON c.id = d.uninstall_command_id
 WHERE d.id = $1 AND d.uninstall_requested_at IS NOT NULL
 `
@@ -120,9 +122,11 @@ type GetDeviceUninstallRow struct {
 	Tpm                string
 	CommandDeliveredAt *time.Time
 	CommandFinishedAt  *time.Time
+	RefusedReason      string
 }
 
-// The uninstall of a device with its command; local_admin and tpm are the outcome the device reported.
+// The uninstall of a device with its command; local_admin and tpm are the outcome the device reported, and
+// refused_reason the reason of a device that refused the command (PDK-403; bounded like device-reported audit params).
 func (q *Queries) GetDeviceUninstall(ctx context.Context, id uuid.UUID) (GetDeviceUninstallRow, error) {
 	row := q.db.QueryRow(ctx, getDeviceUninstall, id)
 	var i GetDeviceUninstallRow
@@ -136,6 +140,7 @@ func (q *Queries) GetDeviceUninstall(ctx context.Context, id uuid.UUID) (GetDevi
 		&i.Tpm,
 		&i.CommandDeliveredAt,
 		&i.CommandFinishedAt,
+		&i.RefusedReason,
 	)
 	return i, err
 }

@@ -711,12 +711,15 @@ func expectOneTargetEvent(t *testing.T, viewer *env.Portal, code, id, outcome st
 		return found
 	}
 	var found []env.AuditEvent
-	for deadline := time.Now().Add(auditPollTimeout); ; time.Sleep(500 * time.Millisecond) {
-		if found = find(); len(found) > 0 || time.Now().After(deadline) {
+	start := time.Now()
+	// Deadline against the poll's start and a load-dependent settle, as in expectOneEvent (PDK-551, PDK-561).
+	for deadline := start.Add(auditPollTimeout); ; time.Sleep(500 * time.Millisecond) {
+		polled := time.Now()
+		if found = find(); len(found) > 0 || polled.After(deadline) {
 			break
 		}
 	}
-	time.Sleep(auditSettleDelay)
+	time.Sleep(auditSettle(time.Since(start)))
 	found = find()
 	if len(found) != 1 || found[0].Outcome != outcome {
 		t.Fatalf("%s events of target %s: %+v, want exactly one with outcome %s", code, id, found, outcome)

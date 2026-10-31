@@ -29,3 +29,12 @@ until retention expires them and are not restorable into the new cluster. A Post
 installation without a product upgrade path (maintainer decision 2026-10-29); pgBackRest's own PostgreSQL support
 is verified against the sources before each major (`PG_CONTROL_VERSION`, `XLOG_PAGE_MAGIC`), not assumed from the
 package's label.
+
+## Amendment 2026-10-30 (plan M6d, decision 6 revised)
+The rule of the amendment of 2026-10-29 that the backup service runs `stanza-upgrade` when the repository holds the
+stanza for another cluster is withdrawn. The backup service refuses such a stanza and logs it; the operator runs
+`stanza-upgrade` once by hand (`run.sh stanza-upgrade`) when a bucket is kept on purpose. Reason: an automatic
+upgrade lets the service back up a freshly initialised, empty cluster on a rebuilt host, and a disaster restore then
+restores that newest, empty set; it also breaks the archiving of a second installation that shares the bucket. The
+rest of the 2026-10-29 amendment (status Accepted, the backup design, PostgreSQL majors as fresh installations,
+verifying pgBackRest against the sources) stands.

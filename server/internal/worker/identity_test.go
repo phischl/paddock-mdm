@@ -62,6 +62,14 @@ type roleDirectory struct {
 	readable     bool
 	usersVisible bool
 	probes       int
+	// superusers are the identity provider's superusers (the platform round).
+	superusers []ports.IdentityUser
+}
+
+func (d *roleDirectory) Superusers(context.Context) ([]ports.IdentityUser, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.superusers, nil
 }
 
 func (d *roleDirectory) GroupReadable(context.Context, string) (bool, error) {
@@ -165,6 +173,63 @@ func TestAdminAccountsRoundCountsRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := i.refused[f.org]; ok || testutil.ToFloat64(metricDirectoryRefusals)-before != refusedRepeatedly {
+		t.Fatalf("after a successful round: streak %v, %v refusals", i.refused, testutil.ToFloat64(metricDirectoryRefusals)-before)
+	}
+}
+
+// TestPlatformAdminsRoundCountsRefusals (PDK-534): a platform round refused because the directory looks empty to the
+// service token counts once in paddock_identity_directory_refusals_total (although both consumers refuse) and extends
+// the platform's streak of refusals (uuid.Nil); a successful round ends the streak.
+func TestPlatformAdminsRoundCountsRefusals(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	root := ports.IdentityUser{PK: "73", Username: "root-" + f.org.String()[:8], UID: "uid-root-" + f.org.String(), Active: true}
+	adminID := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, `INSERT INTO platform_admin (id, authentik_sub, username, display_name) VALUES ($1, $2, $3, $3)`,
+		adminID, root.UID, root.Username); err != nil {
+		t.Fatal(err)
+	}
+	// A later run in the same binary (-count=2) must not find this administrator unlisted: the round would count its
+	// sessions with the nil SessionRevoker.
+	t.Cleanup(func() {
+		if _, err := f.super.Exec(context.Background(), "DELETE FROM platform_admin WHERE id = $1", adminID); err != nil {
+			t.Error(err)
+		}
+	})
+	group := organization.PlatformAdminsGroup()
+	akadmin := []ports.IdentityUser{{PK: "74", Username: "akadmin"}}
+	dir := &roleDirectory{listings: map[string]int{}, members: map[string][]ports.IdentityUser{group: {root}}, superusers: akadmin}
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	i := NewIdentity(nil, app.NewAdminAccounts(runner, f.pool, platform, dir, nil), app.NewRoleMembership(runner, f.pool, platform, dir),
+		nil, f.pool, platform, time.Minute, time.Minute)
+	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"}), "platform-admins-test")
+	if err := i.platformAdmins(sys); err != nil {
+		t.Fatal(err)
+	}
+	// A blind token: the group listing and the superuser listing are empty and the group is not readable by name.
+	dir.members, dir.superusers = map[string][]ports.IdentityUser{}, nil
+	before := testutil.ToFloat64(metricDirectoryRefusals)
+	for round := 1; round <= refusedRepeatedly; round++ {
+		if err := i.platformAdmins(sys); !errors.Is(err, app.ErrDirectoryEmpty) {
+			t.Fatalf("round %d: %v, want ErrDirectoryEmpty", round, err)
+		}
+		if got := testutil.ToFloat64(metricDirectoryRefusals) - before; got != float64(round) {
+			t.Fatalf("round %d: %v refusals counted, want %d", round, got, round)
+		}
+		if i.refused[uuid.Nil] != round {
+			t.Fatalf("round %d: streak %d", round, i.refused[uuid.Nil])
+		}
+	}
+	dir.members, dir.superusers = map[string][]ports.IdentityUser{group: {root}}, akadmin
+	if err := i.platformAdmins(sys); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := i.refused[uuid.Nil]; ok || testutil.ToFloat64(metricDirectoryRefusals)-before != refusedRepeatedly {
 		t.Fatalf("after a successful round: streak %v, %v refusals", i.refused, testutil.ToFloat64(metricDirectoryRefusals)-before)
 	}
 }

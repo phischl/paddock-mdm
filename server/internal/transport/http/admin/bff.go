@@ -235,9 +235,6 @@ func (c idClaims) hasPasskey() bool {
 	return slices.Contains(c.MFAClasses, StepUpWebAuthnClass)
 }
 
-// errLoginFailed is the audit error code of logins that fail after the state check (code exchange, ID token).
-var errLoginFailed = &problem.Error{Code: app.ReasonLoginFailed, Status: http.StatusBadGateway}
-
 // errMFARequired is the audit error code of a login whose ID token carried no second factor. It also wraps
 // problem.Forbidden, so that the runner records the refusal as denied rather than failed.
 var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFARequired, Status: http.StatusForbidden},
@@ -247,6 +244,23 @@ var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFAReq
 // errMFARequired.
 var errPasskeyRequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonPasskeyRequired,
 	Status: http.StatusForbidden}, problem.Forbidden)
+
+// loginFactorDenial is the sign-in policy of the portal and the MCP login (ADR 0034 amendment 2026-10-29, PDK-531),
+// the one place that decides which factors a role needs: it returns the denial reason and audit error of a login whose
+// ID token lacks one, "" when the factors suffice. Every login needs "mfa" in amr; every role also needs a validated
+// WebAuthn authenticator, and a token without the claim (mapping missing) fails closed. Groups that grant no role keep
+// their own denial reason. optional is the development switch PADDOCK_LOGIN_MFA_OPTIONAL.
+func loginFactorDenial(c idClaims, res organization.RoleResolution, optional bool) (string, error) {
+	switch {
+	case optional:
+		return "", nil
+	case !c.hasMFA():
+		return app.ReasonMFARequired, errMFARequired
+	case !res.Denied && !c.hasPasskey():
+		return app.ReasonPasskeyRequired, errPasskeyRequired
+	}
+	return "", nil
+}
 
 // callback completes the login: state check, code exchange with PKCE, ID token verification (issuer, audience,
 // nonce, expiry), role resolution from the groups claim, admin.login audit event and session cookie.
@@ -286,7 +300,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	token, err := oauth.Exchange(exchangeContext(ctx), q.Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		slog.WarnContext(ctx, "code exchange failed", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", app.ErrLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -301,7 +315,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || claims.Subject == "" {
 		slog.WarnContext(ctx, "ID token rejected", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, "", app.ErrLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -309,21 +323,13 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = claims.Email
 	}
-	if !b.loginMFAOptional && !claims.hasMFA() {
-		slog.WarnContext(ctx, "ID token without a second factor refused")
-		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonMFARequired, "", errMFARequired)
-		denied(w, r, app.ReasonMFARequired)
-		return
-	}
 	res := organization.ResolveRole(claims.Groups)
-	// Every portal role requires a passkey (ADR 0034 amendment 2026-10-29). The check precedes the choice of the active
-	// role, so it holds for a role switch (which runs this callback with a new ID token) and for any later fallback
-	// between the roles; a token without the claim (mapping missing) fails closed. Groups that grant no role keep
-	// their own denial reason.
-	if !b.loginMFAOptional && !res.Denied && !claims.hasPasskey() {
-		slog.WarnContext(ctx, "ID token without a validated WebAuthn authenticator refused", "mfa_classes", claims.MFAClasses)
-		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonPasskeyRequired, "", errPasskeyRequired)
-		denied(w, r, app.ReasonPasskeyRequired)
+	// The check precedes the choice of the active role, so it holds for a role switch (which runs this callback with a
+	// new ID token) and for any later fallback between the roles.
+	if reason, cause := loginFactorDenial(claims, res, b.loginMFAOptional); reason != "" {
+		slog.WarnContext(ctx, "ID token refused for its sign-in factors", "reason", reason, "mfa_classes", claims.MFAClasses)
+		b.accounts.RecordLoginFailure(ctx, ip, username, reason, "", cause)
+		denied(w, r, reason)
 		return
 	}
 	// A switch state sealed for another user is a plain sign-in: it never ends a session or picks the role.
@@ -343,6 +349,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		orgID, err := b.accounts.OrganizationID(ctx, res.Slug)
 		if err != nil {
 			slog.ErrorContext(ctx, "login failed", "error", err)
+			b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonLoginFailed, "", app.ErrLoginFailed)
 			denied(w, r, app.ReasonLoginFailed)
 			return
 		}
@@ -437,9 +444,9 @@ func denialReason(res organization.RoleResolution, err error) string {
 	return app.ReasonNotAuthorized
 }
 
-// logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. It reads the
-// cookie itself, so it also signs the browser out while the session store is unreachable; the record then expires on
-// its own (plan M8s decision 15).
+// logout ends the session on the server, clears the cookie and returns the URL that ends the Authentik session. It
+// reads the cookie itself, so it also signs the browser out while the session store is unreachable; the record then
+// expires on its own (plan M8s decision 15).
 func (b *bff) logout(publicURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sess Session
@@ -450,12 +457,20 @@ func (b *bff) logout(publicURL string) http.HandlerFunc {
 		}
 		http.SetCookie(w, sessionCookie("", -1))
 		_, _, endSession := b.oidc.snapshot()
-		target := publicURL + "/"
-		if endSession != "" {
-			target = endSession + "?" + url.Values{"post_logout_redirect_uri": {publicURL + "/"}}.Encode()
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": target})
+		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": identityProviderLogout(endSession, publicURL)})
 	}
+}
+
+// identityProviderLogout is the brand invalidation flow on the origin of the issuer's end-session endpoint, or the
+// portal when the issuer is unknown (PDK-532). Not the end-session endpoint itself: Authentik refuses its
+// post_logout_redirect_uri without an id_token_hint, and the provider's invalidation flow has no logout stage, so it
+// ends the application only and leaves the Authentik session, which the next sign-in would reuse.
+func identityProviderLogout(endSession, publicURL string) string {
+	u, err := url.Parse(endSession)
+	if endSession == "" || err != nil || u.Scheme == "" || u.Host == "" {
+		return publicURL + "/"
+	}
+	return u.Scheme + "://" + u.Host + "/flows/-/default/invalidation/"
 }
 
 // switchRequest is the body of POST /api/auth/switch (schema RoleSwitch).

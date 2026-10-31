@@ -27,6 +27,7 @@ const (
 	CodeDeviceUninstallRequested   Code = "device.uninstall_requested"
 	CodeDeviceUninstallCancelled   Code = "device.uninstall_cancelled"
 	CodeDeviceUninstalled          Code = "device.uninstalled"
+	CodeDeviceUninstallFailed      Code = "device.uninstall_failed"
 	CodeDeviceAgentUpdateRequested Code = "device.agent_update_requested"
 	CodeDeviceCloneSuspected       Code = "device.clone_suspected"
 	CodeDeviceBundleApplied        Code = "device.bundle_applied"
@@ -46,6 +47,12 @@ const (
 	CodeDeviceDiskConversionCompleted Code = "device.disk_conversion_completed"
 	CodeDeviceDiskConversionFailed    Code = "device.disk_conversion_failed"
 	CodeDeviceDiskConversionAborted   Code = "device.disk_conversion_aborted"
+	// A cancelled conversion that encrypted anyway, and an abort that could not neutralize the initrds (plan M8e
+	// amendment 2026-10-30).
+	CodeDeviceDiskConversionCompletedAfterCancel Code = "device.disk_conversion_completed_after_cancel"
+	CodeDeviceDiskConversionNeutralizeFailed     Code = "device.disk_conversion_neutralize_failed"
+	// The unlock path of a converted disk could not be reinstalled (plan M8e amendment 2026-10-30, PDK-482).
+	CodeDeviceDiskConversionUnlockRestoreFailed Code = "device.disk_conversion_unlock_restore_failed"
 
 	// Supervisor package updates (plan M8d decision 33).
 	CodeDeviceSupervisorUpdated      Code = "device.supervisor_updated"
@@ -321,7 +328,7 @@ var registry = map[Code]Definition{
 		Description: "An administrator retired a device; its identity keys are revoked.",
 		Params:      []string{"hostname", "from_state", "reason", "conversion_cancelled", "conversion_id", "conversion_phase"},
 		Outcomes:    adminOutcomes,
-		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
+		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_cancelled (after_delivery) and conversion_id when it closed a prepared conversion or one with an abort on its way as cancelled, withdrawing a pending encrypt_disk_abort; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
 	},
 	CodeDeviceUninstallRequested: {
 		Code: CodeDeviceUninstallRequested, Emitted: true,
@@ -341,6 +348,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "The param outcome is completed or partial (a step failed); steps maps every step to done, skipped or failed:<message>. helper_failed: the agent could not start the removal, nothing was removed, the request ends and the device is not retired.",
+	},
+	CodeDeviceUninstallFailed: {
+		Code: CodeDeviceUninstallFailed, Emitted: true,
+		Description: "The device refused the command uninstall for a reason that cannot clear up, so the request ended without a removal and the device stays active (actor: the device); an administrator can request it again.",
+		Params:      []string{"hostname", "mode", "command_id", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "reason is invalid_params (PDK-403). A refusal with conversion_pending or revocation_pending records no event: the request stays open with the reason on the device until an administrator cancels it or requests it again.",
 	},
 	CodeDeviceEncryptRequested: {
 		Code: CodeDeviceEncryptRequested, Emitted: true,
@@ -389,6 +403,27 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Params conversion_id and by (admin or operator).",
+	},
+	CodeDeviceDiskConversionCompletedAfterCancel: {
+		Code: CodeDeviceDiskConversionCompletedAfterCancel, Emitted: true,
+		Description: "The device initialised LUKS2 on its root partition at a restart although its in-place encryption had been cancelled (the restart came before the cleanup); the conversion is adopted as encrypting, and the escrowed recovery key opens the disk (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded instead of device.disk_conversion_started when the event carries after_cancel. Params conversion_id, volume, init_s and init_result.",
+	},
+	CodeDeviceDiskConversionNeutralizeFailed: {
+		Code: CodeDeviceDiskConversionNeutralizeFailed, Emitted: true,
+		Description: "The device cancelled its in-place encryption but could not make its prepared initrds boot unencrypted; until its cleanup has rebuilt them, a restart may still encrypt the disk (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id and reason (boot_space_low when /boot has no room for the copy, else the error).",
+	},
+	CodeDeviceDiskConversionUnlockRestoreFailed: {
+		Code: CodeDeviceDiskConversionUnlockRestoreFailed, Emitted: true,
+		Description: "The device could not reinstall the unlock path of its converted disk into its initrds; until it succeeds, a kernel whose initrd was disarmed when the in-place encryption was cancelled cannot open the disk, so only the other kernels boot (actor: the device). The device retries; the disk state names the blocking issue.",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id and reason (kernel_not_buildable, no_bootable_kernel, boot_space_low, else the error). Reported once per reason and agent start.",
 	},
 	CodeDeviceGroupsChanged: {
 		Code: CodeDeviceGroupsChanged, Emitted: true,
@@ -599,7 +634,8 @@ var registry = map[Code]Definition{
 	CodeAgentReleasePublished: {
 		Code: CodeAgentReleasePublished, Emitted: true,
 		Description: "A platform administrator published an agent release; it can now be rolled out.",
-		Params:      []string{"version", "arches"},
+		Params:      []string{"version", "arches", "mismatched_objects"},
+		Note:        "mismatched_objects lists the object keys of stored release files that do not match their recorded checksums; it is set on a failed publish refused for that reason (PDK-496).",
 		Outcomes:    adminOutcomes,
 	},
 	CodeAgentReleaseImported: {

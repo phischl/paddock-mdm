@@ -20,11 +20,15 @@ import (
 // the portal, and for the worker the open commands to deliver, their delivery, results and expiry. Commands are
 // issued by the use cases of their type through issueCommand.
 type DeviceCommands struct {
-	org *db.OrgPool
+	runner *ActionRunner
+	org    *db.OrgPool
 }
 
-// NewDeviceCommands creates the use cases.
-func NewDeviceCommands(org *db.OrgPool) *DeviceCommands { return &DeviceCommands{org: org} }
+// NewDeviceCommands creates the use cases; runner records the end of an uninstall request the device refused for
+// good (endRefusedUninstall).
+func NewDeviceCommands(runner *ActionRunner, org *db.OrgPool) *DeviceCommands {
+	return &DeviceCommands{runner: runner, org: org}
+}
 
 // CommandQuery selects a page of the commands of a device.
 type CommandQuery struct {
@@ -200,11 +204,28 @@ func (d *DeviceCommands) MarkDelivered(ctx context.Context, hb ingest.Heartbeat)
 }
 
 // Finish records the result of a command; only the first result of an open command counts (worker). The result of
-// an in-place encryption command also moves its conversion (recordConversionResult).
+// an in-place encryption command also moves its conversion (recordConversionResult); an uninstall the device refused
+// for good also ends its request (endRefusedUninstall).
 func (d *DeviceCommands) Finish(ctx context.Context, r ingest.CommandResult) error {
 	result := r.Result
 	if len(result) == 0 {
 		result = json.RawMessage(`{}`)
+	}
+	if reason, ok := terminalUninstallRefusal(r.Status, result); ok {
+		var typ string
+		if err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			cmd, err := q.GetDeviceCommand(ctx, r.CommandID)
+			if db.IsNoRows(err) {
+				return nil
+			}
+			typ = cmd.Type
+			return err
+		}); err != nil {
+			return err
+		}
+		if typ == command.TypeUninstall {
+			return endRefusedUninstall(ctx, d.runner, r, result, reason)
+		}
 	}
 	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		cmd, err := q.GetDeviceCommand(ctx, r.CommandID)

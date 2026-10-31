@@ -183,3 +183,29 @@ func TestHubNameFilter(t *testing.T) {
 		}
 	}
 }
+
+// A pin with a line compares only with that line; when the line has no tag the error names it.
+func TestCheckFollowsTheLine(t *testing.T) {
+	tags := `{"next":null,"results":[{"name":"26.10.0"},{"name":"9.7.4"},{"name":"8.4.13"},{"name":"8.4.12"}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(tags)) }))
+	defer srv.Close()
+	u := upstreamAt(srv.URL, srv.Client())
+	img, err := ParseImage("mysql:8.4.11@sha256:aa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := Pin{Info: PinInfo{Name: "fleet_mysql", Line: "8.4."}, Kind: KindImage, Image: img, Pinned: "8.4.11"}
+
+	if r := u.check(context.Background(), pin); r.Latest != "8.4.13" || r.Class != ClassPatch || r.Err != nil {
+		t.Errorf("with line: %+v", r)
+	}
+	pin.Info.Line = ""
+	if r := u.check(context.Background(), pin); r.Latest != "26.10.0" || r.Class != ClassMajor {
+		t.Errorf("without line: %+v", r)
+	}
+	pin.Info.Line = "8.5."
+	r := u.check(context.Background(), pin)
+	if r.Class != ClassUnknown || r.Err == nil || !strings.Contains(r.Err.Error(), `no tag of the shape ^\d+\.\d+\.\d+$ in line 8.5.`) {
+		t.Errorf("empty line: %+v", r)
+	}
+}

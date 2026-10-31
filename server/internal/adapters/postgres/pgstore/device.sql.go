@@ -364,8 +364,8 @@ func (q *Queries) ListAgentUpdateRequests(ctx context.Context) ([]ListAgentUpdat
 }
 
 const listCachedDeviceKeys = `-- name: ListCachedDeviceKeys :many
-SELECT k.key_id, k.public_key, k.status AS key_status, d.id AS device_id, d.state
-FROM device_identity_key k JOIN device d ON d.id = k.device_id
+SELECT k.key_id, k.public_key, k.status AS key_status, d.id AS device_id, d.state, coalesce(s.last_seq, 0)::bigint AS last_seq
+FROM device_identity_key k JOIN device d ON d.id = k.device_id LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.state <> 'pending' AND ($1::uuid IS NULL OR d.id = $1::uuid)
 ORDER BY k.key_id
 `
@@ -376,10 +376,12 @@ type ListCachedDeviceKeysRow struct {
 	KeyStatus string
 	DeviceID  uuid.UUID
 	State     string
+	LastSeq   int64
 }
 
 // Worker cache sync: identity keys with the state of their device; pending devices are not cached (plan M2a
 // decision 10).
+// last_seq restores the device's check-in counter together with its key (0 = never checked in).
 func (q *Queries) ListCachedDeviceKeys(ctx context.Context, deviceID uuid.NullUUID) ([]ListCachedDeviceKeysRow, error) {
 	rows, err := q.db.Query(ctx, listCachedDeviceKeys, deviceID)
 	if err != nil {
@@ -395,6 +397,7 @@ func (q *Queries) ListCachedDeviceKeys(ctx context.Context, deviceID uuid.NullUU
 			&i.KeyStatus,
 			&i.DeviceID,
 			&i.State,
+			&i.LastSeq,
 		); err != nil {
 			return nil, err
 		}

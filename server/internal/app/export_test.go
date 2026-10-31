@@ -44,3 +44,9 @@ func (r *Retention) SetIndexDays(n int) { r.indexDays = n }
 
 // KeptByIndex is keptByIndex, for tests of the month start, the margin and the youngest row.
 var KeptByIndex = keptByIndex
+
+// SetStoreTimeouts shortens the bounds of an upload's object store write and a publish's checksum verification for
+// tests of a store that does not answer.
+func (a *AgentReleases) SetStoreTimeouts(store, verify time.Duration) {
+	a.storeTimeout, a.verifyTimeout = store, verify
+}

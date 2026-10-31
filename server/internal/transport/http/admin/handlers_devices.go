@@ -379,6 +379,9 @@ func toDeviceUninstall(u *pgstore.GetDeviceUninstallRow, overdue bool) *adminapi
 	if u.Tpm != "" {
 		out.Tpm = &u.Tpm
 	}
+	if u.RefusedReason != "" {
+		out.RefusedReason = &u.RefusedReason
+	}
 	return out
 }
 

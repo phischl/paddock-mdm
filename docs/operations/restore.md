@@ -13,6 +13,13 @@ store is **not** part of the routine backup or restore: it is protected by WORM 
 | Bundles bucket, Valkey | not backed up; rebuilt (`paddock-server admin recompile --all`, `admin rebuild-cache`) | – | 1 h |
 | RabbitMQ | not backed up; definitions are code, devices re-send | – | – |
 
+Valkey persists with AOF and `appendfsync everysec`, so a Valkey crash can lose up to about one second of writes.
+This includes the check-in sequence counters (`seq:<device>`), which can then roll back. A counter that is missing
+entirely is restored to `device_status.last_seq`, and its device gets a retryable 503 until then; a counter that
+survived is never changed. A rolled-back counter, or one restored from a `last_seq` that lagged behind queued
+heartbeats, reissues numbers until it catches up, which weakens clone detection for the device meanwhile. This is
+the accepted residual risk RR-97 (PDK-475) and needs no operator action.
+
 ## Backup bucket
 
 All backups go to one S3 bucket (default `paddock-backup`) that MUST be outside the control-plane host: another
@@ -61,10 +68,15 @@ The overlay `deploy/compose/compose.backup.yaml` (part of the production configu
 - **PostgreSQL** (`postgres`, `authentik-postgres`) runs with `archive_mode=on` and `archive_timeout=60`. Its image has
   no pgBackRest, so `archive_command` copies every WAL file into a spool volume; `pgbackrest` and
   `pgbackrest-authentik` push it to the repository every 2 seconds and take a full backup when the last one is older
-  than 24 hours. They read the data directory and the socket of their database through shared volumes. Every full
-  backup is read back with `pgbackrest verify` and counts only when it is intact. The stanza's lock lives in its state
-  volume, so a backup taken by hand (`./paddock compose run … pgbackrest backup`) waits for a running scheduled one instead of
-  running beside it.
+  than 24 hours. They read the data directory and the socket of their database through shared volumes; pgBackRest
+  needs the data directory at the path the server reports (`/var/lib/postgresql/18/docker` inside the volume). Every
+  full backup is read back with `pgbackrest verify` and counts only when it is intact. The stanza's lock lives in its
+  state volume, so a backup taken by hand (`./paddock compose run … pgbackrest backup`) waits for a running scheduled one instead of
+  running beside it. When the repository holds the stanza for another cluster (a fresh installation into a kept
+  bucket, or a host being restored), the service refuses it, logs why and takes no backup. On a host being restored,
+  restore first (section "Restoring the control plane") and never run `stanza-upgrade`; only for a fresh installation
+  into a deliberately kept bucket the operator runs `./paddock compose run --rm --no-deps pgbackrest stanza-upgrade`
+  once (`pgbackrest-authentik` likewise); the old backups stay until retention expires them and cannot be restored into the new cluster.
 - **OpenBao**: `paddock-worker` takes a snapshot when the newest one in the bucket is older than 6 hours (AppRole
   `paddock-backup`, read on `sys/storage/raft/snapshot` only), encrypts it and uploads it. After key operations take
   one by hand (`docs/operations/openbao.md` section 5).
@@ -90,7 +102,8 @@ store is not restored; the audit host keeps running. Commands run in the control
 
 1. **Prepare.** A rebuilt host with the repository, `.env` and `.secrets/` as in `docs/operations/install.md`
    (secrets from your secret store, `backup_encryption_key` from the custodians' offline copy). Three OpenBao
-   custodians are available.
+   custodians are available. Do not run `./paddock up` before step 3, not even `./paddock up --infra`: it starts
+   `pgbackrest` against an empty, freshly initialised cluster. Never run `stanza-upgrade` on a host being restored.
 2. **Stop the writers.** `./paddock compose --profile paddock stop` and `./paddock compose stop authentik-server authentik-worker pgbackrest
    pgbackrest-authentik`.
 3. **PostgreSQL.** With empty volumes `postgres-data` and `authentik-postgres-data` (remove damaged ones with

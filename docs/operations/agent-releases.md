@@ -96,7 +96,13 @@ variable `PADDOCK_RELEASE_KEY_PASSPHRASE`, so it never appears on a command line
    query parameter `package_version=<fleetd version>`; it is stored as
    `packages/<version>/fleet-osquery_<fleetd version>_<arch>.deb` and installed by the agent, never by the autoinstall
    (`docs/operations/fleet.md`).
-5. Publish: `POST …/<version>/publish`. Published releases are immutable.
+5. Publish: `POST …/<version>/publish`. Published releases are immutable. Publishing waits for running uploads: while
+   a file of the release is being uploaded (at most ten minutes per file), it is refused with 409 `invalid_state`, as
+   is a second upload of the same file. An upload that failed without the store rejecting it (a timeout, a broken
+   connection, a server error) keeps blocking for these ten minutes, because the store may still complete its write.
+   Publishing reads every stored file back and refuses with `invalid_state` when
+   one no longer matches its recorded checksum (the failed `agent_release.published` event names it in
+   `mismatched_objects`); upload that file again, then publish.
 
 In development, `make agent-release VERSION=x.y.z` does all of this with the development key, fleetd included.
 

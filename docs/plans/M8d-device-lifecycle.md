@@ -476,11 +476,10 @@ the policy of their device group says.
        `/var/lib/AccountsService/users/<name>`; result `local_admin: removed`. Without such an account the account is
        kept: `local_admin: kept_last_admin`. With `keep_local_admin`: `kept`. Mode `leave`: `kept`.
     8. `apt-get remove --purge -y fleet-osquery paddock-revoke paddock-agent paddock-supervisor` (one apt run,
-       bounded 15 min; the uninstall helper runs from a copy in `/root/paddock-uninstall/`, so the removal of its own package is
-       harmless). Then
-       remove `/opt/orbit/`, `/etc/paddock/orbit.env`, `/etc/systemd/system/orbit.service.d/`, `/opt/paddock/`,
-       `/var/lib/paddock/packages/`, `/var/lib/paddock/staging/`, `/var/lib/paddock/rollback/`,
-       `/var/lib/paddock/quarantine/` (copied in step 4).
+       bounded 15 min; the uninstall helper runs from a copy in `/root/paddock-uninstall/`, so the removal of its own
+       package is harmless). Then remove `/opt/orbit/`, `/etc/paddock/orbit.env`,
+       `/etc/systemd/system/orbit.service.d/`, `/opt/paddock/`, `/var/lib/paddock/packages/`,
+       `/var/lib/paddock/staging/`, `/var/lib/paddock/rollback/`, `/var/lib/paddock/quarantine/` (copied in step 4).
     9. Mode `reset` with `clear_tpm` only: re-check every LUKS volume of `/etc/crypttab` plus the root volume
        (`luks.Inspect`); any token `tpm2` or `tpm2+pin` → `tpm: skipped_in_use` (nothing is cleared). Otherwise
        `tpm2_clear` (lockout hierarchy, empty auth); on an authorization failure write `5` to
@@ -1298,6 +1297,7 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   copy and the plan after writing `result.json`; a `helper_failed` and a withdrawn request delete them too. Before
   `systemd-run` the agent checks with `statfs` (`ST_NOEXEC`) that the directory is executable and otherwise reports
   `helper_failed` with the reason in its log.
+- Amendment 2026-10-28 (PDK-403): a terminal refusal (invalid_params) ends the uninstall request as failed; transient refusals (conversion_pending, revocation_pending) leave it open with the reason visible; no automatic retry.
 
 ### 15.5 Login history (decisions 14–17)
 

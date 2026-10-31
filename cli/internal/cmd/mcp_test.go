@@ -158,6 +158,23 @@ func TestMCPTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.stdout), &list); err != nil || len(list) != 2 || list[0]["destructive"] != true {
 		t.Fatalf("tools json: %+v", r)
 	}
+	if strings.Contains(r.stderr, "switched off") {
+		t.Fatalf("hint with the MCP enabled: %+v", r)
+	}
+
+	// Without a saved policy the list is empty and stderr says why (plan M14 §9.3 M0).
+	m.f.Off = true
+	const hint = "the MCP is switched off for this scope"
+	if r := m.run(t, "", "mcp", "tools"); r.code != 0 || !strings.Contains(r.stderr, hint) ||
+		r.stdout != "NAME  CLASS  DESTRUCTIVE  TITLE\n" {
+		t.Fatalf("tools off: %+v", r)
+	}
+	r = m.run(t, "", "mcp", "tools", "-o", "json")
+	if err := json.Unmarshal([]byte(r.stdout), &list); r.code != 0 || err != nil || list == nil || len(list) != 0 ||
+		!strings.Contains(r.stderr, hint) {
+		t.Fatalf("tools off json: %+v", r)
+	}
+	m.f.Off = false
 
 	m.signIn(t, time.Minute)
 	m.f.RefuseRefresh = true

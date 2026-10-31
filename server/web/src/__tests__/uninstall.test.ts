@@ -8,7 +8,7 @@ import type { DeviceUninstall } from '../api/client'
 import DangerZone from '../components/DangerZone.vue'
 import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
 import { createPortalI18n } from '../i18n'
-import { diskUsesTpm, uninstallCancellable } from '../lib/uninstall'
+import { diskUsesTpm, uninstallCancellable, uninstallRunning } from '../lib/uninstall'
 import { vuetify } from '../plugins/vuetify'
 import { useSessionStore } from '../stores/session'
 
@@ -85,7 +85,7 @@ async function type(testid: string, value: string): Promise<void> {
 
 const pending: DeviceUninstall = {
   mode: 'leave', requested_at: '2026-10-18T09:00:00Z', command_id: 'c1', command_status: 'pending', uninstalled_at: null,
-  local_admin: null, tpm: null, report_overdue: false,
+  local_admin: null, tpm: null, report_overdue: false, refused_reason: null,
 }
 
 describe('remove Paddock (plan M8d decision 42)', () => {
@@ -146,7 +146,8 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     const onChanged = vi.fn()
     const w = await mountZone({ uninstall: pending }, onChanged)
     expect(el('danger-uninstall')).toBeNull()
-    expect(text('danger-uninstall-pending')).toContain('Removal requested (leave as is) — Pending.')
+    expect(text('danger-uninstall-pending')).toContain('Removal requested (leave as is) — Pending. The device removes Paddock at its next check-in')
+    expect(el('uninstall-stopped')).toBeNull()
     await w.find('[data-testid="uninstall-cancel-request"]').trigger('click')
     expect(pendingConfirm.value?.options).toMatchObject({ title: 'Cancel the removal', confirmLabel: 'Cancel request' })
     settleConfirm({ reason: '' })
@@ -157,7 +158,7 @@ describe('remove Paddock (plan M8d decision 42)', () => {
 
   it('offers no cancel once the device received the command', async () => {
     await mountZone({ uninstall: { ...pending, command_status: 'delivered' } })
-    expect(text('danger-uninstall-pending')).toContain('Delivered')
+    expect(text('danger-uninstall-pending')).toContain('Delivered. The device removes Paddock at its next check-in')
     expect(el('uninstall-cancel-request')).toBeNull()
   })
 
@@ -173,6 +174,38 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     expect(onChanged).toHaveBeenCalledTimes(1)
   })
 
+  it('shows why the device refused the removal and offers the cancel (PDK-403)', async () => {
+    await mountZone({ uninstall: { ...pending, command_status: 'failed', refused_reason: 'conversion_pending' } })
+    expect(text('uninstall-refused')).toContain('The device refused the removal: an in-place encryption of its disk is pending.')
+    expect(el('uninstall-cancel-request')).not.toBeNull()
+  })
+
+  it('does not promise the removal at the next check-in once the device refused it (PDK-563)', async () => {
+    await mountZone({ uninstall: { ...pending, command_status: 'failed', refused_reason: 'conversion_pending' } })
+    expect(text('danger-uninstall-pending')).toContain('Removal requested (leave as is) — Failed.')
+    expect(text('danger-uninstall-pending')).not.toContain('removes Paddock at its next check-in')
+    expect(text('uninstall-refused')).toContain('Cancel the request and request it again once the cause is resolved.')
+    expect(el('uninstall-stopped')).toBeNull()
+  })
+
+  it.each([['failed', 'Failed'], ['expired', 'Expired']])('says a %s command will not run any more and offers the cancel (PDK-563)', async (status, label) => {
+    await mountZone({ uninstall: { ...pending, command_status: status } })
+    expect(text('danger-uninstall-pending')).toContain(`Removal requested (leave as is) — ${label}.`)
+    expect(text('danger-uninstall-pending')).not.toContain('removes Paddock at its next check-in')
+    expect(text('uninstall-stopped')).toBe('The command will not run any more. Cancel the request and request it again.')
+    expect(el('uninstall-cancel-request')).not.toBeNull()
+  })
+
+  it('shows a refusal reason the catalog does not know as the device reported it', async () => {
+    await mountZone({ uninstall: { ...pending, command_status: 'failed', refused_reason: 'helper_failed' } })
+    expect(text('uninstall-refused')).toContain('The device refused the removal: helper_failed.')
+  })
+
+  it('shows no refusal while the device has not refused', async () => {
+    await mountZone({ uninstall: { ...pending, command_status: 'delivered' } })
+    expect(el('uninstall-refused')).toBeNull()
+  })
+
   it('offers the cancel again once the removal report is overdue', async () => {
     await mountZone({ uninstall: { ...pending, command_status: 'succeeded', report_overdue: true } })
     expect(el('uninstall-cancel-request')).not.toBeNull()
@@ -185,6 +218,12 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     expect(uninstallCancellable({ ...pending, command_status: 'delivered', report_overdue: true })).toBe(true)
     expect(uninstallCancellable({ ...pending, uninstalled_at: '2026-10-18T10:00:00Z' })).toBe(false)
     expect(uninstallCancellable(null)).toBe(false)
+    expect(uninstallRunning(pending)).toBe(true)
+    expect(uninstallRunning({ ...pending, command_status: 'delivered' })).toBe(true)
+    expect(uninstallRunning({ ...pending, command_status: 'succeeded' })).toBe(true)
+    expect(uninstallRunning({ ...pending, command_status: 'failed', refused_reason: 'conversion_pending' })).toBe(false)
+    expect(uninstallRunning({ ...pending, command_status: 'expired' })).toBe(false)
+    expect(uninstallRunning({ ...pending, uninstalled_at: '2026-10-18T10:00:00Z' })).toBe(false)
     expect(diskUsesTpm({ tokens: ['recovery', 'tpm2+pin'], volumes: [] })).toBe(true)
     expect(diskUsesTpm({ tokens: ['password'], volumes: [{ tokens: ['tpm2'] }] })).toBe(true)
     expect(diskUsesTpm({ tokens: ['password', 'recovery'], volumes: [{}] })).toBe(false)

@@ -39,7 +39,8 @@ docs/operations/lab-install.md` as their first line on every run.
 - **Disk:** NVMe or SATA SSD, not a spinning disk: PostgreSQL, MySQL, RabbitMQ and RustFS share it. About 8 GB are
   images, 1 GB Fleet's vulnerability database, up to 3 GB the databases of a lab, 1 GB Prometheus (30 days), 1 GB
   audit evidence per 100 devices and year; 60 GB leave room for the images of two bundle versions during an upgrade.
-- **Memory:** the stack uses about 3.4 GB idle. The production figure of 16 GB (`docs/operations/capacity.md`) has
+- **Memory:** the stack uses about 3.9 GB idle (3.4 GB plus about 0.5 GB for Authentik's four web workers,
+  `PADDOCK_AUTHENTIK_WEB_WORKERS`). The production figure of 16 GB (`docs/operations/capacity.md`) has
   head-room for 1 000 check-ins/s, which a lab of up to 25 devices never reaches.
 - **Operating system:** Ubuntu 24.04 LTS, **amd64** (Fleet's image is published for `linux/amd64` only; `./paddock
   up` refuses another architecture).
@@ -325,6 +326,7 @@ Every production item that applies to one host runs unchanged:
 - `ip allow list bypass is off`
 - `audit index retention of the retention round` (`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` set, at least 400 days and at
   least `PADDOCK_AUDIT_RETENTION_DAYS`; the worker does not start otherwise)
+- `authentik web workers` (`PADDOCK_AUTHENTIK_WEB_WORKERS` is an integer of at least 1)
 - `release public keys are production keys`
 - `audit bucket has Object Lock COMPLIANCE` (with `--online`; at least 400 days)
 
