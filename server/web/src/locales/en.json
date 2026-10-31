@@ -51,6 +51,7 @@
       "comfortable": "Comfortable"
     },
     "shortcuts": "Keyboard shortcuts",
+    "reopenSetup": "Show the setup checklist",
     "collapseNavigation": "Collapse the navigation",
     "expandNavigation": "Expand the navigation",
     "switchRole": "{scope, select, organization {Switch to {role} ({organization})} other {Switch to {role}}}",
@@ -258,6 +259,9 @@
     "rate_limited": "Too many requests. Try again shortly."
   },
   "audit": {
+    "vulnerability": {
+      "critical_summary": "{new_critical, plural, one {# new critical vulnerability} other {# new critical vulnerabilities}} on {devices, plural, one {# device} other {# devices}}"
+    },
     "retention": {
       "purged": "{deleted, plural, one {# expired entry} other {# expired entries}} of {store} were deleted"
     },
@@ -509,6 +513,15 @@
       "assigned": "{actor} assigned the finding {code} on {hostname}",
       "closed": "{actor} closed the finding {code} on {hostname} as {resolution, select, resolved {resolved} accepted_risk {accepted risk} false_positive {false positive} other {{resolution}}}",
       "reopened": "{actor} reopened the finding {code} on {hostname}"
+    },
+    "notification": {
+      "destination_created": "{actor} created the notification destination {name} ({type, select, webhook {webhook} other {e-mail}})",
+      "destination_updated": "{actor} changed the notification destination {name}",
+      "destination_deleted": "{actor} deleted the notification destination {name}",
+      "destination_secret_rotated": "{actor} replaced the signing secret of the notification destination {name}",
+      "test_requested": "{actor} requested a test notification to {name}",
+      "test_sent": "Test notification to {name}, requested by {requested_by}",
+      "pseudonym_resolved": "{actor} resolved the pseudonym {pseudonym}"
     }
   },
   "organizations": {
@@ -2348,6 +2361,29 @@
         "organization": "organization",
         "platform": "platform"
       }
+    }
+  },
+  "setup": {
+    "title": "Set up Paddock",
+    "progress": "{done} of {total} steps done",
+    "dismiss": "Dismiss",
+    "guide": "Read the guide",
+    "states": {
+      "done": "Done",
+      "open": "To do",
+      "unknown": "Unknown",
+      "manual": "On the host"
+    },
+    "steps": {
+      "organization": "Create the first organization",
+      "orgAdmin": "Assign the first organization administrator in the identity provider",
+      "release": "Publish an agent release",
+      "allowlist": "Restrict the platform to an IP allow list (optional)",
+      "breakGlass": "Name the break-glass accounts",
+      "users": "Connect an identity source that delivers users",
+      "token": "Create an enrollment token",
+      "agent": "Install and enroll the agent on a device",
+      "device": "Approve the first device"
     }
   }
 }

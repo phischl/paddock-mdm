@@ -1,0 +1,244 @@
+-- Notifications (plan M9 §6.2, decisions 10, 11 and 13; ADR 0031 decisions 10 and 11). Forward-only: there is no
+-- Down migration. Organization destinations and their state are organization data; platform destinations use the
+-- same tables with the nil organization (audit.PlatformOrganizationID) under the policy platform of paddock_platform
+-- alone. The notifier (role paddock_notifier) reads destinations and writes delivery state of every organization, the
+-- nil one included, under its organization context; paddock_platform only manages platform destinations. Webhook URL,
+-- signing secret and pseudonym keys are stored only as Transit ciphertext of the derived key notification-wrap under
+-- the organization as context, which the api creates and the notifier alone decrypts. Children reference their
+-- destination and delivery together with the organization, so no row can point into another organization.
+-- +goose Up
+
+CREATE TABLE notification_destination (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL,            -- the nil uuid is the platform scope; no FK (like action)
+  type text NOT NULL CHECK (type IN ('webhook','email')),
+  name text NOT NULL,
+  enabled boolean NOT NULL DEFAULT true,
+  filter_mode text NOT NULL CHECK (filter_mode IN ('security','all','custom')),
+  codes text[] NOT NULL DEFAULT '{}',
+  pseudonymize_users boolean NOT NULL DEFAULT false,
+  include_params boolean NOT NULL DEFAULT false,
+  url_ciphertext text,                      -- webhook; the URL is a secret (it may carry the credential)
+  url_display text,                         -- webhook; scheme, host and masked path (outbound.DisplayURL)
+  secret_ciphertext text,                   -- webhook; HMAC signing secret
+  heartbeat_interval_s int NOT NULL DEFAULT 0
+    CHECK (heartbeat_interval_s = 0 OR heartbeat_interval_s BETWEEN 60 AND 3600),
+  recipients text[] NOT NULL DEFAULT '{}',  -- email
+  email_min_interval_s int NOT NULL DEFAULT 300 CHECK (email_min_interval_s BETWEEN 60 AND 3600),
+  created_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, name),
+  UNIQUE (id, organization_id)
+);
+
+-- Keys that a caller names (the destination of a state row or a forwarded event) include the organization, so a row of
+-- another organization never collides with a new one and an ID of another organization fails like an unknown one.
+CREATE TABLE notification_destination_state (
+  destination_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  cursor_commit_seq bigint NOT NULL DEFAULT 0,
+  -- The notifier moves the cursor to the scope's latest commit sequence before anything else (see below).
+  start_at_latest boolean NOT NULL DEFAULT true,
+  forward_seq bigint NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','stalled')),
+  pending_delivery_id uuid,
+  consecutive_failures int NOT NULL DEFAULT 0,
+  first_failure_at timestamptz, stalled_since timestamptz, last_success_at timestamptz,
+  last_attempt_at timestamptz, next_attempt_at timestamptz, last_heartbeat_at timestamptz,
+  last_error text,
+  last_test_at timestamptz, last_test_ok boolean, last_test_error text,
+  PRIMARY KEY (destination_id, organization_id),
+  FOREIGN KEY (destination_id, organization_id) REFERENCES notification_destination (id, organization_id)
+    ON DELETE CASCADE
+);
+
+CREATE TABLE notification_delivery (
+  id uuid PRIMARY KEY,
+  destination_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('events','heartbeat','test')),
+  forward_from bigint, forward_to bigint,
+  event_count int NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  delivered_at timestamptz,
+  attempts int NOT NULL DEFAULT 0,
+  last_error text,
+  requested_by text,                        -- kind test: the administrator's display
+  UNIQUE (id, organization_id),
+  FOREIGN KEY (destination_id, organization_id) REFERENCES notification_destination (id, organization_id)
+    ON DELETE CASCADE
+);
+CREATE INDEX notification_delivery_destination_idx ON notification_delivery (destination_id, created_at DESC);
+
+CREATE TABLE notification_delivery_event (
+  destination_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  forward_seq bigint NOT NULL,
+  event_id uuid NOT NULL,
+  commit_seq bigint NOT NULL,
+  delivery_id uuid NOT NULL,
+  PRIMARY KEY (destination_id, organization_id, forward_seq),
+  FOREIGN KEY (destination_id, organization_id) REFERENCES notification_destination (id, organization_id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (delivery_id, organization_id) REFERENCES notification_delivery (id, organization_id) ON DELETE CASCADE
+);
+CREATE INDEX notification_delivery_event_delivery_idx ON notification_delivery_event (delivery_id);
+
+CREATE TABLE notification_pseudonym_key (
+  organization_id uuid PRIMARY KEY,
+  key_ciphertext text NOT NULL,             -- Transit datakey/wrapped, context = organization_id
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE notification_pseudonym_lookup (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL,
+  pseudonym text NOT NULL,
+  requested_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_username text,
+  resolved_at timestamptz
+);
+CREATE INDEX notification_pseudonym_lookup_created_idx ON notification_pseudonym_lookup (created_at);
+
+ALTER TABLE notification_destination ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_destination FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_destination_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_destination_state FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_delivery ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_delivery FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_delivery_event ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_delivery_event FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_pseudonym_key ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_pseudonym_key FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_pseudonym_lookup ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_pseudonym_lookup FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant ON notification_destination TO paddock_api, paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY tenant ON notification_destination_state TO paddock_api, paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+-- The api lists deliveries and inserts only fresh test deliveries (plan M9 §6.2): every result column at its default,
+-- so it cannot forge a delivered or failed attempt. The notifier writes everything else.
+CREATE POLICY tenant ON notification_delivery FOR SELECT TO paddock_api
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY tenant_test ON notification_delivery FOR INSERT TO paddock_api
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid AND kind = 'test' AND delivered_at IS NULL
+    AND attempts = 0 AND forward_from IS NULL AND forward_to IS NULL AND event_count = 0 AND last_error IS NULL);
+CREATE POLICY notifier ON notification_delivery TO paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY tenant ON notification_delivery_event TO paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY tenant ON notification_pseudonym_key TO paddock_api, paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+-- The api requests a lookup and reads or deletes it; only the notifier resolves it (plan M9 decision 18).
+CREATE POLICY tenant ON notification_pseudonym_lookup FOR SELECT TO paddock_api
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY tenant_request ON notification_pseudonym_lookup FOR INSERT TO paddock_api
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid AND resolved_username IS NULL
+    AND resolved_at IS NULL);
+CREATE POLICY tenant_delete ON notification_pseudonym_lookup FOR DELETE TO paddock_api
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY notifier ON notification_pseudonym_lookup TO paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+
+CREATE POLICY platform ON notification_destination TO paddock_platform
+  USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid)
+  WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
+CREATE POLICY platform ON notification_destination_state TO paddock_platform
+  USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid)
+  WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
+CREATE POLICY platform ON notification_delivery FOR SELECT TO paddock_platform
+  USING (organization_id = '00000000-0000-0000-0000-000000000000'::uuid);
+CREATE POLICY platform_test ON notification_delivery FOR INSERT TO paddock_platform
+  WITH CHECK (organization_id = '00000000-0000-0000-0000-000000000000'::uuid AND kind = 'test'
+    AND delivered_at IS NULL AND attempts = 0 AND forward_from IS NULL AND forward_to IS NULL AND event_count = 0
+    AND last_error IS NULL);
+
+-- State and cursor (plan M9 decisions 15, 16, 21; amendment 2026-10-31): a new destination never replays history and
+-- enabling with cursor "skip" jumps to the latest event. The latest commit sequence lives in the audit database, which
+-- this database cannot read, so neither the api nor paddock_platform writes the cursor: the api creates the row with
+-- the key columns only (start_at_latest defaults to true) and requests a skip through
+-- paddock_destination_start_at_latest; the notifier, which reads the audit index, then sets the cursor to the scope's
+-- latest commit sequence and clears the flag before it delivers anything. A trigger keeps the cursor from ever
+-- decreasing, for every role. Every result column is the notifier's alone, and the api has no DELETE on state. Deleting
+-- a destination cascades to its state; re-inserting the same destination ID would restart forward_seq, which only the
+-- server-generated UUIDv7 IDs prevent. created_at of api-inserted rows is always the default.
+GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination TO paddock_api;
+GRANT SELECT, INSERT (destination_id, organization_id) ON notification_destination_state TO paddock_api;
+GRANT SELECT, INSERT (id, destination_id, organization_id, kind, requested_by) ON notification_delivery TO paddock_api;
+GRANT SELECT, INSERT (organization_id, key_ciphertext) ON notification_pseudonym_key TO paddock_api;
+GRANT SELECT, INSERT (id, organization_id, pseudonym, requested_by), DELETE ON notification_pseudonym_lookup
+  TO paddock_api;
+
+-- paddock_platform is the platform administrators' api only: platform destinations, their state and test deliveries.
+-- Platform destinations have no pseudonym operations (plan M9 decision 18).
+GRANT SELECT, INSERT, UPDATE, DELETE ON notification_destination TO paddock_platform;
+GRANT SELECT, INSERT (destination_id, organization_id) ON notification_destination_state TO paddock_platform;
+GRANT SELECT, INSERT (id, destination_id, organization_id, kind, requested_by) ON notification_delivery
+  TO paddock_platform;
+
+GRANT SELECT ON notification_destination, notification_pseudonym_key TO paddock_notifier;
+GRANT SELECT, INSERT, UPDATE ON notification_destination_state, notification_delivery, notification_delivery_event
+  TO paddock_notifier;
+GRANT SELECT, UPDATE, DELETE ON notification_pseudonym_lookup TO paddock_notifier;
+
+-- A skip request: start_at_latest of the caller's own destination (organization from paddock.org_id, so a missing
+-- context fails; the platform variant for the nil organization). NULL when there is no such destination.
+CREATE FUNCTION paddock_destination_start_at_latest(p_destination uuid) RETURNS boolean
+  LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS
+  $$ UPDATE notification_destination_state SET start_at_latest = true
+     WHERE destination_id = p_destination AND organization_id = current_setting('paddock.org_id')::uuid
+     RETURNING true $$;
+REVOKE ALL ON FUNCTION paddock_destination_start_at_latest(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_destination_start_at_latest(uuid) TO paddock_api;
+CREATE FUNCTION paddock_platform_destination_start_at_latest(p_destination uuid) RETURNS boolean
+  LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS
+  $$ UPDATE notification_destination_state SET start_at_latest = true
+     WHERE destination_id = p_destination AND organization_id = '00000000-0000-0000-0000-000000000000'::uuid
+     RETURNING true $$;
+REVOKE ALL ON FUNCTION paddock_platform_destination_start_at_latest(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_platform_destination_start_at_latest(uuid) TO paddock_platform;
+
+-- +goose StatementBegin
+CREATE FUNCTION notification_cursor_forward() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+  IF NEW.cursor_commit_seq < OLD.cursor_commit_seq THEN
+    RAISE EXCEPTION 'cursor_commit_seq of a notification destination never decreases' USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER notification_cursor_forward BEFORE UPDATE OF cursor_commit_seq ON notification_destination_state
+  FOR EACH ROW EXECUTE FUNCTION notification_cursor_forward();
+
+-- The notifier's reads around a message (slug, device and account names, pseudonym resolution) and its audit events
+-- through ActionRunner, mirroring paddock_worker (00003, 00007, 00046).
+CREATE POLICY notifier ON organization FOR SELECT TO paddock_notifier
+  USING (id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY notifier ON device FOR SELECT TO paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY notifier ON admin_account FOR SELECT TO paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY notifier ON app_user FOR SELECT TO paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY notifier ON action TO paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY notifier ON outbox TO paddock_notifier
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+GRANT SELECT ON organization, device, admin_account, app_user TO paddock_notifier;
+GRANT INSERT, SELECT, UPDATE ON action TO paddock_notifier;
+GRANT INSERT ON outbox TO paddock_notifier;
+-- The notifier's round iterates organizations before an organization context exists (plan M9 amendment B5.3).
+GRANT EXECUTE ON FUNCTION paddock_organization_ids() TO paddock_notifier;
+
+-- +goose Down

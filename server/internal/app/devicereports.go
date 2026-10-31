@@ -679,7 +679,7 @@ func eventParams(ev protocol.Event) map[string]any {
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
 		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
 		"kind", "started_at", "finished_at", "result", "error", "volume", "command_id", "mode", "local_admin", "tpm",
-		"conversion_id", "layout", "init_result", "by"} {
+		"conversion_id", "layout", "init_result", "by", "state"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}

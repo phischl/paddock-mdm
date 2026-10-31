@@ -1,6 +1,9 @@
 package audit
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 // Code is a stable, dotted English identifier from the closed registry below.
 type Code string
@@ -144,6 +147,8 @@ const (
 	CodePackageHoldDeleted        Code = "package_hold.deleted"
 	CodeDeviceInstallNowRequested Code = "device.install_now_requested"
 	CodeDeviceUpdatesRun          Code = "device.updates_run"
+	// Critical CVE daily summary (plan M9 decision 37).
+	CodeVulnerabilityCriticalSummary Code = "vulnerability.critical_summary"
 	// Staleness (plan M5b decision 10).
 	CodeDeviceStaleWarning  Code = "device.stale_warning"
 	CodeDeviceStaleCritical Code = "device.stale_critical"
@@ -208,6 +213,15 @@ const (
 	CodeFindingAssigned     Code = "finding.assigned"
 	CodeFindingClosed       Code = "finding.closed"
 	CodeFindingReopened     Code = "finding.reopened"
+
+	// Notification destinations of organizations and the platform (plan M9 decisions 14–18, §6.3).
+	CodeNotificationDestinationCreated       Code = "notification.destination_created"
+	CodeNotificationDestinationUpdated       Code = "notification.destination_updated"
+	CodeNotificationDestinationDeleted       Code = "notification.destination_deleted"
+	CodeNotificationDestinationSecretRotated Code = "notification.destination_secret_rotated" //nolint:gosec // an audit code, not a credential
+	CodeNotificationTestRequested            Code = "notification.test_requested"
+	CodeNotificationTestSent                 Code = "notification.test_sent"
+	CodeNotificationPseudonymResolved        Code = "notification.pseudonym_resolved"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -223,6 +237,13 @@ type Definition struct {
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
 
+// notificationDestinationParams are the parameters of notification.destination_created and the first of
+// notification.destination_updated (plan M9 §6.3).
+var notificationDestinationParams = []string{
+	"name", "type", "url_display", "recipient_count", "filter_mode", "codes_count", "pseudonymize_users", "include_params",
+	"heartbeat_interval_s", "email_min_interval_s", "enabled",
+}
+
 // mcpPolicyParams are the parameters of organization.mcp_policy_changed and platform.mcp_policy_changed.
 var mcpPolicyParams = []string{"enabled", "write_enabled", "mode", "allowed_count"}
 
@@ -235,7 +256,7 @@ var deviceEventParams = []string{
 	"generation", "service", "at", "field", "before", "after", "unit",
 	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
 	"command_id", "mode", "local_admin", "tpm", "steps",
-	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by",
+	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by", "state",
 }
 
 var registry = map[Code]Definition{
@@ -957,10 +978,17 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperServiceStopped: {
 		Code: CodeDeviceTamperServiceStopped, Emitted: true,
-		Description: "A device found a service Paddock keeps running stopped outside Paddock and started it again (actor: the device).",
+		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, or a watched third-party service, which it only reports (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "unit is orbit.service (fleetd, the mutual watch of agent and fleetd).",
+		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
+	},
+	CodeVulnerabilityCriticalSummary: {
+		Code: CodeVulnerabilityCriticalSummary, Emitted: true,
+		Description: "New critical vulnerabilities were found on the organization's devices since the previous summary (actor: system; the worker's inventory round).",
+		Params:      []string{"new_critical", "devices", "cves", "cves_truncated", "since", "until"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded at most once per UTC day and only when there are new findings; the first summary covers 24 hours. cves lists at most 20 distinct CVE ids sorted, cves_truncated is true when there are more.",
 	},
 	CodeDeviceTamperAgentNotRunning: {
 		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,
@@ -1310,6 +1338,52 @@ var registry = map[Code]Definition{
 		Params:      []string{"kind", "code", "hostname", "subject", "previous_status", "reason"},
 		Outcomes:    adminOutcomes,
 		Note:        "Failure with invalid_request without a reason, with invalid_state for a finding that is not closed, an attention finding whose condition is gone, or a tamper finding whose subject has a newer open finding.",
+	},
+	CodeNotificationDestinationCreated: {
+		Code: CodeNotificationDestinationCreated, Emitted: true,
+		Description: "An organization administrator (or a platform administrator for the platform) created a notification destination after a step-up: a signed webhook or an e-mail address list. The webhook URL and its signing secret are stored encrypted and never recorded; url_display shows scheme, host and a masked path.",
+		Params:      notificationDestinationParams,
+		Outcomes:    adminOutcomes,
+		Note:        "url_display only for a webhook, recipient_count only for e-mail. Failure with invalid_request naming the violated rule, unknown_code for a custom filter naming an unregistered code, already_exists for a duplicate name, email_not_configured while the api has no SMTP relay. Denied with step_up_required without a fresh step-up.",
+	},
+	CodeNotificationDestinationUpdated: {
+		Code: CodeNotificationDestinationUpdated, Emitted: true,
+		Description: "An administrator changed a notification destination after a step-up; changed lists the changed fields (url when a new URL was given).",
+		Params:      append(slices.Clone(notificationDestinationParams), "changed", "cursor"),
+		Outcomes:    adminOutcomes,
+		Note:        "cursor is continue or skip when the change enabled a disabled destination (skip: delivery resumes at the newest event, the events in between are never delivered), empty otherwise. Failure with invalid_request when enabling without cursor or changing the type, not_found for a destination of another scope.",
+	},
+	CodeNotificationDestinationDeleted: {
+		Code: CodeNotificationDestinationDeleted, Emitted: true,
+		Description: "An administrator deleted a notification destination after a step-up, together with its delivery state and history.",
+		Params:      []string{"name", "type"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeNotificationDestinationSecretRotated: {
+		Code: CodeNotificationDestinationSecretRotated, Emitted: true,
+		Description: "An administrator replaced the signing secret of a webhook destination after a step-up; the new secret was shown once and is never recorded.",
+		Params:      []string{"name"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_state for an e-mail destination (no signing secret).",
+	},
+	CodeNotificationTestRequested: {
+		Code: CodeNotificationTestRequested, Emitted: true,
+		Description: "An administrator requested a test delivery to a notification destination after a step-up; the notifier delivers it in its next round and records notification.test_sent with the result.",
+		Params:      []string{"name", "type", "destination_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeNotificationTestSent: {
+		Code: CodeNotificationTestSent, Emitted: true,
+		Description: "The notifier delivered a requested test notification (one attempt) to a destination; requested_by names the administrator who asked for it.",
+		Params:      []string{"name", "type", "destination_id", "requested_by", "error"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeNotificationPseudonymResolved: {
+		Code: CodeNotificationPseudonymResolved, Emitted: true,
+		Description: "An organization administrator asked, after a step-up, which user name a pseudonym of the organization's notifications stands for; the notifier resolves it and the result is shown once.",
+		Params:      []string{"pseudonym"},
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the organization. Failure with invalid_request for a malformed pseudonym, invalid_state while the organization has no pseudonym key.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

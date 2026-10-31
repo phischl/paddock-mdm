@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { AttentionDevice, AuditEvent, Overview } from '../api/client'
 import ActorChip from '../components/ActorChip.vue'
 import EmptyState from '../components/EmptyState.vue'
+import SetupChecklist from '../components/SetupChecklist.vue'
 import KpiStrip from '../components/KpiStrip.vue'
 import SeverityBar from '../components/SeverityBar.vue'
 import SeverityChip from '../components/SeverityChip.vue'
@@ -91,6 +92,7 @@ const latestPublished = computed(() => {
     >
       {{ problemText(problem) }}
     </p>
+    <SetupChecklist />
     <div
       v-if="loading"
       class="pd-overview-placeholder"

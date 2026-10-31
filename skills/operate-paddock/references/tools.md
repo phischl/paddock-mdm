@@ -120,6 +120,14 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | --- | --- | --- | --- |
 | `getMe` | read | no | GET /api/v1/me |
 
+## notifications
+
+| Tool | Class | Destructive | Summary |
+| --- | --- | --- | --- |
+| `getNotificationCapabilities` | read | no | The destination types this installation supports: email is true only with an SMTP relay (PADDOCK_SMTP_ENABLED). |
+| `getNotificationDestination` | read | no | One destination with its delivery state; 404 not_found for another organization's. |
+| `listNotificationDestinations` | read | no | The organization's notification destinations: signed webhooks and e-mail address lists that receive the organization's security events (ADR 0031). |
+
 ## overview
 
 | Tool | Class | Destructive | Summary |
@@ -138,11 +146,13 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getAutoUnseal` | read | no | The automatic-unseal setting (ADR 0035): the acknowledged decision, the unsealer's report and OpenBao's seal status. |
 | `getIpAllowlistEntry` | read | no | One entry. |
 | `getOrganization` | read | no | GET /api/platform/v1/organizations/{id} |
+| `getPlatformNotificationDestination` | read | no | One destination with its delivery state; 404 not_found for another scope's. |
 | `haltAgentRollout` | write | yes | POST /api/platform/v1/agent-releases/{version}/rollout/halt |
 | `listAgentReleases` | read | no | Agent releases with their rollout status (plan M2b decision 20). |
 | `listComponentTargets` | read | no | The versions devices are expected to run (plan M8d decision 55): paddockd, the supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau from the compiler. |
 | `listIpAllowlist` | read | no | The IP allow list of the administrative surfaces (plan M7a decision 16): while it has entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions and API tokens alike. |
 | `listOrganizations` | read | no | GET /api/platform/v1/organizations |
+| `listPlatformNotificationDestinations` | read | no | The platform's notification destinations: signed webhooks and e-mail address lists that receive platform events (rollouts, releases, OSV, IP allow list) (ADR 0031). |
 | `publishAgentRelease` | write | no | POST /api/platform/v1/agent-releases/{version}/publish |
 | `resumeAgentRollout` | write | no | POST /api/platform/v1/agent-releases/{version}/rollout/resume |
 | `startAgentRollout` | write | no | Starts the staged rollout of a published release; only one rollout runs at a time (409). |
@@ -233,7 +243,11 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `confirmPermissionProfileRootGrant` | privileges | Confirms an effectively Full profile that existed before the step-up rule covered it; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `createApiToken` | api-tokens | The role may not be above the creator's: org_admin creates any organization role, org_operator creates org_operator and org_auditor (403 forbidden). |
 | `createIpAllowlistEntry` | platform | Adds a range. |
+| `createNotificationDestination` | notifications | Creates a destination. |
+| `createPlatformNotificationDestination` | platform | Creates a destination. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
+| `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
+| `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |
 | `disableAutoUnseal` | platform | Disables the setting: the unsealer stops unsealing at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable. |
 | `downloadDeviceHeader` | devices | Returns a stored LUKS header backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup luksHeaderRestore; confirm_hostname must equal the device's hostname. |
@@ -244,13 +258,20 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `importAgentRelease` | platform | Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. |
 | `lockDevice` | revocation | POST /api/v1/devices/{id}/lock |
 | `rejectRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/reject |
+| `resolveNotificationPseudonym` | notifications | Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's notifications stands for. |
 | `revealDeviceLocalAdmin` | devices | Returns the active password and a pending one; confirm_hostname must equal the device's hostname. |
 | `revealDeviceRecoveryKey` | devices | Returns the newest stored recovery key of the device; confirm_hostname must equal the device's hostname. |
+| `rotateNotificationDestinationSecret` | notifications | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
+| `rotatePlatformNotificationDestinationSecret` | platform | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
+| `testNotificationDestination` | notifications | Requests a test delivery. |
+| `testPlatformNotificationDestination` | platform | Requests a test delivery. |
 | `uninstallDevice` | devices | Issues the signed command uninstall (lifetime 7 days, plan M8d decision 37): the device removes Paddock at its next check-in and is retired by its report. |
 | `updateIpAllowlistEntry` | platform | Changes the range and/or the label (at least one). |
 | `updateManagedFileSettings` | settings | Replaces the operator roots: directories of the form /etc/<name>/, /usr/local/etc/<name>/ or /opt/<name>/ (trailing slash), outside the denied and sensitive paths and the never-operator directories (422 path_not_allowed naming the root), at most 50. |
 | `updateMcpSettings` | mcp | Replaces the MCP policy of the organization. |
+| `updateNotificationDestination` | notifications | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
 | `updatePlatformMcpSettings` | mcp | Replaces the MCP policy of the platform (platform administrators' MCP sessions). |
+| `updatePlatformNotificationDestination` | platform | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
 | `updateWatchedUnits` | settings | Replaces the watched units: at most 32 services (names ending in .service), a duplicate is 400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a name that is not a service is 422 unit_not_allowed naming it. |
 
 ## Other operations the MCP does not offer
@@ -261,10 +282,12 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | --- | --- | --- |
 | `checkAgentReleaseSource` | platform | Lists the releases of the source and compares the latest with the newest published release (ADR 0043 decision 3); changes nothing and is not audited. |
 | `disableMcpWrite` | mcp | Disables MCP write access for the caller's own account; no step-up is needed. |
+| `feedAuditEvents` | audit | Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. |
 | `generateAutoinstall` | enrollment-tokens | Generates the Ubuntu autoinstall user-data that installs one device with Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. |
 | `getMcpAccess` | mcp | What the caller's MCP sessions may do under the MCP policy of its scope (the organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and write_enabled, and the account opted in) and the caller's role may perform them. |
 | `getMcpCatalog` | mcp | The MCP tool catalog shared by paddockctl mcp and the server's MCP guard: one entry per admin API operation outside the tag auth, with its class, scope and whether the MCP offers it at all (ADR 0044 decision 5). |
 | `getMcpSettings` | mcp | The MCP policy of the organization (ADR 0044 decision 5). |
+| `getNotificationPseudonymLookup` | notifications | The result of a pseudonym lookup: resolved false until the notifier has resolved it; once resolved, username is the matching user name ("" when none matches) and the lookup is deleted with this read, so a second read is 404 not_found. |
 | `getPlatformMcpSettings` | mcp | The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). |
 | `revokeApiToken` | api-tokens | A request made with an API token cannot revoke (403 forbidden). |
 | `updateMe` | me | PATCH /api/v1/me |

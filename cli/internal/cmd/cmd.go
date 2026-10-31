@@ -9,6 +9,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/phischl/paddock-mdm/cli/internal/cfg"
 	"github.com/phischl/paddock-mdm/cli/internal/client"
@@ -29,6 +30,8 @@ type Env struct {
 	Stdout, Stderr io.Writer
 	Getenv         func(string) string
 	Version        string
+	// PollInterval is the pause of audit feed --follow between two polls; zero means 30 seconds.
+	PollInterval time.Duration
 }
 
 const usage = `usage: paddockctl <command> [flags]
@@ -42,6 +45,10 @@ commands:
                                 show the plan of a configuration and apply it; deletions need --yes
   devices list [--page N] [--page-size 10|25|50|100] [--sort <field>] [-q <text>] [--state <s>]...
                [--device-group-id <uuid>] [--disk-state <s>]... [-o table|json]
+  audit feed [--after N] [--limit L] [--follow]
+                                print audit events as JSON lines and the cursor (next_after=N) on stderr
+  findings list [--page N] [--page-size 10|25|50|100] [--sort <field>] [-q <text>] [--status <s>]...
+                [--kind <k>] [--cleared] [-o table|json]
   mcp login [--no-browser] [--platform]
                                 sign in for the MCP server through the browser (password and second factor);
                                 --platform signs in with the platform role of an identity that has both
@@ -166,6 +173,16 @@ func dispatch(ctx context.Context, e Env) error {
 			return usagef("usage: paddockctl devices list [flags]")
 		}
 		return runDevicesList(ctx, e, args[2:])
+	case "audit":
+		if len(args) < 2 || args[1] != "feed" {
+			return usagef("usage: paddockctl audit feed [--after N] [--limit L] [--follow]")
+		}
+		return runAuditFeed(ctx, e, args[2:])
+	case "findings":
+		if len(args) < 2 || args[1] != "list" {
+			return usagef("usage: paddockctl findings list [flags]")
+		}
+		return runFindingsList(ctx, e, args[2:])
 	case "mcp":
 		return runMCP(ctx, e, args[1:])
 	}

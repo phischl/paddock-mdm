@@ -59,6 +59,7 @@ tags:
   - name: platform
   - name: mcp
   - name: findings
+  - name: notifications
 paths:
   /api/auth/login:
     get:
@@ -537,6 +538,36 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuditEventPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit-events/feed:
+    get:
+      operationId: feedAuditEvents
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor (sessions and API tokens). Commit-ordered cursor feed of the organization's audit
+        events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. An after
+        below the oldest retained commit_seq returns the oldest retained events (catch-up is bounded by the index
+        retention).
+      x-paddock-feed: { cursor: after, limit: { default: 100, max: 1000 } }
+      x-paddock-mcp: { expose: false }
+      parameters:
+        - name: after
+          in: query
+          description: Commit sequence of the last event already read; 0 starts at the beginning.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          description: Maximum number of events in the page.
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        "200":
+          description: Events after the cursor in ascending commit_seq.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditFeedPage" }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
@@ -2591,6 +2622,262 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations:
+    get:
+      operationId: listNotificationDestinations
+      tags: [notifications]
+      description: |
+        Roles: org_admin, org_auditor. The organization's notification destinations: signed webhooks and e-mail address lists that
+        receive the organization's security events (ADR 0031). Never shows a webhook URL or a signing secret;
+        url_display has scheme, host and a masked path.
+      x-paddock-list:
+        sort: [name, type, created_at]
+        default_sort: name
+        search: [name]
+        filters: [type, enabled]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/NotificationDestinationSort"
+        - $ref: "#/components/parameters/Search"
+        - name: type
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/NotificationDestinationType" }
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: One page of destinations.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Creates a destination. A webhook needs an https URL without user information on port 443
+        or 1024–65535 whose host is a public address (400 invalid_request naming the rule); the URL and a new signing
+        secret are stored encrypted and the secret is returned once in this response. An e-mail destination needs 1 to
+        20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
+        GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
+        unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
+        duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history.
+        Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+      x-paddock-audit: notification.destination_created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationDestinationCreate" }
+      responses:
+        "201":
+          description: Created; secret is shown only here (webhook).
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationCreated" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getNotificationDestination
+      tags: [notifications]
+      description: "Roles: org_admin, org_auditor. One destination with its delivery state; 404 not_found for another organization's."
+      responses:
+        "200":
+          description: The destination.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestination" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
+        secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+        Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
+        resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
+        is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+        disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationDestinationUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestination" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Deletes the destination with its delivery state and history. Needs a step-up within the last
+        5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/rotate-secret:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: rotateNotificationDestinationSecret
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Replaces the signing secret of a webhook destination and returns the new one once; deliveries
+        are signed with it from the notifier's next round. 409 invalid_state for an e-mail destination. Needs a step-up
+        within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_secret_rotated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The new secret, shown only here.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationSecret" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: testNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
+        secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
+        message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
+        409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: notification.test_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "202":
+          description: Requested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationTestRequested" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/resolve-pseudonym:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: resolveNotificationPseudonym
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's
+        notifications stands for. The api never decrypts the pseudonym key: the notifier resolves the lookup in its next
+        round; GET …/resolve-pseudonym/{lookup_id} returns the result once. 400 invalid_request for a malformed
+        pseudonym (never recorded), 409 invalid_state while no destination pseudonymizes user names or while another
+        lookup of the organization is pending. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.pseudonym_resolved
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationPseudonymResolve" }
+      responses:
+        "202":
+          description: Requested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPseudonymRequested" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/resolve-pseudonym/{lookup_id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: lookup_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getNotificationPseudonymLookup
+      x-paddock-mcp: { expose: false }
+      tags: [notifications]
+      description: |
+        Roles: org_admin. The result of a pseudonym lookup: resolved false until the notifier has resolved it; once
+        resolved, username is the matching user name ("" when none matches) and the lookup is deleted with this read,
+        so a second read is 404 not_found. Unread lookups are deleted after 10 minutes.
+      responses:
+        "200":
+          description: The lookup.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPseudonymLookup" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-capabilities:
+    get:
+      operationId: getNotificationCapabilities
+      tags: [notifications]
+      description: |
+        Roles: org_admin, org_auditor, platform_admin. The destination types this installation supports: email is true
+        only with an SMTP relay (PADDOCK_SMTP_ENABLED).
+      responses:
+        "200":
+          description: The capabilities.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationCapabilities" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/findings:
     get:
       operationId: listFindings
@@ -4570,6 +4857,192 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /api/platform/v1/notification-destinations:
+    get:
+      operationId: listPlatformNotificationDestinations
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The platform's notification destinations: signed webhooks and e-mail address lists that
+        receive platform events (rollouts, releases, OSV, IP allow list) (ADR 0031). Never shows a webhook URL or a signing secret;
+        url_display has scheme, host and a masked path.
+      x-paddock-list:
+        sort: [name, type, created_at]
+        default_sort: name
+        search: [name]
+        filters: [type, enabled]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/NotificationDestinationSort"
+        - $ref: "#/components/parameters/Search"
+        - name: type
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/NotificationDestinationType" }
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: One page of destinations.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createPlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Creates a destination. A webhook needs an https URL without user information on port 443
+        or 1024–65535 whose host is a public address (400 invalid_request naming the rule); the URL and a new signing
+        secret are stored encrypted and the secret is returned once in this response. An e-mail destination needs 1 to
+        20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
+        GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
+        unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
+        duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
+        Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+      x-paddock-audit: notification.destination_created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationDestinationCreate" }
+      responses:
+        "201":
+          description: Created; secret is shown only here (webhook).
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationCreated" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/notification-destinations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getPlatformNotificationDestination
+      tags: [platform]
+      description: "Roles: platform_admin. One destination with its delivery state; 404 not_found for another scope's."
+      responses:
+        "200":
+          description: The destination.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestination" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updatePlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
+        secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+        Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
+        resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
+        is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+        disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationDestinationUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestination" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deletePlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Deletes the destination with its delivery state and history. Needs a step-up within the last
+        5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/notification-destinations/{id}/rotate-secret:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: rotatePlatformNotificationDestinationSecret
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Replaces the signing secret of a webhook destination and returns the new one once; deliveries
+        are signed with it from the notifier's next round. 409 invalid_state for an e-mail destination. Needs a step-up
+        within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_secret_rotated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The new secret, shown only here.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationSecret" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/notification-destinations/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: testPlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
+        secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
+        message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
+        409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: notification.test_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "202":
+          description: Requested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationTestRequested" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     session:
@@ -4593,6 +5066,14 @@ components:
         Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
         printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
       schema: { type: string }
+    NotificationDestinationSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, type, -type, created_at, -created_at]
+        default: name
     FindingListSort:
       name: sort
       in: query
@@ -5518,6 +5999,44 @@ components:
           additionalProperties: true
         error_code: { type: string }
         correlation_id: { type: string }
+    AuditEventStored:
+      type: object
+      description: The stored audit event, without the read-time device enrichment of AuditEvent.
+      required: [event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id]
+      properties:
+        event_id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid, description: The organization the event belongs to; always the caller's. }
+        occurred_at: { type: string, format: date-time }
+        recorded_at: { type: string, format: date-time }
+        code: { type: string }
+        outcome: { $ref: "#/components/schemas/AuditOutcome" }
+        source: { type: string }
+        actor: { $ref: "#/components/schemas/AuditActor" }
+        target:
+          allOf:
+            - $ref: "#/components/schemas/AuditTarget"
+          nullable: true
+        params:
+          type: object
+          additionalProperties: true
+        error_code: { type: string }
+        correlation_id: { type: string }
+    AuditFeedEvent:
+      type: object
+      required: [commit_seq, event]
+      properties:
+        commit_seq: { type: integer, format: int64, description: "Position of the event in the organization's commit order." }
+        event: { $ref: "#/components/schemas/AuditEventStored" }
+    AuditFeedPage:
+      type: object
+      required: [schema, events, next_after, latest]
+      properties:
+        schema: { type: string, enum: ["paddock.audit.feed.v1"] }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/AuditFeedEvent" }
+        next_after: { type: integer, format: int64, description: "commit_seq of the last returned event, or after when the page is empty." }
+        latest: { type: integer, format: int64, description: "Highest commit_seq of the organization; equal to next_after when caught up." }
     AuditEventPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -6668,6 +7187,140 @@ components:
         reason: { type: string, nullable: true, description: The reason of the last close or reopen. }
         external_ref: { type: string, nullable: true }
         cleared_at: { type: string, format: date-time, nullable: true, description: When the condition of an attention finding was gone. }
+    NotificationDestinationType:
+      type: string
+      enum: [webhook, email]
+    NotificationFilterMode:
+      type: string
+      enum: [security, all, custom]
+      description: security forwards the security preset of ADR 0031, all every event, custom the listed codes.
+    NotificationDestination:
+      type: object
+      required: [id, type, name, enabled, filter_mode, codes, pseudonymize_users, include_params, url_display,
+        heartbeat_interval_s, recipients, email_min_interval_s, created_by, created_at, updated_at, state]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: "#/components/schemas/NotificationDestinationType" }
+        name: { type: string }
+        enabled: { type: boolean }
+        filter_mode: { $ref: "#/components/schemas/NotificationFilterMode" }
+        codes: { type: array, items: { type: string }, description: The codes of filter_mode custom; empty otherwise. }
+        pseudonymize_users: { type: boolean }
+        include_params: { type: boolean }
+        url_display: { type: string, nullable: true, description: "Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail." }
+        heartbeat_interval_s: { type: integer }
+        recipients: { type: array, items: { type: string } }
+        email_min_interval_s: { type: integer }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        state: { $ref: "#/components/schemas/NotificationDestinationState" }
+    NotificationDestinationState:
+      type: object
+      required: [status, cursor_commit_seq, forward_seq, last_success_at, last_attempt_at, next_attempt_at, stalled_since,
+        last_error, lag_seconds, last_test]
+      properties:
+        status: { type: string, enum: [active, stalled] }
+        cursor_commit_seq: { type: integer, format: int64, description: The commit sequence of the last delivered event position. }
+        forward_seq: { type: integer, format: int64, description: The last forwarded sequence number. }
+        last_success_at: { type: string, format: date-time, nullable: true }
+        last_attempt_at: { type: string, format: date-time, nullable: true }
+        next_attempt_at: { type: string, format: date-time, nullable: true }
+        stalled_since: { type: string, format: date-time, nullable: true }
+        last_error: { type: string, nullable: true }
+        lag_seconds: { type: integer, format: int64, description: Seconds since the first failure of the current series of failed deliveries; 0 while deliveries succeed. }
+        last_test:
+          type: object
+          nullable: true
+          required: [at, ok, error]
+          properties:
+            at: { type: string, format: date-time }
+            ok: { type: boolean }
+            error: { type: string, nullable: true }
+    NotificationDestinationCreate:
+      type: object
+      additionalProperties: false
+      required: [type, name, enabled, filter_mode]
+      properties:
+        type: { $ref: "#/components/schemas/NotificationDestinationType" }
+        name: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' }
+        enabled: { type: boolean }
+        filter_mode: { $ref: "#/components/schemas/NotificationFilterMode" }
+        codes: { type: array, maxItems: 200, items: { type: string }, description: Registered audit codes; filter_mode custom only. }
+        pseudonymize_users: { type: boolean, default: false }
+        include_params: { type: boolean, default: false }
+        url: { type: string, writeOnly: true, description: "Webhook only; required for a webhook. Stored encrypted, never returned." }
+        heartbeat_interval_s: { type: integer, default: 0, description: Webhook; 0 (off) or 60–3600. }
+        recipients: { type: array, maxItems: 20, items: { type: string }, description: E-mail only; 1–20 plain addresses. }
+        email_min_interval_s: { type: integer, default: 300, description: E-mail only; 60–3600. }
+    NotificationDestinationUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, enabled, filter_mode]
+      properties:
+        type: { $ref: "#/components/schemas/NotificationDestinationType" }
+        name: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' }
+        enabled: { type: boolean }
+        filter_mode: { $ref: "#/components/schemas/NotificationFilterMode" }
+        codes: { type: array, maxItems: 200, items: { type: string } }
+        pseudonymize_users: { type: boolean, default: false }
+        include_params: { type: boolean, default: false }
+        url: { type: string, writeOnly: true, description: Webhook only; absent keeps the stored URL. }
+        heartbeat_interval_s: { type: integer, default: 0 }
+        recipients: { type: array, maxItems: 20, items: { type: string } }
+        email_min_interval_s: { type: integer, default: 300 }
+        cursor: { type: string, enum: [continue, skip], description: Required when the update enables a disabled destination. }
+    NotificationDestinationCreated:
+      allOf:
+        - $ref: "#/components/schemas/NotificationDestination"
+        - type: object
+          properties:
+            secret: { type: string, description: "Webhook only: the signing secret, shown once; keep it like a password." }
+    NotificationDestinationSecret:
+      type: object
+      required: [secret]
+      properties:
+        secret: { type: string, description: "The new signing secret, shown once." }
+    NotificationTestRequested:
+      type: object
+      required: [delivery_id]
+      properties:
+        delivery_id: { type: string, format: uuid }
+    NotificationPseudonymResolve:
+      type: object
+      additionalProperties: false
+      required: [pseudonym]
+      properties:
+        pseudonym: { type: string, pattern: '^u_[0-9a-f]{24}$', maxLength: 26, description: "u_ and 24 lowercase hexadecimal characters." }
+    NotificationPseudonymRequested:
+      type: object
+      required: [lookup_id]
+      properties:
+        lookup_id: { type: string, format: uuid }
+    NotificationPseudonymLookup:
+      type: object
+      required: [pseudonym, username, resolved]
+      properties:
+        pseudonym: { type: string }
+        username: { type: string, nullable: true, description: 'The user name once resolved; "" when no user matches.' }
+        resolved: { type: boolean }
+    NotificationCapabilities:
+      type: object
+      required: [email]
+      properties:
+        email: { type: boolean }
+    NotificationDestinationPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationDestination" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     FindingPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

@@ -99,14 +99,55 @@ describe('WatchedUnits (plan M9 decision 38)', () => {
     expect(setWatchedUnits).not.toHaveBeenCalled()
   })
 
-  it('shows the server refusal inline', async () => {
-    setWatchedUnits.mockResolvedValueOnce('unit_not_allowed')
-    const w = await mountPage()
+  async function submit(): Promise<void> {
     ;(document.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'))
     await flushPromises()
     settleConfirm({ reason: '' })
     await flushPromises()
-    expect(w.find('[data-testid="watched-problem"]').text()).toContain('This unit is not allowed')
+  }
+  const invalidAttr = () => document.querySelector('#watched-units')?.getAttribute('aria-invalid')
+
+  it('shows the server refusal inline and marks the input invalid', async () => {
+    setWatchedUnits.mockResolvedValueOnce('unit_not_allowed')
+    const w = await mountPage()
+    expect(invalidAttr()).not.toBe('true')
+    await submit()
+    expect(w.text()).toContain('This unit is not allowed')
+    expect(invalidAttr()).toBe('true')
+  })
+
+  it('clears the refusal as soon as the list changes', async () => {
+    setWatchedUnits.mockResolvedValueOnce('unit_not_allowed')
+    const w = await mountPage()
+    await submit()
+    expect(invalidAttr()).toBe('true')
+    ;(document.querySelector('.v-chip__close') as HTMLElement).click()
+    await flushPromises()
+    expect(w.text()).not.toContain('This unit is not allowed')
+    expect(invalidAttr()).not.toBe('true')
+  })
+
+  it('announces a saved list politely and an error assertively', async () => {
+    setWatchedUnits.mockResolvedValueOnce(stored)
+    const w = await mountPage()
+    await submit()
+    expect(w.get('[data-testid="watched-saved"]').attributes('role')).toBe('status')
+    setWatchedUnits.mockResolvedValueOnce('invalid_request')
+    await submit()
+    expect(w.get('[data-testid="watched-problem"]').attributes('role')).toBe('alert')
+  })
+
+  it('marks the input invalid while a client-side error shows', async () => {
+    await mountPage()
+    await addUnit('foo.timer')
+    expect(invalidAttr()).toBe('true')
+  })
+
+  it('shows another server problem below the field', async () => {
+    setWatchedUnits.mockResolvedValueOnce('invalid_request')
+    const w = await mountPage()
+    await submit()
+    expect(w.find('[data-testid="watched-problem"]').exists()).toBe(true)
   })
 
   it('offers no save button to an auditor', async () => {

@@ -36,7 +36,7 @@ container at `/secrets`, so the symlink works there too.
 ## Both VMs in parallel
 
 The per-VM subtests of every gate (`TestAgentGates`, `TestIdentityGates`, `TestLocalAdminGates`, `TestDiskGates`,
-`TestNoticeGate`, `TestInventoryGates`) run in parallel, one subtest per VM (`forEachVM`, plan M4b.1 step 5), so `make system-test VM=all`
+`TestNoticeGate`, `TestInventoryGates`, `TestWatchGate`) run in parallel, one subtest per VM (`forEachVM`, plan M4b.1 step 5), so `make system-test VM=all`
 takes about as long as the slower VM instead of both together. A VM is never used by two tests at a time: the test
 functions themselves still run one after another. Gate S5 (`TestRolloutAutoStop`) drives both VMs itself.
 
@@ -47,13 +47,13 @@ the whole organization shares is coordinated through the VMs' `vmGroup` (`parall
 - `Together` runs a step once for all VMs when each of them reached it: the stack outage of S3 (`make down`,
   `make up`, with `BACKUP=1` when the running stack uses the backup overlay and `BACKUP` is not set), the releases of S4, S-UP1, S-UP2 and S-UP3 (a release
   with `--halt-running` halts every other rollout, so the VMs share one), the update policy of S-UP1 and S-UP3, the
-  login history of LH1 and the stopped worker of LA1. A VM whose gate ended early (a failure) is no longer waited for.
+  login history of LH1, the watched units of N12 and the stopped worker of LA1. A VM whose gate ended early (a failure) is no longer waited for.
   `Share` and `Shared` hand each VM's input to the step, such as the rollout buckets that S-UP1's first wave must
   stay below.
 - `Exclusive` and `Lock` let one VM at a time through a section: the organization's login notice (N1) and reading the
   device code the greeter shows (`gdmLogin`, the newest pending code of the organization).
 - `AfterAll` undoes a shared step once every VM's subtest ended, never under a VM still in the gate: the update
-  policy, the login history (switching it off deletes every row of the organization) and every release a gate starts
+  policy, the login history (switching it off deletes every row of the organization), the watched units of N12 and every release a gate starts
   (`retractRelease`), so that no gate's release stays the one later gates' devices update to: a
   release's single wave lasts a day, so its rollout stays running and is halted by hand; a gate that needs a completed
   rollout (S-UP3) starts it with the failure threshold 1, and a simulated device reports a failed update to halt it.

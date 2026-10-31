@@ -56,8 +56,10 @@ type Deps struct {
 	Updates        *app.Updates
 	Attention      *app.Attention
 	Findings       *app.Findings
-	AccountList    *app.AccountList
-	Overview       *app.Overview
+	// Notifications are the notification destinations of organizations and the platform (plan M9 decisions 14–19).
+	Notifications *app.Notifications
+	AccountList   *app.AccountList
+	Overview      *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
@@ -203,6 +205,17 @@ var privileged = map[string]struct {
 	"POST /api/v1/findings/{id}/assign":                                    {app.ScopeOrg, app.SpecFindingAssign},
 	"POST /api/v1/findings/{id}/close":                                     {app.ScopeOrg, app.SpecFindingClose},
 	"POST /api/v1/findings/{id}/reopen":                                    {app.ScopeOrg, app.SpecFindingReopen},
+	"POST /api/v1/notification-destinations":                               {app.ScopeOrg, app.SpecNotificationCreate},
+	"PUT /api/v1/notification-destinations/{id}":                           {app.ScopeOrg, app.SpecNotificationUpdate},
+	"DELETE /api/v1/notification-destinations/{id}":                        {app.ScopeOrg, app.SpecNotificationDelete},
+	"POST /api/v1/notification-destinations/{id}/rotate-secret":            {app.ScopeOrg, app.SpecNotificationRotateSecret},
+	"POST /api/v1/notification-destinations/{id}/test":                     {app.ScopeOrg, app.SpecNotificationTest},
+	"POST /api/v1/notification-destinations/{id}/resolve-pseudonym":        {app.ScopeOrg, app.SpecNotificationResolvePseudonym},
+	"POST /api/platform/v1/notification-destinations":                      {app.ScopePlatform, app.SpecPlatformNotificationCreate},
+	"PUT /api/platform/v1/notification-destinations/{id}":                  {app.ScopePlatform, app.SpecPlatformNotificationUpdate},
+	"DELETE /api/platform/v1/notification-destinations/{id}":               {app.ScopePlatform, app.SpecPlatformNotificationDelete},
+	"POST /api/platform/v1/notification-destinations/{id}/rotate-secret":   {app.ScopePlatform, app.SpecPlatformNotificationRotateSecret},
+	"POST /api/platform/v1/notification-destinations/{id}/test":            {app.ScopePlatform, app.SpecPlatformNotificationTest},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -237,7 +250,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, findings: d.Findings, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
+		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,

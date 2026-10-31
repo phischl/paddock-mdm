@@ -154,3 +154,33 @@ func TestM14PolicyCodes(t *testing.T) {
 		}
 	}
 }
+
+// TestM9NotificationCodes: the destination codes of plan M9 §6.3 are registered as emitted with their params in the
+// documented order and their outcomes.
+func TestM9NotificationCodes(t *testing.T) {
+	all := []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
+	created := []string{"name", "type", "url_display", "recipient_count", "filter_mode", "codes_count", "pseudonymize_users",
+		"include_params", "heartbeat_interval_s", "email_min_interval_s", "enabled"}
+	for _, tc := range []struct {
+		code     Code
+		params   []string
+		outcomes []Outcome
+	}{
+		{CodeNotificationDestinationCreated, created, all},
+		{CodeNotificationDestinationUpdated, append(slices.Clone(created), "changed", "cursor"), all},
+		{CodeNotificationDestinationDeleted, []string{"name", "type"}, all},
+		{CodeNotificationDestinationSecretRotated, []string{"name"}, all},
+		{CodeNotificationTestRequested, []string{"name", "type", "destination_id"}, all},
+		{CodeNotificationTestSent, []string{"name", "type", "destination_id", "requested_by", "error"}, []Outcome{OutcomeSuccess, OutcomeFailure}},
+		{CodeNotificationPseudonymResolved, []string{"pseudonym"}, all},
+	} {
+		d, ok := Lookup(tc.code)
+		if !ok || !tc.code.Registered() || !d.Emitted || d.Description == "" {
+			t.Errorf("%s is not registered as emitted with a description", tc.code)
+			continue
+		}
+		if !slices.Equal(d.Params, tc.params) || !slices.Equal(d.Outcomes, tc.outcomes) {
+			t.Errorf("%s: params %v outcomes %v, want %v %v", tc.code, d.Params, d.Outcomes, tc.params, tc.outcomes)
+		}
+	}
+}

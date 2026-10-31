@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
@@ -44,6 +46,8 @@ type isolationWorld struct {
 	globexHold string
 	// globexAPIToken is an API token of globex (seedGlobexDevices).
 	globexAPIToken string
+	// globexDestination is a notification destination of globex (seedGlobexNotification).
+	globexDestination string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
 }
@@ -76,6 +80,21 @@ func seedGlobexChangeSet(t *testing.T, w *isolationWorld) {
 	w.globexChangeSet = out.ChangeSetID
 	w.globexIDs = append(w.globexIDs, out.ChangeSetID)
 	w.top.Cleanup(func() { _ = call(w.top, w.carol, http.MethodPut, "/api/v1/config", doc(original)) })
+}
+
+// seedGlobexNotification creates a notification destination of globex that pseudonymizes user names, so its
+// pseudonym lookup has a key.
+func seedGlobexNotification(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	renew := func(t *testing.T) { stepUp(t, w.carol, env.Carol, true) }
+	body := webhookBody(destinationName("globex-iso"), notificationURL)
+	body["pseudonymize_users"] = true
+	renew(t)
+	res := call(t, w.carol, http.MethodPost, "/api/v1/notification-destinations", body)
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexDestination = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexDestination)
+	deleteDestinationOnCleanup(w.top, w.carol, renew, "/api/v1/notification-destinations/"+w.globexDestination)
 }
 
 // settingsOnlyConfig is a document with acme's current update settings only: applying it changes and deletes nothing.
@@ -324,6 +343,32 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"GET /api/v1/api-tokens/{id}":         itemFixture(func(w *isolationWorld) string { return "/api/v1/api-tokens/" + w.globexAPIToken }, nil),
 	"POST /api/v1/api-tokens/{id}/revoke": itemFixture(func(w *isolationWorld) string { return "/api/v1/api-tokens/" + w.globexAPIToken + "/revoke" }, nil),
+
+	"GET /api/v1/notification-destinations": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-destinations?page_size=100", nil
+	}},
+	"POST /api/v1/notification-destinations": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-destinations", webhookBody(destinationName("acme-iso"), notificationURL)
+	}},
+	"GET /api/v1/notification-destinations/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, nil),
+	"PUT /api/v1/notification-destinations/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, map[string]any{"name": "acme-iso", "enabled": true, "filter_mode": "all"}),
+	"DELETE /api/v1/notification-destinations/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, nil),
+	"POST /api/v1/notification-destinations/{id}/rotate-secret": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/rotate-secret"
+	}, nil),
+	"POST /api/v1/notification-destinations/{id}/test": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/test"
+	}, nil),
+	"POST /api/v1/notification-destinations/{id}/resolve-pseudonym": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/resolve-pseudonym"
+	},
+		map[string]any{"pseudonym": "u_0123456789abcdef01234567"}),
+	"GET /api/v1/notification-destinations/{id}/resolve-pseudonym/{lookup_id}": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/resolve-pseudonym/" + uuid.NewString()
+	}, nil),
+	"GET /api/v1/notification-capabilities": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-capabilities", nil
+	}},
 
 	"GET /api/v1/config": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/config", nil
@@ -640,6 +685,10 @@ var listIsolationQueries = map[string][]url.Values{
 		{"status": {"active"}, "sort": {"-created_at"}, "page_size": {"100"}},
 	},
 	"/api/v1/managed-files": {{"q": {"globex-iso"}}},
+	"/api/v1/notification-destinations": {
+		{"q": {"globex-iso"}},
+		{"type": {"webhook"}, "enabled": {"true"}, "sort": {"-created_at"}, "page_size": {"100"}},
+	},
 	"/api/v1/managed-units": {{"q": {"globex-iso"}}},
 	"/api/v1/package-holds": {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
 	// globex's waiting Destroy (seedGlobexDevices) is a revocation_pending condition.
