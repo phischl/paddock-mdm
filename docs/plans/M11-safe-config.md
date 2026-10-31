@@ -1225,3 +1225,11 @@ without a migration merge as soon as their dependencies are on the branch. The V
    `/etc/paddock/disk-setup.json` (also written by the in-place disk conversion of an adopted device) qualifies. The
    enrollment lock is `/var/lib/paddock/enroll.lock` (flock); `paddockd enroll` waits on it interruptibly, the daemon
    skips. PDK-162 asserts the enrollment method in the VM gate and moves the harness to the runbook path.
+9. **Consequences of item 8 for the other tickets (2026-10-31).** Every mention of `/etc/paddock/enroll.json` as the
+   adoption path in §3–§7 (e.g. the adoption guide of PDK-163) reads `/root/paddock-enroll.json`; item 5's "the
+   disk-setup marker" reads `/etc/paddock/autoinstall.marker` (the disk-setup-pending marker is also written by the
+   in-place disk conversion of an adopted device). The system-test harness enrolls through `paddockd enroll` and
+   therefore as `adopted`: once PDK-160 stores `report_only` for adopted devices, the harness's install step enforces
+   the device (`POST /api/v1/devices/{id}/enforce`) unless a gate tests report-only (PDK-160/162). Recovering a failed
+   first-boot enrollment with `paddockd enroll` makes an autoinstalled device `adopted` (safe direction); PDK-163
+   states it in the autoinstall troubleshooting section.
