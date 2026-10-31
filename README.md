@@ -58,6 +58,7 @@ and German, and one identity can switch between the platform administrator role 
 | --- | --- |
 | [Production installation](docs/operations/install.md) | operators: two hosts, TLS, secrets, backups, monitoring, `./paddock check` |
 | [Lab installation](docs/operations/lab-install.md) | one host behind your own TLS proxy; not for production |
+| [Enroll an existing device](docs/operations/enroll-existing.md) | operators: adopt an installed Ubuntu laptop: `paddockd preflight`, packages, enrollment |
 | [Operations runbooks](docs/operations/) | day-to-day operation: agent releases, disk recovery, revocation, restore, capacity |
 | [Compliance pack](docs/compliance/) | auditors: [ISO 27001 mapping](docs/compliance/iso27001-mapping.md), [residual risks](docs/compliance/residual-risks.md), [audit codes](docs/compliance/audit-codes.md), [privacy](docs/compliance/privacy.md), [third-party licenses](docs/compliance/third-party.md) |
 | [CHANGELOG](CHANGELOG.md) | what changed per release |
