@@ -335,6 +335,12 @@ components:
           type: object
           additionalProperties: { type: string }
         agent_version: { type: string, maxLength: 128 }
+        enrollment_method:
+          type: string
+          enum: [autoinstall, adopted]
+          description: |
+            How the device was enrolled (plan M11 decision 10): `autoinstall` by the Paddock autoinstall, `adopted` by
+            `paddockd enroll` on an installed system. Optional; agents of earlier releases leave it out.
     EnrollAccepted:
       type: object
       required: [enrollment_id]

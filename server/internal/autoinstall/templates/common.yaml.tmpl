@@ -54,6 +54,8 @@ autoinstall:
     - ["sh", "-c", "umask 077 && mkdir -p /target/var/lib/paddock && printf %s \"$1\" > /target/var/lib/paddock/install-passphrase", "sh", {{q .Passphrase}}]
     - ["sh", "-c", "printf '%s\\n' \"$1\" > /target/etc/paddock/disk-setup.json", "sh", {{q .DiskSetup}}]
     - ["touch", "/target/var/lib/paddock/disk-setup-pending"]
+    # Only the autoinstall writes this marker: the agent enrolls as autoinstall (enforced) with it, else as adopted.
+    - ["install", "-m", "0600", "/dev/null", "/target/etc/paddock/autoinstall.marker"]
     # The root volume is unlocked with TPM2+PIN once the PIN is enrolled.
     - ["curtin", "in-target", "--target=/target", "--", "sed", "-i", "-E", {{q .CrypttabScript}}, "/etc/crypttab"]
 {{- end}}
