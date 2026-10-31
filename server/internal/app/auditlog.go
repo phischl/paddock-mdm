@@ -200,7 +200,7 @@ func (l *AuditLog) Feed(ctx context.Context, after int64, limit int) (FeedPage, 
 	}
 	err := l.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		var err error
-		out.Events, err = q.ListAuditEventsAfter(ctx, auditstore.ListAuditEventsAfterParams{After: after, MaxRows: int32(limit)})
+		out.Events, err = q.ListAuditEventsAfter(ctx, auditstore.ListAuditEventsAfterParams{After: after, MaxRows: int32(limit)}) //nolint:gosec // validated 1–MaxFeedLimit
 		if err != nil {
 			return fmt.Errorf("list audit events after %d: %w", after, err)
 		}
