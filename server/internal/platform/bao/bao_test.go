@@ -163,6 +163,8 @@ func TestNotificationWrap(t *testing.T) {
 	refuse("a pseudonym key of organization A unwrapping under organization B", err)
 	_, err = notifier.DecryptContext(ctx, pseud, orgA, bao.FieldURL, wrapped)
 	refuse("a pseudonym key decrypting as a URL", err)
+	_, err = api.DecryptContext(ctx, pseud, orgA, bao.FieldPseudonym, wrapped)
+	refuse("the api unwrapping a pseudonym key", err)
 	_, err = api.Encrypt(ctx, pseud, orgA, bao.FieldPseudonym, key)
 	refuse("the api choosing a pseudonym key (encrypt on notification-pseudonym)", err)
 	_, err = api.WrappedDataKey(ctx, wrap, orgA, bao.FieldPseudonym)

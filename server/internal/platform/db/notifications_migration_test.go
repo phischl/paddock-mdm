@@ -282,6 +282,17 @@ func TestNotificationsMigration(t *testing.T) {
 		return err
 	}))
 
+	must("api pseudonym key", inOrg(api, orgA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO notification_pseudonym_key (organization_id, key_ciphertext)
+			VALUES ($1, 'vault:v1:x')`, orgA)
+		return err
+	}))
+	refused("api pseudonym key with created_at", inOrg(api, orgA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO notification_pseudonym_key (organization_id, key_ciphertext, created_at)
+			VALUES ($1, 'vault:v1:x', now() - interval '1 day')`, orgA)
+		return err
+	}))
+
 	// Pseudonym lookups: the api requests, reads and deletes; it cannot store a resolution.
 	must("api lookup request", inOrg(api, orgA, func(tx pgx.Tx) error {
 		id := uuid.New()
