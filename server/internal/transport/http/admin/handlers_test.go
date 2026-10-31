@@ -398,6 +398,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Logins:         app.NewLogins(runner, orgPool, idp),
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
 		Privacy:        app.NewPrivacy(runner, orgPool),
+		ReadAudit:      app.NewReadAudit(runner),
 		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
 		Commands:       app.NewDeviceCommands(orgPool),

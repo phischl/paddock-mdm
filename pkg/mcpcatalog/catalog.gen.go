@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "afa04571ab38bf23b8fd300e23b4c6bca3fa6635a1433c2e3321613d74d4fe4a"
+const Version = "5f8f9698c1748308a807a790042a72695e50a85082ddec4895bd45257a4535ad"
 
 var tools = []Tool{
 	{
@@ -2885,7 +2885,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "settings.privacy_changed",
 		Summary:     "",
-		Description: "Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator and hour) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"properties\":{\"audit_search_recorded\":{\"type\":\"boolean\"},\"inventory_view_recorded\":{\"type\":\"boolean\"},\"retired_inventory_days\":{\"maximum\":365,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"retired_inventory_days\",\"audit_search_recorded\",\"inventory_view_recorded\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{

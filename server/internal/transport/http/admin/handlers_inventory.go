@@ -22,6 +22,9 @@ func (h *handlers) ListDeviceSoftware(ctx context.Context, req adminapi.ListDevi
 	params, err := listing.Parse(deviceSoftwareList, listing.Query{
 		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
 	})
+	if _, rerr := h.readAudit.InventoryViewed(ctx, req.Id, app.InventoryViewSoftware, err); rerr != nil {
+		return nil, rerr
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -40,10 +43,13 @@ func (h *handlers) ListDeviceVulnerabilities(ctx context.Context, req adminapi.L
 	params, err := listing.Parse(findingList, listing.Query{
 		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
 	})
-	if err != nil {
-		return nil, err
+	var severities []string
+	if err == nil {
+		severities, err = listing.Enum("severity", req.Params.Severity)
 	}
-	severities, err := listing.Enum("severity", req.Params.Severity)
+	if _, rerr := h.readAudit.InventoryViewed(ctx, req.Id, app.InventoryViewVulnerabilities, err); rerr != nil {
+		return nil, rerr
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -688,6 +688,14 @@ type ProfileAssignment struct {
 	CreatedAt      time.Time
 }
 
+type ReadAuditWindow struct {
+	OrganizationID uuid.UUID
+	ActorID        string
+	Code           string
+	TargetID       string
+	WindowStart    time.Time
+}
+
 type RetentionInventoryHold struct {
 	DeviceID        uuid.UUID
 	OrganizationID  uuid.UUID

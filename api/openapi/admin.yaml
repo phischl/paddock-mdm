@@ -2476,7 +2476,7 @@ paths:
       description: |
         Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired
         device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches
-        of the audit log are recorded as audit.searched, once per administrator and hour) and
+        of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and
         inventory_view_recorded (views of a device's software and vulnerabilities are recorded as
         device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.
       x-paddock-audit: settings.privacy_changed

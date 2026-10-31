@@ -1869,6 +1869,67 @@ the export" differ, this amendment wins.
 5. **HEAD is refused with 405 (`Allow: GET`)** before the use case and audited as one rejected request, because
    net/http would otherwise run the download for a body that is never sent.
 
+### Amendment 2026-10-30 (PDK-139 round 2, read-access recording)
+
+Architect decisions after review 1 of PDK-139. Where this amendment and decisions 18–21, §6.4 or §6.6 differ, this
+amendment wins.
+
+1. **Accepted deviations.** (1) Both codes declare success, failure and denied (decision 18 emits failure).
+   (2) The development retention unit never purges a key younger than 24 hours; production keeps 48 hours.
+   (3) `PurgeReadWindows` deletes in batches of 1 000 like every other pass. (5) A denied role is recorded whatever
+   the switch, because authorization precedes the switch.
+2. **Deviation (4) changed: refused reads are recorded.** With the switch on, every authenticated attempt records
+   exactly one event. A refused read records `failure` with the problem code as reason: a range the list refuses
+   (`invalid_request` for from ≥ to, `range_too_large` beyond 92 days), handler input errors (`invalid_request`,
+   `page_out_of_range`) and a missing or foreign device (`not_found`, target the requested device ID, as for other
+   refused actions). A failure claims no window (the transaction rolls back). With the switch off nothing changes:
+   no event, the list refuses as before. Input the OpenAPI request validator rejects never reaches the handler and
+   records nothing.
+3. **(a) Cancellation.** `RecordReadOnce` reads the switch in its own step (`enabled`) before `claim`. A
+   `context.Canceled` before that step has read the switch records nothing; after it, the normal rules apply (switch
+   off: nothing; switch on: a claim error is recorded as failure with reason `canceled`).
+4. **(b) Foreign target IDs.** `audit.searched` records `target_id` only when it names a device of the caller's
+   organization (RLS-visible `GetDevice` in the claim transaction); otherwise `target_id` is omitted and
+   `target_id_used: true` is recorded (registry param). The isolation gate's globex `target_id` therefore never
+   enters acme's trail. Other object types (users, groups) are recorded as `target_id_used` only.
+5. **(c) Window key of `audit.searched` (amends decisions 19 and 20).** The key is `(actor key, "audit.searched",
+   filter hash, now.UTC().Truncate(time.Hour))`; the filter hash (SHA-256, hex, stored in the key's `target_id`
+   column) covers the normalized filters as recorded: the requested `from`/`to` (empty for a default end, so a default
+   range keeps its key within the hour), the registered codes and `codes_unknown`, outcomes and actor types (sorted,
+   without duplicates), the resolved `target_id` or `target_id_used`, and `q_used`. The search text never enters the
+   hash, so event counts cannot tell two texts apart. `device.inventory_viewed` keeps `(actor key, device ID, UTC
+   day)`. The list and the recording resolve default range ends against one clock (`AuditQuery.Now`).
+
+### Amendment 2026-10-31 (PDK-139 round 3, read-access recording)
+
+Architect decisions after review 2 of PDK-139 and the external review. Where this amendment and the amendment of
+2026-10-30 (PDK-139 round 2) differ, this amendment wins.
+
+1. **The switch unknown → no event and no data (replaces round 2 item 3 before the switch).** Any error before
+   `enabled` has read the switch — a cancellation, a passed deadline, a failed pool acquire, `BEGIN` or `set_config`,
+   a database error of the settings read — records nothing and is returned: the read itself fails with an error
+   response, and the list is not served.
+2. **The switch off → nothing, whatever fails afterwards.** Once the switch was read as off, `RecordReadOnce` never
+   records, also when the commit fails or the request is canceled after the switch read; the error is returned
+   unrecorded.
+3. **Target of a refused inventory view (amends round 2 item 2).** `device.inventory_viewed` sets the device as target
+   only after `GetDevice` resolved it within the caller's organization. Input errors, a missing or foreign device and a
+   failed lookup record `target_id_used: true` (registry param of `device.inventory_viewed`) and no device ID, so
+   another organization's device ID never enters this organization's trail.
+4. **One range, millisecond-truncated.** `AuditQuery.effectiveRange` truncates `from` and `to` to the millisecond of
+   audit timestamps once, so the recorded range, its filter hash and the list search identical bounds.
+5. **Registry notes.** The notes of `audit.searched` and `device.inventory_viewed` name every emitted failure reason
+   (`invalid_request`, `page_out_of_range`, `range_too_large`, `not_found`, `canceled`, `internal`) and that an
+   unreadable switch records nothing.
+6. **Transparency notice.** The notice and the portal hints say that only the first access per window is recorded.
+7. **Failure events are not coalesced.** Each refused read with the switch on records one failure event; the DPIA
+   input says so. A follow-up coalesces failures per actor, problem code and hour.
+8. **Accepted (R2-m2).** (i) Input the OpenAPI request validator rejects never reaches the handler and records nothing.
+   (ii) Only devices resolve a `target_id` of `audit.searched`; users, groups and other object types are recorded as
+   `target_id_used` only.
+9. **The search text stays out of the filter hash** because it can contain personal data (a searched employee's name):
+   neither the event nor its window key may tell two texts apart.
+
 ### Amendment 2026-10-31 (PDK-608: export builder hardening)
 
 Implemented in PDK-608, which folds in PDK-595 and PDK-596. Where this amendment and decisions 31, 32 or 34 differ,

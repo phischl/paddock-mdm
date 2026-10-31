@@ -35,7 +35,7 @@ Likelihood and severity are left for [Organization] to assess (for example low, 
 | **RR-20 Data loss on revocation** | A Lock or a `terminate` user lock ends the employee's sessions; unsaved work is lost. A Destroy makes the disk unreadable. | Confirmation with typed hostname; Destroy needs a second administrator; limits per administrator (3 per hour, 10 per 24 h), per organization (20 per 24 h) and per device (1 per 24 h). | [ ] | [ ] |
 | **RR-94 Deletion lag in backups** | Data that the retention schedule deletes stays in backups for up to 30 days and in the audit event that proves its deletion; the employee's data lives longer than the stated period. | Backups are encrypted and outside the control-plane host and expire after 30 days; every purge is recorded (`retention.purged`, `device.inventory_purged`). | [ ] | [ ] |
 | **RR-95 Evidence export** | An evidence package for an auditor holds every audit event of the requested range with the employee's user name and the administrators' names and client addresses; it leaves Paddock as a file. | The request needs a step-up and a purpose and is audited (`audit.export_requested`); every download is audited (`audit.export_downloaded`); only organization administrators and auditors can request and download; the package expires 7 days after it is ready. | [ ] | [ ] |
-| **Behaviour evaluation through audit search** | An administrator or auditor searches the audit log by an employee's user name, or reads the login history and the device inventory, to evaluate when and how the employee works. | The switch `audit_search_recorded` records the first search of the audit log per administrator and hour as `audit.searched` with its filters and whether a free-text term was used, not the term itself, so further searches in that hour and the searched name stay invisible; `inventory_view_recorded` records views of a device's *Software* and *Vulnerabilities* tabs as `device.inventory_viewed`, once per administrator, device and day; reads of the device overview (hardware facts, serial number), the device's logins and the organization-wide *Software* and *Vulnerabilities* pages are not recorded; the login history is off by default; roles limit who can read. | [ ] | [ ] |
+| **Behaviour evaluation through audit search** | An administrator or auditor searches the audit log by an employee's user name, or reads the login history and the device inventory, to evaluate when and how the employee works. | The switch `audit_search_recorded` records the first search of the audit log per administrator, hour and set of filters as `audit.searched` with its filters and whether a free-text term was used, not the term itself, so the searched name stays invisible and further searches with the same filters in that hour, whatever their term, record nothing; `inventory_view_recorded` records views of a device's *Software* and *Vulnerabilities* tabs as `device.inventory_viewed`, once per administrator, device and day; reads of the device overview (hardware facts, serial number), the device's logins and the organization-wide *Software* and *Vulnerabilities* pages are not recorded; the login history is off by default; roles limit who can read. | [ ] | [ ] |
 
 ## Mitigations provided by Paddock
 
@@ -43,9 +43,11 @@ Likelihood and severity are left for [Organization] to assess (for example low, 
   data, keystrokes, screen content and location are never collected ([privacy.md](../privacy.md)).
 - **Data minimisation in the inventory:** Fleet's queries that read users' home directories, network addresses and
   software usage are switched off; free disk space and uptime stay in Fleet.
-- **Recorded reads, coalesced:** audit searches (`audit.searched`, the first per administrator and hour) and views of
-  a device's *Software* and *Vulnerabilities* tabs (`device.inventory_viewed`, once per administrator, device and day)
-  are recorded when the organization switches them on.
+- **Recorded reads, coalesced:** audit searches (`audit.searched`, the first per administrator, hour and set of
+  filters) and views of a device's *Software* and *Vulnerabilities* tabs (`device.inventory_viewed`, once per
+  administrator, device and day) are recorded when the organization switches them on. Failure events of refused reads
+  (an invalid range or paging, a missing device) are not coalesced: each refused attempt records one event; coalescing
+  them per actor, problem code and hour is planned as a follow-up.
 - **Purge jobs with evidence:** login trace 365 days, login history `login_history_days`, inventory of retired devices
   `retired_inventory_days`, operational history per index retention; each deletion is recorded
   ([retention.md](../retention.md)).
