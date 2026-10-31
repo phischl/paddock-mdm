@@ -97,6 +97,16 @@ func TestPaddockctl(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.stdout), &page); err != nil || r.code != 0 || page.PageSize != 10 || page.Items == nil {
 		t.Fatalf("devices list: %+v (%v)", r, err)
 	}
+	if r := ctl.run(t, acme, "", "audit", "feed", "--after", "0", "--limit", "2"); r.code != 0 ||
+		!strings.HasPrefix(r.stderr, "next_after=") || strings.Count(r.stdout, "\n") > 2 {
+		t.Fatalf("audit feed: %+v", r)
+	}
+	if r := ctl.run(t, acme, "", "findings", "list", "--status", "open", "-o", "json"); r.code != 0 || !json.Valid([]byte(r.stdout)) {
+		t.Fatalf("findings list: %+v", r)
+	}
+	if r := ctl.run(t, acme, "", "findings", "list", "--status", "open"); r.code != 0 || !strings.Contains(r.stdout, "HOSTNAME") {
+		t.Fatalf("findings table: %+v", r)
+	}
 	if r := ctl.run(t, tokenFile(t, "pdk_"+strings.Repeat("A", 43), 0o600), "", "whoami"); r.code != 1 || !strings.Contains(r.stderr, "unauthenticated") {
 		t.Fatalf("wrong secret: %+v", r)
 	}

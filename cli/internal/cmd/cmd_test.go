@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/phischl/paddock-mdm/cli/internal/cmd"
 )
@@ -30,7 +32,9 @@ type fakeAPI struct {
 	lastBody []byte
 	headers  http.Header
 	// changed makes an apply with expected_plan fail as if the configuration changed after the dry run.
-	changed bool
+	changed       bool
+	feedQueries   []string
+	feedForbidden bool
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +75,25 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "GET /api/v1/devices":
 		_, _ = io.WriteString(w, `{"items":[{"hostname":"h1","state":"active","last_contact_at":null,"agent_version":"1.0.0",`+
 			`"applied_bundle_version":3}],"page":1,"page_size":10,"total":1,"total_capped":false,"sort":"hostname","q":"`+r.URL.RawQuery+`"}`)
+	case "GET /api/v1/audit-events/feed":
+		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+		f.feedQueries = append(f.feedQueries, r.URL.RawQuery)
+		if f.feedForbidden {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"status":403,"code":"forbidden"}`)
+			return
+		}
+		events := []string{}
+		for i := after + 1; i <= min(after+2, 4); i++ {
+			events = append(events, `{"commit_seq":`+strconv.Itoa(i)+`}`)
+		}
+		next := after + len(events)
+		_, _ = io.WriteString(w, `{"schema":"paddock.audit.feed.v1","events":[`+strings.Join(events, ",")+`],"next_after":`+
+			strconv.Itoa(next)+`,"latest":4}`)
+	case "GET /api/v1/findings":
+		_, _ = io.WriteString(w, `{"items":[{"hostname":"h1","kind":"tamper","code":"device.tamper.file","subject":"/etc/sudoers",`+
+			`"status":"open","assignee":null,"last_seen_at":"2026-10-31T10:00:00Z"}],"page":1,"page_size":25,"total":1,`+
+			`"total_capped":false,"sort":"-last_seen_at","q":"`+r.URL.RawQuery+`"}`)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"status":404,"code":"not_found"}`)
@@ -257,5 +280,67 @@ func TestDevicesList(t *testing.T) {
 	r = pc("", "devices", "list")
 	if r.code != 0 || !strings.Contains(r.stdout, "h1") || !strings.HasSuffix(r.stdout, "page 1 of 1 (total 1)\n") {
 		t.Fatalf("devices table: %+v", r)
+	}
+}
+
+func TestAuditFeed(t *testing.T) {
+	api, pc := setup(t, emptyPlan)
+	r := pc("", "audit", "feed", "--after", "0", "--limit", "2")
+	if r.code != 0 || r.stdout != "{\"commit_seq\":1}\n{\"commit_seq\":2}\n" || r.stderr != "next_after=2\n" {
+		t.Fatalf("feed: %+v", r)
+	}
+	if api.feedQueries[0] != "after=0&limit=2" {
+		t.Fatalf("query %v", api.feedQueries)
+	}
+	api.feedForbidden = true
+	if r := pc("", "audit", "feed"); r.code != cmd.ExitError || !strings.Contains(r.stderr, "forbidden") || r.stdout != "" {
+		t.Fatalf("forbidden: %+v", r)
+	}
+	for _, args := range [][]string{{"audit"}, {"audit", "list"}, {"audit", "feed", "--limit", "1001"}, {"audit", "feed", "--after", "-1"}} {
+		if r := pc("", args...); r.code != cmd.ExitUsage {
+			t.Fatalf("%v: %+v", args, r)
+		}
+	}
+}
+
+func TestAuditFeedFollow(t *testing.T) {
+	api, _ := setup(t, emptyPlan)
+	srv := httptest.NewTLSServer(api)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(token, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"PADDOCK_URL": srv.URL, "PADDOCK_TOKEN_FILE": token, "PADDOCK_CA_FILE": ca, "HOME": dir}
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	code := cmd.Main(ctx, cmd.Env{Args: []string{"audit", "feed", "--follow", "--limit", "2"}, Stdin: strings.NewReader(""),
+		Stdout: &out, Stderr: &errOut, Getenv: func(k string) string { return env[k] }, Version: "1", PollInterval: 50 * time.Millisecond})
+	if code != 0 || out.String() != "{\"commit_seq\":1}\n{\"commit_seq\":2}\n{\"commit_seq\":3}\n{\"commit_seq\":4}\n" ||
+		errOut.String() != "next_after=4\n" {
+		t.Fatalf("follow: %d %q %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestFindingsList(t *testing.T) {
+	_, pc := setup(t, emptyPlan)
+	r := pc("", "findings", "list", "--status", "open", "--status", "acknowledged", "--kind", "tamper", "--cleared", "-o", "json")
+	var page map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &page); err != nil || r.code != 0 ||
+		page["q"] != "cleared=true&kind=tamper&status=open&status=acknowledged" {
+		t.Fatalf("findings json: %+v", r)
+	}
+	r = pc("", "findings", "list", "--status", "open")
+	if r.code != 0 || !strings.Contains(r.stdout, "/etc/sudoers") || !strings.HasSuffix(r.stdout, "page 1 of 1 (total 1)\n") {
+		t.Fatalf("findings table: %+v", r)
+	}
+	if r := pc("", "findings"); r.code != cmd.ExitUsage {
+		t.Fatalf("findings: %+v", r)
 	}
 }
