@@ -120,6 +120,9 @@ services:
       # never from GitHub (ADR 0043 decision 9); without the gate running, the check fails with
       # release_source_unavailable.
       PADDOCK_AGENT_RELEASE_SOURCE_URL: ${PADDOCK_AGENT_RELEASE_SOURCE_URL:-http://github-fixture:8080}
+      # Webhook destinations may point at the acceptance sinks on the host (private addresses, plain http); plan M9
+      # gate N5. Honoured only with PADDOCK_ENV=development.
+      PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE: "true"
 
   # The revocation path is enabled in development and test stacks only (plan M4c decision 1); gate R5 runs with
   # PADDOCK_REVOCATION_ENABLED=false.
