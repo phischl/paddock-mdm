@@ -167,3 +167,21 @@ func SetExportChunkSize(e *Exporter, n int) { e.chunkSize = n }
 
 // SetExportBuildTimeout lowers the bound of one build.
 func SetExportBuildTimeout(e *Exporter, d time.Duration) { e.buildTimeout = d }
+
+// SetFailCommitted replaces the error of the transaction that fails a running export after it ended, to simulate a
+// COMMIT whose outcome the client never learned.
+func SetFailCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
+	e.failCommitted = fn
+}
+
+// SetExpiredCommitted replaces the error of the transaction that expires a ready export after it ended, to simulate a
+// COMMIT whose outcome the client never learned.
+func SetExpiredCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, err error) error) {
+	e.expiredCommitted = fn
+}
+
+// SetExportWriteTimeout lowers the bound of markReady and failRunning.
+func SetExportWriteTimeout(e *Exporter, d time.Duration) { e.writeTimeout = d }
+
+// ExportTimeouts returns the bound of one build and of markReady and failRunning.
+func ExportTimeouts(e *Exporter) (build, write time.Duration) { return e.buildTimeout, e.writeTimeout }

@@ -1941,7 +1941,9 @@ this amendment wins. No migration and no change to the API, the events or the pa
    so an error in those passes cannot skip the sweep.
 2. **A build is bounded by `ExportStuckAfter` (decision 32).** The whole build, including every object-store read,
    runs under a deadline of 2 h; when it passes, the export fails with `error: "the build took longer than 2h0m0s: …"`
-   and one failure event, unless the stuck check failed it first (then its event is the only one).
+   and one failure event, unless the stuck check failed it first (then its event is the only one). The deadline counts
+   from the start of the build, the stuck check from `started_at`, so the stuck check usually fails a hung export
+   first; the bound then mainly ends the hung build and frees its goroutine.
 3. **Chunks are inserted only while the export is running (decision 32 step 4).** `InsertAuditExportChunk` inserts
    only when the export is `running`, read under a share lock in the same statement, so it either waits for a stuck
    check in flight or sees its result. An insert that inserts nothing fails the build like `errNotRunning`: no
@@ -1949,6 +1951,21 @@ this amendment wins. No migration and no change to the API, the events or the pa
 4. **The status read after a failed ready update is final (decision 32 steps 5–6).** It reads under the row lock
    (`GetAuditExportLocked`, `FOR UPDATE`, 30 s, outliving a shutdown), so a COMMIT still in flight is waited out.
    When it fails or still sees `running`, the build reads once more after `failRunning` matched no row; a `ready`
-   export then takes the success path. Every export that a build marked ready ends with exactly one
+   export then takes the success path. When the first read failed, the build also reads once more before it gives
+   up on a shutdown or on a failed `failRunning`. Every export that a build marked ready ends with exactly one
    `audit.export_completed` success event, unless no status read succeeds at all, in which case the export stays
    ready with its chunks.
+5. **A failure or expiry whose COMMIT outcome is lost still records its event (decisions 32 and 34).** When the
+   transaction of `failRunning` (build and stuck check) or of the expiry update returns an error after its update
+   matched the row, the caller reads the export under the row lock (as in item 4). If it is `failed` with this
+   caller's error text, or `expired`, the write committed and this caller records the one failure or
+   `retention.purged` event; otherwise it records nothing. A caller whose update never matched the row (for example
+   because it gave up waiting for another replica's lock) never records, so the replica whose write won stays the only
+   one. Residual: if a matched update is rolled back and another replica writes the same status and text before the
+   read, both record; this needs a rollback after the update plus a concurrent stuck check or expiry of the same
+   export.
+6. **`markReady` and `failRunning` are bounded on the client side** by the writer transaction timeout plus 30 s, so a
+   hung connection or a lost acknowledgement cannot block the build or the stuck check beyond the server's own
+   `transaction_timeout`.
+7. **A failing expiry does not stop the pass.** `Expire` records the error, continues with the next due export and
+   then runs the stuck check; the pass returns all errors joined.

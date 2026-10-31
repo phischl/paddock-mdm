@@ -1575,3 +1575,343 @@ func TestExportExpireSweepsWhenALoopFails(t *testing.T) {
 		t.Fatalf("locked export became %s", got.Status)
 	}
 }
+
+// insertExport inserts an export with one chunk.
+func (e exportEnv) insertExport(t *testing.T, org uuid.UUID, status string, started, expires *time.Time) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	id := uuid.Must(uuid.NewV7())
+	if _, err := e.super.Exec(ctx, `INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose,
+		requested_by, correlation_id, started_at, expires_at) VALUES ($1, $2, $3, $4, $4, 'x', '{"type":"admin"}', $5, $6, $7)`,
+		id, org, status, pastDay(14), "req-"+id.String(), started, expires); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.super.Exec(ctx, "INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, 0, 'abc')", id, org); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// hold runs stmt in a transaction of another connection and returns a function that ends it.
+func (e exportEnv) hold(t *testing.T, commit bool, stmt string, args ...any) (end func()) {
+	t.Helper()
+	bg := context.Background()
+	other := superConn(t)
+	tx, err := other.Begin(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(bg, stmt, args...); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if commit {
+			if err := tx.Commit(bg); err != nil {
+				t.Error(err)
+			}
+		} else {
+			_ = tx.Rollback(bg)
+		}
+		_ = other.Close(bg)
+	}
+}
+
+// TestExportFailureRecordedDespiteLostCommit: when the transaction that fails an export commits but the client gets
+// an error, the caller whose write won records exactly one failure event (build and stuck check); a caller whose
+// write did not win records nothing.
+func TestExportFailureRecordedDespiteLostCommit(t *testing.T) {
+	e := newExportEnv(t)
+	bg := context.Background()
+	lostAck := func(_ context.Context, _ uuid.UUID, err error) error {
+		if err != nil {
+			return err
+		}
+		return errors.New("connection reset")
+	}
+	defer auditwriter.SetFailCommitted(e.exporter, nil)
+
+	t.Run("build", func(t *testing.T) {
+		org := uuid.Must(uuid.NewV7())
+		d := pastDay(15)
+		e.object(t, org, d.Add(time.Hour), 1)
+		e.seal(t, org, d)
+		x := e.running(t, org, d, d.AddDate(0, 0, 1), "lost failure commit")
+		auditwriter.SetFailCommitted(e.exporter, lostAck)
+		if err := e.exporter.Build(bg, x); err == nil {
+			t.Fatal("build succeeded")
+		}
+		wantErr := fmt.Sprintf("day %s: no manifest", d.AddDate(0, 0, 1).Format(time.DateOnly))
+		if got := e.export(t, x.ID); got.Status != "failed" || got.Error == nil || *got.Error != wantErr {
+			t.Fatalf("export = %+v", got)
+		}
+		evs := e.events(t, org, audit.CodeAuditExportCompleted, x.ID)
+		if len(evs) != 1 || evs[0].outcome != "failure" || evs[0].params["error"] != wantErr {
+			t.Fatalf("audit.export_completed = %+v", evs)
+		}
+	})
+
+	t.Run("stuck check", func(t *testing.T) {
+		org := uuid.Must(uuid.NewV7())
+		started := time.Now().Add(-auditwriter.ExportStuckAfter - time.Minute)
+		id := e.insertExport(t, org, "running", &started, nil)
+		auditwriter.SetFailCommitted(e.exporter, lostAck)
+		if _, err := e.exporter.Expire(bg, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.export(t, id); got.Status != "failed" || len(e.chunks(t, id)) != 0 {
+			t.Fatalf("export = %+v", got)
+		}
+		evs := e.events(t, org, audit.CodeAuditExportCompleted, id)
+		if len(evs) != 1 || evs[0].outcome != "failure" || evs[0].params["error"] != "exporter restarted" {
+			t.Fatalf("audit.export_completed = %+v", evs)
+		}
+	})
+
+	t.Run("build lost to the stuck check", func(t *testing.T) {
+		org := uuid.Must(uuid.NewV7())
+		d := pastDay(16)
+		e.object(t, org, d.Add(time.Hour), 1)
+		e.seal(t, org, d)
+		x := e.running(t, org, d, d.AddDate(0, 0, 1), "stuck check won")
+		// The build's write did not land; the stuck check's did (its event is its own and not part of this test).
+		auditwriter.SetFailCommitted(e.exporter, func(_ context.Context, id uuid.UUID, err error) error {
+			if err != nil {
+				return err
+			}
+			if _, err := e.super.Exec(bg, "UPDATE audit_export SET error = 'exporter restarted' WHERE id = $1", id); err != nil {
+				t.Fatal(err)
+			}
+			return errors.New("connection reset")
+		})
+		if err := e.exporter.Build(bg, x); err == nil {
+			t.Fatal("build succeeded")
+		}
+		if evs := e.events(t, org, audit.CodeAuditExportCompleted, x.ID); len(evs) != 0 {
+			t.Fatalf("audit.export_completed = %+v", evs)
+		}
+	})
+
+	t.Run("stuck check whose update never ran", func(t *testing.T) {
+		auditwriter.SetFailCommitted(e.exporter, nil)
+		auditwriter.SetExportWriteTimeout(e.exporter, 300*time.Millisecond)
+		defer auditwriter.SetExportWriteTimeout(e.exporter, time.Minute)
+		org := uuid.Must(uuid.NewV7())
+		started := time.Now().Add(-auditwriter.ExportStuckAfter - time.Minute)
+		id := e.insertExport(t, org, "running", &started, nil)
+		// Another replica's stuck check holds the row and commits the same failure after this one gave up.
+		end := e.hold(t, true, "UPDATE audit_export SET status = 'failed', error = 'exporter restarted' WHERE id = $1", id)
+		go func() {
+			time.Sleep(time.Second)
+			end()
+		}()
+		if _, err := e.exporter.Expire(bg, time.Now()); err == nil {
+			t.Fatal("the stuck check did not give up on a held export")
+		}
+		waitStatus(t, e, id, "failed")
+		if evs := e.events(t, org, audit.CodeAuditExportCompleted, id); len(evs) != 0 {
+			t.Fatalf("audit.export_completed = %+v", evs)
+		}
+	})
+}
+
+// waitStatus waits until the export has status.
+func waitStatus(t *testing.T, e exportEnv, id uuid.UUID, status string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); e.export(t, id).Status != status; {
+		if time.Now().After(deadline) {
+			t.Fatalf("export never became %s", status)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestExportExpiryRecordedDespiteLostCommit: an expiry whose acknowledgement is lost records exactly one
+// retention.purged event; an expiry whose update never ran records none, although another replica expired the export.
+func TestExportExpiryRecordedDespiteLostCommit(t *testing.T) {
+	e := newExportEnv(t)
+	bg := context.Background()
+	past := time.Now().Add(-time.Minute)
+	defer auditwriter.SetExpiredCommitted(e.exporter, nil)
+
+	t.Run("lost acknowledgement", func(t *testing.T) {
+		org := uuid.Must(uuid.NewV7())
+		id := e.insertExport(t, org, "ready", &past, &past)
+		auditwriter.SetExpiredCommitted(e.exporter, func(_ context.Context, _ uuid.UUID, err error) error {
+			if err != nil {
+				return err
+			}
+			return errors.New("connection reset")
+		})
+		if _, err := e.exporter.Expire(bg, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.export(t, id); got.Status != "expired" || len(e.chunks(t, id)) != 0 {
+			t.Fatalf("export = %+v", got)
+		}
+		if evs := e.events(t, org, audit.CodeRetentionPurged, id); len(evs) != 1 || evs[0].outcome != "success" {
+			t.Fatalf("retention.purged = %+v", evs)
+		}
+	})
+
+	t.Run("update never ran", func(t *testing.T) {
+		auditwriter.SetExpiredCommitted(e.exporter, nil)
+		org := uuid.Must(uuid.NewV7())
+		id := e.insertExport(t, org, "ready", &past, &past)
+		end := e.hold(t, true, "UPDATE audit_export SET status = 'expired' WHERE id = $1", id)
+		go func() {
+			time.Sleep(3 * time.Second)
+			end()
+		}()
+		ctx, cancel := context.WithTimeout(bg, time.Second)
+		defer cancel()
+		if _, err := e.exporter.Expire(ctx, time.Now()); err == nil {
+			t.Fatal("expiry of a held export succeeded")
+		}
+		waitStatus(t, e, id, "expired")
+		if evs := e.events(t, org, audit.CodeRetentionPurged, id); len(evs) != 0 {
+			t.Fatalf("retention.purged = %+v", evs)
+		}
+	})
+}
+
+// TestExportReadyReadAgainBeforeGivingUp: when the ready update's acknowledgement is lost and the first status read
+// fails, the build reads once more before it returns on a shutdown or a failed failure update, and the ready export
+// gets its one success event.
+func TestExportReadyReadAgainBeforeGivingUp(t *testing.T) {
+	e := newExportEnv(t)
+	for _, c := range []struct {
+		name     string
+		shutdown bool
+	}{{"shutdown", true}, {"failure update fails", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			org := uuid.Must(uuid.NewV7())
+			d := pastDay(17)
+			e.object(t, org, d.Add(time.Hour), 2)
+			e.seal(t, org, d)
+			x := e.running(t, org, d, d, c.name)
+			auditwriter.SetReadyCommitted(e.exporter, func(context.Context, uuid.UUID, error) error { return errors.New("connection reset") })
+			defer auditwriter.SetReadyCommitted(e.exporter, nil)
+			reads := 0
+			auditwriter.SetStatusRead(e.exporter, func(_ context.Context, _ uuid.UUID, status string, err error) (string, error) {
+				if reads++; reads == 1 {
+					if c.shutdown {
+						cancel()
+					}
+					return "", errors.New("connection reset")
+				}
+				return status, err
+			})
+			defer auditwriter.SetStatusRead(e.exporter, nil)
+			auditwriter.SetFailCommitted(e.exporter, func(context.Context, uuid.UUID, error) error { return errors.New("connection reset") })
+			defer auditwriter.SetFailCommitted(e.exporter, nil)
+			if err := e.exporter.Build(ctx, x); err != nil {
+				t.Fatalf("build: %v", err)
+			}
+			if reads != 2 {
+				t.Fatalf("%d status reads", reads)
+			}
+			e.assertReady(t, org, x.ID)
+		})
+	}
+}
+
+// TestExportWritesBounded: a ready or failure update that cannot get the export row gives up after its bound
+// instead of waiting for the row; the export stays running for the stuck check.
+func TestExportWritesBounded(t *testing.T) {
+	e := newExportEnv(t)
+	bg := context.Background()
+	auditwriter.SetExportWriteTimeout(e.exporter, 300*time.Millisecond)
+	defer auditwriter.SetExportWriteTimeout(e.exporter, time.Minute)
+	for _, c := range []struct {
+		name    string
+		lastDay func(d time.Time) time.Time
+	}{
+		{"ready update", func(d time.Time) time.Time { return d }},
+		{"failure update", func(d time.Time) time.Time { return d.AddDate(0, 0, 1) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			org := uuid.Must(uuid.NewV7())
+			d := pastDay(18)
+			e.object(t, org, d.Add(time.Hour), 1)
+			e.seal(t, org, d)
+			x := e.running(t, org, d, c.lastDay(d), c.name)
+			// SHARE mode blocks every UPDATE of audit_export but neither the chunk inserts nor the locked status reads.
+			end := e.hold(t, false, "LOCK TABLE audit_export IN SHARE MODE")
+			released := make(chan struct{})
+			go func() {
+				time.Sleep(5 * time.Second)
+				end()
+				close(released)
+			}()
+			start := time.Now()
+			err := e.exporter.Build(bg, x)
+			took := time.Since(start)
+			<-released
+			if err == nil {
+				t.Fatal("build succeeded")
+			}
+			if took > 4*time.Second {
+				t.Fatalf("build waited %s for the row", took)
+			}
+			if got := e.export(t, x.ID); got.Status != "running" {
+				t.Fatalf("export = %+v", got)
+			}
+			if evs := e.events(t, org, audit.CodeAuditExportCompleted, x.ID); len(evs) != 0 {
+				t.Fatalf("audit.export_completed = %+v", evs)
+			}
+		})
+	}
+}
+
+// TestExportExpireContinuesPastAFailedExpiry: a failing expiry neither stops the expiry of the next export nor the
+// stuck check; the pass reports the failure.
+func TestExportExpireContinuesPastAFailedExpiry(t *testing.T) {
+	e := newExportEnv(t)
+	org := uuid.Must(uuid.NewV7())
+	earlier, past := time.Now().Add(-time.Hour), time.Now().Add(-time.Minute)
+	started := time.Now().Add(-auditwriter.ExportStuckAfter - time.Minute)
+	failing := e.insertExport(t, org, "ready", &earlier, &earlier)
+	next := e.insertExport(t, org, "ready", &past, &past)
+	stuck := e.insertExport(t, org, "running", &started, nil)
+	// The expiry of the first export rolls back: its status is restored and the client gets an error.
+	auditwriter.SetExpiredCommitted(e.exporter, func(_ context.Context, id uuid.UUID, err error) error {
+		if err != nil || id != failing {
+			return err
+		}
+		if _, err := e.super.Exec(context.Background(), "UPDATE audit_export SET status = 'ready' WHERE id = $1", id); err != nil {
+			t.Fatal(err)
+		}
+		return errors.New("connection reset")
+	})
+	defer auditwriter.SetExpiredCommitted(e.exporter, nil)
+	_, err := e.exporter.Expire(context.Background(), time.Now())
+	if err == nil || !strings.Contains(err.Error(), failing.String()) {
+		t.Fatalf("Expire = %v", err)
+	}
+	for id, want := range map[uuid.UUID]string{failing: "ready", next: "expired", stuck: "failed"} {
+		if got := e.export(t, id); got.Status != want {
+			t.Fatalf("export %s is %s, want %s", id, got.Status, want)
+		}
+	}
+	if evs := e.events(t, org, audit.CodeRetentionPurged, next); len(evs) != 1 {
+		t.Fatalf("retention.purged = %+v", evs)
+	}
+	if evs := e.events(t, org, audit.CodeAuditExportCompleted, stuck); len(evs) != 1 {
+		t.Fatalf("audit.export_completed = %+v", evs)
+	}
+}
+
+// TestExportDefaultBounds: a build is bounded by ExportStuckAfter, and markReady and failRunning outlast the
+// writer's own transaction timeout, so its error arrives first.
+func TestExportDefaultBounds(t *testing.T) {
+	x := auditwriter.NewExporter(nil, nil, nil, nil, nil, nil, "test", time.Second)
+	build, write := auditwriter.ExportTimeouts(x)
+	if build != auditwriter.ExportStuckAfter {
+		t.Fatalf("build bound %s, want %s", build, auditwriter.ExportStuckAfter)
+	}
+	if write <= db.WriterTransactionTimeout || write > db.WriterTransactionTimeout+time.Minute {
+		t.Fatalf("write bound %s", write)
+	}
+}
