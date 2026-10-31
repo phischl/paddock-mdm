@@ -48,6 +48,9 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockAuditWriterNotConsuming` | `audit.writer` has no consumer for 5 minutes (visible on the control plane) | critical |
 | `PaddockAuditChainBroken` | the last nightly chain verification found a broken or unreadable audit chain of at least one organization (`docs/operations/audit-bucket.md` section 3) | critical |
 | `PaddockAuditVerifyStale` | no nightly chain verification has finished for 36 hours, for one hour | warning |
+| `PaddockAuditIndexPurgeStale` | no complete audit index purge (01:15 UTC) has finished for 48 hours, for one hour; a purge with a failed or timed-out partition is not complete (`docs/operations/audit-bucket.md` section 4) | warning |
+| `PaddockAuditExportFailed` | an evidence export was marked failed in the last hour (the export's `error` and the audit writer's log name the cause; the requester requests again) | warning |
+| `PaddockAuditExportStuck` | the oldest pending evidence export has waited more than an hour, for 10 minutes: no audit writer builds exports | warning |
 | `PaddockAuditWriterTransactionSlow` | the audit writer's transaction p95 is above 5 s for 5 minutes (see [Attributing a slow audit writer](#attributing-a-slow-audit-writer)) | warning |
 | `PaddockCompileLatencyHigh` | bundle compilation p95 above 30 s for 10 minutes | warning |
 | `PaddockGateway5xx` | more than 5 % of the device API's responses are 5xx for 10 minutes | warning |
@@ -66,6 +69,8 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockWALArchiveLagMissing` | the worker exports the WAL archive age of fewer stanzas than `paddock_backup_wal_stanzas` for 30 minutes | critical |
 | `PaddockOpenBaoHealthMissing` | the worker is up but exports no `paddock_openbao_reachable` for an hour | critical |
 | `PaddockCertificateExpiryMissing` | fewer certificate expiries than `paddock_tls_probe_hosts` for an hour | warning |
+| `PaddockRetentionPurgeStale` | the retention round has not purged a store (`device_login_event`, `device_user_seen`, `retired_inventory`) in every organization for 48 hours, for an hour: personal data is kept beyond its retention period (ADR 0032); the worker logs `retention round failed` with the failing organization and store | critical |
+| `PaddockRetentionPurgeMissing` | the worker exports the last success of fewer stores than `paddock_retention_stores` for an hour (e.g. a pass fails from the start) | warning |
 
 On a lab host (`docs/operations/lab-install.md`) the probe dials your TLS proxy (`PADDOCK_LAB_PROXY_ADDR:443`), so
 `PaddockCertificateExpiry` and `PaddockCertificateProbeFailing` watch the proxy's certificate.
@@ -84,6 +89,7 @@ On a lab host (`docs/operations/lab-install.md`) the probe dials your TLS proxy 
 | `paddock_unsealer_shares_present`, `paddock_unsealer_setting_enabled`, `paddock_unsealer_unseals_total{result}` | unsealer (only where automatic unseal is enabled; job `paddock-unsealer`): the shares file holds three valid lines, the setting it last read, and its unseal attempts by `success` and `failure` |
 | `paddock_tls_certificate_expiry_timestamp_seconds{host}`, `paddock_tls_probe_success{host}`, `paddock_tls_probe_hosts` | worker: TLS handshake with Caddy for each name of `PADDOCK_TLS_PROBE_HOSTS` every 15 minutes, verified against the system trust store like a client (production; Caddy exports no certificate metrics). An expired, untrusted or wrong-name certificate reads `paddock_tls_probe_success` 0 |
 | `paddock_osv_stale`, `paddock_osv_last_success_timestamp_seconds` | worker (M5c) |
+| `paddock_retention_last_success_timestamp_seconds{store}`, `paddock_retention_deleted_total{store}`, `paddock_retention_stores` | worker (M10), every `PADDOCK_RETENTION_INTERVAL` (Go duration, default `6h`, between `1m` and `24h` unless `PADDOCK_ENV=development`; `paddock prodcheck` fails on any other value): end of the last retention round in which the store's pass succeeded in every organization (not exported before the first), the rows deleted per store (including the committed batches of a failed pass; for `retired_inventory` the retired devices whose inventory rows or Fleet host were deleted; a device that failed, was skipped, or keeps its Fleet host with nothing but its host reference left to delete does not count), and the number of stores the round purges (8: `device_login_event`, `device_user_seen`, `retired_inventory`, `read_audit_window`, `device_command`, `device_alert`, `device_event_gap`, `action`) |
 | `paddock_identity_directory_refusals_total` | worker: organization rounds of admin-accounts and rounds of platform-admins refused because every role group listing was empty and the directory probe did not show that the service token sees the directory (PDK-424, PDK-534); counted once per refused organization or platform round |
 | `paddock_ip_allowlist_entries`, `paddock_ip_allowlist_enabled`, `paddock_ip_allowlist_bypass`, `paddock_ip_allowlist_denied_total`, `paddock_ip_allowlist_reload_errors_total`, `paddock_ip_allowlist_last_reload_timestamp_seconds` | api (M7a): the cached IP allow list of each replica, the break-glass bypass, denied requests (exact count; the audit log aggregates them) and the reloads from PostgreSQL |
 | `paddock_audit_writer_transaction_seconds{result}` | audit writer: duration of each writer transaction, one per organization of a batch, from acquiring the connection to commit (`committed`) or rollback (`rolled_back`, e.g. a failed put or `transaction_timeout`); it includes the WORM put of the transaction |
@@ -91,6 +97,9 @@ On a lab host (`docs/operations/lab-install.md`) the probe dials your TLS proxy 
 | `paddock_audit_verify_runs_total{trigger,result}` | audit writer: chain verification runs by `trigger` (`nightly`, `sample`, `cli`) and `result`. `ok` and `failed` are read from `audit_verification_run` at every scrape, so they count the runs of every process, `paddock-server audit verify` included, and survive restarts; they are omitted while the audit database cannot be read. `error` (the verification could not run) and `record_error` (the run could not be recorded) count this process's runs only |
 | `paddock_audit_verify_failed_organizations` | audit writer: organizations whose nightly verification (window or sample day) failed or could not run in the last cycle |
 | `paddock_audit_verify_last_run_timestamp_seconds` | audit writer: end of the last nightly cycle; at start the end of the last recorded nightly run, or the start time |
+| `paddock_audit_index_purge_last_success_timestamp_seconds` | audit writer: end of the last index purge in which no partition failed or hit the lock timeout; at start the start time |
+| `paddock_audit_export_total{result}`, `paddock_audit_export_pending_age_seconds`, `paddock_audit_export_build_seconds` | audit writer (M10): evidence exports of this process by `result` (`ready`, `failed`, `expired`), the age of the oldest pending export in seconds after every poll (0 when none is pending), and the duration of each successful build (buckets 0.1 s to about 55 min) |
+| `paddock_audit_index_partitions_dropped_total` | audit writer: monthly audit index partitions dropped by the nightly purge of this process |
 
 Both histograms use the buckets 5 ms to 41 s and carry no organization or other identifying labels.
 

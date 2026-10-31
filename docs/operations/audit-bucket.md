@@ -109,6 +109,24 @@ The audit writer's `/metrics` exports `paddock_audit_verify_runs_total{trigger,r
 `paddock_audit_verify_failed_organizations` and `paddock_audit_verify_last_run_timestamp_seconds`
 (`docs/operations/monitoring.md`).
 
+**Other nightly work of the audit writer** (ADR 0032, `docs/compliance/retention.md`):
+
+- **Index purge.** Every night at 01:15 UTC, after the seal and the verification, the audit writer drops every
+  monthly partition of the audit index whose events were all recorded more than `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`
+  ago (default and minimum: the WORM retention) and records `retention.purged` (store `audit_index`) per partition in
+  the platform pseudo-organization. The WORM bucket, `audit_object` and `audit_manifest` are never touched. `paddock-server audit purge --dry-run`
+  (audit-writer container) lists every partition with `DROP` or `KEEP` and changes nothing.
+- **Evidence exports.** Evidence packages (`POST /api/v1/audit/exports`) are built on the audit host by the audit
+  writer and stored in the audit index database, never in the bucket; a package expires 7 days after it is ready and
+  the nightly purge deletes it (`retention.purged`, store `audit_exports`). An auditor requests a package for sealed
+  days on the portal's *Evidence exports* page (`/audit/exports`) after a step-up; the request is recorded as
+  `audit.export_requested`, the finished build as `audit.export_completed` and every download as
+  `audit.export_downloaded` (also when refused). A day that is not sealed yet is refused (`day_not_sealed`) and at most
+  two exports of an organization are open at a time (`too_many_exports`). The auditor verifies the downloaded package
+  without any access to Paddock: `paddockctl audit verify-export <file> --fingerprint <fingerprint>`
+  ([paddockctl.md](paddockctl.md#verifying-an-evidence-package)), with the fingerprint of the `audit-chain` key from the
+  signing-keys list of the page or from `paddock-server audit keys` on the audit host.
+
 **What to do on `PaddockAuditChainBroken`.** The alert fires as soon as a nightly cycle found a broken or
 unreadable chain of at least one organization. A restart of the audit writer does not clear it: at start the writer
 counts the organizations whose newest recorded nightly window or sample day failed.
@@ -146,5 +164,47 @@ its log for the 00:45 UTC cycle.
   `PADDOCK_AUDIT_RETENTION_DAYS` (≥ 400). Raising the value extends retention for new objects only.
 - Expired objects are removed by a lifecycle rule that the operator adds once the retention period is known to
   be final; Paddock itself never deletes audit objects.
+- **Index purge.** The audit index (`paddock_audit.audit_event`, monthly partitions by occurrence time) is purged
+  by the audit writer at 01:15 UTC: a partition is dropped only when its month ended and **every** event in it was
+  recorded more than `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` ago (default and minimum: `PADDOCK_AUDIT_RETENTION_DAYS`,
+  so the index never goes ahead of the WORM retention). A partition with a later recorded event is kept until that
+  event expires too. Each drop is recorded as `retention.purged` (store `audit_index`, the partition and the number
+  of events) in the platform pseudo-organization, in the index and in the bucket. The purge waits at most 5 s for
+  the partition's lock; a partition it could not lock is retried the next night. It never deletes objects,
+  `audit_object` or `audit_manifest` rows. `paddock-server audit purge --dry-run` (in the audit-writer container)
+  prints `DROP`/`KEEP` per due partition or `nothing to purge`; without `--dry-run` it purges at once and exits 1
+  when a partition could not be dropped. `PaddockAuditIndexPurgeStale` warns when no complete purge finished for
+  48 hours.
 - `paddock-server audit verify --org <id> --from <day> --to <day>` (run in the audit-writer container) checks the
   signed manifest chain and every object hash of an organization.
+- **Evidence export size and disk.** The audit writer builds one export at a time. It spools the decoded
+  `events.jsonl` of the export in `TMPDIR`, which is the Docker volume `audit-writer-tmp` mounted at
+  `/var/lib/paddock/export-tmp`; the file is unlinked as soon as it is created, so it never shows up in a listing
+  and nothing is left after a crash, and its space is freed when the build ends. The finished package is stored in
+  chunks in the audit index database until it expires. `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default `4294967296`,
+  4 GiB) bounds both `events.jsonl` and the whole package; the package size is computed before its first chunk is
+  stored. An export that exceeds it fails with an error starting with `export_too_large` (shown on the *Evidence
+  exports* page) and an `audit.export_completed` failure event with `reason: export_too_large`, and leaves no chunks
+  behind. Ask the auditor for a shorter range, or raise the limit after checking the disk. An export that the stuck
+  check fails after a restart of the writer (`exporter restarted`) carries no `reason`, whatever stopped it.
+  Sizing: the volume lives in Docker's data-root (`docker info -f '{{.DockerRootDir}}'`, usually `/var/lib/docker`),
+  so it shares that file system with the images, the container logs and the other volumes of the host; it needs free
+  space for one `events.jsonl` of the limit per audit-writer replica (each replica builds one export at a time), and
+  the audit database for the packages of the open exports (at most two per organization, kept 7 days). A single
+  object or manifest larger than 256 MiB is never read into memory: the export fails and the verification reports it
+  as unreadable; an object is decompressed as a stream, never as a whole. The volume holds no state and needs no
+  backup.
+- **The audit writer's writable directories.** The container root is read-only. `/tmp` is a 64 MiB tmpfs mounted
+  `noexec,nosuid,nodev`; the export volume at `/var/lib/paddock/export-tmp` is the writer's one writable directory
+  that allows executing files (Docker mounts a named volume without `noexec`). Nothing but the unlinked export file
+  is written there; `compose.audit.yaml` keeps both, and the bundle test checks them.
+- **Signing key fingerprints.** After every seal and every evidence package the audit writer records the public key of
+  the `audit-chain` version it signed with in `paddock_audit.audit_signing_key` (insert-only, so a published key never
+  changes; the writer reads OpenBao at most every 10 minutes for this and fails the seal or export if the key cannot be
+  recorded or differs from the published key of that version: the mismatch is logged at ERROR with both fingerprints
+  and stops sealing, which the seal-staleness alert surfaces). Auditors and organization admins read them with
+  `GET /api/v1/audit/keys` (`key_version`, `public_key`, `fingerprint` = lowercase hex SHA-256 of the raw 32-byte key).
+  `paddock-server audit keys` (in the audit-writer container) prints `audit-chain v<N> <fingerprint>` per version straight from OpenBao, never from the database.
+  Record that output out of band (ISMS register, signed hand-over note) when a version first appears and after every
+  key rotation: an auditor trusts a package only if its fingerprint equals a value that did not travel with the
+  package. Key rotation itself is not covered here.

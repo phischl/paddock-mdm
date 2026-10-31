@@ -355,3 +355,75 @@ autostart, SSH, network hooks, logrotate, any file directly in `/etc/`, any `/et
 the `org_admin` role and a step-up; ordinary paths keep `RolesWrite`. The agent never deletes a file on a denied
 path, not even one it wrote (`left_denied_file`). The compiler does not ship definitions on denied paths; they are
 listed for review.
+
+## Amendment 2026-10-30 (PDK-590) — the clone rule compares against the last delivered number
+
+**Context.** Decision 11 compares the device's `Paddock-Seq` with the value of the draw counter `seq:<device>`
+before the current draw ("the stored value minus 1"). PDK-471 added `ReleaseSeq` (compare-and-decrement) so that a
+check-in that fails after its draw gives the number back. The release misses when the counter has moved on: a check-in
+stalls after its draw (the AMQP publish is not context-aware — amqp091-go documents that cancelling the context does
+not cancel a publish in progress — so a connection the broker blocks holds the handler for as long as the block
+lasts, long after the agent's 30 s client timeout and its 30 s back-off), the agent retries, the retry draws the next
+number, and the stalled request's release then finds a counter that no longer equals its number. Two such rounds leave
+two drawn numbers the device never received; the next successful check-in reports `issued - 2` and is quarantined as a
+clone without any Valkey loss (`TestCheckinRetryWhileStalledKeepsSeq`, reproduced 2026-10-30: `Seq:4 ReportedSeq:1
+CloneSuspected:true`). This violates design contract 8 (fail safe).
+
+**Options.**
+1. Release unconditionally (plain `DECR`). Rejected: the counter falls below a number another request delivered, so
+   the next draw hands out a duplicate; in the race with a real clone both holders converge on the same number and
+   the divergence that detection relies on is reset.
+2. Reuse an in-flight number for a retry of the same device. Rejected: two concurrent holders (genuine and clone)
+   would receive the same number; needs per-device in-flight state with its own races.
+3. Widen the tolerance of the rule. Rejected: weakens detection for every device, and any fixed tolerance is beaten
+   by one more stall.
+4. **Compare against what was delivered, not what was drawn.** Chosen.
+
+**Decision.** The draw counter `seq:<device>` stays the source of unique numbers (PDK-475: conditional increment,
+restored from `device_status.last_seq`, `ReleaseSeq` kept as counter hygiene). A second string key
+`sd:<device_id>` ("seq delivered", written and read by the gateway, no TTL, not restored after a Valkey loss) holds
+the highest number the gateway has written into a check-in response. Rule:
+
+- `expected` = value of `sd:<device>` read before the draw; if `sd:` is missing (device never checked in since the
+  upgrade, or Valkey lost it), `expected` = the counter's value before the draw (`seq - 1`, the rule as before).
+- `clone_suspected` = `Paddock-Seq < expected - 1` (tolerance of one lost response, unchanged).
+- `sd:` is raised to `seq` (never lowered, Lua compare-and-set on one key) after the heartbeat publish succeeded and
+  only while the request context is still alive; then the response is written. A check-in whose publish stalled,
+  failed, or completed after the device gave up never raises `sd:`, so its number never counts, whether or not its
+  release of the counter succeeds.
+- A failed raise of `sd:` is logged and the check-in still succeeds (fail safe): a lower `sd:` can only suppress a
+  flag, never raise one; the next successful check-in repairs it.
+- The heartbeat carries `expected_seq` (the value compared against); the worker's log line and the audit event
+  `device.clone_suspected` report it as `issued_seq` (param names unchanged, `docs/compliance/audit-codes.md`).
+
+**Why this keeps detection effective.** A number counts only once a response carrying it was written. A genuine
+device and a clone that both succeed deliver distinct numbers, so `sd:` tracks the higher one and the holder of the
+lower one is flagged exactly as before (acceptance gate D3, `TestCheckinSeqBundleAndClone`). A number only drawn
+(failed, stalled, abandoned, or drawn by a clone whose request failed) never flags anyone — that is the whole
+change. Numbers behind by one are tolerated as before; two lost responses in a row still flag (the designed
+trade-off of §6.4).
+
+**Consequences.**
+- No device protocol change; `Paddock-Seq`, `seq` and the response are unchanged. No new boundary: one more cache key
+  inside `server/internal/devicecache`, one more field in the internal `ingest.Heartbeat` (additive JSON).
+- `docs/architecture.md` must follow (architect edit, not part of the implementer's ticket): §6.4/§6.7 "lower than
+  the stored value minus 1" → "lower than the last delivered number minus 1 (`sd:<device>`; the counter's previous
+  value when `sd:` is missing)", and a row `sd:<device_id>` | string (last delivered seq) | gateway | gateway | none
+  in the §8.3 key table. The PDK-475 note stays valid.
+- `TestCheckinFailureKeepsSeq`: the "number another holder drew meanwhile" must be a delivered check-in of that
+  holder, not a bare `NextSeq` on the cache — a bare draw no longer counts, by design.
+- Residual: a stalled check-in whose publish completes after the device gave up is detected by the context check
+  before the raise; a response lost between the raise and the device still costs the one tolerated number (as
+  before). Memory: one short string per device.
+
+**Addendum 2026-10-30 (PDK-590, option a; main as architect after the external review).** The fallback to the counter
+when `sd:` is missing is dropped: without a cached delivery the check-in is never flagged (`clone_suspected` requires a
+known `sd:`), `expected_seq` is 0, and the check-in seeds `sd:` as usual once its response is written. Reason: after a
+Valkey loss PDK-475 restores `seq:` from `device_status.last_seq`, and ingest persists heartbeats of stalled or
+abandoned check-ins whose numbers the device never received (a stalled check-in and its stalled retry raise
+`last_seq` by two), so a fallback to the restored counter would quarantine the genuine device again — the PDK-590
+symptom, against design contract 8 (fail safe). A real clone is caught on the next round, once `sd:` is seeded. Cost:
+the first check-in after a Valkey loss, and the first one of a device without `sd:` (upgrade), cannot be flagged
+(RR-97). Tests: `TestCheckinWithoutDeliveredSeqNotFlagged`, `TestCheckinCacheLossAfterAbandonedPublishes`. The
+`docs/architecture.md` text proposed above applies with "the rule applies only when `sd:` is known" in place of the
+counter fallback.

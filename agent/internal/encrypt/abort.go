@@ -54,8 +54,10 @@ type Event struct {
 // stays set until it is done and is retried at every full pass). id "" accepts the device's conversion whatever its
 // ID. It refuses with unknown_conversion and not_abortable: a phase other than prepared (preparing only when
 // preparing is true, the conversion worker's own abort) or a partition that is LUKS already (invariant I1: the device
-// never undoes an initialised header).
-func Abort(ctx context.Context, sys Host, l paths.Layout, store Store, id, by string, preparing bool) (aborted bool, reason string) {
+// never undoes an initialised header). Before the cleanup the initrds are disarmed (Disarm); report receives its
+// outcome (nil: ReportNeutralizeFailed for a failure).
+func Abort(ctx context.Context, sys Host, l paths.Layout, store Store, id, by string, preparing bool,
+	report NeutralizeReport) (aborted bool, reason string) {
 	c, ok := store.Conversion()
 	if !ok || (id != "" && c.ID != id) {
 		return false, ReasonUnknownConversion
@@ -75,11 +77,39 @@ func Abort(ctx context.Context, sys Host, l paths.Layout, store Store, id, by st
 		return false, ReasonNotAbortable
 	}
 	slog.InfoContext(ctx, "in-place encryption aborted", "conversion_id", c.ID, "by", by)
+	neutralize(ctx, sys, l, store, report)
 	// Synchronous even while supervisor-upgrade.json exists (plan M8e item 18, amendment 2026-10-28, PDK-378): the
 	// initrds are built into temporary files, so a rollback restart killing this leaves only those and CleanupPending,
 	// which the worker completes once the upgrade is over.
 	_, _ = RunCleanup(ctx, sys, l, store) // logged; a later full pass retries
 	return true, ""
+}
+
+// NeutralizeReport receives the outcome of a Disarm: nil after one that succeeded or had nothing to do. The agent
+// reports a failure once per reason and start (review 2 of PDK-482, X3).
+type NeutralizeReport func(ctx context.Context, err error)
+
+// neutralize disarms the initrds of an aborted or failed conversion before the cleanup rebuilds them, which can fail,
+// be killed or wait for dpkg's locks (Disarm; plan M8e item 18, amendment 2026-10-30, PDK-482 and PDK-579). The
+// outcome goes to report, a failure without one to disk.conversion_neutralize_failed; the cleanup runs regardless.
+func neutralize(ctx context.Context, sys Host, l paths.Layout, store Store, report NeutralizeReport) {
+	err := Disarm(ctx, sys, l, store)
+	switch {
+	case report != nil:
+		report(ctx, err)
+	case err != nil:
+		_ = ReportNeutralizeFailed(ctx, store, err)
+	}
+}
+
+// moduleFilesPresent reports whether the module directory or its dracut configuration exists.
+func moduleFilesPresent(l paths.Layout) bool {
+	for _, p := range []string{l.Join(ModuleConf), l.Join(ModuleDir)} {
+		if _, err := os.Lstat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // RunCleanup runs Cleanup and clears CleanupPending once it is done, and reports whether it did and why not
@@ -315,6 +345,11 @@ func listInitrd(ctx context.Context, sys System, listers *[]string, initrd strin
 			continue
 		}
 		if err == nil && exit != 0 {
+			// initramfs-tools' lister stops at the segment a neutralized initrd ends with (PDK-482); such an initrd
+			// carries the cancelled plan at initrdPlanPath, a marker, whatever its main archive holds.
+			if neutralized(initrd) {
+				return initrdPlanPath + "\n", nil
+			}
 			err = fmt.Errorf("%s %s: exit %d: %s", name, initrd, exit, firstLine(stderr))
 		}
 		return out, err

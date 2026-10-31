@@ -13,7 +13,8 @@ DELETE FROM device_login_event;
 SELECT EXISTS (SELECT 1 FROM device_login_event WHERE at < @cutoff::timestamptz);
 
 -- name: PurgeDeviceLoginEvents :execrows
--- One batch of rows older than the cutoff; the worker repeats it until it deletes nothing.
+-- One batch of rows older than the cutoff; the retention round runs each batch in its own transaction until one
+-- deletes fewer than 1 000 rows (plan M10 amendment 2026-10-30).
 DELETE FROM device_login_event WHERE ctid IN (
   SELECT ctid FROM device_login_event WHERE at < @cutoff::timestamptz LIMIT 1000
 );

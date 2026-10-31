@@ -656,6 +656,15 @@ type OrganizationMcpSetting struct {
 	UpdatedBy         uuid.NullUUID
 }
 
+type OrganizationPrivacySetting struct {
+	OrganizationID        uuid.UUID
+	RetiredInventoryDays  int32
+	AuditSearchRecorded   bool
+	InventoryViewRecorded bool
+	UpdatedAt             time.Time
+	UpdatedBy             uuid.NullUUID
+}
+
 type OrganizationRoleMember struct {
 	OrganizationID uuid.UUID
 	Role           string
@@ -791,6 +800,23 @@ type ProfileAssignment struct {
 	SubjectID      uuid.NullUUID
 	DeviceGroupID  uuid.NullUUID
 	CreatedAt      time.Time
+}
+
+type ReadAuditWindow struct {
+	OrganizationID uuid.UUID
+	ActorID        string
+	Code           string
+	TargetID       string
+	WindowStart    time.Time
+}
+
+type RetentionInventoryHold struct {
+	DeviceID        uuid.UUID
+	OrganizationID  uuid.UUID
+	LastAnswer      string
+	RetiredAt       time.Time
+	UnchangedRounds int32
+	LastEventAt     time.Time
 }
 
 type RevocationApproval struct {

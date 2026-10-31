@@ -445,11 +445,26 @@ func TestRunExternalSuccess(t *testing.T) {
 			return nil
 		},
 		func(context.Context) error { external = true; return nil },
-		func(context.Context, *pgstore.Queries, app.Recorder, error) error { return nil })
+		func(context.Context, *pgstore.Queries, app.Recorder, error) error {
+			// The finishing transaction outlasts the millisecond the event's occurred_at is truncated to, so a finish
+			// time taken at the transaction's start would land before occurred_at.
+			time.Sleep(5 * time.Millisecond)
+			return nil
+		})
 	if err != nil || !external {
 		t.Fatalf("RunExternal = %v, external called %v", err, external)
 	}
-	expectOne(t, h, audit.OutcomeSuccess, "")
+	ev := expectOne(t, h, audit.OutcomeSuccess, "")
+	// Migration 00084: the database sets finished_at, never before the event's occurred_at, so the retention round
+	// (by finished_at) keeps the row at least as long as the audit index (by occurred_at) shows the event.
+	var started, finished time.Time
+	if err := h.super.QueryRow(context.Background(), "SELECT started_at, finished_at FROM action WHERE id = $1", ev.EventID).
+		Scan(&started, &finished); err != nil {
+		t.Fatal(err)
+	}
+	if finished.Before(ev.OccurredAt) || finished.Before(started) || finished.Sub(ev.OccurredAt) > time.Minute {
+		t.Fatalf("finished_at %s, want at or just after occurred_at %s and after started_at %s", finished, ev.OccurredAt, started)
+	}
 }
 
 // TestRunExternalStoresTheSource: the started row of an external action already carries the source of the principal,

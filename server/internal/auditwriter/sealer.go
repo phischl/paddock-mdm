@@ -91,12 +91,13 @@ type Sealer struct {
 	pool   *db.AuditWriterPool
 	writer *Writer
 	signer Signer
+	keys   *KeyPublisher
 	now    func() time.Time
 }
 
 // NewSealer creates a sealer.
-func NewSealer(pool *db.AuditWriterPool, writer *Writer, signer Signer) *Sealer {
-	return &Sealer{pool: pool, writer: writer, signer: signer, now: time.Now}
+func NewSealer(pool *db.AuditWriterPool, writer *Writer, signer Signer, keys *KeyPublisher) *Sealer {
+	return &Sealer{pool: pool, writer: writer, signer: signer, keys: keys, now: time.Now}
 }
 
 // ErrLocked means another replica is sealing.
@@ -231,6 +232,9 @@ func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev
 		// Checked before the WORM write: a locked object with an unrecordable key version could never be indexed.
 		if sig.KeyVersion < 1 || sig.KeyVersion > math.MaxInt32 {
 			return fmt.Errorf("%w: %d", ErrKeyVersion, sig.KeyVersion)
+		}
+		if err := s.keys.Ensure(ctx, q, sig.KeyVersion); err != nil {
+			return err
 		}
 		file, err := json.Marshal(ManifestFile{Manifest: canonical, Signature: sig.Value, KeyVersion: sig.KeyVersion})
 		if err != nil {

@@ -81,7 +81,7 @@ func itemCases(method, collection, suffix, code string, okStatus int, create fun
 var identityAuditCases = map[string][]auditCase{
 	"POST /api/auth/mcp/session": {
 		{"success", func(t *testing.T, w *auditWorld) {
-			tokens := mcpDeviceTokens(t, env.Alice)
+			tokens := mcpDeviceTokens(t, w.admins.take())
 			res := mcpSession(t, tokens.IDToken, tokens.AccessToken)
 			expectStatus(t, res, http.StatusNoContent, "")
 			mcpLogout(t, tokens.AccessToken)
@@ -93,7 +93,7 @@ var identityAuditCases = map[string][]auditCase{
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "admin.login", "failure", auditPollTimeout)
 		}},
 		{"replay", func(t *testing.T, w *auditWorld) {
-			tokens := mcpDeviceTokens(t, env.Alice)
+			tokens := mcpDeviceTokens(t, w.admins.take())
 			first := mcpSession(t, tokens.IDToken, tokens.AccessToken)
 			expectStatus(t, first, http.StatusNoContent, "")
 			mcpLogout(t, tokens.AccessToken)
@@ -243,6 +243,27 @@ var identityAuditCases = map[string][]auditCase{
 			res := call(t, w.bob, http.MethodPut, "/api/v1/settings/login", currentLoginSettings(t, w.alice))
 			expectStatus(t, res, http.StatusForbidden, "forbidden")
 			expectOneEvent(t, w.alice, res.RequestID, "settings.login_changed", "denied")
+		}},
+	},
+
+	// settings.privacy_changed (plan M10 decision 8); success writes acme's current settings back.
+	"PUT /api/v1/settings/privacy": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPut, "/api/v1/settings/privacy", currentPrivacySettings(t, w.alice))
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.privacy_changed", "success")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			s := currentPrivacySettings(t, w.alice)
+			s["retired_inventory_days"] = 366
+			res := call(t, w.alice, http.MethodPut, "/api/v1/settings/privacy", s)
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.privacy_changed", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPut, "/api/v1/settings/privacy", currentPrivacySettings(t, w.alice))
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.privacy_changed", "denied")
 		}},
 	},
 

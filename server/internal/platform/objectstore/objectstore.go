@@ -65,6 +65,16 @@ var ErrNotFound = errors.New("objectstore: not found")
 
 // Get reads the current version of an object.
 func (s *Store) Get(ctx context.Context, key string) ([]byte, error) {
+	body, err := s.Open(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = body.Close() }()
+	return io.ReadAll(body)
+}
+
+// Open streams the current version of an object; the caller closes the body.
+func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
 	if err != nil {
 		var noSuchKey *types.NoSuchKey
@@ -73,8 +83,7 @@ func (s *Store) Get(ctx context.Context, key string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	defer func() { _ = out.Body.Close() }()
-	return io.ReadAll(out.Body)
+	return out.Body, nil
 }
 
 // Retention returns the retention mode and date of the current version.

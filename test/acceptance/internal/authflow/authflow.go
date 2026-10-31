@@ -222,7 +222,7 @@ func runFlow(ctx context.Context, client *http.Client, page *url.URL, slug, user
 			if totp == nil {
 				return "", fmt.Errorf("authflow: flow %s asks for MFA", slug)
 			}
-			if answer, err = validateAnswer(ch.Raw, totp); err != nil {
+			if answer, err = validateAnswer(ctx, ch.Raw, totp); err != nil {
 				return "", err
 			}
 			answer["component"] = ch.Component

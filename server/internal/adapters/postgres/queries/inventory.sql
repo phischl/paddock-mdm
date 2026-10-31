@@ -229,6 +229,13 @@ SELECT count(*) FROM (
   LIMIT @count_limit
 ) matching;
 
+-- The organization's devices (not findings) that carry cve; the count of a recorded CVE device-list view
+-- (plan M10 amendment 2026-10-31, PDK-606).
+-- name: CountDevicesWithVulnerability :one
+SELECT count(DISTINCT f.device_id)::int FROM vulnerability_finding f
+JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+WHERE f.cve = @cve;
+
 -- The dashboard tile (plan M5a decision 10): devices with critical or high findings, and devices with findings of
 -- unknown severity.
 -- name: VulnerabilitySummary :one
@@ -239,3 +246,64 @@ FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN 
 
 -- name: DeviceExists :one
 SELECT EXISTS (SELECT 1 FROM device WHERE id = @id);
+
+-- Retention of retired devices' inventory (ADR 0032, plan M10 decision 16). The sync never writes the rows of a device
+-- that is not active or quarantined, so a retired device's rows only shrink.
+
+-- The retired devices of the organization whose retirement is older than cutoff and that still have inventory rows,
+-- longest retired first, after the keyset (after_changed, after_id) of the previous page.
+-- name: ListRetiredDevicesWithInventory :many
+SELECT d.id, d.hostname, d.state_changed_at FROM device d
+WHERE d.state = 'retired' AND d.state_changed_at < @cutoff
+  AND (d.state_changed_at, d.id) > (@after_changed::timestamptz, @after_id::uuid)
+  AND (EXISTS (SELECT 1 FROM device_inventory_ref r WHERE r.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM installed_software s WHERE s.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM vulnerability_finding f WHERE f.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM inventory_policy_result p WHERE p.device_id = d.id))
+ORDER BY d.state_changed_at, d.id
+LIMIT @max_devices;
+
+-- The inventory rows of a device and its Fleet host reference ('' without one).
+-- name: CountDeviceInventory :one
+SELECT coalesce((SELECT r.external_id FROM device_inventory_ref r WHERE r.device_id = @device_id), '')::text AS external_id,
+       (SELECT count(*) FROM installed_software s WHERE s.device_id = @device_id)::bigint AS software,
+       (SELECT count(*) FROM vulnerability_finding f WHERE f.device_id = @device_id)::bigint AS findings,
+       (SELECT count(*) FROM inventory_policy_result p WHERE p.device_id = @device_id)::bigint AS policy_results;
+
+-- keep_ref keeps the Fleet host reference, so the device is listed again until its host is decided.
+-- name: DeleteDeviceInventory :one
+WITH s AS (DELETE FROM installed_software x WHERE x.device_id = @device_id RETURNING 1),
+     f AS (DELETE FROM vulnerability_finding x WHERE x.device_id = @device_id RETURNING 1),
+     p AS (DELETE FROM inventory_policy_result x WHERE x.device_id = @device_id RETURNING 1),
+     r AS (DELETE FROM device_inventory_ref x WHERE x.device_id = @device_id AND NOT @keep_ref::boolean RETURNING 1)
+SELECT (SELECT count(*) FROM s)::bigint AS software, (SELECT count(*) FROM f)::bigint AS findings,
+       (SELECT count(*) FROM p)::bigint AS policy_results, (SELECT count(*) FROM r)::bigint AS refs;
+
+-- The answer the retention round last recorded an event for while it keeps a retired device's Fleet host, '' without
+-- one (plan M10 amendment 2026-10-30, PDK-583 round 2).
+-- name: InventoryHold :one
+SELECT coalesce((SELECT h.last_answer FROM retention_inventory_hold h WHERE h.device_id = @device_id), '')::text AS last_answer,
+       coalesce((SELECT h.unchanged_rounds FROM retention_inventory_hold h WHERE h.device_id = @device_id), 0)::int AS unchanged_rounds,
+       coalesce((SELECT h.retired_at FROM retention_inventory_hold h WHERE h.device_id = @device_id), 'epoch')::timestamptz AS retired_at;
+
+-- Counts one more round without a change of the held answer and returns the rounds counted.
+-- name: CountInventoryHoldRound :one
+UPDATE retention_inventory_hold SET unchanged_rounds = unchanged_rounds + 1
+WHERE device_id = @device_id AND last_answer = @last_answer
+RETURNING unchanged_rounds;
+
+-- Holds the answer with the device's current retirement.
+-- name: SetInventoryHold :exec
+INSERT INTO retention_inventory_hold (device_id, organization_id, last_answer, retired_at, unchanged_rounds, last_event_at)
+SELECT d.id, d.organization_id, @last_answer, d.state_changed_at, 0, now() FROM device d WHERE d.id = @device_id
+ON CONFLICT (device_id) DO UPDATE SET last_answer = excluded.last_answer, retired_at = excluded.retired_at,
+  unchanged_rounds = 0, last_event_at = now();
+
+-- name: DeleteInventoryHold :exec
+DELETE FROM retention_inventory_hold WHERE device_id = @device_id;
+
+-- Whether a device of any organization other than retired_device still uses the Fleet host ('ref') or may use it
+-- through the retired device's hardware ('hardware'), or neither ('none') (platform pool, plan M10 amendments
+-- 2026-10-30): never another organization's rows.
+-- name: FleetHostInUse :one
+SELECT paddock_fleet_host_in_use(@retired_device::uuid, @host::text)::text;

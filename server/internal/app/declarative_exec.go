@@ -157,6 +157,8 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 		return ex.managedFileSettings(ctx)
 	case declarative.SectionSettingsWatched:
 		return ex.watchedUnits(ctx)
+	case declarative.SectionSettingsPrivacy:
+		return ex.privacySettings(ctx)
 	}
 	return problem.InvalidDocument.WithDetail("unknown section " + c.Section)
 }
@@ -448,6 +450,19 @@ func (ex *configExec) updateSettings(ctx context.Context) error {
 		StalenessCriticalH:    int32(in.StalenessCriticalH), //nolint:gosec // validated
 		AgentUpdatePolicy:     in.AgentUpdatePolicy,
 		UpdatedBy:             uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.ID != uuid.Nil},
+	})
+	return err
+}
+
+// privacySettings replaces the privacy settings with the rule of Privacy.Update: an organization administrator.
+func (ex *configExec) privacySettings(ctx context.Context) error {
+	if err := ex.requireAdmin("change the privacy settings"); err != nil {
+		return err
+	}
+	s := ex.desired.Settings.Privacy
+	_, err := upsertPrivacySettings(ctx, ex.q, ex.p, PrivacySettings{
+		RetiredInventoryDays: s.RetiredInventoryDays, AuditSearchRecorded: s.AuditSearchRecorded,
+		InventoryViewRecorded: s.InventoryViewRecorded,
 	})
 	return err
 }

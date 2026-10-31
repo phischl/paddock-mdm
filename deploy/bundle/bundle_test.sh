@@ -304,6 +304,43 @@ print(", ".join(problems)); sys.exit(1 if problems else 0)
   fi
 done
 
+# The audit writer's export temp space (PDK-593): TMPDIR on the named volume, /tmp a noexec, nosuid, nodev tmpfs, the
+# root read-only; in the audit-host and lab bundles and in the development stack (which the bundle does not ship).
+audit_writer_ok() {
+  local dir="$1" settings="$2" f args=()
+  shift 2
+  for f in "$@"; do args+=(-f "$dir/$f"); done
+  docker compose --project-directory "$dir" -p paddock-bundle-test --env-file "$dir/versions.env" \
+    --env-file "$dir/$settings" "${args[@]}" --profile '*' config --format json | python3 -I -c '
+import json, sys
+w = json.load(sys.stdin)["services"]["paddock-audit-writer"]
+problems = []
+tmp = [t for t in w.get("tmpfs", []) if t.split(":")[0] == "/tmp"]
+if len(tmp) != 1 or not {"noexec", "nosuid", "nodev"} <= set(tmp[0].partition(":")[2].split(",")): problems.append("/tmp tmpfs %s" % tmp)
+if not w.get("read_only"): problems.append("read_only")
+if w["environment"].get("TMPDIR") != "/var/lib/paddock/export-tmp": problems.append("TMPDIR %s" % w["environment"].get("TMPDIR"))
+vols = [(v.get("type"), v.get("source"), v.get("target")) for v in w.get("volumes", [])]
+if vols != [("volume", "audit-writer-tmp", "/var/lib/paddock/export-tmp")]: problems.append("volumes %s" % vols)
+print(", ".join(problems)); sys.exit(1 if problems else 0)
+'
+}
+for host in audit lab; do
+  settings=.env.example
+  [[ "$host" != lab* ]] || settings=.env.lab.example
+  # shellcheck disable=SC2046 # the file list is word-split on purpose
+  if out="$(audit_writer_ok "$bundle" "$settings" $(host_files "$bundle" "$host"))"; then
+    pass "$host: the audit writer keeps /tmp noexec, nosuid, nodev and TMPDIR on audit-writer-tmp"
+  else
+    fail "$host: the audit writer's temp space: $out"
+  fi
+done
+# shellcheck disable=SC2046
+if out="$(audit_writer_ok "$compose_src" .env.example $(lib_files "$compose_src" DEV_FILES))"; then
+  pass "dev: the audit writer keeps /tmp noexec, nosuid, nodev and TMPDIR on audit-writer-tmp"
+else
+  fail "dev: the audit writer's temp space: $out"
+fi
+
 cp "$work/u/.env.example" "$work/u/.env"
 sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/u/.env"
 expect 2 "auto-unseal enable on the audit host" "$work/u" auto-unseal enable

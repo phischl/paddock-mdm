@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -238,6 +239,29 @@ func TestAPIRoleGrants(t *testing.T) {
 	expectPermissionDenied(t, "paddock_api SELECT outbox", err)
 }
 
+// TestFleetHostInUseGrant (plan M10 amendments 2026-10-30): only paddock_platform may ask whether a Fleet host is in
+// use across organizations; the worker and api roles get permission denied, so no organization-scoped role reads past
+// its organization through the function.
+func TestFleetHostInUseGrant(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	env := sharedPaddock(t)
+	for role, dsn := range map[string]string{"paddock_worker": env.Worker, "paddock_api": env.API} {
+		conn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = conn.Exec(ctx, "SELECT paddock_fleet_host_in_use($1, 'h1')", uuid.Must(uuid.NewV7()))
+		expectPermissionDenied(t, role+" EXECUTE paddock_fleet_host_in_use", err)
+		_ = conn.Close(ctx)
+	}
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem})
+	use, err := f.platform.FleetHostInUse(sys, uuid.Must(uuid.NewV7()), "no-such-host")
+	if err != nil || use != db.FleetHostUnused {
+		t.Fatalf("paddock_platform: %q (%v), want %q", use, err, db.FleetHostUnused)
+	}
+}
+
 func TestOrganizationIDBySlug(t *testing.T) {
 	f := newFixture(t)
 	var slug string
@@ -366,8 +390,14 @@ func TestAuditReaderIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
+	// The reader may read audit_object of its organization since audit migration 00008 (plan M10 §6.2); without an
+	// organization context the policy fails closed on the unset paddock.org_id, not on a missing grant.
+	insertAuditObject(t, env.Writer, orgA)
 	_, err = conn.Exec(ctx, "SELECT * FROM audit_object")
-	expectPermissionDenied(t, "paddock_audit_reader SELECT audit_object", err)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42704" {
+		t.Errorf("paddock_audit_reader SELECT audit_object without organization context: got %v, want 42704", err)
+	}
 	if err := reader.InOrg(context.Background(), func(context.Context, *auditstore.Queries) error { return nil }); !errors.Is(err, db.ErrNoOrganization) {
 		t.Fatalf("AuditReader.InOrg without principal: got %v", err)
 	}
@@ -427,6 +457,177 @@ func TestAuditReaderSeesOnlyItsChainStatus(t *testing.T) {
 		if _, err := conn.Exec(ctx, "SELECT * FROM "+table); err == nil {
 			t.Errorf("%s: reader without organization context succeeded", table)
 		}
+	}
+}
+
+// TestAuditReaderExports: the reader inserts pending requests and reads the evidence exports of its own organization
+// only; it can neither change nor delete one nor insert one that is not pending or carries builder columns (plan M10
+// §6.2, decision 29, amendment 2026-10-30).
+func TestAuditReaderExports(t *testing.T) {
+	env := sharedAudit(t)
+	ctx := context.Background()
+	reader, err := db.NewAuditReader(ctx, env.Reader, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	orgA, orgB := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	insert := func(org, as uuid.UUID) (uuid.UUID, error) {
+		id := uuid.Must(uuid.NewV7())
+		day := time.Now().UTC().Truncate(24 * time.Hour)
+		return id, reader.InOrgWrite(orgCtx(org), func(ctx context.Context, q *auditstore.Queries) error {
+			_, err := q.InsertAuditExport(ctx, auditstore.InsertAuditExportParams{
+				ID: id, OrganizationID: as, FromDay: day, ToDay: day, Purpose: "rls", RequestedBy: []byte(`{"type":"admin","step_up":true}`),
+				CorrelationID: "rls",
+			})
+			return err
+		})
+	}
+	idA, err := insert(orgA, orgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idB, err := insert(orgB, orgB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := insert(orgA, orgB); err == nil {
+		t.Error("reader of org A inserted an export of org B")
+	}
+
+	err = reader.InOrg(orgCtx(orgA), func(ctx context.Context, q *auditstore.Queries) error {
+		if _, err := q.GetAuditExport(ctx, idA); err != nil {
+			t.Errorf("reader of org A cannot read its export: %v", err)
+		}
+		if _, err := q.GetAuditExport(ctx, idB); !db.IsNoRows(err) {
+			t.Errorf("reader of org A reads the export of org B: %v", err)
+		}
+		items, err := q.ListAuditExports(ctx, auditstore.ListAuditExportsParams{Sort: "-requested_at", MaxRows: 100})
+		if err != nil {
+			return err
+		}
+		for _, e := range items {
+			if e.OrganizationID != orgA {
+				t.Errorf("reader of org A lists an export of %s", e.OrganizationID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pgx.Connect(ctx, env.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	for _, stmt := range []string{
+		"UPDATE audit_export SET status = 'ready'",
+		"DELETE FROM audit_export",
+		"INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES (gen_random_uuid(), gen_random_uuid(), 0, '')",
+		"INSERT INTO audit_signing_key (key_version, public_key) VALUES (99, decode(repeat('00', 32), 'hex'))",
+	} {
+		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgA.String()); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, stmt)
+			return err
+		})
+		expectPermissionDenied(t, "paddock_audit_reader: "+stmt, err)
+	}
+
+	const insertOwn = "INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose, requested_by, " +
+		"correlation_id%s) VALUES (gen_random_uuid(), current_setting('paddock.org_id')::uuid, '%s', current_date, " +
+		"current_date, 'rls', '{}', 'rls'%s)"
+	for _, stmt := range []string{
+		fmt.Sprintf(insertOwn, "", "ready", ""),
+		fmt.Sprintf(insertOwn, "", "running", ""),
+		fmt.Sprintf(insertOwn, ", started_at", "pending", ", now()"),
+		fmt.Sprintf(insertOwn, ", ready_at, expires_at", "pending", ", now(), now()"),
+		fmt.Sprintf(insertOwn, ", event_count, object_count, size", "pending", ", 1, 1, 1"),
+		fmt.Sprintf(insertOwn, ", package_sha256, signature, key_version", "pending", ", '\\x00', 'sig', 1"),
+		fmt.Sprintf(insertOwn, ", verify_ok", "pending", ", true"),
+		fmt.Sprintf(insertOwn, ", verify_problems", "pending", ", '[]'"),
+		fmt.Sprintf(insertOwn, ", error", "pending", ", 'x'"),
+	} {
+		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgA.String()); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, stmt)
+			return err
+		})
+		expectPermissionDenied(t, "paddock_audit_reader: "+stmt, err)
+	}
+}
+
+// TestAuditReaderSeesOnlyItsObjectsAndChunks: the reader of an organization reads its own audit objects and export
+// chunks and none of another organization's (plan M10 §6.2).
+func TestAuditReaderSeesOnlyItsObjectsAndChunks(t *testing.T) {
+	env := sharedAudit(t)
+	ctx := context.Background()
+	orgA, orgB := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, org := range []uuid.UUID{orgA, orgB} {
+		insertAuditObject(t, env.Writer, org)
+		insertExportChunk(t, env.Writer, org)
+	}
+	conn, err := pgx.Connect(ctx, env.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	for _, table := range []string{"audit_object", "audit_export_chunk"} {
+		var orgs []uuid.UUID
+		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgA.String()); err != nil {
+				return err
+			}
+			rows, err := tx.Query(ctx, "SELECT organization_id FROM "+table+" WHERE organization_id = ANY($1)", []uuid.UUID{orgA, orgB})
+			if err != nil {
+				return err
+			}
+			orgs, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+			return err
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", table, err)
+		}
+		if len(orgs) != 1 || orgs[0] != orgA {
+			t.Errorf("reader of org A sees %s rows of %v, want only org A", table, orgs)
+		}
+	}
+}
+
+// insertAuditObject stores one audit object of org through the writer role.
+func insertAuditObject(t *testing.T, writerDSN string, org uuid.UUID) {
+	t.Helper()
+	execAsWriter(t, writerDSN,
+		"INSERT INTO audit_object (object_key, organization_id, day, event_count, sha256) VALUES ($1, $2, current_date, 1, $3)",
+		"org/"+org.String()+"/objects/"+uuid.NewString()+".jsonl", org, make([]byte, 32))
+}
+
+// insertExportChunk stores one export of org with one chunk through the writer role.
+func insertExportChunk(t *testing.T, writerDSN string, org uuid.UUID) {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	execAsWriter(t, writerDSN,
+		`INSERT INTO audit_export (id, organization_id, status, from_day, to_day, purpose, requested_by, correlation_id)
+		 VALUES ($1, $2, 'pending', current_date, current_date, 'rls', '{}', 'rls')`, id, org)
+	execAsWriter(t, writerDSN, "INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, 0, $3)", id, org, []byte{0})
+}
+
+func execAsWriter(t *testing.T, writerDSN, stmt string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, writerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if _, err := conn.Exec(ctx, stmt, args...); err != nil {
+		t.Fatalf("%s: %v", stmt, err)
 	}
 }
 
@@ -505,5 +706,52 @@ func TestLoginSettingsPerOrganization(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestWithLeaderLocks (plan M10 amendment 2026-10-30): all keys are taken on one connection, so a pool of one
+// connection suffices; when another session holds one key, fn does not run and the keys already taken are released.
+func TestWithLeaderLocks(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	one, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(one.Close)
+	other, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(other.Close)
+	first, second := int64(0x7465737431), int64(0x7465737432)
+
+	ran := false
+	ok, err := one.WithLeaderLocks(ctx, []int64{first, second}, func(context.Context) error {
+		ran = true
+		return nil
+	})
+	if err != nil || !ok || !ran {
+		t.Fatalf("one connection: ok %v, ran %v, err %v", ok, ran, err)
+	}
+
+	ok, err = other.WithLeaderLock(ctx, second, func(context.Context) error {
+		ran = false
+		got, err := one.WithLeaderLocks(ctx, []int64{first, second}, func(context.Context) error {
+			ran = true
+			return nil
+		})
+		if err != nil || got || ran {
+			t.Errorf("second key held elsewhere: ok %v, ran %v, err %v", got, ran, err)
+		}
+		return nil
+	})
+	if err != nil || !ok {
+		t.Fatalf("hold second key: ok %v, err %v", ok, err)
+	}
+	ok, err = other.WithLeaderLock(ctx, first, func(context.Context) error { return nil })
+	if err != nil || !ok {
+		t.Fatalf("first key not released after the failed attempt: ok %v, err %v", ok, err)
 	}
 }

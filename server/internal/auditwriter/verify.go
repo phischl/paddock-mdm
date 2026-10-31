@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -27,11 +28,13 @@ type Verifier struct {
 	pool  *db.AuditWriterPool
 	store ObjectStore
 	keys  PublicKeys
+	// maxObject bounds one read from the bucket.
+	maxObject int64
 }
 
 // NewVerifier creates a verifier.
 func NewVerifier(pool *db.AuditWriterPool, store ObjectStore, keys PublicKeys) *Verifier {
-	return &Verifier{pool: pool, store: store, keys: keys}
+	return &Verifier{pool: pool, store: store, keys: keys, maxObject: MaxObjectSize}
 }
 
 // Report lists every problem found; it is empty when the chain verifies.
@@ -106,11 +109,12 @@ func (v *Verifier) Verify(ctx context.Context, org uuid.UUID, from, to time.Time
 func (v *Verifier) verifyManifest(ctx context.Context, q *auditstore.Queries, report *Report, org uuid.UUID, day time.Time,
 	m auditstore.AuditManifest, keys map[int][]byte) error {
 	name := day.Format(time.DateOnly)
-	raw, err := v.store.Get(ctx, m.ObjectKey)
-	if err != nil {
+	var buf bytes.Buffer
+	if _, _, err := streamObject(ctx, v.store, m.ObjectKey, v.maxObject, &buf); err != nil {
 		report.addf("%s: manifest object %s unreadable: %v", name, m.ObjectKey, err)
 		return nil
 	}
+	raw := buf.Bytes()
 	var file ManifestFile
 	if err := json.Unmarshal(raw, &file); err != nil {
 		report.addf("%s: manifest object is not valid JSON", name)
@@ -165,12 +169,11 @@ func (v *Verifier) verifyManifest(ctx context.Context, q *auditstore.Queries, re
 		if !strings.HasPrefix(o.Key, "org/"+org.String()+"/") {
 			report.addf("%s: object %s is outside the organization prefix", name, o.Key)
 		}
-		body, err := v.store.Get(ctx, o.Key)
+		got, _, err := streamObject(ctx, v.store, o.Key, v.maxObject, io.Discard)
 		if err != nil {
 			report.addf("%s: object %s unreadable: %v", name, o.Key, err)
 			continue
 		}
-		got := sha256.Sum256(body)
 		if hex.EncodeToString(got[:]) != o.SHA256 {
 			report.addf("%s: object %s was modified (SHA-256 mismatch)", name, o.Key)
 		}

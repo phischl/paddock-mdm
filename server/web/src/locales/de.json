@@ -1,4 +1,20 @@
 {
+  "privacySettings": {
+    "title": "Datenschutzeinstellungen",
+    "intro": "Wie lange Paddock das Inventar außer Betrieb genommener Geräte aufbewahrt und ob Zugriffe auf das Audit-Protokoll und auf das Geräteinventar protokolliert werden. Über die Überwachung von Administratoren entscheidet Ihre Betriebsvereinbarung.",
+    "retention": "Aufbewahrung",
+    "retiredInventoryDays": "Inventar außer Betrieb genommener Geräte aufbewahren",
+    "retiredInventoryDaysHint": "Software, Schwachstellen und Richtlinienergebnisse eines außer Betrieb genommenen Geräts werden in Paddock und in Fleet so viele Tage nach der Außerbetriebnahme gelöscht.",
+    "retiredInventoryDaysRange": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein.",
+    "days": "Tage",
+    "recording": "Protokollierung von Zugriffen",
+    "auditSearchRecorded": "Suchen im Audit-Protokoll protokollieren",
+    "auditSearchRecordedHint": "Die erste Suche im Audit-Protokoll pro Administrator, Stunde und Filterkombination wird als Audit-Ereignis protokolliert, weitere Suchen in diesem Zeitfenster nicht. Protokolliert werden die Filter, nie die Ergebnisse oder der Suchtext.",
+    "inventoryViewRecorded": "Ansichten des Geräteinventars protokollieren",
+    "inventoryViewRecordedHint": "Die erste Ansicht der Software und Schwachstellen eines Geräts pro Administrator, Gerät und Tag wird als Audit-Ereignis protokolliert, weitere Ansichten in diesem Zeitfenster nicht. Die erste Ansicht der von einer CVE betroffenen Geräte pro Administrator und Stunde wird ebenso protokolliert.",
+    "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",
+    "saved": "Die Datenschutzeinstellungen wurden gespeichert."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent-Updates",
@@ -68,6 +84,7 @@
     "deviceGroups": "Gerätegruppen",
     "audit": "Audit-Protokoll",
     "auditIntegrity": "Nachweisintegrität",
+    "auditExports": "Nachweis-Exporte",
     "organizations": "Organisationen",
     "devices": "Geräte",
     "enrollmentTokens": "Registrierungstoken",
@@ -91,6 +108,7 @@
     "attentionCount": "{count, plural, one {# offener Befund} other {# offene Befunde}}",
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
+    "privacySettings": "Datenschutz",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
     "start": "Start",
@@ -216,7 +234,10 @@
     "forbidden": "Dazu sind Sie nicht berechtigt.",
     "not_found": "Dieser Eintrag existiert nicht mehr.",
     "upstream_unavailable": "Der Identitätsanbieter ist nicht erreichbar. Die Organisation wurde gespeichert und kann erneut eingerichtet werden.",
-    "range_too_large": "Der Zeitraum darf höchstens 92 Tage umfassen.",
+    "range_too_large": "Der Zeitraum ist zu groß.",
+    "day_not_sealed": "Ein Tag des Zeitraums ist noch nicht versiegelt. Exporte umfassen nur versiegelte Aufzeichnungstage.",
+    "too_many_exports": "Es laufen bereits zwei Exporte oder warten auf ihre Erstellung. Warten Sie, bis einer davon abgeschlossen ist.",
+    "export_not_ready": "Der Export steht noch nicht zum Herunterladen bereit.",
     "page_out_of_range": "Diese Seite liegt zu weit zurück. Schränken Sie Suche oder Filter ein.",
     "invalid_request": "Die Anfrage war ungültig.",
     "internal": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
@@ -260,7 +281,8 @@
   },
   "audit": {
     "vulnerability": {
-      "critical_summary": "{new_critical, plural, one {# neue kritische Schwachstelle} other {# neue kritische Schwachstellen}} auf {devices, plural, one {# Gerät} other {# Geräten}}"
+      "critical_summary": "{new_critical, plural, one {# neue kritische Schwachstelle} other {# neue kritische Schwachstellen}} auf {devices, plural, one {# Gerät} other {# Geräten}}",
+      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})"
     },
     "retention": {
       "purged": "{deleted, plural, one {# abgelaufener Eintrag} other {# abgelaufene Einträge}} von {store} gelöscht"
@@ -298,7 +320,11 @@
     },
     "audit": {
       "chain_verified": "Die Hash-Kette des Audit-Protokolls wurde für {from_day} bis {to_day} geprüft ({days, number} Tage, {objects, number} Objekte, {trigger})",
-      "chain_verification_failed": "Der Prüflauf der Hash-Kette des Audit-Protokolls fand {problem_count, plural, one {# Problem} other {# Probleme}} für {from_day} bis {to_day} ({trigger})"
+      "chain_verification_failed": "Der Prüflauf der Hash-Kette des Audit-Protokolls fand {problem_count, plural, one {# Problem} other {# Probleme}} für {from_day} bis {to_day} ({trigger})",
+      "export_requested": "{actor} hat einen Nachweis-Export für {from_day} bis {to_day} angefordert",
+      "searched": "{actor} hat das Audit-Protokoll durchsucht{q_used, select, true { (mit Suchbegriff)} other {}}",
+      "export_completed": "Der Audit-Writer hat den Nachweis-Export für {from_day} bis {to_day} verarbeitet ({events, number} Ereignisse, {objects, number} Objekte)",
+      "export_downloaded": "{actor} hat den Nachweis-Export für {from_day} bis {to_day} heruntergeladen ({size, number} Bytes)"
     },
     "organization": {
       "created": "{actor} hat die Organisation {slug} angelegt",
@@ -347,6 +373,9 @@
       "supervisor_update_failed": "Das Gerät {target} konnte Supervisor {version} nicht installieren und behält {from_version} ({outcome})",
       "login_assignment_changed": "{actor} hat geändert, wer sich an {hostname} anmelden darf",
       "logins_suspended": "{actor} hat die Anmeldungen an {hostname} ausgesetzt",
+      "inventory_purged": "Inventarlöschung des außer Betrieb genommenen Geräts {hostname}: {software, plural, one {# Paket} other {# Pakete}}, {findings, plural, one {# Befund} other {# Befunde}}",
+      "inventory_viewed": "{actor} hat {view, select, vulnerabilities {die Schwachstellen} other {die Software}} von {hostname} angesehen",
+      "inventory_host_kept": "Das außer Betrieb genommene Gerät {hostname} behält seinen Fleet-Host seit {rounds, number} unveränderten Durchläufen ({fleet_host_kept})",
       "logins_resumed": "{actor} hat die Anmeldungen an {hostname} wieder zugelassen",
       "bundle_render_failed": "Ein neues Bundle für {target} wurde blockiert: Die sudo-Rechte von {username} haben die Prüfung nicht bestanden",
       "bundle_entry_omitted": "Das Bundle für {target} lässt die sudo-Rechte von {username} aus: Ein Berechtigungsprofil enthält einen Befehl, der nicht mehr erlaubt ist",
@@ -387,6 +416,9 @@
       "disk_conversion_completed": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte abgeschlossen",
       "disk_conversion_failed": "Die nachträgliche Verschlüsselung des Geräts {target} ist fehlgeschlagen ({stage}: {reason})",
       "disk_conversion_aborted": "Das Gerät {target} hat die nachträgliche Verschlüsselung seiner Festplatte abgebrochen ({by})",
+      "disk_conversion_completed_after_cancel": "Das Gerät {target} hat seine Festplatte bei einem Neustart verschlüsselt, obwohl die nachträgliche Verschlüsselung abgebrochen war; die Umstellung läuft weiter, und der hinterlegte Wiederherstellungsschlüssel öffnet die Festplatte",
+      "disk_conversion_neutralize_failed": "Das Gerät {target} hat die nachträgliche Verschlüsselung abgebrochen, konnte seine Startabbilder aber nicht entschärfen ({reason}); ein Neustart vor Abschluss der Bereinigung kann die Festplatte noch verschlüsseln",
+      "disk_conversion_unlock_restore_failed": "Das Gerät {target} konnte den Entsperrpfad seiner verschlüsselten Festplatte nicht wieder einrichten ({reason}); ein Kernel, dessen Startabbild beim Abbruch entschärft wurde, kann die Festplatte erst danach öffnen",
       "event_gap": "Die Ereignisse {from_seq} bis {to_seq} des Geräts {target} sind nie angekommen (Ereignislücke)",
       "event_gap_filled": "Die fehlenden Ereignisse {from_seq} bis {to_seq} des Geräts {target} sind nachträglich angekommen",
       "event_seq_reset": "Die Ereignisnummerierung des Geräts {target} wurde zurückgesetzt: höchste Nummer {reported_high} nach {previous_high} (Zählerrücksetzung)",
@@ -468,7 +500,8 @@
       "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
       "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
-      "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert"
+      "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert",
+      "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
@@ -1175,7 +1208,9 @@
       },
       "confirmLabel": "Paddock entfernen",
       "typed": "Geben Sie den Hostnamen zur Bestätigung ein. Das Gerät wird außer Betrieb genommen, sobald es die Entfernung meldet.",
-      "pending": "Entfernung angefordert ({mode}) — {status}. Das Gerät entfernt Paddock beim nächsten Check-in und wird dann außer Betrieb genommen.",
+      "pending": "Entfernung angefordert ({mode}) — {status}.",
+      "running": "Das Gerät entfernt Paddock beim nächsten Check-in und wird dann außer Betrieb genommen.",
+      "stopped": "Der Befehl wird nicht mehr ausgeführt. Brechen Sie die Anforderung ab und fordern Sie sie erneut an.",
       "refused": "Das Gerät hat die Entfernung abgelehnt: {reason}. Brechen Sie die Anforderung ab und fordern Sie sie erneut an, sobald die Ursache behoben ist.",
       "refusedReasons": {
         "conversion_pending": "eine nachträgliche Verschlüsselung der Festplatte steht aus",
@@ -2153,6 +2188,63 @@
   "time": {
     "never": "nie",
     "now": "jetzt"
+  },
+  "auditExports": {
+    "title": "Nachweis-Exporte",
+    "intro": "Ein signiertes Paket des Audit-Logs für einen Bereich versiegelter Tage, das Sie ohne den Plattformbetreiber prüfen können. Jede Anforderung und jeder Download wird im Audit-Log aufgezeichnet.",
+    "new": "Neuer Export",
+    "requested": "Der Export wurde angefordert. Er wird im Hintergrund erstellt und erscheint als bereit, sobald er heruntergeladen werden kann.",
+    "requestedAt": "Angefordert",
+    "range": "Zeitraum",
+    "status": "Status",
+    "purpose": "Zweck",
+    "requestedBy": "Angefordert von",
+    "size": "Größe",
+    "download": "Herunterladen",
+    "sha256": "SHA-256 des Pakets",
+    "counts": "Inhalt",
+    "countsValue": "{events, plural, one {# Ereignis} other {# Ereignisse}} in {objects, plural, one {# Objekt} other {# Objekten}}",
+    "keyVersion": "Version des Signaturschlüssels",
+    "expiresAt": "Verfügbar bis",
+    "error": "Fehler",
+    "statuses": {
+      "pending": "Ausstehend",
+      "running": "Läuft",
+      "ready": "Bereit",
+      "failed": "Fehlgeschlagen",
+      "expired": "Abgelaufen"
+    },
+    "chain": {
+      "title": "Kette",
+      "intact": "Intakt",
+      "problems": "Probleme"
+    },
+    "empty": {
+      "title": "Noch keine Nachweis-Exporte",
+      "description": "Fordern Sie einen Export an, um ein signiertes Paket des Audit-Logs zu erhalten."
+    },
+    "dialog": {
+      "title": "Neuer Nachweis-Export",
+      "explanation": "Die Anforderung braucht eine aktuelle Bestätigung Ihrer Identität und wird im Audit-Log aufgezeichnet. Beide Tage müssen versiegelt sein; der letzte Tag liegt höchstens 400 Tage nach dem ersten.",
+      "from": "Erster Tag",
+      "to": "Letzter Tag",
+      "purposeHint": "Wofür Sie das Paket brauchen, zum Beispiel das Audit, für das es bestimmt ist.",
+      "submit": "Identität bestätigen und anfordern"
+    },
+    "errors": {
+      "fromRequired": "Geben Sie den ersten Tag an.",
+      "toRequired": "Geben Sie den letzten Tag an.",
+      "order": "Der letzte Tag darf nicht vor dem ersten Tag liegen.",
+      "purposeRequired": "Geben Sie den Zweck an."
+    },
+    "keys": {
+      "title": "Signaturschlüssel",
+      "hint": "Vergleichen Sie mit dem Fingerabdruck, den Ihr ISMS festgehalten hat. Der Fingerabdruck eines Pakets muss mit einem dieser Werte übereinstimmen.",
+      "none": "Es wurde noch kein Signaturschlüssel verwendet.",
+      "version": "Version",
+      "fingerprint": "Fingerabdruck (SHA-256)",
+      "firstSeen": "Erstmals gesehen"
+    }
   },
   "auditIntegrity": {
     "title": "Nachweisintegrität",

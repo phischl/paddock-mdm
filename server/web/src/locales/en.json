@@ -1,4 +1,20 @@
 {
+  "privacySettings": {
+    "title": "Privacy settings",
+    "intro": "How long Paddock keeps the inventory of retired devices and whether reads of the audit log and of device inventory are recorded. Your works council agreement decides on monitoring of administrators.",
+    "retention": "Retention",
+    "retiredInventoryDays": "Keep the inventory of retired devices",
+    "retiredInventoryDaysHint": "The software, vulnerabilities and policy results of a retired device, in Paddock and in Fleet, are deleted that many days after retirement.",
+    "retiredInventoryDaysRange": "Enter a whole number of days from {min} to {max}.",
+    "days": "days",
+    "recording": "Recording of reads",
+    "auditSearchRecorded": "Record searches of the audit log",
+    "auditSearchRecordedHint": "The first search of the audit log per administrator, hour and set of filters is recorded as an audit event; further searches in that window are not. The filters are recorded, never the results or the search text.",
+    "inventoryViewRecorded": "Record views of device inventory",
+    "inventoryViewRecordedHint": "The first view of a device's software and vulnerabilities per administrator, device and day is recorded as an audit event; further views in that window are not. The first view of the devices affected by a CVE per administrator and hour is recorded in the same way.",
+    "readOnly": "Only organization administrators can change the privacy settings.",
+    "saved": "The privacy settings were saved."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent updates",
@@ -68,6 +84,7 @@
     "deviceGroups": "Device groups",
     "audit": "Audit log",
     "auditIntegrity": "Evidence integrity",
+    "auditExports": "Evidence exports",
     "organizations": "Organizations",
     "devices": "Devices",
     "enrollmentTokens": "Enrollment tokens",
@@ -91,6 +108,7 @@
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
+    "privacySettings": "Privacy",
     "apiTokens": "API tokens",
     "changeSets": "Change sets",
     "start": "Start",
@@ -216,7 +234,10 @@
     "forbidden": "You are not allowed to do this.",
     "not_found": "This item no longer exists.",
     "upstream_unavailable": "The identity provider is not reachable. The organization was saved and can be provisioned again.",
-    "range_too_large": "The time range may span at most 92 days.",
+    "range_too_large": "The time range is too large.",
+    "day_not_sealed": "A day of the range is not sealed yet. Exports cover sealed recording days only.",
+    "too_many_exports": "Two exports are already pending or running. Wait until one of them is finished.",
+    "export_not_ready": "The export is not ready for download yet.",
     "page_out_of_range": "This page is too far back. Narrow the search or filters.",
     "invalid_request": "The request was not valid.",
     "internal": "Something went wrong. Please try again.",
@@ -260,7 +281,8 @@
   },
   "audit": {
     "vulnerability": {
-      "critical_summary": "{new_critical, plural, one {# new critical vulnerability} other {# new critical vulnerabilities}} on {devices, plural, one {# device} other {# devices}}"
+      "critical_summary": "{new_critical, plural, one {# new critical vulnerability} other {# new critical vulnerabilities}} on {devices, plural, one {# device} other {# devices}}",
+      "devices_viewed": "{actor} viewed the devices affected by {cve} ({device_count, plural, one {# device} other {# devices}})"
     },
     "retention": {
       "purged": "{deleted, plural, one {# expired entry} other {# expired entries}} of {store} were deleted"
@@ -298,7 +320,11 @@
     },
     "audit": {
       "chain_verified": "The audit hash chain was verified for {from_day} to {to_day} ({days, number} days, {objects, number} objects, {trigger})",
-      "chain_verification_failed": "The audit hash chain verification found {problem_count, plural, one {# problem} other {# problems}} for {from_day} to {to_day} ({trigger})"
+      "chain_verification_failed": "The audit hash chain verification found {problem_count, plural, one {# problem} other {# problems}} for {from_day} to {to_day} ({trigger})",
+      "export_requested": "{actor} requested an evidence export of {from_day} to {to_day}",
+      "searched": "{actor} searched the audit log{q_used, select, true { with a search term} other {}}",
+      "export_completed": "The audit writer processed the evidence export of {from_day} to {to_day} ({events, number} events, {objects, number} objects)",
+      "export_downloaded": "{actor} downloaded the evidence export of {from_day} to {to_day} ({size, number} bytes)"
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
@@ -347,6 +373,9 @@
       "supervisor_update_failed": "The device {target} could not install supervisor {version} and keeps {from_version} ({outcome})",
       "login_assignment_changed": "{actor} changed who may log in on {hostname}",
       "logins_suspended": "{actor} suspended logins on {hostname}",
+      "inventory_purged": "Inventory purge of the retired device {hostname}: {software, plural, one {# package} other {# packages}}, {findings, plural, one {# finding} other {# findings}}",
+      "inventory_viewed": "{actor} viewed the {view, select, vulnerabilities {vulnerabilities} other {software}} of {hostname}",
+      "inventory_host_kept": "The retired device {hostname} still keeps its Fleet host after {rounds, number} unchanged rounds ({fleet_host_kept})",
       "logins_resumed": "{actor} resumed logins on {hostname}",
       "bundle_render_failed": "A new bundle of {target} was blocked: the sudo rights of {username} failed the check",
       "bundle_entry_omitted": "The bundle of {target} leaves out the sudo rights of {username}: a permission profile holds a command that is no longer allowed",
@@ -387,6 +416,9 @@
       "disk_conversion_completed": "The device {target} finished encrypting its disk in place",
       "disk_conversion_failed": "The in-place encryption of the device {target} failed ({stage}: {reason})",
       "disk_conversion_aborted": "The device {target} abandoned the in-place encryption of its disk ({by})",
+      "disk_conversion_completed_after_cancel": "The device {target} encrypted its disk at a restart although the in-place encryption had been cancelled; the conversion continues and the escrowed recovery key opens the disk",
+      "disk_conversion_neutralize_failed": "The device {target} cancelled the in-place encryption but could not disarm its start-up images ({reason}); a restart before the cleanup finishes may still encrypt the disk",
+      "disk_conversion_unlock_restore_failed": "The device {target} could not reinstall the unlock path of its converted disk ({reason}); a kernel whose start-up image was disarmed at the cancel cannot open the disk until this succeeds",
       "event_gap": "Events {from_seq} to {to_seq} of the device {target} never arrived (event gap)",
       "event_gap_filled": "The missing events {from_seq} to {to_seq} of the device {target} arrived later",
       "event_seq_reset": "The event numbering of the device {target} was reset: highest number {reported_high} after {previous_high} (counter reset)",
@@ -468,7 +500,8 @@
       "dms_changed": "{actor} {enabled, select, true {turned on the dead man's switch with a period of {period_days, number} days} other {turned off the dead man's switch}}",
       "updates_changed": "{actor} changed the update settings",
       "managed_files_changed": "{actor} changed the operator roots of the managed files",
-      "watched_units_changed": "{actor} changed the watched units of the presence policy"
+      "watched_units_changed": "{actor} changed the watched units of the presence policy",
+      "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",
@@ -1175,7 +1208,9 @@
       },
       "confirmLabel": "Remove Paddock",
       "typed": "Type the hostname to confirm. The device is retired once it reports the removal.",
-      "pending": "Removal requested ({mode}) — {status}. The device removes Paddock at its next check-in and is then retired.",
+      "pending": "Removal requested ({mode}) — {status}.",
+      "running": "The device removes Paddock at its next check-in and is then retired.",
+      "stopped": "The command will not run any more. Cancel the request and request it again.",
       "refused": "The device refused the removal: {reason}. Cancel the request and request it again once the cause is resolved.",
       "refusedReasons": {
         "conversion_pending": "an in-place encryption of its disk is pending",
@@ -2153,6 +2188,63 @@
   "time": {
     "never": "never",
     "now": "now"
+  },
+  "auditExports": {
+    "title": "Evidence exports",
+    "intro": "A signed package of the audit log for a range of sealed days, which you can verify without the platform operator. Every request and every download is recorded in the audit log.",
+    "new": "New export",
+    "requested": "The export was requested. It is built in the background and appears as ready when it can be downloaded.",
+    "requestedAt": "Requested",
+    "range": "Range",
+    "status": "Status",
+    "purpose": "Purpose",
+    "requestedBy": "Requested by",
+    "size": "Size",
+    "download": "Download",
+    "sha256": "Package SHA-256",
+    "counts": "Contents",
+    "countsValue": "{events, plural, one {# event} other {# events}} in {objects, plural, one {# object} other {# objects}}",
+    "keyVersion": "Signing key version",
+    "expiresAt": "Available until",
+    "error": "Error",
+    "statuses": {
+      "pending": "Pending",
+      "running": "Running",
+      "ready": "Ready",
+      "failed": "Failed",
+      "expired": "Expired"
+    },
+    "chain": {
+      "title": "Chain",
+      "intact": "Intact",
+      "problems": "Problems"
+    },
+    "empty": {
+      "title": "No evidence exports yet",
+      "description": "Request an export to obtain a signed package of the audit log."
+    },
+    "dialog": {
+      "title": "New evidence export",
+      "explanation": "The request needs a recent confirmation of your identity and is recorded in the audit log. Both days must be sealed; the last day is at most 400 days after the first.",
+      "from": "From day",
+      "to": "To day",
+      "purposeHint": "Why you need the package, for example the audit it is for.",
+      "submit": "Confirm identity and request"
+    },
+    "errors": {
+      "fromRequired": "Enter the first day.",
+      "toRequired": "Enter the last day.",
+      "order": "The last day must not be before the first day.",
+      "purposeRequired": "Enter the purpose."
+    },
+    "keys": {
+      "title": "Signing keys",
+      "hint": "Compare with the fingerprint your ISMS recorded. The fingerprint of a package must match one of these values.",
+      "none": "No signing key has been used yet.",
+      "version": "Version",
+      "fingerprint": "Fingerprint (SHA-256)",
+      "firstSeen": "First seen"
+    }
   },
   "auditIntegrity": {
     "title": "Evidence integrity",

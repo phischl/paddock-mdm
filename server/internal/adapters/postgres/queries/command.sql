@@ -63,3 +63,24 @@ WHERE device_id = @device_id AND id = ANY(@ids::uuid[]) AND status = 'pending';
 UPDATE device_command SET status = @status, result = @result, finished_at = @finished_at::timestamptz,
   delivered_at = coalesce(delivered_at, @finished_at::timestamptz)
 WHERE id = @id AND device_id = @device_id AND status IN ('pending','delivered');
+
+-- name: HasExpiredDeviceCommands :one
+-- Whether the retention round has a batch of finished commands to delete (DeleteExpiredDeviceCommands).
+SELECT EXISTS (
+  SELECT 1 FROM device_command c
+  WHERE c.status IN ('succeeded','failed','expired','cancelled') AND c.finished_at < @cutoff::timestamptz
+    AND NOT EXISTS (SELECT 1 FROM device_disk_conversion v WHERE v.command_id = c.id OR v.abort_command_id = c.id)
+    AND NOT EXISTS (SELECT 1 FROM device d WHERE d.uninstall_command_id = c.id)
+);
+
+-- name: DeleteExpiredDeviceCommands :execrows
+-- One batch of commands that finished before the cutoff (ADR 0032 amendment 2026-10-31, PDK-180); a command a disk
+-- conversion or a device's uninstall still references explains that row and stays. The retention round runs each batch
+-- in its own transaction until one deletes fewer than 1 000 rows (plan M10 amendment 2026-10-30).
+DELETE FROM device_command WHERE id IN (
+  SELECT c.id FROM device_command c
+  WHERE c.status IN ('succeeded','failed','expired','cancelled') AND c.finished_at < @cutoff::timestamptz
+    AND NOT EXISTS (SELECT 1 FROM device_disk_conversion v WHERE v.command_id = c.id OR v.abort_command_id = c.id)
+    AND NOT EXISTS (SELECT 1 FROM device d WHERE d.uninstall_command_id = c.id)
+  LIMIT 1000
+);

@@ -65,6 +65,9 @@ type device struct {
 	// beforeFinalList runs once at the first lsinitrd -m of an initrd in place (not a temporary one): a package's late
 	// write over a renamed initrd.
 	beforeFinalList func(d *device)
+	// onList runs at every lsinitrd of an initrd in place (its path below the root): a kernel package's dracut run
+	// replacing it while it is neutralized (PDK-482).
+	onList func(d *device, initrd string)
 	// onTempCrypttab runs at every lsinitrd -f etc/crypttab of a temporary initrd (the last check of its build).
 	onTempCrypttab func()
 	// partDevices is what blkid names for the partition's PARTUUID ("" = one device, /dev/sda3).
@@ -219,6 +222,11 @@ func (d *device) handle(line string) (string, int, bool) {
 		}
 		_, crypttab, _ := strings.Cut(string(raw), crypttabMark)
 		return crypttab, 0, true
+	case strings.HasPrefix(line, "lsinitrd /boot/initrd.img-") && d.onList != nil:
+		d.onList(d, strings.TrimPrefix(line, "lsinitrd "))
+		raw, _ := os.ReadFile(d.Path(strings.TrimPrefix(line, "lsinitrd ")))
+		listing, _, _ := strings.Cut(string(raw), crypttabMark)
+		return listing, 0, true
 	case (strings.HasPrefix(line, "lsinitrd /boot/") || strings.HasPrefix(line, "lsinitramfs /boot/")) &&
 		strings.HasPrefix(d.readOrEmpty(line[strings.Index(line, " ")+1:]), "TRUNCATED"):
 		return "", 1, true
@@ -263,7 +271,7 @@ func (d *device) buildInitrd(path, v string, module bool) {
 	if err == nil {
 		files = append(files, "etc/crypttab")
 	}
-	d.Write(path, lsinitrdOutput(modules, files)+crypttabMark+string(crypttab))
+	d.Write(path, zstdMagic+lsinitrdOutput(modules, files)+crypttabMark+string(crypttab))
 }
 
 // lsinitrdOutput is what lsinitrd prints: the header with the dracut modules, then the files as ls -l lines.
@@ -285,6 +293,10 @@ func lsinitrdModules(output string) string {
 	mods, _, _ := strings.Cut(strings.TrimPrefix(output, head+"dracut modules:\n"), "====")
 	return head + "dracut modules:\n" + mods
 }
+
+// zstdMagic starts a fake initrd, as the magic of a zstd-compressed main archive, so that the neutralization appends
+// to it (PDK-482, X2); the newline keeps it out of the listing's lines.
+const zstdMagic = "\x28\xb5\x2f\xfd\n"
 
 // crypttabMark separates a fake initrd's listing from the crypttab it carries.
 const crypttabMark = "--- etc/crypttab ---\n"
