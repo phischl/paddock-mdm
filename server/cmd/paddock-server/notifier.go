@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"log/slog"
+	"net/mail"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -23,6 +27,8 @@ import (
 type notifierSettings struct {
 	engine       notifier.Config
 	allowPrivate bool
+	// smtp is the relay of plan M9 decision 27, nil without PADDOCK_SMTP_HOST (e-mail destinations are not served).
+	smtp *notifier.EmailConfig
 }
 
 // loadNotifierSettings reads and checks the engine settings; PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE is refused outside
@@ -47,7 +53,76 @@ func loadNotifierSettings(l *config.Loader, common config.Common) notifierSettin
 	if s.allowPrivate && !common.Development() {
 		l.Invalid("PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE", "only allowed with PADDOCK_ENV=development")
 	}
+	s.smtp = loadSMTPSettings(l, common)
 	return s
+}
+
+// loadSMTPSettings reads the relay (plan M9 decision 27, amendment B6.2). TLS is mandatory: PADDOCK_SMTP_TLS=none is
+// refused outside development, and credentials are refused with it everywhere, so they never travel in plain text.
+func loadSMTPSettings(l *config.Loader, common config.Common) *notifier.EmailConfig {
+	mode := l.String("PADDOCK_SMTP_TLS", notifier.SMTPStartTLS)
+	switch mode {
+	case notifier.SMTPStartTLS, notifier.SMTPImplicit:
+	case notifier.SMTPNone:
+		if !common.Development() {
+			l.Invalid("PADDOCK_SMTP_TLS", "none is only allowed with PADDOCK_ENV=development")
+		}
+	default:
+		l.Invalid("PADDOCK_SMTP_TLS", "must be starttls, implicit or none")
+	}
+	host := l.String("PADDOCK_SMTP_HOST", "")
+	if host == "" {
+		return nil
+	}
+	defaultPort := 587
+	if mode == notifier.SMTPImplicit {
+		defaultPort = 465
+	}
+	cfg := &notifier.EmailConfig{Host: host, Port: l.Int("PADDOCK_SMTP_PORT", defaultPort), TLS: mode,
+		Username: l.String("PADDOCK_SMTP_USERNAME", ""), Timeout: l.Duration("PADDOCK_SMTP_TIMEOUT", 30*time.Second)}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		l.Invalid("PADDOCK_SMTP_PORT", "must be 1 to 65535")
+	}
+	if cfg.Timeout <= 0 {
+		l.Invalid("PADDOCK_SMTP_TIMEOUT", "must be positive")
+	}
+	if cfg.Username != "" {
+		cfg.Password = l.SecretFile("PADDOCK_SMTP_PASSWORD_FILE")
+		if mode == notifier.SMTPNone {
+			l.Invalid("PADDOCK_SMTP_USERNAME", "credentials need TLS; not allowed with PADDOCK_SMTP_TLS=none")
+		}
+	}
+	if from := l.Required("PADDOCK_SMTP_FROM"); from != "" {
+		addr, err := mail.ParseAddress(from)
+		if err != nil {
+			l.Invalid("PADDOCK_SMTP_FROM", "not a valid e-mail address")
+		} else {
+			cfg.From = *addr
+		}
+	}
+	if path := l.String("PADDOCK_SMTP_CA_FILE", ""); path != "" {
+		cfg.RootCAs = smtpRootCAs(l, path)
+	}
+	return cfg
+}
+
+// smtpRootCAs adds the PEM certificates of path to the system roots, for a relay with a certificate of an internal CA.
+// Verification itself is never switched off.
+func smtpRootCAs(l *config.Loader, path string) *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	pem, err := os.ReadFile(path) //nolint:gosec // the path is operator configuration
+	if err != nil {
+		l.Invalid("PADDOCK_SMTP_CA_FILE", "unreadable: "+err.Error())
+		return nil
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		l.Invalid("PADDOCK_SMTP_CA_FILE", "holds no PEM certificate")
+		return nil
+	}
+	return pool
 }
 
 // serveNotifier runs the notifier role (plan M9 decisions 20–26): the only holder of the AppRole paddock-notifier,
@@ -83,12 +158,17 @@ func serveNotifier(ctx context.Context, l *config.Loader, common config.Common) 
 	}
 	runner := app.NewActionRunner(&pool.OrgPool, platformPool, httpx.RequestID, app.WithPlatformScope(pool.InPlatformScope))
 	store := notifier.NewPGStore(pool, reader, runner)
-	engine := notifier.NewEngine(settings.engine, platformPool, store, store, keys,
-		map[outbound.Type]notifier.Transport{
-			outbound.TypeWebhook: notifier.NewWebhook(settings.allowPrivate, buildinfo.Version),
-		}, notifier.NewMetrics(prometheus.DefaultRegisterer))
+	transports := map[outbound.Type]notifier.Transport{
+		outbound.TypeWebhook: notifier.NewWebhook(settings.allowPrivate, buildinfo.Version),
+	}
+	if settings.smtp != nil {
+		transports[outbound.TypeEmail] = notifier.NewEmail(*settings.smtp)
+	}
+	engine := notifier.NewEngine(settings.engine, platformPool, store, store, keys, transports,
+		notifier.NewMetrics(prometheus.DefaultRegisterer))
 	slog.InfoContext(ctx, "notifier starting", "poll_interval", settings.engine.PollInterval,
-		"stall_after", settings.engine.StallAfter, "batch", settings.engine.Batch, "allow_private", settings.allowPrivate)
+		"stall_after", settings.engine.StallAfter, "batch", settings.engine.Batch, "allow_private", settings.allowPrivate,
+		"smtp", settings.smtp != nil)
 	return runAll(ctx,
 		func(ctx context.Context) error {
 			return ops.Serve(ctx, common.OpsAddr, func(ctx context.Context) error {

@@ -77,11 +77,12 @@ WHERE id = @id AND delivered_at IS NULL;
 -- name: NotifierDestinationSucceeded :execrows
 -- A delivered batch moves the cursor to the last event it covered; a heartbeat (cursor_commit_seq NULL) does not. Only
 -- while the state still has the pending batch the engine delivered (none for a heartbeat): a skip request resolved
--- meanwhile wins.
+-- meanwhile wins. next_attempt_at is the e-mail digest's earliest next delivery (plan M9 decision 28), NULL otherwise.
 UPDATE notification_destination_state SET
   cursor_commit_seq = coalesce(sqlc.narg(cursor_commit_seq)::bigint, cursor_commit_seq),
   pending_delivery_id = CASE WHEN sqlc.narg(cursor_commit_seq)::bigint IS NULL THEN pending_delivery_id END,
-  consecutive_failures = 0, first_failure_at = NULL, last_error = NULL, next_attempt_at = NULL,
+  consecutive_failures = 0, first_failure_at = NULL, last_error = NULL,
+  next_attempt_at = sqlc.narg(next_attempt_at)::timestamptz,
   last_attempt_at = @at,
   last_success_at = CASE WHEN sqlc.narg(cursor_commit_seq)::bigint IS NULL THEN last_success_at ELSE @at END,
   last_heartbeat_at = CASE WHEN sqlc.narg(cursor_commit_seq)::bigint IS NULL THEN @at ELSE last_heartbeat_at END
