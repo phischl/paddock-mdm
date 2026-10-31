@@ -8,6 +8,8 @@ Everything an auditor needs about Paddock in one place (plan M6b decision 5).
 | [residual-risks.md](residual-risks.md) | The risks Paddock leaves to the operator, with mitigations and what to record in the ISMS |
 | [audit-codes.md](audit-codes.md) | Every audit event code with its meaning, parameters and outcomes (generated from the code) |
 | [privacy.md](privacy.md) | What Paddock collects from devices and administrators, what it stores, and what it never collects |
+| [retention.md](retention.md) | How long each store is kept, on which legal basis, which job deletes it and which audit event proves the deletion |
+| [privacy-pack/](privacy-pack/) | Templates the operator completes; not legal advice: transparency notice for employees (GDPR Art. 13), input for the record of processing (Art. 30), input for the data protection impact assessment (Art. 35), works council annex (BetrVG § 87(1) no. 6) |
 | [third-party.md](third-party.md) | Licenses of linked dependencies, bundled services, published images, device software and build tools |
 | [glossary-de.md](glossary-de.md) | The German terms of the portal |
 

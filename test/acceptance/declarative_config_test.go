@@ -223,6 +223,34 @@ func TestDeclarativeConfig(t *testing.T) {
 		expectOneEvent(t, admin.Portal, res.RequestID, "config.applied", "success")
 	})
 
+	// settings.privacy round-trips like settings.updates (plan M10 decision 9).
+	t.Run("privacy settings", func(t *testing.T) {
+		doc := getConfig(t, admin.Portal)
+		privacy, ok := doc["settings"].(map[string]any)["privacy"].(map[string]any)
+		if !ok || privacy["retired_inventory_days"] != float64(30) || privacy["audit_search_recorded"] != false ||
+			privacy["inventory_view_recorded"] != false {
+			t.Fatalf("exported privacy settings %v", doc["settings"])
+		}
+		privacy["retired_inventory_days"] = 14
+		dry := configResultOf(t, putConfig(t, admin.Portal, doc, true))
+		if len(dry.Plan.Changes) != 1 || dry.Plan.Changes[0].Section != "settings.privacy" || dry.Plan.Changes[0].Action != "update" {
+			t.Fatalf("dry run %+v", dry.Plan)
+		}
+		res := putConfig(t, admin.Portal, doc, false)
+		if out := configResultOf(t, res); out.Plan.Updated != 1 {
+			t.Fatalf("apply: %s", res.Body)
+		}
+		expectOneEvent(t, admin.Portal, res.RequestID, "config.applied", "success")
+		var got struct {
+			RetiredInventoryDays int `json:"retired_inventory_days"`
+		}
+		read := call(t, admin.Portal, http.MethodGet, "/api/v1/settings/privacy", nil)
+		expectStatus(t, read, http.StatusOK, "")
+		if err := read.JSON(&got); err != nil || got.RetiredInventoryDays != 14 {
+			t.Fatalf("privacy settings after apply: %s, %v", read.Body, err)
+		}
+	})
+
 	// Review 2 of PDK-008: deleting a device group deletes its scoped items, so each must be a deletion in the plan.
 	t.Run("device group deletion", func(t *testing.T) {
 		seed := getConfig(t, admin.Portal)

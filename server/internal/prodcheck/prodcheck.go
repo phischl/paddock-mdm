@@ -19,6 +19,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/phischl/paddock-mdm/server/internal/config"
 )
 
 // Hosts of the two-host topology (architecture §4.1) and the single lab host (ADR 0029).
@@ -60,6 +63,13 @@ type Service struct {
 	CapDrop     []string                  `json:"cap_drop"`
 	SecurityOpt []string                  `json:"security_opt"`
 	PidsLimit   int64                     `json:"pids_limit"`
+	Logging     Logging                   `json:"logging"`
+}
+
+// Logging is a service's container log driver and its options (plan M10 decision 40).
+type Logging struct {
+	Driver  string            `json:"driver"`
+	Options map[string]string `json:"options"`
 }
 
 // ServiceNetwork is a service's attachment to one network.
@@ -152,6 +162,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		checkSecretFilesReadableByServices(c),
 		checkMountedReferences(c),
 		checkAutoUnseal(c, o),
+		checkLogRotation(c),
 	}
 	lab := o.Host == HostLab
 	if lab {
@@ -168,6 +179,12 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	}
 	if _, ok := c.Services["paddock-api"]; ok {
 		results = append(results, checkAllowlistBypass(c))
+	}
+	if usesAny(c, []string{"PADDOCK_RETENTION_INTERVAL"}) {
+		results = append(results, checkRetentionInterval(c))
+	}
+	if _, ok := c.Services["paddock-worker"]; ok {
+		results = append(results, checkAuditIndexRetention(c))
 	}
 	if _, ok := c.Services["authentik-server"]; ok {
 		results = append(results, checkAuthentikWebWorkers(c))
@@ -663,6 +680,22 @@ func checkContainerHardening(c Config) Result {
 	return result("container hardening", f)
 }
 
+// checkLogRotation bounds the size of every service's container log (ADR 0032, plan M10 decision 40): the json-file
+// driver honours max-size, and without it Caddy's access log with client addresses grows without a retention limit.
+func checkLogRotation(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		l := c.Services[name].Logging
+		switch {
+		case l.Driver != "json-file":
+			f = append(f, fmt.Sprintf("%s: logging driver %q, want json-file", name, l.Driver))
+		case strings.TrimSpace(l.Options["max-size"]) == "":
+			f = append(f, name+": logging option max-size is unset")
+		}
+	}
+	return result("container logs are rotated", f)
+}
+
 // dsnProblem reads the DSN file a *_URL_FILE variable names (inside the container: /run/secrets/<target>) and
 // reports a cross-host DSN without sslmode=verify-full. The DSN itself never reaches the output.
 func dsnProblem(c Config, s Service, containerPath string, local func(string) bool) string {
@@ -1020,6 +1053,47 @@ func checkAllowlistBypass(c Config) Result {
 		f = append(f, "paddock-api: PADDOCK_IP_ALLOWLIST_BYPASS is true (break-glass; remove it once access is restored)")
 	}
 	return result("ip allow list bypass is off", f)
+}
+
+// checkRetentionInterval fails on a retention round shorter than the production minimum or longer than the maximum,
+// which the worker would refuse to start with (plan M10 amendment 2026-10-30).
+func checkRetentionInterval(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		v := env(c.Services[name], "PADDOCK_RETENTION_INTERVAL")
+		if v == "" {
+			continue
+		}
+		if d, err := time.ParseDuration(v); err != nil || d < config.MinRetentionInterval || d > config.MaxRetentionInterval {
+			f = append(f, fmt.Sprintf("%s: PADDOCK_RETENTION_INTERVAL=%s is not a duration between %s and %s", name, v,
+				config.MinRetentionInterval, config.MaxRetentionInterval))
+		}
+	}
+	return result("retention round interval", f)
+}
+
+// checkAuditIndexRetention fails on an audit index retention the worker would refuse to start with (ADR 0032 amendment
+// 2026-10-31): Compose passes the variable empty when .env lacks it, as an .env from before the variable does.
+func checkAuditIndexRetention(c Config) Result {
+	var f []string
+	s := c.Services["paddock-worker"]
+	least := MinObjectLockDays
+	if worm := env(s, "PADDOCK_AUDIT_RETENTION_DAYS"); worm != "" {
+		if n, err := strconv.Atoi(worm); err != nil {
+			f = append(f, fmt.Sprintf("paddock-worker: PADDOCK_AUDIT_RETENTION_DAYS=%s is not a number of days", worm))
+		} else if n > least {
+			least = n
+		}
+	}
+	v := env(s, "PADDOCK_AUDIT_INDEX_RETENTION_DAYS")
+	if n, err := strconv.Atoi(v); v == "" {
+		f = append(f, "paddock-worker: PADDOCK_AUDIT_INDEX_RETENTION_DAYS is not set; add it to .env with the audit host's value "+
+			"(docs/operations/upgrade.md)")
+	} else if err != nil || n < least {
+		f = append(f, fmt.Sprintf("paddock-worker: PADDOCK_AUDIT_INDEX_RETENTION_DAYS=%s is not a number of days of at least %d "+
+			"(the bucket default and PADDOCK_AUDIT_RETENTION_DAYS)", v, least))
+	}
+	return result("audit index retention of the retention round", f)
 }
 
 // checkAuthentikWebWorkers fails unless authentik-server's AUTHENTIK_WEB__WORKERS is an integer of at least 1:

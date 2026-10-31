@@ -159,6 +159,8 @@ services:
       PADDOCK_STALENESS_UNIT: ${PADDOCK_STALENESS_UNIT:-minute}
       # Retention periods count seconds, for the login history purge gate (plan M8d decision 19, M10 decision 14).
       PADDOCK_RETENTION_UNIT: ${PADDOCK_RETENTION_UNIT:-seconds}
+      # The retention round every 15 s, so the gates see a purge within seconds (plan M10 amendment A3).
+      PADDOCK_RETENTION_INTERVAL: ${PADDOCK_RETENTION_INTERVAL:-15s}
       # Ubuntu's vulnerability data from the fixture server that gate O1 starts on the network cp, every 30 s, instead
       # of the real bulk file once a day (plan M5c); without the gate running, the downloads fail and the data stays.
       PADDOCK_OSV_UBUNTU_URL: ${PADDOCK_OSV_UBUNTU_URL:-http://osv-fixture:8080/Ubuntu/all.zip}
@@ -186,6 +188,7 @@ services:
     build: *paddock-build
     environment:
       PADDOCK_ENV: development
+      PADDOCK_AUDIT_EXPORT_POLL_INTERVAL: ${PADDOCK_AUDIT_EXPORT_POLL_INTERVAL:-2s}
 
   # The development unsealer (plan M8u decision 14) talks plain HTTP to the development OpenBao, which has no internal
   # CA; its shares are the first three of .secrets/openbao/init.txt (openbao-bootstrap.sh).

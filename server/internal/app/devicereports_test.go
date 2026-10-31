@@ -86,6 +86,29 @@ func TestAgentUpdateEventsAreClassifiedByOutcome(t *testing.T) {
 	}
 }
 
+// TestConversionStartedAfterCancel (plan M8e amendment 2026-10-30, PDK-482): disk.conversion_started with after_cancel
+// true is audited as device.disk_conversion_completed_after_cancel; without it, or with after_cancel false or not a boolean, it stays device.disk_conversion_started. A failed
+// neutralization and a failed reinstall of the unlock path have their own codes.
+func TestConversionStartedAfterCancel(t *testing.T) {
+	tests := []struct {
+		typ, data string
+		code      audit.Code
+	}{
+		{protocol.EventDiskConversionStarted, `{"conversion_id":"c","after_cancel":true}`, audit.CodeDeviceDiskConversionCompletedAfterCancel},
+		{protocol.EventDiskConversionStarted, `{"conversion_id":"c","after_cancel":false}`, audit.CodeDeviceDiskConversionStarted},
+		{protocol.EventDiskConversionStarted, `{"conversion_id":"c","after_cancel":"true"}`, audit.CodeDeviceDiskConversionStarted},
+		{protocol.EventDiskConversionStarted, `{"conversion_id":"c"}`, audit.CodeDeviceDiskConversionStarted},
+		{protocol.EventDiskConversionNeutralizeFailed, `{"conversion_id":"c","reason":"boot_space_low"}`, audit.CodeDeviceDiskConversionNeutralizeFailed},
+		{protocol.EventDiskConversionUnlockRestoreFailed, `{"conversion_id":"c","reason":"kernel_not_buildable"}`, audit.CodeDeviceDiskConversionUnlockRestoreFailed},
+	}
+	for _, tt := range tests {
+		entry, ok := eventEntry(uuid.New(), protocol.Event{EventSeq: 1, Type: tt.typ, OccurredAt: time.Now(), Data: json.RawMessage(tt.data)}, time.Now())
+		if !ok || entry.Spec.Code != tt.code {
+			t.Errorf("%s %s: audit code %q (audited %t), want %q", tt.typ, tt.data, entry.Spec.Code, ok, tt.code)
+		}
+	}
+}
+
 // TestDroppedRange (plan M8b decision 19, PDK-108 review 1): only a range below the event's own number counts as
 // dropped; the agent numbers agent.events_dropped after the range it lost.
 func TestDroppedRange(t *testing.T) {

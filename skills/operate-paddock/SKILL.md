@@ -187,6 +187,7 @@ Decline, say why in one sentence, and name the portal page:
 | IP allow list, automatic unseal, import an agent release, end all sessions | `createIpAllowlistEntry`, `updateIpAllowlistEntry`, `deleteIpAllowlistEntry`, `enableAutoUnseal`, `disableAutoUnseal`, `importAgentRelease`, `endAllSessions` | *Platform › IP allow list*, *OpenBao*, *Agent releases*, *Sessions* |
 | Change the watched units of the presence policy | `updateWatchedUnits` | *Settings › Watched units* |
 | Create, change, delete or test a notification destination, rotate its signing secret, resolve a pseudonym | `createNotificationDestination`, `updateNotificationDestination`, `deleteNotificationDestination`, `rotateNotificationDestinationSecret`, `testNotificationDestination`, `resolveNotificationPseudonym`, `createPlatformNotificationDestination`, `updatePlatformNotificationDestination`, `deletePlatformNotificationDestination`, `rotatePlatformNotificationDestinationSecret`, `testPlatformNotificationDestination` | *Settings › Notifications*, *Platform › Notifications* |
+| Request a signed evidence package of the audit trail | `createAuditExport` | *Evidence exports* |
 | Change the MCP policy or your own write access | `updateMcpSettings`, `updatePlatformMcpSettings`, `enableMcpWrite` | *Settings › MCP*, *Platform › MCP policy*, account menu *AI assistant (MCP)* |
 
 The complete, generated list is in [`references/tools.md`](references/tools.md) under *Step-up operations*. A change

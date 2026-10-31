@@ -182,12 +182,14 @@ func uninstallCaseDevice(t *testing.T, w *auditWorld) (string, string) {
 	return d.DeviceID, getDevice(t, w.alice, d.DeviceID).Hostname
 }
 
-// steppedUpAlice signs alice in on a session of its own and steps it up: a step-up changes the session it runs in.
-func steppedUpAlice(t *testing.T) *env.Portal {
+// steppedUpAdmin signs an administrator of the gate's pool in on a session of its own and steps it up: a step-up
+// changes the session it runs in.
+func steppedUpAdmin(t *testing.T, w *auditWorld) *env.Portal {
 	t.Helper()
-	alice := login(t, env.Alice)
-	stepUp(t, alice, env.Alice, true)
-	return alice
+	user := w.admins.take()
+	admin := login(t, user)
+	stepUp(t, admin, user, true)
+	return admin
 }
 
 // deviceAuditCases are the A3 cases of the M2a operations (plan M2a §8: the existing gates include them).
@@ -198,10 +200,11 @@ var deviceAuditCases = func() map[string][]auditCase {
 		// Each reveal case signs in on its own: a step-up changes the session it runs in.
 		"POST /api/v1/devices/{id}/local-admin/reveal": {
 			{"success", func(t *testing.T, w *auditWorld) {
-				alice := login(t, env.Alice)
-				d, _ := escrowedDevice(t, alice)
-				stepUp(t, alice, env.Alice, true)
-				res := call(t, alice, http.MethodPost, reveal(d.DeviceID), map[string]any{"confirm_hostname": getDevice(t, alice, d.DeviceID).Hostname})
+				user := w.admins.take()
+				admin := login(t, user)
+				d, _ := escrowedDevice(t, admin)
+				stepUp(t, admin, user, true)
+				res := call(t, admin, http.MethodPost, reveal(d.DeviceID), map[string]any{"confirm_hostname": getDevice(t, admin, d.DeviceID).Hostname})
 				expectStatus(t, res, http.StatusOK, "")
 				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "success")
 			}},
@@ -216,12 +219,13 @@ var deviceAuditCases = func() map[string][]auditCase {
 				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "denied")
 			}},
 			{"validation failure", func(t *testing.T, w *auditWorld) {
-				alice := login(t, env.Alice)
-				stepUp(t, alice, env.Alice, true)
-				res := call(t, alice, http.MethodPost, reveal(activeID(t, w)), map[string]any{"confirm_hostname": "not-the-hostname"})
+				user := w.admins.take()
+				admin := login(t, user)
+				stepUp(t, admin, user, true)
+				res := call(t, admin, http.MethodPost, reveal(activeID(t, w)), map[string]any{"confirm_hostname": "not-the-hostname"})
 				expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "failure")
-				res = call(t, alice, http.MethodPost, reveal(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
+				res = call(t, admin, http.MethodPost, reveal(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
 				expectStatus(t, res, http.StatusNotFound, "not_found")
 				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "failure")
 			}},
@@ -384,7 +388,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 		"POST /api/v1/devices/{id}/uninstall": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				id, hostname := uninstallCaseDevice(t, w)
-				res := call(t, steppedUpAlice(t), http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname))
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname))
 				expectStatus(t, res, http.StatusOK, "")
 				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "success")
 			}},
@@ -402,20 +406,20 @@ var deviceAuditCases = func() map[string][]auditCase {
 			}},
 			{"validation failure", func(t *testing.T, w *auditWorld) {
 				id, _ := uninstallCaseDevice(t, w)
-				res := call(t, steppedUpAlice(t), http.MethodPost, uninstallPath(id), uninstallCaseBody("not-the-hostname"))
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, uninstallPath(id), uninstallCaseBody("not-the-hostname"))
 				expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_request")
 				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "failure")
 			}},
 			{"not found", func(t *testing.T, w *auditWorld) {
-				res := call(t, steppedUpAlice(t), http.MethodPost, uninstallPath(uuid.NewString()), uninstallCaseBody("x"))
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, uninstallPath(uuid.NewString()), uninstallCaseBody("x"))
 				expectStatus(t, res, http.StatusNotFound, "not_found")
 				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "failure")
 			}},
 			{"conflict", func(t *testing.T, w *auditWorld) {
 				id, hostname := uninstallCaseDevice(t, w)
-				alice := steppedUpAlice(t)
-				expectStatus(t, call(t, alice, http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname)), http.StatusOK, "")
-				res := call(t, alice, http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname))
+				admin := steppedUpAdmin(t, w)
+				expectStatus(t, call(t, admin, http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname)), http.StatusOK, "")
+				res := call(t, admin, http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname))
 				expectStatus(t, res, http.StatusConflict, "invalid_state")
 				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_requested", "failure")
 			}},
@@ -423,7 +427,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 		"POST /api/v1/devices/{id}/uninstall/cancel": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				id, hostname := uninstallCaseDevice(t, w)
-				expectStatus(t, call(t, steppedUpAlice(t), http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname)), http.StatusOK, "")
+				expectStatus(t, call(t, steppedUpAdmin(t, w), http.MethodPost, uninstallPath(id), uninstallCaseBody(hostname)), http.StatusOK, "")
 				res := call(t, w.alice, http.MethodPost, uninstallPath(id)+"/cancel", nil)
 				expectStatus(t, res, http.StatusOK, "")
 				expectOneEvent(t, w.alice, res.RequestID, "device.uninstall_cancelled", "success")
@@ -451,7 +455,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 		"POST /api/v1/devices/{id}/encrypt": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				s := newConversionSim(t, w.alice, "ao-enc")
-				res := call(t, steppedUpAlice(t), http.MethodPost, s.path("/encrypt"), s.encryptBody())
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, s.path("/encrypt"), s.encryptBody())
 				expectStatus(t, res, http.StatusOK, "")
 				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "success")
 			}},
@@ -469,18 +473,18 @@ var deviceAuditCases = func() map[string][]auditCase {
 			}},
 			{"validation failure", func(t *testing.T, w *auditWorld) {
 				id, _ := uninstallCaseDevice(t, w)
-				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(id), encryptCaseBody("not-the-hostname"))
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, encryptPath(id), encryptCaseBody("not-the-hostname"))
 				expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_request")
 				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "failure")
 			}},
 			{"not found", func(t *testing.T, w *auditWorld) {
-				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(uuid.NewString()), encryptCaseBody("x"))
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, encryptPath(uuid.NewString()), encryptCaseBody("x"))
 				expectStatus(t, res, http.StatusNotFound, "not_found")
 				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "failure")
 			}},
 			{"conflict", func(t *testing.T, w *auditWorld) {
 				id, hostname := uninstallCaseDevice(t, w)
-				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(id), encryptCaseBody(hostname))
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, encryptPath(id), encryptCaseBody(hostname))
 				expectStatus(t, res, http.StatusConflict, "invalid_state")
 				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_requested", "failure")
 			}},
@@ -488,9 +492,9 @@ var deviceAuditCases = func() map[string][]auditCase {
 		"POST /api/v1/devices/{id}/encrypt/cancel": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				s := newConversionSim(t, w.alice, "ao-encc")
-				alice := steppedUpAlice(t)
-				expectStatus(t, call(t, alice, http.MethodPost, s.path("/encrypt"), s.encryptBody()), http.StatusOK, "")
-				res := call(t, alice, http.MethodPost, s.path("/encrypt/cancel"), s.cancelBody())
+				admin := steppedUpAdmin(t, w)
+				expectStatus(t, call(t, admin, http.MethodPost, s.path("/encrypt"), s.encryptBody()), http.StatusOK, "")
+				res := call(t, admin, http.MethodPost, s.path("/encrypt/cancel"), s.cancelBody())
 				expectStatus(t, res, http.StatusOK, "")
 				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "success")
 			}},
@@ -508,20 +512,20 @@ var deviceAuditCases = func() map[string][]auditCase {
 			}},
 			{"validation failure", func(t *testing.T, w *auditWorld) {
 				s := newConversionSim(t, w.alice, "ao-encv")
-				alice := steppedUpAlice(t)
-				expectStatus(t, call(t, alice, http.MethodPost, s.path("/encrypt"), s.encryptBody()), http.StatusOK, "")
-				res := call(t, alice, http.MethodPost, s.path("/encrypt/cancel"), map[string]any{"confirm_hostname": "not-the-hostname"})
+				admin := steppedUpAdmin(t, w)
+				expectStatus(t, call(t, admin, http.MethodPost, s.path("/encrypt"), s.encryptBody()), http.StatusOK, "")
+				res := call(t, admin, http.MethodPost, s.path("/encrypt/cancel"), map[string]any{"confirm_hostname": "not-the-hostname"})
 				expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_request")
 				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "failure")
 			}},
 			{"not found", func(t *testing.T, w *auditWorld) {
-				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(uuid.NewString())+"/cancel", map[string]any{"confirm_hostname": "x"})
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, encryptPath(uuid.NewString())+"/cancel", map[string]any{"confirm_hostname": "x"})
 				expectStatus(t, res, http.StatusNotFound, "not_found")
 				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "failure")
 			}},
 			{"conflict", func(t *testing.T, w *auditWorld) {
 				id, hostname := uninstallCaseDevice(t, w)
-				res := call(t, steppedUpAlice(t), http.MethodPost, encryptPath(id)+"/cancel", map[string]any{"confirm_hostname": hostname})
+				res := call(t, steppedUpAdmin(t, w), http.MethodPost, encryptPath(id)+"/cancel", map[string]any{"confirm_hostname": hostname})
 				expectStatus(t, res, http.StatusConflict, "invalid_state")
 				expectOneEvent(t, w.alice, res.RequestID, "device.encrypt_cancelled", "failure")
 			}},

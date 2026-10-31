@@ -75,3 +75,14 @@ UPDATE device_event_gap SET filled_at = @now WHERE device_id = @device_id AND fi
 
 -- name: ResetEventSeq :exec
 UPDATE device_status SET event_seq_contiguous = 0, event_seq_scanned = 0, event_seq_high = @high WHERE device_id = @device_id;
+
+-- name: HasExpiredEventGaps :one
+SELECT EXISTS (SELECT 1 FROM device_event_gap WHERE filled_at < @cutoff::timestamptz);
+
+-- name: DeleteExpiredEventGaps :execrows
+-- One batch of gaps filled before the cutoff (ADR 0032 amendment 2026-10-31, PDK-180); an unfilled gap has no
+-- filled_at and never matches. The retention round runs each batch in its own transaction until one deletes fewer than
+-- 1 000 rows (plan M10 amendment 2026-10-30).
+DELETE FROM device_event_gap WHERE id IN (
+  SELECT id FROM device_event_gap WHERE filled_at < @cutoff::timestamptz LIMIT 1000
+);

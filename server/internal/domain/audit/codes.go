@@ -50,6 +50,12 @@ const (
 	CodeDeviceDiskConversionCompleted Code = "device.disk_conversion_completed"
 	CodeDeviceDiskConversionFailed    Code = "device.disk_conversion_failed"
 	CodeDeviceDiskConversionAborted   Code = "device.disk_conversion_aborted"
+	// A cancelled conversion that encrypted anyway, and an abort that could not neutralize the initrds (plan M8e
+	// amendment 2026-10-30).
+	CodeDeviceDiskConversionCompletedAfterCancel Code = "device.disk_conversion_completed_after_cancel"
+	CodeDeviceDiskConversionNeutralizeFailed     Code = "device.disk_conversion_neutralize_failed"
+	// The unlock path of a converted disk could not be reinstalled (plan M8e amendment 2026-10-30, PDK-482).
+	CodeDeviceDiskConversionUnlockRestoreFailed Code = "device.disk_conversion_unlock_restore_failed"
 
 	// Supervisor package updates (plan M8d decision 33).
 	CodeDeviceSupervisorUpdated      Code = "device.supervisor_updated"
@@ -86,6 +92,8 @@ const (
 	CodeUserGroupMemberRemoved      Code = "user_group.member_removed"
 	CodeSettingsLoginChanged        Code = "settings.login_changed"
 	CodeRetentionPurged             Code = "retention.purged"
+	CodeDeviceInventoryPurged       Code = "device.inventory_purged"
+	CodeDeviceInventoryHostKept     Code = "device.inventory_host_kept"
 	CodeDeviceLoginAssignmentChange Code = "device.login_assignment_changed"
 	CodeDeviceLoginsSuspended       Code = "device.logins_suspended"
 	CodeDeviceLoginsResumed         Code = "device.logins_resumed"
@@ -222,6 +230,20 @@ const (
 	CodeNotificationTestRequested            Code = "notification.test_requested"
 	CodeNotificationTestSent                 Code = "notification.test_sent"
 	CodeNotificationPseudonymResolved        Code = "notification.pseudonym_resolved"
+
+	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
+	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
+
+	// Read-access recording, coalesced per actor and window (ADR 0032 §4, plan M10 §6.4).
+	CodeAuditSearched         Code = "audit.searched"
+	CodeDeviceInventoryViewed Code = "device.inventory_viewed"
+
+	CodeVulnerabilityDevicesViewed Code = "vulnerability.devices_viewed"
+
+	// Evidence export (ADR 0032 §5, plan M10 §6.4).
+	CodeAuditExportRequested  Code = "audit.export_requested"
+	CodeAuditExportCompleted  Code = "audit.export_completed"
+	CodeAuditExportDownloaded Code = "audit.export_downloaded"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -409,6 +431,27 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Params conversion_id and by (admin or operator).",
+	},
+	CodeDeviceDiskConversionCompletedAfterCancel: {
+		Code: CodeDeviceDiskConversionCompletedAfterCancel, Emitted: true,
+		Description: "The device initialised LUKS2 on its root partition at a restart although its in-place encryption had been cancelled (the restart came before the cleanup); the conversion is adopted as encrypting, and the escrowed recovery key opens the disk (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded instead of device.disk_conversion_started when the event carries after_cancel. Params conversion_id, volume, init_s and init_result.",
+	},
+	CodeDeviceDiskConversionNeutralizeFailed: {
+		Code: CodeDeviceDiskConversionNeutralizeFailed, Emitted: true,
+		Description: "The device cancelled its in-place encryption but could not make its prepared initrds boot unencrypted; until its cleanup has rebuilt them, a restart may still encrypt the disk (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id and reason (boot_space_low when /boot has no room for the copy, else the error).",
+	},
+	CodeDeviceDiskConversionUnlockRestoreFailed: {
+		Code: CodeDeviceDiskConversionUnlockRestoreFailed, Emitted: true,
+		Description: "The device could not reinstall the unlock path of its converted disk into its initrds; until it succeeds, a kernel whose initrd was disarmed when the in-place encryption was cancelled cannot open the disk, so only the other kernels boot (actor: the device). The device retries; the disk state names the blocking issue.",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id and reason (kernel_not_buildable, no_bootable_kernel, boot_space_low, else the error). Reported once per reason and agent start.",
 	},
 	CodeDeviceGroupsChanged: {
 		Code: CodeDeviceGroupsChanged, Emitted: true,
@@ -748,10 +791,25 @@ var registry = map[Code]Definition{
 	},
 	CodeRetentionPurged: {
 		Code: CodeRetentionPurged, Emitted: true,
-		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization) or audit_exports (one event per expired export, in its organization).",
-		Params:      []string{"store", "deleted", "cutoff", "partition", "export_id"},
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
+		Params:      []string{"store", "deleted", "cutoff", "index_days", "partition", "export_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
+	},
+	CodeDeviceInventoryPurged: {
+		Code: CodeDeviceInventoryPurged, Emitted: true,
+		Description: "The retention job deleted the inventory of a retired device in Paddock and its host in Fleet, retired_inventory_days after retirement (actor: system). software, findings and policy_results are the deleted rows. fleet_host_in_use is the answer of the check across all organizations before the host is deleted: ref (another device of any organization references the host; the host stays, the device's Paddock rows go), hardware (an active, quarantined or pending device with the same hardware has no reference yet) or none; it is absent when the device had no Fleet host or the check did not run. On none, Fleet's last check-in of the host is read first: fleet_host_seen_at is that time when known, and a host seen after the device's retirement and within the last 7 days is still in use. fleet_host_kept names why the host stays with the device's host reference while its other rows go: hardware or seen_recently; the device is checked again next round, and an event is recorded only when that answer changes (device.inventory_host_kept after 30 unchanged rounds). fleet_host_deleted is true only when the host was deleted or Fleet no longer knew it. A failure keeps all Paddock rows (the counts are the rows kept) and the device is retried next round: upstream_unavailable when Fleet failed or could not be reached (also an answer from a proxy in front of Fleet or a redirect), invalid_state when Fleet refused this host with its own error body, another code when a check failed or the device changed after it was listed.",
+		Params: []string{"hostname", "retired_at", "software", "findings", "policy_results", "fleet_host_deleted", "fleet_host_in_use",
+			"fleet_host_kept", "fleet_host_seen_at"},
+		Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:     "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
+	},
+	CodeDeviceInventoryHostKept: {
+		Code: CodeDeviceInventoryHostKept, Emitted: true,
+		Description: "The retention job has kept a retired device's Fleet host and host reference for rounds unchanged rounds with the same answer fleet_host_kept (hardware or seen_recently, see device.inventory_purged) and records it once (actor: system). Nothing is deleted; the device is still checked every round and records device.inventory_purged again when the answer changes. A failure means the notice could not be recorded; the next round retries it.",
+		Params:      []string{"hostname", "retired_at", "fleet_host_kept", "rounds"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Notice; ADR 0032.",
 	},
 	CodeDeviceLoginAssignmentChange: {
 		Code: CodeDeviceLoginAssignmentChange, Emitted: true,
@@ -1384,6 +1442,51 @@ var registry = map[Code]Definition{
 		Params:      []string{"pseudonym"},
 		Outcomes:    adminOutcomes,
 		Note:        "Target is the organization. Failure with invalid_request for a malformed pseudonym, invalid_state while the organization has no pseudonym key.",
+	},
+	CodeSettingsPrivacyChanged: {
+		Code: CodeSettingsPrivacyChanged, Emitted: true,
+		Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
+		Params:      []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAuditSearched: {
+		Code: CodeAuditSearched, Emitted: true,
+		Description: "An administrator, auditor or API token searched the audit log; recorded once per actor, clock hour and set of filters (the search text is not part of the set) and only while the organization's audit_search_recorded setting is on. Filters are recorded, never results or the search text; codes outside this registry are only counted (codes_unknown); a target_id that is not a device of the organization is not recorded, only target_id_used.",
+		Params:      []string{"from", "to", "codes", "codes_unknown", "outcomes", "actor_types", "target_id", "target_id_used", "q_used", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators whatever the setting. While the setting is on, failure with the reason of a refused search (invalid_request, page_out_of_range, range_too_large), canceled for a search the client gave up after the setting was read, or internal for a window that could not be claimed; the search is then refused. When the setting cannot be read, nothing is recorded and the search fails.",
+	},
+	CodeDeviceInventoryViewed: {
+		Code: CodeDeviceInventoryViewed, Emitted: true,
+		Description: "An organization member viewed the software or vulnerabilities of a device; recorded once per actor, device and UTC day and only while inventory_view_recorded is on. view is the first view of the day. The device is the target only when it is a device of the organization; otherwise only target_id_used is recorded.",
+		Params:      []string{"hostname", "view", "target_id_used", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "While the setting is on, failure with the reason of a refused view (not_found for a missing or foreign device, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a device lookup or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails.",
+	},
+	CodeVulnerabilityDevicesViewed: {
+		Code: CodeVulnerabilityDevicesViewed, Emitted: true,
+		Description: "An organization member listed the devices affected by a CVE; recorded once per actor, CVE and clock hour and only while inventory_view_recorded is on. device_count is the number of the organization's devices with a finding of the CVE when the window opened; the search text of the list is never recorded.",
+		Params:      []string{"cve", "device_count", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "While the setting is on, failure with the reason of a refused view (not_found for a CVE without finding in the organization, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a count or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails.",
+	},
+	CodeAuditExportRequested: {
+		Code: CodeAuditExportRequested, Emitted: true,
+		Description: "An organization administrator or auditor requested a signed evidence package for a range of sealed recording days after a step-up; denied with step_up_required without one.",
+		Params:      []string{"export_id", "from_day", "to_day", "purpose"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAuditExportDownloaded: {
+		Code: CodeAuditExportDownloaded, Emitted: true,
+		Description: "An organization administrator or auditor downloaded an evidence package; every download is recorded before the first byte is sent. failure carries error_code export_not_ready for an export that is not ready (pending, running, failed or expired).",
+		Params:      []string{"export_id", "from_day", "to_day", "size", "package_sha256"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAuditExportCompleted: {
+		Code: CodeAuditExportCompleted, Emitted: true,
+		Description: "The audit writer finished building an evidence package (actor: system). verify_ok tells whether the chain of the range verified; a package with problems is still delivered so that the auditor sees them. failure carries the error and error_code export_failed; reason export_too_large marks a build whose events.jsonl or package exceeded PADDOCK_AUDIT_EXPORT_MAX_BYTES.",
+		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/state"
@@ -28,10 +30,12 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 	if !ok {
 		return
 	}
-	running, _ := a.supervisorUpgradeHolds()
+	marker, fresh, markerErr := a.supervisorMarker()
 	result, rerr := supervisorpkg.ReadResult(a.d.Layout)
-	// An accepted uninstall removes the supervisor package; an upgrade started now would race the removal.
-	busy := running || result != nil || rerr != nil || update.Pending(a.d.Layout) || a.st.PendingUninstall != nil
+	// A readable marker stays busy until reportSupervisorUpgrade turns it into install_failed: overwriting it would lose
+	// the failed upgrade's event and FailedSupervisorVersion (PDK-479, review 1 M1). An accepted uninstall removes the
+	// supervisor package; an upgrade started now would race the removal.
+	busy := fresh || marker != nil || result != nil || rerr != nil || update.Pending(a.d.Layout) || a.st.PendingUninstall != nil
 	// The conversion worker may hold dpkg's locks and must not be interrupted by a supervisor restart (plan M8e
 	// decision 37 as amended on 2026-10-21, items 16 to 18): only while it runs. A preparation waiting between its
 	// passes, possibly for a long time for a foreign dpkg run, and a cleanup waiting for its next attempt do not hold
@@ -52,6 +56,10 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 		}
 		return
 	}
+	if markerErr != nil {
+		slog.WarnContext(ctx, "unreadable supervisor upgrade marker is stale; starting the supervisor upgrade", "version", ref.Version,
+			"error", markerErr)
+	}
 	base := BundlesURL(a.d.Config.ServerURL)
 	if base == "" {
 		slog.WarnContext(ctx, "supervisor package offered but no package store is configured", "version", ref.Version)
@@ -62,6 +70,9 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 		slog.WarnContext(ctx, "staging the supervisor package failed; retrying at the next check-in", "version", ref.Version, "error", err)
 		return
 	}
+	// Before Launch, which writes the new marker first: a sighting of the replaced one would count the new marker as
+	// stale while systemd-run starts the helper (PDK-479, review 1 m1).
+	a.markerSeen.reset()
 	if err := supervisorpkg.Launch(ctx, a.d.RunUnit, a.d.Layout, deb, ref.Version, installed); err != nil {
 		slog.ErrorContext(ctx, "starting the supervisor upgrade failed; retrying at the next check-in", "version", ref.Version, "error", err)
 		return
@@ -72,11 +83,21 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 // reportSupervisorUpgrade turns the result of `paddockd supervisor-upgrade` into the event agent.supervisor_updated,
 // once (plan M8d decision 32). A version that failed is not installed again; one rolled back only because the server
 // was unreachable is retried after supervisorpkg.RetryAfter, up to supervisorpkg.MaxAttempts times (design contract
-// 8). A marker older than supervisorpkg.StaleAfter without a result counts as install_failed: the helper died.
+// 8). A marker no longer fresh (supervisorMarker) without a result counts as install_failed: the helper died.
 func (a *Agent) reportSupervisorUpgrade() {
 	r, err := supervisorpkg.ReadResult(a.d.Layout)
-	if err != nil {
+	if err != nil && !resultCorrupt(err) {
+		// An I/O error may pass; the result it hides may be a valid failure that must be reported (PDK-479, review 1 E2).
 		slog.Error("reading the supervisor upgrade result failed", "error", err)
+		return
+	}
+	if err != nil {
+		// Nothing else ever clears a corrupt result, and it holds every further supervisor upgrade back (PDK-479). Its
+		// version is unknown, so no event can carry it; the version offered next is installed as usual.
+		slog.Warn("the supervisor upgrade result is corrupt; it is discarded", "error", err)
+		if err := supervisorpkg.RemoveResult(a.d.Layout); err != nil {
+			slog.Error("removing the supervisor upgrade result failed", "error", err)
+		}
 		return
 	}
 	if r == nil {
@@ -104,6 +125,14 @@ func (a *Agent) reportSupervisorUpgrade() {
 	at := r.At
 	a.st.ReportedSupervisorUpgradeAt = &at
 	a.saveState()
+}
+
+// resultCorrupt reports whether a ReadResult error is a parse error of the file's content, not an I/O error. Reading
+// fails only with an *fs.PathError; every other error comes from decoding, including a field's own UnmarshalJSON (a
+// malformed "at" yields a *time.ParseError), so the content can never become readable by waiting.
+func resultCorrupt(err error) bool {
+	var pathErr *fs.PathError
+	return err != nil && !errors.As(err, &pathErr)
 }
 
 // deferSupervisor schedules the next attempt of an upgrade dpkg refused for a held lock (plan M8e amendment 2026-10-21,
@@ -146,32 +175,86 @@ func (a *Agent) retrySupervisor(r *supervisorpkg.Result) {
 }
 
 // supervisorUpgradeHolds reports whether supervisor-upgrade.json holds back other work (an agent update, a further
-// supervisor upgrade, the removal of Paddock). A readable marker holds until staleSupervisorUpgrade turns it into a
-// result. An unreadable one holds only until its mtime is older than supervisorpkg.StaleAfter: staleSupervisorUpgrade
-// cannot clear a marker it cannot read, and nothing may wait longer than the 30 minutes of the ADR 0037 amendment. err
-// is the read error of an unreadable marker, for the caller's log.
+// supervisor upgrade, the removal of Paddock, initrd work): while the marker is fresh (supervisorMarker). err is the
+// read error of an unreadable marker, for the caller's log.
 func (a *Agent) supervisorUpgradeHolds() (bool, error) {
-	marker, err := supervisorpkg.ReadMarker(a.d.Layout)
-	if marker != nil {
-		return true, nil
-	}
-	if err == nil {
-		return false, nil
-	}
-	info, statErr := os.Stat(a.d.Layout.SupervisorUpgrade())
-	if errors.Is(statErr, os.ErrNotExist) {
-		return false, nil
-	}
-	if statErr == nil && a.d.Now().Sub(info.ModTime()) >= supervisorpkg.StaleAfter {
-		return false, err
-	}
-	return true, err
+	_, fresh, err := a.supervisorMarker()
+	return fresh, err
 }
 
-// staleSupervisorUpgrade writes and returns an install_failed result for a marker older than StaleAfter.
+// supervisorMarker is the one rule for supervisor-upgrade.json (PDK-479). It returns the marker when it is readable,
+// whether it is fresh — an upgrade may still run — and the error of an unreadable marker. A marker is fresh while it
+// is younger than supervisorpkg.StaleAfter, counted from its start (StartedAt, or the mtime of an unreadable marker)
+// or from when this process first saw it (markerSeen), whichever is earlier. The sighting bounds every hold a clock
+// set back could stretch — a start ahead of the clock, or one merely moved closer to it — and one the agent cannot
+// place at all (the stat fails with something other than not-exist): no hold outlasts the 30 minutes of the ADR 0037
+// amendment after the first sighting.
+func (a *Agent) supervisorMarker() (*supervisorpkg.Marker, bool, error) {
+	now := a.d.Now()
+	marker, err := supervisorpkg.ReadMarker(a.d.Layout)
+	var start time.Time
+	known := true
+	switch {
+	case marker != nil:
+		start = marker.StartedAt
+	case err == nil:
+		a.markerSeen.reset()
+		return nil, false, nil
+	default:
+		info, statErr := os.Stat(a.d.Layout.SupervisorUpgrade())
+		switch {
+		case errors.Is(statErr, os.ErrNotExist):
+			a.markerSeen.reset()
+			return nil, false, nil
+		case statErr != nil:
+			err, known = errors.Join(err, statErr), false
+		default:
+			start = info.ModTime()
+		}
+	}
+	mono := now
+	if a.d.Monotonic != nil {
+		mono = a.d.Monotonic()
+	}
+	return marker, a.markerSeen.age(now, mono, start, known) < supervisorpkg.StaleAfter, err
+}
+
+// markerSeen remembers when the agent first saw the current supervisor-upgrade.json. It lives in memory only: the wall
+// clock is exactly what cannot be trusted here, so a persisted sighting would mislead after the next clock step, while
+// the monotonic clock (Deps.Monotonic) survives clock steps within the process. A restart of the agent sees the marker
+// anew and holds once more for at most supervisorpkg.StaleAfter. The mutex guards it because the conversion worker
+// checks the marker outside the loop (holdForSupervisor).
+type markerSeen struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+// age returns how long the marker counts as having run: since the first sighting on the monotonic clock mono, recorded
+// now if there is none, or since start on the wall clock now when start is known and earlier.
+func (s *markerSeen) age(now, mono, start time.Time, known bool) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.at.IsZero() {
+		s.at = mono
+	}
+	age := mono.Sub(s.at)
+	if known {
+		age = max(age, now.Sub(start))
+	}
+	return age
+}
+
+// reset forgets the sighting once the marker is gone or replaced.
+func (s *markerSeen) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.at = time.Time{}
+}
+
+// staleSupervisorUpgrade writes and returns an install_failed result for a marker that is no longer fresh.
 func (a *Agent) staleSupervisorUpgrade() *supervisorpkg.Result {
-	m, err := supervisorpkg.ReadMarker(a.d.Layout)
-	if err != nil || m == nil || a.d.Now().Sub(m.StartedAt) < supervisorpkg.StaleAfter {
+	m, fresh, _ := a.supervisorMarker()
+	if m == nil || fresh {
 		return nil
 	}
 	r := supervisorpkg.Result{Version: m.Version, FromVersion: m.FromVersion, Outcome: protocol.SupervisorOutcomeInstallFailed,

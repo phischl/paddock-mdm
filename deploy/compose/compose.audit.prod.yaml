@@ -7,6 +7,13 @@ x-paddock-prod:
   interconnect_addr: ${PADDOCK_INTERCONNECT_ADDR:?set PADDOCK_INTERCONNECT_ADDR in .env}
   revocation_accepted: ${PADDOCK_REVOCATION_ACCEPTED:-no}
 
+# YAML anchors do not cross files: the same log rotation as x-paddock-logging of compose.yaml (plan M10 decision 40).
+x-paddock-logging: &paddock-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+
 services:
   audit-postgres:
     # PostgreSQL refuses a key file that others can read; the entrypoint copies the bind-mounted key with mode 0600
@@ -43,6 +50,7 @@ services:
   # The audit host's own Prometheus (`--profile observability`): the audit writer's metrics stay on this host; the
   # control plane's Prometheus watches the audit queue (PaddockAuditWriterLag, PaddockAuditWriterNotConsuming).
   prometheus-audit:
+    logging: *paddock-logging
     image: ${PROMETHEUS_IMAGE}
     profiles: [observability]
     restart: unless-stopped

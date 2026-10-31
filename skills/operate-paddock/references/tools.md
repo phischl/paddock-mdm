@@ -15,8 +15,11 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
+| `getAuditExport` | read | no | One evidence export of the organization. |
 | `getAuditIntegrity` | read | no | The integrity of the organization's audit evidence (plan M8b decision 30): the last sealed day, the number of sealed days, the newest chain verification run and the times of the last successful and the last failed run. |
 | `listAuditEvents` | read | no | GET /api/v1/audit-events |
+| `listAuditEvidenceKeys` | read | no | The public keys the audit chain and the evidence packages are signed with, by key version, with their SHA-256 fingerprints. |
+| `listAuditExports` | read | no | The organization's evidence exports (ADR 0032 §5). |
 | `listAuditManifests` | read | no | The sealed days of the organization with the result of the newest verification run covering each day. |
 | `listAuditVerificationRuns` | read | no | The chain verification runs of the organization (nightly window, random sample day, paddock-server audit verify). |
 
@@ -189,10 +192,12 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getDMSSettings` | read | no | The dead man's switch; off with the defaults until changed. |
 | `getLoginSettings` | read | no | GET /api/v1/settings/login |
 | `getManagedFileSettings` | read | no | The operator roots of the managed files (ADR 0034 amendment 2026-10-16); empty until changed. |
+| `getPrivacySettings` | read | no | The privacy settings (ADR 0032 §2); the defaults until changed. |
 | `getUpdateSettings` | read | no | The update settings (plan M5b decisions 1 and 9); the defaults until changed. |
 | `getWatchedUnits` | read | no | The third-party systemd services of the presence policy: the agents report when one of them stops. |
 | `updateDMSSettings` | write | no | Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal warns below 30), distinct warn_days below the period. |
 | `updateLoginSettings` | write | no | Replaces the login settings; every device is recompiled. |
+| `updatePrivacySettings` | write | no | Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). |
 | `updateUpdateSettings` | write | no | Replaces the update settings: security_daily_at (HH:MM, local device time), regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720) and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). |
 
 ## updates
@@ -242,6 +247,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `confirmManagedFileSensitive` | managed-config | Confirms a managed file on a sensitive path that existed before the path tiers; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `confirmPermissionProfileRootGrant` | privileges | Confirms an effectively Full profile that existed before the step-up rule covered it; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `createApiToken` | api-tokens | The role may not be above the creator's: org_admin creates any organization role, org_operator creates org_operator and org_auditor (403 forbidden). |
+| `createAuditExport` | audit | Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). |
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
@@ -282,6 +288,7 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | --- | --- | --- |
 | `checkAgentReleaseSource` | platform | Lists the releases of the source and compares the latest with the newest published release (ADR 0043 decision 3); changes nothing and is not audited. |
 | `disableMcpWrite` | mcp | Disables MCP write access for the caller's own account; no step-up is needed. |
+| `downloadAuditExport` | audit | Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. |
 | `feedAuditEvents` | audit | Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. |
 | `generateAutoinstall` | enrollment-tokens | Generates the Ubuntu autoinstall user-data that installs one device with Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. |
 | `getMcpAccess` | mcp | What the caller's MCP sessions may do under the MCP policy of its scope (the organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and write_enabled, and the account opted in) and the caller's role may perform them. |

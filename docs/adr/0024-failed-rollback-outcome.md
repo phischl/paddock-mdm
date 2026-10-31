@@ -109,3 +109,14 @@ already names is removed without being processed and without a new result**, the
 applies to a leftover request. The agent reads the result at its next check-in and never stages that release again.
 The server keeps offering the current release to every older agent (plan M2b decision 21); the per-device stop stays
 on the device.
+
+## Amendment 2026-10-30 (PDK-480) — accepted residual: a request whose release directory a crash removed
+`Supervisor.cleanup` removes `staging/<version>` before `staging/request.json` (PDK-469). A supervisor kill or power
+loss between the two removals (a window of microseconds) on a `finish` path that runs before a switch leaves a request
+without its release; the restart cannot read `paddockd` and reports `signature_invalid` instead of the real outcome.
+This stays, by decision of the architect. The failure code is wrong, and the device counts as one failure toward that
+release's rollout halt rate and skips the release until a newer one is offered. Nothing is activated, nothing wedges
+(the request is consumed, later requests are processed normally) and the agent marks the release as failed. It is
+accepted because telling a missing release from a bad signature would change the supervisor, and design contract 1
+(the supervisor is simple enough to need no updates) has priority. Pinned by
+`TestRestartWithRequestWithoutReleaseDirectory`.

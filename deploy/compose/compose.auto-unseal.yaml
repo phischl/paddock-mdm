@@ -5,8 +5,16 @@
 #
 # YAML anchors do not cross files, so the hardening of the x-paddock anchor of compose.yaml is spelled out here.
 
+# YAML anchors do not cross files: the same log rotation as x-paddock-logging of compose.yaml (plan M10 decision 40).
+x-paddock-logging: &paddock-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+
 services:
   paddock-unsealer:
+    logging: *paddock-logging
     image: ${PADDOCK_IMAGE:-paddock-server:dev}
     profiles: [paddock]
     read_only: true

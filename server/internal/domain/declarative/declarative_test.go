@@ -133,6 +133,34 @@ func TestDiffEverySection(t *testing.T) {
 	}
 }
 
+// TestDiffPrivacySettings: settings.privacy is a settings section like settings.updates (plan M10 decision 9): a
+// changed field is one update, an unchanged section no change, an absent section untouched.
+func TestDiffPrivacySettings(t *testing.T) {
+	cur := current()
+	cur.Settings.Privacy = &declarative.PrivacySettings{RetiredInventoryDays: 30}
+	want := current()
+	want.Settings.Privacy = &declarative.PrivacySettings{RetiredInventoryDays: 14}
+	plan := declarative.Diff(cur, want)
+	if len(plan.Changes) != 1 || plan.Updated != 1 {
+		t.Fatalf("plan %+v", plan)
+	}
+	c := plan.Changes[0]
+	if c.Section != declarative.SectionSettingsPrivacy || c.Action != declarative.ActionUpdate || c.Key != "" ||
+		len(c.Fields) != 1 || c.Fields[0] != (declarative.FieldChange{Name: "retired_inventory_days", Before: 30, After: 14}) {
+		t.Fatalf("change %+v", c)
+	}
+	if plan := declarative.Diff(cur, cur); len(plan.Changes) != 0 {
+		t.Fatalf("same settings: %+v", plan)
+	}
+	want.Settings.Privacy = nil
+	if plan := declarative.Diff(cur, want); len(plan.Changes) != 0 {
+		t.Fatalf("absent section: %+v", plan)
+	}
+	if got := declarative.Path(declarative.SectionSettingsPrivacy, 0); got != "/settings/privacy" {
+		t.Fatalf("Path = %s", got)
+	}
+}
+
 func TestDiffRenameIsDeleteAndCreate(t *testing.T) {
 	d := current()
 	(*d.ManagedFiles)[0].Path = "/etc/motd.d/paddock"
@@ -192,6 +220,12 @@ func TestValidateJSONNamesThePaths(t *testing.T) {
 		"unknown field": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","devices":[]}`, []string{"/"}},
 		"partial settings": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"updates":{"security_daily_at":"03:00"}}}`,
 			[]string{"/settings/updates"}},
+		"privacy days too low": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"privacy":{"retired_inventory_days":0,"audit_search_recorded":false,"inventory_view_recorded":false}}}`,
+			[]string{"/settings/privacy/retired_inventory_days"}},
+		"privacy days too high": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"privacy":{"retired_inventory_days":366,"audit_search_recorded":false,"inventory_view_recorded":false}}}`,
+			[]string{"/settings/privacy/retired_inventory_days"}},
+		"partial privacy": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"privacy":{"retired_inventory_days":14}}}`,
+			[]string{"/settings/privacy"}},
 		"subject": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","profile_assignments":[{"profile":"p","subject":{"type":"group"}}]}`,
 			[]string{"/profile_assignments/0/subject"}},
 		"not json": {`{`, []string{"/"}},

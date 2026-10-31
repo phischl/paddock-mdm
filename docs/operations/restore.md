@@ -13,6 +13,13 @@ store is **not** part of the routine backup or restore: it is protected by WORM 
 | Bundles bucket, Valkey | not backed up; rebuilt (`paddock-server admin recompile --all`, `admin rebuild-cache`) | – | 1 h |
 | RabbitMQ | not backed up; definitions are code, devices re-send | – | – |
 
+Valkey persists with AOF and `appendfsync everysec`, so a Valkey crash can lose up to about one second of writes.
+This includes the check-in sequence counters (`seq:<device>`), which can then roll back. A counter that is missing
+entirely is restored to `device_status.last_seq`, and its device gets a retryable 503 until then; a counter that
+survived is never changed. A rolled-back counter, or one restored from a `last_seq` that lagged behind queued
+heartbeats, reissues numbers until it catches up, which weakens clone detection for the device meanwhile. This is
+the accepted residual risk RR-97 (PDK-475) and needs no operator action.
+
 ## Backup bucket
 
 All backups go to one S3 bucket (default `paddock-backup`) that MUST be outside the control-plane host: another
@@ -49,6 +56,10 @@ Operator steps for the bucket:
 
 Settings in `.env`: `PADDOCK_BACKUP_S3_ENDPOINT` (https URL), `PADDOCK_BACKUP_S3_BUCKET`, `PADDOCK_BACKUP_S3_REGION`,
 `PADDOCK_BACKUP_S3_CA_FILE` (a CA file inside the containers, only for an endpoint with a private CA).
+
+**Deletion lag.** A row that a retention purge deletes still exists in the backups for up to 30 days (14 full backups,
+noncurrent versions and `openbao/`, `fleet/` objects expire after 30 days), and a restore brings it back until the next
+purge run deletes it again (ADR 0032, residual risk RR-94).
 
 ## How the backups run
 

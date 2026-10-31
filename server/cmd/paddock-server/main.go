@@ -27,6 +27,8 @@ commands:
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD   (recorded as a verification run; prints run <id>)
+  audit keys                 (prints the audit-chain key fingerprints: audit-chain v<N> <sha256>)
+  audit purge [--dry-run]   (drops expired audit index partitions; prints DROP/KEEP lines)
   osv import <file>
   admin bump-bundle-seq --by N
   admin recompile --all

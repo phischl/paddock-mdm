@@ -32,6 +32,8 @@ type handlers struct {
 	releases  *app.AgentReleases
 	// imports is the agent release import from the release source (ADR 0043).
 	imports *app.ReleaseImports
+	// exports are the evidence exports of the audit log (plan M10 decision 29).
+	exports *app.AuditExports
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative
@@ -59,6 +61,8 @@ type handlers struct {
 	dms         *app.DMS
 	inventory   *app.Inventory
 	updates     *app.Updates
+	privacy     *app.Privacy
+	readAudit   *app.ReadAudit
 	attention   *app.Attention
 	// findings and the account list of their assignee picker (plan M9 decision 34).
 	findings    *app.Findings
@@ -327,21 +331,26 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 	params, err := listing.Parse(auditEventList, listing.Query{
 		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
 	})
-	if err != nil {
-		return nil, err
+	var outcomes, actorTypes []string
+	if err == nil {
+		outcomes, err = listing.Enum("outcome", req.Params.Outcome)
 	}
-	outcomes, err := listing.Enum("outcome", req.Params.Outcome)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		actorTypes, err = listing.Enum("actor_type", req.Params.ActorType)
 	}
-	actorTypes, err := listing.Enum("actor_type", req.Params.ActorType)
-	if err != nil {
-		return nil, err
-	}
-	res, err := h.audit.List(ctx, app.AuditQuery{
+	// One clock for the recording and the list: each reading its own lets a from just after the recording's now be
+	// refused there and served by the list, unrecorded (PDK-139).
+	query := app.AuditQuery{
 		From: req.Params.From, To: req.Params.To, Codes: listing.Strings(req.Params.Code), Outcomes: outcomes,
-		ActorTypes: actorTypes, TargetID: req.Params.TargetId, Page: params.ListPage(),
-	})
+		ActorTypes: actorTypes, TargetID: req.Params.TargetId, Page: params.ListPage(), Now: h.now(),
+	}
+	if _, rerr := h.readAudit.AuditSearched(ctx, query, err); rerr != nil {
+		return nil, rerr
+	}
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.audit.List(ctx, query)
 	if err != nil {
 		return nil, err
 	}

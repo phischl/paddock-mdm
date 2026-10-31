@@ -98,7 +98,10 @@ type Deps struct {
 	// Download fetches a package from the package store with at most limit bytes; nil uses Client.Download.
 	Download func(ctx context.Context, url string, limit int64) ([]byte, error)
 	Now      func() time.Time
-	Rand     func() float64 // uniform in [0, 1)
+	// Monotonic measures durations within the process, unaffected by wall-clock steps (tests set it apart from Now to
+	// step the wall clock); nil uses Now, whose time.Now readings carry the monotonic clock.
+	Monotonic func() time.Time
+	Rand      func() float64 // uniform in [0, 1)
 	// Sleep waits d or until ctx ends; nil waits.
 	Sleep func(ctx context.Context, d time.Duration) error
 }
@@ -125,6 +128,8 @@ type Agent struct {
 	policySkipped string
 	// supervisorSkipped is the last supervisor package version and reason not installed, logged once.
 	supervisorSkipped string
+	// markerSeen is the first sighting of the current supervisor-upgrade.json (supervisorMarker).
+	markerSeen markerSeen
 	// conversionJobs feeds the conversion worker (plan M8e decision 12); conversionCalls carries its reads and changes
 	// of the state to the loop; conversionBusy is set while a preparation is queued or runs.
 	conversionJobs  chan struct{}
@@ -147,6 +152,11 @@ type Agent struct {
 	// bootConverted is a boot result ok seen since the start: this boot opened the converted disk through the module,
 	// so no "not LUKS" answer leads to a cleanup until the next start (amendment 2026-10-21, item 13).
 	bootConverted bool
+	// neutralizeReported and restoreReported are the reasons of the last disk.conversion_neutralize_failed and
+	// disk.conversion_unlock_restore_failed emitted since the start; "" after a disarm or reinstall that succeeded
+	// (reportOnce, PDK-482). They are accessed on the run loop.
+	neutralizeReported string
+	restoreReported    string
 	// helperLaunched is a helper this start launched or saw running whose end the agent has not recorded yet: an end
 	// without a result counts as a failed run.
 	helperLaunched     bool

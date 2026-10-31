@@ -74,6 +74,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
+      # (PDK-629). These preinstalled toolchains are unused here: the images and trivy run in Docker.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
+          df -h /
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/trivy
@@ -81,6 +89,15 @@ jobs:
           restore-keys: trivy-db-
       - run: make scan-fs
       - run: make scan-images
+      - name: Disk usage after the image build
+        run: |
+          df -h /
+          docker system df || true
+      - name: Disk usage
+        if: failure()
+        run: |
+          df -h
+          docker system df || true
       - name: Make the trivy cache readable for the cache step
         # trivy runs as root in its container; actions/cache saves as the runner user (tar exit 2 otherwise)
         if: always()
@@ -150,6 +167,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # baseline tags for compatibility gates (e.g. baseline/m3b-agent)
+      # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
+      # (PDK-629). These preinstalled toolchains are unused here: Go comes from setup-go, and Node, the images and the
+      # release tools run in Docker.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
+          df -h /
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.3"
@@ -161,8 +187,17 @@ jobs:
       - name: Go modules for the image builds
         run: cd server && go mod download
       - run: PADDOCK_CI_GOMODCACHE="$(go env GOMODCACHE)/cache/download" make up
+      - name: Disk usage after the image build
+        run: |
+          df -h /
+          docker system df || true
       - run: make dev-seed
       - run: make acceptance SHARD=${{ matrix.shard }}/${{ strategy.job-total }}
+      - name: Disk usage
+        if: failure()
+        run: |
+          df -h
+          docker system df || true
       - name: compose logs
         if: failure()
         run: make logs
@@ -198,6 +233,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
+      # (PDK-629). These preinstalled toolchains are unused here: Go comes from setup-go, and Node, the images and the
+      # release tools run in Docker.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
+          df -h /
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.3"
@@ -209,6 +253,10 @@ jobs:
       - name: Go modules for the image builds
         run: cd server && go mod download
       - run: PADDOCK_CI_GOMODCACHE="$(go env GOMODCACHE)/cache/download" make up
+      - name: Disk usage after the image build
+        run: |
+          df -h /
+          docker system df || true
       - run: make dev-seed
       # End every portal session, empty the platform administrators' group and restart OpenBao, so they run alone (plan
       # M8s gate S13, PDK-534, plan M8u gate U4).
@@ -227,6 +275,11 @@ jobs:
           path: |
             server/web/test-results/
             !server/web/test-results/**/trace.zip
+      - name: Disk usage
+        if: failure()
+        run: |
+          df -h
+          docker system df || true
       - name: compose logs
         if: failure()
         run: make logs
@@ -294,6 +347,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
+      # (PDK-629). These preinstalled toolchains are unused here: Go comes from setup-go, and Node, the images and the
+      # release tools run in Docker.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
+          df -h /
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.3"
@@ -327,6 +389,10 @@ jobs:
           make release-bundle RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
           make release-sums RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
           make release-sign RELEASE_VERSION="$EDGE_VERSION" RELEASE_CHANNEL=edge
+      - name: Disk usage after the edge build
+        run: |
+          df -h /
+          docker system df || true
       - name: Smoke test of the edge bundle
         run: deploy/bundle/ci/smoke.sh "dist/release/$EDGE_VERSION/paddock-deploy-$EDGE_VERSION.tar.gz" --work "$RUNNER_TEMP/smoke"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -348,3 +414,8 @@ jobs:
         with:
           name: edge-smoke-lab-logs
           path: ${{ runner.temp }}/smoke-lab/logs/
+      - name: Disk usage
+        if: failure()
+        run: |
+          df -h
+          docker system df || true
