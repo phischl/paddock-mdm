@@ -178,6 +178,40 @@ func (q *Queries) GetAuditExportChunk(ctx context.Context, arg GetAuditExportChu
 	return data, err
 }
 
+const getAuditExportLocked = `-- name: GetAuditExportLocked :one
+SELECT id, organization_id, status, from_day, to_day, purpose, requested_by, requested_at, started_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, signature, key_version, error, correlation_id FROM audit_export WHERE id = $1 FOR UPDATE
+`
+
+// The row lock waits out a transaction still updating the export, so the status read is final.
+func (q *Queries) GetAuditExportLocked(ctx context.Context, id uuid.UUID) (AuditExport, error) {
+	row := q.db.QueryRow(ctx, getAuditExportLocked, id)
+	var i AuditExport
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Status,
+		&i.FromDay,
+		&i.ToDay,
+		&i.Purpose,
+		&i.RequestedBy,
+		&i.RequestedAt,
+		&i.StartedAt,
+		&i.ReadyAt,
+		&i.ExpiresAt,
+		&i.EventCount,
+		&i.ObjectCount,
+		&i.Size,
+		&i.PackageSha256,
+		&i.VerifyOk,
+		&i.VerifyProblems,
+		&i.Signature,
+		&i.KeyVersion,
+		&i.Error,
+		&i.CorrelationID,
+	)
+	return i, err
+}
+
 const getAuditSigningKey = `-- name: GetAuditSigningKey :one
 SELECT public_key FROM audit_signing_key WHERE key_version = $1
 `
@@ -244,8 +278,10 @@ func (q *Queries) InsertAuditExport(ctx context.Context, arg InsertAuditExportPa
 	return i, err
 }
 
-const insertAuditExportChunk = `-- name: InsertAuditExportChunk :exec
-INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES ($1, $2, $3, $4)
+const insertAuditExportChunk = `-- name: InsertAuditExportChunk :execrows
+INSERT INTO audit_export_chunk (export_id, organization_id, seq, data)
+SELECT $1::uuid, $2::uuid, $3::int4, $4::bytea
+WHERE EXISTS (SELECT 1 FROM audit_export WHERE id = $1::uuid AND status = 'running' FOR SHARE)
 `
 
 type InsertAuditExportChunkParams struct {
@@ -255,14 +291,19 @@ type InsertAuditExportChunkParams struct {
 	Data           []byte
 }
 
-func (q *Queries) InsertAuditExportChunk(ctx context.Context, arg InsertAuditExportChunkParams) error {
-	_, err := q.db.Exec(ctx, insertAuditExportChunk,
+// Only a running export takes chunks. The share lock makes a concurrent failure wait for this insert, so its chunk
+// delete sees the row, or makes this insert see the failed status once the failure committed.
+func (q *Queries) InsertAuditExportChunk(ctx context.Context, arg InsertAuditExportChunkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertAuditExportChunk,
 		arg.ExportID,
 		arg.OrganizationID,
 		arg.Seq,
 		arg.Data,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const listAuditExports = `-- name: ListAuditExports :many

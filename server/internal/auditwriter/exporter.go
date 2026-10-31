@@ -90,8 +90,12 @@ type Exporter struct {
 	chunkSize int
 	// maxDecoded bounds the decompressed size of one object.
 	maxDecoded uint64
+	// buildTimeout bounds one build; it is ExportStuckAfter, after which the stuck check takes the export as abandoned.
+	buildTimeout time.Duration
 	// readyCommitted is nil; tests turn a committed ready update into an unknown outcome.
 	readyCommitted func(ctx context.Context, id uuid.UUID, err error) error
+	// statusRead is nil; tests replace the outcome of a status read after a failed ready update.
+	statusRead func(ctx context.Context, id uuid.UUID, status string, err error) (string, error)
 }
 
 // NewExporter creates an exporter; version names the generator in the package.
@@ -103,15 +107,18 @@ func NewExporter(pool *db.AuditWriterPool, writer *Writer, store ObjectStore, si
 	}
 	return &Exporter{pool: pool, writer: writer, store: store, signer: signer, keys: keys, verifier: verifier,
 		version: version, poll: poll, now: time.Now, chunkSize: ExportChunkSize,
-		maxDecoded: exportMaxDecodedObject}
+		maxDecoded: exportMaxDecodedObject, buildTimeout: ExportStuckAfter}
 }
 
-// Run builds pending exports and expires old ones every poll interval until ctx ends.
+// Run builds pending exports and, in its own loop, expires old ones every poll interval until ctx ends.
 func (e *Exporter) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	// A separate loop, because a long or hung build must not freeze the gauge PaddockAuditExportStuck watches.
 	wg.Go(func() { e.observeLoop(ctx) })
+	// Expiry and the stuck check run apart from the builds as well, so a hung build cannot keep a ready package past its
+	// expiry or another replica's abandoned export running.
+	wg.Go(func() { e.expireLoop(ctx) })
 	for {
 		e.round(ctx)
 		select {
@@ -137,11 +144,18 @@ func (e *Exporter) round(ctx context.Context) {
 				export.OrganizationID, "error", err)
 		}
 	}
-	if ctx.Err() != nil {
-		return
-	}
-	if _, err := e.Expire(ctx, e.now()); err != nil {
-		slog.ErrorContext(ctx, "evidence export expiry failed", "error", err)
+}
+
+func (e *Exporter) expireLoop(ctx context.Context) {
+	for {
+		if _, err := e.Expire(ctx, e.now()); err != nil && ctx.Err() == nil {
+			slog.ErrorContext(ctx, "evidence export expiry failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(e.poll):
+		}
 	}
 }
 
@@ -196,12 +210,18 @@ type built struct {
 
 // Build produces the package of a running export (plan M10 decision 32), stores it in chunks and marks the export
 // ready, or failed with its chunks deleted. Problems of the chain do not fail the build: they go into the package
-// so that the auditor sees them. When ctx ends during the build, the export stays running and the stuck check of a
-// later round fails it.
+// so that the auditor sees them. A build is aborted after ExportStuckAfter. When ctx ends during the build, the export
+// stays running and the stuck check of a later round fails it.
 func (e *Exporter) Build(ctx context.Context, export auditstore.AuditExport) error {
 	start := time.Now()
-	res, err := e.build(ctx, export)
-	if err == nil {
+	buildCtx, cancel := context.WithTimeout(ctx, e.buildTimeout)
+	res, err := e.build(buildCtx, export)
+	if err != nil && ctx.Err() == nil && errors.Is(buildCtx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("the build took longer than %s: %w", e.buildTimeout, err)
+	}
+	cancel()
+	marked := err == nil
+	if marked {
 		err = e.markReady(ctx, export, res)
 		if errors.Is(err, errNotRunning) {
 			return err
@@ -220,9 +240,16 @@ func (e *Exporter) Build(ctx context.Context, export auditstore.AuditExport) err
 			return errors.Join(err, failErr)
 		}
 		if !failed {
-			// The stuck check failed the export and recorded its outcome while this build may still have
-			// inserted chunks. Only an ended export loses them: a ready update whose outcome becameReady could not
-			// read may have committed.
+			// failRunning waited for any transaction still holding the row, so this read sees a ready update that
+			// committed after the first read or whose first read failed; a ready export gets its success event here,
+			// because the stuck check only looks at running ones.
+			if marked && e.becameReady(ctx, export.ID) {
+				slog.WarnContext(ctx, "evidence export: ready despite an error", "export_id", export.ID, "error", err)
+				e.ready(ctx, export, res, start)
+				return nil
+			}
+			// The stuck check failed the export and recorded its outcome. Only an ended export loses its chunks: a
+			// ready update whose outcome becameReady could not read may have committed.
 			if _, delErr := e.deleteEndedChunks(context.WithoutCancel(ctx), uuid.NullUUID{UUID: export.ID, Valid: true}); delErr != nil {
 				return errors.Join(err, errNotRunning, delErr)
 			}
@@ -232,12 +259,17 @@ func (e *Exporter) Build(ctx context.Context, export auditstore.AuditExport) err
 		e.recordSelf(ctx, completedEvent(export, nil, exportErrorText(err)))
 		return err
 	}
+	e.ready(ctx, export, res, start)
+	return nil
+}
+
+// ready records the success of a build whose export is ready.
+func (e *Exporter) ready(ctx context.Context, export auditstore.AuditExport, res built, start time.Time) {
 	metricExport.WithLabelValues("ready").Inc()
 	metricExportBuild.Observe(time.Since(start).Seconds())
 	slog.InfoContext(ctx, "evidence export ready", "export_id", export.ID, "organization_id", export.OrganizationID,
 		"objects", res.objects, "events", res.events, "size", res.size, "verify_ok", res.verifyOK)
 	e.recordSelf(ctx, completedEvent(export, &res, ""))
-	return nil
 }
 
 // errNotRunning means the export left running while it was built (the stuck check failed it); that check recorded
@@ -270,7 +302,7 @@ func (e *Exporter) markReady(ctx context.Context, export auditstore.AuditExport,
 		return err
 	}
 	if updated == 0 {
-		if _, delErr := e.deleteChunks(ctx, export.ID); delErr != nil {
+		if _, delErr := e.deleteChunks(context.WithoutCancel(ctx), export.ID); delErr != nil {
 			return errors.Join(errNotRunning, delErr)
 		}
 		return errNotRunning
@@ -294,16 +326,20 @@ func (e *Exporter) failRunning(ctx context.Context, id uuid.UUID, message string
 }
 
 // becameReady reports whether the export is ready after markReady failed: the COMMIT may have succeeded although the
-// client never learned it, and a ready package must keep its chunks and get its completed event.
+// client never learned it, and a ready package must keep its chunks and get its completed event. The read takes the
+// row lock, so a COMMIT still in flight is waited out instead of read as running.
 func (e *Exporter) becameReady(ctx context.Context, id uuid.UUID) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), exportStatusTimeout)
 	defer cancel()
 	var status string
-	err := e.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
-		export, err := q.GetAuditExport(ctx, id)
+	err := e.pool.InWriterWithTimeout(ctx, exportStatusTimeout, func(ctx context.Context, q *auditstore.Queries) error {
+		export, err := q.GetAuditExportLocked(ctx, id)
 		status = export.Status
 		return err
 	})
+	if e.statusRead != nil {
+		status, err = e.statusRead(ctx, id, status, err)
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "evidence export: status not read", "export_id", id, "error", err)
 	}
@@ -331,10 +367,18 @@ func (e *Exporter) deleteChunks(ctx context.Context, id uuid.UUID) (int64, error
 	return n, err
 }
 
-// Expire deletes the chunks of ready exports past their expiry (status expired, retention.purged in the export's
-// organization), fails exports that stayed running longer than ExportStuckAfter (plan M10 decision 34) and deletes
-// chunks left behind by failed or expired exports.
+// Expire deletes chunks left behind by failed or expired exports, deletes the chunks of ready exports past their expiry
+// (status expired, retention.purged in the export's organization) and fails exports that stayed running longer than
+// ExportStuckAfter (plan M10 decision 34).
 func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err error) {
+	// The sweep comes first, so an error of a later pass cannot skip it.
+	n, err := e.deleteEndedChunks(ctx, uuid.NullUUID{})
+	if err != nil {
+		return 0, fmt.Errorf("delete chunks of ended exports: %w", err)
+	}
+	if n > 0 {
+		slog.WarnContext(ctx, "evidence export: deleted leftover chunks", "chunks", n)
+	}
 	var due, stuck []auditstore.AuditExport
 	stuckBefore := now.Add(-ExportStuckAfter)
 	err = e.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
@@ -386,15 +430,6 @@ func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err 
 		metricExport.WithLabelValues("failed").Inc()
 		slog.WarnContext(ctx, "evidence export abandoned", "export_id", export.ID, "started_at", export.StartedAt)
 		e.recordSelf(ctx, completedEvent(export, nil, exportStuckError))
-	}
-	// A builder that was failed by the stuck check can still insert chunks and then die before deleting them; its
-	// outcome is already recorded, so the leftovers need no event but must not outlive the export's expiry.
-	n, err := e.deleteEndedChunks(ctx, uuid.NullUUID{})
-	if err != nil {
-		return expired, fmt.Errorf("delete chunks of ended exports: %w", err)
-	}
-	if n > 0 {
-		slog.WarnContext(ctx, "evidence export: deleted leftover chunks", "chunks", n)
 	}
 	return expired, nil
 }
@@ -579,9 +614,13 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 
 	cw := newChunkWriter(e.chunkSize, func(seq int32, data []byte) error {
 		return e.pool.InWriterWithTimeout(ctx, exportChunkTimeout, func(ctx context.Context, q *auditstore.Queries) error {
-			return q.InsertAuditExportChunk(ctx, auditstore.InsertAuditExportChunkParams{
+			n, err := q.InsertAuditExportChunk(ctx, auditstore.InsertAuditExportChunkParams{
 				ExportID: export.ID, OrganizationID: org, Seq: seq, Data: data,
 			})
+			if err == nil && n == 0 {
+				return fmt.Errorf("chunk %d: %w", seq, errNotRunning)
+			}
+			return err
 		})
 	})
 	if err := e.writeTar(ctx, cw, doc.CreatedAt, readme, c, tmp, canonical, sigFile); err != nil {

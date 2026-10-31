@@ -8,6 +8,10 @@ RETURNING *;
 -- name: GetAuditExport :one
 SELECT * FROM audit_export WHERE id = @id;
 
+-- name: GetAuditExportLocked :one
+-- The row lock waits out a transaction still updating the export, so the status read is final.
+SELECT * FROM audit_export WHERE id = @id FOR UPDATE;
+
 -- name: ListAuditExports :many
 SELECT * FROM audit_export
 WHERE (sqlc.narg(statuses)::text[] IS NULL OR status = ANY(sqlc.narg(statuses)::text[]))
@@ -68,8 +72,12 @@ SELECT * FROM audit_export WHERE status = 'ready' AND expires_at < @now ORDER BY
 -- name: ListStuckAuditExports :many
 SELECT * FROM audit_export WHERE status = 'running' AND started_at < @started_before ORDER BY started_at LIMIT 100;
 
--- name: InsertAuditExportChunk :exec
-INSERT INTO audit_export_chunk (export_id, organization_id, seq, data) VALUES (@export_id, @organization_id, @seq, @data);
+-- name: InsertAuditExportChunk :execrows
+-- Only a running export takes chunks. The share lock makes a concurrent failure wait for this insert, so its chunk
+-- delete sees the row, or makes this insert see the failed status once the failure committed.
+INSERT INTO audit_export_chunk (export_id, organization_id, seq, data)
+SELECT @export_id::uuid, @organization_id::uuid, @seq::int4, @data::bytea
+WHERE EXISTS (SELECT 1 FROM audit_export WHERE id = @export_id::uuid AND status = 'running' FOR SHARE);
 
 -- name: DeleteAuditExportChunks :execrows
 DELETE FROM audit_export_chunk WHERE export_id = @export_id;

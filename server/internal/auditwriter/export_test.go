@@ -156,3 +156,14 @@ func SetReadyCommitted(e *Exporter, fn func(ctx context.Context, id uuid.UUID, e
 
 // SetKeyPublisherClock replaces the publisher's clock.
 func SetKeyPublisherClock(p *KeyPublisher, now func() time.Time) { p.now = now }
+
+// SetStatusRead replaces the outcome of each status read that follows a failed ready update.
+func SetStatusRead(e *Exporter, fn func(ctx context.Context, id uuid.UUID, status string, err error) (string, error)) {
+	e.statusRead = fn
+}
+
+// SetExportChunkSize lowers the size of one chunk row.
+func SetExportChunkSize(e *Exporter, n int) { e.chunkSize = n }
+
+// SetExportBuildTimeout lowers the bound of one build.
+func SetExportBuildTimeout(e *Exporter, d time.Duration) { e.buildTimeout = d }

@@ -1868,3 +1868,26 @@ the export" differ, this amendment wins.
    `TestAuditExportDownloadChunkRemovedMidStream`.
 5. **HEAD is refused with 405 (`Allow: GET`)** before the use case and audited as one rejected request, because
    net/http would otherwise run the download for a body that is never sent.
+
+### Amendment 2026-10-31 (PDK-608: export builder hardening)
+
+Implemented in PDK-608, which folds in PDK-595 and PDK-596. Where this amendment and decisions 31, 32 or 34 differ,
+this amendment wins. No migration and no change to the API, the events or the package format.
+
+1. **Expiry runs in its own loop (decision 31).** `Run` calls `Expire` every poll interval in a loop of its own, next
+   to the pending-age loop, instead of after the claim/build loop, so a hung build delays neither expiry nor the stuck
+   check. `Expire` deletes the chunks of failed and expired exports first, then expires and fails as in decision 34,
+   so an error in those passes cannot skip the sweep.
+2. **A build is bounded by `ExportStuckAfter` (decision 32).** The whole build, including every object-store read,
+   runs under a deadline of 2 h; when it passes, the export fails with `error: "the build took longer than 2h0m0s: …"`
+   and one failure event, unless the stuck check failed it first (then its event is the only one).
+3. **Chunks are inserted only while the export is running (decision 32 step 4).** `InsertAuditExportChunk` inserts
+   only when the export is `running`, read under a share lock in the same statement, so it either waits for a stuck
+   check in flight or sees its result. An insert that inserts nothing fails the build like `errNotRunning`: no
+   further reads, no event (the stuck check recorded the outcome).
+4. **The status read after a failed ready update is final (decision 32 steps 5–6).** It reads under the row lock
+   (`GetAuditExportLocked`, `FOR UPDATE`, 30 s, outliving a shutdown), so a COMMIT still in flight is waited out.
+   When it fails or still sees `running`, the build reads once more after `failRunning` matched no row; a `ready`
+   export then takes the success path. Every export that a build marked ready ends with exactly one
+   `audit.export_completed` success event, unless no status read succeeds at all, in which case the export stays
+   ready with its chunks.
