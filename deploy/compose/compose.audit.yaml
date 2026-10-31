@@ -100,7 +100,7 @@ services:
       PADDOCK_AUDIT_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_audit_writer_access_key
       PADDOCK_AUDIT_S3_SECRET_KEY_FILE: /run/secrets/rustfs_audit_writer_secret_key
       PADDOCK_AUDIT_RETENTION_DAYS: ${PADDOCK_AUDIT_RETENTION_DAYS:-400}
-      # The worker's retention round reads the same variable with the same expression (compose.yaml, ADR 0032 amendment
+      # The worker's retention round reads the same variable, without a fallback (compose.yaml, ADR 0032 amendment
       # 2026-10-31).
       PADDOCK_AUDIT_INDEX_RETENTION_DAYS: ${PADDOCK_AUDIT_INDEX_RETENTION_DAYS:-${PADDOCK_AUDIT_RETENTION_DAYS:-400}}
     secrets:

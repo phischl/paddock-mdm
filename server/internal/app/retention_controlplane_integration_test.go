@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
 // indexPeriod is the audit index retention of newRetentionWorld: 400 days counted in seconds.
@@ -350,6 +352,70 @@ func TestRetentionPurgePlatformActions(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].outcome != "success" || events[0].deleted != 1 {
 		t.Fatalf("platform events %+v, want one success with deleted 1", events)
+	}
+}
+
+// TestRetentionActionDeleteLimitedByDatabase (ADR 0032 amendment 2026-10-31): the database, not only the use case's
+// queries, limits who deletes which action. The platform role, which the internet-facing API holds too, deletes neither
+// an organization's action nor a started platform action; the worker deletes no started action. A finished platform
+// action and a finished organization action show that the deletes themselves are allowed.
+func TestRetentionActionDeleteLimitedByDatabase(t *testing.T) {
+	w := newRetentionWorld(t)
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	org, _ := w.orgWithDevice(t)
+	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	orgFinished := w.action(t, org, long, at(long.Add(time.Minute)))
+	orgStarted := w.action(t, org, long, nil)
+	platformFinished := w.action(t, uuid.Nil, long, at(long.Add(time.Minute)))
+	platformStarted := w.action(t, uuid.Nil, long, nil)
+
+	deleted := func(t *testing.T, url string, orgCtx *uuid.UUID, id uuid.UUID) int64 {
+		t.Helper()
+		conn, err := pgx.Connect(ctx, url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if orgCtx != nil {
+			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgCtx.String()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tag, err := tx.Exec(ctx, "DELETE FROM action WHERE id = $1", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return tag.RowsAffected()
+	}
+
+	for _, c := range []struct {
+		name   string
+		url    string
+		orgCtx *uuid.UUID
+		id     uuid.UUID
+		want   int64
+	}{
+		{"platform, organization's finished action", env.Platform, nil, orgFinished, 0},
+		{"platform, started platform action", env.Platform, nil, platformStarted, 0},
+		{"worker, started action", env.Worker, &org, orgStarted, 0},
+		{"platform, finished platform action", env.Platform, nil, platformFinished, 1},
+		{"worker, finished action", env.Worker, &org, orgFinished, 1},
+	} {
+		if n := deleted(t, c.url, c.orgCtx, c.id); n != c.want {
+			t.Errorf("%s: deleted %d rows, want %d", c.name, n, c.want)
+		}
+	}
+	if !w.exists(t, "action", orgStarted) || !w.exists(t, "action", platformStarted) {
+		t.Fatal("want both started actions kept")
 	}
 }
 

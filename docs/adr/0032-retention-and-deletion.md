@@ -269,4 +269,5 @@ The worker reads the audit writer's variable `PADDOCK_AUDIT_INDEX_RETENTION_DAYS
 both from the same `.env` value; it has no default of its own and refuses to start when the variable is missing or
 below the bucket default of 400 days (`auditwriter.MinRetentionDays`), and a retention configured below that deletes
 nothing. Migration `00080` grants the worker `DELETE` on `device_command`, `device_alert` and `device_event_gap`;
-migration `00081` grants `DELETE` on `action` to the worker and the platform role.
+migration `00081` grants `DELETE` on `action` to the worker and the platform role, limited by restrictive policies to
+finished actions and, for the platform role, to the platform pseudo-organization's.

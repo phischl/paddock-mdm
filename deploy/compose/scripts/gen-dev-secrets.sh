@@ -71,6 +71,12 @@ if [[ ! -f "$COMPOSE_DIR/.env" ]]; then
     echo "deploy/compose/.env: development stack instance $PADDOCK_INSTANCE (project paddock$PADDOCK_INSTANCE)"
   fi
 fi
+# The worker does not start without the audit index retention (compose.yaml), which a .env copied from an older
+# .env.example lacks.
+if ! grep -q '^PADDOCK_AUDIT_INDEX_RETENTION_DAYS=' "$COMPOSE_DIR/.env"; then
+  set_env PADDOCK_AUDIT_INDEX_RETENTION_DAYS 400
+  echo "deploy/compose/.env: added PADDOCK_AUDIT_INDEX_RETENTION_DAYS=400"
+fi
 
 # Control-plane PostgreSQL
 secret postgres_superuser_password
