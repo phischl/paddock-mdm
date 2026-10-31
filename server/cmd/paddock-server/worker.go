@@ -124,8 +124,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), app.NewRoleMembership(runner, pool, platformPool, ak),
 		ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
-	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
-		platformPool, inventoryEvery)
+	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool),
+		app.NewVulnerabilitySummary(runner), pool, platformPool, inventoryEvery)
 	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
 	slog.InfoContext(ctx, "worker starting")
 

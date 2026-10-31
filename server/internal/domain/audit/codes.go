@@ -147,6 +147,8 @@ const (
 	CodePackageHoldDeleted        Code = "package_hold.deleted"
 	CodeDeviceInstallNowRequested Code = "device.install_now_requested"
 	CodeDeviceUpdatesRun          Code = "device.updates_run"
+	// Critical CVE daily summary (plan M9 decision 37).
+	CodeVulnerabilityCriticalSummary Code = "vulnerability.critical_summary"
 	// Staleness (plan M5b decision 10).
 	CodeDeviceStaleWarning  Code = "device.stale_warning"
 	CodeDeviceStaleCritical Code = "device.stale_critical"
@@ -984,6 +986,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
+	},
+	CodeVulnerabilityCriticalSummary: {
+		Code: CodeVulnerabilityCriticalSummary, Emitted: true,
+		Description: "New critical vulnerabilities were found on the organization's devices since the previous summary (actor: system; the worker's inventory round).",
+		Params:      []string{"new_critical", "devices", "cves", "cves_truncated", "since", "until"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded at most once per UTC day and only when there are new findings; the first summary covers 24 hours. cves lists at most 20 distinct CVE ids sorted, cves_truncated is true when there are more.",
 	},
 	CodeDeviceTamperAgentNotRunning: {
 		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,

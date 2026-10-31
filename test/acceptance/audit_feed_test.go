@@ -24,6 +24,7 @@ type feedEvent struct {
 		Target     *struct {
 			ID string `json:"id"`
 		} `json:"target"`
+		Params map[string]any `json:"params"`
 	} `json:"event"`
 }
 
@@ -106,6 +107,32 @@ func targetEvents(t *testing.T, p *env.Portal, id string, n int) []feedEvent {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("feed has %d events for target %s, want %d", len(out), id, n)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// waitTargetEvent polls the feed until an event for target id satisfies match and returns all events of that
+// target. Keying the wait on the event itself, not on a count, keeps unrelated events of the target (enrollment, the
+// first bundle) from satisfying it early.
+func waitTargetEvent(t *testing.T, p *env.Portal, id string, match func(feedEvent) bool) []feedEvent {
+	t.Helper()
+	deadline := time.Now().Add(auditPollTimeout)
+	for {
+		events, _ := drainFeed(t, p, 100)
+		var out []feedEvent
+		found := false
+		for _, e := range events {
+			if e.Event.Target != nil && e.Event.Target.ID == id {
+				out = append(out, e)
+				found = found || match(e)
+			}
+		}
+		if found {
+			return out
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no matching event for target %s in the feed: %+v", id, out)
 		}
 		time.Sleep(time.Second)
 	}
@@ -200,27 +227,41 @@ func TestAuditFeed(t *testing.T) {
 				t.Fatalf("events: %v HTTP %d %s", err, res.Status, res.Body)
 			}
 		}
+		// The audit event's occurred_at is the server's record time; the device's own time is the occurred_at param.
+		deviceSeq := func(e feedEvent) float64 { n, _ := e.Event.Params["event_seq"].(float64); return n }
+		deviceTime := func(t *testing.T, e feedEvent) time.Time {
+			t.Helper()
+			raw, _ := e.Event.Params["occurred_at"].(string)
+			at, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				t.Fatalf("event %s has no device occurred_at: %v", e.Event.EventID, err)
+			}
+			return at
+		}
+		seq := func(n float64) func(feedEvent) bool {
+			return func(e feedEvent) bool { return e.Event.Code == "device.bundle_applied" && deviceSeq(e) == n }
+		}
 		newer := time.Now()
 		late := newer.Add(-3 * time.Hour)
 		send(1, newer)
-		before := len(targetEvents(t, auditor, d.DeviceID, 1))
+		waitTargetEvent(t, auditor, d.DeviceID, seq(1))
 		send(2, late)
-		events := targetEvents(t, auditor, d.DeviceID, before+1)
+		events := waitTargetEvent(t, auditor, d.DeviceID, seq(2))
 		var lateEvent *feedEvent
 		for i, e := range events {
-			if e.Event.OccurredAt.Sub(late).Abs() < 2*time.Second {
+			if seq(2)(e) {
 				lateEvent = &events[i]
 			}
 		}
-		if lateEvent == nil {
-			t.Fatalf("the late event is not in the feed: %+v", events)
+		if got := deviceTime(t, *lateEvent); got.Sub(late).Abs() > time.Second {
+			t.Fatalf("the late event carries device time %s, want %s", got, late)
 		}
 		for _, e := range events {
 			if e.CommitSeq > lateEvent.CommitSeq {
 				t.Errorf("event %s (commit_seq %d) is after the late event (commit_seq %d) although it was sent before", e.Event.EventID, e.CommitSeq, lateEvent.CommitSeq)
 			}
-			if e.Event.EventID != lateEvent.Event.EventID && e.Event.OccurredAt.Before(lateEvent.Event.OccurredAt) {
-				t.Errorf("event %s occurred before the late event, which is meant to be the oldest", e.Event.EventID)
+			if seq(1)(e) && !deviceTime(t, e).After(deviceTime(t, *lateEvent)) {
+				t.Errorf("event %s did not occur after the late event, which is meant to be the oldest", e.Event.EventID)
 			}
 		}
 	})
