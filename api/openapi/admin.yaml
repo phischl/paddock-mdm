@@ -58,6 +58,7 @@ tags:
   - name: audit
   - name: platform
   - name: mcp
+  - name: findings
 paths:
   /api/auth/login:
     get:
@@ -2620,6 +2621,216 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings:
+    get:
+      operationId: listFindings
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. Findings: tamper events and attention conditions of devices with
+        their status, assignee and reason (plan M9 decisions 30–34). A tamper finding counts the events of one device,
+        code and subject while it is open; an attention finding follows its condition and is cleared (cleared_at) when
+        the condition is gone. cleared=false (the default) lists the findings that are not cleared, cleared=true only
+        the cleared ones.
+      x-paddock-list:
+        sort: [last_seen_at, opened_at, status, hostname, code]
+        default_sort: -last_seen_at
+        search: [hostname, code, subject]
+        filters: [status, kind, device_id, assignee_id, cleared]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/FindingListSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/FindingStatus" }
+        - name: kind
+          in: query
+          schema: { $ref: "#/components/schemas/FindingKind" }
+        - name: device_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: assignee_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: cleared
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: One page of findings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FindingPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getFinding
+      tags: [findings]
+      description: "Roles: org_admin, org_operator, org_auditor. One finding; 404 not_found for another organization's."
+      responses:
+        "200":
+          description: The finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}/acknowledge:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: acknowledgeFinding
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator. Acknowledges an open finding (status acknowledged); 409 invalid_state for any
+        other status.
+      x-paddock-audit: finding.acknowledged
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The acknowledged finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}/assign:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: assignFinding
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator. Assigns an open, acknowledged or in-progress finding to an administrator or
+        operator of the organization, or removes the assignee (assignee_id null); the finding is in progress
+        afterwards. 404 not_found for any other account (an auditor, a disabled account, another organization's),
+        409 invalid_state for a closed finding.
+      x-paddock-audit: finding.assigned
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindingAssign" }
+      responses:
+        "200":
+          description: The assigned finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}/close:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: closeFinding
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator; accepted_risk only org_admin (403 forbidden otherwise, recorded as denied).
+        Closes an open, acknowledged or in-progress finding with a resolution and a reason (1 to 1000 characters,
+        400 invalid_request otherwise) and an optional external reference (at most 200 characters). 409
+        invalid_state for a closed finding.
+      x-paddock-audit: finding.closed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindingClose" }
+      responses:
+        "200":
+          description: The closed finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}/reopen:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: reopenFinding
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator. Reopens a closed finding with a reason (1 to 1000 characters, 400
+        invalid_request otherwise): a tamper finding always, unless a newer finding of the same device and subject is
+        open; an attention finding only while its condition is still open. 409 invalid_state otherwise.
+      x-paddock-audit: finding.reopened
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindingReopen" }
+      responses:
+        "200":
+          description: The reopened finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/accounts:
+    get:
+      operationId: listAccounts
+      tags: [users]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The organization's administrator accounts that are not disabled
+        (the assignee picker of findings, plan M9 decision 34).
+      x-paddock-list:
+        sort: [username, display_name, role]
+        default_sort: username
+        search: [username, display_name]
+        filters: [role]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AccountSort"
+        - $ref: "#/components/parameters/Search"
+        - name: role
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AccountRole" }
+      responses:
+        "200":
+          description: One page of accounts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/install-now:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -4412,6 +4623,22 @@ components:
         Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
         printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
       schema: { type: string }
+    FindingListSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [last_seen_at, -last_seen_at, opened_at, -opened_at, status, -status, hostname, -hostname, code, -code]
+        default: -last_seen_at
+    AccountSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [username, -username, display_name, -display_name, role, -role]
+        default: username
     Csrf:
       name: X-Paddock-CSRF
       in: header
@@ -6450,8 +6677,13 @@ components:
              agent_not_running, uninstall_pending, config_behind, disk_conversion_failed, clock_drift, event_gap]
     Attention:
       type: object
-      required: [id, kind, device_id, hostname, since, detail]
+      required: [id, kind, device_id, hostname, since, detail, finding]
       properties:
+        finding:
+          description: The live finding of the condition (plan M9 decision 34); null until the findings round created it.
+          allOf:
+            - $ref: "#/components/schemas/AttentionFinding"
+          nullable: true
         id: { type: string, description: "Unique key of the row: the kind and its source (alert, device or revocation request)." }
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
@@ -6460,6 +6692,109 @@ components:
         detail:
           type: string
           description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as \"<applied> < <newest>\"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as \"<seconds> s\" (server time minus device time); event_gap: the missing event sequence numbers as \"<from>-<to>\"; otherwise empty."
+    FindingKind:
+      type: string
+      enum: [tamper, attention]
+    FindingStatus:
+      type: string
+      enum: [open, acknowledged, in_progress, resolved, accepted_risk, false_positive]
+    FindingResolution:
+      type: string
+      enum: [resolved, accepted_risk, false_positive]
+    FindingAssignee:
+      type: object
+      required: [id, username, display_name]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+    Finding:
+      type: object
+      required: [id, kind, key, code, subject, device_id, hostname, status, assignee, opened_at, last_seen_at, occurrences,
+                 first_event_id, last_event_id, acknowledged_at, closed_at, closed_by, reason, external_ref, cleared_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/FindingKind" }
+        key: { type: string, description: "tamper:<device_id>:<code>:<subject> or attention:<attention id>." }
+        code: { type: string, description: The audit code of a tamper finding or the attention kind of an attention finding. }
+        subject: { type: string, description: "What the finding is about: the file, group, unit, field or volume of a tamper event, the detail of an attention condition; may be empty." }
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        status: { $ref: "#/components/schemas/FindingStatus" }
+        assignee:
+          allOf:
+            - $ref: "#/components/schemas/FindingAssignee"
+          nullable: true
+        opened_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        occurrences: { type: integer, description: Tamper events counted by the finding while it was open. }
+        first_event_id: { type: string, format: uuid, nullable: true, description: The audit event that opened a tamper finding. }
+        last_event_id: { type: string, format: uuid, nullable: true, description: The latest audit event counted by a tamper finding. }
+        acknowledged_at: { type: string, format: date-time, nullable: true }
+        closed_at: { type: string, format: date-time, nullable: true }
+        closed_by: { type: string, nullable: true }
+        reason: { type: string, nullable: true, description: The reason of the last close or reopen. }
+        external_ref: { type: string, nullable: true }
+        cleared_at: { type: string, format: date-time, nullable: true, description: When the condition of an attention finding was gone. }
+    FindingPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Finding" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    FindingAssign:
+      type: object
+      required: [assignee_id]
+      properties:
+        assignee_id: { type: string, format: uuid, nullable: true, description: The account; null removes the assignee. }
+    FindingClose:
+      type: object
+      required: [resolution, reason]
+      properties:
+        resolution: { $ref: "#/components/schemas/FindingResolution" }
+        reason: { type: string, maxLength: 1000 }
+        external_ref: { type: string, maxLength: 200, description: A ticket or change number in another system. }
+    FindingReopen:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 1000 }
+    AttentionFinding:
+      type: object
+      required: [id, status, assignee_display]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/FindingStatus" }
+        assignee_display: { type: string, nullable: true }
+    AccountRole:
+      type: string
+      enum: [org_admin, org_operator, org_auditor]
+    Account:
+      type: object
+      required: [id, username, display_name, role]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+        role: { $ref: "#/components/schemas/AccountRole" }
+    AccountPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Account" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     AttentionPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -6474,11 +6809,16 @@ components:
         sort: { type: string, description: Applied sort. }
     AttentionCondition:
       type: object
-      required: [kind, since, detail]
+      required: [kind, since, detail, finding]
       properties:
         kind: { $ref: "#/components/schemas/AttentionKind" }
         since: { type: string, format: date-time }
         detail: { type: string }
+        finding:
+          description: The live finding of the condition (plan M9 decision 34); null until the findings round created it.
+          allOf:
+            - $ref: "#/components/schemas/AttentionFinding"
+          nullable: true
     AttentionDevice:
       type: object
       required: [device_id, hostname, state, os_release, last_contact_at, severity, since, conditions]

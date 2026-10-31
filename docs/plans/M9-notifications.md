@@ -1459,3 +1459,15 @@ once at the end.
 - **Decision 38 / §6.5 (PDK-130).** A refused unit returns the existing problem `unit_not_allowed` with status
   **422** (since M1, managed units), not 400; duplicates and more than 32 units return 400 `invalid_request`.
 
+- **§6.5 feed item (PDK-121).** `AuditEventStored` carries `organization_id` (decision 6 wins over the shorthand
+  "AuditEvent without device" of §6.5); every item's `organization_id` equals the organization of the token. The
+  feed format `paddock.audit.feed.v1` is frozen with it.
+- **Decision 40 (PDK-131), accepted behaviours.** A watched unit that changes from stopped to missing produces no
+  second event. The agent holds the reported state in memory only, so a unit that is still stopped is reported once
+  more after an agent restart.
+- **Decision 40 (PDK-131), amended 2026-10-31.** The agent reads a watched unit's state with
+  `systemctl show -p LoadState,ActiveState,SubState -- <unit>`. Only `LoadState=not-found` counts as missing; a
+  failed query keeps the previous state, is logged per unit and produces no event, and one failing unit does not
+  stop the others. `deactivating` and a plain `activating` start are transitional (previous state kept, no event).
+  `activating` with `SubState=auto-restart` counts as failed only when it is still seen on the next pass, so a crash
+  loop is reported and a single restart is not. The meaning of decision 40 is unchanged.

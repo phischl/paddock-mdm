@@ -502,7 +502,13 @@
       "step_up": "Step-up",
       "error_code": "Error code"
     },
-    "sourceMcp": "MCP"
+    "sourceMcp": "MCP",
+    "finding": {
+      "acknowledged": "{actor} acknowledged the finding {code} on {hostname}",
+      "assigned": "{actor} assigned the finding {code} on {hostname}",
+      "closed": "{actor} closed the finding {code} on {hostname} as {resolution, select, resolved {resolved} accepted_risk {accepted risk} false_positive {false positive} other {{resolution}}}",
+      "reopened": "{actor} reopened the finding {code} on {hostname}"
+    }
   },
   "organizations": {
     "title": "Organizations",
