@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "03ef052604220252823c9aea9a2c4dc623ef408ef38190ddf4d2f56b0b1104ca"
+const Version = "5f8f9698c1748308a807a790042a72695e50a85082ddec4895bd45257a4535ad"
 
 var tools = []Tool{
 	{
@@ -671,7 +671,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "audit.export_downloaded",
 		Summary:     "",
-		Description: "Roles: org_admin, org_auditor. Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. The response carries Content-Length (the package size), Content-Disposition (paddock-audit-export-<organization slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar) and X-Paddock-Package-SHA256 (the lowercase hex SHA-256 of the body). Recorded as audit.export_downloaded before the first byte is sent; a transfer that breaks later is not recorded again. No range requests.\n\nRead-only.",
+		Description: "Roles: org_admin, org_auditor. Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. The response carries Content-Length (the package size), Content-Disposition (paddock-audit-export-<organization slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar) and X-Paddock-Package-SHA256 (the lowercase hex SHA-256 of the body). Recorded as audit.export_downloaded before the first byte is sent; a transfer that breaks later is not recorded again. No range requests. HEAD is refused with 405 (Allow: GET) and is audited as a rejected request; a transfer whose stored chunks are damaged ends without a body error, so the client detects it by the short body against Content-Length and X-Paddock-Package-SHA256.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
