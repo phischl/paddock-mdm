@@ -178,17 +178,26 @@ its log for the 00:45 UTC cycle.
 - `paddock-server audit verify --org <id> --from <day> --to <day>` (run in the audit-writer container) checks the
   signed manifest chain and every object hash of an organization.
 - **Evidence export size and disk.** The audit writer builds one export at a time. It spools the decoded
-  `events.jsonl` of the export in `TMPDIR`, which is the Docker volume `audit-writer-tmp` mounted at `/tmp` (the
-  container root stays read-only); the file is unlinked as soon as it is created, so it never shows up in a listing
+  `events.jsonl` of the export in `TMPDIR`, which is the Docker volume `audit-writer-tmp` mounted at
+  `/var/lib/paddock/export-tmp`; the file is unlinked as soon as it is created, so it never shows up in a listing
   and nothing is left after a crash, and its space is freed when the build ends. The finished package is stored in
   chunks in the audit index database until it expires. `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default `4294967296`,
-  4 GiB) bounds both `events.jsonl` and the whole package; an export that exceeds it fails with an error starting
-  with `export_too_large` (shown on the *Evidence exports* page) and an `audit.export_completed` failure event with
-  `reason: export_too_large`, and leaves no chunks behind. Ask the auditor for a shorter range, or raise the limit
-  after checking the disk. Sizing: the volume needs free space for one `events.jsonl` of the limit, and the audit
-  database for the packages of the open exports (at most two per organization, kept 7 days). A single object or
-  manifest larger than 256 MiB is never read into memory: the export fails and the verification reports it as
-  unreadable. The volume holds no state and needs no backup.
+  4 GiB) bounds both `events.jsonl` and the whole package; the package size is computed before its first chunk is
+  stored. An export that exceeds it fails with an error starting with `export_too_large` (shown on the *Evidence
+  exports* page) and an `audit.export_completed` failure event with `reason: export_too_large`, and leaves no chunks
+  behind. Ask the auditor for a shorter range, or raise the limit after checking the disk. An export that the stuck
+  check fails after a restart of the writer (`exporter restarted`) carries no `reason`, whatever stopped it.
+  Sizing: the volume lives in Docker's data-root (`docker info -f '{{.DockerRootDir}}'`, usually `/var/lib/docker`),
+  so it shares that file system with the images, the container logs and the other volumes of the host; it needs free
+  space for one `events.jsonl` of the limit per audit-writer replica (each replica builds one export at a time), and
+  the audit database for the packages of the open exports (at most two per organization, kept 7 days). A single
+  object or manifest larger than 256 MiB is never read into memory: the export fails and the verification reports it
+  as unreadable; an object is decompressed as a stream, never as a whole. The volume holds no state and needs no
+  backup.
+- **The audit writer's writable directories.** The container root is read-only. `/tmp` is a 64 MiB tmpfs mounted
+  `noexec,nosuid,nodev`; the export volume at `/var/lib/paddock/export-tmp` is the writer's one writable directory
+  that allows executing files (Docker mounts a named volume without `noexec`). Nothing but the unlinked export file
+  is written there; `compose.audit.yaml` keeps both, and the bundle test checks them.
 - **Signing key fingerprints.** After every seal and every evidence package the audit writer records the public key of
   the `audit-chain` version it signed with in `paddock_audit.audit_signing_key` (insert-only, so a published key never
   changes; the writer reads OpenBao at most every 10 minutes for this and fails the seal or export if the key cannot be

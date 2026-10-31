@@ -55,6 +55,10 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   `PADDOCK_AUDIT_RETENTION_DAYS`, by default 400) and keep both variables the same on both hosts. `./paddock check`
   reports a missing or invalid value (item `audit index retention of the retention round`); `./paddock pull` and the
   other commands keep working until it is set.
+- From 0.1.0-alpha.7 (audit host and lab): `./paddock up` creates the new Docker volume `audit-writer-tmp` for the
+  audit writer's evidence export temp space (`docs/operations/audit-bucket.md` section 4); nothing to migrate. Check
+  that Docker's data-root (`docker info -f '{{.DockerRootDir}}'`) has free space for one export of
+  `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default 4 GiB). A rollback leaves the volume unused; `docker volume rm` removes it.
 
 ## Upgrade (each host)
 

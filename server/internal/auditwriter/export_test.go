@@ -199,3 +199,9 @@ func SetExportMaxBytes(e *Exporter, n int64) { e.maxBytes = n }
 
 // SetVerifierMaxObject lowers the read limit of one object of the verifier.
 func SetVerifierMaxObject(v *Verifier, n int64) { v.maxObject = n }
+
+// SetPackageSized runs fn with the package size the build computed before its first chunk.
+func SetPackageSized(e *Exporter, fn func(size int64)) { e.packageSized = fn }
+
+// SetChunkInserted runs fn after every chunk row the build inserted.
+func SetChunkInserted(e *Exporter, fn func(seq int32)) { e.chunkInserted = fn }

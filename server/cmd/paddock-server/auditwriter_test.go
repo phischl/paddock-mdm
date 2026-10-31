@@ -72,6 +72,8 @@ func TestExportMaxBytes(t *testing.T) {
 		{"0", 0, false},
 		{"-1", 0, false},
 		{"4GiB", 0, false},
+		{"9223372036854775807", 1<<63 - 1, true},
+		{"9223372036854775808", 0, false},
 	} {
 		env := map[string]string{}
 		if tc.value != "" {
@@ -86,6 +88,11 @@ func TestExportMaxBytes(t *testing.T) {
 		if !tc.valid && (err == nil || !strings.Contains(err.Error(), "PADDOCK_AUDIT_EXPORT_MAX_BYTES")) {
 			t.Errorf("%q: err = %v, want it to name PADDOCK_AUDIT_EXPORT_MAX_BYTES", tc.value, err)
 		}
+	}
+	l := config.NewLoaderFrom(map[string]string{"PADDOCK_AUDIT_EXPORT_MAX_BYTES": "9223372036854775808"})
+	exportMaxBytes(l)
+	if err := l.Err(); err == nil || !strings.Contains(err.Error(), "PADDOCK_AUDIT_EXPORT_MAX_BYTES: out of range") {
+		t.Errorf("err = %v, want PADDOCK_AUDIT_EXPORT_MAX_BYTES: out of range", err)
 	}
 	if auditwriter.DefaultExportMaxBytes != 4<<30 {
 		t.Errorf("default = %d, want 4 GiB", auditwriter.DefaultExportMaxBytes)

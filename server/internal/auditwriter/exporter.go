@@ -77,6 +77,10 @@ var errExportTooLarge = errors.New(ReasonExportTooLarge)
 // larger is treated as a decompression bomb and reported as undecodable instead of exhausting the writer's memory.
 const exportMaxDecodedObject = 256 << 20
 
+// exportMaxDecoderWindow is the window of zstd.NewWriter's default level, the encoder of every audit object; a frame
+// asking for a larger one is undecodable instead of growing the decoder's history buffer.
+const exportMaxDecoderWindow = 8 << 20
+
 var (
 	metricExport = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "paddock_audit_export_total", Help: "Evidence exports finished per result (ready, failed, expired).",
@@ -125,6 +129,10 @@ type Exporter struct {
 	expiredCommitted func(ctx context.Context, id uuid.UUID, err error) error
 	// endRead is nil; tests replace the error of each locked read after a failure or expiry with an unknown outcome.
 	endRead func(ctx context.Context, id uuid.UUID, err error) error
+	// packageSized is nil; tests see the package size computed before the first chunk.
+	packageSized func(size int64)
+	// chunkInserted is nil; tests see every chunk row the build inserts.
+	chunkInserted func(seq int32)
 }
 
 // NewExporter creates an exporter; version names the generator in the package and maxBytes bounds events.jsonl and the
@@ -741,6 +749,19 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 	if err != nil {
 		return built{}, err
 	}
+	// Every member's size is known now, so a too-large package fails before its first chunk reaches the audit database
+	// (and its WAL); the cappedWriter in writeTar stays the backstop.
+	size, err := packageSize(doc.CreatedAt, readme, c, canonical, sigFile)
+	if err != nil {
+		return built{}, err
+	}
+	if e.packageSized != nil {
+		e.packageSized(size)
+	}
+	if size > e.maxBytes {
+		return built{}, fmt.Errorf("%w: the package (%d bytes) exceeds PADDOCK_AUDIT_EXPORT_MAX_BYTES (%d bytes)",
+			errExportTooLarge, size, e.maxBytes)
+	}
 	err = e.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		return ensureSigningKey(ctx, q, sig.KeyVersion, keys[sig.KeyVersion])
 	})
@@ -755,6 +776,9 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 			})
 			if err == nil && n == 0 {
 				return fmt.Errorf("chunk %d: %w", seq, errNotRunning)
+			}
+			if err == nil && e.chunkInserted != nil {
+				e.chunkInserted(seq)
 			}
 			return err
 		})
@@ -777,7 +801,7 @@ func (e *Exporter) build(ctx context.Context, export auditstore.AuditExport) (bu
 // package cannot hold it.
 func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Time, byDay map[string]auditstore.AuditManifest,
 	events *cappedWriter, c *collected) error {
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(e.maxDecoded))
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(e.maxDecoded), zstd.WithDecoderMaxWindow(exportMaxDecoderWindow))
 	if err != nil {
 		return err
 	}
@@ -824,13 +848,17 @@ func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Tim
 			if hex.EncodeToString(sum[:]) != o.SHA256 {
 				// Bytes the chain does not vouch for are packed for the auditor but never decompressed.
 				c.addProblem(fmt.Sprintf("%s: object %s was modified (SHA-256 mismatch)", name, o.Key))
-			} else if plain, err := dec.DecodeAll(body.Bytes(), nil); err != nil {
+			} else if lines, ok := e.decodable(dec, body.Bytes()); !ok {
 				c.addProblem(fmt.Sprintf("%s: object %s cannot be decoded", name, o.Key))
 			} else {
-				if _, err := out.Write(plain); err != nil {
+				// The first decode only counted, so an undecodable object left no partial events in events.jsonl.
+				if err := dec.Reset(bytes.NewReader(body.Bytes())); err != nil {
+					return fmt.Errorf("day %s: object %s: %w", name, o.Key, err)
+				}
+				if _, err := io.Copy(out, dec); err != nil {
 					return err
 				}
-				n = bytes.Count(plain, []byte("\n"))
+				n = lines
 			}
 			pd.objects = append(pd.objects, auditevidence.Object{Key: o.Key, Path: path, SHA256: hex.EncodeToString(sum[:]), EventCount: n})
 			pd.sizes = append(pd.sizes, size)
@@ -842,6 +870,29 @@ func (e *Exporter) collect(ctx context.Context, org uuid.UUID, from, to time.Tim
 	c.eventsSz = events.n
 	copy(c.eventsH[:], h.Sum(nil))
 	return nil
+}
+
+// decodable decodes body as a stream into nothing, so that no more than the decoder window is held; it reports the
+// events (lines) of body and false when body is no valid zstd stream or decodes to more than maxDecoded bytes.
+func (e *Exporter) decodable(dec *zstd.Decoder, body []byte) (lines int, ok bool) {
+	if err := dec.Reset(bytes.NewReader(body)); err != nil {
+		return 0, false
+	}
+	limit := int64(e.maxDecoded) //nolint:gosec // exportMaxDecodedObject (256 MiB) or lower in tests
+	counter := &lineCounter{}
+	n, err := io.Copy(counter, io.LimitReader(dec, limit+1))
+	if err != nil || n > limit {
+		return 0, false
+	}
+	return counter.lines, true
+}
+
+// lineCounter counts the line breaks written to it.
+type lineCounter struct{ lines int }
+
+func (c *lineCounter) Write(p []byte) (int, error) {
+	c.lines += bytes.Count(p, []byte("\n"))
+	return len(p), nil
 }
 
 func (e *Exporter) exportDoc(export auditstore.AuditExport, c *collected, runs []auditstore.AuditVerificationRun,
@@ -900,7 +951,7 @@ func (e *Exporter) writeTar(ctx context.Context, cw *chunkWriter, mtime time.Tim
 	events *os.File, exportJSON, sigFile []byte) error {
 	tw := tar.NewWriter(&cappedWriter{w: cw, max: e.maxBytes, name: "the package"})
 	member := func(name string, size int64) error {
-		return tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: size, ModTime: mtime, Typeflag: tar.TypeReg})
+		return tw.WriteHeader(tarHeader(name, size, mtime))
 	}
 	write := func(name string, body []byte) error {
 		if err := member(name, int64(len(body))); err != nil {
@@ -956,6 +1007,56 @@ func (e *Exporter) writeTar(ctx context.Context, cw *chunkWriter, mtime time.Tim
 		return err
 	}
 	return cw.Close()
+}
+
+// tarHeader is the header of one package member.
+func tarHeader(name string, size int64, mtime time.Time) *tar.Header {
+	return &tar.Header{Name: name, Mode: 0o644, Size: size, ModTime: mtime, Typeflag: tar.TypeReg}
+}
+
+// packageSize is the exact size of the tar writeTar produces from the same members: each header as tar.Writer encodes
+// it (a long name adds extension records), each body padded to 512 bytes, and the 1024-byte end marker.
+func packageSize(mtime time.Time, readme []byte, c *collected, exportJSON, sigFile []byte) (int64, error) {
+	var total int64
+	add := func(name string, size int64) error {
+		var header countWriter
+		if err := tar.NewWriter(&header).WriteHeader(tarHeader(name, size, mtime)); err != nil {
+			return err
+		}
+		total += header.n + (size+511)/512*512
+		return nil
+	}
+	if err := add("README.md", int64(len(readme))); err != nil {
+		return 0, err
+	}
+	for _, d := range c.days {
+		if err := add("manifests/"+d.day+".json", int64(len(d.raw))); err != nil {
+			return 0, err
+		}
+	}
+	for _, d := range c.days {
+		for i, o := range d.objects {
+			if err := add(o.Path, d.sizes[i]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	for name, size := range map[string]int64{
+		"events.jsonl": c.eventsSz, "export.json": int64(len(exportJSON)), "export.sig": int64(len(sigFile)),
+	} {
+		if err := add(name, size); err != nil {
+			return 0, err
+		}
+	}
+	return total + 1024, nil
+}
+
+// countWriter counts the bytes written to it.
+type countWriter struct{ n int64 }
+
+func (w *countWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	return len(p), nil
 }
 
 // errWriter keeps the error of a failed write, so a failure of the package side is told apart from a failed read.
