@@ -102,6 +102,21 @@ func TestEnrollmentProcess(t *testing.T) {
 	if key, ok, _ := f.cache.DeviceKey(ctx, req.KeyID); !ok || key.Status != "active" || key.DeviceID != req.EnrollmentID {
 		t.Fatalf("dk: %+v %v", key, ok)
 	}
+	if n, err := f.cache.NextSeq(ctx, req.EnrollmentID); err != nil || n != 1 {
+		t.Fatalf("first seq of the new device: %d %v", n, err)
+	}
+	// PDK-475: a redelivered request after Valkey lost its data restores the counter of the device, which checked in
+	// meanwhile, from device_status.last_seq.
+	if _, err := f.super.Exec(ctx, "INSERT INTO device_status (device_id, organization_id, last_seq) VALUES ($1, $2, 7)", req.EnrollmentID, f.org); err != nil {
+		t.Fatal(err)
+	}
+	redelivered := NewEnrollment(app.NewEnrollments(runner, f.pool), devicecache.New(valkeytest.Start(t).Client(t)))
+	if o := redelivered.process(ctx, req.EnrollmentID.String(), body); o != ack {
+		t.Fatalf("redelivery outcome %v", o)
+	}
+	if n, err := redelivered.cache.NextSeq(ctx, req.EnrollmentID); err != nil || n != 8 {
+		t.Fatalf("first seq after the redelivery: %d %v", n, err)
+	}
 
 	manual, _ := f.token(t, false)
 	pending, body := f.message(t, manual)
@@ -175,7 +190,7 @@ func TestCacheSync(t *testing.T) {
 	})
 
 	// An emptied Valkey is rebuilt by the reconcile.
-	if err := f.cache.PutDeviceKey(ctx, keyID, devicecache.DeviceKey{Status: "stale"}); err != nil {
+	if err := f.cache.PutDeviceKey(ctx, keyID, devicecache.DeviceKey{Status: "stale"}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Reconcile(ctx, f.org); err != nil {
@@ -183,6 +198,92 @@ func TestCacheSync(t *testing.T) {
 	}
 	if k, _, _ := f.cache.DeviceKey(ctx, keyID); k.Status != "quarantined" || k.DeviceID != dev {
 		t.Fatalf("reconciled key %+v", k)
+	}
+
+	// PDK-475: on an emptied Valkey, a change notification that rewrites the key before the reconcile restores the
+	// counter from device_status.last_seq too, so the first check-in continues the sequence instead of restarting at 1.
+	if _, err := f.super.Exec(ctx, "INSERT INTO device_status (device_id, organization_id, last_seq) VALUES ($1, $2, 41)", dev, f.org); err != nil {
+		t.Fatal(err)
+	}
+	emptied := devicecache.New(valkeytest.Start(t).Client(t))
+	if err := NewCacheSync(f.pool, emptied).Changed(ctx, "device:"+f.org.String()+":"+dev.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := emptied.DeviceKey(ctx, keyID); !ok {
+		t.Fatal("key not rewritten")
+	}
+	if n, err := emptied.NextSeq(ctx, dev); err != nil || n != 42 {
+		t.Fatalf("first seq after the cache loss: %d %v", n, err)
+	}
+	emptied = devicecache.New(valkeytest.Start(t).Client(t))
+	if err := NewCacheSync(f.pool, emptied).Reconcile(ctx, f.org); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := emptied.NextSeq(ctx, dev); err != nil || n != 42 {
+		t.Fatalf("first seq after the reconcile: %d %v", n, err)
+	}
+
+	// The reconcile never changes a live counter: one below last_seq (restored from a stale value while heartbeats were
+	// still queued, or rolled back by an AOF replay) may be what the device holds, and raising it could quarantine the
+	// device as a clone (PDK-475); one ahead of last_seq is not lowered either.
+	for _, live := range []int64{5, 100} {
+		stale := devicecache.New(valkeytest.Start(t).Client(t))
+		if err := stale.RestoreSeq(ctx, dev, live); err != nil {
+			t.Fatal(err)
+		}
+		if err := NewCacheSync(f.pool, stale).Reconcile(ctx, f.org); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := stale.NextSeq(ctx, dev); err != nil || n != live+1 {
+			t.Fatalf("seq after reconciling a live counter of %d (last_seq 41): %d %v", live, n, err)
+		}
+	}
+}
+
+// TestReconcileAllContinuesPastFailingOrg (PDK-475): a device whose counter is missing gets 503 until a reconcile
+// restores it, so an organization whose reconcile fails must not stop the organizations after it.
+func TestReconcileAllContinuesPastFailingOrg(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	other := uuid.Must(uuid.NewV7()) // sorts after f.org: ReconcileAll walks the organizations by ID
+	if _, err := f.super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'W', 'active')",
+		other, "w"+other.String()[24:]); err != nil {
+		t.Fatal(err)
+	}
+	deviceWithKey := func(org uuid.UUID) (uuid.UUID, string) {
+		dev := uuid.Must(uuid.NewV7())
+		if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'h', 'active')", dev, org); err != nil {
+			t.Fatal(err)
+		}
+		keyID := "k-" + dev.String()
+		if _, err := f.super.Exec(ctx, `INSERT INTO device_identity_key (key_id, organization_id, device_id, public_key, key_protection, status)
+			VALUES ($1, $2, $3, '\x01', 'file', 'active')`, keyID, org, dev); err != nil {
+			t.Fatal(err)
+		}
+		return dev, keyID
+	}
+	deviceWithKey(f.org) // its counter is made unwritable below
+	dev, keyID := deviceWithKey(other)
+
+	client := valkeytest.Start(t).Client(t)
+	// Denying access to one counter makes restoring it, and so the reconcile of f.org, fail (NOPERM).
+	if err := client.Do(ctx, client.B().AclSetuser().Username("default").Rule("resetkeys", "~dk:*", "~et:*", "~au:*",
+		"~seq:"+dev.String()).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	cache := devicecache.New(client)
+	err := NewCacheSync(f.pool, cache).ReconcileAll(ctx)
+	if err == nil || !strings.Contains(err.Error(), f.org.String()) {
+		t.Fatalf("error of the failing organization not reported: %v", err)
+	}
+	if strings.Contains(err.Error(), other.String()) {
+		t.Fatalf("healthy organization reported as failed: %v", err)
+	}
+	if _, ok, _ := cache.DeviceKey(ctx, keyID); !ok {
+		t.Fatal("organization after the failing one not reconciled")
+	}
+	if n, err := cache.NextSeq(ctx, dev); err != nil || n != 1 {
+		t.Fatalf("seq in the organization after the failing one: %d %v", n, err)
 	}
 }
 
@@ -220,13 +321,14 @@ func TestHeartbeatsAndClones(t *testing.T) {
 	r := NewReports(app.NewDeviceReports(runner, f.pool), app.NewDeviceCommands(runner, f.pool), f.cache)
 	ctx := context.Background()
 	dev := f.device(t, "active")
-	hb := func(seq, reported int64, clone bool, at time.Time) []byte {
+	hb := func(seq, reported, expected int64, clone bool, at time.Time) []byte {
 		b, _ := json.Marshal(ingest.Heartbeat{DeviceID: dev, OrganizationID: f.org, ReceivedAt: at, AppliedBundleVersion: 2,
-			AgentVersion: "0.1.0", Health: json.RawMessage(`{"reconcile":"ok"}`), Seq: seq, ReportedSeq: reported, CloneSuspected: clone})
+			AgentVersion: "0.1.0", Health: json.RawMessage(`{"reconcile":"ok"}`), Seq: seq, ReportedSeq: reported,
+			ExpectedSeq: expected, CloneSuspected: clone})
 		return b
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	if o := r.heartbeat(ctx, "m1", hb(1, 0, false, now)); o != ack {
+	if o := r.heartbeat(ctx, "m1", hb(1, 0, 0, false, now)); o != ack {
 		t.Fatalf("outcome %v", o)
 	}
 	var last time.Time
@@ -238,7 +340,7 @@ func TestHeartbeatsAndClones(t *testing.T) {
 		t.Fatalf("status %s %d %d", last, applied, seq)
 	}
 	// Coalesced: a second heartbeat within 60 s does not write.
-	if o := r.heartbeat(ctx, "m2", hb(2, 1, false, now.Add(time.Second))); o != ack {
+	if o := r.heartbeat(ctx, "m2", hb(2, 1, 1, false, now.Add(time.Second))); o != ack {
 		t.Fatalf("outcome %v", o)
 	}
 	if f.count(t, "SELECT count(*) FROM device_status WHERE device_id = $1 AND last_seq = 1", dev) != 1 {
@@ -247,7 +349,7 @@ func TestHeartbeatsAndClones(t *testing.T) {
 
 	// Two clone reports quarantine the device once, with exactly one audit event.
 	for i, id := range []string{"m3", "m4"} {
-		if o := r.heartbeat(ctx, id, hb(int64(5+i), 1, true, now.Add(2*time.Second))); o != ack {
+		if o := r.heartbeat(ctx, id, hb(int64(5+i), 1, 3, true, now.Add(2*time.Second))); o != ack {
 			t.Fatalf("outcome %v", o)
 		}
 	}
@@ -256,6 +358,11 @@ func TestHeartbeatsAndClones(t *testing.T) {
 	}
 	if n := f.count(t, "SELECT count(*) FROM action WHERE code = 'device.clone_suspected' AND target->>'id' = $1", dev.String()); n != 1 {
 		t.Fatalf("%d clone events, want 1", n)
+	}
+	// issued_seq reports the number the check-in was compared against, not the draw (PDK-590).
+	if n := f.count(t, `SELECT count(*) FROM action WHERE code = 'device.clone_suspected' AND target->>'id' = $1
+		AND params->>'issued_seq' = '3' AND params->>'reported_seq' = '1'`, dev.String()); n != 1 {
+		t.Fatalf("%d clone events with issued_seq 3, want 1", n)
 	}
 	if o := r.heartbeat(ctx, "m5", []byte("{")); o != poison {
 		t.Fatalf("garbage: %v", o)

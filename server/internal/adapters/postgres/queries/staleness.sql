@@ -43,3 +43,14 @@ SELECT coalesce(max(g.staleness_warning_h), 0)::int AS group_warning_h,
        coalesce(max(g.staleness_critical_h), 0)::int AS group_critical_h
 FROM device_group_member m JOIN device_group g ON g.id = m.device_group_id
 WHERE m.device_id = @device_id AND g.staleness_warning_h IS NOT NULL;
+
+-- name: HasExpiredDeviceAlerts :one
+SELECT EXISTS (SELECT 1 FROM device_alert WHERE cleared_at < @cutoff::timestamptz);
+
+-- name: DeleteExpiredDeviceAlerts :execrows
+-- One batch of alerts cleared before the cutoff (ADR 0032 amendment 2026-10-18, PDK-180); an open alert has no
+-- cleared_at and never matches. The retention round runs each batch in its own transaction until one deletes fewer
+-- than 1 000 rows (plan M10 amendment 2026-10-30).
+DELETE FROM device_alert WHERE id IN (
+  SELECT id FROM device_alert WHERE cleared_at < @cutoff::timestamptz LIMIT 1000
+);

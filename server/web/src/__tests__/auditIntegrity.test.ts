@@ -89,7 +89,11 @@ afterEach(() => {
 async function mountView(): Promise<VueWrapper> {
   const pinia = createPinia()
   setActivePinia(pinia)
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/audit/integrity', component: AuditIntegrityView }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/audit/integrity', component: AuditIntegrityView },
+      { path: '/audit/exports', name: 'audit-exports', component: { render: () => null } },
+    ],
+  })
   await router.push('/audit/integrity')
   wrapper = mount(() => h(VApp, null, { default: () => h(AuditIntegrityView) }), {
     global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body,

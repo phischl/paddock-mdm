@@ -441,6 +441,87 @@ tests:
               summary: "The audit chain was not verified for 36 hours"
               description: "The audit writer's last nightly chain verification finished 1d 13h 2m 0s ago; check the audit writer's log for the 00:45 UTC cycle."
 
+  - name: an index purge older than 48 hours warns after one more hour
+    interval: 1m
+    input_series:
+      # The last complete purge finished at the start of the test (timestamp 0) and none follows.
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x3000"
+    alert_rule_test:
+      - eval_time: 48h
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts: []
+      - eval_time: 48h59m
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts: []
+      - eval_time: 49h2m
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The audit index was not purged for 48 hours"
+              description: "The audit writer's last complete index purge finished 2d 1h 2m 0s ago; check the audit writer's log for the 01:15 UTC purge and run paddock-server audit purge --dry-run."
+
+  - name: a failed evidence export warns for an hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_export_total{result="failed", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x30 1x120"
+      - series: 'paddock_audit_export_total{result="ready", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0+1x150"
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: PaddockAuditExportFailed
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: PaddockAuditExportFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, result: failed, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "An evidence export failed"
+              description: "The audit writer marked an evidence export as failed in the last hour; the export's error and the audit writer's log (evidence export failed) name the cause."
+      - eval_time: 2h
+        alertname: PaddockAuditExportFailed
+        exp_alerts: []
+
+  - name: a pending evidence export warns after an hour and ten minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_export_pending_age_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0+60x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: PaddockAuditExportStuck
+        exp_alerts: []
+      - eval_time: 72m
+        alertname: PaddockAuditExportStuck
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "An evidence export has been pending for over an hour"
+              description: "The oldest pending evidence export has waited 1h 12m 0s; check that the audit writer runs and its log for evidence export errors."
+
+  - name: exports built within the poll interval do not warn
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_export_pending_age_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 30 0 45 0x200"
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: PaddockAuditExportStuck
+        exp_alerts: []
+
+  - name: a daily index purge does not warn
+    interval: 1m
+    input_series:
+      # A complete purge every 24 h.
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x1440 86400x1440 172800x1440"
+    alert_rule_test:
+      - eval_time: 71h
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts: []
+
   - name: a stale verification still warns after a writer restart that re-seeds the old last run
     interval: 1m
     input_series:
@@ -536,3 +617,69 @@ tests:
             exp_annotations:
               summary: "The audit chain was not verified for 36 hours"
               description: "The audit writer's last nightly chain verification finished 1d 17h 32m 0s ago; check the audit writer's log for the 00:45 UTC cycle."
+
+  # PDK-137: device_user_seen stops succeeding at time 0, device_login_event keeps succeeding every minute.
+  - name: a retention store without success for 48 hours fires after one more hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_retention_last_success_timestamp_seconds{store="device_login_event", role="paddock-worker"}'
+        values: "0+60x3000"
+      - series: 'paddock_retention_last_success_timestamp_seconds{store="device_user_seen", role="paddock-worker"}'
+        values: "0x3000"
+      - series: 'paddock_retention_stores{role="paddock-worker"}'
+        values: "2x3000"
+    alert_rule_test:
+      - eval_time: 2900m
+        alertname: PaddockRetentionPurgeStale
+        exp_alerts: []
+      - eval_time: 2950m
+        alertname: PaddockRetentionPurgeStale
+        exp_alerts:
+          - exp_labels: { severity: critical, store: device_user_seen }
+            exp_annotations:
+              summary: "The retention purge of device_user_seen has not succeeded for 48 hours"
+              description: "The worker's retention round has not purged device_user_seen in every organization for 48 hours; check its log for the failing organization (docs/operations/monitoring.md)."
+      - eval_time: 2950m
+        alertname: PaddockRetentionPurgeMissing
+        exp_alerts: []
+
+  - name: a retention store that never succeeds is missing after an hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_retention_stores{role="paddock-worker"}'
+        values: "2x70"
+      - series: 'paddock_retention_last_success_timestamp_seconds{store="device_login_event", role="paddock-worker"}'
+        values: "0+60x70"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PaddockRetentionPurgeMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockRetentionPurgeMissing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "The retention purge of some stores never succeeded"
+              description: "The worker exports the last retention success of fewer stores than it purges; check its log."
+
+  - name: a stalled notification destination warns after five minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_notify_destination_stalled{job="paddock", role="paddock-notifier", instance="paddock-notifier:9090", destination_id="d1", type="webhook"}'
+        values: "0x5 1x10 0x5"
+      - series: 'paddock_notify_destination_stalled{job="paddock", role="paddock-notifier", instance="paddock-notifier:9090", destination_id="d2", type="webhook"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: PaddockNotificationStalled
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: PaddockNotificationStalled
+        exp_alerts:
+          - exp_labels: { severity: warning, destination_id: d1, type: webhook }
+            exp_annotations:
+              summary: "Notification destination d1 is stalled"
+              description: "Deliveries to the webhook destination d1 have been failing; see its last_error in the portal or GET /api/v1/notification-destinations/d1."
+      - eval_time: 18m
+        alertname: PaddockNotificationStalled
+        exp_alerts: []

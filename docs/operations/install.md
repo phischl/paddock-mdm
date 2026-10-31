@@ -29,9 +29,11 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   `no-new-privileges:true`); Caddy keeps only `NET_BIND_SERVICE` for 80 and 443; every service has a `pids_limit`.
   `./paddock check` fails the item `container hardening` when a Compose edit removes one of these settings.
 - Control plane: 4 vCPU, 16 GB RAM, 100 GB disk for 100 devices. Audit domain: 2 vCPU, 4 GB RAM, disk for 400 days
-  of audit evidence (about 1 GB per 100 devices and year). Authentik serves logins with 4 web worker processes, one
-  core and about 250 MiB each; raise `PADDOCK_AUTHENTIK_WEB_WORKERS` with the cores for many simultaneous logins
-  (`docs/operations/capacity.md`, "Authentik web workers").
+  of audit evidence (about 1 GB per 100 devices and year) plus free space for one evidence export of up to
+  `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default 4 GiB) on the audit writer's temp volume (`audit-bucket.md` section 4).
+  Authentik serves logins with 4 web worker processes, one core and about 250 MiB each; raise
+  `PADDOCK_AUTHENTIK_WEB_WORKERS` with the cores for many simultaneous logins (`docs/operations/capacity.md`,
+  "Authentik web workers").
 - A **private interconnect** between the hosts (VPN such as WireGuard, or a private network), each host with a fixed
   address on it. Only these endpoints are published there, all with TLS from the internal CAs:
   - control plane → audit host: RabbitMQ `amqps` 5671 (the audit writer consumes), OpenBao 8200 (the audit writer
@@ -195,7 +197,8 @@ tunnel.
 configuration. It prints one PASS/FAIL line per item and exits 1 on any FAIL. It refuses: `compose.dev.yaml` in the
 configuration; `PADDOCK_ENV` other than `production`; development-only variables (`PADDOCK_STEPUP_WINDOW`,
 `PADDOCK_STEPUP_MAX_AUTH_AGE`, `PADDOCK_STALENESS_UNIT`, `PADDOCK_RETENTION_UNIT`, `PADDOCK_REAPER_THRESHOLD`, `PADDOCK_OSV_SYNC_INTERVAL`,
-`PADDOCK_TEST_*`); `PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
+`PADDOCK_TEST_*`); a retention round interval (`PADDOCK_RETENTION_INTERVAL`) below 1 minute, above 24 hours, or
+unparsable; `PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
 missing, empty or readable by every user of the host (symbolic links resolved; `.secrets/` must stay 0700); a path
 below `/run/secrets/` that a service names (in a variable or as the `sslrootcert` of a DSN) without mounting that
 secret; 80/443 published by any service but Caddy, or another published port that is not bound to
@@ -205,8 +208,13 @@ secret; 80/443 published by any service but Caddy, or another published port tha
 without proxies or proxies without a header, an unknown header name, item `edge client address`); a `/0` in a role's
 `PADDOCK_TRUSTED_PROXY_CIDRS`; a Paddock role or Caddy that keeps capabilities (beyond Caddy's `NET_BIND_SERVICE`)
 or may gain privileges, or a service without `pids_limit` (item `container hardening`);
-`PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`); a
-`PADDOCK_AUTHENTIK_WEB_WORKERS` that is not an integer of at least 1 (item `authentik web workers`);
+a service whose container log is not rotated (log driver other than `json-file` or no `max-size`, item
+`container logs are rotated`);
+`PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
+on the control plane, a `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` that is missing, not a number, below 400 days or below
+`PADDOCK_AUDIT_RETENTION_DAYS`, with which the worker does not start (item `audit index retention of the retention
+round`);
+a `PADDOCK_AUTHENTIK_WEB_WORKERS` that is not an integer of at least 1 (item `authentik web workers`);
 the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
 audit bucket without Object Lock COMPLIANCE of at least 400 days.
 
@@ -220,6 +228,14 @@ stolen browser session cannot sign in again without password and authenticator; 
 affected. When Authentik cannot be reached, or does not answer within 80 seconds, both fail with
 `upstream_unavailable` after the portal sessions have ended (the CLI command exits with an error); this is expected while
 Authentik is down. Run the action again once Authentik is back, so that the identity provider's sessions end too.
+
+**Logs.** Every service writes its log to standard output, which Docker keeps per container: the Paddock roles log
+structured lines (`slog`) with usernames, hostnames and organization and device identifiers in the messages but never
+secrets, and Caddy's access log holds the client address of every request. The Compose files rotate these logs with
+the `json-file` driver at 50 MB per file and 10 files per container (anchor `x-paddock-logging`), so each container
+keeps at most about 500 MB and the oldest lines are deleted as new ones arrive (retention schedule of ADR 0032).
+`./paddock check` fails a service without this rotation. Shipping the logs to a central log system (journald, syslog,
+Loki or a SIEM) is the operator's choice and not part of Paddock; keep its retention no longer than the purpose needs.
 
 **AI assistants (MCP).** Authentik applies the blueprint `paddock-mcp.yaml` at its start, like the portal and step-up
 blueprints: the public OIDC provider and application `paddock-mcp` (device authorization grant, the portal's login

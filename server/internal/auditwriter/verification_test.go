@@ -1,10 +1,12 @@
 package auditwriter_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +49,14 @@ func (m *memStore) Get(_ context.Context, key string) ([]byte, error) {
 		return nil, errors.New("no such key")
 	}
 	return body, nil
+}
+
+func (m *memStore) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	body, err := m.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
 type recorderEnv struct {

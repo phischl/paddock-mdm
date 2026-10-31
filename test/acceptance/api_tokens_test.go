@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,25 +65,73 @@ func steppedUpTempUser(t *testing.T, prefix string, groups ...string) *mfaUser {
 func mfaTempUser(t *testing.T, prefix string, groups ...string) *mfaUser {
 	t.Helper()
 	user, password := tempUser(t, prefix, groups...)
-	key := make([]byte, 20)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-	script := "from authentik.core.models import User\n" +
-		"from authentik.stages.authenticator_totp.models import TOTPDevice\n" +
-		fmt.Sprintf("TOTPDevice.objects.update_or_create(user=User.objects.get(username=%q), name=\"paddock-acceptance\", "+
-			"defaults={\"key\": %q, \"confirmed\": True})\n", user, hex.EncodeToString(key)) +
-		"print(\"paddock-acceptance totp ok\")\n"
-	out, err := stack.ComposeInput(testContext(t, 3*time.Minute), strings.NewReader(script), "exec", "-T", "authentik-worker", "ak", "shell")
-	if err != nil || !strings.Contains(out, "paddock-acceptance totp ok") {
-		t.Fatalf("install TOTP authenticator of %s: %v: %s", user, err, out)
-	}
+	totp := installTOTPs(t, 3*time.Minute, user)[0]
 	p, err := loginAs(t, user, password)
 	if err != nil {
 		t.Fatalf("login %s: %v", user, err)
 	}
-	return &mfaUser{Portal: p, username: user, password: password,
-		totp: &authflow.TOTP{Secret: base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)}}
+	return &mfaUser{Portal: p, username: user, password: password, totp: totp}
+}
+
+// akShellSlots bounds the `ak shell` processes the gates run at once. Each one boots a full Django process in
+// authentik-worker (about 4.5 CPU seconds), and parallel cases starting them together take the CPU that Authentik's
+// web workers need on a 4-vCPU runner (PDK-603).
+var akShellSlots = make(chan struct{}, 2)
+
+// installTOTPs installs a TOTP authenticator for each user in one `ak shell`, the way `make dev-seed` does for the dev
+// users (the keys travel on stdin), and returns the users' generators in the same order. budget is the shell's own
+// timeout; the wait for a slot does not count against it.
+func installTOTPs(t *testing.T, budget time.Duration, users ...string) []*authflow.TOTP {
+	t.Helper()
+	script := "from authentik.core.models import User\n" +
+		"from authentik.stages.authenticator_totp.models import TOTPDevice\n"
+	totps := make([]*authflow.TOTP, len(users))
+	for i, user := range users {
+		key := make([]byte, 20)
+		if _, err := rand.Read(key); err != nil {
+			t.Fatal(err)
+		}
+		script += fmt.Sprintf("TOTPDevice.objects.update_or_create(user=User.objects.get(username=%q), name=\"paddock-acceptance\", "+
+			"defaults={\"key\": %q, \"confirmed\": True})\n", user, hex.EncodeToString(key))
+		totps[i] = &authflow.TOTP{Secret: base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)}
+	}
+	script += "print(\"paddock-acceptance totp ok\")\n"
+	akShellSlots <- struct{}{}
+	defer func() { <-akShellSlots }()
+	out, err := stack.ComposeInput(testContext(t, budget), strings.NewReader(script), "exec", "-T", "authentik-worker", "ak", "shell")
+	if err != nil || !strings.Contains(out, "paddock-acceptance totp ok") {
+		t.Fatalf("install TOTP authenticators of %v: %v: %s", users, err, out)
+	}
+	return totps
+}
+
+// adminPool is a pool of temporary administrators with TOTP authenticators of their own, made known to env so the
+// helpers for dev users serve them. The A3 cases that need a stepped-up acme administrator take one in turn instead of
+// alice: a user's TOTP generator hands out one code per 30 s step, and the 33 step-ups and device logins of alice in
+// one A3 run on CI queued for it for 16 minutes, past the 3-minute budget of a device login (PDK-603).
+type adminPool struct {
+	users []string
+	next  atomic.Uint64
+}
+
+// newAdminPool creates n users in groups with one `ak shell` for all their authenticators; they are deleted when t
+// ends.
+func newAdminPool(t *testing.T, prefix string, n int, groups ...string) *adminPool {
+	t.Helper()
+	users, passwords := make([]string, n), make([]string, n)
+	for i := range users {
+		users[i], passwords[i] = tempUser(t, prefix, groups...)
+	}
+	for i, totp := range installTOTPs(t, 3*time.Minute, users...) {
+		env.AddUser(users[i], passwords[i], totp)
+	}
+	return &adminPool{users: users}
+}
+
+// take returns the next user of the pool. Parallel cases may get the same one: each signs in on a session of its own,
+// and the user's TOTP generator never hands out a code twice.
+func (p *adminPool) take() string {
+	return p.users[(p.next.Add(1)-1)%uint64(len(p.users))]
 }
 
 // TestAPITokens is gate T1 of plan M6c: token creation needs a fresh step-up and is audited without the secret, the

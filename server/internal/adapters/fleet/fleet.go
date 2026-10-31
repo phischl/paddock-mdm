@@ -27,11 +27,14 @@ type Client struct {
 
 // New creates a client for Fleet's internal baseURL (e.g. http://fleet:8080); publicURL is the device-facing URL
 // (https://fleet.<domain>), Fleet's server URL. Requests time out after 30 s; 5xx and network errors are retried 3
-// times with exponential back-off, 4xx never.
+// times with exponential back-off, 4xx never. Redirects are not followed: Go would turn a DELETE into a GET whose 200
+// reads as success (PDK-583), so a 3xx is a failure.
 func New(baseURL, token, publicURL string) *Client {
 	return &Client{
 		base: strings.TrimRight(baseURL, "/"), token: token, publicURL: strings.TrimRight(publicURL, "/"),
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
 		retries: 3, backoff: 500 * time.Millisecond,
 	}
 }

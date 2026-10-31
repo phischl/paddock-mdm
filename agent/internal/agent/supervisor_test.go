@@ -4,9 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -391,6 +395,323 @@ func TestSupervisorPackageUnreadableMarker(t *testing.T) {
 			}
 			if m, err := supervisorpkg.ReadMarker(a.d.Layout); err != nil || m == nil || m.Version != buildinfo.Version {
 				t.Fatalf("marker %+v, %v", m, err)
+			}
+		})
+	}
+}
+
+// writeSupervisorMarker writes a readable supervisor-upgrade.json started at startedAt.
+func writeSupervisorMarker(t *testing.T, a *Agent, startedAt time.Time) {
+	t.Helper()
+	marker, err := json.Marshal(supervisorpkg.Marker{Version: "1.2.0", FromVersion: "1.1.0", StartedAt: startedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsutil.WriteFile(a.d.Layout.SupervisorUpgrade(), marker, 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// markerHolds asks both users of the one marker rule (PDK-479) — supervisorUpgradeHolds and the conversion worker's
+// holdForSupervisor — and fails when they disagree.
+func markerHolds(t *testing.T, a *Agent) bool {
+	t.Helper()
+	holds, _ := a.supervisorUpgradeHolds()
+	a.d.Sleep = func(context.Context, time.Duration) error { return context.Canceled }
+	waited := a.holdForSupervisor(context.Background()) != nil
+	if holds != waited {
+		t.Fatalf("supervisorUpgradeHolds %v, holdForSupervisor waited %v", holds, waited)
+	}
+	return holds
+}
+
+// TestSupervisorMarkerBoundary (PDK-479): a marker holds while it is younger than supervisorpkg.StaleAfter, counted
+// from StartedAt or, when unreadable, from its mtime, and no longer at exactly StaleAfter.
+func TestSupervisorMarkerBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		readable bool
+		age      time.Duration
+		holds    bool
+	}{
+		{"readable, younger", true, supervisorpkg.StaleAfter - time.Second, true},
+		{"readable, exactly StaleAfter", true, supervisorpkg.StaleAfter, false},
+		{"unreadable, younger", false, supervisorpkg.StaleAfter - time.Second, true},
+		{"unreadable, exactly StaleAfter", false, supervisorpkg.StaleAfter, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := supervisorAgent(t, "")
+			now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+			a.d.Now = func() time.Time { return now }
+			if tc.readable {
+				writeSupervisorMarker(t, a, now.Add(-tc.age))
+			} else {
+				writeUnreadableMarker(t, a, tc.age)
+			}
+			if holds := markerHolds(t, a); holds != tc.holds {
+				t.Fatalf("holds %v, want %v", holds, tc.holds)
+			}
+		})
+	}
+}
+
+// TestSupervisorMarkerUnplaceableStart (PDK-479): a marker whose start the agent cannot place — the stat fails with
+// something other than not-exist, or the start lies ahead of a clock set back — holds for supervisorpkg.StaleAfter
+// from the agent's first sighting, not forever; a readable one then counts as install_failed.
+func TestSupervisorMarkerUnplaceableStart(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		write func(t *testing.T, a *Agent, now time.Time)
+	}{
+		{"stat error", func(t *testing.T, a *Agent, _ time.Time) {
+			marker := a.d.Layout.SupervisorUpgrade()
+			if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(marker, marker); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"unreadable, mtime ahead", func(t *testing.T, a *Agent, _ time.Time) { writeUnreadableMarker(t, a, -2*time.Hour) }},
+		{"readable, start ahead", func(t *testing.T, a *Agent, now time.Time) { writeSupervisorMarker(t, a, now.Add(2*time.Hour)) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := supervisorAgent(t, "")
+			seen := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+			now := seen
+			a.d.Now = func() time.Time { return now }
+			tc.write(t, a, now)
+			if !markerHolds(t, a) {
+				t.Fatal("not held at the first sighting")
+			}
+			now = seen.Add(supervisorpkg.StaleAfter - time.Second)
+			if !markerHolds(t, a) {
+				t.Fatal("not held within StaleAfter of the first sighting")
+			}
+			now = seen.Add(supervisorpkg.StaleAfter)
+			if markerHolds(t, a) {
+				t.Fatal("held at StaleAfter after the first sighting")
+			}
+			if tc.name != "readable, start ahead" {
+				return
+			}
+			a.reportSupervisorUpgrade()
+			if r, err := supervisorpkg.ReadResult(a.d.Layout); err != nil || r == nil || r.Outcome != protocol.SupervisorOutcomeInstallFailed {
+				t.Fatalf("not counted as failed: %+v %v", r, err)
+			}
+		})
+	}
+}
+
+// TestSupervisorMarkerClockCatchesUp (PDK-479): once the clock passes the start of a marker it first saw ahead of the
+// clock, the hold still ends StaleAfter after the first sighting instead of beginning anew.
+func TestSupervisorMarkerClockCatchesUp(t *testing.T) {
+	a, _, _ := supervisorAgent(t, "")
+	seen := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	now := seen
+	a.d.Now = func() time.Time { return now }
+	writeUnreadableMarker(t, a, -10*time.Minute)
+	if !markerHolds(t, a) {
+		t.Fatal("not held at the first sighting")
+	}
+	now = seen.Add(20 * time.Minute)
+	if !markerHolds(t, a) {
+		t.Fatal("not held within StaleAfter of the first sighting")
+	}
+	now = seen.Add(supervisorpkg.StaleAfter)
+	if markerHolds(t, a) {
+		t.Fatal("the hold began anew once the clock passed the marker's mtime")
+	}
+}
+
+// TestSupervisorPackageOverridesStaleMarker (PDK-479): a supervisor upgrade that overrides a stale unreadable marker
+// logs a warning, and the marker it writes holds — already while systemd-run starts the helper — a further upgrade back
+// although its start lies ahead of the clock.
+func TestSupervisorPackageOverridesStaleMarker(t *testing.T) {
+	a, _, launched := supervisorAgent(t, "")
+	seen := time.Now().Add(-time.Hour)
+	now := seen
+	a.d.Now = func() time.Time { return now }
+	writeUnreadableMarker(t, a, -10*time.Minute)
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 0 {
+		t.Fatalf("started while the marker held: %v", *launched)
+	}
+	now = seen.Add(supervisorpkg.StaleAfter)
+	run := a.d.RunUnit
+	heldAtLaunch := false
+	a.d.RunUnit = func(ctx context.Context, name string, args ...string) error {
+		heldAtLaunch, _ = a.supervisorUpgradeHolds()
+		return run(ctx, name, args...)
+	}
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	a.handleSupervisorPackage(context.Background())
+	slog.SetDefault(prev)
+	if !heldAtLaunch {
+		t.Fatal("the new marker did not hold while systemd-run started the helper (review 1, m1)")
+	}
+	if len(*launched) != 1 {
+		t.Fatalf("not started over the stale marker: %v", *launched)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "unreadable supervisor upgrade marker is stale") {
+		t.Fatalf("no warning: %s", logs.String())
+	}
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 1 {
+		t.Fatalf("started again while the new upgrade runs: %v", *launched)
+	}
+}
+
+// TestSupervisorResultUnreadable (PDK-479): a corrupt supervisor-upgrade-result.json — invalid JSON or a field of the
+// wrong type — is discarded with a warning and no event, and no longer holds the next supervisor upgrade back. One that
+// cannot be read for an I/O error is kept and still holds (review 1, E2): it may hide a failure that must be reported.
+func TestSupervisorResultUnreadable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		write   func(t *testing.T, file string)
+		discard bool
+	}{
+		{"syntax error", func(t *testing.T, file string) {
+			if err := fsutil.WriteFile(file, []byte("{not json"), 0o600, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+		{"type error", func(t *testing.T, file string) {
+			if err := fsutil.WriteFile(file, []byte(`{"version":5}`), 0o600, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+		{"malformed time", func(t *testing.T, file string) {
+			if err := fsutil.WriteFile(file, []byte(`{"at":"2026-13-99T00:00:00Z"}`), 0o600, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+		{"time of the wrong type", func(t *testing.T, file string) {
+			if err := fsutil.WriteFile(file, []byte(`{"at":123}`), 0o600, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+		{"I/O error", func(t *testing.T, file string) {
+			if err := os.MkdirAll(file, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, launched := supervisorAgent(t, "")
+			file := a.d.Layout.SupervisorUpgradeResult()
+			tc.write(t, file)
+			var logs strings.Builder
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			a.reportSupervisorUpgrade()
+			slog.SetDefault(prev)
+			want := "level=ERROR msg=\"reading the supervisor upgrade result failed\""
+			if tc.discard {
+				want = "level=WARN msg=\"the supervisor upgrade result is corrupt; it is discarded\""
+			}
+			if !strings.Contains(logs.String(), want) {
+				t.Fatalf("log %q missing: %s", want, logs.String())
+			}
+			if _, err := os.Stat(file); os.IsNotExist(err) != tc.discard {
+				t.Fatalf("discarded %v, want %v", os.IsNotExist(err), tc.discard)
+			}
+			for _, e := range spooled(t, a) {
+				if e.Type == protocol.EventAgentSupervisorUpdated {
+					t.Fatalf("reported: %+v", e)
+				}
+			}
+			a.handleSupervisorPackage(context.Background())
+			if started := len(*launched) == 1; started != tc.discard {
+				t.Fatalf("started %v, want %v: %v", started, tc.discard, *launched)
+			}
+		})
+	}
+}
+
+// TestSupervisorPackageWaitsForConversion (PDK-479, review 1 M1): a readable marker that turns stale between
+// reportSupervisorUpgrade and handleSupervisorPackage in the same cycle is not overwritten by a new upgrade; the next
+// cycle converts it into install_failed, reports it and does not install the failed version again.
+func TestSupervisorPackageWaitsForConversion(t *testing.T) {
+	a, g, launched := supervisorAgent(t, "")
+	start := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	now := start.Add(supervisorpkg.StaleAfter - time.Second)
+	a.d.Now = func() time.Time { return now }
+	marker, err := json.Marshal(supervisorpkg.Marker{Version: buildinfo.Version, FromVersion: "0.0.0~alpha.1", StartedAt: start})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsutil.WriteFile(a.d.Layout.SupervisorUpgrade(), marker, 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a.reportSupervisorUpgrade()
+	if r, err := supervisorpkg.ReadResult(a.d.Layout); err != nil || r != nil {
+		t.Fatalf("fresh marker converted: %+v %v", r, err)
+	}
+	now = start.Add(supervisorpkg.StaleAfter)
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 0 {
+		t.Fatalf("started over the unconverted marker: %v", *launched)
+	}
+	if m, err := supervisorpkg.ReadMarker(a.d.Layout); err != nil || m == nil || !m.StartedAt.Equal(start) {
+		t.Fatalf("marker overwritten: %+v %v", m, err)
+	}
+	a.Cycle(context.Background())
+	ev := eventsOf(g, protocol.EventAgentSupervisorUpdated)
+	if len(ev) != 1 || string(ev[0].Data) != `{"from_version":"0.0.0~alpha.1","outcome":"install_failed","version":"`+buildinfo.Version+`"}` {
+		t.Fatalf("events %+v", ev)
+	}
+	if a.st.FailedSupervisorVersion != buildinfo.Version || len(*launched) != 0 {
+		t.Fatalf("failed version %q, launched %v", a.st.FailedSupervisorVersion, *launched)
+	}
+}
+
+// TestSupervisorMarkerClockSetBack (PDK-479, review 1 E1): a wall clock set back by less than a marker's age leaves its
+// start in the past but shortens the age; the hold still ends StaleAfter after the agent first saw the marker, also
+// after repeated small steps back.
+func TestSupervisorMarkerClockSetBack(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		steps []time.Duration
+	}{
+		{"one step", []time.Duration{19 * time.Minute}},
+		{"repeated steps", []time.Duration{4 * time.Minute, 4 * time.Minute, 4 * time.Minute, 4 * time.Minute}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := supervisorAgent(t, "")
+			start := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+			elapsed := time.Duration(0)
+			wall := start.Add(time.Minute)
+			a.d.Now = func() time.Time { return wall }
+			a.d.Monotonic = func() time.Time { return start.Add(elapsed) }
+			writeSupervisorMarker(t, a, start)
+			if !markerHolds(t, a) {
+				t.Fatal("not held at the first sighting")
+			}
+			for _, step := range tc.steps {
+				elapsed += 5 * time.Minute
+				wall = wall.Add(5*time.Minute - step)
+				if !markerHolds(t, a) {
+					t.Fatal("not held within StaleAfter of the first sighting")
+				}
+			}
+			advance := supervisorpkg.StaleAfter - time.Second - elapsed
+			elapsed, wall = elapsed+advance, wall.Add(advance)
+			if !markerHolds(t, a) {
+				t.Fatal("not held a second before StaleAfter after the first sighting")
+			}
+			elapsed, wall = elapsed+time.Second, wall.Add(time.Second)
+			if wall.Sub(start) >= supervisorpkg.StaleAfter {
+				t.Fatalf("the wall clock alone would release it: %v", wall.Sub(start))
+			}
+			if markerHolds(t, a) {
+				t.Fatal("held StaleAfter after the first sighting")
+			}
+			a.reportSupervisorUpgrade()
+			if r, err := supervisorpkg.ReadResult(a.d.Layout); err != nil || r == nil || r.Outcome != protocol.SupervisorOutcomeInstallFailed {
+				t.Fatalf("not counted as failed: %+v %v", r, err)
 			}
 		})
 	}

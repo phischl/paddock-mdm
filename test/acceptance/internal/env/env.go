@@ -52,10 +52,21 @@ var TOTPKeyFiles = map[string]string{
 var (
 	totpMu sync.Mutex
 	totps  = map[string]*authflow.TOTP{}
+	// tempPasswords are the passwords of the temporary users made known with AddUser.
+	tempPasswords = map[string]string{}
 )
 
-// TOTP returns the TOTP generator of a dev user, shared by every caller of this process so that no code is used
-// twice (Authentik refuses a replayed code).
+// AddUser makes a temporary Authentik user with a TOTP authenticator known to Password, TOTP and Login, so the
+// helpers for dev users (step-up, device login) serve it too.
+func AddUser(user, password string, totp *authflow.TOTP) {
+	totpMu.Lock()
+	defer totpMu.Unlock()
+	totps[user] = totp
+	tempPasswords[user] = password
+}
+
+// TOTP returns the TOTP generator of a dev user or of a user added with AddUser, shared by every caller of this
+// process so that no code is used twice (Authentik refuses a replayed code).
 func TOTP(user string) (*authflow.TOTP, error) {
 	totpMu.Lock()
 	defer totpMu.Unlock()
@@ -146,8 +157,14 @@ func (t headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(r)
 }
 
-// Password returns the password of a dev user.
+// Password returns the password of a dev user or of a user added with AddUser.
 func Password(user string) (string, error) {
+	totpMu.Lock()
+	pw, ok := tempPasswords[user]
+	totpMu.Unlock()
+	if ok {
+		return pw, nil
+	}
 	f, ok := passwordFiles[user]
 	if !ok {
 		return "", fmt.Errorf("env: unknown dev user %s", user)
@@ -437,6 +454,37 @@ func (a *Authentik) TestPolicy(ctx context.Context, policyPK string, userPK int)
 	err := a.do(ctx, http.MethodPost, "/policies/all/"+url.PathEscape(policyPK)+"/test/",
 		map[string]any{"user": userPK, "context": map[string]any{}}, &res)
 	return res.Passing, err
+}
+
+// TestPropertyMapping evaluates the property mapping named name through Authentik's mapping test endpoint (the
+// mapping as stored, as a dry run without user and token, like the discovery endpoint's evaluation for
+// claims_supported) and returns whether it succeeded and its result or error.
+func (a *Authentik) TestPropertyMapping(ctx context.Context, name string) (bool, string, error) {
+	var page struct {
+		Results []struct {
+			PK   string `json:"pk"`
+			Name string `json:"name"`
+		} `json:"results"`
+	}
+	if err := a.Get(ctx, "/propertymappings/all/?name="+url.QueryEscape(name), &page); err != nil {
+		return false, "", err
+	}
+	pk := ""
+	for _, m := range page.Results {
+		if m.Name == name {
+			pk = m.PK
+		}
+	}
+	if pk == "" {
+		return false, "", fmt.Errorf("property mapping %q not found", name)
+	}
+	var res struct {
+		Successful bool   `json:"successful"`
+		Result     string `json:"result"`
+	}
+	err := a.do(ctx, http.MethodPost, "/propertymappings/all/"+url.PathEscape(pk)+"/test/",
+		map[string]any{"context": map[string]any{}}, &res)
+	return res.Successful, res.Result, err
 }
 
 // GroupPK returns the pk of a group ("" if missing).

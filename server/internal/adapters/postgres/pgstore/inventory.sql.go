@@ -12,6 +12,33 @@ import (
 	"github.com/google/uuid"
 )
 
+const countDeviceInventory = `-- name: CountDeviceInventory :one
+SELECT coalesce((SELECT r.external_id FROM device_inventory_ref r WHERE r.device_id = $1), '')::text AS external_id,
+       (SELECT count(*) FROM installed_software s WHERE s.device_id = $1)::bigint AS software,
+       (SELECT count(*) FROM vulnerability_finding f WHERE f.device_id = $1)::bigint AS findings,
+       (SELECT count(*) FROM inventory_policy_result p WHERE p.device_id = $1)::bigint AS policy_results
+`
+
+type CountDeviceInventoryRow struct {
+	ExternalID    string
+	Software      int64
+	Findings      int64
+	PolicyResults int64
+}
+
+// The inventory rows of a device and its Fleet host reference (” without one).
+func (q *Queries) CountDeviceInventory(ctx context.Context, deviceID uuid.UUID) (CountDeviceInventoryRow, error) {
+	row := q.db.QueryRow(ctx, countDeviceInventory, deviceID)
+	var i CountDeviceInventoryRow
+	err := row.Scan(
+		&i.ExternalID,
+		&i.Software,
+		&i.Findings,
+		&i.PolicyResults,
+	)
+	return i, err
+}
+
 const countDeviceSoftware = `-- name: CountDeviceSoftware :one
 SELECT count(*) FROM (
   SELECT 1 FROM installed_software
@@ -62,6 +89,40 @@ func (q *Queries) CountDeviceVulnerabilities(ctx context.Context, arg CountDevic
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countDevicesWithVulnerability = `-- name: CountDevicesWithVulnerability :one
+SELECT count(DISTINCT f.device_id)::int FROM vulnerability_finding f
+JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+WHERE f.cve = $1
+`
+
+// The organization's devices (not findings) that carry cve; the count of a recorded CVE device-list view
+// (plan M10 amendment 2026-10-31, PDK-606).
+func (q *Queries) CountDevicesWithVulnerability(ctx context.Context, cve string) (int32, error) {
+	row := q.db.QueryRow(ctx, countDevicesWithVulnerability, cve)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countInventoryHoldRound = `-- name: CountInventoryHoldRound :one
+UPDATE retention_inventory_hold SET unchanged_rounds = unchanged_rounds + 1
+WHERE device_id = $1 AND last_answer = $2
+RETURNING unchanged_rounds
+`
+
+type CountInventoryHoldRoundParams struct {
+	DeviceID   uuid.UUID
+	LastAnswer string
+}
+
+// Counts one more round without a change of the held answer and returns the rounds counted.
+func (q *Queries) CountInventoryHoldRound(ctx context.Context, arg CountInventoryHoldRoundParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countInventoryHoldRound, arg.DeviceID, arg.LastAnswer)
+	var unchanged_rounds int32
+	err := row.Scan(&unchanged_rounds)
+	return unchanged_rounds, err
 }
 
 const countSoftware = `-- name: CountSoftware :one
@@ -138,6 +199,49 @@ func (q *Queries) CountVulnerabilityDevices(ctx context.Context, arg CountVulner
 	return count, err
 }
 
+const deleteDeviceInventory = `-- name: DeleteDeviceInventory :one
+WITH s AS (DELETE FROM installed_software x WHERE x.device_id = $1 RETURNING 1),
+     f AS (DELETE FROM vulnerability_finding x WHERE x.device_id = $1 RETURNING 1),
+     p AS (DELETE FROM inventory_policy_result x WHERE x.device_id = $1 RETURNING 1),
+     r AS (DELETE FROM device_inventory_ref x WHERE x.device_id = $1 AND NOT $2::boolean RETURNING 1)
+SELECT (SELECT count(*) FROM s)::bigint AS software, (SELECT count(*) FROM f)::bigint AS findings,
+       (SELECT count(*) FROM p)::bigint AS policy_results, (SELECT count(*) FROM r)::bigint AS refs
+`
+
+type DeleteDeviceInventoryParams struct {
+	DeviceID uuid.UUID
+	KeepRef  bool
+}
+
+type DeleteDeviceInventoryRow struct {
+	Software      int64
+	Findings      int64
+	PolicyResults int64
+	Refs          int64
+}
+
+// keep_ref keeps the Fleet host reference, so the device is listed again until its host is decided.
+func (q *Queries) DeleteDeviceInventory(ctx context.Context, arg DeleteDeviceInventoryParams) (DeleteDeviceInventoryRow, error) {
+	row := q.db.QueryRow(ctx, deleteDeviceInventory, arg.DeviceID, arg.KeepRef)
+	var i DeleteDeviceInventoryRow
+	err := row.Scan(
+		&i.Software,
+		&i.Findings,
+		&i.PolicyResults,
+		&i.Refs,
+	)
+	return i, err
+}
+
+const deleteInventoryHold = `-- name: DeleteInventoryHold :exec
+DELETE FROM retention_inventory_hold WHERE device_id = $1
+`
+
+func (q *Queries) DeleteInventoryHold(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteInventoryHold, deviceID)
+	return err
+}
+
 const deleteMissingFindings = `-- name: DeleteMissingFindings :exec
 DELETE FROM vulnerability_finding f
 WHERE f.device_id = $1
@@ -209,6 +313,25 @@ func (q *Queries) DeviceExists(ctx context.Context, id uuid.UUID) (bool, error) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const fleetHostInUse = `-- name: FleetHostInUse :one
+SELECT paddock_fleet_host_in_use($1::uuid, $2::text)::text
+`
+
+type FleetHostInUseParams struct {
+	RetiredDevice uuid.UUID
+	Host          string
+}
+
+// Whether a device of any organization other than retired_device still uses the Fleet host ('ref') or may use it
+// through the retired device's hardware ('hardware'), or neither ('none') (platform pool, plan M10 amendments
+// 2026-10-30): never another organization's rows.
+func (q *Queries) FleetHostInUse(ctx context.Context, arg FleetHostInUseParams) (string, error) {
+	row := q.db.QueryRow(ctx, fleetHostInUse, arg.RetiredDevice, arg.Host)
+	var column_1 string
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const getDeviceHardware = `-- name: GetDeviceHardware :one
@@ -297,6 +420,27 @@ func (q *Queries) InventoryDevices(ctx context.Context, uuids []string) ([]Inven
 		return nil, err
 	}
 	return items, nil
+}
+
+const inventoryHold = `-- name: InventoryHold :one
+SELECT coalesce((SELECT h.last_answer FROM retention_inventory_hold h WHERE h.device_id = $1), '')::text AS last_answer,
+       coalesce((SELECT h.unchanged_rounds FROM retention_inventory_hold h WHERE h.device_id = $1), 0)::int AS unchanged_rounds,
+       coalesce((SELECT h.retired_at FROM retention_inventory_hold h WHERE h.device_id = $1), 'epoch')::timestamptz AS retired_at
+`
+
+type InventoryHoldRow struct {
+	LastAnswer      string
+	UnchangedRounds int32
+	RetiredAt       time.Time
+}
+
+// The answer the retention round last recorded an event for while it keeps a retired device's Fleet host, ” without
+// one (plan M10 amendment 2026-10-30, PDK-583 round 2).
+func (q *Queries) InventoryHold(ctx context.Context, deviceID uuid.UUID) (InventoryHoldRow, error) {
+	row := q.db.QueryRow(ctx, inventoryHold, deviceID)
+	var i InventoryHoldRow
+	err := row.Scan(&i.LastAnswer, &i.UnchangedRounds, &i.RetiredAt)
+	return i, err
 }
 
 const listAgentNotRunning = `-- name: ListAgentNotRunning :many
@@ -466,6 +610,61 @@ func (q *Queries) ListDeviceVulnerabilities(ctx context.Context, arg ListDeviceV
 			&i.CvssVector,
 			&i.FirstSeenAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRetiredDevicesWithInventory = `-- name: ListRetiredDevicesWithInventory :many
+
+SELECT d.id, d.hostname, d.state_changed_at FROM device d
+WHERE d.state = 'retired' AND d.state_changed_at < $1
+  AND (d.state_changed_at, d.id) > ($2::timestamptz, $3::uuid)
+  AND (EXISTS (SELECT 1 FROM device_inventory_ref r WHERE r.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM installed_software s WHERE s.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM vulnerability_finding f WHERE f.device_id = d.id)
+    OR EXISTS (SELECT 1 FROM inventory_policy_result p WHERE p.device_id = d.id))
+ORDER BY d.state_changed_at, d.id
+LIMIT $4
+`
+
+type ListRetiredDevicesWithInventoryParams struct {
+	Cutoff       time.Time
+	AfterChanged time.Time
+	AfterID      uuid.UUID
+	MaxDevices   int32
+}
+
+type ListRetiredDevicesWithInventoryRow struct {
+	ID             uuid.UUID
+	Hostname       string
+	StateChangedAt time.Time
+}
+
+// Retention of retired devices' inventory (ADR 0032, plan M10 decision 16). The sync never writes the rows of a device
+// that is not active or quarantined, so a retired device's rows only shrink.
+// The retired devices of the organization whose retirement is older than cutoff and that still have inventory rows,
+// longest retired first, after the keyset (after_changed, after_id) of the previous page.
+func (q *Queries) ListRetiredDevicesWithInventory(ctx context.Context, arg ListRetiredDevicesWithInventoryParams) ([]ListRetiredDevicesWithInventoryRow, error) {
+	rows, err := q.db.Query(ctx, listRetiredDevicesWithInventory,
+		arg.Cutoff,
+		arg.AfterChanged,
+		arg.AfterID,
+		arg.MaxDevices,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRetiredDevicesWithInventoryRow{}
+	for rows.Next() {
+		var i ListRetiredDevicesWithInventoryRow
+		if err := rows.Scan(&i.ID, &i.Hostname, &i.StateChangedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -698,6 +897,24 @@ type MarkAgentNotRunningReportedParams struct {
 
 func (q *Queries) MarkAgentNotRunningReported(ctx context.Context, arg MarkAgentNotRunningReportedParams) error {
 	_, err := q.db.Exec(ctx, markAgentNotRunningReported, arg.DeviceID, arg.PolicyKey)
+	return err
+}
+
+const setInventoryHold = `-- name: SetInventoryHold :exec
+INSERT INTO retention_inventory_hold (device_id, organization_id, last_answer, retired_at, unchanged_rounds, last_event_at)
+SELECT d.id, d.organization_id, $1, d.state_changed_at, 0, now() FROM device d WHERE d.id = $2
+ON CONFLICT (device_id) DO UPDATE SET last_answer = excluded.last_answer, retired_at = excluded.retired_at,
+  unchanged_rounds = 0, last_event_at = now()
+`
+
+type SetInventoryHoldParams struct {
+	LastAnswer string
+	DeviceID   uuid.UUID
+}
+
+// Holds the answer with the device's current retirement.
+func (q *Queries) SetInventoryHold(ctx context.Context, arg SetInventoryHoldParams) error {
+	_, err := q.db.Exec(ctx, setInventoryHold, arg.LastAnswer, arg.DeviceID)
 	return err
 }
 

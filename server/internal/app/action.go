@@ -33,7 +33,7 @@ type Scope int
 
 const (
 	ScopeOrg      Scope = iota // OrgPool.InOrg
-	ScopePlatform              // PlatformPool.InPlatform
+	ScopePlatform              // PlatformPool.InPlatform, or the transactions of WithPlatformScope
 )
 
 // ActionSpec describes one privileged action.
@@ -97,6 +97,8 @@ type ActionRunner struct {
 	// externalDelay is the development-only test hook PADDOCK_TEST_EXTERNAL_DELAY (plan M0 §8, A3).
 	externalDelay time.Duration
 	stepUpWindow  time.Duration
+	// platformTx replaces platform.InPlatform for ScopePlatform (WithPlatformScope).
+	platformTx func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error
 }
 
 // RunnerOption configures an ActionRunner.
@@ -115,6 +117,13 @@ func WithStepUpWindow(d time.Duration) RunnerOption {
 
 // StepUpWindow is how long a step-up satisfies RequiresStepUp.
 func (r *ActionRunner) StepUpWindow() time.Duration { return r.stepUpWindow }
+
+// WithPlatformScope makes ScopePlatform actions run in the transactions of tx instead of PlatformPool.InPlatform: the
+// notifier records the events of platform destinations in the same transaction as their delivery state, which only its
+// own role may write (db.NotifierPool.InPlatformScope, plan M9 amendment section E).
+func WithPlatformScope(tx func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error) RunnerOption {
+	return func(r *ActionRunner) { r.platformTx = tx }
+}
 
 // WithClock replaces time.Now (tests).
 func WithClock(now func() time.Time) RunnerOption { return func(r *ActionRunner) { r.now = now } }
@@ -429,6 +438,98 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 	return recorded, nil
 }
 
+// RecordReadOnce records a read of sensitive data at most once per window: authorization as in RunTx (a denied role
+// is recorded as denied), then one organization transaction runs enabled and, when it reports the recording switched
+// on, claim. claim returns false when the window key existed, and then nothing is recorded (no action, no outbox
+// row); true records outcome success in the same transaction. A claim error (a refused read, a failed claim) rolls
+// back, so no window is claimed, and is recorded as failure (plan M10 decision 18, amendment 2026-10-30 PDK-139 round
+// 2). Any error before enabled has read the switch (a cancellation, a failed transaction start or settings read)
+// records nothing and is returned, so the read fails: whether it was to be recorded is not known then. Once the
+// switch was read as off, nothing is recorded whatever fails afterwards (amendment 2026-10-31, PDK-139 round 3).
+func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
+	enabled func(ctx context.Context, q *pgstore.Queries) (bool, error),
+	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok {
+		return false, problem.Unauthenticated
+	}
+	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
+	if err := r.authorize(p, ScopeOrg, spec, rec); err != nil {
+		r.recordFinal(ctx, p, ScopeOrg, rec, err)
+		return false, err
+	}
+	defer r.recordPanic(ctx, p, ScopeOrg, rec)
+	recorded, on := false, false
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		switchedOn, err := enabled(ctx, q)
+		if err != nil {
+			return err
+		}
+		if on = switchedOn; !on {
+			return nil
+		}
+		fresh, err := claim(ctx, q, rec)
+		if err != nil || !fresh {
+			return err
+		}
+		recorded = true
+		return r.insertFinished(ctx, q, rec, nil)
+	})
+	if err != nil {
+		// on is set only once the switch was read as on: before that, or with it off, the read is not recorded.
+		if !on {
+			return false, err
+		}
+		r.recordFinal(ctx, p, ScopeOrg, rec, err)
+		return false, err
+	}
+	return recorded, nil
+}
+
+// RecordAllOnce records the successful events of specs (none is allowed) in one transaction of scope together with
+// the state change claim makes. Contract:
+//   - system principals only: any other principal is refused with problem.Unauthenticated, and ScopeOrg without an
+//     organization with problem.NoOrganization (a missing context fails closed);
+//   - all events or none: they are recorded exactly when claim reports true and the transaction commits; claim false
+//     (or an error) records nothing, not even a failure event;
+//   - claim false means its guarded change no longer applies: another replica, or an earlier attempt, already made
+//     that transition and recorded its events, or another change overtook it.
+//
+// It serves system-observed transitions that must be recorded exactly once, such as the notifier's delivery, stall
+// and resumption events (plan M9 decision 22).
+func (r *ActionRunner) RecordAllOnce(ctx context.Context, scope Scope, specs []ActionSpec,
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return false, problem.Unauthenticated
+	}
+	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
+		return false, problem.NoOrganization
+	}
+	recs := make([]*recorder, len(specs))
+	for i, spec := range specs {
+		recs[i] = r.newRecorder(ctx, p, scope, spec)
+	}
+	recorded := false
+	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
+		fresh, err := claim(ctx, q)
+		if err != nil || !fresh {
+			return err
+		}
+		for _, rec := range recs {
+			if err := r.insertFinished(ctx, q, rec, nil); err != nil {
+				return err
+			}
+		}
+		recorded = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return recorded, nil
+}
+
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
 // login) and reports false. After (optional) runs when the event was recorded.
@@ -635,6 +736,9 @@ func (r *ActionRunner) inScope(ctx context.Context, p principal.Principal, scope
 	fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	if scope == ScopeOrg && p.OrganizationID != uuid.Nil {
 		return r.org.InOrg(ctx, fn)
+	}
+	if r.platformTx != nil {
+		return r.platformTx(ctx, fn)
 	}
 	return r.platform.InPlatform(ctx, fn)
 }

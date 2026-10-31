@@ -1699,3 +1699,29 @@ func TestRequestForTheActiveVersionIsRemovedWithoutAResult(t *testing.T) {
 		t.Fatalf("current → %s, want B", f.active())
 	}
 }
+
+// TestRestartWithRequestWithoutReleaseDirectory (PDK-480): a crash between cleanup's two removals leaves request.json
+// without staging/<version>. The restart reports signature_invalid (accepted residual, ADR 0024 amendment), activates
+// nothing and does not wedge: the request is consumed and a later request is processed normally.
+func TestRestartWithRequestWithoutReleaseDirectory(t *testing.T) {
+	f := newFake(t)
+	request := filepath.Join(f.cfg.Staging, "request.json")
+	if err := os.WriteFile(request, []byte(`{"version":"1.1.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeSignatureInvalid || r.Version != "1.1.0" || r.FromVersion != "1.0.0" {
+		t.Fatalf("result %+v", r)
+	}
+	if f.active() != "A" {
+		t.Fatalf("switched to %s", f.active())
+	}
+	f.expectStagingClean()
+
+	_ = os.Remove(f.cfg.Result)
+	f.stageAfterCheckin("1.2.0", script("1.2.0", 0, f.good()))
+	f.waitFor("the new agent checked in", f.checkedIn)
+	if r := f.endProbation("B"); r.Outcome != outcomeUpdated || r.Version != "1.2.0" {
+		t.Fatalf("later update %+v", r)
+	}
+}

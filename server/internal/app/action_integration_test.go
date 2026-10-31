@@ -445,11 +445,26 @@ func TestRunExternalSuccess(t *testing.T) {
 			return nil
 		},
 		func(context.Context) error { external = true; return nil },
-		func(context.Context, *pgstore.Queries, app.Recorder, error) error { return nil })
+		func(context.Context, *pgstore.Queries, app.Recorder, error) error {
+			// The finishing transaction outlasts the millisecond the event's occurred_at is truncated to, so a finish
+			// time taken at the transaction's start would land before occurred_at.
+			time.Sleep(5 * time.Millisecond)
+			return nil
+		})
 	if err != nil || !external {
 		t.Fatalf("RunExternal = %v, external called %v", err, external)
 	}
-	expectOne(t, h, audit.OutcomeSuccess, "")
+	ev := expectOne(t, h, audit.OutcomeSuccess, "")
+	// Migration 00084: the database sets finished_at, never before the event's occurred_at, so the retention round
+	// (by finished_at) keeps the row at least as long as the audit index (by occurred_at) shows the event.
+	var started, finished time.Time
+	if err := h.super.QueryRow(context.Background(), "SELECT started_at, finished_at FROM action WHERE id = $1", ev.EventID).
+		Scan(&started, &finished); err != nil {
+		t.Fatal(err)
+	}
+	if finished.Before(ev.OccurredAt) || finished.Before(started) || finished.Sub(ev.OccurredAt) > time.Minute {
+		t.Fatalf("finished_at %s, want at or just after occurred_at %s and after started_at %s", finished, ev.OccurredAt, started)
+	}
 }
 
 // TestRunExternalStoresTheSource: the started row of an external action already carries the source of the principal,
@@ -501,5 +516,62 @@ func TestRunExternalDenied(t *testing.T) {
 	}
 	if ev := expectOne(t, h, audit.OutcomeDenied, "forbidden"); ev.OrganizationID != h.org {
 		t.Fatalf("denied platform action recorded in %s, want the caller's organization %s", ev.OrganizationID, h.org)
+	}
+}
+
+// TestRecordAllOnce: the events are recorded in the claim's transaction only when the claim applies, and with the
+// platform scope for a system principal without an organization.
+func TestRecordAllOnce(t *testing.T) {
+	h := newHarness(t)
+	ctx := principal.With(context.Background(), principal.Principal{Kind: principal.KindSystem, Display: "notifier", OrganizationID: h.org})
+	spec := func(code audit.Code) app.ActionSpec {
+		return app.ActionSpec{Code: code, CorrelationID: "corr-" + t.Name(), Params: map[string]any{"destination": "d"}}
+	}
+	specs := []app.ActionSpec{spec(audit.CodeNotificationDelivered), spec(audit.CodeNotificationDestinationResumed)}
+	stale := func(context.Context, *pgstore.Queries) (bool, error) { return false, nil }
+	if ok, err := h.runner.RecordAllOnce(ctx, app.ScopeOrg, specs, stale); ok || err != nil {
+		t.Fatalf("stale claim: %t %v", ok, err)
+	}
+	if actions, _ := h.recorded(t, "corr-"+t.Name()); len(actions) != 0 {
+		t.Fatalf("a stale claim recorded %d actions", len(actions))
+	}
+	fresh := func(context.Context, *pgstore.Queries) (bool, error) { return true, nil }
+	if ok, err := h.runner.RecordAllOnce(ctx, app.ScopeOrg, specs, fresh); !ok || err != nil {
+		t.Fatalf("fresh claim: %t %v", ok, err)
+	}
+	actions, events := h.recorded(t, "corr-"+t.Name())
+	if len(actions) != 2 || len(events) != 2 || actions[0].org != h.org || actions[1].org != h.org ||
+		events[1].Outcome != audit.OutcomeSuccess {
+		t.Fatalf("actions %+v events %d", actions, len(events))
+	}
+	failing := func(context.Context, *pgstore.Queries) (bool, error) { return true, errors.New("boom") }
+	if ok, err := h.runner.RecordAllOnce(ctx, app.ScopeOrg, specs, failing); ok || err == nil {
+		t.Fatalf("failing claim: %t %v", ok, err)
+	}
+	if actions, _ := h.recorded(t, "corr-"+t.Name()); len(actions) != 2 {
+		t.Fatalf("a failing claim recorded events (%d actions)", len(actions))
+	}
+	platform := principal.With(context.Background(), principal.Principal{Kind: principal.KindSystem, Display: "notifier"})
+	if ok, err := h.runner.RecordAllOnce(platform, app.ScopePlatform, specs[:1], fresh); !ok || err != nil {
+		t.Fatalf("platform: %t %v", ok, err)
+	}
+	actions, _ = h.recorded(t, "corr-"+t.Name())
+	platformActions := 0
+	for _, a := range actions {
+		if a.org == audit.PlatformOrganizationID {
+			platformActions++
+		}
+	}
+	if len(actions) != 3 || platformActions != 1 {
+		t.Fatalf("platform action %+v", actions)
+	}
+	if _, err := h.runner.RecordAllOnce(h.admin(principal.RoleOrgAdmin), app.ScopeOrg, specs, fresh); !errors.Is(err, problem.Unauthenticated) {
+		t.Fatalf("an administrator recorded system events: %v", err)
+	}
+	if _, err := h.runner.RecordAllOnce(platform, app.ScopeOrg, specs, fresh); !errors.Is(err, problem.NoOrganization) {
+		t.Fatalf("an organization scope without organization: %v", err)
+	}
+	if actions, _ := h.recorded(t, "corr-"+t.Name()); len(actions) != 3 {
+		t.Fatalf("a refused call recorded events (%d actions)", len(actions))
 	}
 }

@@ -187,10 +187,16 @@ const (
 	EventAgentUninstalled = "agent.uninstalled"
 	// In-place encryption (plan M8e decision 9): the phases of a conversion; each event carries conversion_id.
 	EventDiskConversionPrepared  = "disk.conversion_prepared"  // data: {conversion_id, layout, volume, data_bytes}
-	EventDiskConversionStarted   = "disk.conversion_started"   // data: {conversion_id, volume, init_s, init_result}
+	EventDiskConversionStarted   = "disk.conversion_started"   // data: {conversion_id, volume, init_s, init_result, after_cancel}
 	EventDiskConversionCompleted = "disk.conversion_completed" // data: {conversion_id, volume, data_bytes, duration_s}
 	EventDiskConversionFailed    = "disk.conversion_failed"    // data: {conversion_id, stage, reason, volume}
 	EventDiskConversionAborted   = "disk.conversion_aborted"   // data: {conversion_id, by}
+	// The abort could not neutralize the prepared initrds (plan M8e item 18, amendment 2026-10-30): a restart before
+	// the cleanup finished may still encrypt the disk.
+	EventDiskConversionNeutralizeFailed = "disk.conversion_neutralize_failed" // data: {conversion_id, reason}
+	// The unlock path of a converted disk could not be reinstalled after a cleanup had removed it (plan M8e decision 18,
+	// amendment 2026-10-30): an initrd the disarm of a cancelled conversion neutralized cannot open the disk until then.
+	EventDiskConversionUnlockRestoreFailed = "disk.conversion_unlock_restore_failed" // data: {conversion_id, reason}
 )
 
 // Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
@@ -274,7 +280,7 @@ var EventTypes = []string{
 	EventAgentSupervisorUpdated,
 	EventAgentUninstalled,
 	EventDiskConversionPrepared, EventDiskConversionStarted, EventDiskConversionCompleted, EventDiskConversionFailed,
-	EventDiskConversionAborted,
+	EventDiskConversionAborted, EventDiskConversionNeutralizeFailed, EventDiskConversionUnlockRestoreFailed,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass

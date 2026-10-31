@@ -104,35 +104,6 @@ func (q *Queries) InsertDeviceEventSeen(ctx context.Context, arg InsertDeviceEve
 	return result.RowsAffected(), nil
 }
 
-const listDeviceSeqs = `-- name: ListDeviceSeqs :many
-SELECT device_id, last_seq FROM device_status WHERE last_seq > 0 ORDER BY device_id
-`
-
-type ListDeviceSeqsRow struct {
-	DeviceID uuid.UUID
-	LastSeq  int64
-}
-
-func (q *Queries) ListDeviceSeqs(ctx context.Context) ([]ListDeviceSeqsRow, error) {
-	rows, err := q.db.Query(ctx, listDeviceSeqs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListDeviceSeqsRow{}
-	for rows.Next() {
-		var i ListDeviceSeqsRow
-		if err := rows.Scan(&i.DeviceID, &i.LastSeq); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const setClockDrift = `-- name: SetClockDrift :execrows
 UPDATE device_status SET clock_drift_since = $1
 WHERE device_id = $2 AND clock_drift_since IS NULL AND abs(clock_offset_s) > $3::bigint

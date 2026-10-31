@@ -51,8 +51,15 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	}
 	// Development stacks count the staleness thresholds in minutes (plan M5b decision 9, gate U4).
 	stalenessUnit := config.StalenessUnit(l, common)
-	// Development stacks count the retention days in seconds (plan M8d decision 19, the login history purge gate).
+	// Development stacks count the retention days in seconds (plan M8d decision 19) and run the retention round every
+	// 15 s unless PADDOCK_RETENTION_INTERVAL says otherwise (plan M10 amendment A3, gates TestLoginHistory and R1).
 	retentionDay := config.RetentionUnit(l, common)
+	retentionDefault := worker.RetentionInterval
+	if retentionDay < time.Hour {
+		retentionDefault = 15 * time.Second
+	}
+	retentionEvery := config.RetentionInterval(l, common, retentionDefault)
+	indexRetention := workerIndexRetention(l)
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -112,11 +119,6 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
 		min(worker.StalenessInterval, stalenessUnit/4)).Then(worker.NewFindings(app.NewFindings(runner, pool), pool, platformPool).Round)
 	eventGaps := worker.NewEventGaps(app.NewEventGaps(runner, pool), pool, platformPool, min(worker.StalenessInterval, stalenessUnit/4))
-	loginHistoryEvery := worker.LoginHistoryInterval
-	if retentionDay < time.Hour {
-		loginHistoryEvery = 15 * time.Second
-	}
-	loginHistory := worker.NewLoginHistory(app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, loginHistoryEvery)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	reconcileAK := authentik.New(authentikURL, authentikToken).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
@@ -124,6 +126,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), app.NewRoleMembership(runner, pool, platformPool, ak),
 		ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
+	retention := worker.NewRetention(app.NewRetention(runner, pool, platformPool, fleetClient, retentionDay, indexRetention),
+		app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, retentionEvery)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool),
 		app.NewVulnerabilitySummary(runner), pool, platformPool, inventoryEvery)
 	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
@@ -160,7 +164,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		dms.Run,
 		staleness.Run,
 		eventGaps.Run,
-		loginHistory.Run,
+		retention.Run,
 		rollouts.Run,
 		identity.RunSync,
 		identity.RunReconcile,

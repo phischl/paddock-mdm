@@ -200,25 +200,95 @@ func (p *PlatformPool) InPlatform(ctx context.Context, fn func(ctx context.Conte
 	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
+// The answers of PlatformPool.FleetHostInUse (plan M10 amendments 2026-10-30).
+const (
+	// FleetHostUsedByRef: another device's inventory reference names the host.
+	FleetHostUsedByRef = "ref"
+	// FleetHostUsedByHardware: an active, quarantined or pending device with the retired device's hardware has no
+	// inventory reference yet, so the host may become its own.
+	FleetHostUsedByHardware = "hardware"
+	// FleetHostUnused: neither.
+	FleetHostUnused = "none"
+)
+
+// FleetHostInUse reports whether a device of any organization other than retiredDevice still uses the Fleet host or
+// may use it through retiredDevice's hardware (plan M10 amendments 2026-10-30): one Fleet serves every organization,
+// and the retention round's organization scope cannot see another organization's re-enrolment. A read-only existence
+// check that answers only FleetHostUsedByRef, FleetHostUsedByHardware or FleetHostUnused (InPlatform's principals); any
+// other answer is an error.
+func (p *PlatformPool) FleetHostInUse(ctx context.Context, retiredDevice uuid.UUID, host string) (string, error) {
+	var use string
+	err := p.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		use, err = q.FleetHostInUse(ctx, pgstore.FleetHostInUseParams{RetiredDevice: retiredDevice, Host: host})
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("check the Fleet host's other devices: %w", err)
+	}
+	switch use {
+	case FleetHostUsedByRef, FleetHostUsedByHardware, FleetHostUnused:
+		return use, nil
+	}
+	return "", fmt.Errorf("check the Fleet host's other devices: unexpected answer %q", use)
+}
+
 // WithLeaderLock runs fn while holding the session advisory lock key on a dedicated connection, so that only one
 // replica of a role runs a periodic job at a time. It reports false (and does not call fn) when another session
 // holds the lock.
 func (p *PlatformPool) WithLeaderLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (bool, error) {
+	return p.WithLeaderLocks(ctx, []int64{key}, fn)
+}
+
+// WithLeaderLocks is WithLeaderLock for several keys, all taken on the same connection, so the job never needs a
+// second pool connection while it holds the first lock. It reports false (and does not call fn) when another session
+// holds any of the keys; the keys it got are released again.
+func (p *PlatformPool) WithLeaderLocks(ctx context.Context, keys []int64, fn func(ctx context.Context) error) (bool, error) {
 	conn, err := p.p.Acquire(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer conn.Release()
-	var locked bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&locked); err != nil || !locked {
-		return false, err
-	}
+	var held []int64
 	defer func() {
-		if _, err := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", key); err != nil {
-			_ = conn.Conn().Close(context.WithoutCancel(ctx)) // closing the session releases the lock
+		for i := len(held) - 1; i >= 0; i-- {
+			if _, err := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", held[i]); err != nil {
+				_ = conn.Conn().Close(context.WithoutCancel(ctx)) // closing the session releases the locks
+				return
+			}
 		}
 	}()
+	for _, key := range keys {
+		var locked bool
+		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&locked); err != nil || !locked {
+			return false, err
+		}
+		held = append(held, key)
+	}
 	return true, fn(ctx)
+}
+
+// NotifierPool is the pool of role paddock_notifier (plan M9 decisions 21–23): InOrg for the organizations and
+// InPlatformScope for the platform destinations, which the notifier serves under its own role because
+// paddock_platform has no right on their delivery state (plan M9 amendment section E).
+type NotifierPool struct{ OrgPool }
+
+// NewNotifierPool opens the paddock_notifier pool.
+func NewNotifierPool(ctx context.Context, dsn string, o Options) (*NotifierPool, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &NotifierPool{OrgPool{pool{p}}}, nil
+}
+
+// InPlatformScope runs fn in a transaction scoped to the platform pseudo-organization (audit.PlatformOrganizationID),
+// independent of any principal in ctx. Its only caller is the notifier's platform round (plan M9 amendment section E);
+// like AuditReader.InPlatformScope it MUST NOT be reachable from an HTTP handler (platformscope_lint_test.go).
+func (p *NotifierPool) InPlatformScope(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return setOrg(ctx, tx, audit.PlatformOrganizationID) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
 // RelayPool is the pool of role paddock_relay (outbox relay and reaper).
@@ -268,7 +338,8 @@ func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- st
 	})
 }
 
-// AuditReader is the read-only pool of role paddock_audit_reader, with the same InOrg semantics as OrgPool.
+// AuditReader is the pool of role paddock_audit_reader, with the same InOrg semantics as OrgPool. It reads the
+// organization's audit data; its only write is InOrgWrite's insert of an evidence export request.
 type AuditReader struct{ pool }
 
 // NewAuditReader opens the paddock_audit_reader pool.
@@ -308,6 +379,18 @@ func (r *AuditReader) InPlatformScope(ctx context.Context, fn func(ctx context.C
 			}
 			return setOrg(ctx, tx, audit.PlatformOrganizationID)
 		},
+		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
+}
+
+// InOrgWrite is InOrg in a read-write transaction. The reader role's only write is the insert of an evidence export
+// request (plan M10 decision 29); its grants and RLS policies, not this transaction mode, keep it from anything else.
+func (r *AuditReader) InOrgWrite(ctx context.Context, fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, r.p,
+		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
 		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
 }
 
@@ -384,6 +467,19 @@ func IsForeignKeyViolation(err error) bool {
 func IsAuditDaySealed(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "PA422"
+}
+
+// IsLockTimeout reports whether err is a lock wait that exceeded lock_timeout (SQLSTATE 55P03).
+func IsLockTimeout(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
+}
+
+// IsNoPartition reports whether err is an insert into a partitioned table without a partition for the row (SQLSTATE
+// 23514 without a constraint name), e.g. an audit_event month the index purge dropped concurrently.
+func IsNoPartition(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == ""
 }
 
 // IsCheckViolation reports whether err is a check constraint violation.

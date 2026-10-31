@@ -502,13 +502,20 @@ components:
                  tamper.local_admin_changed, tamper.keyslot_changed, revocation.trust_pinned_tofu,
                  revocation.refused, tamper.service_stopped, updates.run, agent.supervisor_updated,
                  agent.uninstalled, disk.conversion_prepared, disk.conversion_started, disk.conversion_completed,
-                 disk.conversion_failed, disk.conversion_aborted]
+                 disk.conversion_failed, disk.conversion_aborted, disk.conversion_neutralize_failed,
+                 disk.conversion_unlock_restore_failed]
           description: |
             Since plan M8e the phases of an in-place encryption, each with data.conversion_id:
             disk.conversion_prepared {layout (lvm|plain), volume (the LUKS UUID of the header to come), data_bytes},
-            disk.conversion_started {volume, init_s, init_result (ok, <stage>:<reason> or unknown)},
+            disk.conversion_started {volume, init_s, init_result (ok, <stage>:<reason> or unknown), after_cancel
+            (true when the device adopts a conversion it had cancelled; absent otherwise)},
             disk.conversion_completed {volume, data_bytes, duration_s}, disk.conversion_failed {stage (preflight,
-            prepare, init or resume), reason, volume}, disk.conversion_aborted {by (admin or operator)}.
+            prepare, init or resume), reason, volume}, disk.conversion_aborted {by (admin or operator)},
+            disk.conversion_neutralize_failed {reason}: the abort could not make the prepared initrds boot unencrypted
+            (plan M8e amendment 2026-10-30).
+            disk.conversion_unlock_restore_failed {reason (kernel_not_buildable, no_bootable_kernel, boot_space_low or the
+            error)}: the unlock path of a converted disk could not be reinstalled into its initrds; once per reason and
+            agent start (plan M8e amendment 2026-10-30).
         occurred_at: { type: string, format: date-time }
         data:
           type: object

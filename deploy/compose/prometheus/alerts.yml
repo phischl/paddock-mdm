@@ -81,6 +81,36 @@ groups:
         annotations:
           summary: "The audit chain was not verified for 36 hours"
           description: "The audit writer's last nightly chain verification finished {{ $value | humanizeDuration }} ago; check the audit writer's log for the 00:45 UTC cycle."
+      # The index purge runs at 01:15 UTC (plan M10 decisions 23 and 25); 48 h leave one missed or timed-out night of
+      # slack. The writer seeds the gauge at start, so a fresh writer does not fire; a run with a failed or timed-out
+      # partition does not set it.
+      - alert: PaddockAuditIndexPurgeStale
+        expr: time() - paddock_audit_index_purge_last_success_timestamp_seconds > 48 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The audit index was not purged for 48 hours"
+          description: "The audit writer's last complete index purge finished {{ $value | humanizeDuration }} ago; check the audit writer's log for the 01:15 UTC purge and run paddock-server audit purge --dry-run."
+
+      # An evidence export failed (plan M10 decision 34): the requester sees status failed and has to request again.
+      - alert: PaddockAuditExportFailed
+        expr: increase(paddock_audit_export_total{result="failed"}[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "An evidence export failed"
+          description: "The audit writer marked an evidence export as failed in the last hour; the export's error and the audit writer's log (evidence export failed) name the cause."
+
+      # The writer polls every PADDOCK_AUDIT_EXPORT_POLL_INTERVAL; an hour-old pending export means no writer builds.
+      - alert: PaddockAuditExportStuck
+        expr: paddock_audit_export_pending_age_seconds > 3600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An evidence export has been pending for over an hour"
+          description: "The oldest pending evidence export has waited {{ $value | humanizeDuration }}; check that the audit writer runs and its log for evidence export errors."
 
   - name: paddock-control-plane
     rules:
@@ -142,6 +172,15 @@ groups:
         annotations:
           summary: "Ubuntu's vulnerability data is stale"
           description: "The OSV data has not been updated for 3 days (docs/operations/vulnerability-data.md)."
+      # ADR 0032: deletion that stops running keeps personal data beyond its retention period (GDPR Art. 5(1)(e)).
+      - alert: PaddockRetentionPurgeStale
+        expr: time() - max by (store) (paddock_retention_last_success_timestamp_seconds) > 48 * 3600
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "The retention purge of {{ $labels.store }} has not succeeded for 48 hours"
+          description: "The worker's retention round has not purged {{ $labels.store }} in every organization for 48 hours; check its log for the failing organization (docs/operations/monitoring.md)."
       - alert: PaddockIPAllowlistBypassed
         expr: max(paddock_ip_allowlist_bypass) == 1
         for: 15m
@@ -196,6 +235,14 @@ groups:
         annotations:
           summary: "The age of some backups is unknown"
           description: "The worker exports the age of fewer backup kinds than configured; check its log and its backup bucket credential."
+      - alert: PaddockRetentionPurgeMissing
+        expr: max(paddock_retention_stores) > (count(paddock_retention_last_success_timestamp_seconds) or vector(0))
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The retention purge of some stores never succeeded"
+          description: "The worker exports the last retention success of fewer stores than it purges; check its log."
       - alert: PaddockWALArchiveLagMissing
         expr: max(paddock_backup_wal_stanzas) > (count(paddock_backup_wal_last_archived_timestamp_seconds) or vector(0))
         for: 30m
@@ -228,3 +275,16 @@ groups:
         annotations:
           summary: "The certificate of {{ $labels.host }} cannot be read or does not verify"
           description: "The worker's TLS handshake with Caddy for {{ $labels.host }} fails, or the certificate is expired, untrusted or issued for another name."
+
+  - name: paddock-notifications
+    rules:
+      # A destination whose deliveries fail longer than PADDOCK_NOTIFY_STALL_AFTER (plan M9 decision 25); the notifier
+      # keeps retrying and loses nothing, but the receiver sees no detections meanwhile.
+      - alert: PaddockNotificationStalled
+        expr: max by (destination_id, type) (paddock_notify_destination_stalled) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Notification destination {{ $labels.destination_id }} is stalled"
+          description: "Deliveries to the {{ $labels.type }} destination {{ $labels.destination_id }} have been failing; see its last_error in the portal or GET /api/v1/notification-destinations/{{ $labels.destination_id }}."

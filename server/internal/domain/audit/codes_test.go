@@ -173,6 +173,9 @@ func TestM9NotificationCodes(t *testing.T) {
 		{CodeNotificationTestRequested, []string{"name", "type", "destination_id"}, all},
 		{CodeNotificationTestSent, []string{"name", "type", "destination_id", "requested_by", "error"}, []Outcome{OutcomeSuccess, OutcomeFailure}},
 		{CodeNotificationPseudonymResolved, []string{"pseudonym"}, all},
+		{CodeNotificationDelivered, []string{"destination", "destination_id", "kind", "forward_from", "forward_to", "count", "attempts", "resumed"}, []Outcome{OutcomeSuccess}},
+		{CodeNotificationDestinationStalled, []string{"destination", "destination_id", "since_s", "last_error", "forward_seq"}, []Outcome{OutcomeSuccess}},
+		{CodeNotificationDestinationResumed, []string{"destination", "destination_id", "stalled_for_s", "forward_from", "forward_to"}, []Outcome{OutcomeSuccess}},
 	} {
 		d, ok := Lookup(tc.code)
 		if !ok || !tc.code.Registered() || !d.Emitted || d.Description == "" {

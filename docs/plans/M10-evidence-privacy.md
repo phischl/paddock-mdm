@@ -962,6 +962,7 @@ export.sig                           {"signature":"vault:v<N>:<base64>","key_ver
   "objects": [{"key": "org/<org>/2026/01/01/08-<id>.jsonl.zst", "path": "objects/2026/01/01/08-<id>.jsonl.zst", "sha256": "<hex>", "event_count": 40}],
   "event_count": 120,
   "events_sha256": "<hex>",
+  "readme_sha256": "<hex SHA-256 of the README.md member>",
   "chain_anchor": "<hex of the first day's prev_manifest_sha256, or null>",
   "verification": {"ok": true, "problems": [], "verified_at": "2026-04-02T07:00:40Z", "verifier": "paddock-server <version>",
                    "runs": [{"run_id": "<uuid>", "started_at": "2026-04-01T02:00:00Z", "from_day": "2026-03-31", "to_day": "2026-03-31", "ok": true, "problems": []}]},
@@ -1387,11 +1388,12 @@ decision above differ, this amendment wins. Numbers refer to the decisions of §
 | --- | --- | --- |
 | `privacy_settings` (§6.1) | PDK-136 | `server/migrations/paddock/00074_privacy_settings.sql` |
 | `retention_grants` (decision 11) | PDK-137 | `server/migrations/paddock/00075_retention_grants.sql` |
-| `read_audit_window` (§6.1) | PDK-139 | `server/migrations/paddock/00076_read_audit_window.sql` |
+| `read_audit_window` (§6.1) | PDK-139 | `server/migrations/paddock/00079_read_audit_window.sql` |
 | `index_purge` (§6.2) | PDK-140 | `server/migrations/audit/00007_index_purge.sql` |
 | `audit_exports` (§6.2) | PDK-142 | `server/migrations/audit/00008_audit_exports.sql` |
 
-Reserved: paddock `00074`–`00076`, audit `00007`–`00008`. `change_set_before_purge` is **not** created (A3). The
+Reserved: paddock `00074`–`00076` (2026-10-30: `read_audit_window` is `00079`, see the PDK-583 round 3
+amendment), audit `00007`–`00008`. `change_set_before_purge` is **not** created (A3). The
 "next free number" rule of §3.0 is replaced by these fixed numbers; a ticket that finds its number taken stops
 (§12). In `00008_audit_exports.sql` the `DO` block stays as written: `audit_manifest` already has the `reader`
 policy from `00004`, `audit_object` has none and gets it here together with its `SELECT` grant.
@@ -1524,3 +1526,529 @@ TestAuditEvidenceExport|TestLoginHistory'`. No VM system test (nothing on the ag
 - A residual-risk number RR-94 to RR-96 exists on main when PDK-135 starts.
 - `audit.Actor` or `audit.Event` gained a field that changes the stored event JSON of existing objects
   (`events.jsonl` must stay byte-identical to the WORM objects).
+
+### Amendment 2026-10-30 (PDK-137, retention batching)
+
+Architect decision after the external review of PDK-137; it changes A3 and A8 where they differ.
+
+- **One transaction per batch (changes A3 "each in its own `RunTx`").** A pass deletes its expired rows in batches of
+  1 000 rows, each batch in its own transaction, so a long backlog never holds the row locks of every expired row of an
+  organization at once and the devices' login upserts do not wait for the purge. The pass still records exactly one
+  `retention.purged` event per organization, store and round, through `app.ActionRunner.RunExternal`: transaction 1
+  records the started action, the batches run as the "external" step, transaction 2 finishes the action with
+  `deleted` = the rows of the committed batches. A failing batch rolls back alone; the batches before it stay deleted
+  and the event has outcome failure with their number (never a number of rows that were not deleted). A crash between
+  the transactions leaves a started action that the reaper records as outcome unknown. The helper is
+  `app.purgeBatches`; `app.LoginHistory.Purge` and `app.Retention.PurgeUserSeen` use it. The cheap pre-check outside
+  the action stays, so an organization without expired rows records nothing.
+- **Index.** Migration `00075` also creates `device_user_seen_org_last_seen_idx ON device_user_seen (organization_id,
+  last_seen_at)`, so every batch finds its rows through the index instead of rescanning the table (the RLS policy adds
+  the organization). `device_login_event` already has `device_login_event_org_at_idx (organization_id, at)` (00054).
+- **Lock key during a rolling upgrade.** The round holds `retentionLockKey` and, nested, the key of the replaced login
+  history round (`0x70616464206c6f67`, "padd log"); while a worker of an earlier version holds that key, the round
+  purges nothing in that run. The legacy key can be dropped once no release before PDK-137 can run next to a newer
+  worker.
+- **`PADDOCK_RETENTION_INTERVAL` is an operator setting (changes A8).** It is honoured in production, with a minimum of
+  1 minute unless `PADDOCK_ENV=development` (`config.RetentionInterval`, a shorter value stops the start naming the
+  variable); `paddock prodcheck` fails on a value below 1 minute. Development keeps the 15 s default when the unit is
+  seconds. The variable is not in the development-only list of `docs/operations/local-dev.md`; it is documented with
+  the worker's retention metrics in `docs/operations/monitoring.md`. `PADDOCK_RETENTION_UNIT` stays development-only.
+- **Residual race (open for the architect).** Between the pre-check and the first batch a login can refresh the only
+  expired rows; the pass then records a success event with `deleted` 0, which is truthful. Moving the check into the
+  action's transaction does not remove it: an action that has started always records its event, and ending an action
+  without recording it would need a new `ActionRunner` step outside its one-event-per-attempt contract.
+
+### Amendment 2026-10-30 (PDK-137 fix round 2, pass budget and locks)
+
+Architect decision after the second external review of PDK-137; it changes the amendment above where they differ.
+
+- **Time budget per pass.** A pass stops after the batch during which 5 minutes (`app.retentionPassBudget`) have
+  elapsed, comfortably below the outbox reaper's threshold (`outbox.DefaultReaperThreshold`, 10 minutes), and finishes
+  its action cleanly with outcome success and `deleted` = the rows committed so far; the rows left over follow in the
+  next round, with their own event. So every pass still records exactly one `retention.purged` event per organization,
+  store and round, now possibly with a partial count, and a large backlog (e.g. after lowering `login_history_days`)
+  never ends as an `unknown` action without `deleted`. Supersedes stub PDK-564.
+- **Lock timeout per batch.** Every batch sets `lock_timeout` to 30 seconds (`app.retentionLockTimeout`) for its own
+  transaction. A batch blocked longer by a row lock rolls back alone and ends the pass like an elapsed budget (outcome
+  success, the rows committed so far), so a blocked `DELETE` cannot hold a pass past the reaper's threshold.
+- **Both lock keys on one connection.** The round takes `retentionLockKey` and the legacy login history key on the same
+  connection (`db.PlatformPool.WithLeaderLocks`), instead of nesting a second `WithLeaderLock` that needed a second
+  pool connection without a timeout. When another session holds either key, the round purges nothing and the key it
+  got is released again.
+- **Upper bound of `PADDOCK_RETENTION_INTERVAL`.** Outside development the interval is at most 24 hours (besides the
+  1 minute minimum): `config.RetentionInterval` rejects a longer one naming the variable, and `paddock prodcheck` fails
+  on it. `docs/operations/install.md` lists the item.
+- **Residual race.** The architect accepts the pre-check race of the amendment above as an open point; no
+  `ActionRunner` extension.
+
+### Amendment 2026-10-30 (PDK-140, audit index purge)
+
+Architect decisions on reviews 1 and 2 of PDK-140. They amend decision 22 and the `audit_purge_partition` text of
+§6.2; audit migration `00007_index_purge.sql` implements them and is the binding text from now on.
+
+1. **Retention floor in the database, cutoff from the database's clock (review 2).** The function is
+   `audit_purge_partition(p_month date, p_days integer)` and returns `(dropped, events, reason, cutoff, relid)`. It
+   takes the index retention in days, not a cutoff, and computes `cutoff = now() - make_interval(days => p_days)` from
+   the database's clock, so the writer's clock never decides what is dropped and a writer clock running ahead cannot
+   trip the floor. It raises an exception (SQLSTATE `22023`) when `p_days` is `NULL` or below 400 (the check is
+   `p_days < 400`), before it looks at any partition. The 400 days are hardcoded: they are a safety net under the Go
+   checks (`Purger.Run`, `loadAuditDeps`) at the privilege boundary, not configuration, so a `paddock_audit_writer`
+   session calling the function directly cannot drop events within the WORM retention. A Go test asserts that the
+   function's floor equals `auditwriter.MinRetentionDays`; EXECUTE is granted only to `paddock_audit_writer`, the
+   role that purges. `Purger.Run(ctx, dryRun)` takes no clock: it reads the report's cutoff for listing the due
+   partitions from the database (`PurgeCutoff`, the same `now() - days`), and each `retention.purged` records the
+   cutoff its own purge transaction returned (a failed drop, which returns none, records the report's cutoff). This
+   supersedes stub PDK-565.
+2. **Pinned search path and time zone (review 2).** The function is `SET search_path = pg_catalog, public, pg_temp`
+   and qualifies every name with `public.` (also in the `format` calls: `public.%I`), so no temporary table can shadow
+   a partition, as in audit migration `00006`. It is also `SET TimeZone = 'UTC'`, so the month boundary
+   (`end_ts::timestamptz`) and the day arithmetic of the cutoff are the same in a caller session with another
+   `TimeZone`; a test calls it under `Etc/GMT+12`, `Pacific/Kiritimati` and `Europe/Berlin`.
+3. **Lock before the count (ratified deviation from §6.2 verbatim).** The function takes
+   `LOCK TABLE ONLY public.audit_event, public.<partition> IN ACCESS EXCLUSIVE MODE` before it counts and drops.
+   Without it, an event committed between the count and the `DETACH` would be dropped although it was recorded within
+   the retention. A regression test pins this.
+4. **Scan under the lock, with a sizing note.** `recorded_at` has no index on the partitions (audit migrations
+   `00001`–`00006`), so the cheap locked re-check of an unlocked pre-read is not available, and `00007` creates no new
+   index. The `count(*)`/`max(recorded_at)` scan stays under the lock (option a). Sizing: while it runs, every insert
+   and read of `audit_event` waits. `lock_timeout` (5 s) bounds only the wait for the lock; the scan itself is bounded
+   by the writer transaction timeout. A monthly partition whose sequential scan approaches that timeout fails as
+   `purge_failed` every night and raises `PaddockAuditIndexPurgeStale`; operators with such volumes need an index on
+   `recorded_at` first (a later audit migration, architect decision).
+5. **Unknown commit outcome and the no-partition race.** When a drop's transaction ends with an error or is cancelled
+   after the function reported the drop, the purger checks in a new session whether the dropped relation still
+   exists, by the OID the function returned (`relid`, taken before the drop), not by the partition's name (review 2):
+   the writer may already have created a partition of the same name again for a late event, and a partition someone
+   else dropped before the purge transaction is no drop of the purge. If the relation is gone, it records
+   `retention.purged` success without `deleted`, since the count was lost with the result. Without a function result
+   that reported the drop, no `COMMIT` was sent, so the failure path applies. A writer
+   transaction whose insert finds no partition (SQLSTATE `23514`, the purge dropped the month after
+   `ensurePartitions`) is retried like the sealed-day refusal (`PA422`), and the retry creates the partition again.
+
+`audit_ensure_partition` keeps its `search_path` weakness for now; it is fixed in audit migration `00009` (PDK-558),
+not here.
+
+### Amendment 2026-10-30 (PDK-138, retired inventory)
+
+Architect decision after the external review of PDK-138; it changes decisions 16 and 17 and §13 "re-enrolled device"
+where they differ.
+
+- **Platform-scoped existence check before a Fleet host is deleted.** One Fleet serves every organization, and the
+  organization scope of the retention pass cannot see another organization's re-enrolment of the same hardware. New
+  decision: retention may use a platform-scoped existence check, read-only, boolean only. Before `DeleteHost` the
+  device's action asks `db.PlatformPool.FleetHostInUse` (function `paddock_fleet_host_in_use`, migration 00076,
+  `SECURITY DEFINER`, executable by `paddock_platform` only) whether, in any organization and other than the retired
+  device itself, an inventory reference names the same Fleet host or an active or quarantined device has the retired
+  device's hardware UUID (case-insensitive; also a device whose first inventory sync is still pending and has no
+  reference yet). The answer is yes or no; no rows, organization IDs or device IDs of other organizations reach the
+  caller, the logs or the audit. On yes the host stays in Fleet (`fleet_host_deleted` false) and the retired device's
+  Paddock rows are purged as for re-enrolled hardware. When the check fails, the device fails closed: no Fleet call, no
+  Paddock row deleted, a failure event. It replaces the organization-scoped reference count. Supersedes stub PDK-575.
+- **No head-of-line blocking.** A failing device is recorded as its own `device.inventory_purged` failure event (target
+  the device) and the pass goes on with the next device, within the pass budget and the 100-device limit. A pass with
+  failed devices ends partial: its error counts them (`n of m devices failed`), the store's last success is not set,
+  and `PaddockRetentionPurgeStale` stays the fallback alert.
+- **A 404 counts as "already gone" only with Fleet's error body.** `DeleteHost` treats a 404 as a deleted host only
+  when the body is Fleet's JSON error (`{"message": ..., "errors": [...]}`); any other 404 (a proxy, a wrong base URL)
+  is a failure, so no deletion is recorded and the Paddock rows stay.
+- **Return value and metric.** `PurgeRetiredInventory(ctx, now) (devices int, err error)` as in §6.6: the number of
+  devices whose inventory it purged. `paddock_retention_deleted_total{store="retired_inventory"}` therefore counts
+  purged devices, not rows; the other stores keep counting rows.
+
+### Amendment 2026-10-30 (PDK-138, review 2 of the retired inventory)
+
+Architect decisions on the external review after fix round 1 of PDK-138. They amend the amendment above where they
+differ.
+
+- **Migration number.** The function is in `00076_fleet_host_in_use.sql`; 00079 belongs to PDK-139 (renumbered 2026-10-30, see the PDK-583 round 3 amendment), 00077 is PDK-496.
+- **Tri-state instead of "boolean only".** `paddock_fleet_host_in_use` returns `text`: `'ref'`, `'hardware'` or
+  `'none'`, still never another organization's rows or IDs (`db.FleetHostUsedByRef`, `FleetHostUsedByHardware`,
+  `FleetHostUnused`; any other answer fails closed). `'ref'`: another device of any organization references the host;
+  the host stays and the retired device's Paddock rows are purged. `'hardware'`: no reference, but an active,
+  quarantined or **pending** device with the same hardware UUID (case-insensitive) has no inventory reference yet; the
+  host stays and so does the retired device's `device_inventory_ref` row, while its software, findings and policy
+  results are purged, so later rounds list the device again and decide once that device has synced (its reference
+  then names the same host, `'ref'`, or another one, `'none'`) or is gone. `'none'`: the host is deleted. The event
+  records the answer in the new parameter `fleet_host_in_use` (absent when the device had no host or the check did
+  not run); `fleet_host_deleted` stays false for `'ref'` and `'hardware'`.
+- **Hardening.** The function is `SET search_path = pg_catalog, public, pg_temp` and qualifies its tables with
+  `public.`; a test asserts that `paddock_worker` and `paddock_api` get permission denied and `paddock_platform` may
+  execute it.
+- **Paging within the pass.** The 100-device limit is the page size of one listing, not a cap of the pass: after a
+  page the pass lists the next one after the last listed `(state_changed_at, id)` (kept in memory, no new column) until
+  the budget elapses or no device is left, so devices behind ones that keep failing are reached in the same pass.
+  Every round still starts at the head; with a budget that never gets past failing devices at the head, the tail can
+  still starve across rounds (`PaddockRetentionPurgeStale` stays the alert).
+- **Fleet breaker per round.** After three consecutive `upstream_unavailable` failures of the Fleet deletion, the
+  round (state `app.RetentionRound`, created per round and passed into every organization's pass, no globals) starts
+  no further retired-inventory device in any organization. Instead of one event per skipped device, each organization
+  with due devices that the round skips gets one `retention.purged` failure (`store` `retired_inventory`,
+  `upstream_unavailable`); the skipped devices keep all their rows. A successful Fleet deletion resets the count.
+
+### Amendment 2026-10-30 (PDK-142)
+
+Architect decisions on the review of PDK-142 (stubs PDK-580 and PDK-581, folded into PDK-142). Audit migration
+`00008_audit_exports.sql` was not yet on `main` and implements them; it is the binding text from now on.
+
+1. **Reader inserts only pending requests (§6.2 corrected).** The `reader` policy on `audit_export` pins the status and
+   the builder's columns on insert, so no SQL path running as `paddock_audit_reader` can insert an export that looks
+   built or verified. The §6.2 text of that policy reads:
+
+   ```sql
+   CREATE POLICY reader ON audit_export TO paddock_audit_reader
+     USING (organization_id = current_setting('paddock.org_id')::uuid)
+     WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid AND status = 'pending'
+       AND started_at IS NULL AND ready_at IS NULL AND expires_at IS NULL AND event_count IS NULL
+       AND object_count IS NULL AND size IS NULL AND package_sha256 IS NULL AND verify_ok IS NULL
+       AND verify_problems IS NULL AND signature IS NULL AND key_version IS NULL AND error IS NULL);
+   ```
+
+   A test asserts that the reader cannot insert a row with another status or with any builder column set.
+2. **Decision 29: `InOrgWrite` ratified.** `external` runs the checks and `InsertAuditExport` in one
+   `reader.InOrgWrite` transaction (read-write, same organization context and RLS as `reader.InOrg`), since a
+   `READ ONLY` transaction cannot insert. `Get`, `List` and the download keep `reader.InOrg`. `docs/architecture.md`
+   §4.1 carries a dated note that the reader also inserts pending export requests.
+3. **Purpose characters (decision 29).** Besides C0 controls other than tab, newline and carriage return, `prepare`
+   refuses C1 controls (U+0080–U+009F) and bidi controls (U+202A–U+202E, U+2066–U+2069) in `purpose` with
+   `400 invalid_request` before any parameter is set, because the evidence package and the portal show the purpose to
+   auditors. Tab, newline and carriage return stay allowed.
+
+### Amendment 2026-10-30 (PDK-143: no organization slug in the export)
+
+Architect decision during PDK-143. The audit domain has no source for an organization slug: `audit_export` has no
+slug column, the audit database has no organization table, and the audit writer has no access to the `paddock`
+database. Where this amendment and §6.5, §6.7 or decision 32 differ, this amendment wins.
+
+1. **`export.json` has no `organization_slug`.** The field is removed from the §6.5 example and from
+   `pkg/auditevidence.Export` (§6.7); it is not written as an empty string. A signed evidence file carries only what
+   the audit domain can vouch for, and a slug can change while the organization ID cannot.
+2. **The README names the organization by its ID only.** Its first sentence reads "Organization
+   `<organization_id>`, recording days `<from_day>` to `<to_day>`, …"; the rest of the §6.5 text is unchanged.
+3. **No migration, no change to the request API.** A slug snapshot taken at request time (an `audit_export` column
+   filled by PDK-142's request path) would need an audit migration and is not part of this milestone; it is recorded
+   as a low-priority follow-up stub.
+4. **The README is not covered by the signature.** `export.sig` signs `export.json` only; the offline verifier
+   (PDK-146) treats `README.md` as informational and takes every fact from `export.json`.
+5. **Objects the builder does not decode** (review of PDK-143). An object whose SHA-256 differs from its manifest
+   entry, or whose decompressed size exceeds 256 MiB, is still packed verbatim under `objects/` but contributes no
+   lines to `events.jsonl` and has `event_count` 0; the problem is in `verification.problems` (the mismatch text of
+   decision 32, or `"<day>: object <key> cannot be decoded"`) and `verify_ok` is false. The offline verifier reports
+   such an object's hash or decode problem and builds the expected `events.jsonl` without it.
+
+### Amendment 2026-10-30 (PDK-583, review leftovers of the retired inventory)
+
+Architect decisions on the non-blocking findings of PDK-138's third review. They amend the amendment above where they
+differ.
+
+- **Breaker counts only transient Fleet failures.** `ports.InventoryAdmin.DeleteHost` classifies its errors: Fleet
+  failing or unreachable (5xx, timeout, connection error, and statuses that concern Fleet or the way to it rather than
+  the host: 401, 403, a 404 without Fleet's own error body, 408, 429) is `upstream_unavailable`; Fleet refusing
+  this one host or an invalid host reference is `invalid_state`. Round 2 below narrows the refusal and covers
+  redirects. Both fail the device with one
+  `device.inventory_purged` failure event and keep its rows. Only `upstream_unavailable` counts toward the round's
+  breaker; a refusal neither counts nor resets the count, a successful deletion resets it. Permanently refused hosts at
+  the head of one organization therefore no longer skip the retired inventory of every organization.
+- **A persisting `'hardware'` answer records no event.** (Replaced by round 2 below: the derived "unchanged" check
+  missed a first sight and a change from a failure.) Before starting a device's action, the pass reads the
+  device's remaining inventory; when nothing but the host reference is left and the host check answers `'hardware'`,
+  the pass starts no action and only logs. The round that purged the other rows recorded the answer; the next event
+  follows when the answer changes to `'ref'` or `'none'` and the reference is deleted. No new column: "unchanged" is
+  derived from the remaining rows, since `'hardware'` is the only answer that leaves the reference without other
+  rows. A device that had nothing but the reference when it was first listed records no event until the answer
+  changes, because nothing is deleted. The check is read-only and fail-safe (an error starts the action, which
+  re-checks under the row lock and records the outcome), so the one-event-per-attempt rule holds: a skipped device is
+  no attempt. `paddock_retention_deleted_total{store="retired_inventory"}` therefore counts only devices whose rows
+  were deleted.
+- Open, not decided: x3 (two Fleet hosts of the same hardware) and x4 (no event for a pass-level failure). Both are
+  decided in round 2 below.
+
+### Amendment 2026-10-30 (PDK-583 round 2, review 1 of the leftovers)
+
+Architect decisions on review 1 of PDK-583. They amend the amendment above where they differ.
+
+- **B1: only Fleet's own refusal is `invalid_state`.** A 4xx is Fleet's refusal of this one host only when it carries
+  Fleet's JSON error body (`{"message": ..., "errors": [...]}`, the same check that makes a 404 "already gone") and
+  is not 401, 403, 404, 408 or 429. Any other 4xx (a proxy or ingress in front of Fleet answering 405, 407, 421, or 400
+  without Fleet's body) fails every host alike and is `upstream_unavailable`, so it trips the breaker.
+- **Redirects (PDK-586, folded in).** The Fleet client does not follow redirects (`CheckRedirect` returns
+  `http.ErrUseLastResponse`): Go would turn a redirected DELETE into a GET whose 200 reads as a deleted host. Every 3xx
+  is `upstream_unavailable`.
+- **A canceled context** (shutdown) is neither `upstream_unavailable` nor `invalid_state` and does not count toward
+  the breaker.
+- **x3: a host still checking in is kept.** When the host check answers `'none'`, the device's action first reads
+  Fleet's last check-in of the host (`ports.InventoryAdmin.HostSeenAt`, the host detail without software). A host
+  seen **after the device's retirement and within 7 retention days of now** is still in use, by fleetd still running
+  on the retired machine or by a successor without a reference of its own. It is kept with the retired device's
+  reference like `'hardware'`; the other Paddock rows go. The event records `fleet_host_kept` `seen_recently` and
+  `fleet_host_seen_at`. A host seen only before the retirement or longer ago, never seen, or no longer known is
+  deleted, so gate R2 (host seen just before the retirement) stays deterministic. A failing lookup fails closed: no
+  deletion, all rows kept, one failure event; an `upstream_unavailable` lookup failure counts toward the breaker like a
+  failed deletion. The 7 days are retention days (`PADDOCK_RETENTION_UNIT`).
+- **M1: the kept answer is persisted.** Paddock migration 00078 adds `retention_inventory_hold` (`device_id` primary
+  key referencing `device` with `ON DELETE CASCADE`, `organization_id`, `last_answer` `'hardware'` or
+  `'seen_recently'`, `unchanged_rounds`, `last_event_at`; ENABLE and FORCE row level security, the organization policy
+  without `missing_ok`, granted to `paddock_worker` only). A successful action that keeps the host stores its answer
+  (`fleet_host_kept`) with zero rounds. Before a listed device's action, the pass compares: when the device has a held
+  answer, nothing but the host reference is left and the current answer (the host check and, on `'none'`, the
+  check-in lookup) equals the held one, the pass starts no action, counts the unchanged round and logs. Otherwise it
+  drops the held answer and the action runs, so every change of answer records one event: a first sight, a change from
+  a failure or `'none'` to a kept answer, between `'hardware'` and `'seen_recently'`, and from a kept answer to the
+  host's deletion. An action that fails therefore leaves no held answer, and the next kept answer is recorded again.
+  A skip is no attempt and starts no action, so the one-event-per-attempt rule holds. The row goes when the answer
+  changes and with the device.
+- **Bound: one notice after 30 unchanged rounds.** The round that reaches 30 unchanged rounds of a held answer
+  records one `device.inventory_host_kept` success event (new code; `fleet_host_kept`, `rounds`) in the same
+  transaction as the count, and deletes nothing. Later unchanged rounds record no further notice; a change of answer
+  starts over. It is a notice in the audit trail, no alert.
+- **x4: a pass-level failure records one event.** A failure loading the organization's privacy settings or listing
+  the first page of its retired devices records one `retention.purged` failure (`store` `retired_inventory`) for the
+  organization and round, through `RunTx` like the breaker skip.
+
+### Amendment 2026-10-30 (PDK-583 round 3, review 2 of the leftovers)
+
+Decisions on review 2 of PDK-583. They amend M1, x3 and the bound above where they differ.
+
+- **The held answer is consistent with the last event.** A device's action never runs while the device has a held
+  answer: before the action the pass drops the held answer in a transaction of its own, also when it could not read
+  it, and when the drop fails the device is skipped this round and the pass fails (no action, no event). The action
+  sets the held answer, or drops it on a failure or when nothing is kept, in the transaction that records its outcome.
+  A held answer therefore always belongs to the last event of the device.
+- **The held answer belongs to one retirement.** `retention_inventory_hold.retired_at` (migration 00078) stores the
+  device's `state_changed_at` with the answer. When it differs from the listed device's (reactivated and retired
+  again), the answer counts as changed: the action runs, records its event and starts the count over.
+- **A lookup blip neither records an event nor restarts the count.** The comparison's host check and check-in lookup
+  run under the same bound as the action's Fleet step (`fleetDeleteTimeout`). When the check-in lookup of a held
+  device fails with `upstream_unavailable`, the device keeps its held answer and its count, is skipped this round
+  without an action or event, the pass fails (the worker logs it and the store's last success does not advance) and the
+  failure counts toward the round's Fleet breaker like a failed lookup in an action. Any other failure of the
+  comparison lets the action run; it checks again and records the outcome.
+- **The breaker is reset only by a deleted host.** A successful lookup does not reset it, so a proxy that answers
+  reads but fails every deletion still trips it.
+- **`paddock_retention_deleted_total{store="retired_inventory"}` counts a device only when rows or its Fleet host were
+  deleted**; a first sight or changed kept answer of a device with nothing but its host reference left counts nothing.
+- **`HostSeenAt` fails closed on a foreign answer.** A 200 without a host object (or host id) or without `seen_time`
+  is `upstream_unavailable`: Fleet always sends both, and a host that never checked in carries Fleet's zero time. Only
+  Fleet's own 404 reads as a host that is gone.
+- **`device.inventory_host_kept` declares `failure`**: a notice that cannot be recorded fails with the count and is
+  retried the next round.
+- **Migration numbers (renumbered 2026-10-30).** The hold table is paddock migration 00078; PDK-139 moves to 00079, so
+  the cluster leaves no gap of its own even if PDK-139 lands last (goose refuses missing versions). This supersedes the
+  "00078 belongs to PDK-139" note of the PDK-138 amendment; §6.1's table names 00079 for `read_audit_window`. Merge
+  order to main: 00076 (PDK-138), 00077 (PDK-496), 00078 (PDK-583), 00079 (PDK-139); the next migration merged into
+  the cluster takes the next free number.
+- **Architect-confirmed (2026-10-30).** Two choices of this round are confirmed by the architect: a check-in lookup
+  blip skips the device without an event, counts toward the breaker and leaves the stale alert as the safety net (no
+  deletion on uncertainty); the breaker resets only after a real deletion, because a successful lookup proves nothing
+  about DELETE. Scattered timeouts that trip the breaker stop the deletions of that round and the next round retries;
+  a windowed count is decided in PDK-589.
+
+### Amendment 2026-10-31 (PDK-605: README covered by export.json; decision 35 as built)
+
+Architect decisions 2026-10-30 (PDK-143 amendment items 4-5, PDK-144 decision 35), implemented in PDK-605, which
+folds in PDK-599. Where this amendment and §3.9 decision 35, §6.5 or the amendment "PDK-143: no organization slug in
+the export" differ, this amendment wins.
+
+1. **Item 4 of the PDK-143 amendment is replaced: the README is covered by the signature.** `export.json` gains
+   `readme_sha256` (lowercase hex SHA-256 of the `README.md` member bytes; §6.5 example updated). `export.sig` signs
+   `export.json`, so a README altered in transit fails `paddockctl audit verify-export`: a mismatch, a missing README
+   or an `export.json` without the field is a problem (`verify_ok=false`). This is not circular: the README holds
+   only values of `export.json` that exist before signing, never the hash of `export.json` or of the signature. It
+   also names the signing key version and fingerprint, which the signer decides; the exporter renders the README for
+   the newest published key before signing and renders and signs once more if the signer used another version.
+2. **Decision 32/§6.5 override stays as written in the PDK-143 amendment item 5** (an object that is modified or
+   cannot be decoded is packed verbatim without events and sets `verify_ok=false`).
+3. **Decision 35 as built.** The download reads each chunk in its own short `reader.InOrg` transaction (by primary
+   key), so a slow client holds no audit-reader connection between chunks; the export row is looked up before the
+   action's `RunTx` and reused for the headers, with no second readiness check after the event. The transfer has
+   write deadline 60 s per piece and an overall cap of `max(10 min, size / 64 KiB/s)`, itself capped at 24 h so a huge
+   recorded size cannot overflow the duration. `size <= 0` counts as not ready.
+4. **A chunk that goes missing mid-stream aborts the stream.** The use case returns an error, the handler ends the
+   body short of `Content-Length` without appending a problem body, and no second event is recorded (one event per
+   attempt, recorded before the first byte). The final size and SHA-256 check stays. Covered by
+   `TestAuditExportDownloadChunkRemovedMidStream`.
+5. **HEAD is refused with 405 (`Allow: GET`)** before the use case and audited as one rejected request, because
+   net/http would otherwise run the download for a body that is never sent.
+
+### Amendment 2026-10-30 (PDK-139 round 2, read-access recording)
+
+Architect decisions after review 1 of PDK-139. Where this amendment and decisions 18–21, §6.4 or §6.6 differ, this
+amendment wins.
+
+1. **Accepted deviations.** (1) Both codes declare success, failure and denied (decision 18 emits failure).
+   (2) The development retention unit never purges a key younger than 24 hours; production keeps 48 hours.
+   (3) `PurgeReadWindows` deletes in batches of 1 000 like every other pass. (5) A denied role is recorded whatever
+   the switch, because authorization precedes the switch.
+2. **Deviation (4) changed: refused reads are recorded.** With the switch on, every authenticated attempt records
+   exactly one event. A refused read records `failure` with the problem code as reason: a range the list refuses
+   (`invalid_request` for from ≥ to, `range_too_large` beyond 92 days), handler input errors (`invalid_request`,
+   `page_out_of_range`) and a missing or foreign device (`not_found`, target the requested device ID, as for other
+   refused actions). A failure claims no window (the transaction rolls back). With the switch off nothing changes:
+   no event, the list refuses as before. Input the OpenAPI request validator rejects never reaches the handler and
+   records nothing.
+3. **(a) Cancellation.** `RecordReadOnce` reads the switch in its own step (`enabled`) before `claim`. A
+   `context.Canceled` before that step has read the switch records nothing; after it, the normal rules apply (switch
+   off: nothing; switch on: a claim error is recorded as failure with reason `canceled`).
+4. **(b) Foreign target IDs.** `audit.searched` records `target_id` only when it names a device of the caller's
+   organization (RLS-visible `GetDevice` in the claim transaction); otherwise `target_id` is omitted and
+   `target_id_used: true` is recorded (registry param). The isolation gate's globex `target_id` therefore never
+   enters acme's trail. Other object types (users, groups) are recorded as `target_id_used` only.
+5. **(c) Window key of `audit.searched` (amends decisions 19 and 20).** The key is `(actor key, "audit.searched",
+   filter hash, now.UTC().Truncate(time.Hour))`; the filter hash (SHA-256, hex, stored in the key's `target_id`
+   column) covers the normalized filters as recorded: the requested `from`/`to` (empty for a default end, so a default
+   range keeps its key within the hour), the registered codes and `codes_unknown`, outcomes and actor types (sorted,
+   without duplicates), the resolved `target_id` or `target_id_used`, and `q_used`. The search text never enters the
+   hash, so event counts cannot tell two texts apart. `device.inventory_viewed` keeps `(actor key, device ID, UTC
+   day)`. The list and the recording resolve default range ends against one clock (`AuditQuery.Now`).
+
+### Amendment 2026-10-31 (PDK-139 round 3, read-access recording)
+
+Architect decisions after review 2 of PDK-139 and the external review. Where this amendment and the amendment of
+2026-10-30 (PDK-139 round 2) differ, this amendment wins.
+
+1. **The switch unknown → no event and no data (replaces round 2 item 3 before the switch).** Any error before
+   `enabled` has read the switch — a cancellation, a passed deadline, a failed pool acquire, `BEGIN` or `set_config`,
+   a database error of the settings read — records nothing and is returned: the read itself fails with an error
+   response, and the list is not served.
+2. **The switch off → nothing, whatever fails afterwards.** Once the switch was read as off, `RecordReadOnce` never
+   records, also when the commit fails or the request is canceled after the switch read; the error is returned
+   unrecorded.
+3. **Target of a refused inventory view (amends round 2 item 2).** `device.inventory_viewed` sets the device as target
+   only after `GetDevice` resolved it within the caller's organization. Input errors, a missing or foreign device and a
+   failed lookup record `target_id_used: true` (registry param of `device.inventory_viewed`) and no device ID, so
+   another organization's device ID never enters this organization's trail.
+4. **One range, millisecond-truncated.** `AuditQuery.effectiveRange` truncates `from` and `to` to the millisecond of
+   audit timestamps once, so the recorded range, its filter hash and the list search identical bounds.
+5. **Registry notes.** The notes of `audit.searched` and `device.inventory_viewed` name every emitted failure reason
+   (`invalid_request`, `page_out_of_range`, `range_too_large`, `not_found`, `canceled`, `internal`) and that an
+   unreadable switch records nothing.
+6. **Transparency notice.** The notice and the portal hints say that only the first access per window is recorded.
+7. **Failure events are not coalesced.** Each refused read with the switch on records one failure event; the DPIA
+   input says so. A follow-up coalesces failures per actor, problem code and hour.
+8. **Accepted (R2-m2).** (i) Input the OpenAPI request validator rejects never reaches the handler and records nothing.
+   (ii) Only devices resolve a `target_id` of `audit.searched`; users, groups and other object types are recorded as
+   `target_id_used` only.
+9. **The search text stays out of the filter hash** because it can contain personal data (a searched employee's name):
+   neither the event nor its window key may tell two texts apart.
+
+### Amendment 2026-10-31 (PDK-606, CVE device-list view)
+
+Architect decision (d) of PDK-139 round 2, with the window of round 3.
+
+1. **New code `vulnerability.devices_viewed`** (registry, outcomes success, failure, denied; params `cve`,
+   `device_count`, `window_start`). It is recorded by `GET /api/v1/vulnerabilities/{cve}/devices` through
+   `RecordReadOnce` before the list, while `inventory_view_recorded` is on. The switch off records nothing, an
+   unreadable switch records nothing and fails the read (round 3 item 1), a refused read (malformed CVE, listing
+   error, CVE without finding in the organization → `not_found`) is a failure with its problem code, a role outside
+   the read roles is denied. Authorization is that of the list (`RolesRead`), so recording does not change who may read.
+2. **Window `(actor, cve, UTC clock hour)`** in `read_audit_window`: the CVE is stored in the key's `target_id` column;
+   no migration. The CVE is a public identifier that matched the CVE pattern. The search text `q`, paging and sort are
+   not part of the key and never recorded.
+3. **`device_count` is the number of distinct devices of the caller's organization** (active or quarantined) with a
+   finding of the CVE, counted in the claim transaction under row-level security (query
+   `CountDevicesWithVulnerability`) and only after the switch was read as on. It is the devices, not the finding
+   rows the list pages over, and no device ID or name enters the event.
+4. **Failure events stay uncoalesced** as for the other read codes (round 3 item 7).
+5. The privacy pack (transparency notice, works-council annex, DPIA input, `privacy.md`) and the portal hint name the
+   new event.
+
+### Amendment 2026-10-31 (PDK-608: export builder hardening)
+
+Implemented in PDK-608, which folds in PDK-595 and PDK-596. Where this amendment and decisions 31, 32 or 34 differ,
+this amendment wins. No migration and no change to the API, the events or the package format.
+
+1. **Expiry runs in its own loop (decision 31).** `Run` calls `Expire` every poll interval in a loop of its own, next
+   to the pending-age loop, instead of after the claim/build loop, so a hung build delays neither expiry nor the stuck
+   check. `Expire` deletes the chunks of failed and expired exports first, then expires and fails as in decision 34,
+   so an error in those passes cannot skip the sweep.
+2. **A build is bounded by `ExportStuckAfter` (decision 32).** The whole build, including every object-store read,
+   runs under a deadline of 2 h; when it passes, the export fails with `error: "the build took longer than 2h0m0s: …"`
+   and one failure event, unless the stuck check failed it first (then its event is the only one). The deadline counts
+   from the start of the build, the stuck check from `started_at`, so the stuck check usually fails a hung export
+   first; the bound then mainly ends the hung build and frees its goroutine.
+3. **Chunks are inserted only while the export is running (decision 32 step 4).** `InsertAuditExportChunk` inserts
+   only when the export is `running`, read under a share lock in the same statement, so it either waits for a stuck
+   check in flight or sees its result. An insert that inserts nothing fails the build like `errNotRunning`: no
+   further reads, no event (the stuck check recorded the outcome).
+4. **The status read after a failed ready update is final (decision 32 steps 5–6).** It reads under the row lock
+   (`GetAuditExportLocked`, `FOR UPDATE`, 30 s, outliving a shutdown), so a COMMIT still in flight is waited out.
+   When it fails or still sees `running`, the build reads once more after `failRunning` matched no row; a `ready`
+   export then takes the success path. When the first read failed, the build also reads once more before it gives
+   up on a shutdown or on a failed `failRunning`. Every export that a build marked ready ends with exactly one
+   `audit.export_completed` success event, unless no status read succeeds at all, in which case the export stays
+   ready with its chunks.
+5. **A failure or expiry whose COMMIT outcome is lost records its event exactly once (decisions 32 and 34).** The
+   update of `failRunning` (build and stuck check) and the expiry update return the row's `xmin`, the id of the
+   writing transaction. Only when the transaction's statements all succeeded and its COMMIT returned an error is the
+   outcome unknown; then the caller reads the export under the row lock (as in item 4, `GetAuditExportLocked` also
+   returns `xmin`) and records its one failure or `retention.purged` event only if the visible version carries its own
+   `xmin`. A caller whose update matched no row, or whose transaction failed before the COMMIT, never reads and never
+   records. So a rollback of this caller's write followed by another replica's identical write (same status, same
+   `exporter restarted`) does not record twice. A failed read is retried once; if both reads fail the export stays
+   `failed`/`expired` without its event (neither list query sees it again) and the pass reports the error.
+6. **The exporter's writes are bounded on the client side** by the writer transaction timeout plus 30 s:
+   `markReady`, `failRunning`, the expiry update, every chunk delete (also the ones that outlive a shutdown) and the
+   list queries of `Expire`. A hung connection or a lost acknowledgement cannot block the build or the stuck check
+   beyond that bound; the locked status reads of items 4 and 5 have their own bound of 30 s.
+7. **A failing expiry or stuck-check failure does not stop the pass.** `Expire` records the error, continues with the
+   next due export, then runs the stuck check, which likewise continues with the next stuck export; the pass returns
+   all errors joined.
+
+### Amendment 2026-10-31 (PDK-593: export temp file and size limits)
+
+Architect decision 2026-10-31 (PDK-593, with finding L3 of the PDK-143 external review), implemented in PDK-593.
+Where this amendment and decision 32 differ, this amendment wins. No migration and no change to the API or the
+package format; `audit.export_completed` gains the param `reason`.
+
+1. **TMPDIR on a volume (decision 32 step 3).** `paddock-audit-writer` keeps `read_only: true` and `/tmp` as a 64 MiB
+   tmpfs mounted `noexec,nosuid,nodev`; `TMPDIR` is `/var/lib/paddock/export-tmp`, the named volume
+   `audit-writer-tmp` (`compose.audit.yaml`, used by the development stack, the audit host and the lab), so a large
+   export uses disk, not the host's memory. The image creates that directory owned by `nonroot`, so a fresh volume
+   copies the owner. **Accepted deviation:** a named volume is mounted without `noexec`, so the volume is the writer's
+   one writable directory that allows executing files; nothing but the export temp file is written there.
+   `docs/operations/audit-bucket.md` section 4 records it and `deploy/bundle/bundle_test.sh` asserts the `/tmp` flags,
+   `TMPDIR` and the volume for the dev, audit-host and lab configurations. The temp file of `events.jsonl` is unlinked
+   right after `os.CreateTemp` and used through its open handle, so a writer killed during a build leaves nothing on
+   the volume. The volume lives in Docker's data-root and its bound applies per audit-writer replica.
+2. **`PADDOCK_AUDIT_EXPORT_MAX_BYTES`** (`paddock-audit-writer`, default `4294967296` = 4 GiB, a positive integer,
+   otherwise the role refuses to start; parsed as a 64-bit integer, a larger value is `out of range`) bounds
+   `events.jsonl` while it is written to the temp file and the whole package. The exact package size (each tar header
+   as `tar.Writer` encodes it, each member padded to 512 bytes, the 1024-byte end marker) is computed once the
+   signature exists and before the first chunk is inserted; the counting writer under the tar stays as a backstop.
+   Exceeding either fails the build: status `failed`, `error` = `"export_too_large: events.jsonl exceeds
+   PADDOCK_AUDIT_EXPORT_MAX_BYTES (<n> bytes)"` or `"export_too_large: the package (<size> bytes) exceeds …"`, no chunks
+   left, exactly one `audit.export_completed` failure event with `error_code: "export_failed"` and the registered param
+   `reason: "export_too_large"`. An export failed by the stuck check (`exporter restarted`) carries no `reason`: the
+   check does not know why the build stopped.
+3. **Object-store reads are bounded and streamed (L3; decisions 32 step 4 and the verifier of M8b).** Every manifest and
+   object read of the exporter and of `Verifier` goes through `ObjectStore.Open` and `io.LimitReader` with the per-object
+   limit `MaxObjectSize` (256 MiB, equal to the decode limit) and is hashed while it streams; a larger object is an
+   error (`"… unreadable: larger than the per-object read limit (<n> bytes)"`): the build fails, the verifier reports
+   it as a problem. The verifier hashes objects without buffering them. The first pass of the build buffers one object
+   (at most the limit) because it decodes only bytes whose hash matched; the second pass streams each object straight
+   into the tar with the size read in the first pass, and an object whose hash then differs fails the build (`"day <d>:
+   object <key> changed during the build"`).
+4. **Streamed decoding.** After the hash matched, an object is decoded as a stream (`Decoder.Reset` + `io.Copy` through
+   `io.LimitReader(decoder, limit+1)`), first only counting its lines and bytes, then once more into `events.jsonl`, so
+   an undecodable or too large object leaves no partial events. The decoder refuses a declared window above 8 MiB
+   (`WithDecoderMaxWindow`, the window of the encoder of audit objects); a single-segment frame sizes its window from
+   its content size, which the decode limit (256 MiB) bounds. Peak memory of a build is about one buffered object plus
+   the decoder window.
+
+### Amendment 2026-10-31 (PDK-652: current signing key listed before the first seal)
+
+Architect decision 2026-10-31 (PDK-652), implemented in PDK-652. Extends decision 36; no migration, no change to the
+API or the package format.
+
+1. **Publication at startup.** Besides the publication after every `Sign` in `sealDay` and `Build`, `serve
+   audit-writer` publishes OpenBao's newest audit-chain version (the highest version `bao.PublicKeys` returns, the one
+   the next seal or export signs with) once at startup through `KeyPublisher.EnsureCurrent`, the same
+   `ensureSigningKey` path and the same per-process key cache as the sealer. `GET /api/v1/audit/keys` therefore lists
+   the current key on a fresh platform before any seal. Older versions are published only when a seal or export signs
+   with them.
+2. **Non-blocking, idempotent, retried.** The publication runs alongside the writer's other loops and never delays
+   consuming, sealing, exports or verification. While OpenBao or the audit database does not answer (sealed OpenBao,
+   database not yet migrated) it retries with a backoff from 1 s doubling to 1 min. `INSERT … ON CONFLICT DO NOTHING`
+   keeps it safe with several replicas.
+3. **Mismatch unchanged.** A published key that differs from OpenBao's for the same version is detected as before
+   (`ErrSigningKeyMismatch`, logged with both fingerprints); the startup publication does not retry it, because it
+   persists until the key is rotated and every seal and export reports it again.

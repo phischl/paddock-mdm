@@ -306,18 +306,19 @@ func (discardCommands) ClaimResult(_ context.Context, device, _ uuid.UUID, statu
 }
 
 type env struct {
-	t        *testing.T
-	keysDown bool               // the fake bundle key source fails
-	orgs     *app.Organizations // the organization use cases, for their test hooks
-	handler  http.Handler
-	keys     *admin.Keyring
-	router   routers.Router
-	super    *pgx.Conn
-	writer   *db.AuditWriterPool
-	idp      *fakeIdP
-	release  minisign.PrivateKey // signs agent releases the server accepts
-	acme     uuid.UUID
-	globex   uuid.UUID
+	t         *testing.T
+	keysDown  bool               // the fake bundle key source fails
+	orgs      *app.Organizations // the organization use cases, for their test hooks
+	handler   http.Handler
+	keys      *admin.Keyring
+	router    routers.Router
+	super     *pgx.Conn
+	writer    *db.AuditWriterPool
+	writerDSN string // the same role, for statements the generated queries do not offer
+	idp       *fakeIdP
+	release   minisign.PrivateKey // signs agent releases the server accepts
+	acme      uuid.UUID
+	globex    uuid.UUID
 	// disk is the escrow-wrap key and the escrow bucket of the disk recovery (plan M4b decision 14).
 	disk *diskEscrow
 	// stepUps are the step-up ID tokens, kept as Valkey would and verified as the escrow-reader would.
@@ -383,7 +384,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
+	e := &env{t: t, keys: keys, super: super, writer: writer, writerDSN: ag.Writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
 		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}}
 	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
@@ -415,6 +416,8 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Logins:         app.NewLogins(runner, orgPool, idp),
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
 		WatchedUnits:   app.NewWatchedUnits(runner, orgPool),
+		Privacy:        app.NewPrivacy(runner, orgPool),
+		ReadAudit:      app.NewReadAudit(runner),
 		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
 		Commands:       app.NewDeviceCommands(runner, orgPool),
@@ -426,6 +429,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Inventory:      app.NewInventory(orgPool),
 		AuditLog:       app.NewAuditLog(reader, orgPool),
 		AuditIntegrity: app.NewAuditIntegrity(reader),
+		AuditExports:   app.NewAuditExports(runner, reader),
 		Attention:      app.NewAttention(orgPool),
 		Findings:       app.NewFindings(runner, orgPool),
 		AccountList:    app.NewAccountList(orgPool),
