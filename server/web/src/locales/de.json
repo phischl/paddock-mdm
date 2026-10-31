@@ -87,6 +87,7 @@
     "software": "Software",
     "vulnerabilities": "Schwachstellen",
     "attention": "Handlungsbedarf",
+    "findings": "Feststellungen",
     "attentionCount": "{count, plural, one {# offener Befund} other {# offene Befunde}}",
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
@@ -2004,6 +2005,91 @@
     },
     "device": "Gerät",
     "conditions": "Befunde"
+  },
+  "findings": {
+    "title": "Feststellungen",
+    "summary": "Manipulationsereignisse und Handlungsbedarf Ihrer Geräte. Übernehmen Sie eine Feststellung, weisen Sie sie zu und schließen Sie sie mit einer Begründung; jeder Schritt steht im Audit-Log.",
+    "code": "Feststellung",
+    "statusColumn": "Status",
+    "device": "Gerät",
+    "occurrences": "Vorkommen",
+    "assignee": "Zuständig",
+    "lastSeen": "Zuletzt gesehen",
+    "cleared": "Erledigt",
+    "clearedHint": "Der Befund ist verschwunden; die Feststellung bleibt, bis jemand sie schließt.",
+    "done": "{finding} ist jetzt {status}.",
+    "deviceTitle": "Feststellungen",
+    "openList": "Feststellungen öffnen",
+    "status": {
+      "open": "Offen",
+      "acknowledged": "Zur Kenntnis genommen",
+      "in_progress": "In Bearbeitung",
+      "resolved": "Behoben",
+      "accepted_risk": "Risiko akzeptiert",
+      "false_positive": "Fehlalarm"
+    },
+    "kinds": {
+      "tamper": "Manipulationsereignis",
+      "attention": "Handlungsbedarf"
+    },
+    "resolutions": {
+      "resolved": "Behoben",
+      "accepted_risk": "Risiko akzeptiert",
+      "false_positive": "Fehlalarm"
+    },
+    "filters": {
+      "status": "Status",
+      "statusHint": "Ohne Auswahl: offen, zur Kenntnis genommen und in Bearbeitung.",
+      "kind": "Art",
+      "cleared": "Erledigt",
+      "clearedHint": "Ohne Auswahl sind erledigte Feststellungen ausgeblendet.",
+      "clearedOnly": "Nur erledigte Feststellungen"
+    },
+    "acknowledge": {
+      "action": "Zur Kenntnis nehmen",
+      "label": "Zur Kenntnis nehmen: {finding}",
+      "title": "Feststellung zur Kenntnis nehmen",
+      "message": "Diese Feststellung als gesehen markieren: {finding}. Sie bleibt offen, bis sie geschlossen wird.",
+      "confirm": "Zur Kenntnis nehmen"
+    },
+    "assign": {
+      "action": "Zuweisen",
+      "label": "Zuweisen: {finding}",
+      "title": "Feststellung zuweisen",
+      "message": "Wer kümmert sich um diese Feststellung? {finding}",
+      "assignee": "Zuständig",
+      "hint": "Administratoren und Operatoren Ihrer Organisation. Leeren Sie das Feld, um die Zuweisung zu entfernen.",
+      "submit": "Zuweisen",
+      "unassign": "Zuweisung entfernen"
+    },
+    "close": {
+      "action": "Schließen",
+      "label": "Schließen: {finding}",
+      "title": "Feststellung schließen",
+      "message": "Diese Feststellung mit einem Ergebnis und einer Begründung schließen: {finding}. Das Audit-Log behält beides.",
+      "resolution": "Ergebnis",
+      "acceptedRiskHint": "Risiko akzeptiert erfordert einen Organisations-Administrator.",
+      "reason": "Begründung",
+      "reasonHint": "Fakten und Ticket-Verweise, keine persönlichen Wertungen.",
+      "reasonRequired": "Geben Sie eine Begründung ein.",
+      "reasonTooLong": "Die Begründung ist zu lang.",
+      "externalRef": "Externer Verweis (optional)",
+      "externalRefHint": "Eine Ticket- oder Änderungsnummer in einem anderen System.",
+      "externalRefTooLong": "Der Verweis ist zu lang.",
+      "submit": "Feststellung schließen"
+    },
+    "reopen": {
+      "action": "Wieder öffnen",
+      "label": "Wieder öffnen: {finding}",
+      "title": "Feststellung wieder öffnen",
+      "message": "Diese Feststellung wieder öffnen: {finding}. Eine Begründung ist nötig und steht im Audit-Log.",
+      "reason": "Begründung",
+      "confirm": "Wieder öffnen"
+    },
+    "empty": {
+      "title": "Keine Feststellungen",
+      "description": "Nichts erfordert eine Entscheidung. Manipulationsereignisse und Handlungsbedarf erscheinen hier, sobald sie auftreten."
+    }
   },
   "palette": {
     "title": "Befehlspalette",
