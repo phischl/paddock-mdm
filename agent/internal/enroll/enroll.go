@@ -58,6 +58,9 @@ type Options struct {
 	Proxy        string
 	// SkipWhenBusy returns ErrBusy instead of waiting while another enrollment holds the enrollment lock.
 	SkipWhenBusy bool
+	// BusyLogged is kept by the caller of Autoinstalled across attempts, so a skip because of a held lock is logged
+	// once and not at every retry; nil logs every skip.
+	BusyLogged *bool
 	// Method is the enrollment method the request sends: paddockd enroll adopts an installed device, Autoinstalled
 	// sets Method(Layout) itself.
 	Method string
@@ -78,7 +81,7 @@ func Run(ctx context.Context, o Options) (int, error) {
 		}
 	}
 	l := o.Layout
-	release, err := lock(l, !o.SkipWhenBusy)
+	release, err := lock(ctx, o)
 	if err != nil {
 		return ExitError, err
 	}
@@ -96,11 +99,16 @@ func Run(ctx context.Context, o Options) (int, error) {
 		return ExitRejected, errors.New("the enrollment of this device was rejected")
 	}
 	var token string
-	if o.ConfigPath != "" {
+	switch {
+	case o.ConfigPath != "" && st.EnrollmentID != "" && configGone(o.ConfigPath):
+		// The other side of the enrollment lock started this enrollment and removed the configuration meanwhile: resume
+		// with what it stored instead of failing on the missing file.
+		slog.InfoContext(ctx, "resuming the enrollment started meanwhile", "enrollment_id", st.EnrollmentID)
+	case o.ConfigPath != "":
 		if token, err = storeConfig(o); err != nil {
 			return ExitError, err
 		}
-	} else if st.EnrollmentID == "" {
+	case st.EnrollmentID == "":
 		return ExitError, errors.New("--config is required for a new enrollment")
 	}
 	cfg, err := config.LoadAgent(l.AgentConfig())
@@ -147,6 +155,16 @@ func Autoinstalled(ctx context.Context, o Options) bool {
 	}
 	o.RemoveConfig, o.NoWait, o.SkipWhenBusy, o.Method = true, true, true, Method(o.Layout)
 	code, err := Run(ctx, o)
+	if errors.Is(err, ErrBusy) {
+		// A deliberate skip while `paddockd enroll` runs, possibly for hours waiting for approval: no warning.
+		if o.BusyLogged == nil || !*o.BusyLogged {
+			slog.InfoContext(ctx, "paddockd enroll is enrolling this device; the autoinstall enrollment waits for it")
+			if o.BusyLogged != nil {
+				*o.BusyLogged = true
+			}
+		}
+		return false
+	}
 	switch code {
 	case ExitActive, ExitPending:
 		slog.InfoContext(ctx, "device enrolled with the configuration of the autoinstall", "pending", code == ExitPending)
@@ -159,12 +177,11 @@ func Autoinstalled(ctx context.Context, o Options) bool {
 	return false
 }
 
-// Method is the enrollment method of the agent's own enrollment (plan M11 amendment R6.5): autoinstall only with
-// /etc/paddock/disk-setup.json, which the Paddock autoinstall writes and nothing else does before enrollment, adopted
-// otherwise — a configuration file alone proves nothing, and report-only is the safe default. The disk-setup-pending
-// marker cannot serve: the first-boot disk setup removes it before the agent starts.
+// Method is the enrollment method of the agent's own enrollment (plan M11 amendment R6.5): autoinstall only with the
+// marker that only the Paddock autoinstall writes, adopted otherwise — a configuration file alone proves nothing,
+// and report-only is the safe default.
 func Method(l paths.Layout) string {
-	if _, err := os.Stat(l.DiskSetupConfig()); err == nil {
+	if _, err := os.Stat(l.AutoinstallMarker()); err == nil {
 		return protocol.EnrollmentAutoinstall
 	}
 	return protocol.EnrollmentAdopted
@@ -173,11 +190,16 @@ func Method(l paths.Layout) string {
 // ErrBusy reports that another enrollment of this device holds the enrollment lock.
 var ErrBusy = errors.New("another enrollment of this device is running")
 
+// LockRetry is the interval at which `paddockd enroll` retries a held enrollment lock.
+const LockRetry = 2 * time.Second
+
 // lock takes the enrollment lock shared by `paddockd enroll` and the agent's autoinstall loop, so a device never sends
-// two concurrent enrollment requests (plan M11 amendment R6.5); wait blocks until it is free, otherwise a held lock
-// is ErrBusy. The lock is released when the returned function closes the file, or when the process exits.
-func lock(l paths.Layout, wait bool) (func(), error) {
-	path := l.EnrollLock()
+// two concurrent enrollment requests (plan M11 amendment R6.5). A held lock is ErrBusy with o.SkipWhenBusy; otherwise
+// lock says once that it waits and retries every LockRetry through o.Sleep, so cancelling ctx (Ctrl-C) ends the wait
+// — a blocking flock would ignore the signal. The lock is released when the returned function closes the file, or
+// when the process exits.
+func lock(ctx context.Context, o Options) (func(), error) {
+	path := o.Layout.EnrollLock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("enrollment lock: %w", err)
 	}
@@ -185,18 +207,26 @@ func lock(l paths.Layout, wait bool) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("enrollment lock: %w", err)
 	}
-	how := syscall.LOCK_EX
-	if !wait {
-		how |= syscall.LOCK_NB
-	}
-	if err := syscall.Flock(int(f.Fd()), how); err != nil { //nolint:gosec // a file descriptor fits an int
-		_ = f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+	for waiting := false; ; waiting = true {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) //nolint:gosec // a file descriptor fits an int
+		switch {
+		case err == nil:
+			return func() { _ = f.Close() }, nil
+		case !errors.Is(err, syscall.EWOULDBLOCK):
+			_ = f.Close()
+			return nil, fmt.Errorf("enrollment lock: %w", err)
+		case o.SkipWhenBusy:
+			_ = f.Close()
 			return nil, ErrBusy
 		}
-		return nil, fmt.Errorf("enrollment lock: %w", err)
+		if !waiting {
+			slog.InfoContext(ctx, "another enrollment of this device is running; waiting")
+		}
+		if err := o.Sleep(ctx, LockRetry); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("waiting for another enrollment of this device: %w", err)
+		}
 	}
-	return func() { _ = f.Close() }, nil
 }
 
 // requestEnrollment sends the enrollment request and retries invalid_token answers.
@@ -245,6 +275,12 @@ func storeConfig(o Options) (string, error) {
 		}
 	}
 	return ec.Token, nil
+}
+
+// configGone reports whether the enrollment configuration at path no longer exists.
+func configGone(path string) bool {
+	_, err := os.Stat(path)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func removeConfig(o Options) error {

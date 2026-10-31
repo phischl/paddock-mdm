@@ -277,8 +277,9 @@ func TestEnrollmentMethod(t *testing.T) {
 }
 
 // TestAutoinstalledMethod (plan M11 amendment R6.5): the agent's own enrollment sends autoinstall only on a device
-// with the autoinstall's disk setup configuration; a configuration at the daemon's path alone gives adopted (fail
-// safe), whatever the caller asked for.
+// with the marker of the autoinstall; a configuration at the daemon's path alone gives adopted (fail safe), also next
+// to a disk setup configuration, which the disk conversion writes on adopted devices too, and whatever the caller
+// asked for.
 func TestAutoinstalledMethod(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -303,8 +304,11 @@ func TestAutoinstalledMethod(t *testing.T) {
 			if err := os.WriteFile(o.ConfigPath, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.WriteFile(f.layout.DiskSetupConfig(), []byte("{\"boot_pin_min_length\":8}\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			if tc.marker {
-				if err := os.WriteFile(f.layout.DiskSetupConfig(), []byte("{\"boot_pin_min_length\":8}\n"), 0o644); err != nil {
+				if err := os.WriteFile(f.layout.AutoinstallMarker(), nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -351,14 +355,16 @@ func TestEnrollmentLock(t *testing.T) {
 	}
 
 	release := holdLock(t, f.layout)
-	if enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 0 {
-		t.Fatalf("autoinstall loop enrolled while the lock was held: %d requests", len(f.g.Enrolls))
+	var busyLogged bool
+	o.BusyLogged = &busyLogged
+	if enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 0 || !busyLogged {
+		t.Fatalf("autoinstall loop while the lock was held: %d requests, busy logged %v", len(f.g.Enrolls), busyLogged)
 	}
 	if _, err := os.Stat(o.ConfigPath); err != nil {
 		t.Fatalf("configuration removed while busy: %v", err)
 	}
 	cli := f.options(f.cfgPath)
-	cli.NoWait = true
+	cli.NoWait, cli.Sleep = true, shortSleep
 	done := make(chan int, 1)
 	go func() {
 		code, _ := enroll.Run(context.Background(), cli)
@@ -378,5 +384,64 @@ func TestEnrollmentLock(t *testing.T) {
 	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
 	if !enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 1 {
 		t.Fatalf("autoinstall loop after paddockd enroll: %d requests", len(f.g.Enrolls))
+	}
+}
+
+// shortSleep waits briefly instead of the given duration, so a lock wait retries quickly in tests.
+func shortSleep(ctx context.Context, _ time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(5 * time.Millisecond):
+		return nil
+	}
+}
+
+// TestEnrollmentLockWaitIsInterruptible: `paddockd enroll` waiting for a held lock ends with a clear error when its
+// context is cancelled (Ctrl-C), without a request.
+func TestEnrollmentLockWaitIsInterruptible(t *testing.T) {
+	f := newFixture(t)
+	release := holdLock(t, f.layout)
+	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
+	cli := f.options(f.cfgPath)
+	waits := 0
+	cli.Sleep = func(ctx context.Context, d time.Duration) error {
+		if d != enroll.LockRetry {
+			t.Errorf("lock retry after %v", d)
+		}
+		if waits++; waits == 3 {
+			cancel()
+		}
+		return ctx.Err()
+	}
+	code, err := enroll.Run(ctx, cli)
+	if code != enroll.ExitError || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "another enrollment") || waits != 3 {
+		t.Fatalf("cancelled wait: exit %d, %v after %d waits", code, err, waits)
+	}
+	if len(f.g.Enrolls) != 0 {
+		t.Fatalf("%d enrollment requests", len(f.g.Enrolls))
+	}
+}
+
+// TestResumeWithoutConfiguration: when the enrollment configuration is gone because the other side of the lock
+// started the enrollment and removed it, `paddockd enroll` resumes that enrollment instead of failing on the file.
+func TestResumeWithoutConfiguration(t *testing.T) {
+	f := newFixture(t)
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollPending, DeviceID: testgw.DeviceID})
+	o := f.options(f.cfgPath)
+	o.NoWait = true
+	if code, err := enroll.Run(context.Background(), o); code != enroll.ExitPending || err != nil {
+		t.Fatalf("first run: %d, %v", code, err)
+	}
+	if _, err := os.Stat(f.cfgPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("configuration not removed")
+	}
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
+	if code, err := enroll.Run(context.Background(), f.options(f.cfgPath)); code != enroll.ExitActive || err != nil {
+		t.Fatalf("resume with a removed configuration: %d, %v", code, err)
+	}
+	if len(f.g.Enrolls) != 1 {
+		t.Fatalf("%d enrollment requests", len(f.g.Enrolls))
 	}
 }

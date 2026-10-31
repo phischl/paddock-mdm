@@ -545,8 +545,8 @@ func TestReportOnlyApplyChangesNothing(t *testing.T) {
 }
 
 // TestReportOnlyPlanErrorsAndCutOff: a resource whose plan fails is reported failed with the message and Errors stays
-// empty (plan M11 amendment R6.6); more than 50
-// plan lines are cut with "… and N more" and every line is at most 256 bytes of valid UTF-8.
+// empty (plan M11 amendment R6.6); more than 50 plan lines are cut with "… and N more" and every line is at most 256
+// bytes of valid UTF-8.
 func TestReportOnlyPlanErrorsAndCutOff(t *testing.T) {
 	ctx := context.Background()
 	sys, a, _, _ := adoptedDevice(t)

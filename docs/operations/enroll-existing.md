@@ -63,7 +63,8 @@ Fix every `fail` before you continue. A `warn` does not block adoption but tells
 
 ## 4. Install the packages
 
-These are the steps of the system test harness, in the same order.
+These are the steps of the system test harness, in the same order; the harness still keeps the enrollment
+configuration at a temporary path instead of `/root/paddock-enroll.json` (section 5).
 
 1. Download the packages of the release you want to roll out; `<arch>` is `amd64` or `arm64`:
    `https://bundles.<domain>/packages/<version>/paddock-supervisor_<version>_<arch>.deb`,

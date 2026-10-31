@@ -86,6 +86,10 @@ func (l Layout) EnrollConfig() string { return l.Join("/etc/paddock/enroll.json"
 // below the state directory, which both have, unlike /run/paddock, which exists only while the supervisor runs.
 func (l Layout) EnrollLock() string { return l.Join("/var/lib/paddock/enroll.lock") }
 
+// AutoinstallMarker exists only on a device installed with the Paddock autoinstall; the agent then enrolls as
+// autoinstall, otherwise as adopted (plan M11 amendment R6.5).
+func (l Layout) AutoinstallMarker() string { return l.Join("/etc/paddock/autoinstall.marker") }
+
 // DiskSetupConfig holds the settings of the first-boot disk setup (plan M4b decision 4).
 func (l Layout) DiskSetupConfig() string { return l.Join("/etc/paddock/disk-setup.json") }
 
