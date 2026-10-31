@@ -1196,3 +1196,12 @@ without a migration merge as soon as their dependencies are on the branch. The V
    kind in M9's findings round. **Recommendation: (a)**, default chosen; nothing blocked.
 5. Unchanged from §12 with their defaults: `settings.rollout` not in the declarative document; minimum wave duration
    15 minutes in production; profiles not staged.
+
+### R6. Answers of the architect (2026-10-31)
+
+1. `paddockctl apply` has no `--urgent` and no `--reason`; the urgent opt-out is portal-only. PDK-159 documents it in
+   the `paddockctl apply` help text, in `docs/operations/paddockctl.md` and in `configuration-rollouts.md`.
+2. `POST /api/v1/devices/{id}/enforce` carries `x-paddock-mcp: { expose: false }` (R2.2 option a).
+3. Change sets cover `settings.managed_files` and `settings.privacy` in PDK-154; `settings.watched_units` is covered
+   once M9 is merged into `cluster/config-software` (PDK-154 starts after that merge anyway, R4).
+4. Report-only devices become M9 attention findings (R2.8 option a).

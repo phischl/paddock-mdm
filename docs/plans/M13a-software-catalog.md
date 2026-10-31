@@ -1179,3 +1179,16 @@ together with M11's `TestPreflight|TestAdoptionGates|TestConfigRolloutGates` (al
 4. **Icon size refusal as 400** (R2.3) instead of a new 413 code: default 400; PDK-409 proceeds.
 5. Unchanged from §12 with their defaults: no step-up for assignments; `StateChanged(ScopeOrg)`; `apt-get remove`
    without purge; no attention kind for failed software; per-package audit events; keyring files; immutable slugs.
+
+### R6. Answers of the architect (2026-10-31)
+
+1. ADR 0042 is accepted (status line changed in place, "accepted by architect 2026-10-31").
+2. The architect adds a dated amendment to ADR 0032 with rows for the four new tables before PDK-414.
+3. `pkg/openpgpkey` without a new dependency is accepted **only as a parse-and-inspect reader**: fingerprint,
+   algorithm, key size, expiry and user IDs for display and validation. Paddock code never verifies OpenPGP
+   signatures; verification stays with apt/dnf on the device. Binding conditions for PDK-408: strict length bounds on
+   every length field and on the whole input; armored and binary input; unknown packet versions are rejected; a Go
+   fuzz test `FuzzParse` is checked in; PDK-408 is risk high and gets an external review. If any ticket turns out to
+   need signature verification on the server, it stops and the question goes back to the architect (a vetted library
+   would be a new dependency that needs the maintainer's approval).
+4. The icon size refusal is `400 invalid_request` (R2.3).
