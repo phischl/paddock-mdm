@@ -209,3 +209,67 @@ func TestExportBuildFailsOnSigningKeyMismatch(t *testing.T) {
 		t.Fatalf("published key of v%d was rewritten: %x", k.version, got)
 	}
 }
+
+// TestEnsureCurrentPublishesTheNewestKeyWithoutASeal: the newest version OpenBao reports is published before any seal
+// or export, older versions are not (PDK-652).
+func TestEnsureCurrentPublishesTheNewestKeyWithoutASeal(t *testing.T) {
+	k := newKeyTestEnv(t)
+	ctx := context.Background()
+	older, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := func(context.Context) (map[int][]byte, error) {
+		return map[int][]byte{k.version - 1: older, k.version: k.pub}, nil
+	}
+	publisher := auditwriter.NewKeyPublisher(keys)
+	for range 2 {
+		if err := publisher.EnsureCurrent(ctx, k.pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := k.published(t); len(got) != 1 || string(got[0]) != string(k.pub) {
+		t.Fatalf("published keys of v%d = %x, want exactly %x", k.version, got, []byte(k.pub))
+	}
+	var n int
+	if err := k.super.QueryRow(ctx, "SELECT count(*) FROM audit_signing_key WHERE public_key = $1", []byte(older)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("the older version's key was published %d times", n)
+	}
+}
+
+func TestEnsureCurrentDetectsAMismatch(t *testing.T) {
+	k := newKeyTestEnv(t)
+	ctx := context.Background()
+	other, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.super.Exec(ctx, "INSERT INTO audit_signing_key (key_version, public_key) VALUES ($1, $2)", k.version, []byte(other)); err != nil {
+		t.Fatal(err)
+	}
+	if err := auditwriter.NewKeyPublisher(k.keyFn).EnsureCurrent(ctx, k.pool); !errors.Is(err, auditwriter.ErrSigningKeyMismatch) {
+		t.Fatalf("EnsureCurrent over a different published key: err = %v, want ErrSigningKeyMismatch", err)
+	}
+	if got := k.published(t); len(got) != 1 || string(got[0]) != string([]byte(other)) {
+		t.Fatalf("published key of v%d was rewritten: %x", k.version, got)
+	}
+}
+
+func TestEnsureCurrentFailsWithoutAUsableKey(t *testing.T) {
+	k := newKeyTestEnv(t)
+	for name, keys := range map[string]auditwriter.PublicKeys{
+		"no versions": func(context.Context) (map[int][]byte, error) { return map[int][]byte{}, nil },
+		"short key":   func(context.Context) (map[int][]byte, error) { return map[int][]byte{k.version: k.pub[:16]}, nil },
+		"read fails":  func(context.Context) (map[int][]byte, error) { return nil, errors.New("openbao down") },
+	} {
+		if err := auditwriter.NewKeyPublisher(keys).EnsureCurrent(context.Background(), k.pool); err == nil {
+			t.Fatalf("%s: EnsureCurrent succeeded", name)
+		}
+	}
+	if got := k.published(t); len(got) != 0 {
+		t.Fatalf("a key was published: %x", got)
+	}
+}

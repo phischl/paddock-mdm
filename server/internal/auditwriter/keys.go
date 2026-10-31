@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
 // ErrSigningKeyMismatch means OpenBao's public key for an audit-chain version differs from the one already published.
@@ -51,18 +52,56 @@ func (p *KeyPublisher) Ensure(ctx context.Context, q *auditstore.Queries, versio
 	return ensureSigningKey(ctx, q, version, pub)
 }
 
+// EnsureCurrent publishes the public key of OpenBao's newest audit-chain version, the one the next seal or export
+// signs with, so GET /api/v1/audit/keys lists it before the first seal (PDK-652). It is idempotent and safe with
+// several replicas; an already published version whose key differs is ErrSigningKeyMismatch, as for a seal.
+func (p *KeyPublisher) EnsureCurrent(ctx context.Context, pool *db.AuditWriterPool) error {
+	version, pub, err := p.current(ctx)
+	if err != nil {
+		return err
+	}
+	return pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		return ensureSigningKey(ctx, q, version, pub)
+	})
+}
+
+func (p *KeyPublisher) current(ctx context.Context) (int, []byte, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cached == nil || p.now().Sub(p.at) >= keyCacheTTL {
+		if err := p.refresh(ctx); err != nil {
+			return 0, nil, err
+		}
+	}
+	version := 0
+	for v := range p.cached {
+		version = max(version, v)
+	}
+	if version == 0 {
+		return 0, nil, fmt.Errorf("%w: OpenBao has no audit-chain public key", ErrKeyVersion)
+	}
+	return version, p.cached[version], nil
+}
+
+func (p *KeyPublisher) refresh(ctx context.Context) error {
+	keys, err := p.keys(ctx)
+	if err != nil {
+		return fmt.Errorf("public keys: %w", err)
+	}
+	p.cached, p.at = keys, p.now()
+	return nil
+}
+
 func (p *KeyPublisher) lookup(ctx context.Context, version int) ([]byte, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if pub, ok := p.cached[version]; ok && p.now().Sub(p.at) < keyCacheTTL {
 		return pub, nil
 	}
-	keys, err := p.keys(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("public keys: %w", err)
+	if err := p.refresh(ctx); err != nil {
+		return nil, err
 	}
-	p.cached, p.at = keys, p.now()
-	pub, ok := keys[version]
+	pub, ok := p.cached[version]
 	if !ok {
 		return nil, fmt.Errorf("%w: audit-chain v%d has no public key", ErrKeyVersion, version)
 	}

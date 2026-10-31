@@ -2033,3 +2033,22 @@ package format; `audit.export_completed` gains the param `reason`.
    (`WithDecoderMaxWindow`, the window of the encoder of audit objects); a single-segment frame sizes its window from
    its content size, which the decode limit (256 MiB) bounds. Peak memory of a build is about one buffered object plus
    the decoder window.
+
+### Amendment 2026-10-31 (PDK-652: current signing key listed before the first seal)
+
+Architect decision 2026-10-31 (PDK-652), implemented in PDK-652. Extends decision 36; no migration, no change to the
+API or the package format.
+
+1. **Publication at startup.** Besides the publication after every `Sign` in `sealDay` and `Build`, `serve
+   audit-writer` publishes OpenBao's newest audit-chain version (the highest version `bao.PublicKeys` returns, the one
+   the next seal or export signs with) once at startup through `KeyPublisher.EnsureCurrent`, the same
+   `ensureSigningKey` path and the same per-process key cache as the sealer. `GET /api/v1/audit/keys` therefore lists
+   the current key on a fresh platform before any seal. Older versions are published only when a seal or export signs
+   with them.
+2. **Non-blocking, idempotent, retried.** The publication runs alongside the writer's other loops and never delays
+   consuming, sealing, exports or verification. While OpenBao or the audit database does not answer (sealed OpenBao,
+   database not yet migrated) it retries with a backoff from 1 s doubling to 1 min. `INSERT … ON CONFLICT DO NOTHING`
+   keeps it safe with several replicas.
+3. **Mismatch unchanged.** A published key that differs from OpenBao's for the same version is detected as before
+   (`ErrSigningKeyMismatch`, logged with both fingerprints); the startup publication does not retry it, because it
+   persists until the key is rotated and every seal and export reports it again.
