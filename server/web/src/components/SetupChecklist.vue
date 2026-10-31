@@ -93,9 +93,17 @@ const visible = computed(() => !!session.me && !setup.dismissed)
 </template>
 
 <style scoped>
+.pd-setup {
+  margin-bottom: var(--pd-space-4, 16px);
+}
+
 .pd-setup-steps {
   margin: 0;
   padding: 0 var(--pd-space-4, 16px) var(--pd-space-4, 16px) calc(var(--pd-space-4, 16px) + 1.5em);
+}
+
+.pd-setup-steps li + li {
+  margin-top: 0.5em;
 }
 
 .pd-setup-state {
@@ -104,5 +112,13 @@ const visible = computed(() => !!session.me && !setup.dismissed)
   margin-right: 0.5em;
   font-size: 0.8125rem;
   opacity: 0.75;
+}
+
+@media (max-width: 600px) {
+  .pd-setup-state {
+    display: block;
+    min-width: 0;
+    margin-right: 0;
+  }
 }
 </style>
