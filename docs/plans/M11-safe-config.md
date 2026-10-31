@@ -1219,3 +1219,9 @@ without a migration merge as soon as their dependencies are on the branch. The V
 7. **What report-only does not stop.** Paddock's own updates (agent and supervisor), revocation, the LUKS tick and the
    dead man's switch keep running on a report-only device (intended); PDK-163's adoption guide lists them.
    `rotate_admin_password` on a report-only device is answered `failed` with reason `report_only`.
+8. **Amendment to item 5 (2026-10-31, architect).** The autoinstall-only marker is a dedicated file
+   `/etc/paddock/autoinstall.marker` (root, 0600) that only the autoinstall template writes in its late-commands.
+   Neither the disk-setup marker (removed by the first-boot disk setup before the agent enrolls) nor
+   `/etc/paddock/disk-setup.json` (also written by the in-place disk conversion of an adopted device) qualifies. The
+   enrollment lock is `/var/lib/paddock/enroll.lock` (flock); `paddockd enroll` waits on it interruptibly, the daemon
+   skips. PDK-162 asserts the enrollment method in the VM gate and moves the harness to the runbook path.
