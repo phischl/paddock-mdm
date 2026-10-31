@@ -381,6 +381,10 @@ func TestUserIDControlAndBidiRunesReplaced(t *testing.T) {
 		"\uFEFFbom soft\u00ADhyphen":                  "\ufffdbom soft\ufffdhyphen",
 		"tag\U000E0000\U000E0001\U000E0041\U000E007F": "tag\ufffd\ufffd\ufffd\ufffd",
 		"private\uE000\U000F0000":                     "private\ufffd\ufffd",
+		"cgj a\u034Fb":                                "cgj a\ufffdb",
+		"vs a\uFE0Fb\U000E0100":                       "vs a\ufffdb\ufffd",
+		"fillers \u115F\u1160\u3164\uFFA0":            "fillers \ufffd\ufffd\ufffd\ufffd",
+		"braille \u2800":                              "braille \ufffd",
 	}
 	for in, want := range tests {
 		k, err := openpgpkey.Parse(cat(ed25519Key(4), uid(in)))

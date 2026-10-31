@@ -21,6 +21,7 @@ const (
 	brainpoolFP = "0311F1FD19711332107186E93504EB92B130BD0C"
 	dsaFP       = "26EB16479113C792A40357F4F0FC57026622ACAD"
 	rsaSmallSub = "7149256BEC1A7DB713A95C7366280043EC88781E"
+	rsa1024FP   = "6086E1154945BD4236AF8B9DA6E1A1495CCE1C35"
 )
 
 func key(t *testing.T, name string) string {
@@ -66,12 +67,12 @@ func TestValidateSourceAccepts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			in := valid(t)
 			mutate(&in)
-			fp, keyring, err := software.ValidateSource(in)
+			got, err := software.ValidateSource(in)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if fp != software.NormalizeFingerprint(in.Fingerprint) || len(keyring) == 0 {
-				t.Errorf("fingerprint %s, keyring of %d bytes", fp, len(keyring))
+			if got.Fingerprint != software.NormalizeFingerprint(in.Fingerprint) || len(got.Keyring) == 0 || got.WeakKey {
+				t.Errorf("fingerprint %s, keyring of %d bytes, weak %v", got.Fingerprint, len(got.Keyring), got.WeakKey)
 			}
 		})
 	}
@@ -101,6 +102,19 @@ func TestValidateSourceRefuses(t *testing.T) {
 		{"non-flat suite without components", func(in *software.SourceInput) { in.Components = nil }, "at least one entry"},
 		{"flat and non-flat suites", func(in *software.SourceInput) { in.Suites, in.Components = []string{"stable", "./"}, nil }, "all flat"},
 		{"flat and non-flat suites with components", func(in *software.SourceInput) { in.Suites = []string{"stable", "./"} }, "all flat"},
+		{"duplicate suite", func(in *software.SourceInput) { in.Suites = []string{"stable", "stable"} }, "must not repeat"},
+		{"duplicate flat suite", func(in *software.SourceInput) { in.Suites, in.Components = []string{"./", "./"}, nil }, "must not repeat"},
+		{"duplicate component", func(in *software.SourceInput) { in.Components = []string{"main", "main"} }, "must not repeat"},
+		{"name of a Hangul filler", func(in *software.SourceInput) { in.Name = "ㅤ" }, "invisible"},
+		{"name of a halfwidth Hangul filler", func(in *software.SourceInput) { in.Name = "\uFFA0" }, "invisible"},
+		{"name of Hangul choseong and jungseong fillers", func(in *software.SourceInput) { in.Name = "\u115F\u1160" }, "invisible"},
+		{"name of a braille blank", func(in *software.SourceInput) { in.Name = "⠀" }, "invisible"},
+		{"name with a combining grapheme joiner", func(in *software.SourceInput) { in.Name = "a\u034Fb" }, "invisible"},
+		{"name with a variation selector", func(in *software.SourceInput) { in.Name = "a\uFE0Fb" }, "invisible"},
+		{"name with a supplementary variation selector", func(in *software.SourceInput) { in.Name = "a\U000E0100b" }, "invisible"},
+		{"name with an unassigned tag character", func(in *software.SourceInput) { in.Name = "a\U000E0002" }, "invisible"},
+		{"name with a tag character", func(in *software.SourceInput) { in.Name = "a\U000E0041" }, "invisible"},
+		{"name of marks only", func(in *software.SourceInput) { in.Name = "\u0301\u0302" }, "at least one letter"},
 		{"no uris", func(in *software.SourceInput) { in.URIs = nil }, "uris must have"},
 		{"five uris", func(in *software.SourceInput) {
 			in.URIs = strings.Fields("https://a https://b https://c https://d https://e")
@@ -132,10 +146,7 @@ func TestValidateSourceRefuses(t *testing.T) {
 		{"missing fingerprint", func(in *software.SourceInput) { in.Fingerprint = "" }, "40 hexadecimal"},
 		{"short fingerprint", func(in *software.SourceInput) { in.Fingerprint = rsa3072FP[:39] }, "40 hexadecimal"},
 		{"non-hex fingerprint", func(in *software.SourceInput) { in.Fingerprint = "G" + rsa3072FP[1:] }, "40 hexadecimal"},
-		{"rsa 2048", func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "rsa2048.asc"), rsa2048FP }, "RSA 2048 bits"},
-		{"rsa 3072 with a 2048-bit subkey", func(in *software.SourceInput) {
-			in.SigningKey, in.Fingerprint = key(t, "rsa3072-sub2048.asc"), rsaSmallSub
-		}, "subkey 1 is RSA 2048 bits"},
+		{"rsa 1024", func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "rsa1024.asc"), rsa1024FP }, "RSA 1024 bits"},
 		{"brainpool", func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "brainpool.asc"), brainpoolFP }, "brainpoolP256r1"},
 		{"dsa", func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "dsa.asc"), dsaFP }, "algorithm DSA"},
 	}
@@ -143,7 +154,7 @@ func TestValidateSourceRefuses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			in := valid(t)
 			tt.mutate(&in)
-			_, _, err := software.ValidateSource(in)
+			_, err := software.ValidateSource(in)
 			if !errors.Is(err, software.ErrSource) || errors.Is(err, software.ErrFingerprint) {
 				t.Fatalf("err = %v, want ErrSource", err)
 			}
@@ -157,7 +168,7 @@ func TestValidateSourceRefuses(t *testing.T) {
 func TestValidateSourceFingerprintMismatch(t *testing.T) {
 	in := valid(t)
 	in.Fingerprint = rsa3072FP[:39] + "0"
-	_, _, err := software.ValidateSource(in)
+	_, err := software.ValidateSource(in)
 	if !errors.Is(err, software.ErrFingerprint) || errors.Is(err, software.ErrSource) {
 		t.Fatalf("err = %v, want ErrFingerprint", err)
 	}
@@ -168,13 +179,40 @@ func TestValidateSourceFingerprintMismatch(t *testing.T) {
 
 func TestValidateSourceKeyringIsTheDearmoredKey(t *testing.T) {
 	in := valid(t)
-	_, keyring, err := software.ValidateSource(in)
+	got, err := software.ValidateSource(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp, err := openpgpkey.FingerprintBinary(keyring)
+	fp, err := openpgpkey.FingerprintBinary(got.Keyring)
 	if err != nil || fp != rsa3072FP {
 		t.Errorf("FingerprintBinary(keyring) = %s, %v", fp, err)
+	}
+}
+
+// TestValidateSourceWeakKey covers the revised architect decision 2026-10-31: RSA 2048 to 3071 bits is accepted and
+// flagged.
+func TestValidateSourceWeakKey(t *testing.T) {
+	tests := []struct {
+		file, fp string
+		weak     bool
+	}{
+		{"rsa2048.asc", rsa2048FP, true},
+		{"rsa3072-sub2048.asc", rsaSmallSub, true},
+		{"rsa3072.asc", rsa3072FP, false},
+		{"ed25519.asc", ed25519FP, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			in := valid(t)
+			in.SigningKey, in.Fingerprint = key(t, tt.file), tt.fp
+			got, err := software.ValidateSource(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.WeakKey != tt.weak || got.Fingerprint != tt.fp {
+				t.Errorf("WeakKey = %v, fingerprint %s; want %v", got.WeakKey, got.Fingerprint, tt.weak)
+			}
+		})
 	}
 }
 
@@ -212,57 +250,68 @@ func TestKeyPolicy(t *testing.T) {
 	evenModulus := rsaParams(3072, 1, 0, 1)
 	evenModulus.RSAModulus[len(evenModulus.RSAModulus)-1] = 0x02
 	ed := ec(openpgpkey.EdDSA, "Ed25519")
+	tinyModulus := rsaParams(3072, 1, 0, 1)
+	tinyModulus.RSAModulus = []byte{1, 0, 1}
 	native := func(alg openpgpkey.Algorithm) openpgpkey.Params { return openpgpkey.Params{Algorithm: alg} }
 	tests := []struct {
 		name    string
 		primary openpgpkey.Params
 		subkeys []openpgpkey.Params
 		ok      bool
+		weak    bool
 	}{
-		{"rsa 3072", rsa(3072), nil, true},
-		{"rsa 4096 with rsa 3072 subkey", rsa(4096), []openpgpkey.Params{rsa(3072)}, true},
-		{"rsa 3071", rsa(3071), nil, false},
-		{"rsa 2048", rsa(2048), nil, false},
-		{"rsa 4096 with rsa 2048 subkey", rsa(4096), []openpgpkey.Params{rsa(2048)}, false},
-		{"eddsa ed25519 with ecdh curve25519", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDH, "Curve25519")}, true},
-		{"eddsa ed448 with ecdh x448", ec(openpgpkey.EdDSA, "Ed448"), []openpgpkey.Params{ec(openpgpkey.ECDH, "X448")}, true},
-		{"native ed25519 with x25519", native(openpgpkey.Ed25519), []openpgpkey.Params{native(openpgpkey.X25519)}, true},
-		{"native ed448 with x448", native(openpgpkey.Ed448), []openpgpkey.Params{native(openpgpkey.X448)}, true},
-		{"ecdsa p-256", ec(openpgpkey.ECDSA, "NIST P-256"), []openpgpkey.Params{ec(openpgpkey.ECDH, "NIST P-256")}, true},
-		{"ecdsa p-384", ec(openpgpkey.ECDSA, "NIST P-384"), []openpgpkey.Params{ec(openpgpkey.ECDH, "NIST P-384")}, true},
-		{"ecdsa p-521", ec(openpgpkey.ECDSA, "NIST P-521"), []openpgpkey.Params{ec(openpgpkey.ECDSA, "NIST P-521")}, true},
-		{"rsa primary with ed25519 signing subkey", rsa(3072), []openpgpkey.Params{ec(openpgpkey.EdDSA, "Ed25519")}, true},
-		{"ecdsa brainpool", ec(openpgpkey.ECDSA, "brainpoolP256r1"), nil, false},
-		{"ecdsa brainpool 512", ec(openpgpkey.ECDSA, "brainpoolP512r1"), nil, false},
-		{"ecdsa secp256k1", ec(openpgpkey.ECDSA, "secp256k1"), nil, false},
-		{"ecdh brainpool subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDH, "brainpoolP384r1")}, false},
-		{"ecdh curve25519 as primary", ec(openpgpkey.ECDH, "Curve25519"), nil, false},
-		{"native x25519 as primary", native(openpgpkey.X25519), nil, false},
-		{"native x448 as primary", native(openpgpkey.X448), nil, false},
-		{"eddsa on a nist curve", ec(openpgpkey.EdDSA, "NIST P-256"), nil, false},
-		{"ecdsa on ed25519", ec(openpgpkey.ECDSA, "Ed25519"), nil, false},
-		{"ecdsa curve25519 signing subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDSA, "Curve25519")}, false},
-		{"dsa", native(openpgpkey.DSA), nil, false},
-		{"elgamal subkey", rsa(3072), []openpgpkey.Params{native(openpgpkey.ElGamal)}, false},
-		{"rsa exponent 2^32+1", rsaParams(3072, 1, 0, 0, 0, 1), nil, true},
-		{"rsa even modulus", evenModulus, nil, false},
-		{"rsa even exponent", rsaParams(3072, 1, 0, 2), nil, false},
-		{"rsa exponent 3", rsaParams(3072, 3), nil, false},
-		{"rsa exponent 65535", rsaParams(3072, 0xFF, 0xFF), nil, false},
-		{"rsa subkey exponent 3", rsa(4096), []openpgpkey.Params{rsaParams(3072, 3)}, false},
-		{"ecdh sha-512 aes-256", ed, []openpgpkey.Params{kdf("Curve25519", 10, 9)}, true},
-		{"ecdh sha-384 aes-192", ed, []openpgpkey.Params{kdf("NIST P-384", 9, 8)}, true},
-		{"ecdh sha-1 kdf", ed, []openpgpkey.Params{kdf("Curve25519", 2, 7)}, false},
-		{"ecdh sha-224 kdf", ed, []openpgpkey.Params{kdf("Curve25519", 11, 7)}, false},
-		{"ecdh camellia kdf", ed, []openpgpkey.Params{kdf("Curve25519", 8, 11)}, false},
-		{"ecdh triple-des kdf", ed, []openpgpkey.Params{kdf("Curve25519", 8, 2)}, false},
+		{"rsa 3072", rsa(3072), nil, true, false},
+		{"rsa 4096 with rsa 3072 subkey", rsa(4096), []openpgpkey.Params{rsa(3072)}, true, false},
+		{"rsa 3071", rsa(3071), nil, true, true},
+		{"rsa 2048", rsa(2048), nil, true, true},
+		{"rsa 4096 with rsa 2048 subkey", rsa(4096), []openpgpkey.Params{rsa(2048)}, true, true},
+		{"ed25519 with rsa 2048 subkey", ed, []openpgpkey.Params{rsa(2048)}, true, true},
+		{"rsa 2047", rsa(2047), nil, false, false},
+		{"rsa 1024", rsa(1024), nil, false, false},
+		{"rsa 4096 with rsa 1024 subkey", rsa(4096), []openpgpkey.Params{rsa(1024)}, false, false},
+		{"eddsa ed25519 with ecdh curve25519", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDH, "Curve25519")}, true, false},
+		{"eddsa ed448 with ecdh x448", ec(openpgpkey.EdDSA, "Ed448"), []openpgpkey.Params{ec(openpgpkey.ECDH, "X448")}, true, false},
+		{"native ed25519 with x25519", native(openpgpkey.Ed25519), []openpgpkey.Params{native(openpgpkey.X25519)}, true, false},
+		{"native ed448 with x448", native(openpgpkey.Ed448), []openpgpkey.Params{native(openpgpkey.X448)}, true, false},
+		{"ecdsa p-256", ec(openpgpkey.ECDSA, "NIST P-256"), []openpgpkey.Params{ec(openpgpkey.ECDH, "NIST P-256")}, true, false},
+		{"ecdsa p-384", ec(openpgpkey.ECDSA, "NIST P-384"), []openpgpkey.Params{ec(openpgpkey.ECDH, "NIST P-384")}, true, false},
+		{"ecdsa p-521", ec(openpgpkey.ECDSA, "NIST P-521"), []openpgpkey.Params{ec(openpgpkey.ECDSA, "NIST P-521")}, true, false},
+		{"rsa primary with ed25519 signing subkey", rsa(3072), []openpgpkey.Params{ec(openpgpkey.EdDSA, "Ed25519")}, true, false},
+		{"ecdsa brainpool", ec(openpgpkey.ECDSA, "brainpoolP256r1"), nil, false, false},
+		{"ecdsa brainpool 512", ec(openpgpkey.ECDSA, "brainpoolP512r1"), nil, false, false},
+		{"ecdsa secp256k1", ec(openpgpkey.ECDSA, "secp256k1"), nil, false, false},
+		{"ecdh brainpool subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDH, "brainpoolP384r1")}, false, false},
+		{"ecdh curve25519 as primary", ec(openpgpkey.ECDH, "Curve25519"), nil, false, false},
+		{"native x25519 as primary", native(openpgpkey.X25519), nil, false, false},
+		{"native x448 as primary", native(openpgpkey.X448), nil, false, false},
+		{"eddsa on a nist curve", ec(openpgpkey.EdDSA, "NIST P-256"), nil, false, false},
+		{"ecdsa on ed25519", ec(openpgpkey.ECDSA, "Ed25519"), nil, false, false},
+		{"ecdsa curve25519 signing subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDSA, "Curve25519")}, false, false},
+		{"dsa", native(openpgpkey.DSA), nil, false, false},
+		{"elgamal subkey", rsa(3072), []openpgpkey.Params{native(openpgpkey.ElGamal)}, false, false},
+		{"rsa exponent 2^31-1", rsaParams(3072, 0x7F, 0xFF, 0xFF, 0xFF), nil, true, false},
+		{"rsa exponent 2^31+1", rsaParams(3072, 0x80, 0, 0, 1), nil, false, false},
+		{"rsa exponent 2^32+1", rsaParams(3072, 1, 0, 0, 0, 1), nil, false, false},
+		{"rsa exponent 2^64+1", rsaParams(3072, 1, 0, 0, 0, 0, 0, 0, 0, 1), nil, false, false},
+		{"rsa exponent not below the modulus", tinyModulus, nil, false, false},
+		{"rsa even modulus", evenModulus, nil, false, false},
+		{"rsa even exponent", rsaParams(3072, 1, 0, 2), nil, false, false},
+		{"rsa exponent 3", rsaParams(3072, 3), nil, false, false},
+		{"rsa exponent 65535", rsaParams(3072, 0xFF, 0xFF), nil, false, false},
+		{"rsa subkey exponent 3", rsa(4096), []openpgpkey.Params{rsaParams(3072, 3)}, false, false},
+		{"ecdh sha-512 aes-256", ed, []openpgpkey.Params{kdf("Curve25519", 10, 9)}, true, false},
+		{"ecdh sha-384 aes-192", ed, []openpgpkey.Params{kdf("NIST P-384", 9, 8)}, true, false},
+		{"ecdh sha-1 kdf", ed, []openpgpkey.Params{kdf("Curve25519", 2, 7)}, false, false},
+		{"ecdh sha-224 kdf", ed, []openpgpkey.Params{kdf("Curve25519", 11, 7)}, false, false},
+		{"ecdh camellia kdf", ed, []openpgpkey.Params{kdf("Curve25519", 8, 11)}, false, false},
+		{"ecdh triple-des kdf", ed, []openpgpkey.Params{kdf("Curve25519", 8, 2)}, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			k := &openpgpkey.Key{Params: tt.primary, Subkeys: tt.subkeys}
-			err := software.KeyPolicy(k)
-			if tt.ok && err != nil {
-				t.Errorf("err = %v, want accepted", err)
+			weak, err := software.KeyPolicy(k)
+			if tt.ok && (err != nil || weak != tt.weak) {
+				t.Errorf("weak = %v, err = %v; want accepted with weak = %v", weak, err, tt.weak)
 			}
 			if !tt.ok && !errors.Is(err, software.ErrSource) {
 				t.Errorf("err = %v, want ErrSource", err)

@@ -439,7 +439,8 @@ func primaryCert(uids []userID) *selfCert {
 
 // displayable turns a user ID into text that is safe to show: invalid UTF-8, control and format characters (among
 // them the bidirectional controls that can reorder what an administrator reads, Trojan Source, CVE-2021-42574, and
-// zero-width characters), line and paragraph separators, private-use characters and the tag block become U+FFFD.
+// zero-width characters), line and paragraph separators, private-use characters, the tag block, default-ignorable
+// code points (U+034F, the Hangul fillers), variation selectors and U+2800 (braille blank) become U+FFFD.
 // Replacing rather than refusing keeps a vendor key with such a user ID usable.
 func displayable(b []byte) string {
 	s := string(b)
@@ -447,8 +448,11 @@ func displayable(b []byte) string {
 		s = strings.ToValidUTF8(s, string(utf8.RuneError))
 	}
 	return strings.Map(func(r rune) rune {
-		// The tag block is listed explicitly because its unassigned code points are not in Cf.
-		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Co) || (r >= 0xE0000 && r <= 0xE007F) {
+		// The tag block is listed explicitly because its unassigned code points are not in Cf; U+2800 and U+FFA0
+		// render blank without a property that says so.
+		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Co,
+			unicode.Other_Default_Ignorable_Code_Point, unicode.Variation_Selector) ||
+			(r >= 0xE0000 && r <= 0xE007F) || r == '\u2800' || r == '\uFFA0' {
 			return utf8.RuneError
 		}
 		return r
