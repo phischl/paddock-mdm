@@ -40,6 +40,7 @@ type Deps struct {
 	UserGroups     *app.UserGroups
 	Logins         *app.Logins
 	LoginSettings  *app.LoginSettings
+	WatchedUnits   *app.WatchedUnits
 	LoginHistory   *app.LoginHistory
 	AgentUpdates   *app.AgentUpdates
 	Uninstalls     *app.Uninstalls
@@ -182,6 +183,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/revocation-requests/{id}/cancel":                         {app.ScopeOrg, app.SpecRevocationCancel},
 	"PUT /api/v1/settings/dms":                                             {app.ScopeOrg, app.SpecDMSUpdate},
 	"PUT /api/v1/settings/managed-files":                                   {app.ScopeOrg, app.SpecManagedFileSettingsChange},
+	"PUT /api/v1/settings/watched-units":                                   {app.ScopeOrg, app.SpecWatchedUnitsChange},
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
 	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
@@ -227,7 +229,7 @@ func NewHandler(d Deps) http.Handler {
 	h := &handlers{
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
-		logins: d.Logins, loginSettings: d.LoginSettings, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
+		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,

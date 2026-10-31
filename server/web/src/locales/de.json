@@ -106,6 +106,7 @@
     "shortcut": "Tastenkürzel: {keys}",
     "securityReview": "Sicherheitsprüfung",
     "operatorRoots": "Freigegebene Verzeichnisse",
+    "watchedUnits": "Überwachte Dienste",
     "mcpSettings": "MCP"
   },
   "roles": {
@@ -461,7 +462,8 @@
       "login_changed": "{actor} hat die Anmeldeeinstellungen geändert",
       "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
-      "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert"
+      "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
+      "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
@@ -1773,6 +1775,23 @@
     "empty": {
       "title": "Keine Widerrufe",
       "description": "Sperr- und Vernichtungsanfragen dieser Organisation erscheinen hier mit ihrem Fortschritt."
+    }
+  },
+  "watchedUnits": {
+    "title": "Überwachte Dienste",
+    "intro": "Fremde Agenten wie ein EDR- oder SIEM-Agent laufen als systemd-Dienste, die Paddock nicht ausliefert. Tragen Sie sie hier ein: Jedes Gerät meldet, wenn einer davon stoppt oder fehlt, genau wie beim eigenen Agenten von Paddock.",
+    "info": "Paddock meldet nur. Es installiert, startet oder startet einen überwachten Dienst nie neu.",
+    "label": "Dienste",
+    "hint": "Namen mit der Endung .service, zum Beispiel wazuh-agent.service. Nach jedem Namen die Eingabetaste drücken. Höchstens {max}.",
+    "placeholder": "wazuh-agent.service",
+    "saved": "Die überwachten Dienste wurden gespeichert. Jedes Gerät erhält sie mit seiner nächsten Konfiguration.",
+    "updatedAt": "Zuletzt gespeichert {at}",
+    "confirmTitle": "Überwachte Dienste speichern?",
+    "confirm": "{count, plural, =0 {Auf keinem Gerät wird ein Dienst überwacht.} one {# Dienst wird auf jedem Gerät überwacht.} other {# Dienste werden auf jedem Gerät überwacht.}}",
+    "errors": {
+      "notService": "{unit} ist kein Dienstname. Verwenden Sie einen Namen mit der Endung .service.",
+      "duplicate": "{unit} ist doppelt aufgeführt.",
+      "tooMany": "Höchstens {max} Dienste können überwacht werden."
     }
   },
   "dms": {

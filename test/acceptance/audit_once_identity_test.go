@@ -367,6 +367,37 @@ var identityAuditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "settings.managed_files_changed", "denied")
 		}},
 	},
+	"PUT /api/v1/settings/watched-units": {
+		// The success case writes the current units back; no other gate changes acme's list.
+		{"success", func(t *testing.T, w *auditWorld) {
+			a := adminUser(t, "a3-watched")
+			res := call(t, a.Portal, http.MethodGet, "/api/v1/settings/watched-units", nil)
+			var cur map[string]any
+			if err := res.JSON(&cur); err != nil {
+				t.Fatal(err)
+			}
+			a.stepUp(t)
+			res = call(t, a.Portal, http.MethodPut, "/api/v1/settings/watched-units", map[string]any{"units": cur["units"]})
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.watched_units_changed", "success")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			a := adminUser(t, "a3-watched")
+			res := call(t, a.Portal, http.MethodPut, "/api/v1/settings/watched-units", map[string]any{"units": []string{"paddockd.service"}})
+			expectStatus(t, res, http.StatusUnprocessableEntity, "unit_not_allowed")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.watched_units_changed", "failure")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodPut, "/api/v1/settings/watched-units", map[string]any{"units": []string{}})
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.watched_units_changed", "denied")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPut, "/api/v1/settings/watched-units", map[string]any{"units": []string{}})
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.watched_units_changed", "denied")
+		}},
+	},
 	"POST /api/v1/permission-profiles/{id}/confirm-root-grant": confirmCases("/api/v1/permission-profiles", "/confirm-root-grant",
 		"permission_profile.root_grant_confirmed", map[string]any{"name": "a3 root", "class": "full"},
 		map[string]any{"name": "a3 none", "class": "none"}),

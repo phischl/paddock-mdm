@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "abc79214c0249f98ec15af2326771478967c9120c95bfc7a7d5d952a62cdbaf2"
+const Version = "282e209acca5469f772b7adc1b4ed7a8e2ce5d052f37729832235d1d9d1683bb"
 
 var tools = []Tool{
 	{
@@ -1410,6 +1410,24 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. The numbers of the start page tile (plan M5a decision 10).\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getWatchedUnits",
+		Method:      "GET",
+		Path:        "/api/v1/settings/watched-units",
+		Pattern:     "GET /api/v1/settings/watched-units",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The third-party systemd services of the presence policy: the agents report when one of them stops. Empty until changed; updated_at is null for an empty list.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{
@@ -2833,6 +2851,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Renames the group; the slug and the Authentik name stay.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "updateWatchedUnits",
+		Method:      "PUT",
+		Path:        "/api/v1/settings/watched-units",
+		Pattern:     "PUT /api/v1/settings/watched-units",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "settings.watched_units_changed",
+		Summary:     "",
+		Description: "Roles: org_admin. Replaces the watched units: at most 32 services (names ending in .service), a duplicate is 400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a name that is not a service is 422 unit_not_allowed naming it. Paddock only reports a stopped unit; it never installs, starts or restarts it. Every device is recompiled. Needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"units\":{\"items\":{\"maxLength\":255,\"type\":\"string\"},\"maxItems\":32,\"type\":\"array\"}},\"required\":[\"units\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "uploadAgentArtifact",

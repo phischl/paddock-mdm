@@ -44,6 +44,8 @@ const (
 	TypeUpdates = "updates"
 	// TypeHostname is the type and ID of the resource the agent makes of the hostname section (plan M8h decision 10).
 	TypeHostname = "hostname"
+	// TypeWatch is the type and ID of the resource the agent makes of the watch section (plan M9 decision 39).
+	TypeWatch = "watch"
 )
 
 // Bundle is the desired state of one device.
@@ -75,6 +77,21 @@ type Bundle struct {
 	// Hostname is the device's managed name (schema v2 only, ADR 0041). Agents that do not know the section ignore
 	// it; a device without a managed name has no section.
 	Hostname *HostnameSpec `json:"hostname,omitempty"`
+	// Watch is the organization's presence policy: third-party units the agent reports when they stop (schema v2 only,
+	// plan M9 decision 39). Agents that do not know the section ignore it; an organization without watched units has no
+	// section.
+	Watch *WatchSpec `json:"watch,omitempty"`
+}
+
+// WatchSpec is the watch section: the systemd services of third-party agents (an EDR or SIEM agent) the device only
+// observes and reports, never installs or restarts.
+type WatchSpec struct {
+	Units []string `json:"units"`
+}
+
+// WatchResource turns the watch section into the resource the agent plans and applies.
+func WatchResource(s WatchSpec) (Resource, error) {
+	return resource(TypeWatch, TypeWatch, s)
 }
 
 // HostnameSpec is the hostname section: the device's managed name (ADR 0041).

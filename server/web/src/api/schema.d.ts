@@ -1441,6 +1441,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/watched-units": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The third-party systemd services of the presence policy: the
+         *     agents report when one of them stops. Empty until changed; updated_at is null for an empty list.
+         */
+        get: operations["getWatchedUnits"];
+        /**
+         * @description Roles: org_admin. Replaces the watched units: at most 32 services (names ending in .service), a duplicate is
+         *     400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a
+         *     name that is not a service is 422 unit_not_allowed naming it. Paddock only reports a stopped unit; it never
+         *     installs, starts or restarts it. Every device is recompiled. Needs a step-up within the last 300 s (403
+         *     step_up_required; API tokens cannot satisfy it).
+         */
+        put: operations["updateWatchedUnits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/mcp": {
         parameters: {
             query?: never;
@@ -4149,6 +4176,14 @@ export interface components {
         };
         ManagedFileSettingsUpdate: {
             operator_roots: string[];
+        };
+        WatchedUnits: {
+            units: string[];
+            /** Format: date-time */
+            updated_at: string | null;
+        };
+        WatchedUnitsUpdate: {
+            units: string[];
         };
         DMSSettings: {
             enabled: boolean;
@@ -7929,6 +7964,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManagedFileSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getWatchedUnits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The watched units. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchedUnits"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateWatchedUnits: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WatchedUnitsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchedUnits"];
                 };
             };
             400: components["responses"]["Problem"];
