@@ -1205,3 +1205,17 @@ without a migration merge as soon as their dependencies are on the branch. The V
 3. Change sets cover `settings.managed_files` and `settings.privacy` in PDK-154; `settings.watched_units` is covered
    once M9 is merged into `cluster/config-software` (PDK-154 starts after that merge anyway, R4).
 4. Report-only devices become M9 attention findings (R2.8 option a).
+5. **Enrollment method from an autoinstall-only marker (decisions 10, 44; PDK-161).** The agent sends
+   `enrollment_method: autoinstall` only when an autoinstall-only marker exists on the device (the disk-setup marker of
+   `docs/operations/autoinstall.md`); a configuration file without that marker gives `adopted`, so report-only is the
+   default when in doubt (fail safe). The enroll-existing runbook places the enrollment configuration outside the
+   daemon's path, at `/root/paddock-enroll.json` with mode 0600, so the daemon's autoinstall loop never picks it up.
+   `paddockd enroll` and the daemon's loop share one file lock, so a device never sends two concurrent enrollment
+   requests. A local administrator who creates the marker by hand only opts their own device into immediate
+   enforcement; that is accepted.
+6. **Plan errors of report-only devices (decision 9; PDK-158, PDK-160).** The report-only report keeps `errors: []`;
+   plan errors appear only as `failed` resources. The server shows them as their own state ("report-only, plan
+   errors"), never as a failed apply, and they never count toward a wave's failure rate.
+7. **What report-only does not stop.** Paddock's own updates (agent and supervisor), revocation, the LUKS tick and the
+   dead man's switch keep running on a report-only device (intended); PDK-163's adoption guide lists them.
+   `rotate_admin_password` on a report-only device is answered `failed` with reason `report_only`.
