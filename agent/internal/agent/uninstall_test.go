@@ -332,6 +332,8 @@ func TestUninstallInterruptedLaunchRetries(t *testing.T) {
 // wrote its result.
 func TestUninstallWaitsForSupervisorUpgrade(t *testing.T) {
 	a, launched := uninstallAgent(t)
+	// The upgrade runs: its marker is younger than supervisorpkg.StaleAfter, after which it no longer holds (PDK-479).
+	a.d.Now = func() time.Time { return time.Date(2026, 10, 18, 9, 5, 0, 0, time.UTC) }
 	marker := `{"version":"1.2.0","from_version":"1.1.0","started_at":"2026-10-18T09:00:00Z"}`
 	if err := fsutil.WriteFile(a.d.Layout.SupervisorUpgrade(), []byte(marker), 0o600, 0o700); err != nil {
 		t.Fatal(err)

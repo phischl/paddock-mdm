@@ -47,6 +47,12 @@ const (
 	CodeDeviceDiskConversionCompleted Code = "device.disk_conversion_completed"
 	CodeDeviceDiskConversionFailed    Code = "device.disk_conversion_failed"
 	CodeDeviceDiskConversionAborted   Code = "device.disk_conversion_aborted"
+	// A cancelled conversion that encrypted anyway, and an abort that could not neutralize the initrds (plan M8e
+	// amendment 2026-10-30).
+	CodeDeviceDiskConversionCompletedAfterCancel Code = "device.disk_conversion_completed_after_cancel"
+	CodeDeviceDiskConversionNeutralizeFailed     Code = "device.disk_conversion_neutralize_failed"
+	// The unlock path of a converted disk could not be reinstalled (plan M8e amendment 2026-10-30, PDK-482).
+	CodeDeviceDiskConversionUnlockRestoreFailed Code = "device.disk_conversion_unlock_restore_failed"
 
 	// Supervisor package updates (plan M8d decision 33).
 	CodeDeviceSupervisorUpdated      Code = "device.supervisor_updated"
@@ -381,6 +387,27 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Params conversion_id and by (admin or operator).",
+	},
+	CodeDeviceDiskConversionCompletedAfterCancel: {
+		Code: CodeDeviceDiskConversionCompletedAfterCancel, Emitted: true,
+		Description: "The device initialised LUKS2 on its root partition at a restart although its in-place encryption had been cancelled (the restart came before the cleanup); the conversion is adopted as encrypting, and the escrowed recovery key opens the disk (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded instead of device.disk_conversion_started when the event carries after_cancel. Params conversion_id, volume, init_s and init_result.",
+	},
+	CodeDeviceDiskConversionNeutralizeFailed: {
+		Code: CodeDeviceDiskConversionNeutralizeFailed, Emitted: true,
+		Description: "The device cancelled its in-place encryption but could not make its prepared initrds boot unencrypted; until its cleanup has rebuilt them, a restart may still encrypt the disk (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id and reason (boot_space_low when /boot has no room for the copy, else the error).",
+	},
+	CodeDeviceDiskConversionUnlockRestoreFailed: {
+		Code: CodeDeviceDiskConversionUnlockRestoreFailed, Emitted: true,
+		Description: "The device could not reinstall the unlock path of its converted disk into its initrds; until it succeeds, a kernel whose initrd was disarmed when the in-place encryption was cancelled cannot open the disk, so only the other kernels boot (actor: the device). The device retries; the disk state names the blocking issue.",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Params conversion_id and reason (kernel_not_buildable, no_bootable_kernel, boot_space_low, else the error). Reported once per reason and agent start.",
 	},
 	CodeDeviceGroupsChanged: {
 		Code: CodeDeviceGroupsChanged, Emitted: true,

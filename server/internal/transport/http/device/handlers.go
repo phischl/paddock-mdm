@@ -152,13 +152,19 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, err)
 		return
 	}
+	expected, known, err := g.d.Cache.LastDelivered(r.Context(), dev.id)
+	if err != nil {
+		g.fail(w, r, err)
+		return
+	}
 	seq, err := g.d.Cache.NextSeq(r.Context(), dev.id)
 	if err != nil {
 		g.fail(w, r, err)
 		return
 	}
-	// A failed check-in carries no seq, so the number is taken back: otherwise two failures in a row (an ingest stall,
-	// a device that gives up waiting) leave the device two behind and quarantine it as a clone.
+	// A failed check-in carries no seq, so the number is taken back (PDK-471). The release is hygiene only: it misses
+	// when a retry drew meanwhile, and clone detection compares against delivered numbers, which a failed check-in
+	// never raises (PDK-590).
 	fail := func(err error) {
 		g.releaseSeq(r, dev.id, seq)
 		g.fail(w, r, err)
@@ -185,14 +191,15 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		fail(err)
 		return
 	}
-	issued := seq - 1 // the value the device should have sent
 	received := g.d.Now().UTC()
 	hb := ingest.Heartbeat{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: received,
 		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion, Arch: boundedArch(req.Arch),
 		SchemaVersions: boundedSchemaVersions(req.SchemaVersions), Health: req.Health,
-		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq,
-		CloneSuspected: dev.headers.Seq < issued-1, DeliveredCommands: delivered,
+		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq, ExpectedSeq: expected,
+		// Without a cached delivery (upgrade, Valkey loss) nothing is flagged: a counter restored from last_seq can
+		// include published but undelivered numbers, and a real clone is caught on the next round (contract 8, PDK-590).
+		CloneSuspected: known && dev.headers.Seq < expected-1, DeliveredCommands: delivered,
 		ClockOffsetS: received.Unix() - dev.headers.Timestamp,
 	}
 	body, err := json.Marshal(hb)
@@ -207,10 +214,25 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		fail(err)
 		return
 	}
+	if err := r.Context().Err(); err != nil {
+		fail(err) // the device gave up while the publish was in flight; the number must not count as delivered
+		return
+	}
+	g.markDelivered(r, dev.id, seq)
 	writeJSON(w, http.StatusOK, out)
 }
 
-// releaseTimeout bounds taking back a sequence number; it runs detached from the request, whose failure is often the
+// markDelivered records seq as delivered right before the response. A failure is logged only (fail safe): a lower
+// sd: can only suppress a clone flag, never raise one, and the next successful check-in repairs it.
+func (g *gateway) markDelivered(r *http.Request, device uuid.UUID, seq int64) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), releaseTimeout)
+	defer cancel()
+	if err := g.d.Cache.MarkDelivered(ctx, device, seq); err != nil {
+		slog.WarnContext(ctx, "recording the delivered sequence number failed", "device_id", device, "seq", seq, "error", err)
+	}
+}
+
+// releaseTimeout bounds taking back or recording a sequence number; it runs detached from the request, whose failure is often the
 // device giving up (a cancelled context).
 const releaseTimeout = 5 * time.Second
 

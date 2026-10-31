@@ -62,7 +62,7 @@ func (r *Reports) heartbeat(ctx context.Context, messageID string, body []byte) 
 			return retry
 		case quarantined:
 			slog.WarnContext(ctx, "clone suspected; device quarantined", "device_id", hb.DeviceID,
-				"reported_seq", hb.ReportedSeq, "issued_seq", hb.Seq-1)
+				"reported_seq", hb.ReportedSeq, "issued_seq", hb.ExpectedSeq)
 		}
 	}
 	if err := r.commands.MarkDelivered(ctx, hb); err != nil {

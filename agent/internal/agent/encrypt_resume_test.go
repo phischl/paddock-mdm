@@ -1454,17 +1454,70 @@ func TestBootableLinkedToTempRegenerated(t *testing.T) {
 	}
 }
 
+// TestLinkedTempAtNextRegenerated: PDK-481 (amendment item 19, rule B (0)) — a bootable kernel's initrd that is a
+// symlink to a temporary initrd whose file is also at the path its own rebuild would take next to it (a hard link, or
+// a second bootable kernel's symlink) does not keep the regeneration pending: the rebuild takes a temporary name no
+// bootable link refers to, every initrd ends as a regular file and no temporary file is left.
+func TestLinkedTempAtNextRegenerated(t *testing.T) {
+	const other = "6.8.0-90-generic"
+	temp := "/boot/.initrd.img-" + testKernel + ".paddock"
+	next := "/boot/.initrd.img-" + testKernel + ".next.paddock"
+	for name, craft := range map[string]func(t *testing.T, d *convDevice){
+		"hard link": func(t *testing.T, d *convDevice) {
+			if err := os.Link(d.Path(temp), d.Path(next)); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"second kernel's link": func(t *testing.T, d *convDevice) {
+			d.Write("/boot/vmlinuz-"+other, "")
+			d.Write("/lib/modules/"+other+"/modules.dep", "")
+			d.Write(next, "another key-carrying temporary initrd")
+			if err := os.Symlink(d.Path(next), d.Path("/boot/initrd.img-"+other)); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, d, _ := convertedAgent(t)
+			a.startConversion(context.Background())
+			d.set(func(d *convDevice) { d.slots = []string{"password", "tpm2+pin", "reencrypt"} })
+			d.Write(temp, "a key-carrying temporary initrd")
+			craft(t, d)
+			_ = os.Remove(d.Path("/boot/initrd.img-" + testKernel))
+			if err := os.Symlink(d.Path(temp), d.Path("/boot/initrd.img-"+testKernel)); err != nil {
+				t.Fatal(err)
+			}
+			runWorker(t, a)
+			if h := a.conversionHealth(); h.InitrdIssue != "" || !a.st.Conversion.InitrdRegenerated {
+				t.Fatalf("health %+v", h)
+			}
+			initrds, _ := filepath.Glob(d.Path("/boot/initrd.img-*"))
+			for _, initrd := range initrds {
+				if info, err := os.Lstat(initrd); err != nil || !info.Mode().IsRegular() {
+					t.Fatalf("%s is no regular file: %v", initrd, err)
+				}
+			}
+			if temps, _ := filepath.Glob(d.Path("/boot/.initrd.img-*")); len(temps) != 0 {
+				t.Fatalf("temporary files left: %v", temps)
+			}
+		})
+	}
+}
+
 // TestKeySharedBootableInHealth: amendment item 19, rule B — a bootable kernel's initrd that is a symlink to a
-// temporary initrd whose file is also at the path its own rebuild would take next to it keeps it: the regeneration
-// stays pending and the health shows key_material_shared_bootable with the kernel.
+// temporary initrd whose file is also at every temporary name its own rebuild may take (PDK-481: a deliberately
+// crafted /boot) keeps it: the regeneration stays pending and the health shows key_material_shared_bootable with the
+// kernel.
 func TestKeySharedBootableInHealth(t *testing.T) {
 	a, d, _ := convertedAgent(t)
 	a.startConversion(context.Background())
 	d.set(func(d *convDevice) { d.slots = []string{"password", "tpm2+pin", "reencrypt"} })
 	temp := "/boot/.initrd.img-" + testKernel + ".paddock"
 	d.Write(temp, "a key-carrying temporary initrd")
-	if err := os.Link(d.Path(temp), d.Path("/boot/.initrd.img-"+testKernel+".next.paddock")); err != nil {
-		t.Fatal(err)
+	for _, suffix := range []string{".next", ".next2", ".next3", ".next4", ".next5", ".next6", ".next7"} {
+		if err := os.Link(d.Path(temp), d.Path("/boot/.initrd.img-"+testKernel+suffix+".paddock")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_ = os.Remove(d.Path("/boot/initrd.img-" + testKernel))
 	if err := os.Symlink(d.Path(temp), d.Path("/boot/initrd.img-"+testKernel)); err != nil {

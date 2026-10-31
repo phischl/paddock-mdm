@@ -92,8 +92,13 @@ type DeviceKey struct {
 
 func deviceKeyKey(keyID string) string { return "dk:" + keyID }
 
-// PutDeviceKey caches an identity key without expiry.
-func (c *Cache) PutDeviceKey(ctx context.Context, keyID string, k DeviceKey) error {
+// PutDeviceKey caches an identity key without expiry. It first restores seq:<device> from lastSeq (the device's
+// device_status.last_seq, 0 for a device that never checked in): a missing counter is set to lastSeq and a live one is
+// left unchanged (RestoreSeq), so a usable identity key always comes with a counter, also after Valkey lost its data.
+func (c *Cache) PutDeviceKey(ctx context.Context, keyID string, k DeviceKey, lastSeq int64) error {
+	if err := c.RestoreSeq(ctx, k.DeviceID, lastSeq); err != nil {
+		return err
+	}
 	return c.putHash(ctx, deviceKeyKey(keyID), time.Time{}, map[string]string{
 		"device": k.DeviceID.String(), "org": k.OrganizationID.String(), "status": k.Status,
 		"public_key": base64.StdEncoding.EncodeToString(k.PublicKey),
