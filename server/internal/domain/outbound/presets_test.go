@@ -39,7 +39,7 @@ func TestSecurityCodesContent(t *testing.T) {
 		"admin.sessions_revoked", "platform.sessions_ended", "platform.auto_unseal_enabled",
 		"platform.auto_unseal_disabled", "device.retired", "device.uninstall_requested", "device.escrow_destroyed",
 		"managed_file.sensitive_confirmed", "vulnerability.critical_summary", "notification.pseudonym_resolved",
-		"notification.destination_created", "notification.destination_secret_rotated",
+		"audit.export_requested", "audit.export_downloaded", "notification.destination_created", "notification.destination_secret_rotated",
 	} {
 		if !slices.Contains(codes, c) {
 			t.Errorf("%s missing from the preset", c)

@@ -2,6 +2,8 @@ package outbound_test
 
 import (
 	"encoding/base64"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/outbound"
@@ -32,5 +34,23 @@ func TestNewSecret(t *testing.T) {
 	}
 	if a == b {
 		t.Fatal("two secrets are equal")
+	}
+}
+
+// TestDocumentedSignatureVector: the test vector of docs/operations/notifications.md, which receivers check their
+// verification code against, is what Signature produces.
+func TestDocumentedSignatureVector(t *testing.T) {
+	doc, err := os.ReadFile("../../../../docs/operations/notifications.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := outbound.Signature([]byte("whsec-test"), 1700000000, []byte(`{"kind":"test"}`))
+	if !strings.Contains(string(doc), "X-Paddock-Signature: "+want+"\n") {
+		t.Fatalf("docs/operations/notifications.md does not carry the test vector %s", want)
+	}
+	for _, s := range []string{"the secret `whsec-test`", "the timestamp `1700000000`", "the body `{\"kind\":\"test\"}`"} {
+		if !strings.Contains(string(doc), s) {
+			t.Errorf("the documented vector does not state %s", s)
+		}
 	}
 }
