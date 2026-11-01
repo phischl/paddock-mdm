@@ -111,6 +111,7 @@
     "privacySettings": "Datenschutz",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
+    "configStatus": "Konfigurationsstatus",
     "start": "Start",
     "groups": {
       "overview": "Übersicht",
@@ -1157,6 +1158,7 @@
       "overview": "Übersicht",
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
+      "applyStatus": "Anwendungsstatus",
       "commands": "Befehle",
       "audit": "Audit"
     },
@@ -1479,6 +1481,63 @@
     "empty": {
       "title": "Noch keine Änderungssätze",
       "description": "Änderungssätze werden aufgezeichnet, wenn paddockctl oder die API eine Konfiguration anwendet."
+    }
+  },
+  "configStatus": {
+    "title": "Konfigurationsstatus",
+    "summary": "Pro Ressource: auf wie vielen aktiven Geräten sie angewendet wurde, fehlschlug, in einer reinen Berichtsanwendung aussteht oder nach einer lokalen Änderung korrigiert wurde.",
+    "resource": "Ressource",
+    "type": "Typ",
+    "status": "Status",
+    "message": "Meldung",
+    "version": "Bundle-Version",
+    "time": "Gemeldet",
+    "lastFailure": "Letzter Fehler",
+    "states": {
+      "applied": "Angewendet",
+      "failed": "Fehlgeschlagen",
+      "pending": "Ausstehend",
+      "drift_corrected": "Abweichung korrigiert"
+    },
+    "count": {
+      "applied": "{count} angewendet",
+      "failed": "{count} fehlgeschlagen",
+      "pending": "{count} ausstehend",
+      "drift_corrected": "{count} Abweichung korrigiert"
+    },
+    "reportOnly": "Dieses Gerät ist im Berichtsmodus: Es meldet, was es ändern würde, und ändert nichts. Ausstehende Zeilen nennen die geplanten Änderungen.",
+    "changes": "Geplante Änderungen",
+    "noDetails": "Keine weiteren Details.",
+    "bundles": "Bundle-Verlauf",
+    "compiled": "Erzeugt",
+    "outcome": "Ergebnis",
+    "mode": "Modus",
+    "changed": "Geändert",
+    "errors": "Fehler",
+    "reportedAt": "Gemeldet",
+    "rollout": "Rollout",
+    "outcomes": {
+      "applied": "Angewendet",
+      "rejected": "Abgelehnt",
+      "none": "Nicht gemeldet"
+    },
+    "modes": {
+      "enforce": "Erzwingen",
+      "report_only": "Nur berichten"
+    },
+    "empty": {
+      "device": {
+        "title": "Noch kein Anwendungsstatus",
+        "description": "Das Gerät hat noch nicht gemeldet, was es angewendet hat."
+      },
+      "bundles": {
+        "title": "Keine Konfigurationsversionen",
+        "description": "Für dieses Gerät wurde noch keine Konfiguration erzeugt."
+      },
+      "fleet": {
+        "title": "Noch kein Anwendungsstatus",
+        "description": "Kein Gerät hat bisher gemeldet, was es angewendet hat."
+      }
     }
   },
   "managed": {

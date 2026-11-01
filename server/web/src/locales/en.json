@@ -111,6 +111,7 @@
     "privacySettings": "Privacy",
     "apiTokens": "API tokens",
     "changeSets": "Change sets",
+    "configStatus": "Configuration status",
     "start": "Start",
     "groups": {
       "overview": "Overview",
@@ -1157,6 +1158,7 @@
       "overview": "Overview",
       "access": "Login & sudo",
       "configuration": "Configuration",
+      "applyStatus": "Apply status",
       "commands": "Commands",
       "audit": "Audit"
     },
@@ -1479,6 +1481,63 @@
     "empty": {
       "title": "No change sets yet",
       "description": "Change sets are recorded when paddockctl or the API applies a configuration."
+    }
+  },
+  "configStatus": {
+    "title": "Configuration status",
+    "summary": "Per resource, on how many active devices it applied, failed, is pending in a report-only apply or was corrected after a local change.",
+    "resource": "Resource",
+    "type": "Type",
+    "status": "Status",
+    "message": "Message",
+    "version": "Bundle version",
+    "time": "Reported",
+    "lastFailure": "Last failure",
+    "states": {
+      "applied": "Applied",
+      "failed": "Failed",
+      "pending": "Pending",
+      "drift_corrected": "Drift corrected"
+    },
+    "count": {
+      "applied": "{count} applied",
+      "failed": "{count} failed",
+      "pending": "{count} pending",
+      "drift_corrected": "{count} drift corrected"
+    },
+    "reportOnly": "This device is in report-only mode: it reports what it would change and changes nothing. Pending rows list the planned changes.",
+    "changes": "Planned changes",
+    "noDetails": "No further details.",
+    "bundles": "Bundle history",
+    "compiled": "Compiled",
+    "outcome": "Outcome",
+    "mode": "Mode",
+    "changed": "Changed",
+    "errors": "Errors",
+    "reportedAt": "Reported",
+    "rollout": "Rollout",
+    "outcomes": {
+      "applied": "Applied",
+      "rejected": "Rejected",
+      "none": "Not reported"
+    },
+    "modes": {
+      "enforce": "Enforce",
+      "report_only": "Report only"
+    },
+    "empty": {
+      "device": {
+        "title": "No apply status yet",
+        "description": "The device has not reported what it applied."
+      },
+      "bundles": {
+        "title": "No configuration versions",
+        "description": "No configuration was compiled for this device yet."
+      },
+      "fleet": {
+        "title": "No apply status yet",
+        "description": "No device has reported what it applied."
+      }
     }
   },
   "managed": {
