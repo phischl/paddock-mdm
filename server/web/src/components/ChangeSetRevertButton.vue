@@ -13,9 +13,11 @@ const reason = computed(() => (blocked.value ? t('changeSets.revert.blocked.' + 
 </script>
 
 <template>
+  <!-- Named like the tooltips in Devices.vue and CvssScore.vue: axe needs the name while the tooltip is hidden. -->
   <v-tooltip
     v-if="blocked"
     :text="reason"
+    :aria-label="reason"
     location="top"
   >
     <template #activator="{ props: tip }">

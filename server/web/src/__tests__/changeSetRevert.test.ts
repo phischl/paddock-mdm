@@ -81,6 +81,14 @@ describe('revert a change set (plan M11 decision 22)', () => {
     expect(revertBlocked(legacy)).toBe('noBefore')
   })
 
+  it('names the tooltips of the disabled buttons, which stay in the page while closed (axe aria-tooltip-name)', async () => {
+    await mountList()
+    const names = [...document.querySelectorAll('[role="tooltip"]')].map((el) => el.getAttribute('aria-label'))
+    expect(names).toContain('This change set was already reverted.')
+    expect(names.some((n) => n?.startsWith('The previous state of this change set is not stored'))).toBe(true)
+    expect(names.every((n) => !!n)).toBe(true)
+  })
+
   it('shows the inverse plan in a modal and reverts with the confirmed plan', async () => {
     const nativeConfirm = vi.spyOn(window, 'confirm')
     revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
