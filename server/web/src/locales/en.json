@@ -503,6 +503,12 @@
       "resumed": "{actor} resumed the rollout of agent {version}",
       "completed": "The rollout of agent {version} was completed"
     },
+    "config_rollout": {
+      "advanced": "The configuration rollout moved to {percent, number} % of the devices",
+      "halted": "The configuration rollout was halted: {reason}",
+      "resumed": "{actor} resumed the configuration rollout",
+      "completed": "The configuration rollout was completed"
+    },
     "managed_file": {
       "created": "{actor} defined the managed file {path}",
       "updated": "{actor} changed the managed file {path}",

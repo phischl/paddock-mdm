@@ -1197,6 +1197,208 @@ paths:
         "409": { $ref: "#/components/responses/Problem" }
         "412": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/config-rollouts:
+    get:
+      operationId: listConfigRollouts
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11
+        decision 34), each with its counts: eligible are the active devices inside the wave the rollout reached (every
+        device once it completed), failed those whose newest report on a bundle of the rollout since its start or last
+        resume is a rejection or names a failed staged resource, applied those whose newest such report applied every
+        staged resource, pending the rest. The report of a report-only device never counts as applied or failed.
+      x-paddock-list:
+        sort: [started_at, status]
+        default_sort: -started_at
+        search: [started_by]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ConfigRolloutSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ConfigRolloutStatus" }
+      responses:
+        "200":
+          description: One page of rollouts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigRolloutPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/config-rollouts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getConfigRollout
+      tags: [config]
+      description: "Roles: org_admin, org_operator, org_auditor. A rollout with its counts, its change set and the bundle resource IDs it stages; 404 not_found for an unknown rollout or one of another organization."
+      responses:
+        "200":
+          description: The rollout.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigRolloutDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/config-rollouts/{id}/devices:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listConfigRolloutDevices
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them:
+        whether each is inside the wave the rollout reached, its newest bundle, whether that bundle carries the
+        rollout, the device's report of it and the staged resources that failed in it. Equal sort keys are ordered by
+        hostname. 404 not_found for an unknown rollout or one of another organization.
+      x-paddock-list:
+        sort: [hostname, in_wave, report_outcome]
+        default_sort: hostname
+        search: [hostname]
+        filters: [in_wave, report_outcome]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ConfigRolloutDeviceSort"
+        - $ref: "#/components/parameters/Search"
+        - name: in_wave
+          in: query
+          schema: { type: boolean }
+        - name: report_outcome
+          in: query
+          description: |
+            Repeatable; applied, rejected, report_only or none (400 invalid_request otherwise). The values are not an
+            OpenAPI enum, as for the outcome filter of the device's bundles.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+      responses:
+        "200":
+          description: One page of devices.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigRolloutDevicePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/config-rollouts/{id}/halt:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: haltConfigRollout
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator. running → halted with a reason of 2 to 500 characters (400 invalid_request
+        otherwise). Devices keep the state of the wave the rollout reached; the rollout stays open, so its staged keys
+        stay blocked until it is resumed and completed, completed, or its change set reverted. 409 invalid_state when
+        the rollout is not running; 404 not_found for an unknown rollout or one of another organization.
+      x-paddock-audit: config_rollout.halted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfigRolloutHalt" }
+      responses:
+        "200":
+          description: Halted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigRollout" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/config-rollouts/{id}/resume:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: resumeConfigRollout
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator. halted → running in the wave where it stopped; failures reported before the
+        resume no longer count. 409 invalid_state when the rollout is not halted; 404 not_found for an unknown rollout
+        or one of another organization.
+      x-paddock-audit: config_rollout.resumed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Resumed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigRollout" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/config-rollouts/{id}/advance:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: advanceConfigRollout
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator. Moves a running rollout to its next wave now; its devices receive the staged
+        change at their next check-in. 409 invalid_state when the rollout is halted, ended or in its last wave
+        (complete it instead); 404 not_found for an unknown rollout or one of another organization.
+      x-paddock-audit: config_rollout.advanced
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Advanced.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigRollout" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/config-rollouts/{id}/complete:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: completeConfigRollout
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator. Ends a running or halted rollout: every device receives the staged change at
+        its next check-in. It works also after rollouts were switched off in the settings: an open rollout keeps its
+        rules until it is completed or its change set reverted. 409 invalid_state when the rollout already completed
+        or was reverted; 404 not_found for an unknown rollout or one of another organization.
+      x-paddock-audit: config_rollout.completed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigRollout" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /api/v1/autoinstall:
     post:
       operationId: generateAutoinstall
@@ -5726,6 +5928,22 @@ components:
         type: string
         enum: [name, -name, created_at, -created_at, expires_at, -expires_at]
         default: -created_at
+    ConfigRolloutSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [started_at, -started_at, status, -status]
+        default: -started_at
+    ConfigRolloutDeviceSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The hostname, then the device id is the tie-breaker.
+      schema:
+        type: string
+        enum: [hostname, -hostname, in_wave, -in_wave, report_outcome, -report_outcome]
+        default: hostname
     ChangeSetSort:
       name: sort
       in: query
@@ -6833,6 +7051,97 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    ConfigRolloutStatus:
+      type: string
+      enum: [running, halted, completed, reverted]
+    ConfigRolloutCounts:
+      type: object
+      required: [eligible, applied, failed, pending]
+      properties:
+        eligible: { type: integer, description: Active devices inside the wave the rollout reached. }
+        applied: { type: integer, description: Eligible devices whose newest report on a bundle of the rollout applied every staged resource. }
+        failed: { type: integer, description: Eligible devices the failure threshold counts (since the start or the last resume). }
+        pending: { type: integer, description: The other eligible devices. }
+    ConfigRollout:
+      type: object
+      required: [id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent,
+        failure_threshold_min, canary_device_group_id, status, halted_reason, started_by, started_at, ended_at, ended_reason, counts]
+      properties:
+        id: { type: string, format: uuid }
+        change_set_id: { type: string, format: uuid }
+        waves:
+          type: array
+          items: { type: integer }
+        current_wave_index: { type: integer }
+        wave_started_at: { type: string, format: date-time }
+        min_wave_minutes: { type: integer }
+        failure_threshold_percent: { type: integer }
+        failure_threshold_min: { type: integer }
+        canary_device_group_id: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/ConfigRolloutStatus" }
+        halted_reason: { type: string, nullable: true }
+        started_by: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, nullable: true }
+        ended_reason: { type: string, nullable: true }
+        counts: { $ref: "#/components/schemas/ConfigRolloutCounts" }
+    ConfigRolloutPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ConfigRollout" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ConfigRolloutDetail:
+      type: object
+      required: [rollout, change_set, staged_resource_ids]
+      properties:
+        rollout: { $ref: "#/components/schemas/ConfigRollout" }
+        change_set: { $ref: "#/components/schemas/ChangeSet" }
+        staged_resource_ids:
+          type: array
+          description: The bundle resource IDs whose failure counts against the rollout (file:<path>, unit:<name>, updates).
+          items: { type: string }
+    ConfigRolloutDevice:
+      type: object
+      required: [device_id, hostname, in_wave, bundle_version, carries_rollout, report_outcome, failed_resource_ids]
+      properties:
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        in_wave: { type: boolean, description: The device is inside the wave the rollout reached (every device once it completed). }
+        bundle_version: { type: integer, format: int64, nullable: true, description: The device's newest bundle; null before its first. }
+        carries_rollout: { type: boolean, description: The newest bundle contains the rollout's staged change. }
+        report_outcome:
+          type: string
+          description: |
+            The device's report of its newest bundle: applied, rejected, report_only (a report-only device; its plan
+            errors are listed in failed_resource_ids but are never a failed apply) or none (not reported yet).
+        failed_resource_ids:
+          type: array
+          description: The staged resources that failed in the newest bundle.
+          items: { type: string }
+    ConfigRolloutDevicePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ConfigRolloutDevice" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ConfigRolloutHalt:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 2, maxLength: 500, description: Why the rollout is halted. }
     ApiTokenRole:
       type: string
       enum: [org_admin, org_operator, org_auditor]

@@ -503,6 +503,12 @@
       "resumed": "{actor} hat das Rollout von Agent {version} fortgesetzt",
       "completed": "Das Rollout von Agent {version} wurde abgeschlossen"
     },
+    "config_rollout": {
+      "advanced": "Das Konfigurations-Rollout hat {percent, number} % der Geräte erreicht",
+      "halted": "Das Konfigurations-Rollout wurde angehalten: {reason}",
+      "resumed": "{actor} hat das Konfigurations-Rollout fortgesetzt",
+      "completed": "Das Konfigurations-Rollout wurde abgeschlossen"
+    },
     "managed_file": {
       "created": "{actor} hat die verwaltete Datei {path} definiert",
       "updated": "{actor} hat die verwaltete Datei {path} geändert",

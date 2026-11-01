@@ -58,6 +58,7 @@ type Deps struct {
 	ConfigStatus    *app.ConfigStatus
 	Updates         *app.Updates
 	RolloutSettings *app.RolloutSettings
+	ConfigRollouts  *app.ConfigRollouts
 	Privacy         *app.Privacy
 	// ReadAudit records the audit searches and inventory views the organization switched on (plan M10 decision 20).
 	ReadAudit *app.ReadAudit
@@ -199,6 +200,10 @@ var privileged = map[string]struct {
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
 	"PUT /api/v1/settings/rollout":                                         {app.ScopeOrg, app.SpecRolloutSettings},
+	"POST /api/v1/config-rollouts/{id}/halt":                               {app.ScopeOrg, app.SpecConfigRolloutHalt},
+	"POST /api/v1/config-rollouts/{id}/resume":                             {app.ScopeOrg, app.SpecConfigRolloutResume},
+	"POST /api/v1/config-rollouts/{id}/advance":                            {app.ScopeOrg, app.SpecConfigRolloutAdvance},
+	"POST /api/v1/config-rollouts/{id}/complete":                           {app.ScopeOrg, app.SpecConfigRolloutComplete},
 	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
 	"GET /api/v1/audit/exports/{id}/download":                              {app.ScopeOrg, app.SpecAuditExportDownload},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
@@ -262,7 +267,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,

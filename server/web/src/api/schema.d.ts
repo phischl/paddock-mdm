@@ -761,6 +761,166 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-rollouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11
+         *     decision 34), each with its counts: eligible are the active devices inside the wave the rollout reached (every
+         *     device once it completed), failed those whose newest report on a bundle of the rollout since its start or last
+         *     resume is a rejection or names a failed staged resource, applied those whose newest such report applied every
+         *     staged resource, pending the rest. The report of a report-only device never counts as applied or failed.
+         */
+        get: operations["listConfigRollouts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. A rollout with its counts, its change set and the bundle resource IDs it stages; 404 not_found for an unknown rollout or one of another organization. */
+        get: operations["getConfigRollout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them:
+         *     whether each is inside the wave the rollout reached, its newest bundle, whether that bundle carries the
+         *     rollout, the device's report of it and the staged resources that failed in it. Equal sort keys are ordered by
+         *     hostname. 404 not_found for an unknown rollout or one of another organization.
+         */
+        get: operations["listConfigRolloutDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/halt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. running → halted with a reason of 2 to 500 characters (400 invalid_request
+         *     otherwise). Devices keep the state of the wave the rollout reached; the rollout stays open, so its staged keys
+         *     stay blocked until it is resumed and completed, completed, or its change set reverted. 409 invalid_state when
+         *     the rollout is not running; 404 not_found for an unknown rollout or one of another organization.
+         */
+        post: operations["haltConfigRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. halted → running in the wave where it stopped; failures reported before the
+         *     resume no longer count. 409 invalid_state when the rollout is not halted; 404 not_found for an unknown rollout
+         *     or one of another organization.
+         */
+        post: operations["resumeConfigRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/advance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Moves a running rollout to its next wave now; its devices receive the staged
+         *     change at their next check-in. 409 invalid_state when the rollout is halted, ended or in its last wave
+         *     (complete it instead); 404 not_found for an unknown rollout or one of another organization.
+         */
+        post: operations["advanceConfigRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Ends a running or halted rollout: every device receives the staged change at
+         *     its next check-in. It works also after rollouts were switched off in the settings: an open rollout keeps its
+         *     rules until it is completed or its change set reverted. 409 invalid_state when the rollout already completed
+         *     or was reverted; 404 not_found for an unknown rollout or one of another organization.
+         */
+        post: operations["completeConfigRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autoinstall": {
         parameters: {
             query?: never;
@@ -4418,6 +4578,95 @@ export interface components {
             sort: string;
         };
         /** @enum {string} */
+        ConfigRolloutStatus: "running" | "halted" | "completed" | "reverted";
+        ConfigRolloutCounts: {
+            /** @description Active devices inside the wave the rollout reached. */
+            eligible: number;
+            /** @description Eligible devices whose newest report on a bundle of the rollout applied every staged resource. */
+            applied: number;
+            /** @description Eligible devices the failure threshold counts (since the start or the last resume). */
+            failed: number;
+            /** @description The other eligible devices. */
+            pending: number;
+        };
+        ConfigRollout: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            change_set_id: string;
+            waves: number[];
+            current_wave_index: number;
+            /** Format: date-time */
+            wave_started_at: string;
+            min_wave_minutes: number;
+            failure_threshold_percent: number;
+            failure_threshold_min: number;
+            /** Format: uuid */
+            canary_device_group_id: string | null;
+            status: components["schemas"]["ConfigRolloutStatus"];
+            halted_reason: string | null;
+            started_by: string;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            ended_at: string | null;
+            ended_reason: string | null;
+            counts: components["schemas"]["ConfigRolloutCounts"];
+        };
+        ConfigRolloutPage: {
+            items: components["schemas"]["ConfigRollout"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        ConfigRolloutDetail: {
+            rollout: components["schemas"]["ConfigRollout"];
+            change_set: components["schemas"]["ChangeSet"];
+            /** @description The bundle resource IDs whose failure counts against the rollout (file:<path>, unit:<name>, updates). */
+            staged_resource_ids: string[];
+        };
+        ConfigRolloutDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /** @description The device is inside the wave the rollout reached (every device once it completed). */
+            in_wave: boolean;
+            /**
+             * Format: int64
+             * @description The device's newest bundle; null before its first.
+             */
+            bundle_version: number | null;
+            /** @description The newest bundle contains the rollout's staged change. */
+            carries_rollout: boolean;
+            /**
+             * @description The device's report of its newest bundle: applied, rejected, report_only (a report-only device; its plan
+             *     errors are listed in failed_resource_ids but are never a failed apply) or none (not reported yet).
+             */
+            report_outcome: string;
+            /** @description The staged resources that failed in the newest bundle. */
+            failed_resource_ids: string[];
+        };
+        ConfigRolloutDevicePage: {
+            items: components["schemas"]["ConfigRolloutDevice"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        ConfigRolloutHalt: {
+            /** @description Why the rollout is halted. */
+            reason: string;
+        };
+        /** @enum {string} */
         ApiTokenRole: "org_admin" | "org_operator" | "org_auditor";
         /** @enum {string} */
         ApiTokenStatus: "active" | "expired" | "revoked";
@@ -6621,6 +6870,10 @@ export interface components {
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        ConfigRolloutSort: "started_at" | "-started_at" | "status" | "-status";
+        /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id is the tie-breaker. */
+        ConfigRolloutDeviceSort: "hostname" | "-hostname" | "in_wave" | "-in_wave" | "report_outcome" | "-report_outcome";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         ChangeSetSort: "applied_at" | "-applied_at";
         /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
         ApiTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at" | "last_used_at" | "-last_used_at";
@@ -7946,6 +8199,225 @@ export interface operations {
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
+        };
+    };
+    listConfigRollouts: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["ConfigRolloutSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["ConfigRolloutStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of rollouts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRolloutPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getConfigRollout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rollout. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRolloutDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listConfigRolloutDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id is the tie-breaker. */
+                sort?: components["parameters"]["ConfigRolloutDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                in_wave?: boolean;
+                /**
+                 * @description Repeatable; applied, rejected, report_only or none (400 invalid_request otherwise). The values are not an
+                 *     OpenAPI enum, as for the outcome filter of the device's bundles.
+                 */
+                report_outcome?: string[];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRolloutDevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    haltConfigRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigRolloutHalt"];
+            };
+        };
+        responses: {
+            /** @description Halted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    resumeConfigRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resumed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    advanceConfigRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Advanced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    completeConfigRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Completed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     generateAutoinstall: {

@@ -239,6 +239,13 @@ const (
 	// Rollout settings per organization (plan M11 decisions 23 and 24).
 	CodeSettingsRolloutChanged Code = "settings.rollout_changed"
 
+	// Staged configuration rollouts (plan M11 decisions 32 and 33). config_rollout.halted is a preset event of the
+	// notification rules (plan M9 §6.9): the code is frozen.
+	CodeConfigRolloutAdvanced  Code = "config_rollout.advanced"
+	CodeConfigRolloutHalted    Code = "config_rollout.halted"
+	CodeConfigRolloutResumed   Code = "config_rollout.resumed"
+	CodeConfigRolloutCompleted Code = "config_rollout.completed"
+
 	// Read-access recording, coalesced per actor and window (ADR 0032 §4, plan M10 §6.4).
 	CodeAuditSearched         Code = "audit.searched"
 	CodeDeviceInventoryViewed Code = "device.inventory_viewed"
@@ -1485,6 +1492,34 @@ var registry = map[Code]Definition{
 			"canary_device_group_id"},
 		Outcomes: adminOutcomes,
 		Note:     "failure with invalid_request for invalid waves, a minimum wave duration below the minimum or a threshold out of range, and with not_found for an unknown or foreign canary device group.",
+	},
+	CodeConfigRolloutAdvanced: {
+		Code: CodeConfigRolloutAdvanced, Emitted: true,
+		Description: "A staged configuration rollout moved to its next wave: by the worker once the wave's minimum duration passed (actor: system, manual false), or by an administrator (manual true). The devices of the new wave receive the staged change at their next check-in.",
+		Params:      []string{"rollout_id", "change_set_id", "wave", "percent", "manual"},
+		Outcomes:    adminOutcomes,
+		Note:        "wave is the index of the new wave, percent its share of the devices. failure with invalid_state when the rollout is not running or already in its last wave, not_found for an unknown rollout or one of another organization.",
+	},
+	CodeConfigRolloutHalted: {
+		Code: CodeConfigRolloutHalted, Emitted: true,
+		Description: "A staged configuration rollout was halted: by the worker when the failed devices of the waves reached so far reached the threshold (actor: system), or by an administrator with a reason. Devices keep the state of the wave the rollout reached.",
+		Params:      []string{"rollout_id", "change_set_id", "reason", "wave", "eligible", "failed", "threshold"},
+		Outcomes:    adminOutcomes,
+		Note:        "eligible, failed and threshold are set when the worker halts. failure with invalid_request without a reason of 2 to 500 characters, invalid_state when the rollout is not running, not_found for an unknown rollout or one of another organization. A preset event of the notification rules.",
+	},
+	CodeConfigRolloutResumed: {
+		Code: CodeConfigRolloutResumed, Emitted: true,
+		Description: "An administrator resumed a halted configuration rollout in the wave where it stopped; failures reported before the resume no longer count.",
+		Params:      []string{"rollout_id", "change_set_id", "wave"},
+		Outcomes:    adminOutcomes,
+		Note:        "failure with invalid_state when the rollout is not halted, not_found for an unknown rollout or one of another organization.",
+	},
+	CodeConfigRolloutCompleted: {
+		Code: CodeConfigRolloutCompleted, Emitted: true,
+		Description: "A staged configuration rollout completed: by the worker after its last wave (actor: system, manual false), or by an administrator from running or halted (manual true). Every device receives the staged change at its next check-in.",
+		Params:      []string{"rollout_id", "change_set_id", "wave", "manual"},
+		Outcomes:    adminOutcomes,
+		Note:        "failure with invalid_state when the rollout already completed or was reverted, not_found for an unknown rollout or one of another organization.",
 	},
 	CodeAuditSearched: {
 		Code: CodeAuditSearched, Emitted: true,

@@ -27,10 +27,17 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
+| `advanceConfigRollout` | write | no | Moves a running rollout to its next wave now; its devices receive the staged change at their next check-in. |
 | `applyConfig` | write | no | Applies a paddock.v1 document (at most 1 MiB) in one transaction: a present section is authoritative (items not listed are deleted), absent sections are untouched. |
+| `completeConfigRollout` | write | yes | Ends a running or halted rollout: every device receives the staged change at its next check-in. |
 | `getChangeSet` | read | no | GET /api/v1/change-sets/{id} |
 | `getConfig` | read | no | The organization's declarative configuration as a paddock.v1 document (api/schema/paddock.v1.json) with every section present, in the key order of the schema. |
+| `getConfigRollout` | read | no | A rollout with its counts, its change set and the bundle resource IDs it stages; 404 not_found for an unknown rollout or one of another organization. |
+| `haltConfigRollout` | write | yes | POST /api/v1/config-rollouts/{id}/halt |
 | `listChangeSets` | read | no | Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource. |
+| `listConfigRolloutDevices` | read | no | The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle, whether that bundle carries the rollout, the device's report of it and the staged resources that failed in it. |
+| `listConfigRollouts` | read | no | The staged configuration rollouts of the organization (plan M11 decision 34), each with its counts: eligible are the active devices inside the wave the rollout reached (every device once it completed), failed those whose newest report on a bundle of the rollout since its start or last resume is a rejection or names a failed staged resource, applied those whose newest such report applied every staged resource, pending the rest. |
+| `resumeConfigRollout` | write | no | POST /api/v1/config-rollouts/{id}/resume |
 | `revertChangeSet` | write | yes | Applies the inverse of a change set in one transaction (plan M11 decision 21): an item it created is deleted, an item it updated or deleted is restored from its stored before-state; items created since are kept, and an item whose deleted key was created again since is set back to the before-state. |
 
 ## device-groups

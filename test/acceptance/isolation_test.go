@@ -40,6 +40,7 @@ func TestOrganizationIsolation(t *testing.T) {
 	seedGlobexOwnersAndLogins(t, w)
 	seedGlobexUpstream(t, w)
 	seedGlobexChangeSet(t, w)
+	seedGlobexRollout(t, w)
 	seedGlobexNotification(t, w)
 	seedGlobexFinding(t, w)
 	seedGlobexConfigStatus(t, w)
