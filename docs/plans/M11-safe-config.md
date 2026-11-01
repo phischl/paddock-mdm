@@ -1241,7 +1241,8 @@ without a migration merge as soon as their dependencies are on the branch. The V
     group or a file path appears as delete plus create (natural keys), which PDK-155's revert handles like any other
     pair of items.
 11. **Ordering of apply reports (decision 13, PDK-151, 2026-11-01).** Applied reports are ordered by bundle version
-    first, then by the event time capped at the gateway's receive time, then by the event sequence. A step of the
+    first, then by the event time capped at the gateway's receive time, then by processing order (no
+    event-sequence key; amended 2026-11-01). A step of the
     device clock therefore never makes an older version's status win; drift reports carry their bundle version. A
     rejection never replaces the applied report of the same version, in any arrival order, and a report row is
     stored only for a bundle version that exists for the device.
