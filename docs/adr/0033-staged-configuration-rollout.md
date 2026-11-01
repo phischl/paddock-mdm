@@ -226,3 +226,21 @@ secrets rule and the retention matrix (A.8.32, AUD-07/M10); adopted devices are 
   exist.
 Follow-ups: plan `docs/plans/M11-safe-config.md` (PDK-150 to PDK-164); architecture §7, §11.3, §11.5, §16, §17
 amendments in PDK-163; the declarative document does not carry `settings.rollout` in M11 (a later plan may add it).
+
+## Amendment 2026-11-01 (writes during an open rollout)
+
+Architect decision for PDK-157 (plan M11 amendment R6.13), the precise reading of option E1 next to decisions 25 and
+29 of the plan. A *section* is a section key of `configrollout.StagedKeys`; `package_holds` and `settings.updates`
+count as one section (both render into the `updates` resource). While the organization has a `running` or `halted`
+rollout, a write that is not urgent:
+
+1. touches a staged (section, key) → 409 `rollout_conflict`;
+2. otherwise touches any section the rollout stages → 409 `rollout_running`; a change set that also touches other
+   sections is refused as a whole, never split;
+3. otherwise (only sections the rollout does not stage, or no rollout-able section) → `immediate`: it reaches every
+   device and starts no rollout.
+
+An urgent write that touches a staged key is refused with 409 `rollout_conflict`; one that does not is `urgent` and
+reaches every device. Reverts follow the same rule, except the revert of the open rollout's own change set, which is
+immediate and ends the rollout (option G1). A device group deletion is a write of every section it cascades into.
+Every refusal is decided inside the audited action.

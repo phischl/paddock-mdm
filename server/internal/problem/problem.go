@@ -65,7 +65,12 @@ var (
 	InvalidDocument = &Error{Code: "invalid_document", Status: http.StatusUnprocessableEntity}
 	// PlanChanged: the plan of PUT /api/v1/config differs from the one the client confirmed (expected_plan); nothing
 	// is applied (plan M6c amendment 2026-10-08).
-	PlanChanged    = &Error{Code: "plan_changed", Status: http.StatusPreconditionFailed}
+	PlanChanged = &Error{Code: "plan_changed", Status: http.StatusPreconditionFailed}
+	// RolloutConflict: a configuration write touches a key the organization's open rollout stages (plan M11 decision
+	// 29); the administrator completes or reverts the rollout first.
+	RolloutConflict = &Error{Code: "rollout_conflict", Status: http.StatusConflict}
+	// RolloutRunning: a second staged change set while a rollout is open (plan M11 decision 29).
+	RolloutRunning = &Error{Code: "rollout_running", Status: http.StatusConflict}
 	TooManyDevices = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
 	// Uninstall (plan M8d decision 37): clear_tpm while a volume unlocks with the TPM; and invalid_request with 422 for
 	// a request whose values contradict the device or each other (typed hostname, reset-only options with leave).

@@ -50,14 +50,15 @@ func (h *handlers) ApplyConfig(ctx context.Context, req adminapi.ApplyConfigRequ
 	if req.Params.ExpectedPlan != nil {
 		expected = *req.Params.ExpectedPlan
 	}
+	opts := rolloutOptions(req.Params.Urgent, req.Params.Reason)
 	var plan declarative.Plan
 	if out.DryRun {
-		plan, err = h.declarative.Plan(ctx, raw)
+		plan, err = h.declarative.Plan(ctx, raw, opts)
 	} else {
 		var id uuid.UUID
-		id, plan, err = h.declarative.Apply(ctx, raw, expected)
-		if id != uuid.Nil {
-			out.ChangeSetId = &id
+		id, plan, err = h.declarative.Apply(ctx, raw, expected, opts)
+		if err == nil {
+			err = h.appliedRollout(ctx, id, &out)
 		}
 	}
 	if err != nil {
@@ -65,6 +66,27 @@ func (h *handlers) ApplyConfig(ctx context.Context, req adminapi.ApplyConfigRequ
 	}
 	out.Plan, out.PlanSha256 = toConfigPlan(plan), plan.SHA256()
 	return adminapi.ApplyConfig200JSONResponse(out), nil
+}
+
+// appliedRollout fills the change set and its rollout into the result of an apply or revert; an empty plan recorded
+// no change set and leaves them null.
+func (h *handlers) appliedRollout(ctx context.Context, id uuid.UUID, out *adminapi.ConfigApplyResult) error {
+	if id == uuid.Nil {
+		return nil
+	}
+	out.ChangeSetId = &id
+	cs, err := h.declarative.GetChangeSet(ctx, id)
+	if err != nil {
+		return err
+	}
+	rollout := adminapi.ChangeSetRollout(cs.Rollout)
+	out.Rollout, out.RolloutId = &rollout, cs.RolloutID
+	return nil
+}
+
+// rolloutOptions is the urgent opt-out of a configuration write (plan M11 decision 26).
+func rolloutOptions(urgent *adminapi.RolloutUrgent, reason *adminapi.RolloutReason) app.WriteOptions {
+	return app.WriteOptions{Urgent: deref(urgent, false), Reason: deref(reason, "")}
 }
 
 func (h *handlers) RevertChangeSet(ctx context.Context, req adminapi.RevertChangeSetRequestObject) (adminapi.RevertChangeSetResponseObject, error) {
@@ -81,8 +103,8 @@ func (h *handlers) RevertChangeSet(ctx context.Context, req adminapi.RevertChang
 		return nil, err
 	}
 	out := adminapi.ConfigApplyResult{DryRun: opts.DryRun, Plan: toConfigPlan(plan), PlanSha256: plan.SHA256()}
-	if id != uuid.Nil {
-		out.ChangeSetId = &id
+	if err := h.appliedRollout(ctx, id, &out); err != nil {
+		return nil, err
 	}
 	return adminapi.RevertChangeSet200JSONResponse(out), nil
 }
@@ -132,6 +154,7 @@ func toChangeSet(cs app.ChangeSetRecord) (adminapi.ChangeSet, error) {
 		Id: cs.ID, AppliedAt: cs.AppliedAt.UTC(), Source: adminapi.ChangeSetSource(cs.Source),
 		Summary: adminapi.ChangeSetSummary{Created: int(cs.CreatedN), Updated: int(cs.UpdatedN), Deleted: int(cs.DeletedN), Sections: cs.Sections},
 		Rollout: adminapi.ChangeSetRollout(cs.Rollout), UrgentReason: cs.UrgentReason, BeforeAvailable: cs.BeforeAvailable, RevertedBy: cs.RevertedBy,
+		RolloutId: cs.RolloutID,
 	}
 	if cs.RevertsChangeSetID.Valid {
 		out.RevertsChangeSetId = &cs.RevertsChangeSetID.UUID

@@ -677,7 +677,12 @@ export interface paths {
          *     changes records a change set; one without changes records the event with zeros and no change set.
          *     expected_plan (plan M6c amendment 2026-10-08) is the plan_sha256 of a dry run the client confirmed: when the
          *     plan computed now differs, the apply is refused with 412 plan_changed (audited as failure) and nothing is
-         *     applied.
+         *     applied. Staged rollouts (plan M11 decisions 25-29): with rollouts enabled, an apply that changes managed
+         *     files, managed units, package holds or the update settings starts a rollout (rollout staged, rollout_id) unless
+         *     urgent is set. While a rollout is open, a change of a key it stages is refused with 409 rollout_conflict (urgent
+         *     too), any other change of a section it stages with 409 rollout_running (package holds and update settings are
+         *     one section; a mixed apply is refused as a whole), and a change of only other sections is immediate. The same
+         *     rules apply to every per-resource write and to reverts (ADR 0033 amendment 2026-11-01).
          */
         put: operations["applyConfig"];
         post?: never;
@@ -745,8 +750,9 @@ export interface paths {
          *     different plan is refused with 412 plan_changed. The revert is recorded as a new change set whose
          *     reverts_change_set_id is the original. 409 invalid_state when the change set has no before-state (recorded
          *     before before-states were stored, or purged after 90 days) or was already reverted. 404 not_found for an
-         *     unknown change set or one of another organization. urgent and reason are stored; until staged rollouts exist
-         *     every revert reaches every device at once.
+         *     unknown change set or one of another organization. The revert of the change set of the open rollout ends that
+         *     rollout (status reverted) and reaches every device at once; any other revert follows the staging and conflict
+         *     rules of PUT /api/v1/config, with urgent and reason as the opt-out.
          */
         post: operations["revertChangeSet"];
         delete?: never;
@@ -1155,7 +1161,7 @@ export interface paths {
         /**
          * @description Roles: org_admin, org_operator, org_auditor. Every configuration version compiled for the device, newest
          *     first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. Outcome none lists
-         *     the versions without a report. config_rollout_id is null until configuration rollouts exist.
+         *     the versions without a report. config_rollout_id names the configuration rollout whose wave the device was in.
          */
         get: operations["listDeviceBundles"];
         put?: never;
@@ -4344,11 +4350,18 @@ export interface components {
              */
             change_set_id: string | null;
             plan: components["schemas"]["ConfigPlan"];
+            /** @description The rollout mode of the recorded change set; null for dry runs and empty plans. */
+            rollout?: components["schemas"]["ChangeSetRollout"] | null;
+            /**
+             * Format: uuid
+             * @description The rollout a staged change set started.
+             */
+            rollout_id?: string | null;
         };
         /** @enum {string} */
         ChangeSetSource: "session" | "api_token";
         /**
-         * @description immediate: every device receives the change at once. staged and urgent are set by staged rollouts.
+         * @description immediate: every device receives the change at once. staged: the change set started a rollout. urgent: it would have been staged and skipped the rollout with a reason.
          * @enum {string}
          */
         ChangeSetRollout: "immediate" | "staged" | "urgent";
@@ -4389,7 +4402,7 @@ export interface components {
             before_available: boolean;
             /**
              * Format: uuid
-             * @description The staged rollout of this change set; null until staged rollouts exist.
+             * @description The rollout this change set started; null unless staged.
              */
             rollout_id?: string | null;
         };
@@ -4825,7 +4838,7 @@ export interface components {
             schema_version: number;
             /**
              * Format: uuid
-             * @description The configuration rollout that produced the version; null until configuration rollouts exist.
+             * @description The configuration rollout whose staged change the version carries; null otherwise.
              */
             config_rollout_id: string | null;
             /** @description What the device reported about the version; null until it reported. */
@@ -6005,6 +6018,15 @@ export interface components {
             files: components["schemas"]["ManagedFile"][];
             units: components["schemas"]["ManagedUnit"][];
             conflicts: components["schemas"]["ConfigConflict"][];
+            /**
+             * @description The organization's open configuration rollout; null without one. The configuration above is the live one;
+             *     a device outside the wave (in_wave false) keeps the before-state of the rollout's staged keys.
+             */
+            rollout?: {
+                /** Format: uuid */
+                id: string;
+                in_wave: boolean;
+            } | null;
         };
         /**
          * @description Tier of the path (ADR 0034 decision 2 and amendment 2026-10-16): ordinary (below an operator root of the
@@ -6532,6 +6554,14 @@ export interface components {
         FindingListSort: "last_seen_at" | "-last_seen_at" | "opened_at" | "-opened_at" | "status" | "-status" | "hostname" | "-hostname" | "code" | "-code";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         AccountSort: "username" | "-username" | "display_name" | "-display_name" | "role" | "-role";
+        /**
+         * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+         *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+         *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+         */
+        RolloutUrgent: boolean;
+        /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+        RolloutReason: string;
         Csrf: "1";
         Id: string;
         /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
@@ -7775,6 +7805,14 @@ export interface operations {
     applyConfig: {
         parameters: {
             query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
                 /** @description Compute and check the plan without applying it. */
                 dry_run?: boolean;
                 /** @description plan_sha256 of the confirmed dry run; a different plan is refused with 412 plan_changed. */
@@ -7877,9 +7915,9 @@ export interface operations {
                 dry_run?: boolean;
                 /** @description plan_sha256 of the confirmed dry run; required unless dry_run. A different plan is refused with 412 plan_changed. */
                 expected_plan?: string;
-                /** @description Opt out of a staged rollout (needs reason). Stored; without effect until staged rollouts exist. */
+                /** @description Opt out of a staged rollout; needs reason, a step-up and enabled rollouts, as RolloutUrgent. */
                 urgent?: boolean;
-                /** @description Why the change set is reverted (2 to 500 characters). */
+                /** @description Why the change set is reverted (2 to 500 characters); with urgent also the urgent reason. */
                 reason?: string;
             };
             header: {
@@ -8542,7 +8580,16 @@ export interface operations {
     };
     createManagedFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8601,7 +8648,16 @@ export interface operations {
     };
     deleteManagedFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8623,11 +8679,21 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updateManagedFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8694,7 +8760,16 @@ export interface operations {
     };
     createManagedUnit: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8753,7 +8828,16 @@ export interface operations {
     };
     deleteManagedUnit: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8775,11 +8859,21 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updateManagedUnit: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -9650,7 +9744,16 @@ export interface operations {
     };
     updateUpdateSettings: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -9675,6 +9778,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
         };
     };
@@ -9816,7 +9920,16 @@ export interface operations {
     };
     createPackageHold: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -9873,7 +9986,16 @@ export interface operations {
     };
     deletePackageHold: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -9895,11 +10017,21 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updatePackageHold: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -9927,6 +10059,7 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     getOverview: {

@@ -75,7 +75,8 @@ func (h *handlers) ListDeviceBundles(ctx context.Context, req adminapi.ListDevic
 }
 
 func toDeviceBundle(r pgstore.ListDeviceBundlesRow) adminapi.DeviceBundle {
-	out := adminapi.DeviceBundle{Version: r.Version, CreatedAt: r.CreatedAt.UTC(), SchemaVersion: int(r.SchemaVersion)}
+	out := adminapi.DeviceBundle{Version: r.Version, CreatedAt: r.CreatedAt.UTC(), SchemaVersion: int(r.SchemaVersion),
+		ConfigRolloutId: idPtr(r.ConfigRolloutID)}
 	if r.ReportOutcome == nil || r.ReportMode == nil || r.ReportOccurredAt == nil {
 		return out
 	}

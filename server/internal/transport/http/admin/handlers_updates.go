@@ -28,7 +28,7 @@ func (h *handlers) UpdateUpdateSettings(ctx context.Context, req adminapi.Update
 		SecurityDailyAt: b.SecurityDailyAt, RegularSchedule: b.RegularSchedule, RegularUpdatesEnabled: b.RegularUpdatesEnabled,
 		MaxRandomDelayMin: b.MaxRandomDelayMin, StalenessWarningH: b.StalenessWarningH, StalenessCriticalH: b.StalenessCriticalH,
 		AgentUpdatePolicy: string(deref(b.AgentUpdatePolicy, "")),
-	})
+	}, rolloutOptions(req.Params.Urgent, req.Params.Reason))
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func (h *handlers) CreatePackageHold(ctx context.Context, req adminapi.CreatePac
 	}
 	p, err := h.updates.CreateHold(ctx, app.HoldInput{
 		DeviceGroupID: req.Body.DeviceGroupId, Package: req.Body.Package, Version: req.Body.Version, Reason: reason,
-	})
+	}, rolloutOptions(req.Params.Urgent, req.Params.Reason))
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (h *handlers) GetPackageHold(ctx context.Context, req adminapi.GetPackageHo
 }
 
 func (h *handlers) UpdatePackageHold(ctx context.Context, req adminapi.UpdatePackageHoldRequestObject) (adminapi.UpdatePackageHoldResponseObject, error) {
-	p, err := h.updates.UpdateHold(ctx, req.Id, req.Body.Version, req.Body.Reason)
+	p, err := h.updates.UpdateHold(ctx, req.Id, req.Body.Version, req.Body.Reason, rolloutOptions(req.Params.Urgent, req.Params.Reason))
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (h *handlers) UpdatePackageHold(ctx context.Context, req adminapi.UpdatePac
 }
 
 func (h *handlers) DeletePackageHold(ctx context.Context, req adminapi.DeletePackageHoldRequestObject) (adminapi.DeletePackageHoldResponseObject, error) {
-	if err := h.updates.DeleteHold(ctx, req.Id); err != nil {
+	if err := h.updates.DeleteHold(ctx, req.Id, rolloutOptions(req.Params.Urgent, req.Params.Reason)); err != nil {
 		return nil, err
 	}
 	return adminapi.DeletePackageHold204Response{}, nil

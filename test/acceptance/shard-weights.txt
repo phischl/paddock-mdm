@@ -27,6 +27,8 @@
 144 TestObservability
 134 TestComponentTargets
 130 TestCombinedRootGrant
+# Estimate, not yet measured (PDK-157): gate organization, three devicesims, two step-ups, five bundle waits.
+120 TestConfigRolloutStaging
 119 TestEffectiveStepUp
 115 TestRevocationLockAndDestroy
 113 TestLoginGate

@@ -16,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/configrollout"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/domain/managedconfig"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
@@ -530,6 +531,7 @@ type EffectiveConfig struct {
 	Units     []pgstore.ManagedUnit
 	Conflicts []managedconfig.Conflict
 	Resources []bundle.Resource
+	Rollout   *DeviceRollout // the open configuration rollout; nil without one
 }
 
 // EffectiveConfig resolves the managed files and units of a device (plan M2a decision 7).
@@ -558,10 +560,38 @@ func (d *Devices) EffectiveConfig(ctx context.Context, id uuid.UUID) (EffectiveC
 			out.Units = append(out.Units, defs.unitRows[u.ID])
 		}
 		out.Conflicts = eff.Conflicts
-		out.Resources, err = managedconfig.Resources(eff)
+		if out.Resources, err = managedconfig.Resources(eff); err != nil {
+			return err
+		}
+		out.Rollout, err = deviceRollout(ctx, q, id, groups)
 		return err
 	})
 	return out, err
+}
+
+// DeviceRollout is the organization's open configuration rollout as one device sees it (plan M11 decision 30).
+type DeviceRollout struct {
+	ID uuid.UUID
+	// InWave: the device receives the staged change set; outside the wave it keeps the before-state of the staged keys.
+	InWave bool
+}
+
+// deviceRollout returns the open rollout for device, a member of groups; nil without one.
+func deviceRollout(ctx context.Context, q *pgstore.Queries, device uuid.UUID, groups []uuid.UUID) (*DeviceRollout, error) {
+	open, err := q.GetOpenConfigRollout(ctx)
+	if db.IsNoRows(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	waves := make([]int, len(open.Waves))
+	for i, w := range open.Waves {
+		waves[i] = int(w)
+	}
+	canary := open.CanaryDeviceGroupID.Valid && slices.Contains(groups, open.CanaryDeviceGroupID.UUID)
+	percent := configrollout.Percent(open.Status, waves, int(open.CurrentWaveIndex))
+	return &DeviceRollout{ID: open.ID, InWave: configrollout.Eligible(configrollout.Bucket(device, open.ID), percent, canary)}, nil
 }
 
 // ManagedDefinitions are all managed files and units of an organization. Files on denied paths are never shipped or

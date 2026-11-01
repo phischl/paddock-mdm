@@ -164,14 +164,15 @@ type AttentionCondition struct {
 }
 
 type Bundle struct {
-	DeviceID       uuid.UUID
-	Version        int64
-	OrganizationID uuid.UUID
-	ContentSha256  []byte
-	EnvelopeSha256 []byte
-	ObjectKey      string
-	CreatedAt      time.Time
-	SchemaVersion  int32
+	DeviceID        uuid.UUID
+	Version         int64
+	OrganizationID  uuid.UUID
+	ContentSha256   []byte
+	EnvelopeSha256  []byte
+	ObjectKey       string
+	CreatedAt       time.Time
+	SchemaVersion   int32
+	ConfigRolloutID uuid.NullUUID
 }
 
 type ChangeSet struct {
@@ -198,6 +199,27 @@ type ComponentTarget struct {
 	Version   string
 	Source    string
 	UpdatedAt time.Time
+}
+
+type ConfigRollout struct {
+	ID                      uuid.UUID
+	OrganizationID          uuid.UUID
+	ChangeSetID             uuid.UUID
+	Waves                   []int32
+	CurrentWaveIndex        int32
+	WaveStartedAt           time.Time
+	MinWaveMinutes          int32
+	FailureThresholdPercent int32
+	FailureThresholdMin     int32
+	CanaryDeviceGroupID     uuid.NullUUID
+	Status                  string
+	HaltedReason            *string
+	EvaluationSince         time.Time
+	StartedBy               string
+	StartedAt               time.Time
+	EndedAt                 *time.Time
+	EndedReason             *string
+	UpdatedAt               time.Time
 }
 
 type Device struct {
