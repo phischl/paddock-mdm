@@ -232,6 +232,19 @@ type DeviceAlert struct {
 	ClearedAt      *time.Time
 }
 
+type DeviceBundleReport struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	Version        int64
+	Outcome        string
+	Mode           string
+	Changed        int32
+	ErrorCount     int32
+	Reason         *string
+	OccurredAt     time.Time
+	RecordedAt     time.Time
+}
+
 type DeviceCommand struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
@@ -361,6 +374,17 @@ type DeviceOwner struct {
 	UserID         uuid.UUID
 	AssignedAt     time.Time
 	AssignedBy     uuid.NullUUID
+}
+
+type DeviceResourceStatus struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	ResourceID     string
+	Status         string
+	Message        string
+	Changes        []string
+	BundleVersion  int64
+	OccurredAt     time.Time
 }
 
 type DeviceStatus struct {

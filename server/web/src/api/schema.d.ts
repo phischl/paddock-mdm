@@ -1087,6 +1087,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/config-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The apply status of the device's resources as its agent last
+         *     reported them (plan M11 decision 14): one item per resource ID with its status, the message of a failure and,
+         *     for a report-only apply, what would change (pending). A report that omits a resource removes its row; older
+         *     agents without per-resource outcomes only produce failed rows.
+         */
+        get: operations["listDeviceConfigStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/bundles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. Every configuration version compiled for the device, newest
+         *     first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. Outcome none lists
+         *     the versions without a report. config_rollout_id is null until configuration rollouts exist.
+         */
+        get: operations["listDeviceBundles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/owners": {
         parameters: {
             query?: never;
@@ -2613,6 +2660,27 @@ export interface paths {
          *     Ubuntu has no priority for has severity unknown.
          */
         get: operations["listDeviceVulnerabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The fleet view of the apply status (plan M11 decision 14): one
+         *     item per resource ID with the number of active devices per status and when a device last reported it failed.
+         *     Which devices fail is read on the device (listDeviceConfigStatus).
+         */
+        get: operations["listConfigStatus"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4633,12 +4701,119 @@ export interface components {
              *     organization's dead man's switch period while the switch is on (plan M4c decision 17); null otherwise.
              */
             presumed_self_locked_at: string | null;
+            config_status: components["schemas"]["DeviceConfigStatusCounts"];
             /**
              * Format: date-time
              * @description Since when the device is presumed lost: it has been silent for longer than the organization's critical
              *     staleness threshold (plan M5b decision 10); null otherwise, cleared by its next contact.
              */
             presumed_lost_at: string | null;
+        };
+        /**
+         * @description The apply status of one resource on one device: applied; failed (the message says why); pending (a report-only
+         *     apply would change it, changes lists what); drift_corrected (the agent corrected a local change).
+         * @enum {string}
+         */
+        ResourceState: "applied" | "failed" | "pending" | "drift_corrected";
+        DeviceResourceStatus: {
+            /** @description Resource ID such as file:/etc/foo.conf, unit:foo.service or time. */
+            resource_id: string;
+            /** @description The part of the ID before the colon (file, unit), else the whole ID. */
+            type: string;
+            status: components["schemas"]["ResourceState"];
+            /** @description The reason of a failure; empty otherwise. */
+            message: string;
+            /** @description What a report-only apply would change (status pending); empty otherwise. */
+            changes: string[];
+            /** Format: int64 */
+            bundle_version: number;
+            /**
+             * Format: date-time
+             * @description When the agent reported it.
+             */
+            occurred_at: string;
+        };
+        DeviceResourceStatusPage: {
+            items: components["schemas"]["DeviceResourceStatus"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        DeviceBundleReport: {
+            /** @enum {string} */
+            outcome: "applied" | "rejected";
+            /**
+             * @description Mode of the apply. A rejection carries no mode: it shows the mode of the device's applied report of the highest lower version, enforce when there is none.
+             * @enum {string}
+             */
+            mode: "enforce" | "report_only";
+            /** @description Resources the apply changed. */
+            changed: number;
+            /** @description Errors the apply reported. */
+            error_count: number;
+            /** @description Why the device rejected the bundle. */
+            reason: string | null;
+            /** Format: date-time */
+            occurred_at: string;
+        };
+        DeviceBundle: {
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            created_at: string;
+            schema_version: number;
+            /**
+             * Format: uuid
+             * @description The configuration rollout that produced the version; null until configuration rollouts exist.
+             */
+            config_rollout_id: string | null;
+            /** @description What the device reported about the version; null until it reported. */
+            report: components["schemas"]["DeviceBundleReport"] | null;
+        };
+        DeviceBundlePage: {
+            items: components["schemas"]["DeviceBundle"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @description One resource ID with the number of active devices per status. */
+        ResourceStatus: {
+            resource_id: string;
+            type: string;
+            applied: number;
+            failed: number;
+            pending: number;
+            drift_corrected: number;
+            /** Format: date-time */
+            last_failure_at: string | null;
+        };
+        ResourceStatusPage: {
+            items: components["schemas"]["ResourceStatus"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @description The device's resources per apply status; zeros until the agent reported. */
+        DeviceConfigStatusCounts: {
+            applied: number;
+            failed: number;
+            pending: number;
+            drift_corrected: number;
         };
         /** @description The latest login.* and sudo.* report of the device's agent (plan M3b decision 17). */
         DeviceLoginStatus: {
@@ -6314,6 +6489,14 @@ export interface components {
         VulnerableDeviceSort: "hostname" | "-hostname";
         /** @description Repeatable. unknown selects findings without severity (no Ubuntu priority and no score). */
         SeverityFilter: components["schemas"]["Severity"][];
+        /** @description Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker. */
+        DeviceResourceStatusSort: "resource_id" | "-resource_id" | "status" | "-status" | "occurred_at" | "-occurred_at";
+        /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+        DeviceBundleSort: "version" | "-version" | "created_at" | "-created_at";
+        /** @description Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker. */
+        ConfigStatusSort: "resource_id" | "-resource_id" | "failed" | "-failed" | "pending" | "-pending" | "applied" | "-applied";
+        /** @description Repeatable. Keeps resources with a device in one of these statuses. */
+        ResourceStateFilter: components["schemas"]["ResourceState"][];
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -8025,6 +8208,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceLoginEventPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceConfigStatus: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker. */
+                sort?: components["parameters"]["DeviceResourceStatusSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. Keeps resources with a device in one of these statuses. */
+                status?: components["parameters"]["ResourceStateFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of resource statuses. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceResourceStatusPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceBundles: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+                sort?: components["parameters"]["DeviceBundleSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /**
+                 * @description Repeatable; applied, rejected or none (400 invalid_request otherwise). none selects versions the device has
+                 *     not reported. The values are not an OpenAPI enum: the generated constant None would take the name of the
+                 *     privilege class's.
+                 */
+                outcome?: string[];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of bundle versions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceBundlePage"];
                 };
             };
             400: components["responses"]["Problem"];
@@ -10820,6 +11079,39 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listConfigStatus: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker. */
+                sort?: components["parameters"]["ConfigStatusSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. Keeps resources with a device in one of these statuses. */
+                status?: components["parameters"]["ResourceStateFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of resources. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceStatusPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     listSoftware: {

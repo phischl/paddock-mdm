@@ -317,3 +317,14 @@ audit event before it is published (follow-up PDK-642). And the restrictive `DEL
 (`platform_delete`, `delete_finished`) have no time bound: a finished action can be deleted before the retention cutoff.
 The platform role deletes only finished actions of the pseudo-organization, and the worker is an internal role whose
 only `DELETE` on `action` is the retention round (follow-up PDK-643).
+
+## Amendment 2026-11-01 (plan M11, PDK-151) — apply history per bundle version
+
+Architect-authorised 2026-11-01. The §1 row "device_bundle_report, device_resource_status: current state only" is
+split. `device_resource_status` stays current state only: replaced by the device's next report; rows of a retired
+device stay with the device record. `device_bundle_report` is the apply history of plan M11 decision 12: one row per
+bundle version the server compiled for the device (a report of an unknown version is not stored). A later applied
+report of the same version replaces the row, an applied report replaces a rejection of the same version whatever its
+time, and a rejection never replaces an applied report. It is kept with the device record, because `bundle` rows are
+never purged, and has no purge job in this milestone. Growth is bounded by the number of compiled bundle versions per device; a purge
+together with superseded bundles is a follow-up. Legal basis unchanged: Art. 6(1)(f) (A.8.9).

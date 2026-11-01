@@ -224,6 +224,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),
 		MCPAccess:      app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
 		Inventory:      app.NewInventory(orgPool),
+		ConfigStatus:   app.NewConfigStatus(orgPool),
 		Accounts:       accounts,
 		Releases:       releases,
 		ReleaseImports: imports,

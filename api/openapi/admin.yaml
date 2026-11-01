@@ -1569,6 +1569,79 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/config-status:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceConfigStatus
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The apply status of the device's resources as its agent last
+        reported them (plan M11 decision 14): one item per resource ID with its status, the message of a failure and,
+        for a report-only apply, what would change (pending). A report that omits a resource removes its row; older
+        agents without per-resource outcomes only produce failed rows.
+      x-paddock-list:
+        sort: [resource_id, status, occurred_at]
+        default_sort: resource_id
+        search: [resource_id]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceResourceStatusSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/ResourceStateFilter"
+      responses:
+        "200":
+          description: One page of resource statuses.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceResourceStatusPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/bundles:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceBundles
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. Every configuration version compiled for the device, newest
+        first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. Outcome none lists
+        the versions without a report. config_rollout_id is null until configuration rollouts exist.
+      x-paddock-list:
+        sort: [version, created_at]
+        default_sort: -version
+        search: [version]
+        filters: [outcome]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceBundleSort"
+        - $ref: "#/components/parameters/Search"
+        - name: outcome
+          in: query
+          description: |
+            Repeatable; applied, rejected or none (400 invalid_request otherwise). none selects versions the device has
+            not reported. The values are not an OpenAPI enum: the generated constant None would take the name of the
+            privilege class's.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+      responses:
+        "200":
+          description: One page of bundle versions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceBundlePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/owners:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -3920,6 +3993,34 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/config-status:
+    get:
+      operationId: listConfigStatus
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The fleet view of the apply status (plan M11 decision 14): one
+        item per resource ID with the number of active devices per status and when a device last reported it failed.
+        Which devices fail is read on the device (listDeviceConfigStatus).
+      x-paddock-list:
+        sort: [resource_id, failed, pending, applied]
+        default_sort: -failed
+        search: [resource_id]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ConfigStatusSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/ResourceStateFilter"
+      responses:
+        "200":
+          description: One page of resources.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceStatusPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/software:
     get:
       operationId: listSoftware
@@ -5422,6 +5523,39 @@ components:
       schema:
         type: array
         items: { $ref: "#/components/schemas/Severity" }
+    DeviceResourceStatusSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker.
+      schema:
+        type: string
+        enum: [resource_id, -resource_id, status, -status, occurred_at, -occurred_at]
+        default: resource_id
+    DeviceBundleSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The version is the tie-breaker.
+      schema:
+        type: string
+        enum: [version, -version, created_at, -created_at]
+        default: -version
+    ConfigStatusSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker.
+      schema:
+        type: string
+        enum: [resource_id, -resource_id, failed, -failed, pending, -pending, applied, -applied]
+        default: -failed
+    ResourceStateFilter:
+      name: status
+      in: query
+      description: Repeatable. Keeps resources with a device in one of these statuses.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/ResourceState" }
     DeviceSort:
       name: sort
       in: query
@@ -6902,7 +7036,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Device"
         - type: object
-          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor, presumed_self_locked_at, presumed_lost_at]
+          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor, presumed_self_locked_at, presumed_lost_at, config_status]
           properties:
             groups:
               type: array
@@ -6932,6 +7066,7 @@ components:
               description: |
                 Since when the device is presumed to have locked itself: it has been silent for longer than the
                 organization's dead man's switch period while the switch is on (plan M4c decision 17); null otherwise.
+            config_status: { $ref: "#/components/schemas/DeviceConfigStatusCounts" }
             presumed_lost_at:
               type: string
               format: date-time
@@ -6939,6 +7074,111 @@ components:
               description: |
                 Since when the device is presumed lost: it has been silent for longer than the organization's critical
                 staleness threshold (plan M5b decision 10); null otherwise, cleared by its next contact.
+    ResourceState:
+      type: string
+      enum: [applied, failed, pending, drift_corrected]
+      description: |
+        The apply status of one resource on one device: applied; failed (the message says why); pending (a report-only
+        apply would change it, changes lists what); drift_corrected (the agent corrected a local change).
+    DeviceResourceStatus:
+      type: object
+      required: [resource_id, type, status, message, changes, bundle_version, occurred_at]
+      properties:
+        resource_id: { type: string, description: "Resource ID such as file:/etc/foo.conf, unit:foo.service or time." }
+        type: { type: string, description: "The part of the ID before the colon (file, unit), else the whole ID." }
+        status: { $ref: "#/components/schemas/ResourceState" }
+        message: { type: string, description: The reason of a failure; empty otherwise. }
+        changes:
+          type: array
+          description: What a report-only apply would change (status pending); empty otherwise.
+          items: { type: string }
+        bundle_version: { type: integer, format: int64 }
+        occurred_at: { type: string, format: date-time, description: When the agent reported it. }
+    DeviceResourceStatusPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceResourceStatus" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DeviceBundleReport:
+      type: object
+      required: [outcome, mode, changed, error_count, reason, occurred_at]
+      properties:
+        outcome: { type: string, enum: [applied, rejected] }
+        mode:
+          type: string
+          enum: [enforce, report_only]
+          description: >-
+            Mode of the apply. A rejection carries no mode: it shows the mode of the device's applied report of the
+            highest lower version, enforce when there is none.
+        changed: { type: integer, description: Resources the apply changed. }
+        error_count: { type: integer, description: Errors the apply reported. }
+        reason: { type: string, nullable: true, description: Why the device rejected the bundle. }
+        occurred_at: { type: string, format: date-time }
+    DeviceBundle:
+      type: object
+      required: [version, created_at, schema_version, config_rollout_id, report]
+      properties:
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        schema_version: { type: integer }
+        config_rollout_id: { type: string, format: uuid, nullable: true, description: The configuration rollout that produced the version; null until configuration rollouts exist. }
+        report:
+          nullable: true
+          description: What the device reported about the version; null until it reported.
+          allOf:
+            - $ref: "#/components/schemas/DeviceBundleReport"
+    DeviceBundlePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceBundle" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ResourceStatus:
+      type: object
+      required: [resource_id, type, applied, failed, pending, drift_corrected, last_failure_at]
+      description: One resource ID with the number of active devices per status.
+      properties:
+        resource_id: { type: string }
+        type: { type: string }
+        applied: { type: integer }
+        failed: { type: integer }
+        pending: { type: integer }
+        drift_corrected: { type: integer }
+        last_failure_at: { type: string, format: date-time, nullable: true }
+    ResourceStatusPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ResourceStatus" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DeviceConfigStatusCounts:
+      type: object
+      description: The device's resources per apply status; zeros until the agent reported.
+      required: [applied, failed, pending, drift_corrected]
+      properties:
+        applied: { type: integer }
+        failed: { type: integer }
+        pending: { type: integer }
+        drift_corrected: { type: integer }
     DeviceLoginStatus:
       type: object
       description: The latest login.* and sudo.* report of the device's agent (plan M3b decision 17).

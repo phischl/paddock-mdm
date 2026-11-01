@@ -1233,3 +1233,16 @@ without a migration merge as soon as their dependencies are on the branch. The V
    the device (`POST /api/v1/devices/{id}/enforce`) unless a gate tests report-only (PDK-160/162). Recovering a failed
    first-boot enrollment with `paddockd enroll` makes an autoinstalled device `adopted` (safe direction); PDK-163
    states it in the autoinstall troubleshooting section.
+10. **Change-set recording by document diff (PDK-154, 2026-11-01).** Decision 19's per-item before documents are
+    implemented as a diff of the whole declarative document read before and after the write, inside the write's
+    transaction. This is correct only because every writer of a declarative section takes `LockConfigApply` as the
+    first lock of its transaction (including `Users.Delete`, `UserGroups.Delete` and the identity sync's rename and
+    removal); a new writer that skips the lock would be attributed to a concurrent change set. A rename of a device
+    group or a file path appears as delete plus create (natural keys), which PDK-155's revert handles like any other
+    pair of items.
+11. **Ordering of apply reports (decision 13, PDK-151, 2026-11-01).** Applied reports are ordered by bundle version
+    first, then by the event time capped at the gateway's receive time, then by processing order (no
+    event-sequence key; amended 2026-11-01). A step of the
+    device clock therefore never makes an older version's status win; drift reports carry their bundle version. A
+    rejection never replaces the applied report of the same version, in any arrival order, and a report row is
+    stored only for a bundle version that exists for the device.

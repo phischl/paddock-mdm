@@ -53,17 +53,18 @@ type handlers struct {
 	conversions   *app.DiskConversions
 	privileges    *app.Privileges
 
-	commands    *app.DeviceCommands
-	localAdmin  *app.LocalAdmin
-	autoinstall *app.Autoinstall
-	disk        *app.Disk
-	revocations *app.Revocations
-	dms         *app.DMS
-	inventory   *app.Inventory
-	updates     *app.Updates
-	privacy     *app.Privacy
-	readAudit   *app.ReadAudit
-	attention   *app.Attention
+	commands     *app.DeviceCommands
+	localAdmin   *app.LocalAdmin
+	autoinstall  *app.Autoinstall
+	disk         *app.Disk
+	revocations  *app.Revocations
+	dms          *app.DMS
+	inventory    *app.Inventory
+	configStatus *app.ConfigStatus
+	updates      *app.Updates
+	privacy      *app.Privacy
+	readAudit    *app.ReadAudit
+	attention    *app.Attention
 	// findings and the account list of their assignee picker (plan M9 decision 34).
 	findings    *app.Findings
 	accountList *app.AccountList

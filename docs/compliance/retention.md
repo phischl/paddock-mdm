@@ -28,7 +28,8 @@ job that deletes and the audit event that proves it. "Now" means configurable pe
 | `revocation_request` with its `revocation_approval` rows | Operational history | Actor references, hostnames, reasons | Lifetime of the organization (revocation domain, ADR 0014; ADR 0032 amendment 2026-10-31) | Art. 6(1)(f) (A.8.9, A.8.32) | None yet; follow-up ticket | — |
 | `change_set` (metadata and plan) | Operational history | Actor references, hostnames, reasons | WORM retention (they explain audit events and feed M11 revert) | Art. 6(1)(f) (A.8.9, A.8.32) | None in this milestone; follow-up ticket | — |
 | `change_set.before` (M11, ADR 0033: managed file contents before a change) | Configuration history (may hold personal data of the file contents) | Full managed file contents | **90 days** after `applied_at`; then the column is set to NULL and `before_purged_at` stamped; the change set itself stays | Art. 6(1)(f) (A.8.32 revert) | Worker, every 6 h; `retention.purged` (store `change_set_before`, per organization) | Fixed by code |
-| `device_bundle_report`, `device_resource_status` (M11) | Apply status per device | Resource IDs, error messages (may name local users and paths) | Current state only: replaced by the device's next report; rows of a retired device stay with the device record | Art. 6(1)(f) (A.8.9) | None (overwritten); retired devices: follow-up with the device record | — |
+| `device_resource_status` (M11) | Apply status per device | Resource IDs, error messages (may name local users and paths) | Current state only: replaced by the device's next report; rows of a retired device stay with the device record | Art. 6(1)(f) (A.8.9) | None (overwritten); retired devices: follow-up with the device record | — |
+| `device_bundle_report` (M11) | Apply history per device | Outcome, mode, change and error counts, rejection reason per bundle version | One row per bundle version the server compiled for the device, kept as long as that `bundle` row (device record); a later report of the same version replaces it | Art. 6(1)(f) (A.8.9) | None in this milestone; follows the device record | — |
 | `organization_role_member`, `platform_role_member` (M8b, ADR 0030: current members of portal role groups) | Administrator data | Account identities per role | Current state only: a revoked member is deleted by the identity sync (ADR 0032 amendment 2026-10-31) | Art. 6(1)(c)/(f) (A.5.18) | Identity sync (`admin.role_revoked`) | — |
 | `device_event_gap` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `filled_at`; unfilled gaps never | Art. 6(1)(f) | Worker, every 6 h, per organization, batches of 1 000; `retention.purged` (store `device_event_gap`, only when rows were deleted) | — |
 | `device_event_dropped` (M8b) | Evidence metadata | Device IDs, sequence ranges; no names | Lifetime of the device (no timestamp; ADR 0032 amendment 2026-10-31) | Art. 6(1)(f) | None yet; follow-up ticket | — |
@@ -124,7 +125,8 @@ until a later decision adds a purge:
 - escrowed secrets of retired devices (`escrow_secret`, bucket `paddock-escrow`): until a Destroy or until the device
   row is deleted;
 - `change_set` (metadata and plan);
-- `device_bundle_report` and `device_resource_status` of retired devices: they stay with the device record;
+- `device_bundle_report` (all devices) and `device_resource_status` of retired devices: they stay with the device
+  record;
 - administrator accounts and API tokens (`admin_account`, `api_token`): they follow Authentik;
 - the chain metadata (`audit_object`, `audit_manifest`, `audit_signing_key`, `audit_verification_run`): unlimited by
   design;

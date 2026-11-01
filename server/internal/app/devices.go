@@ -140,6 +140,8 @@ type DeviceDetail struct {
 	DiskConversion *DiskConversion
 	// ComponentTargets are the platform's component targets (plan M8d decision 55).
 	ComponentTargets map[string]string
+	// ConfigStatus counts the device's resources per apply status (plan M11 decision 14); zeros without rows.
+	ConfigStatus pgstore.CountDeviceResourceStatusRow
 }
 
 // LoginManagement reports whether the device's agent supports bundle schema v2 (login and sudo, plan M3a decision
@@ -218,6 +220,9 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 		health = diskHealth(out.Status.Health)
 	}
 	if out.DiskConversion, err = loadDiskConversion(ctx, q, id, health); err != nil {
+		return out, err
+	}
+	if out.ConfigStatus, err = q.CountDeviceResourceStatus(ctx, id); err != nil {
 		return out, err
 	}
 	out.Login, err = loadLoginAssignment(ctx, q, id)
