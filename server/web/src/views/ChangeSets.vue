@@ -123,6 +123,11 @@ async function submitRevert(): Promise<void> {
   if (res === 'plan_changed') {
     // The configuration changed since the dry run: the new plan replaces the shown one and must be confirmed again.
     const again = await revertDryRun(cs.id)
+    // The new plan may touch a section that needs a step-up the first one did not.
+    if (again === stepUpRequired) {
+      startStepUp(stepUpAction, stepUpTarget, cs.id)
+      return
+    }
     if (typeof again === 'string') {
       closeRevert()
       problem.value = again

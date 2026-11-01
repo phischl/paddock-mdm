@@ -147,6 +147,22 @@ describe('revert a change set (plan M11 decision 22)', () => {
     expect(document.querySelector('.form-error')).toBeNull()
   })
 
+  it('starts the step-up when the reloaded plan needs one', async () => {
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', {
+      value: { ...window.location, assign, href: 'https://admin.test/change-sets', search: '' }, writable: true, configurable: true,
+    })
+    revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1')).mockResolvedValueOnce('step_up_required')
+    revertChangeSet.mockResolvedValueOnce('plan_changed')
+    const w = await mountList()
+    await w.find('[data-testid="change-set-revert"]').trigger('click')
+    await flushPromises()
+    ;(document.querySelector('[data-testid="confirm-accept"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(assign).toHaveBeenCalledWith('/api/auth/stepup?return_to=%2Fchange-sets')
+    expect(document.querySelector('.form-error')).toBeNull()
+  })
+
   it('cancels without reverting', async () => {
     revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
     const w = await mountList()

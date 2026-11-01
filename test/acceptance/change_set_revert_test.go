@@ -119,6 +119,13 @@ func TestChangeSetRevert(t *testing.T) {
 	}
 	expectOneEvent(t, admin.Portal, res.RequestID, "config.reverted", "failure")
 
+	t.Run("a change set of another organization is not found", func(t *testing.T) {
+		alice := login(t, env.Alice)
+		res := call(t, alice, http.MethodPost, revertPath(original, url.Values{"expected_plan": {hash}}), nil)
+		expectStatus(t, res, http.StatusNotFound, "not_found")
+		expectOneEvent(t, alice, res.RequestID, "config.reverted", "failure")
+	})
+
 	t.Run("a revert that makes a profile full again needs a step-up", func(t *testing.T) {
 		admin.stepUp(t)
 		res := call(t, admin.Portal, http.MethodPost, "/api/v1/permission-profiles", map[string]any{"name": uniqueName("m11 revert full"), "class": "full"})

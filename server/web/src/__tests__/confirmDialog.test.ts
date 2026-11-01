@@ -143,6 +143,24 @@ describe('ConfirmDialog', () => {
   })
 })
 
+describe('ConfirmDialog detail slot (PDK-155)', () => {
+  it('stays narrow without a slot and widens for the slot content', async () => {
+    mountDialog()
+    await flushPromises()
+    expect(wrapper?.findComponent(VDialog).props('maxWidth')).toBe(480)
+    wrapper?.unmount()
+    wrapper = mount(ConfirmDialog, {
+      props: { modelValue: true, title: 'Revert change set', message: 'Undo it?', confirmLabel: 'Revert' },
+      slots: { default: () => h('p', { 'data-testid': 'slot-detail' }, 'the plan') },
+      global: { plugins: [createPortalI18n(), vuetify] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(wrapper.findComponent(VDialog).props('maxWidth')).toBe('64rem')
+    expect(el('slot-detail')?.textContent).toBe('the plan')
+  })
+})
+
 describe('ConfirmDialog reason field (plan M7c decision 23)', () => {
   const reason = { label: 'Reason', hint: 'Kept with the request.', required: true, maxLength: 500 as const }
 
