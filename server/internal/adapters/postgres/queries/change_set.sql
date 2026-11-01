@@ -6,8 +6,17 @@
 SELECT pg_advisory_xact_lock(hashtextextended('config_apply:' || current_setting('paddock.org_id'), 0));
 
 -- name: InsertChangeSet :exec
-INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections, plan, before, rollout)
-VALUES (@id, @organization_id, @actor, @source, @created_n, @updated_n, @deleted_n, @sections, @plan, @before, @rollout);
+INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections, plan, before, rollout,
+  reverts_change_set_id, reason, urgent_reason)
+VALUES (@id, @organization_id, @actor, @source, @created_n, @updated_n, @deleted_n, @sections, @plan, @before, @rollout,
+  sqlc.narg(reverts_change_set_id), sqlc.narg(reason), sqlc.narg(urgent_reason));
+
+-- name: GetChangeSetForRevert :one
+-- The only query that reads "before" for the API (plan M11 decision 21); reverted_by as in GetChangeSet.
+SELECT c.plan, c.before, c.before_purged_at,
+  COALESCE((SELECT r.id FROM change_set r WHERE r.reverts_change_set_id = c.id ORDER BY r.applied_at DESC, r.id DESC LIMIT 1),
+    '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS reverted_by
+FROM change_set c WHERE c.id = @id;
 
 -- name: GetChangeSet :one
 -- reverted_by is the nil UUID while nothing reverted the change set. Never selects "before": it holds full file contents and is read only by the revert.

@@ -144,6 +144,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/api-tokens":                                              {app.ScopeOrg, app.SpecAPITokenCreate},
 	"POST /api/v1/api-tokens/{id}/revoke":                                  {app.ScopeOrg, app.SpecAPITokenRevoke},
 	"PUT /api/v1/config":                                                   {app.ScopeOrg, app.SpecConfigApply},
+	"POST /api/v1/change-sets/{id}/revert":                                 {app.ScopeOrg, app.SpecConfigRevert},
 	"POST /api/platform/v1/agent-releases":                                 {app.ScopePlatform, app.SpecAgentReleaseCreate},
 	"POST /api/platform/v1/agent-releases/import":                          {app.ScopePlatform, app.SpecAgentReleaseImport},
 	"PUT /api/platform/v1/agent-releases/{version}/artifacts/{arch}":       {app.ScopePlatform, app.SpecAgentReleaseUpload},

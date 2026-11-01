@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "bb5db5ca6582a77ded2cabb4b9a4f8f23429f0d642b23212eb92a62375612ad6"
+const Version = "1f596fefd7a7c0d8b9bc01fc0a4253232eacaaca1f79e3b9d8e526c25e8b7af5"
 
 var tools = []Tool{
 	{
@@ -2833,6 +2833,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns the newest stored recovery key of the device; confirm_hostname must equal the device's hostname. 409 invalid_state when none is stored, 404 not_found once a Destroy of the device was issued. Type it at the boot PIN prompt once the PIN attempts are used up (docs/operations/disk-recovery.md). Responses are never cached.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"confirm_hostname\":{\"maxLength\":253,\"type\":\"string\"}},\"required\":[\"confirm_hostname\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "revertChangeSet",
+		Method:      "POST",
+		Path:        "/api/v1/change-sets/{id}/revert",
+		Pattern:     "POST /api/v1/change-sets/{id}/revert",
+		Tag:         "config",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: true,
+		Idempotent:  false,
+		AuditCode:   "config.reverted",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator. Applies the inverse of a change set in one transaction (plan M11 decision 21): an item it created is deleted, an item it updated or deleted is restored from its stored before-state; items created since are kept, and an item whose deleted key was created again since is set back to the before-state. The rules of the per-resource endpoints apply unchanged, as for PUT /api/v1/config (organization administrators only for device group deletions and settings, a step-up for full profiles, the managed-file operator roots and the watched units). With dry_run=true the plan is computed and checked but nothing is applied and nothing is audited. Otherwise expected_plan is required (400 invalid_request without it) and a different plan is refused with 412 plan_changed. The revert is recorded as a new change set whose reverts_change_set_id is the original. 409 invalid_state when the change set has no before-state (recorded before before-states were stored, or purged after 90 days) or was already reverted. 404 not_found for an unknown change set or one of another organization. urgent and reason are stored; until staged rollouts exist every revert reaches every device at once.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"dry_run\":{\"default\":false,\"description\":\"Compute and check the inverse plan without applying it.\",\"type\":\"boolean\"},\"expected_plan\":{\"description\":\"plan_sha256 of the confirmed dry run; required unless dry_run. A different plan is refused with 412 plan_changed.\",\"pattern\":\"^[0-9a-f]{64}$\",\"type\":\"string\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"reason\":{\"description\":\"Why the change set is reverted (2 to 500 characters).\",\"maxLength\":500,\"minLength\":2,\"type\":\"string\"},\"urgent\":{\"default\":false,\"description\":\"Opt out of a staged rollout (needs reason). Stored; without effect until staged rollouts exist.\",\"type\":\"boolean\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "revokeApiToken",

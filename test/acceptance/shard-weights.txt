@@ -43,6 +43,8 @@
 79 TestListContractM8e
 77 TestAutoUnsealAcknowledgement
 75 TestUnlockMode
+# Estimate, not yet measured (PDK-155): gate organization, two step-ups and eight audit lookups.
+75 TestChangeSetRevert
 74 TestAgentRolloutFromHost
 72 TestAgentReleaseImport
 71 TestEffectiveProfileGate

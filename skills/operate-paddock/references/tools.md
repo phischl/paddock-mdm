@@ -31,6 +31,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getChangeSet` | read | no | GET /api/v1/change-sets/{id} |
 | `getConfig` | read | no | The organization's declarative configuration as a paddock.v1 document (api/schema/paddock.v1.json) with every section present, in the key order of the schema. |
 | `listChangeSets` | read | no | Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource. |
+| `revertChangeSet` | write | yes | Applies the inverse of a change set in one transaction (plan M11 decision 21): an item it created is deleted, an item it updated or deleted is restored from its stored before-state; items created since are kept, and an item whose deleted key was created again since is set back to the before-state. |
 
 ## device-groups
 

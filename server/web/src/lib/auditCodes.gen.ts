@@ -28,6 +28,7 @@ export const auditCodes = [
   'audit.searched',
   'autoinstall.generated',
   'config.applied',
+  'config.reverted',
   'device.agent_events_dropped',
   'device.agent_rollback_failed',
   'device.agent_rolled_back',

@@ -349,7 +349,8 @@
       "revoked": "{actor} hat das Registrierungstoken {name} widerrufen"
     },
     "config": {
-      "applied": "{actor} hat eine Konfiguration angewendet ({created} erstellt, {updated} geändert, {deleted} gelöscht)"
+      "applied": "{actor} hat eine Konfiguration angewendet ({created} erstellt, {updated} geändert, {deleted} gelöscht)",
+      "reverted": "{actor} hat einen Änderungssatz rückgängig gemacht ({created} erstellt, {updated} geändert, {deleted} gelöscht)"
     },
     "api_token": {
       "created": "{actor} hat das API-Token {name} ({role}) angelegt",
@@ -1476,6 +1477,21 @@
     "before": "Vorher",
     "after": "Nachher",
     "close": "Schließen",
+    "revertsLabel": "Macht den Änderungssatz rückgängig",
+    "revertedByLabel": "Rückgängig gemacht durch den Änderungssatz",
+    "revert": {
+      "action": "Rückgängig machen",
+      "label": "Änderungssatz vom {at} rückgängig machen",
+      "title": "Änderungssatz rückgängig machen",
+      "message": "Diese Änderungen machen den Änderungssatz vom {at} rückgängig und werden sofort angewendet. Seitdem angelegte Einträge bleiben erhalten.",
+      "emptyPlan": "Die Konfiguration entspricht bereits dem Stand vor diesem Änderungssatz; es würde sich nichts ändern.",
+      "planChanged": "Die Konfiguration hat sich geändert, seit der Plan angezeigt wurde. Prüfen Sie den neuen Plan und bestätigen Sie erneut.",
+      "done": "Der Änderungssatz vom {at} wurde rückgängig gemacht.",
+      "blocked": {
+        "reverted": "Dieser Änderungssatz wurde bereits rückgängig gemacht.",
+        "noBefore": "Der vorherige Stand dieses Änderungssatzes ist nicht gespeichert (vor dessen Speicherung erfasst oder nach 90 Tagen entfernt)."
+      }
+    },
     "empty": {
       "title": "Noch keine Änderungssätze",
       "description": "Änderungssätze werden aufgezeichnet, wenn paddockctl oder die API eine Konfiguration anwendet."

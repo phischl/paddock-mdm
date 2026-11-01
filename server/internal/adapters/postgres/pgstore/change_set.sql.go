@@ -92,6 +92,33 @@ func (q *Queries) GetChangeSet(ctx context.Context, id uuid.UUID) (GetChangeSetR
 	return i, err
 }
 
+const getChangeSetForRevert = `-- name: GetChangeSetForRevert :one
+SELECT c.plan, c.before, c.before_purged_at,
+  COALESCE((SELECT r.id FROM change_set r WHERE r.reverts_change_set_id = c.id ORDER BY r.applied_at DESC, r.id DESC LIMIT 1),
+    '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS reverted_by
+FROM change_set c WHERE c.id = $1
+`
+
+type GetChangeSetForRevertRow struct {
+	Plan           json.RawMessage
+	Before         json.RawMessage
+	BeforePurgedAt *time.Time
+	RevertedBy     uuid.UUID
+}
+
+// The only query that reads "before" for the API (plan M11 decision 21); reverted_by as in GetChangeSet.
+func (q *Queries) GetChangeSetForRevert(ctx context.Context, id uuid.UUID) (GetChangeSetForRevertRow, error) {
+	row := q.db.QueryRow(ctx, getChangeSetForRevert, id)
+	var i GetChangeSetForRevertRow
+	err := row.Scan(
+		&i.Plan,
+		&i.Before,
+		&i.BeforePurgedAt,
+		&i.RevertedBy,
+	)
+	return i, err
+}
+
 const hasExpiredChangeSetBefore = `-- name: HasExpiredChangeSetBefore :one
 SELECT EXISTS (SELECT 1 FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz)
 `
@@ -104,22 +131,27 @@ func (q *Queries) HasExpiredChangeSetBefore(ctx context.Context, cutoff time.Tim
 }
 
 const insertChangeSet = `-- name: InsertChangeSet :exec
-INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections, plan, before, rollout)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections, plan, before, rollout,
+  reverts_change_set_id, reason, urgent_reason)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+  $12, $13, $14)
 `
 
 type InsertChangeSetParams struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	Actor          json.RawMessage
-	Source         string
-	CreatedN       int32
-	UpdatedN       int32
-	DeletedN       int32
-	Sections       []string
-	Plan           json.RawMessage
-	Before         json.RawMessage
-	Rollout        string
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	Actor              json.RawMessage
+	Source             string
+	CreatedN           int32
+	UpdatedN           int32
+	DeletedN           int32
+	Sections           []string
+	Plan               json.RawMessage
+	Before             json.RawMessage
+	Rollout            string
+	RevertsChangeSetID uuid.NullUUID
+	Reason             *string
+	UrgentReason       *string
 }
 
 func (q *Queries) InsertChangeSet(ctx context.Context, arg InsertChangeSetParams) error {
@@ -135,6 +167,9 @@ func (q *Queries) InsertChangeSet(ctx context.Context, arg InsertChangeSetParams
 		arg.Plan,
 		arg.Before,
 		arg.Rollout,
+		arg.RevertsChangeSetID,
+		arg.Reason,
+		arg.UrgentReason,
 	)
 	return err
 }

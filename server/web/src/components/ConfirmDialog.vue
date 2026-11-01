@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch } from 'vue'
+import { computed, nextTick, ref, useId, useSlots, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ComponentPublicInstance } from 'vue'
 import type { ConfirmReason } from '../composables/useConfirm'
@@ -8,7 +8,8 @@ import { reducedMotion } from '../lib/pageContext'
 /**
  * Modal confirmation (ADR 0018, plan M7c decision 23): title, consequence in one sentence, an optional reason
  * field, focus on Cancel, Esc cancels, destructive button in the danger colour; high-risk actions require typing a
- * text. Enter in the fields never submits.
+ * text. Enter in the fields never submits. The default slot shows what the action does in detail (the plan of a
+ * revert); a dialog with it is wider.
  */
 const props = defineProps<{
   modelValue: boolean
@@ -27,6 +28,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const slots = useSlots()
 const id = useId()
 const typed = ref('')
 const reasonText = ref('')
@@ -72,7 +74,7 @@ function onConfirm(): void {
 <template>
   <v-dialog
     :model-value="modelValue"
-    max-width="480"
+    :max-width="slots.default ? '64rem' : 480"
     :transition="reducedMotion() ? false : 'dialog-transition'"
     :aria-labelledby="id + '-title'"
     :aria-describedby="id + '-message'"
@@ -95,6 +97,7 @@ function onConfirm(): void {
         <p :id="id + '-message'">
           {{ message }}
         </p>
+        <slot />
         <v-alert
           v-if="warning"
           type="warning"
