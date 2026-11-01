@@ -37,27 +37,28 @@ type Deps struct {
 	Managed      *app.ManagedConfig
 	Releases     *app.AgentReleases
 	// ReleaseImports import agent releases from the configured release source (ADR 0043).
-	ReleaseImports *app.ReleaseImports
-	Users          *app.Users
-	UserGroups     *app.UserGroups
-	Logins         *app.Logins
-	LoginSettings  *app.LoginSettings
-	WatchedUnits   *app.WatchedUnits
-	LoginHistory   *app.LoginHistory
-	AgentUpdates   *app.AgentUpdates
-	Uninstalls     *app.Uninstalls
-	Conversions    *app.DiskConversions
-	Privileges     *app.Privileges
-	Commands       *app.DeviceCommands
-	LocalAdmin     *app.LocalAdmin
-	Autoinstall    *app.Autoinstall
-	Disk           *app.Disk
-	Revocations    *app.Revocations
-	DMS            *app.DMS
-	Inventory      *app.Inventory
-	ConfigStatus   *app.ConfigStatus
-	Updates        *app.Updates
-	Privacy        *app.Privacy
+	ReleaseImports  *app.ReleaseImports
+	Users           *app.Users
+	UserGroups      *app.UserGroups
+	Logins          *app.Logins
+	LoginSettings   *app.LoginSettings
+	WatchedUnits    *app.WatchedUnits
+	LoginHistory    *app.LoginHistory
+	AgentUpdates    *app.AgentUpdates
+	Uninstalls      *app.Uninstalls
+	Conversions     *app.DiskConversions
+	Privileges      *app.Privileges
+	Commands        *app.DeviceCommands
+	LocalAdmin      *app.LocalAdmin
+	Autoinstall     *app.Autoinstall
+	Disk            *app.Disk
+	Revocations     *app.Revocations
+	DMS             *app.DMS
+	Inventory       *app.Inventory
+	ConfigStatus    *app.ConfigStatus
+	Updates         *app.Updates
+	RolloutSettings *app.RolloutSettings
+	Privacy         *app.Privacy
 	// ReadAudit records the audit searches and inventory views the organization switched on (plan M10 decision 20).
 	ReadAudit *app.ReadAudit
 	Attention *app.Attention
@@ -197,6 +198,7 @@ var privileged = map[string]struct {
 	"PUT /api/v1/settings/watched-units":                                   {app.ScopeOrg, app.SpecWatchedUnitsChange},
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
+	"PUT /api/v1/settings/rollout":                                         {app.ScopeOrg, app.SpecRolloutSettings},
 	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
 	"GET /api/v1/audit/exports/{id}/download":                              {app.ScopeOrg, app.SpecAuditExportDownload},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
@@ -260,7 +262,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,

@@ -710,6 +710,18 @@ type OrganizationRoleSnapshot struct {
 	Role           string
 }
 
+type OrganizationRolloutSetting struct {
+	OrganizationID          uuid.UUID
+	Enabled                 bool
+	Waves                   []int32
+	MinWaveMinutes          int32
+	FailureThresholdPercent int32
+	FailureThresholdMin     int32
+	CanaryDeviceGroupID     uuid.NullUUID
+	UpdatedAt               time.Time
+	UpdatedBy               uuid.NullUUID
+}
+
 type OrganizationUpdateSetting struct {
 	OrganizationID        uuid.UUID
 	SecurityDailyAt       string

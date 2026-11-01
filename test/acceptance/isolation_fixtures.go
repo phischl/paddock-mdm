@@ -682,6 +682,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"PUT /api/v1/settings/updates": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/settings/updates", currentUpdateSettings(t, w.alice)
 	}},
+	"GET /api/v1/settings/rollout": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/rollout", nil
+	}},
+	"PUT /api/v1/settings/rollout": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/rollout", currentRolloutSettings(t, w.alice)
+	}},
 	"GET /api/v1/settings/privacy": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/settings/privacy", nil
 	}},
