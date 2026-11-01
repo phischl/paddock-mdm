@@ -4,6 +4,7 @@
 //	devicesim local-admin --hostname <name> < enrollment-config.json
 //	devicesim inventory --hostname <name> --package <name>=<version> ... < enrollment-config.json
 //	devicesim disk --hostname <name> --health <json> < enrollment-config.json
+//	devicesim config-report --hostname <name> --resource <id>=<status>[:<message>] ... < enrollment-config.json
 //
 // enroll prints {"enrollment_id", "device_id", "status"} once the enrollment left "processing". local-admin needs an
 // auto-approving token: it enrolls, escrows a first local administrator password like an agent (encrypted to the
@@ -11,7 +12,8 @@
 // an auto-approving token, too: it enrolls, enrolls an osquery host with the device's hardware UUID in Fleet (plan
 // M5a), reports the packages and prints {"device_id"}. disk needs an auto-approving token, too: it enrolls, checks in
 // once with the given health (e.g. an unencrypted disk that can be encrypted in place, plan M8e) and prints
-// {"device_id"}.
+// {"device_id"}. config-report needs an auto-approving token, too: it enrolls, waits for its first bundle and reports
+// bundle.applied with the given resource outcomes (plan M11) and prints {"device_id"}.
 package main
 
 import (
@@ -42,11 +44,11 @@ func main() {
 	}
 }
 
-const usage = "usage: devicesim enroll|local-admin|inventory|disk --hostname <name> [--package <name>=<version> ...] " +
-	"[--health <json>] < enrollment-config.json"
+const usage = "usage: devicesim enroll|local-admin|inventory|disk|config-report --hostname <name> [--package <name>=<version> ...] " +
+	"[--health <json>] [--resource <id>=<status>[:<message>] ...] < enrollment-config.json"
 
 func run(args []string) error {
-	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory" && args[0] != "disk") {
+	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory" && args[0] != "disk" && args[0] != "config-report") {
 		return errors.New(usage)
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
@@ -59,6 +61,16 @@ func run(args []string) error {
 			return errors.New("want <name>=<version>")
 		}
 		packages = append(packages, [2]string{name, version})
+		return nil
+	})
+	var resources []map[string]string
+	fs.Func("resource", "resource outcome <id>=<status>[:<message>] (config-report)", func(v string) error {
+		id, outcome, ok := strings.Cut(v, "=")
+		status, message, _ := strings.Cut(outcome, ":")
+		if !ok || id == "" || status == "" {
+			return errors.New("want <id>=<status>[:<message>]")
+		}
+		resources = append(resources, map[string]string{"id": id, "status": status, "message": message})
 		return nil
 	})
 	if err := fs.Parse(args[1:]); err != nil || *hostname == "" || (args[0] == "disk" && !json.Valid([]byte(*health))) {
@@ -108,6 +120,12 @@ func run(args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID})
 	}
+	if args[0] == "config-report" {
+		if err := reportConfig(ctx, dev, resources); err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID})
+	}
 	if args[0] == "inventory" {
 		if err := reportInventory(ctx, client, dev, *hostname, packages); err != nil {
 			return err
@@ -119,6 +137,42 @@ func run(args []string) error {
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID, "password": password})
+}
+
+// reportConfig checks in until the device has a bundle and reports it applied with the given resource outcomes.
+func reportConfig(ctx context.Context, dev *devicesim.Device, resources []map[string]string) error {
+	for {
+		out, res, err := dev.Checkin(ctx)
+		if err != nil || res.Status != http.StatusOK {
+			return fmt.Errorf("checkin: %v HTTP %d", err, res.Status)
+		}
+		if out.Bundle != nil {
+			failed := 0
+			errs := []map[string]string{}
+			for _, r := range resources {
+				if r["status"] == "failed" {
+					failed++
+					errs = append(errs, map[string]string{"id": r["id"], "message": r["message"]})
+				}
+			}
+			data, err := json.Marshal(map[string]any{
+				"version": out.Bundle.Version, "changed": len(resources) - failed, "mode": "enforce", "errors": errs, "resources": resources,
+			})
+			if err != nil {
+				return err
+			}
+			res, err := dev.SendEvents(ctx, []protocol.Event{{EventSeq: 1, Type: protocol.EventBundleApplied, OccurredAt: time.Now(), Data: data}})
+			if err != nil || res.Status != http.StatusAccepted {
+				return fmt.Errorf("bundle.applied event: %v HTTP %d %s", err, res.Status, res.Body)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("the device got no bundle")
+		case <-time.After(2500 * time.Millisecond):
+		}
+	}
 }
 
 // reportInventory enrolls the device's osquery host in Fleet and answers Fleet's queries until it has the packages.

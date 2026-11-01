@@ -138,6 +138,7 @@
     "rolloutSettings": "Rollouts",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
+    "configStatus": "Konfigurationsstatus",
     "start": "Start",
     "groups": {
       "overview": "Übersicht",
@@ -1185,6 +1186,7 @@
       "overview": "Übersicht",
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
+      "applyStatus": "Anwendungsstatus",
       "commands": "Befehle",
       "audit": "Audit"
     },
@@ -1295,7 +1297,10 @@
       "hint": "Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach.",
       "targetHint": "Ziel = letztes abgeschlossenes Release. Ein laufender Rollout verschiebt es nicht; eine Komponente, die neuer als ihr Ziel ist, gilt als aktuell."
     },
-    "componentFilter": "Komponente veraltet"
+    "componentFilter": "Komponente veraltet",
+    "reportOnly": {
+      "banner": "Dieses Gerät ist im Berichtsmodus: Es meldet, was es ändern würde, und ändert nichts. Ausstehende Zeilen nennen die geplanten Änderungen."
+    }
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -1508,6 +1513,63 @@
       "title": "Noch keine Änderungssätze",
       "description": "Änderungssätze werden aufgezeichnet, wenn paddockctl oder die API eine Konfiguration anwendet."
     }
+  },
+  "configStatus": {
+    "title": "Konfigurationsstatus",
+    "summary": "Pro Ressource: auf wie vielen aktiven Geräten sie angewendet wurde, fehlschlug, in einer reinen Berichtsanwendung aussteht oder nach einer lokalen Änderung korrigiert wurde.",
+    "resource": "Ressource",
+    "type": "Typ",
+    "status": "Status",
+    "message": "Meldung",
+    "version": "Bundle-Version",
+    "time": "Gemeldet",
+    "lastFailure": "Letzter Fehler",
+    "states": {
+      "applied": "Angewendet",
+      "failed": "Fehlgeschlagen",
+      "pending": "Ausstehend",
+      "drift_corrected": "Abweichung korrigiert"
+    },
+    "count": {
+      "applied": "{count, plural, one {# angewendet} other {# angewendet}}",
+      "failed": "{count, plural, one {# fehlgeschlagen} other {# fehlgeschlagen}}",
+      "pending": "{count, plural, one {# ausstehend} other {# ausstehend}}",
+      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}"
+    },
+    "changes": "Geplante Änderungen",
+    "noDetails": "Keine weiteren Details.",
+    "bundles": "Bundle-Verlauf",
+    "compiled": "Erzeugt",
+    "outcome": "Ergebnis",
+    "mode": "Modus",
+    "changed": "Geändert",
+    "errors": "Fehler",
+    "reportedAt": "Gemeldet",
+    "rollout": "Rollout",
+    "outcomes": {
+      "applied": "Angewendet",
+      "rejected": "Abgelehnt",
+      "none": "Nicht gemeldet"
+    },
+    "modes": {
+      "enforce": "Erzwingen",
+      "report_only": "Nur berichten"
+    },
+    "empty": {
+      "device": {
+        "title": "Noch kein Anwendungsstatus",
+        "description": "Das Gerät hat noch nicht gemeldet, was es angewendet hat."
+      },
+      "bundles": {
+        "title": "Keine Konfigurationsversionen",
+        "description": "Für dieses Gerät wurde noch keine Konfiguration erzeugt."
+      },
+      "fleet": {
+        "title": "Noch kein Anwendungsstatus",
+        "description": "Kein Gerät hat bisher gemeldet, was es angewendet hat."
+      }
+    },
+    "schema": "Schema"
   },
   "managed": {
     "scope": "Gilt für",

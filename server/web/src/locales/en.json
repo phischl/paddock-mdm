@@ -138,6 +138,7 @@
     "rolloutSettings": "Rollouts",
     "apiTokens": "API tokens",
     "changeSets": "Change sets",
+    "configStatus": "Configuration status",
     "start": "Start",
     "groups": {
       "overview": "Overview",
@@ -1185,6 +1186,7 @@
       "overview": "Overview",
       "access": "Login & sudo",
       "configuration": "Configuration",
+      "applyStatus": "Apply status",
       "commands": "Commands",
       "audit": "Audit"
     },
@@ -1295,7 +1297,10 @@
       "hint": "Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update.",
       "targetHint": "Target = last completed release. A running rollout does not move it; a component newer than its target counts as up to date."
     },
-    "componentFilter": "Component outdated"
+    "componentFilter": "Component outdated",
+    "reportOnly": {
+      "banner": "This device is in report-only mode: it reports what it would change and changes nothing. Pending rows list the planned changes."
+    }
   },
   "tokens": {
     "title": "Enrollment tokens",
@@ -1508,6 +1513,63 @@
       "title": "No change sets yet",
       "description": "Change sets are recorded when paddockctl or the API applies a configuration."
     }
+  },
+  "configStatus": {
+    "title": "Configuration status",
+    "summary": "Per resource, on how many active devices it applied, failed, is pending in a report-only apply or was corrected after a local change.",
+    "resource": "Resource",
+    "type": "Type",
+    "status": "Status",
+    "message": "Message",
+    "version": "Bundle version",
+    "time": "Reported",
+    "lastFailure": "Last failure",
+    "states": {
+      "applied": "Applied",
+      "failed": "Failed",
+      "pending": "Pending",
+      "drift_corrected": "Drift corrected"
+    },
+    "count": {
+      "applied": "{count, plural, one {# applied} other {# applied}}",
+      "failed": "{count, plural, one {# failed} other {# failed}}",
+      "pending": "{count, plural, one {# pending} other {# pending}}",
+      "drift_corrected": "{count, plural, one {# drift corrected} other {# drifts corrected}}"
+    },
+    "changes": "Planned changes",
+    "noDetails": "No further details.",
+    "bundles": "Bundle history",
+    "compiled": "Compiled",
+    "outcome": "Outcome",
+    "mode": "Mode",
+    "changed": "Changed",
+    "errors": "Errors",
+    "reportedAt": "Reported",
+    "rollout": "Rollout",
+    "outcomes": {
+      "applied": "Applied",
+      "rejected": "Rejected",
+      "none": "Not reported"
+    },
+    "modes": {
+      "enforce": "Enforce",
+      "report_only": "Report only"
+    },
+    "empty": {
+      "device": {
+        "title": "No apply status yet",
+        "description": "The device has not reported what it applied."
+      },
+      "bundles": {
+        "title": "No configuration versions",
+        "description": "No configuration was compiled for this device yet."
+      },
+      "fleet": {
+        "title": "No apply status yet",
+        "description": "No device has reported what it applied."
+      }
+    },
+    "schema": "Schema"
   },
   "managed": {
     "scope": "Applies to",
