@@ -489,7 +489,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceBundleApplied: {
 		Code: CodeDeviceBundleApplied, Emitted: true,
-		Description: "A device reported that it applied a bundle (actor: the device).",
+		Description: "A device reported that it applied a bundle, with its mode enforce or report_only; the per-resource outcomes are apply status, not audit params (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 	},
