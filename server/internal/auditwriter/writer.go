@@ -67,10 +67,11 @@ type Writer struct {
 	pool          *db.AuditWriterPool
 	store         ObjectStore
 	retentionDays int
-	txTimeout     time.Duration       // db.WriterTransactionTimeout; lowered only by tests
-	dayChosen     func(day time.Time) // nil; tests seal the chosen day here to race the audit_object trigger
-	rowInserted   func(day time.Time) // nil; tests seal here to race the sealer's audit-day lock
-	ensured       func()              // nil; tests drop a partition here to race the index purge
+	txTimeout     time.Duration        // db.WriterTransactionTimeout; lowered only by tests
+	dayChosen     func(day time.Time)  // nil; tests seal the chosen day here to race the audit_object trigger
+	rowInserted   func(day time.Time)  // nil; tests seal here to race the sealer's audit-day lock
+	beforeInsert  func(ev audit.Event) // nil; tests index ev from another connection to race the insert
+	ensured       func()               // nil; tests drop a partition here to race the index purge
 }
 
 // NewWriter creates a writer. retentionDays below MinRetentionDays is an error.
@@ -106,8 +107,9 @@ func Validate(ev audit.Event) error {
 	return nil
 }
 
-// WriteBatch writes events grouped by organization, one transaction per organization: ensure partitions →
-// insert ON CONFLICT DO NOTHING → insert audit_object → write only the newly inserted events as one WORM object →
+// WriteBatch writes events grouped by organization, one transaction per organization: ensure partitions → lock the
+// organization's commit sequence → insert with the next commit_seq values ON CONFLICT DO NOTHING (an event a
+// concurrent writer indexed first is an error, never a gap) → insert audit_object → write only the newly inserted events as one WORM object →
 // commit. recorded_at and the object key's hour follow the transaction's start time, not occurred_at. audit_object.day
 // and retention follow the recording day, or the first unsealed day when the recording day is already sealed (ADR
 // 0010 amendment 2026-10-25), so a late event is covered by the manifest of a day that is still open and a sealed
@@ -176,6 +178,12 @@ func (w *Writer) writeGroupOnce(ctx context.Context, org uuid.UUID, events []aud
 		if w.ensured != nil {
 			w.ensured()
 		}
+		// The row lock serializes the organization's writers until commit, so commit_seq follows commit order without
+		// gaps (plan M9 decision 2); a retry after a rollback takes it again and re-assigns the numbers.
+		lastSeq, err := q.LockOrgSeq(ctx, org)
+		if err != nil {
+			return err
+		}
 		fresh, err := w.withoutExisting(ctx, q, events)
 		if err != nil {
 			return err
@@ -184,23 +192,29 @@ func (w *Writer) writeGroupOnce(ctx context.Context, org uuid.UUID, events []aud
 			return nil
 		}
 		key := ObjectKey(org, recordedAt.Truncate(time.Hour), fresh[0].EventID)
-		var inserted []audit.Event
+		inserted := make([]audit.Event, 0, len(fresh))
 		for _, ev := range fresh {
 			ev.RecordedAt = recordedAt
 			row, err := indexRow(ev, key)
 			if err != nil {
 				return err
 			}
+			lastSeq++
+			row.CommitSeq = lastSeq
+			if w.beforeInsert != nil {
+				w.beforeInsert(ev)
+			}
 			if _, err := q.InsertAuditEvent(ctx, row); err != nil {
-				if db.IsNoRows(err) { // a concurrent writer inserted it first
-					continue
+				if db.IsNoRows(err) {
+					// Skipping would leave a gap in commit_seq; the rollback lets the consumer redeliver the batch.
+					return fmt.Errorf("auditwriter: event %s already indexed by a concurrent writer: %w", ev.EventID, err)
 				}
 				return err
 			}
 			inserted = append(inserted, ev)
 		}
-		if len(inserted) == 0 {
-			return nil
+		if err := q.SetOrgSeq(ctx, auditstore.SetOrgSeqParams{OrganizationID: org, LastSeq: lastSeq}); err != nil {
+			return err
 		}
 		body, err := encodeObject(inserted)
 		if err != nil {

@@ -361,3 +361,54 @@ func listContractUserGroup(t *testing.T, alice *env.Portal) string {
 	}
 	return group
 }
+
+// feedOperations returns the GET operations that carry x-paddock-feed, by path.
+func feedOperations(doc *openapi3.T) map[string]*openapi3.Operation {
+	out := map[string]*openapi3.Operation{}
+	for path, item := range doc.Paths.Map() {
+		if item.Get != nil {
+			if _, ok := item.Get.Extensions["x-paddock-feed"]; ok {
+				out[path] = item.Get
+			}
+		}
+	}
+	return out
+}
+
+// TestListContractFeeds: a cursor feed (plan M9 decision 7) is no collection, so the list contract skips it, and it
+// declares the cursor and limit parameters and the four page properties instead.
+func TestListContractFeeds(t *testing.T) {
+	doc := loadSpec(t)
+	feeds := feedOperations(doc)
+	if len(feeds) == 0 {
+		t.Fatal("no operation carries x-paddock-feed")
+	}
+	lists := collectionGETs(doc)
+	for path, op := range feeds {
+		t.Run(path, func(t *testing.T) {
+			if _, ok := op.Extensions["x-paddock-list"]; ok {
+				t.Error("a feed must not carry x-paddock-list")
+			}
+			if _, ok := lists[path]; ok {
+				t.Error("a feed must not be a collection GET")
+			}
+			for _, name := range []string{"after", "limit"} {
+				if op.Parameters.GetByInAndName("query", name) == nil {
+					t.Errorf("parameter %s missing", name)
+				}
+			}
+			ok := op.Responses.Status(http.StatusOK)
+			if ok == nil || ok.Value == nil || ok.Value.Content.Get("application/json") == nil {
+				t.Fatal("no JSON 200 response")
+			}
+			schema := ok.Value.Content.Get("application/json").Schema.Value
+			want := []string{"events", "latest", "next_after", "schema"}
+			if got := sorted(schema.Required); !slices.Equal(got, want) {
+				t.Errorf("required properties %v, want %v", got, want)
+			}
+			if len(schema.Properties) != len(want) {
+				t.Errorf("%d properties, want exactly %v", len(schema.Properties), want)
+			}
+		})
+	}
+}

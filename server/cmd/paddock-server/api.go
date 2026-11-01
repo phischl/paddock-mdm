@@ -19,6 +19,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/bundlesign"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/domain/outbound"
 	"github.com/phischl/paddock-mdm/server/internal/escrowreader"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -103,6 +104,10 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		denialWindow = l.Duration("PADDOCK_TEST_IP_ALLOWLIST_WINDOW", ipDenialWindow)
 	}
 	allowlistBypass := l.Bool("PADDOCK_IP_ALLOWLIST_BYPASS", false)
+	// Notification destinations (plan M9 decisions 9 and 28): e-mail only with an SMTP relay; webhook URLs on private
+	// addresses only on the development stack, whose acceptance sinks run on the host.
+	smtpEnabled := l.Bool("PADDOCK_SMTP_ENABLED", false)
+	outboundPolicy := outbound.Policy{AllowPrivate: common.Development() && l.Bool("PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE", false)}
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -198,6 +203,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		UserGroups:     app.NewUserGroups(runner, orgPool, ak),
 		Logins:         app.NewLogins(runner, orgPool, ak),
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
+		WatchedUnits:   app.NewWatchedUnits(runner, orgPool),
 		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
 		Commands:       app.NewDeviceCommands(runner, orgPool),
@@ -210,6 +216,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Privacy:        app.NewPrivacy(runner, orgPool),
 		ReadAudit:      app.NewReadAudit(runner),
 		Attention:      app.NewAttention(orgPool),
+		Findings:       app.NewFindings(runner, orgPool),
+		Notifications:  app.NewNotifications(runner, orgPool, platformPool, baoClient, outboundPolicy, smtpEnabled),
+		AccountList:    app.NewAccountList(orgPool),
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),
 		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),

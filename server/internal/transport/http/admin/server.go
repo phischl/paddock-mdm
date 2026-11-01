@@ -42,6 +42,7 @@ type Deps struct {
 	UserGroups     *app.UserGroups
 	Logins         *app.Logins
 	LoginSettings  *app.LoginSettings
+	WatchedUnits   *app.WatchedUnits
 	LoginHistory   *app.LoginHistory
 	AgentUpdates   *app.AgentUpdates
 	Uninstalls     *app.Uninstalls
@@ -59,7 +60,11 @@ type Deps struct {
 	// ReadAudit records the audit searches and inventory views the organization switched on (plan M10 decision 20).
 	ReadAudit *app.ReadAudit
 	Attention *app.Attention
-	Overview  *app.Overview
+	Findings  *app.Findings
+	// Notifications are the notification destinations of organizations and the platform (plan M9 decisions 14–19).
+	Notifications *app.Notifications
+	AccountList   *app.AccountList
+	Overview      *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
@@ -187,6 +192,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/revocation-requests/{id}/cancel":                         {app.ScopeOrg, app.SpecRevocationCancel},
 	"PUT /api/v1/settings/dms":                                             {app.ScopeOrg, app.SpecDMSUpdate},
 	"PUT /api/v1/settings/managed-files":                                   {app.ScopeOrg, app.SpecManagedFileSettingsChange},
+	"PUT /api/v1/settings/watched-units":                                   {app.ScopeOrg, app.SpecWatchedUnitsChange},
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
 	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
@@ -203,6 +209,21 @@ var privileged = map[string]struct {
 	"PUT /api/platform/v1/settings/mcp":                                    {app.ScopePlatform, app.SpecPlatformMCPSettingsUpdate},
 	"POST /api/v1/me/mcp-write/enable":                                     {app.ScopeOrg, app.SpecMCPWriteEnable},
 	"POST /api/v1/me/mcp-write/disable":                                    {app.ScopeOrg, app.SpecMCPWriteDisable},
+	"POST /api/v1/findings/{id}/acknowledge":                               {app.ScopeOrg, app.SpecFindingAcknowledge},
+	"POST /api/v1/findings/{id}/assign":                                    {app.ScopeOrg, app.SpecFindingAssign},
+	"POST /api/v1/findings/{id}/close":                                     {app.ScopeOrg, app.SpecFindingClose},
+	"POST /api/v1/findings/{id}/reopen":                                    {app.ScopeOrg, app.SpecFindingReopen},
+	"POST /api/v1/notification-destinations":                               {app.ScopeOrg, app.SpecNotificationCreate},
+	"PUT /api/v1/notification-destinations/{id}":                           {app.ScopeOrg, app.SpecNotificationUpdate},
+	"DELETE /api/v1/notification-destinations/{id}":                        {app.ScopeOrg, app.SpecNotificationDelete},
+	"POST /api/v1/notification-destinations/{id}/rotate-secret":            {app.ScopeOrg, app.SpecNotificationRotateSecret},
+	"POST /api/v1/notification-destinations/{id}/test":                     {app.ScopeOrg, app.SpecNotificationTest},
+	"POST /api/v1/notification-destinations/{id}/resolve-pseudonym":        {app.ScopeOrg, app.SpecNotificationResolvePseudonym},
+	"POST /api/platform/v1/notification-destinations":                      {app.ScopePlatform, app.SpecPlatformNotificationCreate},
+	"PUT /api/platform/v1/notification-destinations/{id}":                  {app.ScopePlatform, app.SpecPlatformNotificationUpdate},
+	"DELETE /api/platform/v1/notification-destinations/{id}":               {app.ScopePlatform, app.SpecPlatformNotificationDelete},
+	"POST /api/platform/v1/notification-destinations/{id}/rotate-secret":   {app.ScopePlatform, app.SpecPlatformNotificationRotateSecret},
+	"POST /api/platform/v1/notification-destinations/{id}/test":            {app.ScopePlatform, app.SpecPlatformNotificationTest},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -235,9 +256,9 @@ func NewHandler(d Deps) http.Handler {
 	h := &handlers{
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, exports: d.AuditExports, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
-		logins: d.Logins, loginSettings: d.LoginSettings, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
+		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, updates: d.Updates, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
+		inventory: d.Inventory, updates: d.Updates, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,

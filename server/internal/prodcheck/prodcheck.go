@@ -143,6 +143,7 @@ type Result struct {
 var devOnly = []string{
 	"PADDOCK_STEPUP_WINDOW", "PADDOCK_STEPUP_MAX_AUTH_AGE", "PADDOCK_STALENESS_UNIT", "PADDOCK_REAPER_THRESHOLD",
 	"PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL", "PADDOCK_RETENTION_UNIT", "PADDOCK_STEPUP_MFA_CLASS",
+	"PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE",
 }
 
 // releaseKeyVars name the minisign public keys of agent and revocation releases.
@@ -185,6 +186,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	}
 	if _, ok := c.Services["paddock-worker"]; ok {
 		results = append(results, checkAuditIndexRetention(c))
+	}
+	if _, ok := c.Services["paddock-notifier"]; ok {
+		results = append(results, checkSMTPPresence(c))
 	}
 	if _, ok := c.Services["authentik-server"]; ok {
 		results = append(results, checkAuthentikWebWorkers(c))
@@ -294,6 +298,10 @@ func checkDevVariables(c Config) Result {
 			if slices.Contains(devOnly, k) || strings.HasPrefix(k, "PADDOCK_TEST_") {
 				f = append(f, fmt.Sprintf("%s: %s", name, k))
 			}
+			// The relay without TLS exists for the acceptance sink only (plan M9 decision 26).
+			if k == "PADDOCK_SMTP_TLS" && strings.TrimSpace(*v) == "none" {
+				f = append(f, name+": smtp: TLS is none (PADDOCK_SMTP_TLS)")
+			}
 		}
 	}
 	return result("no development-only variables", f)
@@ -396,8 +404,12 @@ func checkSecretFiles(c Config) Result {
 		switch {
 		case err != nil:
 			f = append(f, fmt.Sprintf("%s: missing (%s)", name, sec.File))
-		case fi.IsDir() || fi.Size() == 0:
+		case fi.IsDir():
 			f = append(f, fmt.Sprintf("%s: empty (%s)", name, sec.File))
+		case fi.Size() == 0:
+			if !optionalSecret(c, name) {
+				f = append(f, fmt.Sprintf("%s: empty (%s)", name, sec.File))
+			}
 		default:
 			if readable, err := worldReadable(sec.File); err != nil {
 				f = append(f, fmt.Sprintf("%s: cannot check who can read it (%s): %v", name, sec.File, err))
@@ -408,6 +420,16 @@ func checkSecretFiles(c Config) Result {
 	}
 	return result("secret files present, not empty and not world-readable", f)
 }
+
+// optionalSecret reports whether the secret may be an empty file: the SMTP relay's password, as long as no service
+// names a relay username (plan M9 decision 41; the secret scripts create it empty, the notifier reads it only with a
+// username).
+func optionalSecret(c Config, name string) bool {
+	return name == smtpPasswordSecret && !usesAny(c, []string{"PADDOCK_SMTP_USERNAME"})
+}
+
+// smtpPasswordSecret is the top-level secret of the SMTP relay's password.
+const smtpPasswordSecret = "smtp_password"
 
 // serviceUID is the user of the Paddock images (USER nonroot in deploy/compose/Dockerfile).
 const serviceUID = 65532
@@ -1094,6 +1116,38 @@ func checkAuditIndexRetention(c Config) Result {
 			"(the bucket default and PADDOCK_AUDIT_RETENTION_DAYS)", v, least))
 	}
 	return result("audit index retention of the retention round", f)
+}
+
+// checkSMTPPresence fails when the api's PADDOCK_SMTP_ENABLED does not say whether paddock-notifier has a relay
+// (plan M9 §6.7): with true and no relay the portal offers e-mail destinations that never deliver, with false and a
+// relay it refuses them.
+func checkSMTPPresence(c Config) Result {
+	var f []string
+	notifier := c.Services["paddock-notifier"]
+	host := env(notifier, "PADDOCK_SMTP_HOST")
+	// The values loadSMTPSettings refuses at start; none is a finding of the development-only item.
+	switch tls := env(notifier, "PADDOCK_SMTP_TLS"); tls {
+	case "", "starttls", "implicit", "none":
+	default:
+		f = append(f, fmt.Sprintf("paddock-notifier: PADDOCK_SMTP_TLS is %q, not starttls or implicit", tls))
+	}
+	if host != "" && env(notifier, "PADDOCK_SMTP_FROM") == "" {
+		f = append(f, "paddock-notifier: PADDOCK_SMTP_HOST is set but PADDOCK_SMTP_FROM is empty")
+	}
+	if api, ok := c.Services["paddock-api"]; ok {
+		raw := env(api, "PADDOCK_SMTP_ENABLED")
+		// Exactly the spellings config.Loader.Bool of the api accepts; any other value stops the api at start.
+		enabled := raw == "true"
+		switch {
+		case raw != "" && raw != "true" && raw != "false":
+			f = append(f, fmt.Sprintf("paddock-api: PADDOCK_SMTP_ENABLED is %q, not true or false", raw))
+		case enabled && host == "":
+			f = append(f, "PADDOCK_SMTP_ENABLED is true but paddock-notifier has no PADDOCK_SMTP_HOST: set the relay or false")
+		case !enabled && host != "":
+			f = append(f, "paddock-notifier has PADDOCK_SMTP_HOST but PADDOCK_SMTP_ENABLED is not true: set it to true")
+		}
+	}
+	return result("notifications: SMTP presence flag matches the relay", f)
 }
 
 // checkAuthentikWebWorkers fails unless authentik-server's AUTHENTIK_WEB__WORKERS is an integer of at least 1:

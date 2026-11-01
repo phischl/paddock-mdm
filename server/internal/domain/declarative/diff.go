@@ -20,6 +20,7 @@ const (
 	SectionSettingsUpdates    = "settings.updates"
 	SectionSettingsLogin      = "settings.login"
 	SectionSettingsManaged    = "settings.managed_files"
+	SectionSettingsWatched    = "settings.watched_units"
 	SectionSettingsPrivacy    = "settings.privacy"
 )
 
@@ -27,7 +28,7 @@ const (
 func Sections() []string {
 	return []string{SectionDeviceGroups, SectionPermissionProfiles, SectionManagedFiles, SectionManagedUnits,
 		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin, SectionSettingsManaged,
-		SectionSettingsPrivacy}
+		SectionSettingsWatched, SectionSettingsPrivacy}
 }
 
 // Actions of a change.
@@ -124,6 +125,11 @@ func section(d Document, name string) (bool, []entry) {
 			return false, nil
 		}
 		return true, []entry{{fields: d.Settings.ManagedFiles.fields()}}
+	case SectionSettingsWatched:
+		if d.Settings == nil || d.Settings.WatchedUnits == nil {
+			return false, nil
+		}
+		return true, []entry{{fields: []field{{"units", list(*d.Settings.WatchedUnits)}}}}
 	case SectionSettingsPrivacy:
 		if d.Settings == nil || d.Settings.Privacy == nil {
 			return false, nil
@@ -188,6 +194,8 @@ func Path(section string, index int) string {
 		return "/settings/login"
 	case SectionSettingsManaged:
 		return "/settings/managed_files"
+	case SectionSettingsWatched:
+		return "/settings/watched_units"
 	case SectionSettingsPrivacy:
 		return "/settings/privacy"
 	}
@@ -247,7 +255,7 @@ func Diff(current, desired Document) Plan {
 
 func isSettings(s string) bool {
 	return s == SectionSettingsLogin || s == SectionSettingsUpdates || s == SectionSettingsManaged ||
-		s == SectionSettingsPrivacy
+		s == SectionSettingsWatched || s == SectionSettingsPrivacy
 }
 
 func sorted(items []entry) []entry {

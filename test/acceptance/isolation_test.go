@@ -40,6 +40,8 @@ func TestOrganizationIsolation(t *testing.T) {
 	seedGlobexOwnersAndLogins(t, w)
 	seedGlobexUpstream(t, w)
 	seedGlobexChangeSet(t, w)
+	seedGlobexNotification(t, w)
+	seedGlobexFinding(t, w)
 	ctx := testContext(t, time.Minute)
 	var globexEvents []env.AuditEvent
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
@@ -333,10 +335,20 @@ func mcpIsolationSweep(t *testing.T, w *isolationWorld, acme uuid.UUID, ops []st
 // naming a globex object means acme acted on it). TestWithoutOwnFailedAttempts proves both.
 func withoutOwnFailedAttempts(body []byte, ownActors []string) ([]byte, error) {
 	var page struct {
-		Items []json.RawMessage `json:"items"`
+		Items  []json.RawMessage `json:"items"`
+		Events []struct {
+			Event json.RawMessage `json:"event"`
+		} `json:"events"`
 	}
 	if err := json.Unmarshal(body, &page); err != nil {
 		return nil, fmt.Errorf("audit-event list: %w", err)
+	}
+	// The SIEM feed wraps each event with its commit_seq.
+	if page.Events != nil && page.Items == nil {
+		page.Items = []json.RawMessage{}
+	}
+	for _, e := range page.Events {
+		page.Items = append(page.Items, e.Event)
 	}
 	if page.Items == nil {
 		return nil, fmt.Errorf("audit-event list without items")

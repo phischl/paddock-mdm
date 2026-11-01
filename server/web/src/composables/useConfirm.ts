@@ -1,11 +1,12 @@
 import { readonly, shallowRef } from 'vue'
+import { useFocusReturn } from './useFocusReturn'
 
 /** A reason the dialog collects with the confirmation (revocations); kept with the request, never a secret. */
 export interface ConfirmReason {
   label: string
   hint?: string
   required: boolean
-  maxLength: 500
+  maxLength: number
 }
 
 /** What a confirmation asks; texts are already translated. */
@@ -49,9 +50,24 @@ export function settleConfirm(answer: ConfirmAnswer): void {
 
 /** Asks and resolves with the raw answer. */
 function ask(options: ConfirmOptions): Promise<ConfirmAnswer> {
+  // The control that asked is remembered before a pending request is cancelled, and gets the focus back once the
+  // dialog is gone (confirm, Cancel, Esc), so keyboard users continue where they were. A control that left the page
+  // meanwhile (its row was deleted) is skipped; the caller then moves the focus itself.
+  const focusReturn = useFocusReturn()
+  focusReturn.remember()
   settleConfirm(false)
   return new Promise<ConfirmAnswer>((resolve) => {
-    pending.value = { id: ++requests, options, resolve }
+    pending.value = {
+      id: ++requests,
+      options,
+      resolve: (answer) => {
+        resolve(answer)
+        // A request that replaces this one sets its own pending value synchronously; its dialog keeps the focus.
+        void Promise.resolve().then(() => {
+          if (pending.value === null) focusReturn.restore()
+        })
+      },
+    }
   })
 }
 

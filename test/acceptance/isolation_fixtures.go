@@ -47,10 +47,24 @@ type isolationWorld struct {
 	globexHold string
 	// globexAPIToken is an API token of globex (seedGlobexDevices).
 	globexAPIToken string
+	// globexDestination is a notification destination of globex (seedGlobexNotification).
+	globexDestination string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
+	// globexFinding is the open tamper finding of globexDevice (seedGlobexFinding).
+	globexFinding string
 	// globexExport is an evidence export of globex (seedGlobexExport).
 	globexExport string
+}
+
+// seedGlobexFinding reports an unexpected sudoers file of globexDevice as event 1 (seedGlobexLogin continues with 2) and
+// waits until carol sees the finding the worker opens from it.
+func seedGlobexFinding(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	sendSudoersEvent(t, w.globexSim, 1, "globex-iso-evil-"+uniqueSuffix())
+	f := tamperFindingOf(t, w.carol, w.globexDevice, 1)
+	w.globexFinding = f.ID
+	w.globexIDs = append(w.globexIDs, f.ID)
 }
 
 // seedGlobexChangeSet applies, as carol, a document with only globex's update settings and a changed daily time, so
@@ -81,6 +95,21 @@ func seedGlobexChangeSet(t *testing.T, w *isolationWorld) {
 	w.globexChangeSet = out.ChangeSetID
 	w.globexIDs = append(w.globexIDs, out.ChangeSetID)
 	w.top.Cleanup(func() { _ = call(w.top, w.carol, http.MethodPut, "/api/v1/config", doc(original)) })
+}
+
+// seedGlobexNotification creates a notification destination of globex that pseudonymizes user names, so its
+// pseudonym lookup has a key.
+func seedGlobexNotification(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	renew := func(t *testing.T) { stepUp(t, w.carol, env.Carol, true) }
+	body := webhookBody(destinationName("globex-iso"), notificationURL)
+	body["pseudonymize_users"] = true
+	renew(t)
+	res := call(t, w.carol, http.MethodPost, "/api/v1/notification-destinations", body)
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexDestination = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexDestination)
+	deleteDestinationOnCleanup(w.top, w.carol, renew, "/api/v1/notification-destinations/"+w.globexDestination)
 }
 
 // settingsOnlyConfig is a document with acme's current update settings only: applying it changes and deletes nothing.
@@ -144,7 +173,7 @@ func seedGlobexOwnersAndLogins(t *testing.T, w *isolationWorld) {
 func seedGlobexLogin(t *testing.T, w *isolationWorld) {
 	t.Helper()
 	w.globexLogin = "globex-iso-" + uniqueSuffix() + "@globex.test"
-	sendSessionLogins(t, w.globexSim, 1, w.globexLogin, time.Now().UTC().Truncate(time.Millisecond))
+	sendSessionLogins(t, w.globexSim, 2, w.globexLogin, time.Now().UTC().Truncate(time.Millisecond))
 	query := "/api/v1/devices/" + w.globexDevice + "/logins?" + url.Values{"username": {strings.ToLower(w.globexLogin)}}.Encode()
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
 		var page struct {
@@ -350,6 +379,71 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"GET /api/v1/api-tokens/{id}":         itemFixture(func(w *isolationWorld) string { return "/api/v1/api-tokens/" + w.globexAPIToken }, nil),
 	"POST /api/v1/api-tokens/{id}/revoke": itemFixture(func(w *isolationWorld) string { return "/api/v1/api-tokens/" + w.globexAPIToken + "/revoke" }, nil),
+
+	"GET /api/v1/notification-destinations": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-destinations?page_size=100", nil
+	}},
+	"POST /api/v1/notification-destinations": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-destinations", webhookBody(destinationName("acme-iso"), notificationURL)
+	}},
+	"GET /api/v1/notification-destinations/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, nil),
+	"PUT /api/v1/notification-destinations/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, map[string]any{"name": "acme-iso", "enabled": true, "filter_mode": "all"}),
+	"DELETE /api/v1/notification-destinations/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, nil),
+	"POST /api/v1/notification-destinations/{id}/rotate-secret": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/rotate-secret"
+	}, nil),
+	"POST /api/v1/notification-destinations/{id}/test": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/test"
+	}, nil),
+	"POST /api/v1/notification-destinations/{id}/resolve-pseudonym": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/resolve-pseudonym"
+	},
+		map[string]any{"pseudonym": "u_0123456789abcdef01234567"}),
+	"GET /api/v1/notification-destinations/{id}/resolve-pseudonym/{lookup_id}": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/resolve-pseudonym/" + uuid.NewString()
+	}, nil),
+	"GET /api/v1/findings": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/findings?page_size=100", nil
+	}},
+	"GET /api/v1/findings/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/findings/" + w.globexFinding }, nil),
+	"POST /api/v1/findings/{id}/acknowledge": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/findings/" + w.globexFinding + "/acknowledge"
+	}, nil),
+	"POST /api/v1/findings/{id}/assign": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/findings/" + w.globexFinding + "/assign"
+	}, map[string]any{"assignee_id": nil}),
+	"POST /api/v1/findings/{id}/close": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/findings/" + w.globexFinding + "/close"
+	}, map[string]any{"resolution": "resolved", "reason": "acme-iso"}),
+	"POST /api/v1/findings/{id}/reopen": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/findings/" + w.globexFinding + "/reopen"
+	}, map[string]any{"reason": "acme-iso"}),
+	"GET /api/v1/accounts": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/accounts?page_size=100", nil
+	}},
+	"GET /api/v1/settings/watched-units": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/watched-units", nil
+	}},
+	"PUT /api/v1/settings/watched-units": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		res := call(t, w.alice, http.MethodGet, "/api/v1/settings/watched-units", nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var cur struct {
+			Units []string `json:"units"`
+		}
+		if err := res.JSON(&cur); err != nil {
+			t.Fatal(err)
+		}
+		if cur.Units == nil {
+			cur.Units = []string{}
+		}
+		return "/api/v1/settings/watched-units", map[string]any{"units": cur.Units}
+	}},
+	"GET /api/v1/audit-events/feed": {kind: isoOwn, ownAttempts: true, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/audit-events/feed?limit=1000", nil
+	}},
+	"GET /api/v1/notification-capabilities": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-capabilities", nil
+	}},
 
 	"GET /api/v1/config": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/config", nil
@@ -672,6 +766,18 @@ var listIsolationQueries = map[string][]url.Values{
 		{"status": {"active"}, "sort": {"-created_at"}, "page_size": {"100"}},
 	},
 	"/api/v1/managed-files": {{"q": {"globex-iso"}}},
+	"/api/v1/notification-destinations": {
+		{"q": {"globex-iso"}},
+		{"type": {"webhook"}, "enabled": {"true"}, "sort": {"-created_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/findings": {
+		{"q": {"globex-iso"}},
+		{"kind": {"tamper"}, "status": {"open"}, "sort": {"-opened_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/accounts": {
+		{"q": {"carol"}},
+		{"role": {"org_admin"}, "sort": {"username"}, "page_size": {"100"}},
+	},
 	"/api/v1/managed-units": {{"q": {"globex-iso"}}},
 	"/api/v1/package-holds": {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
 	// globex's waiting Destroy (seedGlobexDevices) is a revocation_pending condition.

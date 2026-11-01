@@ -1,8 +1,8 @@
 // Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10, M3b decision 6): resources in
 // the order hostname (the bundle's hostname section, plan M8h decision 14) → time → file → systemd_unit → updates
 // (the bundle's updates section, plan M5b decision 5) → login → sudo,
-// then the inventory section (plan M5a decision 5), each independently (an error does not stop the others), then the
-// removal of files that left the bundle.
+// then the inventory section (plan M5a decision 5) and the watch section (plan M9 decision 40), each independently (an
+// error does not stop the others), then the removal of files that left the bundle.
 package apply
 
 import (
@@ -68,12 +68,19 @@ type Applier struct {
 	file      *reconcile.File
 	login     *reconcile.Login
 	inventory *reconcile.Inventory
+	watch     *reconcile.Watch
 	hostname  reconcile.HostnameState
 }
 
 // WithInventory adds the reconciler of the bundle's inventory section; without it the section is ignored.
 func (a *Applier) WithInventory(inv *reconcile.Inventory) *Applier {
 	a.inventory = inv
+	return a
+}
+
+// WithWatch adds the reconciler of the bundle's watch section; without it the section is ignored.
+func (a *Applier) WithWatch(w *reconcile.Watch) *Applier {
+	a.watch = w
 	return a
 }
 
@@ -96,7 +103,7 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 
 // sorted returns the resources of b in apply order with the updates and hostname sections as resources, filtered by
 // keep, and,
-// with an inventory reconciler, the inventory section last.
+// with an inventory reconciler, the inventory section, and with a watch reconciler, the watch section last.
 func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource {
 	var out []bundle.Resource
 	for _, typ := range order {
@@ -130,6 +137,11 @@ func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bu
 			out = append(out, r)
 		}
 	}
+	if a.watch != nil && b.Watch != nil {
+		if r, err := bundle.WatchResource(*b.Watch); err == nil && keep(r) {
+			out = append(out, r)
+		}
+	}
 	return out
 }
 
@@ -140,6 +152,9 @@ func (a *Applier) reconciler(b *bundle.Bundle, typ string) (reconcile.Reconciler
 	}
 	if typ == reconcile.InventoryID && a.inventory != nil {
 		return a.inventory, true
+	}
+	if typ == bundle.TypeWatch && a.watch != nil {
+		return a.watch, true
 	}
 	if typ == bundle.TypeUpdates {
 		return a.updates, true
@@ -171,6 +186,9 @@ func (a *Applier) Apply(ctx context.Context, b *bundle.Bundle) Report {
 		return a.reportOnly(ctx, b)
 	}
 	r := a.apply(ctx, b, all)
+	if a.watch != nil && b.Watch == nil {
+		a.watch.Forget()
+	}
 	a.removeStale(b, &r)
 	return r
 }

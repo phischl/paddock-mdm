@@ -29,7 +29,7 @@ Fleet's features that could collect such data are switched off and kept off by `
 | Events of the agent's own work: bundle applied or rejected (resource IDs and error messages), configuration drift corrected, agent updated or rolled back, login and sudo configuration applied or failed, locks and suspensions applied | when they happen | audit log |
 | Update runs (`updates.run`): kind (security or regular), start and end, result, number of upgraded packages, held-back package names, reboot required | after each run | audit log, device update status |
 | Revocation results: per volume the device path and the keyslot counts before and after, unresolved crypttab entries, refusals with their reason | after a Lock, Destroy or refused token | audit log, revocation request |
-| Tamper events: changed sudoers files or privileged group members (file names, user names, hashes), changed protected files (file name), changed LUKS keyslots (kinds), changed local administrator account (which field), a stopped `orbit.service` (unit name) | when they happen | audit log |
+| Tamper events: changed sudoers files or privileged group members (file names, user names, hashes), changed protected files (file name), changed LUKS keyslots (kinds), changed local administrator account (which field), a stopped `orbit.service` (unit name), a stopped or missing watched third-party unit (unit name and state) | when they happen | audit log |
 | `session.login`: the directory user's name and the time, at most once per user and 24 hours; every session start while the organization's login history is on | at a directory user's login | device_user_seen (no session, terminal or remote host), kept 365 days after the last login (ADR 0032); while the login history is on also `device_login_event` |
 | Login history (`device_login_event`, ADR 0037 decision 6): user name, device and start time of every session of a directory user | only while the organization has switched the login history on (off by default), and only sessions that started after the switch-on; a start time in the future is capped at the server's time plus 5 minutes | `login_history_days` (7–365, default 90), deleted by the worker every 6 hours (`retention.purged`); switching it off deletes every row of the organization at once |
 | `local_admin.login`: the PAM service and the time of a login of the managed local administrator | at such a login | audit log (no terminal or remote host) |
@@ -136,3 +136,46 @@ or restrict it to *Selected tools only*, where it is not. Paddock stores of an M
 session (the session record in Valkey, `admin.login` with `channel: mcp`) plus the MCP client's name and version in the
 audit events of its changes (`actor.client`); reads through the MCP are not recorded per call (RR-89). The session
 file on the workstation holds Authentik tokens of the administrator, not data of devices or users.
+
+## What leaves the server
+
+Paddock's server sends data to a third party only where the operator or an administrator configured it. Besides the
+two outbound calls named above (Ubuntu's vulnerability data and the agent release source, neither carries device,
+organization, user or inventory data), these are the paths for audit data. They forward **audit events that already
+exist**; nothing is collected for them, and the negative list (never collected, above) is not widened by them:
+`device_user_seen`, the inventory and every other table that is not an audit event are never forwarded.
+
+| Path | Started by | What is sent | Recipient |
+| --- | --- | --- | --- |
+| **Webhook destination** (`docs/operations/notifications.md`) | an organization or platform administrator, with a step-up | per delivery a signed JSON message with the audit events that match the destination's filter (the security preset, all events or the selected codes): event ID, time, code, outcome, the actor (type, ID, display name, client IP), the target (type, ID, display name: a hostname or a user or account name) and **all parameters** of the event, plus a portal link per device event. Never a secret: audit parameters carry none | the webhook receiver at the URL the administrator entered; the URL itself is stored encrypted and never shown again |
+| **E-mail destination** | the same | per delivery one plain-text message per batch: time, code, outcome, device or target display name, actor display name, a portal link for device events and, only with *Include event parameters*, the parameters; at most 50 events in detail | the listed addresses (1 to 20), through the **SMTP relay** the operator configured (`PADDOCK_SMTP_*`); the relay and every mail system behind it see the message |
+| **Heartbeat and test message** | the notifier, or the administrator's *Send test* | organization ID and slug (`platform` for the platform), delivery ID, destination ID and sequence numbers; no audit events | as above |
+| **Audit cursor feed** (`docs/operations/siem.md`) | a SIEM or auditor's tool holding an API token with the role `org_auditor` or `org_admin` | the organization's stored audit events as in the audit log (actor, target, parameters), read by the caller | the holder of the token: the SIEM operator |
+
+Who receives what is therefore decided by the administrator who creates the destination, and it is recorded: every
+creation, change, secret replacement and test is an audit event (`notification.destination_*`, `notification.test_*`),
+and so is every successful delivery (`notification.delivered`, with the range of forwarded events, never their content).
+
+**Pseudonymization.** An organization destination can replace user names with a pseudonym (`u_` and 24 hexadecimal
+characters of an HMAC with a key of the organization) in the actor and target display names and in the parameters
+`username`, `user`, `display_name`, `requested_by`, `approved_by`, `created_by`, `members` and `users`, and it removes
+the client IP and ID of administrators from the actor. Host names, device names and every other parameter stay. The
+pseudonym is stable inside the organization, so it is pseudonymous data, not anonymous data: an organization
+administrator can resolve it (`notification.pseudonym_resolved`, with a step-up), and whoever holds both the
+notifications and the organization's user list can resolve it too. A platform destination receives platform events,
+which carry no end-user names.
+
+**Recipients are processors or controllers of their own.** The operator of a webhook receiver, of the SMTP relay and of
+the mail systems behind the recipients' addresses receives personal data (administrator names and IP addresses, device
+host names, user names) in clear unless pseudonymized, and an e-mail is not end-to-end encrypted. Treat each of them as a
+recipient in your records of processing: conclude a data processing agreement where the recipient processes on your
+behalf (GDPR Art. 28), check transfers outside the EEA (Chapter V), and keep to the purpose of the notification (A.8.16
+monitoring and A.5.25–26 incident handling, [iso27001-mapping.md](iso27001-mapping.md)). Paddock cannot recall a message
+once it left; a webhook receiver's retention is its own ([residual-risks.md](residual-risks.md), RR-98).
+
+**The negative list binds Paddock's own components.** The statement "never collected" above covers the Paddock agent,
+fleetd and the server roles. A third-party agent on the device (an EDR or SIEM agent) is configured by the
+organization and is not bound by it; `docs/operations/third-party-agents.md` shows how to keep such an agent to the same
+bounds, and Paddock's watched-unit report (*Tamper events* above) is the only thing Paddock asks of it.
+
+How long Paddock keeps the notification tables themselves: [retention.md](retention.md).

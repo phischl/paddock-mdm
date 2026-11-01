@@ -115,6 +115,7 @@ services:
       PADDOCK_COMPILER_PASSWORD_FILE: /run/secrets/db_paddock_compiler_password
       PADDOCK_ESCROW_READER_PASSWORD_FILE: /run/secrets/db_paddock_escrow_reader_password
       PADDOCK_REVOCATION_PASSWORD_FILE: /run/secrets/db_paddock_revocation_password
+      PADDOCK_NOTIFIER_PASSWORD_FILE: /run/secrets/db_paddock_notifier_password
     secrets:
       - postgres_superuser_password
       - db_paddock_owner_password
@@ -125,6 +126,7 @@ services:
       - db_paddock_compiler_password
       - db_paddock_escrow_reader_password
       - db_paddock_revocation_password
+      - db_paddock_notifier_password
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
       - postgres-data:/var/lib/postgresql
@@ -449,6 +451,9 @@ services:
       # Break-glass of a locked-out platform (plan M7a decision 22): true ignores the application IP allow list;
       # prod-check fails while it is set.
       PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
+      # Whether paddock-notifier has an SMTP relay (plan M9 decision 27): e-mail destinations are offered only then.
+      # A non-secret presence flag set in .env next to PADDOCK_SMTP_HOST; ./paddock check fails when the two disagree.
+      PADDOCK_SMTP_ENABLED: ${PADDOCK_SMTP_ENABLED:-false}
       # Agent release import from GitHub (ADR 0043): the repository ("off" switches the import off, e.g. air-gapped),
       # the API base, and the proxy of the outbound request; the optional token file is a Compose override.
       PADDOCK_AGENT_RELEASE_SOURCE_REPO: ${PADDOCK_AGENT_RELEASE_SOURCE_REPO:-phischl/paddock-mdm}
@@ -729,6 +734,41 @@ services:
       openbao:
         condition: service_healthy
 
+  # Security notifications (plan M9 decisions 20–29, 41): reads the audit index, delivers webhooks and e-mail. The only
+  # holder of the AppRole paddock-notifier, the only role that decrypts destination URLs, signing secrets and pseudonym
+  # keys. The relay is platform configuration from .env; smtp_password stays empty unless the relay needs a username.
+  paddock-notifier:
+    logging: *paddock-logging
+    <<: *paddock
+    command: ["serve", "notifier"]
+    environment:
+      <<: *paddock-env
+      PADDOCK_DB_NOTIFIER_URL_FILE: /run/secrets/db_paddock_notifier_url
+      PADDOCK_DB_PLATFORM_URL_FILE: /run/secrets/db_paddock_platform_url
+      PADDOCK_AUDIT_DB_READER_URL_FILE: /run/secrets/db_paddock_audit_reader_url
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_notifier_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_notifier_secret_id
+      PADDOCK_PUBLIC_ADMIN_URL: ${PADDOCK_PUBLIC_ADMIN_URL:-https://admin.paddock.localhost:8443}
+      PADDOCK_SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      SSL_CERT_FILE: /run/secrets/caddy_root_crt
+    secrets:
+      - db_paddock_notifier_url
+      - db_paddock_platform_url
+      - db_paddock_audit_reader_url
+      - approle_notifier_role_id
+      - approle_notifier_secret_id
+      - smtp_password
+      - caddy_root_crt
+    networks: [cp, audit-index]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+      caddy-ca-export:
+        condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
+
   # Metrics and alert rules (plan M6a decision 8, docs/operations/monitoring.md): `--profile observability`. Not
   # published; Alertmanager and Grafana are not bundled.
   prometheus:
@@ -788,6 +828,7 @@ secrets:
   db_paddock_compiler_password: { file: ./.secrets/db_paddock_compiler_password }
   db_paddock_escrow_reader_password: { file: ./.secrets/db_paddock_escrow_reader_password }
   db_paddock_revocation_password: { file: ./.secrets/db_paddock_revocation_password }
+  db_paddock_notifier_password: { file: ./.secrets/db_paddock_notifier_password }
   db_paddock_owner_url: { file: ./.secrets/db_paddock_owner_url }
   db_paddock_api_url: { file: ./.secrets/db_paddock_api_url }
   db_paddock_platform_url: { file: ./.secrets/db_paddock_platform_url }
@@ -797,6 +838,7 @@ secrets:
   db_paddock_escrow_reader_url: { file: ./.secrets/db_paddock_escrow_reader_url }
   db_paddock_revocation_url: { file: ./.secrets/db_paddock_revocation_url }
   db_paddock_audit_reader_url: { file: ./.secrets/db_paddock_audit_reader_url }
+  db_paddock_notifier_url: { file: ./.secrets/db_paddock_notifier_url }
   rabbitmq_definitions: { file: ./.secrets/rabbitmq/definitions.json }
   rabbitmq_provisioner_password: { file: ./.secrets/rabbitmq_provisioner_password }
   rabbitmq_relay_password: { file: ./.secrets/rabbitmq_relay_password }
@@ -838,6 +880,10 @@ secrets:
   approle_escrow_reader_secret_id: { file: ./.secrets/approle/paddock-escrow-reader/secret_id }
   approle_revocation_issuer_role_id: { file: ./.secrets/approle/paddock-revocation-issuer/role_id }
   approle_revocation_issuer_secret_id: { file: ./.secrets/approle/paddock-revocation-issuer/secret_id }
+  approle_notifier_role_id: { file: ./.secrets/approle/paddock-notifier/role_id }
+  approle_notifier_secret_id: { file: ./.secrets/approle/paddock-notifier/secret_id }
+  # The SMTP relay's password; empty for a relay without a username (plan M9 decision 41).
+  smtp_password: { file: ./.secrets/smtp_password }
   escrow_reader_token: { file: ./.secrets/escrow_reader_token }
   caddy_root_crt: { file: ./.secrets/caddy-root.crt }
   fleet_mysql_root_password: { file: ./.secrets/fleet_mysql_root_password }

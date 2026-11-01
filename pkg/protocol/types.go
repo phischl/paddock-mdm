@@ -269,6 +269,9 @@ type UpdatesRun struct {
 // TamperServiceStopped is the data of tamper.service_stopped.
 type TamperServiceStopped struct {
 	Unit string `json:"unit"`
+	// State is inactive, failed or missing for a watched third-party unit (plan M9 decision 40); empty for
+	// orbit.service, which the agent starts again.
+	State string `json:"state,omitempty"`
 }
 
 // EventTypes is the closed set of event types.
