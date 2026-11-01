@@ -473,7 +473,7 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 			err = setLoginState(ctx, q, deviceID, org, area, ev, spec.Params)
 		}
 		if configStatusEvent(ev.Type) && err == nil {
-			err = recordConfigStatus(ctx, q, org, deviceID, ev)
+			err = recordConfigStatus(ctx, q, org, deviceID, ev, receivedAt)
 		}
 		if g, ok := spec.Params["generation"].(int64); ok && ev.Type == protocol.EventLocalAdminRotated && err == nil && g > 0 && g <= 1<<31-1 {
 			_, err = q.ActivateEscrowGeneration(ctx, pgstore.ActivateEscrowGenerationParams{

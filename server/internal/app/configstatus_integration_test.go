@@ -344,3 +344,58 @@ func TestConfigStatusReads(t *testing.T) {
 		t.Fatalf("default sort -failed: %+v", fleet.Items)
 	}
 }
+
+// TestConfigStatusFutureClock: a report dated far ahead of the server is stored at the server's receipt time plus
+// protocol.MaxClockSkew, so the device's next correct report still wins (PDK-151 review 2 finding M1).
+func TestConfigStatusFutureClock(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	received := time.Now().UTC().Truncate(time.Millisecond)
+	send := func(seq int64, at, receivedAt time.Time, data map[string]any) {
+		t.Helper()
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.reports.RecordEvents(systemCtx(org), device, receivedAt, []protocol.Event{
+			{EventSeq: seq, Type: protocol.EventBundleApplied, OccurredAt: at, Data: raw},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(1, received.Add(365*24*time.Hour), received, map[string]any{
+		"version": 1, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
+	})
+	var stored time.Time
+	if err := h.super.QueryRow(context.Background(), "SELECT occurred_at FROM device_bundle_report WHERE device_id = $1 AND version = 1", device).Scan(&stored); err != nil ||
+		!stored.Equal(received.Add(protocol.MaxClockSkew)) {
+		t.Fatalf("future report stored at %s, want %s (%v)", stored, received.Add(protocol.MaxClockSkew), err)
+	}
+	later := received.Add(10 * time.Minute)
+	send(2, later, later, map[string]any{"version": 2, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "failed", "message": "x"}}})
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Status != "failed" || rows["file:/etc/a.conf"].Version != 2 {
+		t.Fatalf("the newer report did not win: %+v", rows)
+	}
+}
+
+// TestConfigStatusRejectionKeepsApplied: a rejection of a version the device applied keeps the applied report, so a
+// late older report still cannot bring back what that version removed (PDK-151 review 2 finding L1).
+func TestConfigStatusRejectionKeepsApplied(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
+		"version": 3, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}},
+	})
+	record(t, h, org, device, 2, protocol.EventBundleRejected, at.Add(time.Minute), map[string]any{"version": 3, "reason": "signature"})
+	var outcome string
+	if err := h.super.QueryRow(context.Background(), "SELECT outcome FROM device_bundle_report WHERE device_id = $1 AND version = 3", device).Scan(&outcome); err != nil || outcome != "applied" {
+		t.Fatalf("a rejection replaced the applied report: %s (%v)", outcome, err)
+	}
+	record(t, h, org, device, 3, protocol.EventBundleApplied, at.Add(-time.Minute), map[string]any{
+		"version": 2, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
+	})
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Version != 3 {
+		t.Fatalf("a late older report came back after a rejection: %+v", rows)
+	}
+}

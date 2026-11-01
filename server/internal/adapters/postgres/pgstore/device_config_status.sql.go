@@ -438,6 +438,7 @@ ON CONFLICT (device_id, version) DO UPDATE SET
   outcome = EXCLUDED.outcome, mode = EXCLUDED.mode, changed = EXCLUDED.changed, error_count = EXCLUDED.error_count,
   reason = EXCLUDED.reason, occurred_at = EXCLUDED.occurred_at, recorded_at = now()
 WHERE EXCLUDED.occurred_at > device_bundle_report.occurred_at
+  AND NOT (device_bundle_report.outcome = 'applied' AND EXCLUDED.outcome = 'rejected')
 `
 
 type UpsertDeviceBundleReportParams struct {
@@ -452,7 +453,9 @@ type UpsertDeviceBundleReportParams struct {
 	OccurredAt     time.Time
 }
 
-// A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order).
+// A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order). A
+// rejection never replaces the applied report of the same version: HasNewerAppliedBundleReport would lose it, and a
+// late older report would bring back what that version removed (PDK-151 review 2 finding L1).
 func (q *Queries) UpsertDeviceBundleReport(ctx context.Context, arg UpsertDeviceBundleReportParams) error {
 	_, err := q.db.Exec(ctx, upsertDeviceBundleReport,
 		arg.DeviceID,

@@ -19,14 +19,17 @@ SELECT EXISTS (
 SELECT mode FROM device_bundle_report WHERE device_id = @device_id AND outcome = 'applied' AND occurred_at <= @occurred_at
 ORDER BY occurred_at DESC, version DESC LIMIT 1;
 
--- A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order).
+-- A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order). A
+-- rejection never replaces the applied report of the same version: HasNewerAppliedBundleReport would lose it, and a
+-- late older report would bring back what that version removed (PDK-151 review 2 finding L1).
 -- name: UpsertDeviceBundleReport :exec
 INSERT INTO device_bundle_report (device_id, organization_id, version, outcome, mode, changed, error_count, reason, occurred_at)
 VALUES (@device_id, @organization_id, @version, @outcome, @mode, @changed, @error_count, sqlc.narg(reason), @occurred_at)
 ON CONFLICT (device_id, version) DO UPDATE SET
   outcome = EXCLUDED.outcome, mode = EXCLUDED.mode, changed = EXCLUDED.changed, error_count = EXCLUDED.error_count,
   reason = EXCLUDED.reason, occurred_at = EXCLUDED.occurred_at, recorded_at = now()
-WHERE EXCLUDED.occurred_at > device_bundle_report.occurred_at;
+WHERE EXCLUDED.occurred_at > device_bundle_report.occurred_at
+  AND NOT (device_bundle_report.outcome = 'applied' AND EXCLUDED.outcome = 'rejected');
 
 -- rows is a JSON array of {id, status, message, changes}; a row with a newer occurred_at is never replaced.
 -- name: UpsertDeviceResourceStatuses :exec

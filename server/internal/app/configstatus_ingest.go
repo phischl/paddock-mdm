@@ -44,8 +44,10 @@ type statusRow struct {
 
 // recordConfigStatus stores what the event says about the device's apply status, in the transaction of the event
 // (plan M11 decision 13): the report of the bundle version and the per-resource status. Anything the database would
-// refuse is dropped here instead, so that a malformed report never fails the event batch.
-func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, ev protocol.Event) error {
+// refuse is dropped here instead, so that a malformed report never fails the event batch. The report time comes from
+// the device: it is capped at receivedAt plus protocol.MaxClockSkew, so a clock that ran ahead once cannot make every
+// later report look older (PDK-151 review 2 finding M1).
+func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) error {
 	var data struct {
 		Version     int64              `json:"version"`
 		Changed     int64              `json:"changed"`
@@ -61,6 +63,9 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 	at := ev.OccurredAt
 	if at.IsZero() {
 		return nil
+	}
+	if latest := receivedAt.Add(protocol.MaxClockSkew); !receivedAt.IsZero() && at.After(latest) {
+		at = latest
 	}
 	if err := q.LockDeviceConfigStatus(ctx, deviceID); err != nil {
 		return fmt.Errorf("lock the apply status of the device: %w", err)
