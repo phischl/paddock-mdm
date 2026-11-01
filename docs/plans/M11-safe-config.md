@@ -1276,3 +1276,21 @@ without a migration merge as soon as their dependencies are on the branch. The V
     400); the way out is complete or revert.
     2026-11-01 (architect): the compiler reads its definitions and the overlay in one read-only REPEATABLE READ
     transaction, `db.OrgPool.InOrgSnapshot`, recorded in ADR 0002 (amendment 2026-11-01).
+14. **Rollout evaluation and counting (PDK-158; architect, 2026-11-01).** Decisions from the reviews of PDK-158:
+    (a) The worker counts with the API's Go rule (`app.ConfigRollouts`: the active devices, the canary members and the
+        newest report per device on a bundle of the rollout, a fixed number of queries per organization, never one per
+        device), so the rollout page shows what the worker evaluates. `paddock_config_rollout_stats` (`00093`) stays in
+        place unused; PDK-160's migration `00094` drops it.
+    (b) The rule for a device inside the wave: the newest report on a bundle of the rollout is picked first, then the
+        time filter applies. Failed: reported at or after `evaluation_since`, a rejection, or an apply with a failed
+        staged resource. Report-only exempts only failed resources (plan errors, R6.6); a rejection of a report-only
+        device counts. The report's `mode` is taken as the device reports it. Applied: an enforced apply without a
+        failed staged resource. Pending: everything else.
+    (c) `GET /config-rollouts/{id}/devices` shows that same report (`report_outcome`, `failed_resource_ids`); failures
+        reported before the last resume no longer count and are not listed.
+    (d) Resume restarts both `evaluation_since` and `wave_started_at`: the current wave gets its full observation period
+        again.
+    (e) `advance` joins the destructive path segments of `destructive()` in `server/internal/mcpgen/mcpgen.go`
+        (`advanceConfigRollout` is generated with `Destructive: true`): it widens a staged change like `complete`.
+    (f) Devices that never report never count (decision 27): accepted; PDK-163 documents it in
+        `configuration-rollouts.md`.

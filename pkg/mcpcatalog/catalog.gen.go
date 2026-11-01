@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "69955cc7c8f558f79fa8df415827a48039a79941c5653325a25054f5313d11e0"
+const Version = "6bdd9e4531a25f9a788f209aa4ce5ff7acf9f25955b11269b87288ff85135880"
 
 var tools = []Tool{
 	{
@@ -55,7 +55,7 @@ var tools = []Tool{
 		StepUp:      false,
 		Expose:      true,
 		Bootstrap:   false,
-		Destructive: false,
+		Destructive: true,
 		Idempotent:  false,
 		AuditCode:   "config_rollout.advanced",
 		Summary:     "",
@@ -2129,7 +2129,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle, whether that bundle carries the rollout, the device's report of it and the staged resources that failed in it. Equal sort keys are ordered by hostname. 404 not_found for an unknown rollout or one of another organization.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: hostname, in_wave, report_outcome), q (search over: hostname).",
+		Description: "Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged resources. Equal sort keys are ordered by hostname. 404 not_found for an unknown rollout or one of another organization.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: hostname, in_wave, report_outcome), q (search over: hostname).",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"in_wave\":{\"type\":\"boolean\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"report_outcome\":{\"description\":\"Repeatable; applied, rejected, report_only or none (400 invalid_request otherwise). The values are not an\\nOpenAPI enum, as for the outcome filter of the device's bundles.\\n\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"sort\":{\"default\":\"hostname\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The hostname, then the device id is the tie-breaker.\",\"enum\":[\"hostname\",\"-hostname\",\"in_wave\",\"-in_wave\",\"report_outcome\",\"-report_outcome\"],\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -2147,7 +2147,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11 decision 34), each with its counts: eligible are the active devices inside the wave the rollout reached (every device once it completed), failed those whose newest report on a bundle of the rollout since its start or last resume is a rejection or names a failed staged resource, applied those whose newest such report applied every staged resource, pending the rest. The report of a report-only device never counts as applied or failed.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: started_at, status), q (search over: started_by).",
+		Description: "Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11 decision 34), each with its counts, which are also what the worker evaluates: eligible are the active devices inside the wave the rollout reached (every device once it completed). Of each device the newest report on a bundle of the rollout is read: failed when, reported since the rollout's start or last resume, it is a rejection or an apply with a failed staged resource; applied when it is an apply without a failed staged resource; pending otherwise. The failed resources of a report-only device are plan errors and never count; its rejection does.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: started_at, status), q (search over: started_by).",
 		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-started_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"started_at\",\"-started_at\",\"status\",\"-status\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"running\",\"halted\",\"completed\",\"reverted\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{
@@ -2903,7 +2903,7 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "config_rollout.resumed",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator. halted → running in the wave where it stopped; failures reported before the resume no longer count. 409 invalid_state when the rollout is not halted; 404 not_found for an unknown rollout or one of another organization.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin, org_operator. halted → running in the wave where it stopped; failures reported before the resume no longer count, and the wave's minimum duration starts again. 409 invalid_state when the rollout is not halted; 404 not_found for an unknown rollout or one of another organization.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{

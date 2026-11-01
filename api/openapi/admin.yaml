@@ -1203,10 +1203,11 @@ paths:
       tags: [config]
       description: |
         Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11
-        decision 34), each with its counts: eligible are the active devices inside the wave the rollout reached (every
-        device once it completed), failed those whose newest report on a bundle of the rollout since its start or last
-        resume is a rejection or names a failed staged resource, applied those whose newest such report applied every
-        staged resource, pending the rest. The report of a report-only device never counts as applied or failed.
+        decision 34), each with its counts, which are also what the worker evaluates: eligible are the active devices
+        inside the wave the rollout reached (every device once it completed). Of each device the newest report on a
+        bundle of the rollout is read: failed when, reported since the rollout's start or last resume, it is a rejection
+        or an apply with a failed staged resource; applied when it is an apply without a failed staged resource; pending
+        otherwise. The failed resources of a report-only device are plan errors and never count; its rejection does.
       x-paddock-list:
         sort: [started_at, status]
         default_sort: -started_at
@@ -1259,9 +1260,10 @@ paths:
       tags: [config]
       description: |
         Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them:
-        whether each is inside the wave the rollout reached, its newest bundle, whether that bundle carries the
-        rollout, the device's report of it and the staged resources that failed in it. Equal sort keys are ordered by
-        hostname. 404 not_found for an unknown rollout or one of another organization.
+        whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the
+        rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged
+        resources. Equal sort keys are ordered by hostname. 404 not_found for an unknown rollout or one of another
+        organization.
       x-paddock-list:
         sort: [hostname, in_wave, report_outcome]
         default_sort: hostname
@@ -1333,7 +1335,7 @@ paths:
       tags: [config]
       description: |
         Roles: org_admin, org_operator. halted → running in the wave where it stopped; failures reported before the
-        resume no longer count. 409 invalid_state when the rollout is not halted; 404 not_found for an unknown rollout
+        resume no longer count, and the wave's minimum duration starts again. 409 invalid_state when the rollout is not halted; 404 not_found for an unknown rollout
         or one of another organization.
       x-paddock-audit: config_rollout.resumed
       parameters:
@@ -7119,11 +7121,15 @@ components:
         report_outcome:
           type: string
           description: |
-            The device's report of its newest bundle: applied, rejected, report_only (a report-only device; its plan
-            errors are listed in failed_resource_ids but are never a failed apply) or none (not reported yet).
+            The device's newest report on a bundle of the rollout, the one the counts read: applied, rejected,
+            report_only (an apply of a report-only device; its plan errors are listed in failed_resource_ids but never
+            count) or none (no report on a bundle of the rollout).
         failed_resource_ids:
           type: array
-          description: The staged resources that failed in the newest bundle.
+          description: |
+            The staged resources that failed in that report and count against the rollout, and the plan errors of a
+            report-only device. Failures reported before the rollout's last resume no longer count and are not listed;
+            the device is pending until it reports again.
           items: { type: string }
     ConfigRolloutDevicePage:
       type: object

@@ -1505,11 +1505,11 @@ var registry = map[Code]Definition{
 		Description: "A staged configuration rollout was halted: by the worker when the failed devices of the waves reached so far reached the threshold (actor: system), or by an administrator with a reason. Devices keep the state of the wave the rollout reached.",
 		Params:      []string{"rollout_id", "change_set_id", "reason", "wave", "eligible", "failed", "threshold"},
 		Outcomes:    adminOutcomes,
-		Note:        "eligible, failed and threshold are set when the worker halts. failure with invalid_request without a reason of 2 to 500 characters, invalid_state when the rollout is not running, not_found for an unknown rollout or one of another organization. A preset event of the notification rules.",
+		Note:        "eligible, failed and threshold are set when the worker halts. failure with invalid_request without a reason of 2 to 500 characters free of control characters (the refused reason is not recorded), invalid_state when the rollout is not running, not_found for an unknown rollout or one of another organization. A preset event of the notification rules.",
 	},
 	CodeConfigRolloutResumed: {
 		Code: CodeConfigRolloutResumed, Emitted: true,
-		Description: "An administrator resumed a halted configuration rollout in the wave where it stopped; failures reported before the resume no longer count.",
+		Description: "An administrator resumed a halted configuration rollout in the wave where it stopped; failures reported before the resume no longer count and the wave's minimum duration starts again.",
 		Params:      []string{"rollout_id", "change_set_id", "wave"},
 		Outcomes:    adminOutcomes,
 		Note:        "failure with invalid_state when the rollout is not halted, not_found for an unknown rollout or one of another organization.",

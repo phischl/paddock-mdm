@@ -476,6 +476,7 @@ func TestDestructiveSegments(t *testing.T) {
 		{"POST", "/api/v1/change-sets/{id}/revert", true},
 		{"POST", "/api/v1/config-rollouts/{id}/complete", true},
 		{"POST", "/api/v1/config-rollouts/{id}/halt", true},
+		{"POST", "/api/v1/config-rollouts/{id}/advance", true},
 		{"POST", "/api/v1/config-rollouts/{id}/resume", false},
 		{"DELETE", "/api/v1/things/{id}", true},
 		{"POST", "/api/v1/things/{id}/approve", false},

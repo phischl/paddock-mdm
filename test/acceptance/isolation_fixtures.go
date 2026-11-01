@@ -149,6 +149,14 @@ func seedGlobexRollout(t *testing.T, w *isolationWorld) {
 	}
 	w.globexRollout = *staged.RolloutID
 	w.globexIDs = append(w.globexIDs, w.globexRollout)
+	// Never leave an open rollout in globex: it would refuse globex's writes in every later run. Registered after the
+	// settings restore, so it runs before it.
+	w.top.Cleanup(func() {
+		res := call(w.top, w.carol, http.MethodPost, "/api/v1/config-rollouts/"+w.globexRollout+"/complete", nil)
+		if res.Status != http.StatusOK && res.Status != http.StatusConflict {
+			w.top.Errorf("cleanup: complete globex rollout %s: HTTP %d %s", w.globexRollout, res.Status, res.Body)
+		}
+	})
 	expectStatus(t, call(t, w.carol, http.MethodPost, "/api/v1/config-rollouts/"+w.globexRollout+"/complete", nil), http.StatusOK, "")
 	expectStatus(t, call(t, w.carol, http.MethodPut, "/api/v1/settings/rollout", original), http.StatusOK, "")
 }

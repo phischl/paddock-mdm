@@ -366,7 +366,8 @@ func TestConfigRolloutCountsAndDevices(t *testing.T) {
 	check("failed", failed, true, true, "applied", 1)
 	check("report-only", reportOnly, true, true, "report_only", 1)
 	check("pending", pending, true, false, "none", 0)
-	check("outside", outside, false, false, "applied", 0)
+	// The list shows the report the counts read: a report on a bundle without the rollout is none.
+	check("outside", outside, false, false, "none", 0)
 	check("canary", canaryDevice, true, false, "none", 0)
 
 	inWave := false
@@ -376,7 +377,7 @@ func TestConfigRolloutCountsAndDevices(t *testing.T) {
 	}
 	ro, err := h.api.ListDevices(h.admin, r.id, app.ConfigRolloutDeviceQuery{Page: app.ListPage{Sort: "report_outcome", Limit: 10},
 		ReportOutcomes: []string{app.RolloutReportReportOnly, app.RolloutReportNone}})
-	if err != nil || ro.Count != 3 || ro.Items[0].ReportOutcome != app.RolloutReportNone || ro.Items[2].ReportOutcome != app.RolloutReportReportOnly {
+	if err != nil || ro.Count != 4 || ro.Items[0].ReportOutcome != app.RolloutReportNone || ro.Items[3].ReportOutcome != app.RolloutReportReportOnly {
 		t.Fatalf("report_outcome filter %+v, %v", ro, err)
 	}
 	sorted, err := h.api.ListDevices(h.admin, r.id, app.ConfigRolloutDeviceQuery{Page: app.ListPage{Sort: "-in_wave", Limit: 10, Offset: 5}})
@@ -391,5 +392,114 @@ func TestConfigRolloutCountsAndDevices(t *testing.T) {
 	}
 	if d, err := h.api.Get(h.admin, r.id); err != nil || d.Counts.Eligible != 6 {
 		t.Fatalf("completed counts %+v, %v", d.Counts, err)
+	}
+}
+
+// TestConfigRolloutHaltReasonNUL (review F2): a reason with a NUL is refused with invalid_request before it reaches the
+// database or the audit params, and the attempt is recorded exactly once.
+func TestConfigRolloutHaltReasonNUL(t *testing.T) {
+	h := newRolloutHarness(t)
+	enableRollouts(t, h.writeHarness, []int{50, 100}, nil)
+	r := h.stage(t, "/etc/acme/nul.conf")
+	if _, err := h.api.Halt(h.admin, r.id, "bro\x00ken"); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("halt with a NUL = %v", err)
+	}
+	events := h.events(t, audit.CodeConfigRolloutHalted)
+	if len(events) != 1 || events[0].Outcome != audit.OutcomeFailure || events[0].ErrorCode != "invalid_request" {
+		t.Fatalf("halted events %+v", events)
+	}
+	if _, ok := events[0].Params["reason"]; ok {
+		t.Fatalf("the refused reason is an audit param: %v", events[0].Params)
+	}
+	if got := h.rollout(t, r.changeSet); got.status != configrollout.StatusRunning {
+		t.Fatalf("rollout %+v", got)
+	}
+}
+
+// TestConfigRolloutResumeRestartsWave (plan M11 amendment R6.14): resume restarts the wave's minimum duration, so the
+// worker does not advance right after a long halt.
+func TestConfigRolloutResumeRestartsWave(t *testing.T) {
+	h := newRolloutHarness(t)
+	enableRollouts(t, h.writeHarness, []int{50, 100}, nil)
+	r := h.stage(t, "/etc/acme/resume.conf")
+	h.exec(t, "UPDATE config_rollout SET wave_started_at = now() - interval '2 hours' WHERE id = $1", r.id)
+	if _, err := h.api.Halt(h.admin, r.id, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := h.api.Resume(h.admin, r.id)
+	if err != nil || time.Since(resumed.WaveStartedAt) > time.Minute || !resumed.WaveStartedAt.Equal(resumed.EvaluationSince) {
+		t.Fatalf("resume = %+v, %v", resumed, err)
+	}
+	if err := h.worker.Evaluate(h.system, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.rollout(t, r.changeSet); got.current != 0 || got.status != configrollout.StatusRunning {
+		t.Fatalf("advanced right after the resume: %+v", got)
+	}
+}
+
+// TestConfigRolloutCountingRule (plan M11 amendments R6.6 and R6.14): the worker counts with the API's rule. A
+// report-only device's failed staged resource is a plan error and never counts; its rejection counts; the time filter
+// applies to the newest rollout report, so an older version reported late after a resume does not count. The worker's
+// decision and the Get counts agree.
+func TestConfigRolloutCountingRule(t *testing.T) {
+	h := newRolloutHarness(t)
+	enableRollouts(t, h.writeHarness, []int{100}, nil)
+	h.exec(t, "UPDATE organization_rollout_settings SET failure_threshold_min = 1, failure_threshold_percent = 0 WHERE organization_id = $1", h.org)
+	r := h.stage(t, "/etc/acme/rule.conf")
+	staged := "file:/etc/acme/rule.conf"
+	now := time.Now()
+	h.exec(t, "UPDATE config_rollout SET failure_threshold_min = 1, failure_threshold_percent = 0 WHERE id = $1", r.id)
+
+	planErrors, late := h.device(t, r.id, 100, true), h.device(t, r.id, 100, true)
+	h.report(t, planErrors, r.id, 1, "applied", "report_only", staged, now)
+	// late: version 2 applied cleanly before the resume, version 1's failure reported after it.
+	h.exec(t, "UPDATE config_rollout SET evaluation_since = $2 WHERE id = $1", r.id, now.Add(-time.Minute))
+	h.report(t, late, r.id, 2, "applied", "enforce", "", now.Add(-2*time.Minute))
+	h.report(t, late, r.id, 1, "applied", "enforce", staged, now)
+
+	d, err := h.api.Get(h.admin, r.id)
+	if err != nil || d.Counts != (app.RolloutCounts{Eligible: 2, Applied: 1, Pending: 1}) {
+		t.Fatalf("counts %+v, %v", d.Counts, err)
+	}
+	if err := h.worker.Evaluate(h.system, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.rollout(t, r.changeSet); got.status != configrollout.StatusRunning {
+		t.Fatalf("halted on plan errors or a late older report: %+v", got)
+	}
+
+	rejected := h.device(t, r.id, 100, true)
+	h.report(t, rejected, r.id, 1, "rejected", "report_only", "", now)
+	d, err = h.api.Get(h.admin, r.id)
+	if err != nil || d.Counts != (app.RolloutCounts{Eligible: 3, Applied: 1, Failed: 1, Pending: 1}) {
+		t.Fatalf("counts with a report-only rejection %+v, %v", d.Counts, err)
+	}
+	if err := h.worker.Evaluate(h.system, now); err != nil {
+		t.Fatal(err)
+	}
+	halted := h.events(t, audit.CodeConfigRolloutHalted)
+	if len(halted) != 1 || halted[0].Params["eligible"] != float64(d.Counts.Eligible) || halted[0].Params["failed"] != float64(d.Counts.Failed) {
+		t.Fatalf("worker decision %+v disagrees with the counts %+v", halted, d.Counts)
+	}
+	devices, err := h.api.ListDevices(h.admin, r.id, app.ConfigRolloutDeviceQuery{Page: app.ListPage{Sort: "hostname", Limit: 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dev := range devices.Items {
+		switch dev.DeviceID {
+		case planErrors:
+			if dev.ReportOutcome != app.RolloutReportReportOnly || len(dev.FailedResourceIDs) != 1 {
+				t.Errorf("report-only device %+v", dev)
+			}
+		case late:
+			if dev.ReportOutcome != app.RolloutReportApplied || len(dev.FailedResourceIDs) != 0 || dev.BundleVersion == nil || *dev.BundleVersion != 2 {
+				t.Errorf("late device %+v", dev)
+			}
+		case rejected:
+			if dev.ReportOutcome != app.RolloutReportRejected {
+				t.Errorf("rejected device %+v", dev)
+			}
+		}
 	}
 }

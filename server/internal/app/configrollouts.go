@@ -105,13 +105,16 @@ func rolloutTarget(id uuid.UUID) audit.Target {
 // reachedPercent is the share of devices the rollout reached: the current wave while it is open, and the wave it had
 // reached when it was reverted; every device once it completed.
 func reachedPercent(r pgstore.ConfigRollout) int {
-	if r.Status == configrollout.StatusCompleted {
-		return 100
+	waves := make([]int, len(r.Waves))
+	for i, w := range r.Waves {
+		waves[i] = int(w)
 	}
-	if i := int(r.CurrentWaveIndex); i >= 0 && i < len(r.Waves) {
-		return int(r.Waves[i])
+	status := r.Status
+	if status == configrollout.StatusReverted {
+		// configrollout.Percent is what devices receive (nothing once reverted); the counts show how far it got.
+		status = configrollout.StatusRunning
 	}
-	return 0
+	return configrollout.Percent(status, waves, int(r.CurrentWaveIndex))
 }
 
 // inWave reports whether device is inside the wave r reached.
@@ -124,8 +127,50 @@ func stagedFailure(failed, staged []string) bool {
 	return slices.ContainsFunc(failed, func(id string) bool { return slices.Contains(staged, id) })
 }
 
-// countRollout counts the active devices of r (RolloutCounts). A report of a report-only device never counts as
-// applied or failed (plan M11 amendment R6.6).
+// deviceState is how the counts of a rollout see one device of its wave.
+type deviceState int
+
+const (
+	statePending deviceState = iota
+	stateApplied
+	stateFailed
+)
+
+// countsAgainst reports whether rep counts toward the failure rate of r: reported since the rollout's start or last
+// resume. The time is checked after the newest report was picked (plan M11 amendment R6.14), so an older version
+// reported late does not hide a newer one.
+func countsAgainst(r pgstore.ConfigRollout, rep pgstore.ListConfigRolloutReportsRow) bool {
+	return !rep.OccurredAt.Before(r.EvaluationSince)
+}
+
+// classify is the one rule of the worker's evaluation and of the API's counts (plan M11 decision 27, amendments R6.6
+// and R6.14) for a device's newest report on a bundle of r (nil: none): failed is a rejection, or an enforced apply
+// with a failed staged resource, reported since evaluation_since; the failed resources of a report-only device are
+// plan errors and never count, its rejection does. Applied is an enforced apply without a failed staged resource;
+// everything else is pending.
+func classify(r pgstore.ConfigRollout, rep *pgstore.ListConfigRolloutReportsRow, staged []string) deviceState {
+	switch {
+	case rep == nil:
+		return statePending
+	case rep.Outcome == RolloutReportRejected:
+		if countsAgainst(r, *rep) {
+			return stateFailed
+		}
+		return statePending
+	case rep.Mode == protocol.BundleModeReportOnly:
+		return statePending
+	case stagedFailure(rep.FailedResourceIds, staged):
+		if countsAgainst(r, *rep) {
+			return stateFailed
+		}
+		return statePending
+	case rep.Outcome == RolloutReportApplied:
+		return stateApplied
+	}
+	return statePending
+}
+
+// countRollout counts the active devices of r (RolloutCounts).
 func countRollout(r pgstore.ConfigRollout, staged []string, devices []uuid.UUID, canary map[uuid.UUID]bool,
 	reports map[uuid.UUID]pgstore.ListConfigRolloutReportsRow) RolloutCounts {
 	var c RolloutCounts
@@ -134,15 +179,15 @@ func countRollout(r pgstore.ConfigRollout, staged []string, devices []uuid.UUID,
 			continue
 		}
 		c.Eligible++
-		rep, ok := reports[d]
-		switch {
-		case !ok || rep.Mode == protocol.BundleModeReportOnly:
-			c.Pending++
-		case !rep.OccurredAt.Before(r.EvaluationSince) &&
-			(rep.Outcome == RolloutReportRejected || stagedFailure(rep.FailedResourceIds, staged)):
-			c.Failed++
-		case rep.Outcome == RolloutReportApplied && !stagedFailure(rep.FailedResourceIds, staged):
+		var rep *pgstore.ListConfigRolloutReportsRow
+		if row, ok := reports[d]; ok {
+			rep = &row
+		}
+		switch classify(r, rep, staged) {
+		case stateApplied:
 			c.Applied++
+		case stateFailed:
+			c.Failed++
 		default:
 			c.Pending++
 		}
@@ -241,21 +286,21 @@ func (c *ConfigRollouts) List(ctx context.Context, page ListPage, statuses []str
 		if len(rows) == 0 {
 			return nil
 		}
-		w, err := loadRolloutWorld(ctx, q, rows, nil)
+		rollouts := make([]pgstore.ConfigRollout, len(rows))
+		for i, r := range rows {
+			rollouts[i] = r.ConfigRollout
+		}
+		w, err := loadRolloutWorld(ctx, q, rollouts, nil)
 		if err != nil {
 			return err
 		}
 		out.Items = make([]ConfigRolloutRecord, len(rows))
 		for i, r := range rows {
-			plan, err := q.GetConfigRolloutPlan(ctx, r.ID)
-			if err != nil {
-				return fmt.Errorf("read the plan of rollout %s: %w", r.ID, err)
-			}
-			staged, err := stagedResourceIDs(plan)
+			staged, err := stagedResourceIDs(r.Plan)
 			if err != nil {
 				return err
 			}
-			out.Items[i] = ConfigRolloutRecord{ConfigRollout: r, Counts: w.counts(r, staged)}
+			out.Items[i] = ConfigRolloutRecord{ConfigRollout: r.ConfigRollout, Counts: w.counts(r.ConfigRollout, staged)}
 		}
 		return nil
 	})
@@ -320,9 +365,13 @@ func (c *ConfigRollouts) ListDevices(ctx context.Context, id uuid.UUID, query Co
 		if err != nil {
 			return err
 		}
-		canary := w.canaryOf(r)
+		canary, reports := w.canaryOf(r), w.reports[r.ID]
 		for _, d := range w.devices {
-			dev := rolloutDevice(r, d, staged, canary)
+			var rep *pgstore.ListConfigRolloutReportsRow
+			if row, ok := reports[d.ID]; ok {
+				rep = &row
+			}
+			dev := rolloutDevice(r, d, rep, staged, canary)
 			if (query.InWave == nil || *query.InWave == dev.InWave) &&
 				(len(query.ReportOutcomes) == 0 || slices.Contains(query.ReportOutcomes, dev.ReportOutcome)) {
 				all = append(all, dev)
@@ -340,19 +389,30 @@ func (c *ConfigRollouts) ListDevices(ctx context.Context, id uuid.UUID, query Co
 	return out, nil
 }
 
-// rolloutDevice is device d as rollout r sees it.
-func rolloutDevice(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRow, staged []string, canary map[uuid.UUID]bool) ConfigRolloutDevice {
+// rolloutDevice is device d as rollout r sees it. The report is the device's newest report on a bundle of r, the one
+// its counts read (classify); the failed resources it lists are those that count, and the plan errors of a
+// report-only device, which are shown but never count.
+func rolloutDevice(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRow, rep *pgstore.ListConfigRolloutReportsRow,
+	staged []string, canary map[uuid.UUID]bool) ConfigRolloutDevice {
 	out := ConfigRolloutDevice{
-		DeviceID: d.ID, Hostname: d.Hostname, InWave: inWave(r, d.ID, canary), ReportOutcome: d.ReportOutcome,
+		DeviceID: d.ID, Hostname: d.Hostname, InWave: inWave(r, d.ID, canary), ReportOutcome: RolloutReportNone,
 		CarriesRollout: d.BundleRolloutID == r.ID, FailedResourceIDs: []string{},
 	}
 	if d.BundleVersion > 0 {
 		out.BundleVersion = &d.BundleVersion
 	}
-	if d.ReportMode == protocol.BundleModeReportOnly && d.ReportOutcome != RolloutReportNone {
+	if rep == nil {
+		return out
+	}
+	out.ReportOutcome = rep.Outcome
+	reportOnly := rep.Mode == protocol.BundleModeReportOnly && rep.Outcome == RolloutReportApplied
+	if reportOnly {
 		out.ReportOutcome = RolloutReportReportOnly
 	}
-	for _, id := range d.FailedResourceIds {
+	if !reportOnly && !countsAgainst(r, *rep) {
+		return out
+	}
+	for _, id := range rep.FailedResourceIds {
 		if slices.Contains(staged, id) {
 			out.FailedResourceIDs = append(out.FailedResourceIDs, id)
 		}
@@ -387,11 +447,13 @@ func sortRolloutDevices(devices []ConfigRolloutDevice, sort string) {
 // Halt stops a running rollout with reason (2 to 500 characters): devices keep the state of the wave it reached.
 func (c *ConfigRollouts) Halt(ctx context.Context, id uuid.UUID, reason string) (pgstore.ConfigRollout, error) {
 	reason = strings.TrimSpace(reason)
-	return c.transition(ctx, SpecConfigRolloutHalt, id, map[string]any{"reason": reason},
-		func(ctx context.Context, q *pgstore.Queries, _ Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
-			if n := utf8.RuneCountInString(reason); n < 2 || n > rolloutHaltReasonMax {
-				return r, problem.InvalidRequest.WithDetail("reason must have 2 to 500 characters")
+	return c.transition(ctx, SpecConfigRolloutHalt, id, nil,
+		func(ctx context.Context, q *pgstore.Queries, rec Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
+			// Validated before it becomes an audit param: a NUL cannot be stored in the event either (jsonb).
+			if n := utf8.RuneCountInString(reason); n < 2 || n > rolloutHaltReasonMax || !reasonText(reason) {
+				return r, problem.InvalidRequest.WithDetail("reason must have 2 to 500 characters without control characters")
 			}
+			rec.SetParam("reason", reason)
 			if r.Status != configrollout.StatusRunning {
 				return r, problem.InvalidState.WithDetail("the rollout is " + r.Status)
 			}
@@ -481,13 +543,14 @@ func (c *ConfigRollouts) transition(ctx context.Context, spec ActionSpec, id uui
 
 // runningRollout is a running rollout as the worker read it, with its counts.
 type runningRollout struct {
-	pgstore.ListRunningConfigRolloutsRow
-	stats pgstore.ConfigRolloutStatsRow
+	pgstore.ConfigRollout
+	counts RolloutCounts
 }
 
 // Evaluate is the worker's round for the organization of ctx (plan M11 decision 33): every running rollout halts when
 // its failed devices reach the threshold, otherwise advances once the wave's minimum duration passed, or completes
-// after the last wave. Each change is one audited action of the system; a halted rollout is not evaluated.
+// after the last wave. It counts with the API's rule (classify, amendment R6.14) in a fixed number of queries per
+// organization. Each change is one audited action of the system; a halted rollout is not evaluated.
 func (c *ConfigRollouts) Evaluate(ctx context.Context, now time.Time) error {
 	var running []runningRollout
 	if err := c.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -495,19 +558,23 @@ func (c *ConfigRollouts) Evaluate(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return fmt.Errorf("list running rollouts: %w", err)
 		}
+		if len(rows) == 0 {
+			return nil
+		}
+		rollouts := make([]pgstore.ConfigRollout, len(rows))
+		for i, r := range rows {
+			rollouts[i] = r.ConfigRollout
+		}
+		w, err := loadRolloutWorld(ctx, q, rollouts, nil)
+		if err != nil {
+			return err
+		}
 		for _, r := range rows {
 			staged, err := stagedResourceIDs(r.Plan)
 			if err != nil {
 				return err
 			}
-			stats, err := q.ConfigRolloutStats(ctx, pgstore.ConfigRolloutStatsParams{
-				RolloutID: r.ID, Pct: r.Waves[r.CurrentWaveIndex], Canary: r.CanaryDeviceGroupID, Since: r.EvaluationSince,
-				StagedIds: staged,
-			})
-			if err != nil {
-				return fmt.Errorf("count the devices of rollout %s: %w", r.ID, err)
-			}
-			running = append(running, runningRollout{ListRunningConfigRolloutsRow: r, stats: stats})
+			running = append(running, runningRollout{ConfigRollout: r.ConfigRollout, counts: w.counts(r.ConfigRollout, staged)})
 		}
 		return nil
 	}); err != nil {
@@ -527,20 +594,21 @@ func (c *ConfigRollouts) evaluate(ctx context.Context, r runningRollout, now tim
 	for i, w := range r.Waves {
 		waves[i] = int(w)
 	}
+	eligible, failed := int64(r.counts.Eligible), int64(r.counts.Failed)
 	in := configrollout.Rollout{
 		Status: configrollout.StatusRunning, Waves: waves, CurrentWave: int(r.CurrentWaveIndex), WaveStartedAt: r.WaveStartedAt,
 		MinWaveMinutes: int(r.MinWaveMinutes), FailurePercent: int(r.FailureThresholdPercent), FailureMin: int(r.FailureThresholdMin),
-		Eligible: r.stats.Eligible, Failed: r.stats.Failed,
+		Eligible: eligible, Failed: failed,
 	}
 	var spec ActionSpec
 	var params map[string]any
 	var change func(ctx context.Context, q *pgstore.Queries, rec Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error)
 	switch configrollout.Decide(in, now) {
 	case configrollout.Halt:
-		threshold := configrollout.Threshold(in.Eligible, in.FailurePercent, in.FailureMin)
-		reason := fmt.Sprintf("%d failed devices reached the threshold of %d", in.Failed, threshold)
+		threshold := configrollout.Threshold(eligible, in.FailurePercent, in.FailureMin)
+		reason := fmt.Sprintf("%d failed devices reached the threshold of %d", failed, threshold)
 		spec = SpecConfigRolloutHalt
-		params = map[string]any{"reason": reason, "eligible": in.Eligible, "failed": in.Failed, "threshold": threshold}
+		params = map[string]any{"reason": reason, "eligible": eligible, "failed": failed, "threshold": threshold}
 		change = func(ctx context.Context, q *pgstore.Queries, _ Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
 			return q.HaltConfigRollout(ctx, pgstore.HaltConfigRolloutParams{ID: r.ID, HaltedReason: &reason})
 		}
@@ -551,12 +619,14 @@ func (c *ConfigRollouts) evaluate(ctx context.Context, r runningRollout, now tim
 	default:
 		return nil
 	}
-	slog.InfoContext(ctx, "config rollout changed", "rollout", r.ID, "code", spec.Code, "eligible", in.Eligible, "failed", in.Failed)
-	wave := r.CurrentWaveIndex
+	slog.InfoContext(ctx, "config rollout changed", "rollout", r.ID, "code", spec.Code, "eligible", eligible, "failed", failed)
+	read := r.ConfigRollout
 	return ignoreStale(c.transition(ctx, spec, r.ID, params,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder, cur pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
-			// The decision was read outside this transaction; an administrator may have acted since.
-			if cur.Status != configrollout.StatusRunning || cur.CurrentWaveIndex != wave {
+			// The decision was read outside this transaction; an administrator may have acted since, also by halting
+			// and resuming, which discards the failures the decision counted.
+			if cur.Status != configrollout.StatusRunning || cur.CurrentWaveIndex != read.CurrentWaveIndex ||
+				!cur.EvaluationSince.Equal(read.EvaluationSince) || !cur.WaveStartedAt.Equal(read.WaveStartedAt) {
 				return cur, problem.InvalidState.WithDetail("the rollout changed since it was evaluated")
 			}
 			return change(ctx, q, rec, cur)
