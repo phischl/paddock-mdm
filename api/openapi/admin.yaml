@@ -1084,12 +1084,12 @@ paths:
     get:
       operationId: listChangeSets
       tags: [config]
-      description: "Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something."
+      description: "Roles: org_admin, org_operator, org_auditor. Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource."
       x-paddock-list:
         sort: [applied_at]
         default_sort: -applied_at
         search: [actor_display]
-        filters: [source]
+        filters: [source, rollout]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -1103,6 +1103,14 @@ paths:
           schema:
             type: array
             items: { $ref: "#/components/schemas/ChangeSetSource" }
+        - name: rollout
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ChangeSetRollout" }
       responses:
         "200":
           description: One page of change sets.
@@ -6631,6 +6639,10 @@ components:
     ChangeSetSource:
       type: string
       enum: [session, api_token]
+    ChangeSetRollout:
+      type: string
+      enum: [immediate, staged, urgent]
+      description: "immediate: every device receives the change at once. staged and urgent are set by staged rollouts."
     ChangeSetActor:
       type: object
       required: [type, display]
@@ -6650,7 +6662,7 @@ components:
           items: { type: string }
     ChangeSet:
       type: object
-      required: [id, applied_at, actor, source, summary, plan]
+      required: [id, applied_at, actor, source, summary, plan, rollout, before_available]
       properties:
         id: { type: string, format: uuid }
         applied_at: { type: string, format: date-time }
@@ -6658,6 +6670,14 @@ components:
         source: { $ref: "#/components/schemas/ChangeSetSource" }
         summary: { $ref: "#/components/schemas/ChangeSetSummary" }
         plan: { $ref: "#/components/schemas/ConfigPlan" }
+        rollout: { $ref: "#/components/schemas/ChangeSetRollout" }
+        urgent_reason: { type: string, nullable: true, description: Why the change skipped staging; null otherwise. }
+        reverts_change_set_id: { type: string, format: uuid, nullable: true, description: The change set this one reverts. }
+        reverted_by: { type: string, format: uuid, nullable: true, description: The newest change set that reverts this one. }
+        before_available:
+          type: boolean
+          description: Whether the before-states are stored. False for change sets recorded before they were stored and after they were purged.
+        rollout_id: { type: string, format: uuid, nullable: true, description: The staged rollout of this change set; null until staged rollouts exist. }
     ChangeSetPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

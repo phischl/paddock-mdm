@@ -263,6 +263,17 @@ type Definition struct {
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
 
+// withChangeSetParams appends the params of the audit events of configuration writes that record a change set (plan
+// M11 decisions 19 and 26): rollout_id and urgent_reason stay unset until staged rollouts and the urgent opt-out exist.
+func withChangeSetParams(params []string) []string {
+	for _, p := range []string{"change_set_id", "rollout", "rollout_id", "urgent_reason"} {
+		if !slices.Contains(params, p) {
+			params = append(params, p)
+		}
+	}
+	return params
+}
+
 // notificationDestinationParams are the parameters of notification.destination_created and the first of
 // notification.destination_updated (plan M9 §6.3).
 var notificationDestinationParams = []string{
@@ -302,20 +313,20 @@ var registry = map[Code]Definition{
 	CodeDeviceGroupCreated: {
 		Code: CodeDeviceGroupCreated, Emitted: true,
 		Description: "A device group was created.",
-		Params:      []string{"name", "staleness_warning_h", "staleness_critical_h", "agent_update_policy", "disk_unlock_mode"},
+		Params:      withChangeSetParams([]string{"name", "staleness_warning_h", "staleness_critical_h", "agent_update_policy", "disk_unlock_mode"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeDeviceGroupUpdated: {
 		Code: CodeDeviceGroupUpdated, Emitted: true,
 		Description: "A device group was renamed or its description changed.",
-		Params: []string{"name", "old_name", "description_changed", "staleness_warning_h", "staleness_critical_h",
-			"agent_update_policy", "disk_unlock_mode"},
+		Params: withChangeSetParams([]string{"name", "old_name", "description_changed", "staleness_warning_h", "staleness_critical_h",
+			"agent_update_policy", "disk_unlock_mode"}),
 		Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeDeviceGroupDeleted: {
 		Code: CodeDeviceGroupDeleted, Emitted: true,
 		Description: "A device group was deleted.",
-		Params:      []string{"name"},
+		Params:      withChangeSetParams([]string{"name"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeEnrollmentTokenCreated: {
@@ -617,37 +628,37 @@ var registry = map[Code]Definition{
 	CodeManagedFileCreated: {
 		Code: CodeManagedFileCreated, Emitted: true,
 		Description: "A managed file was defined for the organization or a device group.",
-		Params:      []string{"path", "device_group_id", "mode", "owner", "group", "tier"},
+		Params:      withChangeSetParams([]string{"path", "device_group_id", "mode", "owner", "group", "tier"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedFileUpdated: {
 		Code: CodeManagedFileUpdated, Emitted: true,
 		Description: "A managed file definition was changed.",
-		Params:      []string{"path", "device_group_id", "mode", "owner", "group", "tier", "content_changed", "old_path"},
+		Params:      withChangeSetParams([]string{"path", "device_group_id", "mode", "owner", "group", "tier", "content_changed", "old_path"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedFileDeleted: {
 		Code: CodeManagedFileDeleted, Emitted: true,
 		Description: "A managed file definition was deleted.",
-		Params:      []string{"path", "device_group_id"},
+		Params:      withChangeSetParams([]string{"path", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedUnitCreated: {
 		Code: CodeManagedUnitCreated, Emitted: true,
 		Description: "A managed systemd unit was defined for the organization or a device group.",
-		Params:      []string{"unit", "device_group_id", "enabled", "active"},
+		Params:      withChangeSetParams([]string{"unit", "device_group_id", "enabled", "active"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedUnitUpdated: {
 		Code: CodeManagedUnitUpdated, Emitted: true,
 		Description: "A managed systemd unit definition was changed.",
-		Params:      []string{"unit", "device_group_id", "enabled", "active", "old_unit"},
+		Params:      withChangeSetParams([]string{"unit", "device_group_id", "enabled", "active", "old_unit"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedUnitDeleted: {
 		Code: CodeManagedUnitDeleted, Emitted: true,
 		Description: "A managed systemd unit definition was deleted.",
-		Params:      []string{"unit", "device_group_id"},
+		Params:      withChangeSetParams([]string{"unit", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeAgentReleaseCreated: {
@@ -729,7 +740,7 @@ var registry = map[Code]Definition{
 	CodeUserDeleted: {
 		Code: CodeUserDeleted, Emitted: true,
 		Description: "A local user was deleted in Authentik and Paddock, with their group memberships and assignments.",
-		Params:      []string{"username"},
+		Params:      withChangeSetParams([]string{"username"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
 	},
 	CodeUserLocked: {
@@ -772,7 +783,7 @@ var registry = map[Code]Definition{
 	CodeUserGroupDeleted: {
 		Code: CodeUserGroupDeleted, Emitted: true,
 		Description: "A user group was deleted in Authentik and Paddock, with its login and profile assignments.",
-		Params:      []string{"slug", "name"},
+		Params:      withChangeSetParams([]string{"slug", "name"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
 	},
 	CodeUserGroupMemberAdded: {
@@ -790,7 +801,7 @@ var registry = map[Code]Definition{
 	CodeSettingsLoginChanged: {
 		Code: CodeSettingsLoginChanged, Emitted: true,
 		Description: "The organization's login settings were changed (Hello PIN, session action of a lock, break-glass accounts, sudoers.d allow list, sudo lecture text).",
-		Params:      []string{"changed", "login_history_enabled", "login_history_days", "login_history_deleted"},
+		Params:      withChangeSetParams([]string{"changed", "login_history_enabled", "login_history_days", "login_history_deleted"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeRetentionPurged: {
@@ -836,38 +847,38 @@ var registry = map[Code]Definition{
 	CodePermissionProfileCreated: {
 		Code: CodePermissionProfileCreated, Emitted: true,
 		Description: "A permission profile was created.",
-		Params:      []string{"name", "class", "commands", "root_equivalent", "effective_class"},
+		Params:      withChangeSetParams([]string{"name", "class", "commands", "root_equivalent", "effective_class"}),
 		Outcomes:    adminOutcomes,
 		Note:        "root_equivalent is true when a command of the profile hands out root on its own or in combination (catalog version in the effective profile).",
 	},
 	CodePermissionProfileUpdated: {
 		Code: CodePermissionProfileUpdated, Emitted: true,
 		Description: "A permission profile was changed.",
-		Params:      []string{"name", "class", "old_class", "commands", "root_equivalent", "effective_class"},
+		Params:      withChangeSetParams([]string{"name", "class", "old_class", "commands", "root_equivalent", "effective_class"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodePermissionProfileDeleted: {
 		Code: CodePermissionProfileDeleted, Emitted: true,
 		Description: "A permission profile without assignments was deleted.",
-		Params:      []string{"name", "class"},
+		Params:      withChangeSetParams([]string{"name", "class"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeProfileAssignmentCreated: {
 		Code: CodeProfileAssignmentCreated, Emitted: true,
 		Description: "A permission profile was assigned globally, to a group or to a user, optionally only on the devices of one device group.",
-		Params:      []string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id"},
+		Params:      withChangeSetParams([]string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeProfileAssignmentUpdated: {
 		Code: CodeProfileAssignmentUpdated, Emitted: true,
 		Description: "The device group scope of a profile assignment was changed.",
-		Params:      []string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id", "old_device_group_id"},
+		Params:      withChangeSetParams([]string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id", "old_device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeProfileAssignmentDeleted: {
 		Code: CodeProfileAssignmentDeleted, Emitted: true,
 		Description: "A profile assignment was removed.",
-		Params:      []string{"profile", "class", "subject_type", "subject_id", "device_group_id"},
+		Params:      withChangeSetParams([]string{"profile", "class", "subject_type", "subject_id", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceBundleRenderFailed: {
@@ -1062,27 +1073,27 @@ var registry = map[Code]Definition{
 	CodeSettingsUpdatesChanged: {
 		Code: CodeSettingsUpdatesChanged, Emitted: true,
 		Description: "An organization administrator changed the update settings: the time of the daily security updates, the schedule of regular updates, the random delay and the staleness thresholds.",
-		Params: []string{"security_daily_at", "regular_schedule", "regular_updates_enabled", "max_random_delay_min",
-			"staleness_warning_h", "staleness_critical_h", "agent_update_policy"},
+		Params: withChangeSetParams([]string{"security_daily_at", "regular_schedule", "regular_updates_enabled", "max_random_delay_min",
+			"staleness_warning_h", "staleness_critical_h", "agent_update_policy"}),
 		Outcomes: adminOutcomes,
 		Note:     "failure with invalid_schedule for a schedule outside the accepted subset.",
 	},
 	CodePackageHoldCreated: {
 		Code: CodePackageHoldCreated, Emitted: true,
 		Description: "A package was held for the organization or a device group, optionally pinned to a version.",
-		Params:      []string{"package", "version", "device_group_id", "reason"},
+		Params:      withChangeSetParams([]string{"package", "version", "device_group_id", "reason"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodePackageHoldUpdated: {
 		Code: CodePackageHoldUpdated, Emitted: true,
 		Description: "The version or the reason of a package hold changed.",
-		Params:      []string{"package", "version", "device_group_id", "reason", "old_version"},
+		Params:      withChangeSetParams([]string{"package", "version", "device_group_id", "reason", "old_version"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodePackageHoldDeleted: {
 		Code: CodePackageHoldDeleted, Emitted: true,
 		Description: "A package hold was removed; devices may upgrade the package again.",
-		Params:      []string{"package", "version", "device_group_id"},
+		Params:      withChangeSetParams([]string{"package", "version", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceInstallNowRequested: {
@@ -1191,7 +1202,7 @@ var registry = map[Code]Definition{
 	CodeConfigApplied: {
 		Code: CodeConfigApplied, Emitted: true,
 		Description: "A declarative configuration (PUT /api/v1/config, paddockctl apply) was applied in one transaction; the change set lists every change.",
-		Params:      []string{"change_set_id", "created", "updated", "deleted", "sections"},
+		Params:      withChangeSetParams([]string{"change_set_id", "created", "updated", "deleted", "sections"}),
 		Outcomes:    adminOutcomes,
 		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied.",
 	},
@@ -1253,14 +1264,14 @@ var registry = map[Code]Definition{
 	CodeSettingsManagedFilesChanged: {
 		Code: CodeSettingsManagedFilesChanged, Emitted: true,
 		Description: "An organization administrator changed, with a step-up, the operator roots of the managed files: the directories below which operators may manage files without a step-up.",
-		Params:      []string{"old_operator_roots", "operator_roots"},
+		Params:      withChangeSetParams([]string{"old_operator_roots", "operator_roots"}),
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up and for API tokens, forbidden for another role; failure with path_not_allowed for a root outside the rules of ADR 0034 (amendment 2026-10-16).",
 	},
 	CodeSettingsWatchedUnitsChanged: {
 		Code: CodeSettingsWatchedUnitsChanged, Emitted: true,
 		Description: "An organization administrator changed, with a step-up, the third-party systemd units of the presence policy: the units the agents report when they stop (plan M9 decision 38).",
-		Params:      []string{"added", "removed", "units"},
+		Params:      withChangeSetParams([]string{"added", "removed", "units"}),
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up and for API tokens, forbidden for another role; failure with unit_not_allowed for a reserved or non-service unit and invalid_request for more than 32 units or a duplicate.",
 	},
@@ -1450,7 +1461,7 @@ var registry = map[Code]Definition{
 	CodeSettingsPrivacyChanged: {
 		Code: CodeSettingsPrivacyChanged, Emitted: true,
 		Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
-		Params:      []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"},
+		Params:      withChangeSetParams([]string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeAuditSearched: {

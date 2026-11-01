@@ -30,7 +30,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `applyConfig` | write | no | Applies a paddock.v1 document (at most 1 MiB) in one transaction: a present section is authoritative (items not listed are deleted), absent sections are untouched. |
 | `getChangeSet` | read | no | GET /api/v1/change-sets/{id} |
 | `getConfig` | read | no | The organization's declarative configuration as a paddock.v1 document (api/schema/paddock.v1.json) with every section present, in the key order of the schema. |
-| `listChangeSets` | read | no | Every apply of PUT /api/v1/config that changed something. |
+| `listChangeSets` | read | no | Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource. |
 
 ## device-groups
 

@@ -694,7 +694,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something. */
+        /** @description Roles: org_admin, org_operator, org_auditor. Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource. */
         get: operations["listChangeSets"];
         put?: never;
         post?: never;
@@ -4291,6 +4291,11 @@ export interface components {
         };
         /** @enum {string} */
         ChangeSetSource: "session" | "api_token";
+        /**
+         * @description immediate: every device receives the change at once. staged and urgent are set by staged rollouts.
+         * @enum {string}
+         */
+        ChangeSetRollout: "immediate" | "staged" | "urgent";
         ChangeSetActor: {
             type: string;
             id?: string;
@@ -4311,6 +4316,26 @@ export interface components {
             source: components["schemas"]["ChangeSetSource"];
             summary: components["schemas"]["ChangeSetSummary"];
             plan: components["schemas"]["ConfigPlan"];
+            rollout: components["schemas"]["ChangeSetRollout"];
+            /** @description Why the change skipped staging; null otherwise. */
+            urgent_reason?: string | null;
+            /**
+             * Format: uuid
+             * @description The change set this one reverts.
+             */
+            reverts_change_set_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The newest change set that reverts this one.
+             */
+            reverted_by?: string | null;
+            /** @description Whether the before-states are stored. False for change sets recorded before they were stored and after they were purged. */
+            before_available: boolean;
+            /**
+             * Format: uuid
+             * @description The staged rollout of this change set; null until staged rollouts exist.
+             */
+            rollout_id?: string | null;
         };
         ChangeSetPage: {
             items: components["schemas"]["ChangeSet"][];
@@ -7711,6 +7736,8 @@ export interface operations {
                 q?: components["parameters"]["Search"];
                 /** @description Repeatable. */
                 source?: components["schemas"]["ChangeSetSource"][];
+                /** @description Repeatable. */
+                rollout?: components["schemas"]["ChangeSetRollout"][];
             };
             header?: never;
             path?: never;

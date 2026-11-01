@@ -99,7 +99,7 @@ func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.M
 	var f pgstore.ManagedFile
 	spec := SpecManagedFileCreate
 	spec.Params = map[string]any{"path": deref(in.Path, ""), "device_group_id": idParam(in.DeviceGroupID)}
-	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		roots, err := operatorRoots(ctx, q)
 		if err != nil {
 			return err
@@ -140,7 +140,7 @@ func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.M
 		rec.SetTarget(audit.Target{Type: "managed_file", ID: f.ID.String(), Display: f.Path})
 		stateChangedFor(rec, f.OrganizationID, f.DeviceGroupID)
 		return nil
-	})
+	}))
 	return f, err
 }
 
@@ -151,7 +151,7 @@ func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInp
 	var f pgstore.ManagedFile
 	spec := SpecManagedFileUpdate
 	spec.Target = &audit.Target{Type: "managed_file", ID: id.String()}
-	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetManagedFile(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -192,7 +192,7 @@ func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInp
 		}
 		stateChangedFor(rec, f.OrganizationID, f.DeviceGroupID)
 		return nil
-	})
+	}))
 	return f, err
 }
 
@@ -200,7 +200,7 @@ func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInp
 func (m *ManagedConfig) DeleteFile(ctx context.Context, id uuid.UUID) error {
 	spec := SpecManagedFileDelete
 	spec.Target = &audit.Target{Type: "managed_file", ID: id.String()}
-	return m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return m.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetManagedFile(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -213,7 +213,7 @@ func (m *ManagedConfig) DeleteFile(ctx context.Context, id uuid.UUID) error {
 		}
 		stateChangedFor(rec, old.OrganizationID, old.DeviceGroupID)
 		return nil
-	})
+	}))
 }
 
 func recordFile(rec Recorder, f pgstore.ManagedFile, group *uuid.UUID, roots []string) {
@@ -354,7 +354,7 @@ func (m *ManagedConfig) CreateUnit(ctx context.Context, in UnitInput) (pgstore.M
 	var u pgstore.ManagedUnit
 	spec := SpecManagedUnitCreate
 	spec.Params = map[string]any{"unit": deref(in.Unit, ""), "device_group_id": idParam(in.DeviceGroupID)}
-	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		next := pgstore.ManagedUnit{Unit: deref(in.Unit, ""), Enabled: deref(in.Enabled, true), Active: deref(in.Active, true)}
 		recordUnit(rec, next, in.DeviceGroupID)
 		if err := policy.ValidateUnit(next.Unit); err != nil {
@@ -380,7 +380,7 @@ func (m *ManagedConfig) CreateUnit(ctx context.Context, in UnitInput) (pgstore.M
 		rec.SetTarget(audit.Target{Type: "managed_unit", ID: u.ID.String(), Display: u.Unit})
 		stateChangedFor(rec, u.OrganizationID, u.DeviceGroupID)
 		return nil
-	})
+	}))
 	return u, err
 }
 
@@ -389,7 +389,7 @@ func (m *ManagedConfig) UpdateUnit(ctx context.Context, id uuid.UUID, in UnitInp
 	var u pgstore.ManagedUnit
 	spec := SpecManagedUnitUpdate
 	spec.Target = &audit.Target{Type: "managed_unit", ID: id.String()}
-	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetManagedUnit(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -412,7 +412,7 @@ func (m *ManagedConfig) UpdateUnit(ctx context.Context, id uuid.UUID, in UnitInp
 		}
 		stateChangedFor(rec, u.OrganizationID, u.DeviceGroupID)
 		return nil
-	})
+	}))
 	return u, err
 }
 
@@ -420,7 +420,7 @@ func (m *ManagedConfig) UpdateUnit(ctx context.Context, id uuid.UUID, in UnitInp
 func (m *ManagedConfig) DeleteUnit(ctx context.Context, id uuid.UUID) error {
 	spec := SpecManagedUnitDelete
 	spec.Target = &audit.Target{Type: "managed_unit", ID: id.String()}
-	return m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return m.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetManagedUnit(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -433,7 +433,7 @@ func (m *ManagedConfig) DeleteUnit(ctx context.Context, id uuid.UUID) error {
 		}
 		stateChangedFor(rec, old.OrganizationID, old.DeviceGroupID)
 		return nil
-	})
+	}))
 }
 
 func recordUnit(rec Recorder, u pgstore.ManagedUnit, group *uuid.UUID) {

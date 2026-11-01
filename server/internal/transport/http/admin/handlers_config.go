@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -79,7 +78,11 @@ func (h *handlers) ListChangeSets(ctx context.Context, req adminapi.ListChangeSe
 	if err != nil {
 		return nil, err
 	}
-	res, err := h.declarative.ListChangeSets(ctx, app.ChangeSetQuery{Page: params.ListPage(), Sources: sources})
+	rollouts, err := listing.Enum("rollout", req.Params.Rollout)
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.declarative.ListChangeSets(ctx, app.ChangeSetQuery{Page: params.ListPage(), Sources: sources, Rollouts: rollouts})
 	if err != nil {
 		return nil, err
 	}
@@ -104,10 +107,14 @@ func (h *handlers) GetChangeSet(ctx context.Context, req adminapi.GetChangeSetRe
 	return adminapi.GetChangeSet200JSONResponse(out), nil
 }
 
-func toChangeSet(cs pgstore.ChangeSet) (adminapi.ChangeSet, error) {
+func toChangeSet(cs app.ChangeSetRecord) (adminapi.ChangeSet, error) {
 	out := adminapi.ChangeSet{
 		Id: cs.ID, AppliedAt: cs.AppliedAt.UTC(), Source: adminapi.ChangeSetSource(cs.Source),
 		Summary: adminapi.ChangeSetSummary{Created: int(cs.CreatedN), Updated: int(cs.UpdatedN), Deleted: int(cs.DeletedN), Sections: cs.Sections},
+		Rollout: adminapi.ChangeSetRollout(cs.Rollout), UrgentReason: cs.UrgentReason, BeforeAvailable: cs.BeforeAvailable, RevertedBy: cs.RevertedBy,
+	}
+	if cs.RevertsChangeSetID.Valid {
+		out.RevertsChangeSetId = &cs.RevertsChangeSetID.UUID
 	}
 	if out.Summary.Sections == nil {
 		out.Summary.Sections = []string{}
