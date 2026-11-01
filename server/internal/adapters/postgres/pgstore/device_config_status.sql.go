@@ -156,6 +156,44 @@ func (q *Queries) DeleteFailedDeviceResourceStatusNotIn(ctx context.Context, arg
 	return err
 }
 
+const getLatestAppliedBundleMode = `-- name: GetLatestAppliedBundleMode :one
+SELECT mode FROM device_bundle_report WHERE device_id = $1 AND outcome = 'applied' AND occurred_at <= $2
+ORDER BY occurred_at DESC, version DESC LIMIT 1
+`
+
+type GetLatestAppliedBundleModeParams struct {
+	DeviceID   uuid.UUID
+	OccurredAt time.Time
+}
+
+// The mode of the device's last applied report up to occurred_at: a bundle.rejected event carries none, and the device
+// keeps running the bundle it applied before.
+func (q *Queries) GetLatestAppliedBundleMode(ctx context.Context, arg GetLatestAppliedBundleModeParams) (string, error) {
+	row := q.db.QueryRow(ctx, getLatestAppliedBundleMode, arg.DeviceID, arg.OccurredAt)
+	var mode string
+	err := row.Scan(&mode)
+	return mode, err
+}
+
+const hasNewerAppliedBundleReport = `-- name: HasNewerAppliedBundleReport :one
+SELECT EXISTS (
+  SELECT 1 FROM device_bundle_report WHERE device_id = $1 AND outcome = 'applied' AND occurred_at > $2
+)
+`
+
+type HasNewerAppliedBundleReportParams struct {
+	DeviceID   uuid.UUID
+	OccurredAt time.Time
+}
+
+// A newer applied report owns the resource rows of the device: an older event must neither insert nor delete any.
+func (q *Queries) HasNewerAppliedBundleReport(ctx context.Context, arg HasNewerAppliedBundleReportParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasNewerAppliedBundleReport, arg.DeviceID, arg.OccurredAt)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listConfigStatus = `-- name: ListConfigStatus :many
 SELECT resource_id, applied, failed, pending, drift_corrected, last_failure_at FROM (
   SELECT s.resource_id,
@@ -378,8 +416,22 @@ func (q *Queries) ListDeviceResourceStatus(ctx context.Context, arg ListDeviceRe
 	return items, nil
 }
 
-const upsertDeviceBundleReport = `-- name: UpsertDeviceBundleReport :exec
+const lockDeviceConfigStatus = `-- name: LockDeviceConfigStatus :exec
 
+SELECT pg_advisory_xact_lock(hashtextextended('config_status:' || CAST($1::uuid AS text), 0))
+`
+
+// Apply status of devices (plan M11 decisions 12–14, PDK-151). The worker writes it from the device's events, in the
+// event's transaction; the admin API reads it.
+// Serializes the apply-status writes of one device across workers (PDK-151 review 1): without it, an older report
+// whose transaction runs alongside a newer one inserts the resources the newer one deleted. Released at the end of the
+// transaction.
+func (q *Queries) LockDeviceConfigStatus(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockDeviceConfigStatus, deviceID)
+	return err
+}
+
+const upsertDeviceBundleReport = `-- name: UpsertDeviceBundleReport :exec
 INSERT INTO device_bundle_report (device_id, organization_id, version, outcome, mode, changed, error_count, reason, occurred_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (device_id, version) DO UPDATE SET
@@ -400,8 +452,6 @@ type UpsertDeviceBundleReportParams struct {
 	OccurredAt     time.Time
 }
 
-// Apply status of devices (plan M11 decisions 12–14, PDK-151). The worker writes it from the device's events, in the
-// event's transaction; the admin API reads it.
 // A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order).
 func (q *Queries) UpsertDeviceBundleReport(ctx context.Context, arg UpsertDeviceBundleReportParams) error {
 	_, err := q.db.Exec(ctx, upsertDeviceBundleReport,

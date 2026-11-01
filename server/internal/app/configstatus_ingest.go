@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 	"unicode/utf8"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
 // Bounds of the apply status stored from a device's report (plan M11 decision 13). A device that names more resources
@@ -60,18 +62,22 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 	if at.IsZero() {
 		return nil
 	}
-	switch ev.Type {
-	case protocol.EventBundleRejected:
-		var reason *string
-		if data.Reason != nil {
-			r := boundText(*data.Reason, maxParamString)
-			reason = &r
+	if err := q.LockDeviceConfigStatus(ctx, deviceID); err != nil {
+		return fmt.Errorf("lock the apply status of the device: %w", err)
+	}
+	if ev.Type == protocol.EventBundleRejected {
+		return recordRejection(ctx, q, org, deviceID, data.Version, data.Reason, at)
+	}
+	// Newer wins (plan M11 decision 13): the occurred_at guards of the queries protect only rows that exist, so a late
+	// older event would insert again what a newer report removed.
+	newer, err := q.HasNewerAppliedBundleReport(ctx, pgstore.HasNewerAppliedBundleReportParams{DeviceID: deviceID, OccurredAt: at})
+	if err != nil {
+		return fmt.Errorf("check for a newer apply report: %w", err)
+	}
+	if ev.Type == protocol.EventConfigDriftCorrected {
+		if newer {
+			return nil
 		}
-		return q.UpsertDeviceBundleReport(ctx, pgstore.UpsertDeviceBundleReportParams{
-			DeviceID: deviceID, OrganizationID: org, Version: data.Version, Outcome: "rejected", Mode: protocol.BundleModeEnforce,
-			Reason: reason, OccurredAt: at,
-		})
-	case protocol.EventConfigDriftCorrected:
 		rows := make([]statusRow, 0, len(data.ResourceIDs))
 		for _, id := range data.ResourceIDs {
 			rows = append(rows, statusRow{ID: id, Status: protocol.ResourceDriftCorrected})
@@ -89,6 +95,9 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 		OccurredAt: at,
 	}); err != nil {
 		return err
+	}
+	if newer {
+		return nil
 	}
 	if data.Resources != nil {
 		rows := make([]statusRow, 0, len(*data.Resources))
@@ -128,6 +137,26 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 		return err
 	}
 	return upsertResourceStatuses(ctx, q, org, deviceID, data.Version, at, rows)
+}
+
+// recordRejection stores the device's rejection of a bundle version. The event carries no mode, so the report takes
+// the mode of the device's last applied report before it, enforce when there is none (the agent's default).
+func recordRejection(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, version int64, why *string, at time.Time) error {
+	var reason *string
+	if why != nil {
+		r := boundText(*why, maxParamString)
+		reason = &r
+	}
+	mode, err := q.GetLatestAppliedBundleMode(ctx, pgstore.GetLatestAppliedBundleModeParams{DeviceID: deviceID, OccurredAt: at})
+	switch {
+	case db.IsNoRows(err):
+		mode = protocol.BundleModeEnforce
+	case err != nil:
+		return fmt.Errorf("read the mode of the last applied report: %w", err)
+	}
+	return q.UpsertDeviceBundleReport(ctx, pgstore.UpsertDeviceBundleReportParams{
+		DeviceID: deviceID, OrganizationID: org, Version: version, Outcome: "rejected", Mode: mode, Reason: reason, OccurredAt: at,
+	})
 }
 
 // upsertResourceStatuses stores normalized rows.

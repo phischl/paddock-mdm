@@ -1,6 +1,24 @@
 -- Apply status of devices (plan M11 decisions 12–14, PDK-151). The worker writes it from the device's events, in the
 -- event's transaction; the admin API reads it.
 
+-- Serializes the apply-status writes of one device across workers (PDK-151 review 1): without it, an older report
+-- whose transaction runs alongside a newer one inserts the resources the newer one deleted. Released at the end of the
+-- transaction.
+-- name: LockDeviceConfigStatus :exec
+SELECT pg_advisory_xact_lock(hashtextextended('config_status:' || CAST(@device_id::uuid AS text), 0));
+
+-- A newer applied report owns the resource rows of the device: an older event must neither insert nor delete any.
+-- name: HasNewerAppliedBundleReport :one
+SELECT EXISTS (
+  SELECT 1 FROM device_bundle_report WHERE device_id = @device_id AND outcome = 'applied' AND occurred_at > @occurred_at
+);
+
+-- The mode of the device's last applied report up to occurred_at: a bundle.rejected event carries none, and the device
+-- keeps running the bundle it applied before.
+-- name: GetLatestAppliedBundleMode :one
+SELECT mode FROM device_bundle_report WHERE device_id = @device_id AND outcome = 'applied' AND occurred_at <= @occurred_at
+ORDER BY occurred_at DESC, version DESC LIMIT 1;
+
 -- A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order).
 -- name: UpsertDeviceBundleReport :exec
 INSERT INTO device_bundle_report (device_id, organization_id, version, outcome, mode, changed, error_count, reason, occurred_at)

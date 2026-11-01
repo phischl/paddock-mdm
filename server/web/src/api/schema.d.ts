@@ -4722,7 +4722,10 @@ export interface components {
         DeviceBundleReport: {
             /** @enum {string} */
             outcome: "applied" | "rejected";
-            /** @enum {string} */
+            /**
+             * @description Mode of the apply. A rejection carries no mode: it shows the mode of the device's last applied report before it, enforce when there is none.
+             * @enum {string}
+             */
             mode: "enforce" | "report_only";
             /** @description Resources the apply changed. */
             changed: number;

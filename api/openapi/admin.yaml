@@ -7091,7 +7091,12 @@ components:
       required: [outcome, mode, changed, error_count, reason, occurred_at]
       properties:
         outcome: { type: string, enum: [applied, rejected] }
-        mode: { type: string, enum: [enforce, report_only] }
+        mode:
+          type: string
+          enum: [enforce, report_only]
+          description: >-
+            Mode of the apply. A rejection carries no mode: it shows the mode of the device's last applied report
+            before it, enforce when there is none.
         changed: { type: integer, description: Resources the apply changed. }
         error_count: { type: integer, description: Errors the apply reported. }
         reason: { type: string, nullable: true, description: Why the device rejected the bundle. }

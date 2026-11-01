@@ -100,12 +100,16 @@ func TestConfigStatusIngest(t *testing.T) {
 	if rows = statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Version != 8 {
 		t.Fatalf("after the second report: %+v", rows)
 	}
-	// An older report that arrives late neither overwrites nor deletes.
+	// An older report that arrives late neither overwrites, nor deletes, nor brings back a resource that left the bundle.
 	record(t, h, org, device, 3, protocol.EventBundleApplied, at.Add(-time.Hour), map[string]any{
 		"version": 6, "resources": []map[string]any{{"id": "unit:old.service", "status": "failed", "message": "old"}},
 	})
-	if rows = statusRows(t, h, device); len(rows) != 2 || rows["file:/etc/a.conf"].Version != 8 {
+	if rows = statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Version != 8 {
 		t.Fatalf("after the late report: %+v", rows)
+	}
+	var lateOutcome string
+	if err := h.super.QueryRow(context.Background(), "SELECT outcome FROM device_bundle_report WHERE device_id = $1 AND version = 6", device).Scan(&lateOutcome); err != nil || lateOutcome != "applied" {
+		t.Fatalf("the late report of version 6 was not kept: %s (%v)", lateOutcome, err)
 	}
 	record(t, h, org, device, 4, protocol.EventBundleApplied, at.Add(-2*time.Hour), map[string]any{
 		"version": 8, "mode": "report_only", "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "failed", "message": "late"}},
@@ -149,13 +153,13 @@ func TestConfigStatusRejectedAndDrift(t *testing.T) {
 	org, device := h.device(t)
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
-		"version": 3, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "time", "status": "applied"}},
+		"version": 3, "mode": "report_only", "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "time", "status": "applied"}},
 	})
 	record(t, h, org, device, 2, protocol.EventBundleRejected, at.Add(time.Minute), map[string]any{"version": 4, "reason": "signature"})
-	var outcome, reason string
-	if err := h.super.QueryRow(context.Background(), "SELECT outcome, reason FROM device_bundle_report WHERE device_id = $1 AND version = 4", device).Scan(&outcome, &reason); err != nil ||
-		outcome != "rejected" || reason != "signature" {
-		t.Fatalf("rejected report %s %s (%v)", outcome, reason, err)
+	var outcome, reason, mode string
+	if err := h.super.QueryRow(context.Background(), "SELECT outcome, reason, mode FROM device_bundle_report WHERE device_id = $1 AND version = 4", device).Scan(&outcome, &reason, &mode); err != nil ||
+		outcome != "rejected" || reason != "signature" || mode != "report_only" {
+		t.Fatalf("rejected report %s %s %s (%v)", outcome, reason, mode, err)
 	}
 	if rows := statusRows(t, h, device); len(rows) != 2 || rows["time"].Status != "applied" {
 		t.Fatalf("rows changed by a rejection: %+v", rows)
@@ -164,6 +168,93 @@ func TestConfigStatusRejectedAndDrift(t *testing.T) {
 	rows := statusRows(t, h, device)
 	if rows["file:/etc/a.conf"].Status != "drift_corrected" || rows["time"].Status != "applied" {
 		t.Fatalf("rows %+v", rows)
+	}
+
+	// A drift correction that arrives after a newer report removed its resource does not bring the resource back.
+	record(t, h, org, device, 4, protocol.EventBundleApplied, at.Add(4*time.Minute), map[string]any{
+		"version": 5, "resources": []map[string]any{{"id": "time", "status": "applied"}},
+	})
+	record(t, h, org, device, 5, protocol.EventConfigDriftCorrected, at.Add(3*time.Minute), map[string]any{"version": 3, "resource_ids": []string{"file:/etc/a.conf", "time"}})
+	if rows = statusRows(t, h, device); len(rows) != 1 || rows["time"].Status != "applied" || rows["time"].Version != 5 {
+		t.Fatalf("after the late drift correction: %+v", rows)
+	}
+
+	// A device without an applied report has its rejection recorded as enforce, the agent's default mode.
+	org2, fresh := h.device(t)
+	record(t, h, org2, fresh, 1, protocol.EventBundleRejected, at, map[string]any{"version": 1, "reason": "signature"})
+	if err := h.super.QueryRow(context.Background(), "SELECT mode FROM device_bundle_report WHERE device_id = $1 AND version = 1", fresh).Scan(&mode); err != nil || mode != "enforce" {
+		t.Fatalf("rejection without an applied report: %s (%v)", mode, err)
+	}
+}
+
+// TestConfigStatusIngestSerializesPerDevice: two ingest transactions of one device that run at the same time take
+// turns, and the older report never brings back what the newer one removed (plan M11 decision 13, PDK-151 review 1).
+func TestConfigStatusIngestSerializesPerDevice(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	ctx := context.Background()
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
+		"version": 1, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
+	})
+
+	hold, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(ctx) }()
+	if _, err := hold.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('config_status:' || $1::text, 0))", device); err != nil {
+		t.Fatal(err)
+	}
+	waiting := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var n int
+			if err := hold.QueryRow(ctx, `SELECT count(*) FROM pg_locks l, (SELECT hashtextextended('config_status:' || $1::text, 0) AS k) h
+				WHERE l.locktype = 'advisory' AND NOT l.granted AND l.objsubid = 1
+				  AND l.classid::bigint = (h.k >> 32) & 4294967295 AND l.objid::bigint = h.k & 4294967295`, device).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if n == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d ingest transactions wait for the device lock, want %d", n, want)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	send := func(seq int64, occurred time.Time, data map[string]any) <-chan error {
+		done := make(chan error, 1)
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			_, err := h.reports.RecordEvent(systemCtx(org), device, protocol.Event{EventSeq: seq, Type: protocol.EventBundleApplied, OccurredAt: occurred, Data: raw})
+			done <- err
+		}()
+		return done
+	}
+	newer := send(2, at.Add(2*time.Minute), map[string]any{
+		"version": 3, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}},
+	})
+	waiting(1)
+	older := send(3, at.Add(time.Minute), map[string]any{
+		"version": 2, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "failed"}, {"id": "unit:old.service", "status": "applied"}},
+	})
+	waiting(2)
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, done := range []<-chan error{newer, older} {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Status != "applied" || rows["file:/etc/a.conf"].Version != 3 {
+		t.Fatalf("after the concurrent reports: %+v", rows)
 	}
 }
 
