@@ -89,6 +89,18 @@ describe('revert a change set (plan M11 decision 22)', () => {
     expect(names.every((n) => !!n)).toBe(true)
   })
 
+  it('scrolls the plan in a named, keyboard-focusable region (axe scrollable-region-focusable)', async () => {
+    revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
+    const w = await mountList()
+    await w.find('[data-testid="change-set-revert"]').trigger('click')
+    await flushPromises()
+    const region = dialog()?.querySelector('[data-testid="change-set-plan-region"]')
+    expect(region?.getAttribute('role')).toBe('region')
+    expect(region?.getAttribute('tabindex')).toBe('0')
+    expect(region?.getAttribute('aria-label')).toBe('Plan of the change set, scrollable')
+    expect(region?.querySelector('[data-testid="change-set-plan"]')).not.toBeNull()
+  })
+
   it('shows the inverse plan in a modal and reverts with the confirmed plan', async () => {
     const nativeConfirm = vi.spyOn(window, 'confirm')
     revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))

@@ -29,15 +29,30 @@ test('operator reverts a change set and cannot revert it twice', async ({ page }
     await expect(list.getByTestId('change-set-revert')).toHaveCount(2)
     await expectAccessible(page)
 
-    // Newest first: the update of the reason.
-    await list.getByTestId('change-set-revert').first().click()
+    // Newest first: the update of the reason. Escape closes the dialog and gives the focus back to the button.
+    const revert = list.getByTestId('change-set-revert').first()
+    await revert.click()
     const dialog = page.getByTestId('confirm-dialog')
+    await expect(dialog.getByRole('heading', { name: 'Revert change set' })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expect(revert).toBeFocused()
+
+    await revert.click()
     await expect(dialog.getByRole('heading', { name: 'Revert change set' })).toBeVisible()
     const plan = dialog.getByTestId('change-set-plan')
     await expect(plan.locator('tbody tr')).toHaveCount(1)
     await expect(plan).toContainText('package_holds')
     await expect(plan).toContainText('first')
     await expectAccessible(page)
+    // On a phone the plan scrolls inside its own named region; the page never scrolls sideways.
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 375, height: 812 })
+    await expect(dialog.getByRole('heading', { name: 'Revert change set' })).toBeInViewport()
+    await expect(dialog.getByRole('region', { name: 'Plan of the change set, scrollable' })).toBeVisible()
+    await expectAccessible(page)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    if (viewport) await page.setViewportSize(viewport)
     await dialog.getByTestId('confirm-accept').click()
     await expect(page.getByTestId('change-set-reverted')).toBeVisible()
     await expect(dialog).toBeHidden()

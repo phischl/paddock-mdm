@@ -1505,6 +1505,7 @@
     "before": "Before",
     "after": "After",
     "close": "Close",
+    "planRegion": "Plan of the change set, scrollable",
     "revertsLabel": "Reverts the change set",
     "revertedByLabel": "Reverted by the change set",
     "revert": {

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, useSlots, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, useSlots, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ComponentPublicInstance } from 'vue'
 import type { ConfirmReason } from '../composables/useConfirm'
+import { useFocusReturn } from '../composables/useFocusReturn'
 import { reducedMotion } from '../lib/pageContext'
 
 /**
@@ -40,8 +41,40 @@ const canConfirm = computed(
     (!props.reason?.required || reasonText.value.trim() !== ''),
 )
 
+/**
+ * Focuses Cancel without scrolling to it: in a long dialog (the plan of a revert) the browser would scroll the card to
+ * the buttons and hide the title and the consequence.
+ */
 function focusCancel(): void {
-  ;(cancelButton.value?.$el as HTMLElement | undefined)?.focus()
+  ;(cancelButton.value?.$el as HTMLElement | undefined)?.focus({ preventScroll: true })
+  const el = card.value?.$el as HTMLElement | undefined
+  if (el) el.scrollTop = 0
+}
+
+// The control that opened the dialog gets the focus back once the dialog closes after an answer (Cancel, Esc,
+// confirm), also for dialogs a page mounts only while open. A dialog replaced by another request without an answer
+// leaves the focus to the new one.
+const focusReturn = useFocusReturn()
+let answered = false
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (open) {
+      answered = false
+      focusReturn.remember()
+    } else if (answered) {
+      focusReturn.restore()
+    }
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => {
+  if (answered && props.modelValue) focusReturn.restore()
+})
+
+function cancel(): void {
+  answered = true
+  emit('cancel')
 }
 
 /**
@@ -67,7 +100,9 @@ watch(
 )
 
 function onConfirm(): void {
-  if (canConfirm.value) emit('confirm', { reason: reasonText.value.trim() })
+  if (!canConfirm.value) return
+  answered = true
+  emit('confirm', { reason: reasonText.value.trim() })
 }
 </script>
 
@@ -78,13 +113,13 @@ function onConfirm(): void {
     :transition="reducedMotion() ? false : 'dialog-transition'"
     :aria-labelledby="id + '-title'"
     :aria-describedby="id + '-message'"
-    @update:model-value="(open: boolean) => !open && emit('cancel')"
+    @update:model-value="(open: boolean) => !open && cancel()"
     @after-enter="focusCancelAfterEnter"
   >
     <v-card
       ref="card"
       data-testid="confirm-dialog"
-      @keydown.esc.stop="emit('cancel')"
+      @keydown.esc.stop="cancel()"
     >
       <v-card-title
         :id="id + '-title'"
@@ -136,7 +171,7 @@ function onConfirm(): void {
             ref="cancelButton"
             variant="tonal"
             data-testid="confirm-cancel"
-            @click="emit('cancel')"
+            @click="cancel()"
           >
             {{ t('common.cancel') }}
           </v-btn>
