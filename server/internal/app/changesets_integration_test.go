@@ -334,6 +334,13 @@ func TestChangeSetBeforePurge(t *testing.T) {
 		return id
 	}
 	old, young := insert(100*time.Second), insert(80*time.Second)
+	other := w.organization(t, 0, now)
+	foreign := uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(ctx, `INSERT INTO change_set (id, organization_id, applied_at, actor, source, created_n, updated_n, deleted_n, sections, plan, before)
+		VALUES ($1, $2, $3, '{"type":"admin","display":"a"}', 'session', 0, 1, 0, '{managed_files}', '{"changes":[]}', '{"managed_files":{}}')`,
+		foreign, other, now.Add(-100*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	if n, err := w.retention.PurgeChangeSetBefore(principal.With(ctx, principal.Principal{Kind: principal.KindAdmin, OrganizationID: org, Role: principal.RoleOrgAdmin}), now); !errors.Is(err, problem.Unauthenticated) || n != 0 {
 		t.Fatalf("admin purge = %d, %v", n, err)
@@ -357,6 +364,14 @@ func TestChangeSetBeforePurge(t *testing.T) {
 	if err := w.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'retention.purged' AND params->>'store' = $2",
 		org, app.StoreChangeSetBefore).Scan(&events); err != nil || events != 1 {
 		t.Fatalf("%d retention.purged events (%v), want 1", events, err)
+	}
+	var foreignBefore []byte
+	var foreignEvents int
+	if err := w.super.QueryRow(ctx, "SELECT before FROM change_set WHERE id = $1", foreign).Scan(&foreignBefore); err != nil || foreignBefore == nil {
+		t.Fatalf("another organization lost its before-state: %s, %v", foreignBefore, err)
+	}
+	if err := w.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'retention.purged'", other).Scan(&foreignEvents); err != nil || foreignEvents != 0 {
+		t.Fatalf("another organization got %d retention.purged events (%v)", foreignEvents, err)
 	}
 	if n, err := w.retention.PurgeChangeSetBefore(systemCtx(org), now); err != nil || n != 0 {
 		t.Fatalf("second purge %d (%v), want 0", n, err)

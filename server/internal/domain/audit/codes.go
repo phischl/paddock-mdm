@@ -740,7 +740,7 @@ var registry = map[Code]Definition{
 	CodeUserDeleted: {
 		Code: CodeUserDeleted, Emitted: true,
 		Description: "A local user was deleted in Authentik and Paddock, with their group memberships and assignments.",
-		Params:      []string{"username"},
+		Params:      withChangeSetParams([]string{"username"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
 	},
 	CodeUserLocked: {
@@ -783,7 +783,7 @@ var registry = map[Code]Definition{
 	CodeUserGroupDeleted: {
 		Code: CodeUserGroupDeleted, Emitted: true,
 		Description: "A user group was deleted in Authentik and Paddock, with its login and profile assignments.",
-		Params:      []string{"slug", "name"},
+		Params:      withChangeSetParams([]string{"slug", "name"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
 	},
 	CodeUserGroupMemberAdded: {

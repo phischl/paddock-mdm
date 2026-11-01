@@ -196,7 +196,7 @@ func TestChangeSetParams(t *testing.T) {
 		CodePackageHoldDeleted, CodeSettingsUpdatesChanged, CodeSettingsLoginChanged, CodeSettingsPrivacyChanged,
 		CodeSettingsManagedFilesChanged, CodeSettingsWatchedUnitsChanged, CodePermissionProfileCreated,
 		CodePermissionProfileUpdated, CodePermissionProfileDeleted, CodeProfileAssignmentCreated, CodeProfileAssignmentUpdated,
-		CodeProfileAssignmentDeleted, CodeDeviceGroupCreated, CodeDeviceGroupUpdated, CodeDeviceGroupDeleted} {
+		CodeProfileAssignmentDeleted, CodeDeviceGroupCreated, CodeDeviceGroupUpdated, CodeDeviceGroupDeleted, CodeUserDeleted, CodeUserGroupDeleted} {
 		d, _ := Lookup(code)
 		for _, p := range []string{"change_set_id", "rollout", "rollout_id", "urgent_reason"} {
 			if n := slices.Index(d.Params, p); n < 0 || slices.Index(d.Params[n+1:], p) >= 0 {
