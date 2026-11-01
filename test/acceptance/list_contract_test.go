@@ -97,7 +97,8 @@ func TestListContract(t *testing.T) {
 		map[string]any{"user_ids": []string{owner}}), http.StatusOK, "")
 	parents := map[string]string{"/api/v1/users/{id}/devices": owner, "/api/v1/devices/{id}/logins": member.DeviceID, "/api/v1/device-groups/{id}/devices": parentGroup, "/api/v1/user-groups/{id}/members": userGroup,
 		"/api/v1/devices/{id}/commands": member.DeviceID, "/api/v1/devices/{id}/software": member.DeviceID,
-		"/api/v1/devices/{id}/vulnerabilities": member.DeviceID, "/api/v1/vulnerabilities/{cve}/devices": cve}
+		"/api/v1/devices/{id}/vulnerabilities": member.DeviceID,
+		"/api/v1/devices/{id}/config-status":   member.DeviceID, "/api/v1/devices/{id}/bundles": member.DeviceID, "/api/v1/vulnerabilities/{cve}/devices": cve}
 	order := newCollation(t)
 	paths := make([]string, 0, len(lists))
 	for p := range lists {

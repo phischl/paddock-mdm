@@ -17,7 +17,7 @@ const device = {
   os_release: { VERSION_ID: '24.04' }, enrollment_token_id: null, enrolled_at: now, state_changed_at: now, bundle_version: 3,
   last_contact_at: now, applied_bundle_version: 3, agent_version: '1.9.1', groups: [], identity_keys: [], logins_suspended: false,
   login_assignment: { users: [], groups: [] }, schema_versions: [], login_management: true, login_status: { login: null, sudo: null },
-  sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, owners: [], hardware: null, components: [], components_outdated: [],
+  sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, config_status: { applied: 0, failed: 0, pending: 0, drift_corrected: 0 }, owners: [], hardware: null, components: [], components_outdated: [],
 } as DeviceDetail
 
 let wrapper: VueWrapper | null = null

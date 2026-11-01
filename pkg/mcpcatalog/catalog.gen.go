@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "048f4a52c95738fb14b14f5b11659142223dfe7e5bfb8615f3bb9d23d469d98e"
+const Version = "c8dd9312c9fb8fb79179b65921fdfe97ba09d545c0f97bd12a621972235c9104"
 
 var tools = []Tool{
 	{
@@ -2025,6 +2025,42 @@ var tools = []Tool{
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{
+		Name:        "listConfigStatus",
+		Method:      "GET",
+		Path:        "/api/v1/config-status",
+		Pattern:     "GET /api/v1/config-status",
+		Tag:         "devices",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The fleet view of the apply status (plan M11 decision 14): one item per resource ID with the number of active devices per status and when a device last reported it failed. Which devices fail is read on the device (listDeviceConfigStatus).\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: resource_id, failed, pending, applied), q (search over: resource_id).",
+		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-failed\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The resource ID is the tie-breaker.\",\"enum\":[\"resource_id\",\"-resource_id\",\"failed\",\"-failed\",\"pending\",\"-pending\",\"applied\",\"-applied\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable. Keeps resources with a device in one of these statuses.\",\"items\":{\"description\":\"The apply status of one resource on one device: applied; failed (the message says why); pending (a report-only\\napply would change it, changes lists what); drift_corrected (the agent corrected a local change).\\n\",\"enum\":[\"applied\",\"failed\",\"pending\",\"drift_corrected\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "listDeviceBundles",
+		Method:      "GET",
+		Path:        "/api/v1/devices/{id}/bundles",
+		Pattern:     "GET /api/v1/devices/{id}/bundles",
+		Tag:         "devices",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. Every configuration version compiled for the device, newest first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. Outcome none lists the versions without a report. config_rollout_id is null until configuration rollouts exist.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: version, created_at), q (search over: version).",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"outcome\":{\"description\":\"Repeatable; applied, rejected or none (400 invalid_request otherwise). none selects versions the device has\\nnot reported. The values are not an OpenAPI enum: the generated constant None would take the name of the\\nprivilege class's.\\n\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-version\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The version is the tie-breaker.\",\"enum\":[\"version\",\"-version\",\"created_at\",\"-created_at\"],\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
 		Name:        "listDeviceCommands",
 		Method:      "GET",
 		Path:        "/api/v1/devices/{id}/commands",
@@ -2041,6 +2077,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. The commands issued to the device (plan M4a decision 1).\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: issued_at, expires_at, type, status), q (search over: type).",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-issued_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"issued_at\",\"-issued_at\",\"expires_at\",\"-expires_at\",\"type\",\"-type\",\"status\",\"-status\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"pending\",\"delivered\",\"succeeded\",\"failed\",\"expired\",\"cancelled\"],\"type\":\"string\"},\"type\":\"array\"},\"type\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"rotate_admin_password\",\"delete_self_lock\",\"install_now\",\"uninstall\",\"encrypt_disk\",\"encrypt_disk_abort\"],\"type\":\"string\"},\"type\":\"array\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "listDeviceConfigStatus",
+		Method:      "GET",
+		Path:        "/api/v1/devices/{id}/config-status",
+		Pattern:     "GET /api/v1/devices/{id}/config-status",
+		Tag:         "devices",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The apply status of the device's resources as its agent last reported them (plan M11 decision 14): one item per resource ID with its status, the message of a failure and, for a report-only apply, what would change (pending). A report that omits a resource removes its row; older agents without per-resource outcomes only produce failed rows.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: resource_id, status, occurred_at), q (search over: resource_id).",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"resource_id\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The resource ID is the tie-breaker.\",\"enum\":[\"resource_id\",\"-resource_id\",\"status\",\"-status\",\"occurred_at\",\"-occurred_at\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable. Keeps resources with a device in one of these statuses.\",\"items\":{\"description\":\"The apply status of one resource on one device: applied; failed (the message says why); pending (a report-only\\napply would change it, changes lists what); drift_corrected (the agent corrected a local change).\\n\",\"enum\":[\"applied\",\"failed\",\"pending\",\"drift_corrected\"],\"type\":\"string\"},\"type\":\"array\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listDeviceGroupDevices",
