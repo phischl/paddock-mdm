@@ -282,8 +282,14 @@ func (d *DeviceReports) QuarantineClone(ctx context.Context, hb ingest.Heartbeat
 		Params: map[string]any{"reported_seq": hb.ReportedSeq, "issued_seq": hb.ExpectedSeq},
 	}
 	err = d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		_, err := TransitionDevice(ctx, q, rec, device.ActionQuarantine, hb.DeviceID)
-		return err
+		if _, err := TransitionDevice(ctx, q, rec, device.ActionQuarantine, hb.DeviceID); err != nil {
+			return err
+		}
+		org, err := orgOf(ctx)
+		if err != nil {
+			return err
+		}
+		return UpsertTamperFinding(ctx, q, org, hb.DeviceID, audit.CodeDeviceCloneSuspected, "", rec.ActionID(), d.now())
 	})
 	return err == nil, err
 }
@@ -370,7 +376,7 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 	if !ok {
 		return false, nil // the gateway admits only known types; anything else is ignored
 	}
-	return d.runner.RecordOnce(ctx, entry.Spec, entry.Claim)
+	return d.runner.RecordOnce(ctx, entry.Spec, entry.Claim, entry.After)
 }
 
 // RecordEvents is RecordEvent for the events of one ingest message, session logins included, in one transaction
@@ -424,7 +430,7 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 		Target: &audit.Target{Type: "device", ID: deviceID.String()},
 		Params: params,
 	}
-	return OnceEntry{Spec: spec, Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+	return OnceEntry{Spec: spec, After: tamperFindingAfter(deviceID, code, ev.Data, receivedAt), Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
 		org, err := orgOf(ctx)
 		if err != nil {
 			return false, err
@@ -465,6 +471,9 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 		}
 		if area := loginStateArea(ev.Type, spec.Params); area != "" && err == nil {
 			err = setLoginState(ctx, q, deviceID, org, area, ev, spec.Params)
+		}
+		if configStatusEvent(ev.Type) && err == nil {
+			err = recordConfigStatus(ctx, q, org, deviceID, ev, receivedAt)
 		}
 		if g, ok := spec.Params["generation"].(int64); ok && ev.Type == protocol.EventLocalAdminRotated && err == nil && g > 0 && g <= 1<<31-1 {
 			_, err = q.ActivateEscrowGeneration(ctx, pgstore.ActivateEscrowGenerationParams{
@@ -684,7 +693,7 @@ func eventParams(ev protocol.Event) map[string]any {
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
 		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
 		"kind", "started_at", "finished_at", "result", "error", "volume", "command_id", "mode", "local_admin", "tpm",
-		"conversion_id", "layout", "init_result", "by"} {
+		"conversion_id", "layout", "init_result", "by", "state"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}

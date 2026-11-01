@@ -539,7 +539,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 	units := managedCases("/api/v1/managed-units", "managed_unit",
 		func() map[string]any { return map[string]any{"unit": testUnit()} },
 		map[string]any{"unit": "sshd.service"}, "unit_not_allowed", http.StatusUnprocessableEntity)
-	for _, m := range []map[string][]auditCase{files, units} {
+	for _, m := range []map[string][]auditCase{files, units, findingAuditCases()} {
 		for k, v := range m {
 			cases[k] = v
 		}

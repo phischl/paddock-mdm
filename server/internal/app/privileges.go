@@ -158,7 +158,7 @@ func profileChangeNeedsStepUp(cur pgstore.PermissionProfile, in privilege.Profil
 // Full requires a step-up (ADR 0034 decision 1).
 func (p *Privileges) CreateProfile(ctx context.Context, in privilege.Profile) (pgstore.PermissionProfile, error) {
 	var out pgstore.PermissionProfile
-	err := p.runner.RunTx(ctx, ScopeOrg, SpecProfileCreate, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := p.runner.RunTx(ctx, ScopeOrg, SpecProfileCreate, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		in, err := validProfile(in)
 		profileParams(rec, in)
 		if err != nil {
@@ -187,7 +187,7 @@ func (p *Privileges) CreateProfile(ctx context.Context, in privilege.Profile) (p
 		}
 		rec.SetTarget(audit.Target{Type: "permission_profile", ID: out.ID.String(), Display: out.Name})
 		return nil
-	})
+	}))
 	return out, err
 }
 
@@ -220,7 +220,7 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 	spec := SpecProfileUpdate
 	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
 	var out pgstore.PermissionProfile
-	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := p.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		guard, err := beginGrantGuard(ctx, q)
 		if err != nil {
 			return err
@@ -261,7 +261,7 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil
-	})
+	}))
 	return out, err
 }
 
@@ -306,7 +306,7 @@ func (p *Privileges) ConfirmRootGrant(ctx context.Context, id uuid.UUID) (pgstor
 func (p *Privileges) DeleteProfile(ctx context.Context, id uuid.UUID) error {
 	spec := SpecProfileDelete
 	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
-	return p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return p.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		cur, err := q.GetPermissionProfile(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -320,7 +320,7 @@ func (p *Privileges) DeleteProfile(ctx context.Context, id uuid.UUID) error {
 			return err
 		}
 		return nil
-	})
+	}))
 }
 
 // AssignmentQuery selects a page of profile assignments.
@@ -386,7 +386,7 @@ type NewAssignment struct {
 // Assigning an effectively Full profile requires a step-up (ADR 0034 decision 1).
 func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pgstore.ProfileAssignment, error) {
 	var out pgstore.ProfileAssignment
-	err := p.runner.RunTx(ctx, ScopeOrg, SpecAssignmentCreate, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := p.runner.RunTx(ctx, ScopeOrg, SpecAssignmentCreate, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		subject := uuid.Nil
 		if in.SubjectID != nil {
 			subject = *in.SubjectID
@@ -438,7 +438,7 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 		}
 		rec.StateChanged(statechange.ScopeOrg, profile.OrganizationID)
 		return nil
-	})
+	}))
 	return out, err
 }
 
@@ -470,7 +470,7 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 	spec := SpecAssignmentUpdate
 	spec.Target = &audit.Target{Type: "profile_assignment", ID: id.String()}
 	var out pgstore.ProfileAssignment
-	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := p.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		guard, err := beginGrantGuard(ctx, q)
 		if err != nil {
 			return err
@@ -507,7 +507,7 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil
-	})
+	}))
 	return out, err
 }
 
@@ -515,7 +515,7 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 func (p *Privileges) DeleteAssignment(ctx context.Context, id uuid.UUID) error {
 	spec := SpecAssignmentDelete
 	spec.Target = &audit.Target{Type: "profile_assignment", ID: id.String()}
-	return p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return p.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		// Removing a grant never grows one, but it serializes with the changes that are compared (plan M8s 7g-bis).
 		if err := q.LockOrganizationPrivileges(ctx); err != nil {
 			return err
@@ -532,7 +532,7 @@ func (p *Privileges) DeleteAssignment(ctx context.Context, id uuid.UUID) error {
 		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil
-	})
+	}))
 }
 
 func loadAssignment(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID) (pgstore.ProfileAssignment, pgstore.PermissionProfile, error) {

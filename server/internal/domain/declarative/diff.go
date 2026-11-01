@@ -20,6 +20,7 @@ const (
 	SectionSettingsUpdates    = "settings.updates"
 	SectionSettingsLogin      = "settings.login"
 	SectionSettingsManaged    = "settings.managed_files"
+	SectionSettingsWatched    = "settings.watched_units"
 	SectionSettingsPrivacy    = "settings.privacy"
 )
 
@@ -27,7 +28,7 @@ const (
 func Sections() []string {
 	return []string{SectionDeviceGroups, SectionPermissionProfiles, SectionManagedFiles, SectionManagedUnits,
 		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin, SectionSettingsManaged,
-		SectionSettingsPrivacy}
+		SectionSettingsWatched, SectionSettingsPrivacy}
 }
 
 // Actions of a change.
@@ -92,6 +93,7 @@ type entry struct {
 	key    Key
 	fields []field
 	index  int
+	item   any
 }
 
 // section returns whether the section is present in d and its entries.
@@ -113,22 +115,27 @@ func section(d Document, name string) (bool, []entry) {
 		if d.Settings == nil || d.Settings.Updates == nil {
 			return false, nil
 		}
-		return true, []entry{{fields: d.Settings.Updates.fields()}}
+		return true, []entry{{fields: d.Settings.Updates.fields(), item: *d.Settings.Updates}}
 	case SectionSettingsLogin:
 		if d.Settings == nil || d.Settings.Login == nil {
 			return false, nil
 		}
-		return true, []entry{{fields: d.Settings.Login.fields()}}
+		return true, []entry{{fields: d.Settings.Login.fields(), item: *d.Settings.Login}}
 	case SectionSettingsManaged:
 		if d.Settings == nil || d.Settings.ManagedFiles == nil {
 			return false, nil
 		}
-		return true, []entry{{fields: d.Settings.ManagedFiles.fields()}}
+		return true, []entry{{fields: d.Settings.ManagedFiles.fields(), item: *d.Settings.ManagedFiles}}
+	case SectionSettingsWatched:
+		if d.Settings == nil || d.Settings.WatchedUnits == nil {
+			return false, nil
+		}
+		return true, []entry{{fields: []field{{"units", list(*d.Settings.WatchedUnits)}}, item: *d.Settings.WatchedUnits}}
 	case SectionSettingsPrivacy:
 		if d.Settings == nil || d.Settings.Privacy == nil {
 			return false, nil
 		}
-		return true, []entry{{fields: d.Settings.Privacy.fields()}}
+		return true, []entry{{fields: d.Settings.Privacy.fields(), item: *d.Settings.Privacy}}
 	}
 	return false, nil
 }
@@ -139,7 +146,7 @@ func entries[T any](items *[]T, key func(T) Key, fields func(T) []field) (bool, 
 	}
 	out := make([]entry, len(*items))
 	for i, it := range *items {
-		out[i] = entry{key: key(it), fields: fields(it), index: i}
+		out[i] = entry{key: key(it), fields: fields(it), index: i, item: it}
 	}
 	return true, out
 }
@@ -188,6 +195,8 @@ func Path(section string, index int) string {
 		return "/settings/login"
 	case SectionSettingsManaged:
 		return "/settings/managed_files"
+	case SectionSettingsWatched:
+		return "/settings/watched_units"
 	case SectionSettingsPrivacy:
 		return "/settings/privacy"
 	}
@@ -245,9 +254,31 @@ func Diff(current, desired Document) Plan {
 	return plan
 }
 
+// BeforeItems returns, for every update and deletion of plan, the item of current it changes or removes, by section and
+// key (Key.String, "" for a settings section): the before-state a revert restores (plan M11 decision 18).
+func BeforeItems(current Document, plan Plan) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, c := range plan.Changes {
+		if c.Action == ActionCreate {
+			continue
+		}
+		_, have := section(current, c.Section)
+		for _, e := range have {
+			if e.key.String() != c.Key {
+				continue
+			}
+			if out[c.Section] == nil {
+				out[c.Section] = map[string]any{}
+			}
+			out[c.Section][c.Key] = e.item
+		}
+	}
+	return out
+}
+
 func isSettings(s string) bool {
 	return s == SectionSettingsLogin || s == SectionSettingsUpdates || s == SectionSettingsManaged ||
-		s == SectionSettingsPrivacy
+		s == SectionSettingsWatched || s == SectionSettingsPrivacy
 }
 
 func sorted(items []entry) []entry {

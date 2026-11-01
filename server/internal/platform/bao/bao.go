@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openbao/openbao/api/v2"
 )
 
@@ -270,6 +271,91 @@ func (c *Client) Decrypt(ctx context.Context, key string, version int, ciphertex
 	}
 	plain, _ := s.Data["plaintext"].(string)
 	if s == nil || plain == "" {
+		return nil, errors.New("bao: decrypt returned no plaintext")
+	}
+	out, err := base64.StdEncoding.DecodeString(plain)
+	if err != nil {
+		return nil, fmt.Errorf("bao: plaintext encoding: %w", err)
+	}
+	return out, nil
+}
+
+// ContextField names what a ciphertext of a derived key protects; it is part of the Transit context, so a ciphertext of
+// one field never decrypts as another.
+type ContextField string
+
+// Fields of the notification keys (ADR 0031 amendment 2026-10-31).
+const (
+	FieldURL       ContextField = "url"
+	FieldSecret    ContextField = "secret"
+	FieldPseudonym ContextField = "pseudonym"
+)
+
+// OrganizationContext is the Transit context of a derived key (ADR 0031 amendment 2026-10-31): the lowercase canonical
+// organization ID, ":" and the field, base64-encoded as Transit requires. It is the only place that forms a context,
+// so a ciphertext made by the api decrypts in the notifier for the same organization and field only.
+func OrganizationContext(org uuid.UUID, field ContextField) string {
+	return base64.StdEncoding.EncodeToString([]byte(strings.ToLower(org.String()) + ":" + string(field)))
+}
+
+// Encrypt encrypts plaintext with the derived Transit key under the context of the organization and field and returns
+// the ciphertext as Transit writes it ("vault:vN:…").
+func (c *Client) Encrypt(ctx context.Context, key string, org uuid.UUID, field ContextField, plaintext []byte) (string,
+	error,
+) {
+	return c.writeCiphertext(ctx, "transit/encrypt/"+key, map[string]any{
+		"plaintext": base64.StdEncoding.EncodeToString(plaintext),
+		"context":   OrganizationContext(org, field),
+	})
+}
+
+// WrappedDataKey returns a new random 256-bit data key, wrapped by the derived Transit key under the context of the
+// organization and field; the caller never sees the plaintext key (pseudonym keys, ADR 0031 amendment 2026-10-31).
+func (c *Client) WrappedDataKey(ctx context.Context, key string, org uuid.UUID, field ContextField) (string, error) {
+	return c.writeCiphertext(ctx, "transit/datakey/wrapped/"+key, map[string]any{
+		"bits":    256,
+		"context": OrganizationContext(org, field),
+	})
+}
+
+func (c *Client) writeCiphertext(ctx context.Context, path string, body map[string]any) (string, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return "", err
+	}
+	s, err := c.api.Logical().WriteWithContext(ctx, path, body)
+	if err != nil {
+		return "", fmt.Errorf("bao: %s: %w", path, err)
+	}
+	if s == nil {
+		return "", fmt.Errorf("bao: %s returned no ciphertext", path)
+	}
+	ct, _ := s.Data["ciphertext"].(string)
+	if ct == "" {
+		return "", fmt.Errorf("bao: %s returned no ciphertext", path)
+	}
+	return ct, nil
+}
+
+// DecryptContext decrypts a ciphertext of Encrypt or WrappedDataKey ("vault:vN:…") with the derived Transit key under
+// the context of the organization and field; a ciphertext made for another organization or field fails.
+func (c *Client) DecryptContext(ctx context.Context, key string, org uuid.UUID, field ContextField, ciphertext string) (
+	[]byte, error,
+) {
+	if err := c.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	s, err := c.api.Logical().WriteWithContext(ctx, "transit/decrypt/"+key, map[string]any{
+		"ciphertext": ciphertext,
+		"context":    OrganizationContext(org, field),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bao: decrypt: %w", err)
+	}
+	if s == nil {
+		return nil, errors.New("bao: decrypt returned no plaintext")
+	}
+	plain, _ := s.Data["plaintext"].(string)
+	if plain == "" {
 		return nil, errors.New("bao: decrypt returned no plaintext")
 	}
 	out, err := base64.StdEncoding.DecodeString(plain)

@@ -39,6 +39,17 @@ func TestRun(t *testing.T) {
 	if r := Run(context.Background(), l); !r.OK || result(r, "bundle") != Pass {
 		t.Fatalf("cached schema 2 bundle: %+v", r)
 	}
+	// A cached report-only bundle verifies too: an adopted device must be able to update its agent.
+	env, _ = testgw.SignedBundle(t, bundle.Bundle{
+		SchemaVersion: bundle.SchemaVersion2, BundleVersion: 3, DeviceID: testgw.DeviceID, OrganizationID: testgw.OrgID, IssuedAt: time.Now(),
+		Mode: bundle.ModeReportOnly,
+	})
+	if err := os.WriteFile(l.Bundle(), env, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := Run(context.Background(), l); !r.OK || result(r, "bundle") != Pass {
+		t.Fatalf("cached report-only bundle: %+v", r)
+	}
 	if err := os.WriteFile(l.Bundle(), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}

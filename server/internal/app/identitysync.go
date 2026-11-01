@@ -95,6 +95,10 @@ func (s *IdentitySync) SyncUsers(ctx context.Context, skip func(username string)
 		switch {
 		case ok && cur.Source == user.SourceSynced && (cur.Username != username || cur.DisplayName != iu.Name || cur.Email != iu.Email):
 			errs = append(errs, s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+				// The username is the natural key of the user's assignments in the declarative document.
+				if err := q.LockConfigApply(ctx); err != nil {
+					return err
+				}
 				return q.UpdateSyncedAppUser(ctx, pgstore.UpdateSyncedAppUserParams{ID: cur.ID, Username: username, DisplayName: iu.Name, Email: iu.Email})
 			}))
 		case !ok && !skip(username):

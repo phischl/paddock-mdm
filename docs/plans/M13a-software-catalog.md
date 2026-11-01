@@ -1192,3 +1192,14 @@ together with M11's `TestPreflight|TestAdoptionGates|TestConfigRolloutGates` (al
    need signature verification on the server, it stops and the question goes back to the architect (a vetted library
    would be a new dependency that needs the maintainer's approval).
 4. The icon size refusal is `400 invalid_request` (R2.3).
+5. **Amendment to decision 2 (2026-10-31, architect).** Suites and components: either every suite is flat (ends in
+   `/`) and there are no components, or no suite is flat and there is at least one component; everything else is
+   refused (`400 invalid_request`), because a malformed deb822 entry stops every apt operation on the device. The
+   source name must be valid UTF-8 without runes of the categories Cc and Cf and without U+2028/U+2029, and is stored
+   trimmed. Signing-key policy (primary key and every subkey): RSA at least 2048 bits with an odd modulus and an odd
+   exponent of at least 65537; keys with an RSA part of 2048–3071 bits are accepted with `weak_key: true` (source view,
+   audit params, portal warning "acceptable until 2030"); EdDSA/ECDSA only on Ed25519, Ed448, NIST P-256/384/521;
+   Curve25519/X448 and NIST ECDH only for encryption subkeys, with a SHA-2 KDF hash and an AES KDF cipher; DSA,
+   ElGamal, Brainpool and secp256k1 are refused. `pkg/openpgpkey` stays a permissive structural reader; the policy
+   lives in `server/internal/domain/software`. Source URIs may point to internal or IDN hosts: devices fetch from
+   them, the server never does; the documentation says so.

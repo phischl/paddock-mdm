@@ -1,8 +1,8 @@
 // Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10, M3b decision 6): resources in
 // the order hostname (the bundle's hostname section, plan M8h decision 14) → time → file → systemd_unit → updates
 // (the bundle's updates section, plan M5b decision 5) → login → sudo,
-// then the inventory section (plan M5a decision 5), each independently (an error does not stop the others), then the
-// removal of files that left the bundle.
+// then the inventory section (plan M5a decision 5) and the watch section (plan M9 decision 40), each independently (an
+// error does not stop the others), then the removal of files that left the bundle.
 package apply
 
 import (
@@ -68,12 +68,19 @@ type Applier struct {
 	file      *reconcile.File
 	login     *reconcile.Login
 	inventory *reconcile.Inventory
+	watch     *reconcile.Watch
 	hostname  reconcile.HostnameState
 }
 
 // WithInventory adds the reconciler of the bundle's inventory section; without it the section is ignored.
 func (a *Applier) WithInventory(inv *reconcile.Inventory) *Applier {
 	a.inventory = inv
+	return a
+}
+
+// WithWatch adds the reconciler of the bundle's watch section; without it the section is ignored.
+func (a *Applier) WithWatch(w *reconcile.Watch) *Applier {
+	a.watch = w
 	return a
 }
 
@@ -96,7 +103,7 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 
 // sorted returns the resources of b in apply order with the updates and hostname sections as resources, filtered by
 // keep, and,
-// with an inventory reconciler, the inventory section last.
+// with an inventory reconciler, the inventory section, and with a watch reconciler, the watch section last.
 func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource {
 	var out []bundle.Resource
 	for _, typ := range order {
@@ -130,6 +137,11 @@ func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bu
 			out = append(out, r)
 		}
 	}
+	if a.watch != nil && b.Watch != nil {
+		if r, err := bundle.WatchResource(*b.Watch); err == nil && keep(r) {
+			out = append(out, r)
+		}
+	}
 	return out
 }
 
@@ -140,6 +152,9 @@ func (a *Applier) reconciler(b *bundle.Bundle, typ string) (reconcile.Reconciler
 	}
 	if typ == reconcile.InventoryID && a.inventory != nil {
 		return a.inventory, true
+	}
+	if typ == bundle.TypeWatch && a.watch != nil {
+		return a.watch, true
 	}
 	if typ == bundle.TypeUpdates {
 		return a.updates, true
@@ -164,11 +179,66 @@ func (a *Applier) CheckTypes(b *bundle.Bundle) error {
 	return nil
 }
 
-// Apply applies every resource of b and removes managed files that are no longer part of it.
+// Apply applies every resource of b and removes managed files that are no longer part of it; a report-only bundle
+// is planned instead (reportOnly).
 func (a *Applier) Apply(ctx context.Context, b *bundle.Bundle) Report {
+	if b.Mode == bundle.ModeReportOnly {
+		return a.reportOnly(ctx, b)
+	}
 	r := a.apply(ctx, b, all)
+	if a.watch != nil && b.Watch == nil {
+		a.watch.Forget()
+	}
 	a.removeStale(b, &r)
 	return r
+}
+
+// Limits of the planned changes of one resource in a report-only report (plan M11 decision 9).
+const (
+	maxChangeLines = 50
+	maxChangeBytes = 256
+)
+
+// reportOnly reports what applying b would change without changing anything (plan M11 decision 9): status pending
+// with the plan lines, applied for a resource without changes, failed for a plan error (Errors stays empty); managed
+// files that left the bundle are pending with the line "remove". It goes through Plan only and never reaches a
+// reconciler's Apply, EnsureDenyList or removeStale, so every reconciler that sorted returns is covered — also one a
+// later release adds.
+func (a *Applier) reportOnly(ctx context.Context, b *bundle.Bundle) Report {
+	rep := newReport(b)
+	for _, p := range a.Plan(ctx, b) {
+		switch {
+		case p.Error != "":
+			// Not in Errors: a plan error of a report-only device is no failed apply and must not count toward a
+			// wave's failure rate (plan M11 amendment R6.6).
+			rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: p.ID, Status: protocol.ResourceFailed, Message: p.Error})
+		case len(p.Changes) > 0:
+			rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: p.ID, Status: protocol.ResourcePending, Changes: cutChanges(p.Changes)})
+		default:
+			rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: p.ID, Status: protocol.ResourceApplied})
+		}
+	}
+	for _, path := range a.stale(b) {
+		rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: "file:" + path, Status: protocol.ResourcePending, Changes: []string{"remove"}})
+	}
+	return rep
+}
+
+// cutChanges bounds plan lines to maxChangeLines lines of at most maxChangeBytes bytes each; the bundle.applied event
+// must stay small even for a device whose adoption would change a lot.
+func cutChanges(changes []string) []string {
+	if len(changes) > maxChangeLines {
+		rest := len(changes) - (maxChangeLines - 1)
+		changes = append(slices.Clone(changes[:maxChangeLines-1]), fmt.Sprintf("… and %d more", rest))
+	}
+	out := make([]string, len(changes))
+	for i, c := range changes {
+		if len(c) > maxChangeBytes {
+			c = strings.ToValidUTF8(c[:maxChangeBytes], "")
+		}
+		out[i] = c
+	}
+	return out
 }
 
 // ApplyResources applies only the resources with the given IDs (drift correction).
@@ -176,10 +246,21 @@ func (a *Applier) ApplyResources(ctx context.Context, b *bundle.Bundle, ids []st
 	return a.apply(ctx, b, func(r bundle.Resource) bool { return slices.Contains(ids, r.ID) })
 }
 
-func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.Resource) bool) Report {
+// newReport is the empty report of b.
+func newReport(b *bundle.Bundle) Report {
 	rep := Report{Version: b.BundleVersion, Errors: []ResourceError{}, Mode: protocol.BundleModeEnforce, Resources: []protocol.BundleAppliedResource{}}
 	if b.Mode == bundle.ModeReportOnly {
 		rep.Mode = protocol.BundleModeReportOnly
+	}
+	return rep
+}
+
+func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.Resource) bool) Report {
+	rep := newReport(b)
+	if b.Mode == bundle.ModeReportOnly {
+		// Defence in depth: the agent's drift loop skips a report-only bundle, and a caller that does not must still
+		// leave the device unchanged (CLAUDE.md agent contract 8).
+		return rep
 	}
 	for _, res := range a.sorted(b, keep) {
 		rec, ok := a.reconciler(b, res.Type)
@@ -228,19 +309,7 @@ func hasLogin(b *bundle.Bundle) bool {
 // removeStale deletes files Paddock wrote that left the bundle, unless they were changed locally (plan M2b
 // decision 10). A removed unit resource leaves the unit as it is.
 func (a *Applier) removeStale(b *bundle.Bundle, rep *Report) {
-	wanted := map[string]bool{}
-	for _, r := range b.Resources {
-		if r.Type == bundle.TypeFile {
-			var s bundle.FileSpec
-			if json.Unmarshal(r.Spec, &s) == nil {
-				wanted[s.Path] = true
-			}
-		}
-	}
-	for _, path := range a.file.Managed.Paths() {
-		if wanted[path] {
-			continue
-		}
+	for _, path := range a.stale(b) {
 		id := "file:" + path
 		if err := a.file.Remove(path); err != nil { // reconcile.ErrModified: left in place and reported
 			rep.fail(id, err.Error())
@@ -250,6 +319,26 @@ func (a *Applier) removeStale(b *bundle.Bundle, rep *Report) {
 		rep.ChangedIDs = append(rep.ChangedIDs, id)
 		rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: id, Status: protocol.ResourceApplied})
 	}
+}
+
+// stale returns the files Paddock wrote that are no longer part of b, sorted.
+func (a *Applier) stale(b *bundle.Bundle) []string {
+	wanted := map[string]bool{}
+	for _, r := range b.Resources {
+		if r.Type == bundle.TypeFile {
+			var s bundle.FileSpec
+			if json.Unmarshal(r.Spec, &s) == nil {
+				wanted[s.Path] = true
+			}
+		}
+	}
+	var out []string
+	for _, path := range a.file.Managed.Paths() {
+		if !wanted[path] {
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 // Plan plans every resource of b without changing the system.

@@ -1219,3 +1219,30 @@ without a migration merge as soon as their dependencies are on the branch. The V
 7. **What report-only does not stop.** Paddock's own updates (agent and supervisor), revocation, the LUKS tick and the
    dead man's switch keep running on a report-only device (intended); PDK-163's adoption guide lists them.
    `rotate_admin_password` on a report-only device is answered `failed` with reason `report_only`.
+8. **Amendment to item 5 (2026-10-31, architect).** The autoinstall-only marker is a dedicated file
+   `/etc/paddock/autoinstall.marker` (root, 0600) that only the autoinstall template writes in its late-commands.
+   Neither the disk-setup marker (removed by the first-boot disk setup before the agent enrolls) nor
+   `/etc/paddock/disk-setup.json` (also written by the in-place disk conversion of an adopted device) qualifies. The
+   enrollment lock is `/var/lib/paddock/enroll.lock` (flock); `paddockd enroll` waits on it interruptibly, the daemon
+   skips. PDK-162 asserts the enrollment method in the VM gate and moves the harness to the runbook path.
+9. **Consequences of item 8 for the other tickets (2026-10-31).** Every mention of `/etc/paddock/enroll.json` as the
+   adoption path in §3–§7 (e.g. the adoption guide of PDK-163) reads `/root/paddock-enroll.json`; item 5's "the
+   disk-setup marker" reads `/etc/paddock/autoinstall.marker` (the disk-setup-pending marker is also written by the
+   in-place disk conversion of an adopted device). The system-test harness enrolls through `paddockd enroll` and
+   therefore as `adopted`: once PDK-160 stores `report_only` for adopted devices, the harness's install step enforces
+   the device (`POST /api/v1/devices/{id}/enforce`) unless a gate tests report-only (PDK-160/162). Recovering a failed
+   first-boot enrollment with `paddockd enroll` makes an autoinstalled device `adopted` (safe direction); PDK-163
+   states it in the autoinstall troubleshooting section.
+10. **Change-set recording by document diff (PDK-154, 2026-11-01).** Decision 19's per-item before documents are
+    implemented as a diff of the whole declarative document read before and after the write, inside the write's
+    transaction. This is correct only because every writer of a declarative section takes `LockConfigApply` as the
+    first lock of its transaction (including `Users.Delete`, `UserGroups.Delete` and the identity sync's rename and
+    removal); a new writer that skips the lock would be attributed to a concurrent change set. A rename of a device
+    group or a file path appears as delete plus create (natural keys), which PDK-155's revert handles like any other
+    pair of items.
+11. **Ordering of apply reports (decision 13, PDK-151, 2026-11-01).** Applied reports are ordered by bundle version
+    first, then by the event time capped at the gateway's receive time, then by processing order (no
+    event-sequence key; amended 2026-11-01). A step of the
+    device clock therefore never makes an older version's status win; drift reports carry their bundle version. A
+    rejection never replaces the applied report of the same version, in any arrival order, and a report row is
+    stored only for a bundle version that exists for the device.

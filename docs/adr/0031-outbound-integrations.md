@@ -216,3 +216,24 @@ Facts about the code that bound the design (checked 2026-10-15):
   this engine; M8b's `device.event_gap` and `device.clock_drift` are finding sources through their attention
   kinds `event_gap` and `clock_drift` (the attention view is the source of attention findings), so M9 needs no
   tamper-finding entry for them.
+
+## Amendment 2026-10-31 — IPv6 prefixes that embed IPv4 (decision 12)
+
+Authorised by the architect on 2026-10-31 (external review of PDK-122). The deny list of decision 12 gains three
+IPv6 prefixes: `64:ff9b::/96` (NAT64 well-known prefix, RFC 6052), `2002::/16` (6to4, RFC 3056) and `2001::/32`
+(Teredo, RFC 4380). Each embeds an IPv4 address that a translator or relay on the control plane's network reaches,
+so a webhook name resolving to, for example, `64:ff9b::a00:1` or `2002:a00:1::1` would reach `10.0.0.1` past the
+IPv4 entries of the list. They are checked like every other entry: at validation and again at every dial.
+The list also denies `64:ff9b:1::/48` (local-use NAT64, RFC 8215), `100::/64` (discard, RFC 6666) and the
+documentation ranges `2001:db8::/32`, `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` (RFC 3849, RFC 5737), which no
+real receiver uses (`198.18.0.0/15` was already listed). `outbound.DeniedPrefixes` implements the list.
+
+The same amendment binds the destination secrets of decisions 8 and 11. Two derived Transit keys hold them:
+`notification-wrap` the webhook URL and signing secret (the api encrypts), `notification-pseudonym` the
+per-organization pseudonym keys, which are data keys from `transit/datakey/wrapped`: the api stores the wrapped key and
+can neither choose one (no encrypt on that key) nor see its plaintext. The notifier alone decrypts both. The context of
+every operation is `<organization_id>:<field>` (lowercase canonical organization ID, the nil UUID for the platform
+scope; field `url`, `secret` or `pseudonym`), base64-encoded as Transit requires, so a ciphertext decrypts for its own
+organization and field only. Every key-wrapping interface (Paddock's OpenBao client, the use cases, the notifier) takes
+the organization and forms the context in one helper. Row IDs of the notification tables are server-generated
+(UUIDv7) and never caller input; the keys a caller names include the organization.

@@ -16,6 +16,12 @@
         "login": { "$ref": "#/$defs/loginSettings" },
         "updates": { "$ref": "#/$defs/updateSettings" },
         "managed_files": { "$ref": "#/$defs/managedFileSettings" },
+        "watched_units": {
+          "description": "Third-party systemd services the agents report when they stop (presence policy); an organization administrator with a step-up, same rules as PUT /api/v1/settings/watched-units.",
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string" }
+        },
         "privacy": { "$ref": "#/$defs/privacySettings" }
       }
     },

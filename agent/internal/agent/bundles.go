@@ -79,12 +79,16 @@ func (a *Agent) handleBundle(ctx context.Context, ref *protocol.BundleRef) {
 	a.event(protocol.EventBundleApplied, rep)
 }
 
-// drift re-plans the current bundle and corrects what changed locally (plan M2b decision 11).
+// drift re-plans the current bundle and corrects what changed locally (plan M2b decision 11); a report-only bundle
+// is neither planned nor corrected (plan M11 decision 9), its report came with the bundle.
 func (a *Agent) drift(ctx context.Context) {
 	if a.current == nil {
 		return
 	}
 	a.applyRevocation(a.current)
+	if a.reportOnly() {
+		return
+	}
 	ids := apply.Drifted(a.d.Applier.Plan(ctx, a.current))
 	if len(ids) == 0 {
 		return
@@ -98,6 +102,11 @@ func (a *Agent) drift(ctx context.Context) {
 	}
 	slog.InfoContext(ctx, "drift corrected", "resources", rep.ChangedIDs)
 	a.event(protocol.EventConfigDriftCorrected, map[string]any{"version": a.current.BundleVersion, "resource_ids": rep.ChangedIDs})
+}
+
+// reportOnly reports whether the current bundle asks the agent to report instead of enforce (plan M11 decision 9).
+func (a *Agent) reportOnly() bool {
+	return a.current != nil && a.current.Mode == bundle.ModeReportOnly
 }
 
 // event spools an event; a spool failure is logged (the device keeps working).

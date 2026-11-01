@@ -37,7 +37,7 @@ changes.
 
 ```sh
 chmod +x paddockd_<version>_linux_<arch>
-sudo ./paddockd_<version>_linux_<arch> preflight [--json] [--config /etc/paddock/enroll.json] [--proxy URL]
+sudo ./paddockd_<version>_linux_<arch> preflight [--json] [--config /root/paddock-enroll.json] [--proxy URL]
 ```
 
 It prints one line per check; `--json` prints `[{"name","status","detail"}]`. The exit code is 1 if and only if a
@@ -63,7 +63,8 @@ Fix every `fail` before you continue. A `warn` does not block adoption but tells
 
 ## 4. Install the packages
 
-These are the steps of the system test harness, in the same order.
+These are the steps of the system test harness, in the same order; the harness still keeps the enrollment
+configuration at a temporary path instead of `/root/paddock-enroll.json` (section 5).
 
 1. Download the packages of the release you want to roll out; `<arch>` is `amd64` or `arm64`:
    `https://bundles.<domain>/packages/<version>/paddock-supervisor_<version>_<arch>.deb`,
@@ -89,20 +90,24 @@ These are the steps of the system test harness, in the same order.
 
 1. In the portal, create an enrollment token (*Enrollment tokens*, or `POST /api/v1/enrollment-tokens`) and keep the
    enrollment configuration it shows once.
-2. On the device, write the configuration with a restrictive umask. The harness uses `/tmp/enroll.json`; use
-   `/etc/paddock/enroll.json` on a device you keep:
+2. On the device, write the configuration to `/root/paddock-enroll.json`, readable by root only. Never put it at
+   `/etc/paddock/enroll.json`: that path belongs to the autoinstall, and the agent enrolls from it on its own.
 
    ```sh
-   sudo install -d -m 0755 /etc/paddock
-   (umask 077 && sudo tee /etc/paddock/enroll.json >/dev/null)   # paste the configuration, end with Ctrl-D
-   sudo paddockd preflight --config /etc/paddock/enroll.json
+   sudo install -m 0600 /dev/null /root/paddock-enroll.json
+   sudo tee /root/paddock-enroll.json >/dev/null   # paste the configuration, end with Ctrl-D
+   sudo paddockd preflight --config /root/paddock-enroll.json
    ```
 
 3. Enroll and remove the configuration afterwards:
 
    ```sh
-   sudo paddockd enroll --config /etc/paddock/enroll.json --remove-config
+   sudo paddockd enroll --config /root/paddock-enroll.json --remove-config
    ```
+
+The device reports itself as `adopted` and starts in the report-only phase (section 6). It reports `autoinstall`, and
+is enforced at once, only if it carries the marker the Paddock autoinstall leaves; a local administrator who creates
+that marker by hand only opts their own device into immediate enforcement.
 
 Exit codes: `0` active, `2` pending (the token is not auto-approve: approve the device in the portal, *Devices*),
 `3` rejected, `1` error. With `--no-wait` the command returns 2 while it waits for approval.

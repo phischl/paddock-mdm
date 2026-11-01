@@ -1,6 +1,6 @@
 import type {
   AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceComponent, DeviceContact, DeviceState,
-  DiskState, OrganizationStatus, RevocationStatus,
+  DiskState, FindingStatus, OrganizationStatus, RevocationStatus,
 } from '../api/client'
 
 /**
@@ -105,6 +105,23 @@ export function attentionStatus(kind: AttentionKind): StatusView {
       return { status: 'warn', label }
     case 'revocation_pending':
       return { status: 'info', label }
+  }
+}
+
+/** The chip of a finding's status: waiting is a warning, taken is info, closed findings are neutral. */
+export function findingStatus(status: FindingStatus): StatusView {
+  const label = 'findings.status.' + status
+  switch (status) {
+    case 'open':
+      return { status: 'warn', label }
+    case 'acknowledged':
+    case 'in_progress':
+      return { status: 'info', label }
+    case 'resolved':
+      return { status: 'ok', label }
+    case 'accepted_risk':
+    case 'false_positive':
+      return { status: 'neutral', label }
   }
 }
 

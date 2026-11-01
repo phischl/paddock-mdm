@@ -137,6 +137,7 @@ func runEnroll(ctx context.Context, layout paths.Layout, args []string) int {
 	}
 	code, err := enroll.Run(ctx, enroll.Options{
 		Layout: layout, ConfigPath: *cfg, RemoveConfig: *remove, NoWait: *noWait, Proxy: *proxy,
+		Method: protocol.EnrollmentAdopted,
 	})
 	if err != nil {
 		slog.Error("enrollment failed", "error", err)
@@ -180,9 +181,10 @@ func runAgent(ctx context.Context, layout paths.Layout) int {
 		}()
 	}
 	var deps agent.Deps
+	var busyLogged bool
 	for logged := false; ; {
 		var err error
-		enrolled := enroll.Autoinstalled(ctx, enroll.Options{Layout: layout, ConfigPath: layout.EnrollConfig()})
+		enrolled := enroll.Autoinstalled(ctx, enroll.Options{Layout: layout, ConfigPath: layout.EnrollConfig(), BusyLogged: &busyLogged})
 		if deps, err = agent.Load(layout); err == nil && enrolled {
 			break
 		}

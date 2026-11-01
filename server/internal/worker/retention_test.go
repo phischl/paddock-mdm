@@ -130,7 +130,7 @@ func TestRetentionRoundRetiredInventory(t *testing.T) {
 	day := 24 * time.Hour
 	fleet := &fakeSource{}
 	r := NewRetention(app.NewRetention(runner, f.pool, platform, fleet, day, 400), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
-	if len(r.passes) != 8 || r.passes[2].store != app.StoreRetiredInventory {
+	if len(r.passes) != 9 || r.passes[2].store != app.StoreRetiredInventory {
 		t.Fatalf("passes %+v, want retired_inventory third of 8", r.passes)
 	}
 	dev := uuid.Must(uuid.NewV7())
@@ -178,7 +178,7 @@ func TestRetentionRoundReadWindows(t *testing.T) {
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	day := 24 * time.Hour
 	r := NewRetention(app.NewRetention(runner, f.pool, platform, &fakeSource{}, day, 400), app.NewLoginHistory(runner, f.pool, day), f.pool, platform, time.Hour)
-	if len(r.passes) != 8 || r.passes[3].store != app.StoreReadAuditWindow {
+	if len(r.passes) != 9 || r.passes[3].store != app.StoreReadAuditWindow {
 		t.Fatalf("passes %+v, want read_audit_window fourth of 8", r.passes)
 	}
 	now := time.Now().UTC()
@@ -377,7 +377,7 @@ func TestRetentionRoundControlPlane(t *testing.T) {
 			t.Errorf("%s has no last success", store)
 		}
 	}
-	if len(r.passes) != 8 || r.passes[4].store != app.StoreDeviceCommand || r.passes[5].store != app.StoreDeviceAlert ||
+	if len(r.passes) != 9 || r.passes[4].store != app.StoreDeviceCommand || r.passes[5].store != app.StoreDeviceAlert ||
 		r.passes[6].store != app.StoreDeviceEventGap || r.passes[7].store != app.StoreAction || r.passes[7].platform == nil {
 		t.Fatalf("passes %+v, want device_command, device_alert, device_event_gap and action (with its platform pass) after pass 4", r.passes)
 	}

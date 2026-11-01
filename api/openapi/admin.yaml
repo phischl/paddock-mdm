@@ -58,6 +58,8 @@ tags:
   - name: audit
   - name: platform
   - name: mcp
+  - name: findings
+  - name: notifications
 paths:
   /api/auth/login:
     get:
@@ -536,6 +538,36 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuditEventPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit-events/feed:
+    get:
+      operationId: feedAuditEvents
+      tags: [audit]
+      description: >-
+        Roles: org_admin, org_auditor (sessions and API tokens). Commit-ordered cursor feed of the organization's audit
+        events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. An after
+        below the oldest retained commit_seq returns the oldest retained events (catch-up is bounded by the index
+        retention).
+      x-paddock-feed: { cursor: after, limit: { default: 100, max: 1000 } }
+      x-paddock-mcp: { expose: false }
+      parameters:
+        - name: after
+          in: query
+          description: Commit sequence of the last event already read; 0 starts at the beginning.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          description: Maximum number of events in the page.
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        "200":
+          description: Events after the cursor in ascending commit_seq.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditFeedPage" }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
@@ -1052,12 +1084,12 @@ paths:
     get:
       operationId: listChangeSets
       tags: [config]
-      description: "Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something."
+      description: "Roles: org_admin, org_operator, org_auditor. Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource."
       x-paddock-list:
         sort: [applied_at]
         default_sort: -applied_at
         search: [actor_display]
-        filters: [source]
+        filters: [source, rollout]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -1071,6 +1103,14 @@ paths:
           schema:
             type: array
             items: { $ref: "#/components/schemas/ChangeSetSource" }
+        - name: rollout
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ChangeSetRollout" }
       responses:
         "200":
           description: One page of change sets.
@@ -1525,6 +1565,79 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeviceLoginEventPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/config-status:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceConfigStatus
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The apply status of the device's resources as its agent last
+        reported them (plan M11 decision 14): one item per resource ID with its status, the message of a failure and,
+        for a report-only apply, what would change (pending). A report that omits a resource removes its row; older
+        agents without per-resource outcomes only produce failed rows.
+      x-paddock-list:
+        sort: [resource_id, status, occurred_at]
+        default_sort: resource_id
+        search: [resource_id]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceResourceStatusSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/ResourceStateFilter"
+      responses:
+        "200":
+          description: One page of resource statuses.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceResourceStatusPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/bundles:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceBundles
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. Every configuration version compiled for the device, newest
+        first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. Outcome none lists
+        the versions without a report. config_rollout_id is null until configuration rollouts exist.
+      x-paddock-list:
+        sort: [version, created_at]
+        default_sort: -version
+        search: [version]
+        filters: [outcome]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceBundleSort"
+        - $ref: "#/components/parameters/Search"
+        - name: outcome
+          in: query
+          description: |
+            Repeatable; applied, rejected or none (400 invalid_request otherwise). none selects versions the device has
+            not reported. The values are not an OpenAPI enum: the generated constant None would take the name of the
+            privilege class's.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+      responses:
+        "200":
+          description: One page of bundle versions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceBundlePage" }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
@@ -2378,6 +2491,50 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/settings/watched-units:
+    get:
+      operationId: getWatchedUnits
+      tags: [settings]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The third-party systemd services of the presence policy: the
+        agents report when one of them stops. Empty until changed; updated_at is null for an empty list.
+      responses:
+        "200":
+          description: The watched units.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WatchedUnits" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateWatchedUnits
+      x-paddock-step-up: true
+      tags: [settings]
+      description: |
+        Roles: org_admin. Replaces the watched units: at most 32 services (names ending in .service), a duplicate is
+        400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a
+        name that is not a service is 422 unit_not_allowed naming it. Paddock only reports a stopped unit; it never
+        installs, starts or restarts it. Every device is recompiled. Needs a step-up within the last 300 s (403
+        step_up_required; API tokens cannot satisfy it).
+      x-paddock-audit: settings.watched_units_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WatchedUnitsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WatchedUnits" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
   /api/v1/settings/mcp:
     get:
       operationId: getMcpSettings
@@ -2756,6 +2913,472 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AttentionPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations:
+    get:
+      operationId: listNotificationDestinations
+      tags: [notifications]
+      description: |
+        Roles: org_admin, org_auditor. The organization's notification destinations: signed webhooks and e-mail address lists that
+        receive the organization's security events (ADR 0031). Never shows a webhook URL or a signing secret;
+        url_display has scheme, host and a masked path.
+      x-paddock-list:
+        sort: [name, type, created_at]
+        default_sort: name
+        search: [name]
+        filters: [type, enabled]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/NotificationDestinationSort"
+        - $ref: "#/components/parameters/Search"
+        - name: type
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/NotificationDestinationType" }
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: One page of destinations.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Creates a destination. A webhook needs an https URL without user information on port 443
+        or 1024–65535 whose host is a public address (400 invalid_request naming the rule); the URL and a new signing
+        secret are stored encrypted and the secret is returned once in this response. An e-mail destination needs 1 to
+        20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
+        GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
+        unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
+        duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history.
+        Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+      x-paddock-audit: notification.destination_created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationDestinationCreate" }
+      responses:
+        "201":
+          description: Created; secret is shown only here (webhook).
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationCreated" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getNotificationDestination
+      tags: [notifications]
+      description: "Roles: org_admin, org_auditor. One destination with its delivery state; 404 not_found for another organization's."
+      responses:
+        "200":
+          description: The destination.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestination" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
+        secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+        Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
+        resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
+        is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+        disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationDestinationUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestination" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Deletes the destination with its delivery state and history. Needs a step-up within the last
+        5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/rotate-secret:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: rotateNotificationDestinationSecret
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Replaces the signing secret of a webhook destination and returns the new one once; deliveries
+        are signed with it from the notifier's next round. 409 invalid_state for an e-mail destination. Needs a step-up
+        within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_secret_rotated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The new secret, shown only here.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationSecret" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: testNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
+        secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
+        message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
+        409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: notification.test_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "202":
+          description: Requested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationTestRequested" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/resolve-pseudonym:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: resolveNotificationPseudonym
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's
+        notifications stands for. The api never decrypts the pseudonym key: the notifier resolves the lookup in its next
+        round; GET …/resolve-pseudonym/{lookup_id} returns the result once. 400 invalid_request for a malformed
+        pseudonym (never recorded), 409 invalid_state while no destination pseudonymizes user names or while another
+        lookup of the organization is pending. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.pseudonym_resolved
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationPseudonymResolve" }
+      responses:
+        "202":
+          description: Requested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPseudonymRequested" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/resolve-pseudonym/{lookup_id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: lookup_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getNotificationPseudonymLookup
+      x-paddock-mcp: { expose: false }
+      tags: [notifications]
+      description: |
+        Roles: org_admin. The result of a pseudonym lookup: resolved false until the notifier has resolved it; once
+        resolved, username is the matching user name ("" when none matches) and the lookup is deleted with this read,
+        so a second read is 404 not_found. Unread lookups are deleted after 10 minutes.
+      responses:
+        "200":
+          description: The lookup.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPseudonymLookup" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-capabilities:
+    get:
+      operationId: getNotificationCapabilities
+      tags: [notifications]
+      description: |
+        Roles: org_admin, org_auditor, platform_admin. The destination types this installation supports: email is true
+        only with an SMTP relay (PADDOCK_SMTP_ENABLED).
+      responses:
+        "200":
+          description: The capabilities.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationCapabilities" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings:
+    get:
+      operationId: listFindings
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. Findings: tamper events and attention conditions of devices with
+        their status, assignee and reason (plan M9 decisions 30–34). A tamper finding counts the events of one device,
+        code and subject while it is open; an attention finding follows its condition and is cleared (cleared_at) when
+        the condition is gone. cleared=false (the default) lists the findings that are not cleared, cleared=true only
+        the cleared ones.
+      x-paddock-list:
+        sort: [last_seen_at, opened_at, status, hostname, code]
+        default_sort: -last_seen_at
+        search: [hostname, code, subject]
+        filters: [status, kind, device_id, assignee_id, cleared]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/FindingListSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/FindingStatus" }
+        - name: kind
+          in: query
+          schema: { $ref: "#/components/schemas/FindingKind" }
+        - name: device_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: assignee_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: cleared
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: One page of findings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FindingPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getFinding
+      tags: [findings]
+      description: "Roles: org_admin, org_operator, org_auditor. One finding; 404 not_found for another organization's."
+      responses:
+        "200":
+          description: The finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}/acknowledge:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: acknowledgeFinding
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator. Acknowledges an open finding (status acknowledged); 409 invalid_state for any
+        other status.
+      x-paddock-audit: finding.acknowledged
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The acknowledged finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}/assign:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: assignFinding
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator. Assigns an open, acknowledged or in-progress finding to an administrator or
+        operator of the organization, or removes the assignee (assignee_id null); the finding is in progress
+        afterwards. 404 not_found for any other account (an auditor, a disabled account, another organization's),
+        409 invalid_state for a closed finding.
+      x-paddock-audit: finding.assigned
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindingAssign" }
+      responses:
+        "200":
+          description: The assigned finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}/close:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: closeFinding
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator; accepted_risk only org_admin (403 forbidden otherwise, recorded as denied).
+        Closes an open, acknowledged or in-progress finding with a resolution and a reason (1 to 1000 characters,
+        400 invalid_request otherwise) and an optional external reference (at most 200 characters). 409
+        invalid_state for a closed finding.
+      x-paddock-audit: finding.closed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindingClose" }
+      responses:
+        "200":
+          description: The closed finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/findings/{id}/reopen:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: reopenFinding
+      tags: [findings]
+      description: |
+        Roles: org_admin, org_operator. Reopens a closed finding with a reason (1 to 1000 characters, 400
+        invalid_request otherwise): a tamper finding always, unless a newer finding of the same device and subject is
+        open; an attention finding only while its condition is still open. 409 invalid_state otherwise.
+      x-paddock-audit: finding.reopened
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindingReopen" }
+      responses:
+        "200":
+          description: The reopened finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/accounts:
+    get:
+      operationId: listAccounts
+      tags: [users]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The organization's administrator accounts that are not disabled
+        (the assignee picker of findings, plan M9 decision 34).
+      x-paddock-list:
+        sort: [username, display_name, role]
+        default_sort: username
+        search: [username, display_name]
+        filters: [role]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AccountSort"
+        - $ref: "#/components/parameters/Search"
+        - name: role
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AccountRole" }
+      responses:
+        "200":
+          description: One page of accounts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountPage" }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
@@ -3411,6 +4034,34 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/config-status:
+    get:
+      operationId: listConfigStatus
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The fleet view of the apply status (plan M11 decision 14): one
+        item per resource ID with the number of active devices per status and when a device last reported it failed.
+        Which devices fail is read on the device (listDeviceConfigStatus).
+      x-paddock-list:
+        sort: [resource_id, failed, pending, applied]
+        default_sort: -failed
+        search: [resource_id]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ConfigStatusSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/ResourceStateFilter"
+      responses:
+        "200":
+          description: One page of resources.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceStatusPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/software:
     get:
       operationId: listSoftware
@@ -4528,6 +5179,192 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /api/platform/v1/notification-destinations:
+    get:
+      operationId: listPlatformNotificationDestinations
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The platform's notification destinations: signed webhooks and e-mail address lists that
+        receive platform events (rollouts, releases, OSV, IP allow list) (ADR 0031). Never shows a webhook URL or a signing secret;
+        url_display has scheme, host and a masked path.
+      x-paddock-list:
+        sort: [name, type, created_at]
+        default_sort: name
+        search: [name]
+        filters: [type, enabled]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/NotificationDestinationSort"
+        - $ref: "#/components/parameters/Search"
+        - name: type
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/NotificationDestinationType" }
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: One page of destinations.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createPlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Creates a destination. A webhook needs an https URL without user information on port 443
+        or 1024–65535 whose host is a public address (400 invalid_request naming the rule); the URL and a new signing
+        secret are stored encrypted and the secret is returned once in this response. An e-mail destination needs 1 to
+        20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
+        GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
+        unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
+        duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
+        Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+      x-paddock-audit: notification.destination_created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationDestinationCreate" }
+      responses:
+        "201":
+          description: Created; secret is shown only here (webhook).
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationCreated" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/notification-destinations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getPlatformNotificationDestination
+      tags: [platform]
+      description: "Roles: platform_admin. One destination with its delivery state; 404 not_found for another scope's."
+      responses:
+        "200":
+          description: The destination.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestination" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updatePlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
+        secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+        Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
+        resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
+        is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
+        disabling or renaming one is not. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationDestinationUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestination" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deletePlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Deletes the destination with its delivery state and history. Needs a step-up within the last
+        5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/notification-destinations/{id}/rotate-secret:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: rotatePlatformNotificationDestinationSecret
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Replaces the signing secret of a webhook destination and returns the new one once; deliveries
+        are signed with it from the notifier's next round. 409 invalid_state for an e-mail destination. Needs a step-up
+        within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: notification.destination_secret_rotated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The new secret, shown only here.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDestinationSecret" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/notification-destinations/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: testPlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Requests a test delivery. The notifier, the only service that can decrypt the URL and the
+        secret, delivers it in its next round with one attempt (webhook: the signed envelope of kind test; e-mail: one
+        message) and records notification.test_sent with the result, which GET …/{id} shows in state.last_test.
+        409 invalid_state while an earlier test of the destination is still pending. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: notification.test_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "202":
+          description: Requested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationTestRequested" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     session:
@@ -4551,6 +5388,30 @@ components:
         Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
         printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
       schema: { type: string }
+    NotificationDestinationSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, type, -type, created_at, -created_at]
+        default: name
+    FindingListSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [last_seen_at, -last_seen_at, opened_at, -opened_at, status, -status, hostname, -hostname, code, -code]
+        default: -last_seen_at
+    AccountSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [username, -username, display_name, -display_name, role, -role]
+        default: username
     Csrf:
       name: X-Paddock-CSRF
       in: header
@@ -4703,6 +5564,39 @@ components:
       schema:
         type: array
         items: { $ref: "#/components/schemas/Severity" }
+    DeviceResourceStatusSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker.
+      schema:
+        type: string
+        enum: [resource_id, -resource_id, status, -status, occurred_at, -occurred_at]
+        default: resource_id
+    DeviceBundleSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The version is the tie-breaker.
+      schema:
+        type: string
+        enum: [version, -version, created_at, -created_at]
+        default: -version
+    ConfigStatusSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker.
+      schema:
+        type: string
+        enum: [resource_id, -resource_id, failed, -failed, pending, -pending, applied, -applied]
+        default: -failed
+    ResourceStateFilter:
+      name: status
+      in: query
+      description: Repeatable. Keeps resources with a device in one of these statuses.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/ResourceState" }
     DeviceSort:
       name: sort
       in: query
@@ -5468,6 +6362,44 @@ components:
           additionalProperties: true
         error_code: { type: string }
         correlation_id: { type: string }
+    AuditEventStored:
+      type: object
+      description: The stored audit event, without the read-time device enrichment of AuditEvent.
+      required: [event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id]
+      properties:
+        event_id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid, description: The organization the event belongs to; always the caller's. }
+        occurred_at: { type: string, format: date-time }
+        recorded_at: { type: string, format: date-time }
+        code: { type: string }
+        outcome: { $ref: "#/components/schemas/AuditOutcome" }
+        source: { type: string }
+        actor: { $ref: "#/components/schemas/AuditActor" }
+        target:
+          allOf:
+            - $ref: "#/components/schemas/AuditTarget"
+          nullable: true
+        params:
+          type: object
+          additionalProperties: true
+        error_code: { type: string }
+        correlation_id: { type: string }
+    AuditFeedEvent:
+      type: object
+      required: [commit_seq, event]
+      properties:
+        commit_seq: { type: integer, format: int64, description: "Position of the event in the organization's commit order." }
+        event: { $ref: "#/components/schemas/AuditEventStored" }
+    AuditFeedPage:
+      type: object
+      required: [schema, events, next_after, latest]
+      properties:
+        schema: { type: string, enum: ["paddock.audit.feed.v1"] }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/AuditFeedEvent" }
+        next_after: { type: integer, format: int64, description: "commit_seq of the last returned event, or after when the page is empty." }
+        latest: { type: integer, format: int64, description: "Highest commit_seq of the organization; equal to next_after when caught up." }
     AuditEventPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -5748,6 +6680,10 @@ components:
     ChangeSetSource:
       type: string
       enum: [session, api_token]
+    ChangeSetRollout:
+      type: string
+      enum: [immediate, staged, urgent]
+      description: "immediate: every device receives the change at once. staged and urgent are set by staged rollouts."
     ChangeSetActor:
       type: object
       required: [type, display]
@@ -5767,7 +6703,7 @@ components:
           items: { type: string }
     ChangeSet:
       type: object
-      required: [id, applied_at, actor, source, summary, plan]
+      required: [id, applied_at, actor, source, summary, plan, rollout, before_available]
       properties:
         id: { type: string, format: uuid }
         applied_at: { type: string, format: date-time }
@@ -5775,6 +6711,14 @@ components:
         source: { $ref: "#/components/schemas/ChangeSetSource" }
         summary: { $ref: "#/components/schemas/ChangeSetSummary" }
         plan: { $ref: "#/components/schemas/ConfigPlan" }
+        rollout: { $ref: "#/components/schemas/ChangeSetRollout" }
+        urgent_reason: { type: string, nullable: true, description: Why the change skipped staging; null otherwise. }
+        reverts_change_set_id: { type: string, format: uuid, nullable: true, description: The change set this one reverts. }
+        reverted_by: { type: string, format: uuid, nullable: true, description: The newest change set that reverts this one. }
+        before_available:
+          type: boolean
+          description: Whether the before-states are stored. False for change sets recorded before they were stored and after they were purged.
+        rollout_id: { type: string, format: uuid, nullable: true, description: The staged rollout of this change set; null until staged rollouts exist. }
     ChangeSetPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -6133,7 +7077,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Device"
         - type: object
-          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor, presumed_self_locked_at, presumed_lost_at]
+          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor, presumed_self_locked_at, presumed_lost_at, config_status]
           properties:
             groups:
               type: array
@@ -6163,6 +7107,7 @@ components:
               description: |
                 Since when the device is presumed to have locked itself: it has been silent for longer than the
                 organization's dead man's switch period while the switch is on (plan M4c decision 17); null otherwise.
+            config_status: { $ref: "#/components/schemas/DeviceConfigStatusCounts" }
             presumed_lost_at:
               type: string
               format: date-time
@@ -6170,6 +7115,111 @@ components:
               description: |
                 Since when the device is presumed lost: it has been silent for longer than the organization's critical
                 staleness threshold (plan M5b decision 10); null otherwise, cleared by its next contact.
+    ResourceState:
+      type: string
+      enum: [applied, failed, pending, drift_corrected]
+      description: |
+        The apply status of one resource on one device: applied; failed (the message says why); pending (a report-only
+        apply would change it, changes lists what); drift_corrected (the agent corrected a local change).
+    DeviceResourceStatus:
+      type: object
+      required: [resource_id, type, status, message, changes, bundle_version, occurred_at]
+      properties:
+        resource_id: { type: string, description: "Resource ID such as file:/etc/foo.conf, unit:foo.service or time." }
+        type: { type: string, description: "The part of the ID before the colon (file, unit), else the whole ID." }
+        status: { $ref: "#/components/schemas/ResourceState" }
+        message: { type: string, description: The reason of a failure; empty otherwise. }
+        changes:
+          type: array
+          description: What a report-only apply would change (status pending); empty otherwise.
+          items: { type: string }
+        bundle_version: { type: integer, format: int64 }
+        occurred_at: { type: string, format: date-time, description: When the agent reported it. }
+    DeviceResourceStatusPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceResourceStatus" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DeviceBundleReport:
+      type: object
+      required: [outcome, mode, changed, error_count, reason, occurred_at]
+      properties:
+        outcome: { type: string, enum: [applied, rejected] }
+        mode:
+          type: string
+          enum: [enforce, report_only]
+          description: >-
+            Mode of the apply. A rejection carries no mode: it shows the mode of the device's applied report of the
+            highest lower version, enforce when there is none.
+        changed: { type: integer, description: Resources the apply changed. }
+        error_count: { type: integer, description: Errors the apply reported. }
+        reason: { type: string, nullable: true, description: Why the device rejected the bundle. }
+        occurred_at: { type: string, format: date-time }
+    DeviceBundle:
+      type: object
+      required: [version, created_at, schema_version, config_rollout_id, report]
+      properties:
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        schema_version: { type: integer }
+        config_rollout_id: { type: string, format: uuid, nullable: true, description: The configuration rollout that produced the version; null until configuration rollouts exist. }
+        report:
+          nullable: true
+          description: What the device reported about the version; null until it reported.
+          allOf:
+            - $ref: "#/components/schemas/DeviceBundleReport"
+    DeviceBundlePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceBundle" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ResourceStatus:
+      type: object
+      required: [resource_id, type, applied, failed, pending, drift_corrected, last_failure_at]
+      description: One resource ID with the number of active devices per status.
+      properties:
+        resource_id: { type: string }
+        type: { type: string }
+        applied: { type: integer }
+        failed: { type: integer }
+        pending: { type: integer }
+        drift_corrected: { type: integer }
+        last_failure_at: { type: string, format: date-time, nullable: true }
+    ResourceStatusPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ResourceStatus" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DeviceConfigStatusCounts:
+      type: object
+      description: The device's resources per apply status; zeros until the agent reported.
+      required: [applied, failed, pending, drift_corrected]
+      properties:
+        applied: { type: integer }
+        failed: { type: integer }
+        pending: { type: integer }
+        drift_corrected: { type: integer }
     DeviceLoginStatus:
       type: object
       description: The latest login.* and sudo.* report of the device's agent (plan M3b decision 17).
@@ -6467,6 +7517,23 @@ components:
           type: array
           maxItems: 50
           items: { type: string, maxLength: 1024 }
+    WatchedUnits:
+      type: object
+      required: [units, updated_at]
+      properties:
+        units:
+          type: array
+          items: { type: string }
+        updated_at: { type: string, format: date-time, nullable: true }
+    WatchedUnitsUpdate:
+      type: object
+      required: [units]
+      additionalProperties: false
+      properties:
+        units:
+          type: array
+          maxItems: 32
+          items: { type: string, maxLength: 255 }
     DMSSettings:
       type: object
       required: [enabled, period_days, warn_days]
@@ -6649,8 +7716,13 @@ components:
              agent_not_running, uninstall_pending, config_behind, disk_conversion_failed, clock_drift, event_gap]
     Attention:
       type: object
-      required: [id, kind, device_id, hostname, since, detail]
+      required: [id, kind, device_id, hostname, since, detail, finding]
       properties:
+        finding:
+          description: The live finding of the condition (plan M9 decision 34); null until the findings round created it.
+          allOf:
+            - $ref: "#/components/schemas/AttentionFinding"
+          nullable: true
         id: { type: string, description: "Unique key of the row: the kind and its source (alert, device or revocation request)." }
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
@@ -6659,6 +7731,243 @@ components:
         detail:
           type: string
           description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as \"<applied> < <newest>\"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as \"<seconds> s\" (server time minus device time); event_gap: the missing event sequence numbers as \"<from>-<to>\"; otherwise empty."
+    FindingKind:
+      type: string
+      enum: [tamper, attention]
+    FindingStatus:
+      type: string
+      enum: [open, acknowledged, in_progress, resolved, accepted_risk, false_positive]
+    FindingResolution:
+      type: string
+      enum: [resolved, accepted_risk, false_positive]
+    FindingAssignee:
+      type: object
+      required: [id, username, display_name]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+    Finding:
+      type: object
+      required: [id, kind, key, code, subject, device_id, hostname, status, assignee, opened_at, last_seen_at, occurrences,
+                 first_event_id, last_event_id, acknowledged_at, closed_at, closed_by, reason, external_ref, cleared_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/FindingKind" }
+        key: { type: string, description: "tamper:<device_id>:<code>:<subject> or attention:<attention id>." }
+        code: { type: string, description: The audit code of a tamper finding or the attention kind of an attention finding. }
+        subject: { type: string, description: "What the finding is about: the file, group, unit, field or volume of a tamper event, the detail of an attention condition; may be empty." }
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        status: { $ref: "#/components/schemas/FindingStatus" }
+        assignee:
+          allOf:
+            - $ref: "#/components/schemas/FindingAssignee"
+          nullable: true
+        opened_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        occurrences: { type: integer, description: Tamper events counted by the finding while it was open. }
+        first_event_id: { type: string, format: uuid, nullable: true, description: The audit event that opened a tamper finding. }
+        last_event_id: { type: string, format: uuid, nullable: true, description: The latest audit event counted by a tamper finding. }
+        acknowledged_at: { type: string, format: date-time, nullable: true }
+        closed_at: { type: string, format: date-time, nullable: true }
+        closed_by: { type: string, nullable: true }
+        reason: { type: string, nullable: true, description: The reason of the last close or reopen. }
+        external_ref: { type: string, nullable: true }
+        cleared_at: { type: string, format: date-time, nullable: true, description: When the condition of an attention finding was gone. }
+    NotificationDestinationType:
+      type: string
+      enum: [webhook, email]
+    NotificationFilterMode:
+      type: string
+      enum: [security, all, custom]
+      description: security forwards the security preset of ADR 0031, all every event, custom the listed codes.
+    NotificationDestination:
+      type: object
+      required: [id, type, name, enabled, filter_mode, codes, pseudonymize_users, include_params, url_display,
+        heartbeat_interval_s, recipients, email_min_interval_s, created_by, created_at, updated_at, state]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: "#/components/schemas/NotificationDestinationType" }
+        name: { type: string }
+        enabled: { type: boolean }
+        filter_mode: { $ref: "#/components/schemas/NotificationFilterMode" }
+        codes: { type: array, items: { type: string }, description: The codes of filter_mode custom; empty otherwise. }
+        pseudonymize_users: { type: boolean }
+        include_params: { type: boolean }
+        url_display: { type: string, nullable: true, description: "Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail." }
+        heartbeat_interval_s: { type: integer }
+        recipients: { type: array, items: { type: string } }
+        email_min_interval_s: { type: integer }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        state: { $ref: "#/components/schemas/NotificationDestinationState" }
+    NotificationDestinationState:
+      type: object
+      required: [status, cursor_commit_seq, forward_seq, last_success_at, last_attempt_at, next_attempt_at, stalled_since,
+        last_error, lag_seconds, last_test]
+      properties:
+        status: { type: string, enum: [active, stalled] }
+        cursor_commit_seq: { type: integer, format: int64, description: The commit sequence of the last delivered event position. }
+        forward_seq: { type: integer, format: int64, description: The last forwarded sequence number. }
+        last_success_at: { type: string, format: date-time, nullable: true }
+        last_attempt_at: { type: string, format: date-time, nullable: true }
+        next_attempt_at: { type: string, format: date-time, nullable: true }
+        stalled_since: { type: string, format: date-time, nullable: true }
+        last_error: { type: string, nullable: true }
+        lag_seconds: { type: integer, format: int64, description: Seconds since the first failure of the current series of failed deliveries; 0 while deliveries succeed. }
+        last_test:
+          type: object
+          nullable: true
+          required: [at, ok, error]
+          properties:
+            at: { type: string, format: date-time }
+            ok: { type: boolean }
+            error: { type: string, nullable: true }
+    NotificationDestinationCreate:
+      type: object
+      additionalProperties: false
+      required: [type, name, enabled, filter_mode]
+      properties:
+        type: { $ref: "#/components/schemas/NotificationDestinationType" }
+        name: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' }
+        enabled: { type: boolean }
+        filter_mode: { $ref: "#/components/schemas/NotificationFilterMode" }
+        codes: { type: array, maxItems: 200, items: { type: string }, description: Registered audit codes; filter_mode custom only. }
+        pseudonymize_users: { type: boolean, default: false }
+        include_params: { type: boolean, default: false }
+        url: { type: string, writeOnly: true, description: "Webhook only; required for a webhook. Stored encrypted, never returned." }
+        heartbeat_interval_s: { type: integer, default: 0, description: Webhook; 0 (off) or 60–3600. }
+        recipients: { type: array, maxItems: 20, items: { type: string }, description: E-mail only; 1–20 plain addresses. }
+        email_min_interval_s: { type: integer, default: 300, description: E-mail only; 60–3600. }
+    NotificationDestinationUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, enabled, filter_mode]
+      properties:
+        type: { $ref: "#/components/schemas/NotificationDestinationType" }
+        name: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' }
+        enabled: { type: boolean }
+        filter_mode: { $ref: "#/components/schemas/NotificationFilterMode" }
+        codes: { type: array, maxItems: 200, items: { type: string } }
+        pseudonymize_users: { type: boolean, default: false }
+        include_params: { type: boolean, default: false }
+        url: { type: string, writeOnly: true, description: Webhook only; absent keeps the stored URL. }
+        heartbeat_interval_s: { type: integer, default: 0 }
+        recipients: { type: array, maxItems: 20, items: { type: string } }
+        email_min_interval_s: { type: integer, default: 300 }
+        cursor: { type: string, enum: [continue, skip], description: Required when the update enables a disabled destination. }
+    NotificationDestinationCreated:
+      allOf:
+        - $ref: "#/components/schemas/NotificationDestination"
+        - type: object
+          properties:
+            secret: { type: string, description: "Webhook only: the signing secret, shown once; keep it like a password." }
+    NotificationDestinationSecret:
+      type: object
+      required: [secret]
+      properties:
+        secret: { type: string, description: "The new signing secret, shown once." }
+    NotificationTestRequested:
+      type: object
+      required: [delivery_id]
+      properties:
+        delivery_id: { type: string, format: uuid }
+    NotificationPseudonymResolve:
+      type: object
+      additionalProperties: false
+      required: [pseudonym]
+      properties:
+        pseudonym: { type: string, pattern: '^u_[0-9a-f]{24}$', maxLength: 26, description: "u_ and 24 lowercase hexadecimal characters." }
+    NotificationPseudonymRequested:
+      type: object
+      required: [lookup_id]
+      properties:
+        lookup_id: { type: string, format: uuid }
+    NotificationPseudonymLookup:
+      type: object
+      required: [pseudonym, username, resolved]
+      properties:
+        pseudonym: { type: string }
+        username: { type: string, nullable: true, description: 'The user name once resolved; "" when no user matches.' }
+        resolved: { type: boolean }
+    NotificationCapabilities:
+      type: object
+      required: [email]
+      properties:
+        email: { type: boolean }
+    NotificationDestinationPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationDestination" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    FindingPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Finding" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    FindingAssign:
+      type: object
+      required: [assignee_id]
+      properties:
+        assignee_id: { type: string, format: uuid, nullable: true, description: The account; null removes the assignee. }
+    FindingClose:
+      type: object
+      required: [resolution, reason]
+      properties:
+        resolution: { $ref: "#/components/schemas/FindingResolution" }
+        reason: { type: string, maxLength: 1000 }
+        external_ref: { type: string, maxLength: 200, description: A ticket or change number in another system. }
+    FindingReopen:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 1000 }
+    AttentionFinding:
+      type: object
+      required: [id, status, assignee_display]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/FindingStatus" }
+        assignee_display: { type: string, nullable: true }
+    AccountRole:
+      type: string
+      enum: [org_admin, org_operator, org_auditor]
+    Account:
+      type: object
+      required: [id, username, display_name, role]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+        role: { $ref: "#/components/schemas/AccountRole" }
+    AccountPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Account" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     AttentionPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -6673,11 +7982,16 @@ components:
         sort: { type: string, description: Applied sort. }
     AttentionCondition:
       type: object
-      required: [kind, since, detail]
+      required: [kind, since, detail, finding]
       properties:
         kind: { $ref: "#/components/schemas/AttentionKind" }
         since: { type: string, format: date-time }
         detail: { type: string }
+        finding:
+          description: The live finding of the condition (plan M9 decision 34); null until the findings round created it.
+          allOf:
+            - $ref: "#/components/schemas/AttentionFinding"
+          nullable: true
     AttentionDevice:
       type: object
       required: [device_id, hostname, state, os_release, last_contact_at, severity, since, conditions]

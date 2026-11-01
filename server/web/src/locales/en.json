@@ -93,6 +93,7 @@
       "comfortable": "Comfortable"
     },
     "shortcuts": "Keyboard shortcuts",
+    "reopenSetup": "Show the setup checklist",
     "collapseNavigation": "Collapse the navigation",
     "expandNavigation": "Expand the navigation",
     "switchRole": "{scope, select, organization {Switch to {role} ({organization})} other {Switch to {role}}}",
@@ -129,6 +130,7 @@
     "software": "Software",
     "vulnerabilities": "Vulnerabilities",
     "attention": "Attention",
+    "findings": "Findings",
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
@@ -151,7 +153,10 @@
     "shortcut": "Shortcut: {keys}",
     "securityReview": "Security review",
     "operatorRoots": "Operator roots",
-    "mcpSettings": "MCP"
+    "watchedUnits": "Watched units",
+    "mcpSettings": "MCP",
+    "notifications": "Notifications",
+    "platformNotifications": "Platform notifications"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -301,9 +306,17 @@
     "mcp_tool_not_allowed": "This operation is not allowed through the MCP.",
     "mcp_write_not_enabled": "Changes through the MCP are not enabled.",
     "mcp_login_required": "Sign in again with paddockctl mcp login.",
-    "rate_limited": "Too many requests. Try again shortly."
+    "rate_limited": "Too many requests. Try again shortly.",
+    "email_not_configured": "This installation has no e-mail relay, so e-mail destinations cannot be enabled.",
+    "unknown_code": "One of the audit codes is not registered.",
+    "notification_test_pending": "An earlier test of this destination is still waiting for its result. Try again in a moment.",
+    "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment."
   },
   "audit": {
+    "vulnerability": {
+      "critical_summary": "{new_critical, plural, one {# new critical vulnerability} other {# new critical vulnerabilities}} on {devices, plural, one {# device} other {# devices}}",
+      "devices_viewed": "{actor} viewed the devices affected by {cve} ({device_count, plural, one {# device} other {# devices}})"
+    },
     "retention": {
       "purged": "{deleted, plural, one {# expired entry} other {# expired entries}} of {store} were deleted"
     },
@@ -445,9 +458,6 @@
       "clock_drift": "The clock of the device {target} differs from the server's by {offset_s, number} seconds (threshold {threshold_s, number} seconds)",
       "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's"
     },
-    "vulnerability": {
-      "devices_viewed": "{actor} viewed the devices affected by {cve} ({device_count, plural, one {# device} other {# devices}})"
-    },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
       "approved": "{actor} approved destroying {hostname}",
@@ -523,6 +533,7 @@
       "dms_changed": "{actor} {enabled, select, true {turned on the dead man's switch with a period of {period_days, number} days} other {turned off the dead man's switch}}",
       "updates_changed": "{actor} changed the update settings",
       "managed_files_changed": "{actor} changed the operator roots of the managed files",
+      "watched_units_changed": "{actor} changed the watched units of the presence policy",
       "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}",
       "rollout_changed": "{actor} changed the rollout settings: staged rollouts {enabled, select, true {on} other {off}}"
     },
@@ -563,7 +574,25 @@
       "step_up": "Step-up",
       "error_code": "Error code"
     },
-    "sourceMcp": "MCP"
+    "sourceMcp": "MCP",
+    "finding": {
+      "acknowledged": "{actor} acknowledged the finding {code} on {hostname}",
+      "assigned": "{actor} assigned the finding {code} on {hostname}",
+      "closed": "{actor} closed the finding {code} on {hostname} as {resolution, select, resolved {resolved} accepted_risk {accepted risk} false_positive {false positive} other {{resolution}}}",
+      "reopened": "{actor} reopened the finding {code} on {hostname}"
+    },
+    "notification": {
+      "destination_created": "{actor} created the notification destination {name} ({type, select, webhook {webhook} other {e-mail}})",
+      "destination_updated": "{actor} changed the notification destination {name}",
+      "destination_deleted": "{actor} deleted the notification destination {name}",
+      "destination_secret_rotated": "{actor} replaced the signing secret of the notification destination {name}",
+      "test_requested": "{actor} requested a test notification to {name}",
+      "test_sent": "Test notification to {name}, requested by {requested_by}",
+      "pseudonym_resolved": "{actor} resolved the pseudonym {pseudonym}",
+      "delivered": "{count} events delivered to {destination}",
+      "destination_stalled": "Deliveries to {destination} are stalled ({last_error})",
+      "destination_resumed": "Deliveries to {destination} resumed after {stalled_for_s} s"
+    }
   },
   "organizations": {
     "title": "Organizations",
@@ -1840,6 +1869,23 @@
       "description": "Lock and Destroy requests of this organization appear here with their progress."
     }
   },
+  "watchedUnits": {
+    "title": "Watched units",
+    "intro": "Third-party agents such as an EDR or SIEM agent run as systemd services that Paddock does not deploy. List them here and every device reports it when one of them stops or is missing, the same way it does for Paddock's own agent.",
+    "info": "Paddock only reports. It never installs, starts or restarts a watched unit.",
+    "label": "Services",
+    "hint": "Names ending in .service, for example wazuh-agent.service. Press Enter after each name. At most {max}.",
+    "placeholder": "wazuh-agent.service",
+    "saved": "The watched units were saved. Every device receives them with its next configuration.",
+    "updatedAt": "Last saved {at}",
+    "confirmTitle": "Save the watched units?",
+    "confirm": "{count, plural, =0 {No unit will be watched on any device.} one {# unit will be watched on every device.} other {# units will be watched on every device.}}",
+    "errors": {
+      "notService": "{unit} is not a service name. Use a name ending in .service.",
+      "duplicate": "{unit} is listed twice.",
+      "tooMany": "At most {max} units can be watched."
+    }
+  },
   "dms": {
     "title": "Dead man's switch",
     "warning": "If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself. This includes a device whose connection to Paddock is blocked on purpose: an attacker who keeps the device from reaching Paddock can trigger the lock.",
@@ -2031,6 +2077,91 @@
     },
     "device": "Device",
     "conditions": "Conditions"
+  },
+  "findings": {
+    "title": "Findings",
+    "summary": "Tamper events and attention conditions of your devices. Take a finding, assign it and close it with a reason; every step is recorded in the audit log.",
+    "code": "Finding",
+    "statusColumn": "Status",
+    "device": "Device",
+    "occurrences": "Occurrences",
+    "assignee": "Assignee",
+    "lastSeen": "Last seen",
+    "cleared": "Cleared",
+    "clearedHint": "The condition is gone; the finding stays until someone closes it.",
+    "done": "{finding} is now {status}.",
+    "deviceTitle": "Findings",
+    "openList": "Open the findings",
+    "status": {
+      "open": "Open",
+      "acknowledged": "Acknowledged",
+      "in_progress": "In progress",
+      "resolved": "Resolved",
+      "accepted_risk": "Accepted risk",
+      "false_positive": "False positive"
+    },
+    "kinds": {
+      "tamper": "Tamper event",
+      "attention": "Attention condition"
+    },
+    "resolutions": {
+      "resolved": "Resolved",
+      "accepted_risk": "Accepted risk",
+      "false_positive": "False positive"
+    },
+    "filters": {
+      "status": "Status",
+      "statusHint": "Without a selection: open, acknowledged and in progress.",
+      "kind": "Kind",
+      "cleared": "Cleared",
+      "clearedHint": "Without a selection, cleared findings are hidden.",
+      "clearedOnly": "Only cleared findings"
+    },
+    "acknowledge": {
+      "action": "Acknowledge",
+      "label": "Acknowledge: {finding}",
+      "title": "Acknowledge finding",
+      "message": "Mark this finding as seen: {finding}. It stays open until it is closed.",
+      "confirm": "Acknowledge"
+    },
+    "assign": {
+      "action": "Assign",
+      "label": "Assign: {finding}",
+      "title": "Assign finding",
+      "message": "Who takes care of this finding? {finding}",
+      "assignee": "Assignee",
+      "hint": "Administrators and operators of your organization. Clear the field to remove the assignee.",
+      "submit": "Assign",
+      "unassign": "Remove assignee"
+    },
+    "close": {
+      "action": "Close",
+      "label": "Close: {finding}",
+      "title": "Close finding",
+      "message": "Close this finding with a resolution and a reason: {finding}. The audit log keeps both.",
+      "resolution": "Resolution",
+      "acceptedRiskHint": "Accepted risk needs an organization administrator.",
+      "reason": "Reason",
+      "reasonHint": "Facts and ticket references, no personal judgements.",
+      "reasonRequired": "Enter a reason.",
+      "reasonTooLong": "The reason is too long.",
+      "externalRef": "External reference (optional)",
+      "externalRefHint": "A ticket or change number in another system.",
+      "externalRefTooLong": "The reference is too long.",
+      "submit": "Close finding"
+    },
+    "reopen": {
+      "action": "Reopen",
+      "label": "Reopen: {finding}",
+      "title": "Reopen finding",
+      "message": "Reopen this finding: {finding}. A reason is required and recorded in the audit log.",
+      "reason": "Reason",
+      "confirm": "Reopen"
+    },
+    "empty": {
+      "title": "No findings",
+      "description": "Nothing needs a decision. Tamper events and attention conditions appear here as soon as they happen."
+    }
   },
   "palette": {
     "title": "Command palette",
@@ -2360,5 +2491,148 @@
         "platform": "platform"
       }
     }
+  },
+  "setup": {
+    "title": "Set up Paddock",
+    "progress": "{done} of {total} steps done",
+    "dismiss": "Dismiss",
+    "guide": "Read the guide",
+    "states": {
+      "done": "Done",
+      "open": "To do",
+      "unknown": "Unknown",
+      "manual": "On the host"
+    },
+    "steps": {
+      "organization": "Create the first organization",
+      "orgAdmin": "Assign the first organization administrator in the identity provider",
+      "release": "Publish an agent release",
+      "allowlist": "Restrict the platform to an IP allow list (optional)",
+      "breakGlass": "Name the break-glass accounts",
+      "users": "Connect an identity source that delivers users",
+      "token": "Create an enrollment token",
+      "agent": "Install and enroll the agent on a device",
+      "device": "Approve the first device"
+    }
+  },
+  "notifications": {
+    "title": "Notifications",
+    "platformTitle": "Platform notifications",
+    "summary": "Send security events of this organization to a signed webhook or an e-mail list. Deliveries are at least once; the secret of a webhook is shown only when it is created or replaced.",
+    "platformSummary": "Send platform events (rollouts, releases, vulnerability data, IP allow list) to a signed webhook or an e-mail list.",
+    "create": "Add destination",
+    "createTitle": "New notification destination",
+    "editTitle": "Edit notification destination",
+    "editLabel": "Edit: {name}",
+    "testLabel": "Send test: {name}",
+    "rotateLabel": "Replace secret: {name}",
+    "deleteLabel": "Delete: {name}",
+    "type": "Type",
+    "types": {
+      "webhook": "Webhook",
+      "email": "E-mail"
+    },
+    "enabled": "Enabled",
+    "on": "On",
+    "off": "Off",
+    "state": "State",
+    "states": {
+      "active": "Active",
+      "stalled": "Stalled",
+      "disabled": "Disabled"
+    },
+    "lastSuccess": "Last delivery",
+    "never": "Never",
+    "lag": "Lag",
+    "lagValue": {
+      "s": "{value} s",
+      "min": "{value} min",
+      "h": "{value} h",
+      "d": "{value} d"
+    },
+    "filterMode": "Events",
+    "modes": {
+      "security": "Security events",
+      "all": "All events",
+      "custom": "Selected events"
+    },
+    "modeHints": {
+      "security": "The security preset: tamper events, findings, revocations, logins and changes of protected settings.",
+      "all": "Every audit event, including routine changes.",
+      "custom": "Only the audit codes you list."
+    },
+    "codes": "Audit codes",
+    "codesHint": "Type or pick registered audit codes, for example finding.closed.",
+    "codesCount": "Select 1 to 200 audit codes.",
+    "codesUnknown": "One of the codes is not a registered audit code.",
+    "nameHint": "Letters, digits, spaces, dots, underscores and hyphens; at most 64 characters.",
+    "nameInvalid": "The name must start with a letter or digit and have at most 64 characters of letters, digits, spaces, '.', '_' and '-'.",
+    "url": "Webhook URL",
+    "urlHint": "An https address that is reachable from the Paddock server. Paddock stores it encrypted and never shows it again.",
+    "urlCurrent": "Current address: {url}. Leave empty to keep it.",
+    "urlUnchanged": "unchanged",
+    "urlRequired": "Enter the webhook URL.",
+    "urlHttps": "The URL must start with https://.",
+    "reenterUrl": "Your identity is confirmed. The webhook URL is never kept while you confirm, so enter it again and save.",
+    "recipients": "Recipients",
+    "recipientsHint": "One e-mail address per line, at most 20.",
+    "recipientsCount": "Enter 1 to 20 e-mail addresses.",
+    "recipientsInvalid": "One of the addresses is not a plain e-mail address.",
+    "pseudonymize": "Replace user names with pseudonyms",
+    "includeParams": "Include event parameters",
+    "heartbeat": "Heartbeat interval (seconds)",
+    "heartbeatHint": "0 switches the heartbeat off; otherwise 60 to 3600.",
+    "heartbeatInvalid": "Enter 0 or a number from 60 to 3600.",
+    "minInterval": "Minimum interval between e-mails (seconds)",
+    "minIntervalHint": "Events inside the interval are summarized in one message; 60 to 3600.",
+    "intervalInvalid": "Enter a number from 60 to 3600.",
+    "saved": "Notification destination saved.",
+    "deleted": "Notification destination {name} deleted.",
+    "close": "Close",
+    "secretTitle": "Signing secret",
+    "secret": "Signing secret",
+    "shownOnce": "This is the only time the signing secret of {name} is shown. Copy it now and store it like a password; Paddock cannot show it again.",
+    "deleteTitle": "Delete notification destination",
+    "deleteConfirm": "Delete {name} with its delivery state? Events are no longer sent there.",
+    "rotateTitle": "Replace the signing secret",
+    "rotate": "Replace secret",
+    "rotateConfirm": "Replace the signing secret of {name}? Deliveries are signed with the new secret from the next round; the receiver must be updated.",
+    "testTitle": "Send a test notification",
+    "test": "Send test",
+    "testConfirm": "Send one test delivery to {name}?",
+    "testWaiting": "Test to {name} requested. Waiting for the result (up to 30 seconds)…",
+    "testOk": "The test delivery to {name} succeeded.",
+    "testError": "The test delivery to {name} failed: {error}",
+    "testUnknown": "unknown error",
+    "testTimeout": "No result for the test to {name} yet. Check the state of the destination in a moment.",
+    "cursor": {
+      "title": "Enable destination",
+      "message": "{name} has been disabled. Where should delivery resume?",
+      "continue": "{count, plural, one {Deliver the # event since it was disabled} other {Deliver the # events since it was disabled}}",
+      "continueUnknown": "Deliver the events since it was disabled",
+      "skip": "Skip them and continue with the newest event",
+      "enable": "Enable"
+    },
+    "pseudonym": {
+      "open": "Resolve pseudonym",
+      "title": "Resolve a pseudonym",
+      "summary": "Notifications can carry pseudonyms instead of user names. Enter a pseudonym to see which user it stands for; the result is shown once.",
+      "none": "No destination replaces user names with pseudonyms, so there is nothing to resolve.",
+      "destination": "Destination",
+      "label": "Pseudonym",
+      "hint": "u_ followed by 24 hexadecimal characters.",
+      "invalid": "Enter u_ followed by 24 lowercase hexadecimal characters.",
+      "resolve": "Resolve",
+      "waiting": "Waiting for the result (up to 30 seconds)…",
+      "match": "The pseudonym stands for {username}.",
+      "noMatch": "No user matches this pseudonym.",
+      "timeout": "No result yet. Try again in a moment."
+    },
+    "empty": {
+      "title": "No notification destinations",
+      "description": "Add a webhook or an e-mail list to receive security events outside the portal."
+    },
+    "urlRejected": "The server refused the URL: it must be an https address on port 443 or 1024 to 65535 whose host is public.",
+    "nameTaken": "A destination with this name already exists."
   }
 }

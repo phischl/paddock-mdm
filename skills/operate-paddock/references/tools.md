@@ -30,7 +30,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `applyConfig` | write | no | Applies a paddock.v1 document (at most 1 MiB) in one transaction: a present section is authoritative (items not listed are deleted), absent sections are untouched. |
 | `getChangeSet` | read | no | GET /api/v1/change-sets/{id} |
 | `getConfig` | read | no | The organization's declarative configuration as a paddock.v1 document (api/schema/paddock.v1.json) with every section present, in the key order of the schema. |
-| `listChangeSets` | read | no | Every apply of PUT /api/v1/config that changed something. |
+| `listChangeSets` | read | no | Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource. |
 
 ## device-groups
 
@@ -56,7 +56,10 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getDeviceUpdates` | read | no | The update state of the device (plan M5b decision 12): its last security and regular update runs, whether a reboot is pending, the holds that apply to it and the packages held with different versions (the smallest version wins). |
 | `listAttention` | read | no | The conditions that need an administrator, one row per open condition of a device (plan M5b decision 11): staleness warning and critical (the organization's thresholds), presumed lost, quarantined (clone suspected), disk encryption not compliant, agent not the current release, the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days, an agent release whose rollback failed and is still pending on the device (ADR 0024), a device clock more than 60 s off the server's, measured at check-in and cleared once it is back within 30 s (clock_drift, plan M8b decision 15), a hole in a device's event numbering still open after two further check-ins (event_gap, plan M8b decision 23). |
 | `listAttentionDevices` | read | no | The attention list grouped by device: one item per device with an open condition, its conditions most severe first. |
+| `listConfigStatus` | read | no | The fleet view of the apply status (plan M11 decision 14): one item per resource ID with the number of active devices per status and when a device last reported it failed. |
+| `listDeviceBundles` | read | no | Every configuration version compiled for the device, newest first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. |
 | `listDeviceCommands` | read | no | The commands issued to the device (plan M4a decision 1). |
+| `listDeviceConfigStatus` | read | no | The apply status of the device's resources as its agent last reported them (plan M11 decision 14): one item per resource ID with its status, the message of a failure and, for a report-only apply, what would change (pending). |
 | `listDeviceLogins` | read | no | The login history of the device (plan M8d decision 18): every session start of a directory user while the organization's login history is on, for login_history_days. |
 | `listDevices` | read | no | GET /api/v1/devices |
 | `rejectDevice` | write | yes | POST /api/v1/devices/{id}/reject |
@@ -79,6 +82,17 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getEnrollmentToken` | read | no | GET /api/v1/enrollment-tokens/{id} |
 | `listEnrollmentTokens` | read | no | GET /api/v1/enrollment-tokens |
 | `revokeEnrollmentToken` | write | yes | Idempotent: revoking a revoked token keeps the first revocation time. |
+
+## findings
+
+| Tool | Class | Destructive | Summary |
+| --- | --- | --- | --- |
+| `acknowledgeFinding` | write | no | Acknowledges an open finding (status acknowledged); 409 invalid_state for any other status. |
+| `assignFinding` | write | no | Assigns an open, acknowledged or in-progress finding to an administrator or operator of the organization, or removes the assignee (assignee_id null); the finding is in progress afterwards. |
+| `closeFinding` | write | no | Closes an open, acknowledged or in-progress finding with a resolution and a reason (1 to 1000 characters, 400 invalid_request otherwise) and an optional external reference (at most 200 characters). |
+| `getFinding` | read | no | One finding; 404 not_found for another organization's. |
+| `listFindings` | read | no | Findings: tamper events and attention conditions of devices with their status, assignee and reason (plan M9 decisions 30–34). |
+| `reopenFinding` | write | no | Reopens a closed finding with a reason (1 to 1000 characters, 400 invalid_request otherwise): a tamper finding always, unless a newer finding of the same device and subject is open; an attention finding only while its condition is still open. |
 
 ## inventory
 
@@ -112,6 +126,14 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | --- | --- | --- | --- |
 | `getMe` | read | no | GET /api/v1/me |
 
+## notifications
+
+| Tool | Class | Destructive | Summary |
+| --- | --- | --- | --- |
+| `getNotificationCapabilities` | read | no | The destination types this installation supports: email is true only with an SMTP relay (PADDOCK_SMTP_ENABLED). |
+| `getNotificationDestination` | read | no | One destination with its delivery state; 404 not_found for another organization's. |
+| `listNotificationDestinations` | read | no | The organization's notification destinations: signed webhooks and e-mail address lists that receive the organization's security events (ADR 0031). |
+
 ## overview
 
 | Tool | Class | Destructive | Summary |
@@ -130,11 +152,13 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getAutoUnseal` | read | no | The automatic-unseal setting (ADR 0035): the acknowledged decision, the unsealer's report and OpenBao's seal status. |
 | `getIpAllowlistEntry` | read | no | One entry. |
 | `getOrganization` | read | no | GET /api/platform/v1/organizations/{id} |
+| `getPlatformNotificationDestination` | read | no | One destination with its delivery state; 404 not_found for another scope's. |
 | `haltAgentRollout` | write | yes | POST /api/platform/v1/agent-releases/{version}/rollout/halt |
 | `listAgentReleases` | read | no | Agent releases with their rollout status (plan M2b decision 20). |
 | `listComponentTargets` | read | no | The versions devices are expected to run (plan M8d decision 55): paddockd, the supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau from the compiler. |
 | `listIpAllowlist` | read | no | The IP allow list of the administrative surfaces (plan M7a decision 16): while it has entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions and API tokens alike. |
 | `listOrganizations` | read | no | GET /api/platform/v1/organizations |
+| `listPlatformNotificationDestinations` | read | no | The platform's notification destinations: signed webhooks and e-mail address lists that receive platform events (rollouts, releases, OSV, IP allow list) (ADR 0031). |
 | `publishAgentRelease` | write | no | POST /api/platform/v1/agent-releases/{version}/publish |
 | `resumeAgentRollout` | write | no | POST /api/platform/v1/agent-releases/{version}/rollout/resume |
 | `startAgentRollout` | write | no | Starts the staged rollout of a published release; only one rollout runs at a time (409). |
@@ -174,6 +198,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getPrivacySettings` | read | no | The privacy settings (ADR 0032 §2); the defaults until changed. |
 | `getRolloutSettings` | read | no | The settings of staged configuration rollouts (plan M11 decision 24); the defaults (rollouts off) until changed. |
 | `getUpdateSettings` | read | no | The update settings (plan M5b decisions 1 and 9); the defaults until changed. |
+| `getWatchedUnits` | read | no | The third-party systemd services of the presence policy: the agents report when one of them stops. |
 | `updateDMSSettings` | write | no | Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal warns below 30), distinct warn_days below the period. |
 | `updateLoginSettings` | write | no | Replaces the login settings; every device is recompiled. |
 | `updatePrivacySettings` | write | no | Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). |
@@ -203,6 +228,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `deleteUserGroup` | write | yes | Deletes the group in Authentik and Paddock with its login and profile assignments. |
 | `getUser` | read | no | GET /api/v1/users/{id} |
 | `getUserGroup` | read | no | GET /api/v1/user-groups/{id} |
+| `listAccounts` | read | no | The organization's administrator accounts that are not disabled (the assignee picker of findings, plan M9 decision 34). |
 | `listUpstreamGroups` | read | no | Authentik groups outside Paddock's namespace with at least one member of the organization; they can be imported. |
 | `listUserDevices` | read | no | The devices the user owns (plan M8d decision 4). |
 | `listUserGroupMembers` | read | no | The members of a user group. |
@@ -228,7 +254,11 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `createApiToken` | api-tokens | The role may not be above the creator's: org_admin creates any organization role, org_operator creates org_operator and org_auditor (403 forbidden). |
 | `createAuditExport` | audit | Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). |
 | `createIpAllowlistEntry` | platform | Adds a range. |
+| `createNotificationDestination` | notifications | Creates a destination. |
+| `createPlatformNotificationDestination` | platform | Creates a destination. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
+| `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
+| `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |
 | `disableAutoUnseal` | platform | Disables the setting: the unsealer stops unsealing at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable. |
 | `downloadDeviceHeader` | devices | Returns a stored LUKS header backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup luksHeaderRestore; confirm_hostname must equal the device's hostname. |
@@ -239,13 +269,21 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `importAgentRelease` | platform | Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. |
 | `lockDevice` | revocation | POST /api/v1/devices/{id}/lock |
 | `rejectRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/reject |
+| `resolveNotificationPseudonym` | notifications | Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's notifications stands for. |
 | `revealDeviceLocalAdmin` | devices | Returns the active password and a pending one; confirm_hostname must equal the device's hostname. |
 | `revealDeviceRecoveryKey` | devices | Returns the newest stored recovery key of the device; confirm_hostname must equal the device's hostname. |
+| `rotateNotificationDestinationSecret` | notifications | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
+| `rotatePlatformNotificationDestinationSecret` | platform | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
+| `testNotificationDestination` | notifications | Requests a test delivery. |
+| `testPlatformNotificationDestination` | platform | Requests a test delivery. |
 | `uninstallDevice` | devices | Issues the signed command uninstall (lifetime 7 days, plan M8d decision 37): the device removes Paddock at its next check-in and is retired by its report. |
 | `updateIpAllowlistEntry` | platform | Changes the range and/or the label (at least one). |
 | `updateManagedFileSettings` | settings | Replaces the operator roots: directories of the form /etc/<name>/, /usr/local/etc/<name>/ or /opt/<name>/ (trailing slash), outside the denied and sensitive paths and the never-operator directories (422 path_not_allowed naming the root), at most 50. |
 | `updateMcpSettings` | mcp | Replaces the MCP policy of the organization. |
+| `updateNotificationDestination` | notifications | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
 | `updatePlatformMcpSettings` | mcp | Replaces the MCP policy of the platform (platform administrators' MCP sessions). |
+| `updatePlatformNotificationDestination` | platform | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
+| `updateWatchedUnits` | settings | Replaces the watched units: at most 32 services (names ending in .service), a duplicate is 400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a name that is not a service is 422 unit_not_allowed naming it. |
 
 ## Other operations the MCP does not offer
 
@@ -256,10 +294,12 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | `checkAgentReleaseSource` | platform | Lists the releases of the source and compares the latest with the newest published release (ADR 0043 decision 3); changes nothing and is not audited. |
 | `disableMcpWrite` | mcp | Disables MCP write access for the caller's own account; no step-up is needed. |
 | `downloadAuditExport` | audit | Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. |
+| `feedAuditEvents` | audit | Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. |
 | `generateAutoinstall` | enrollment-tokens | Generates the Ubuntu autoinstall user-data that installs one device with Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. |
 | `getMcpAccess` | mcp | What the caller's MCP sessions may do under the MCP policy of its scope (the organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and write_enabled, and the account opted in) and the caller's role may perform them. |
 | `getMcpCatalog` | mcp | The MCP tool catalog shared by paddockctl mcp and the server's MCP guard: one entry per admin API operation outside the tag auth, with its class, scope and whether the MCP offers it at all (ADR 0044 decision 5). |
 | `getMcpSettings` | mcp | The MCP policy of the organization (ADR 0044 decision 5). |
+| `getNotificationPseudonymLookup` | notifications | The result of a pseudonym lookup: resolved false until the notifier has resolved it; once resolved, username is the matching user name ("" when none matches) and the lookup is deleted with this read, so a second read is 404 not_found. |
 | `getPlatformMcpSettings` | mcp | The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). |
 | `revokeApiToken` | api-tokens | A request made with an API token cannot revoke (403 forbidden). |
 | `updateMe` | me | PATCH /api/v1/me |

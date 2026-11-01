@@ -175,16 +175,22 @@ type Bundle struct {
 }
 
 type ChangeSet struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	AppliedAt      time.Time
-	Actor          json.RawMessage
-	Source         string
-	CreatedN       int32
-	UpdatedN       int32
-	DeletedN       int32
-	Sections       []string
-	Plan           json.RawMessage
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	AppliedAt          time.Time
+	Actor              json.RawMessage
+	Source             string
+	CreatedN           int32
+	UpdatedN           int32
+	DeletedN           int32
+	Sections           []string
+	Plan               json.RawMessage
+	Before             json.RawMessage
+	BeforePurgedAt     *time.Time
+	RevertsChangeSetID uuid.NullUUID
+	Rollout            string
+	UrgentReason       *string
+	Reason             *string
 }
 
 type ComponentTarget struct {
@@ -224,6 +230,19 @@ type DeviceAlert struct {
 	Kind           string
 	RaisedAt       time.Time
 	ClearedAt      *time.Time
+}
+
+type DeviceBundleReport struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	Version        int64
+	Outcome        string
+	Mode           string
+	Changed        int32
+	ErrorCount     int32
+	Reason         *string
+	OccurredAt     time.Time
+	RecordedAt     time.Time
 }
 
 type DeviceCommand struct {
@@ -357,6 +376,17 @@ type DeviceOwner struct {
 	AssignedBy     uuid.NullUUID
 }
 
+type DeviceResourceStatus struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	ResourceID     string
+	Status         string
+	Message        string
+	Changes        []string
+	BundleVersion  int64
+	OccurredAt     time.Time
+}
+
 type DeviceStatus struct {
 	DeviceID             uuid.UUID
 	OrganizationID       uuid.UUID
@@ -420,6 +450,30 @@ type EscrowSecret struct {
 	Volume         uuid.NullUUID
 }
 
+type Finding struct {
+	ID                uuid.UUID
+	OrganizationID    uuid.UUID
+	Kind              string
+	Key               string
+	DeviceID          uuid.UUID
+	Code              string
+	Subject           string
+	Status            string
+	AssigneeAccountID uuid.NullUUID
+	OpenedAt          time.Time
+	LastSeenAt        time.Time
+	Occurrences       int32
+	FirstEventID      uuid.NullUUID
+	LastEventID       uuid.NullUUID
+	AcknowledgedAt    *time.Time
+	ClosedAt          *time.Time
+	ClosedBy          *string
+	Reason            *string
+	ExternalRef       *string
+	ClearedAt         *time.Time
+	UpdatedAt         time.Time
+}
+
 type InstalledSoftware struct {
 	DeviceID       uuid.UUID
 	OrganizationID uuid.UUID
@@ -470,6 +524,88 @@ type ManagedUnit struct {
 	Active         bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+type NotificationDelivery struct {
+	ID             uuid.UUID
+	DestinationID  uuid.UUID
+	OrganizationID uuid.UUID
+	Kind           string
+	ForwardFrom    *int64
+	ForwardTo      *int64
+	EventCount     int32
+	CreatedAt      time.Time
+	DeliveredAt    *time.Time
+	Attempts       int32
+	LastError      *string
+	RequestedBy    *string
+}
+
+type NotificationDeliveryEvent struct {
+	DestinationID  uuid.UUID
+	OrganizationID uuid.UUID
+	ForwardSeq     int64
+	EventID        uuid.UUID
+	CommitSeq      int64
+	DeliveryID     uuid.UUID
+}
+
+type NotificationDestination struct {
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	Type               string
+	Name               string
+	Enabled            bool
+	FilterMode         string
+	Codes              []string
+	PseudonymizeUsers  bool
+	IncludeParams      bool
+	UrlCiphertext      *string
+	UrlDisplay         *string
+	SecretCiphertext   *string
+	HeartbeatIntervalS int32
+	Recipients         []string
+	EmailMinIntervalS  int32
+	CreatedBy          string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type NotificationDestinationState struct {
+	DestinationID       uuid.UUID
+	OrganizationID      uuid.UUID
+	CursorCommitSeq     int64
+	StartAtLatest       bool
+	ForwardSeq          int64
+	Status              string
+	PendingDeliveryID   uuid.NullUUID
+	ConsecutiveFailures int32
+	FirstFailureAt      *time.Time
+	StalledSince        *time.Time
+	LastSuccessAt       *time.Time
+	LastAttemptAt       *time.Time
+	NextAttemptAt       *time.Time
+	LastHeartbeatAt     *time.Time
+	LastError           *string
+	LastTestAt          *time.Time
+	LastTestOk          *bool
+	LastTestError       *string
+}
+
+type NotificationPseudonymKey struct {
+	OrganizationID uuid.UUID
+	KeyCiphertext  string
+	CreatedAt      time.Time
+}
+
+type NotificationPseudonymLookup struct {
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	Pseudonym        string
+	RequestedBy      string
+	CreatedAt        time.Time
+	ResolvedUsername *string
+	ResolvedAt       *time.Time
 }
 
 type OpenbaoAutoUnseal struct {
@@ -797,4 +933,17 @@ type VulnerabilityFinding struct {
 	CvssVector        *string
 	FleetSeverity     *string
 	FleetFixedVersion *string
+}
+
+type VulnerabilitySummary struct {
+	OrganizationID uuid.UUID
+	Day            time.Time
+	Since          time.Time
+	Until          time.Time
+}
+
+type WatchedUnit struct {
+	OrganizationID uuid.UUID
+	Unit           string
+	CreatedAt      time.Time
 }

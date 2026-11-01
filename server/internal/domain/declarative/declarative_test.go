@@ -399,3 +399,37 @@ func TestKeysOfItemsWithSeparatorsInNamesStayDistinct(t *testing.T) {
 		t.Fatalf("plan %+v", plan)
 	}
 }
+
+// TestBeforeItems (plan M11 decision 18): the before-state has the full item of every update and deletion, by section
+// and key, and nothing for a creation.
+func TestBeforeItems(t *testing.T) {
+	d := current()
+	d.Settings.Updates.SecurityDailyAt = "02:30"
+	d.ManagedFiles = &[]declarative.ManagedFile{
+		{Path: "/etc/motd", Mode: "0644", Owner: "root", Group: "root", Content: "hello world"},
+		{Path: "/etc/issue.net", Mode: "0644", Owner: "root", Group: "root", Content: "new"},
+	}
+	d.PackageHolds = &[]declarative.PackageHold{}
+	plan := declarative.Diff(current(), d)
+	before := declarative.BeforeItems(current(), plan)
+
+	motd, ok := before[declarative.SectionManagedFiles][`[null,"/etc/motd"]`].(declarative.ManagedFile)
+	if !ok || motd.Content != "hello" {
+		t.Errorf("updated file before-state %+v", before[declarative.SectionManagedFiles])
+	}
+	if _, ok := before[declarative.SectionManagedFiles][`[null,"/etc/issue.net"]`]; ok {
+		t.Error("a created file has a before-state")
+	}
+	if got, ok := before[declarative.SectionManagedFiles][`["laptops","/etc/laptop.conf"]`].(declarative.ManagedFile); !ok || got.Content != "x=1" {
+		t.Errorf("deleted file before-state %+v", got)
+	}
+	if hold, ok := before[declarative.SectionPackageHolds][`[null,"firefox"]`].(declarative.PackageHold); !ok || hold.Reason != "breaks kiosk" {
+		t.Errorf("deleted hold before-state %+v", before[declarative.SectionPackageHolds])
+	}
+	if u, ok := before[declarative.SectionSettingsUpdates][""].(declarative.UpdateSettings); !ok || u.SecurityDailyAt != "03:00" {
+		t.Errorf("settings before-state %+v", before[declarative.SectionSettingsUpdates])
+	}
+	if len(declarative.BeforeItems(current(), declarative.Diff(current(), current()))) != 0 {
+		t.Error("an empty plan has before-states")
+	}
+}

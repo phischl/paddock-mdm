@@ -147,11 +147,12 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 			return nil
 		}
 		id = uuid.Must(uuid.NewV7())
-		if err := insertChangeSet(ctx, q, id, p, ex.steppedUp, plan, sections); err != nil {
+		if err := insertChangeSet(ctx, q, id, p, ex.steppedUp, plan, sections, st); err != nil {
 			return err
 		}
 		rec.SetTarget(audit.Target{Type: "change_set", ID: id.String()})
 		rec.SetParam("change_set_id", id.String())
+		rec.SetParam("rollout", RolloutImmediate)
 		rec.StateChanged(statechange.ScopeOrg, p.OrganizationID)
 		return nil
 	})
@@ -162,7 +163,7 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 }
 
 func insertChangeSet(ctx context.Context, q *pgstore.Queries, id uuid.UUID, p principal.Principal, steppedUp bool,
-	plan declarative.Plan, sections []string) error {
+	plan declarative.Plan, sections []string, before configState) error {
 	a := actorOf(p)
 	a.StepUp = steppedUp
 	actor, err := json.Marshal(a)
@@ -173,6 +174,10 @@ func insertChangeSet(ctx context.Context, q *pgstore.Queries, id uuid.UUID, p pr
 	if err != nil {
 		return err
 	}
+	beforeJSON, err := beforeStates(before, plan)
+	if err != nil {
+		return err
+	}
 	source := ChangeSetSourceSession
 	if p.APITokenID != uuid.Nil {
 		source = ChangeSetSourceAPIToken
@@ -180,7 +185,7 @@ func insertChangeSet(ctx context.Context, q *pgstore.Queries, id uuid.UUID, p pr
 	return q.InsertChangeSet(ctx, pgstore.InsertChangeSetParams{
 		ID: id, OrganizationID: p.OrganizationID, Actor: actor, Source: source,
 		CreatedN: int32(plan.Created), UpdatedN: int32(plan.Updated), DeletedN: int32(plan.Deleted), //nolint:gosec // bounded by the 1 MiB document
-		Sections: sections, Plan: planJSON,
+		Sections: sections, Plan: planJSON, Before: beforeJSON, Rollout: RolloutImmediate,
 	})
 }
 
@@ -192,27 +197,54 @@ const (
 
 // ChangeSetQuery selects a page of change sets.
 type ChangeSetQuery struct {
-	Page    ListPage
-	Sources []string // session, api_token; nil: all
+	Page     ListPage
+	Sources  []string // session, api_token; nil: all
+	Rollouts []string // immediate, staged, urgent; nil: all
+}
+
+// ChangeSetRecord is a change set as the API shows it. Before stays empty: the before-states hold full file contents
+// and are read by the revert only; BeforeAvailable tells whether they are stored.
+type ChangeSetRecord struct {
+	pgstore.ChangeSet
+	BeforeAvailable bool
+	RevertedBy      *uuid.UUID // the newest change set that reverted this one
+}
+
+func changeSetRecord(r pgstore.GetChangeSetRow) ChangeSetRecord {
+	out := ChangeSetRecord{
+		ChangeSet: pgstore.ChangeSet{ID: r.ID, OrganizationID: r.OrganizationID, AppliedAt: r.AppliedAt, Actor: r.Actor, Source: r.Source,
+			CreatedN: r.CreatedN, UpdatedN: r.UpdatedN, DeletedN: r.DeletedN, Sections: r.Sections, Plan: r.Plan, Rollout: r.Rollout,
+			UrgentReason: r.UrgentReason, RevertsChangeSetID: r.RevertsChangeSetID},
+		BeforeAvailable: r.BeforeAvailable,
+	}
+	if r.RevertedBy != uuid.Nil {
+		out.RevertedBy = &r.RevertedBy
+	}
+	return out
 }
 
 // ListChangeSets returns one page of change sets.
-func (d *Declarative) ListChangeSets(ctx context.Context, query ChangeSetQuery) (Listed[pgstore.ChangeSet], error) {
-	var out Listed[pgstore.ChangeSet]
+func (d *Declarative) ListChangeSets(ctx context.Context, query ChangeSetQuery) (Listed[ChangeSetRecord], error) {
+	var out Listed[ChangeSetRecord]
 	if _, err := RequireOrg(ctx, RolesRead); err != nil {
 		return out, err
 	}
 	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		n, err := q.CountChangeSets(ctx, pgstore.CountChangeSetsParams{QPattern: query.Page.QPattern, Sources: query.Sources, CountLimit: countLimit})
+		n, err := q.CountChangeSets(ctx, pgstore.CountChangeSetsParams{QPattern: query.Page.QPattern, Sources: query.Sources, Rollouts: query.Rollouts, CountLimit: countLimit})
 		if err != nil {
 			return fmt.Errorf("count change sets: %w", err)
 		}
 		out.Count = int(n)
-		out.Items, err = q.ListChangeSets(ctx, pgstore.ListChangeSetsParams{
-			QPattern: query.Page.QPattern, Sources: query.Sources, Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
+		rows, err := q.ListChangeSets(ctx, pgstore.ListChangeSetsParams{
+			QPattern: query.Page.QPattern, Sources: query.Sources, Rollouts: query.Rollouts, Sort: query.Page.Sort,
+			SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
 		})
 		if err != nil {
 			return fmt.Errorf("list change sets: %w", err)
+		}
+		out.Items = make([]ChangeSetRecord, len(rows))
+		for i, r := range rows {
+			out.Items[i] = changeSetRecord(pgstore.GetChangeSetRow(r))
 		}
 		return nil
 	})
@@ -220,15 +252,18 @@ func (d *Declarative) ListChangeSets(ctx context.Context, query ChangeSetQuery) 
 }
 
 // GetChangeSet returns one change set; missing and foreign change sets are both not_found.
-func (d *Declarative) GetChangeSet(ctx context.Context, id uuid.UUID) (pgstore.ChangeSet, error) {
+func (d *Declarative) GetChangeSet(ctx context.Context, id uuid.UUID) (ChangeSetRecord, error) {
 	if _, err := RequireOrg(ctx, RolesRead); err != nil {
-		return pgstore.ChangeSet{}, err
+		return ChangeSetRecord{}, err
 	}
-	var cs pgstore.ChangeSet
+	var cs ChangeSetRecord
 	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		var err error
-		cs, err = q.GetChangeSet(ctx, id)
-		return notFound(err)
+		row, err := q.GetChangeSet(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		cs = changeSetRecord(row)
+		return nil
 	})
 	return cs, err
 }
@@ -295,6 +330,10 @@ func normalize(doc *declarative.Document) {
 	if doc.Settings != nil && doc.Settings.ManagedFiles != nil {
 		doc.Settings.ManagedFiles.OperatorRoots = sortedRoots(doc.Settings.ManagedFiles.OperatorRoots)
 	}
+	if doc.Settings != nil && doc.Settings.WatchedUnits != nil {
+		units := sortedUnits(*doc.Settings.WatchedUnits)
+		doc.Settings.WatchedUnits = &units
+	}
 }
 
 // configState is the current configuration and the IDs behind its natural keys.
@@ -329,6 +368,10 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	if err != nil {
 		return st, fmt.Errorf("managed-file settings: %w", err)
 	}
+	watched, err := loadWatchedUnits(ctx, q)
+	if err != nil {
+		return st, fmt.Errorf("watched units: %w", err)
+	}
 	privacy, err := LoadPrivacySettings(ctx, q)
 	if err != nil {
 		return st, fmt.Errorf("privacy settings: %w", err)
@@ -337,10 +380,11 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 		SecurityDailyAt: upd.SecurityDailyAt, RegularSchedule: upd.RegularSchedule, RegularUpdatesEnabled: upd.RegularUpdatesEnabled,
 		MaxRandomDelayMin: upd.MaxRandomDelayMin, StalenessWarningH: upd.StalenessWarningH, StalenessCriticalH: upd.StalenessCriticalH,
 		AgentUpdatePolicy: upd.AgentUpdatePolicy,
-	}, ManagedFiles: &declarative.ManagedFileSettings{OperatorRoots: roots}, Privacy: &declarative.PrivacySettings{
-		RetiredInventoryDays: privacy.RetiredInventoryDays, AuditSearchRecorded: privacy.AuditSearchRecorded,
-		InventoryViewRecorded: privacy.InventoryViewRecorded,
-	}}
+	}, ManagedFiles: &declarative.ManagedFileSettings{OperatorRoots: roots}, WatchedUnits: &watched.Units,
+		Privacy: &declarative.PrivacySettings{
+			RetiredInventoryDays: privacy.RetiredInventoryDays, AuditSearchRecorded: privacy.AuditSearchRecorded,
+			InventoryViewRecorded: privacy.InventoryViewRecorded,
+		}}
 
 	groups, err := q.ListAllDeviceGroups(ctx)
 	if err != nil {

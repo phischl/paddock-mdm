@@ -4,7 +4,7 @@ import { defineComponent, h, provide, ref } from 'vue'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { VApp } from 'vuetify/components'
 import { createPinia, setActivePinia } from 'pinia'
-import type { DeviceDetail } from '../api/client'
+import type { AttentionCondition, DeviceDetail } from '../api/client'
 import { createPortalI18n, type PortalLocale } from '../i18n'
 import { deviceDetailKey, type DevicePage } from '../lib/deviceDetailPage'
 import { vuetify } from '../plugins/vuetify'
@@ -29,7 +29,7 @@ const device = {
   os_release: { VERSION_ID: '24.04' }, enrollment_token_id: null, enrolled_at: now, state_changed_at: now, bundle_version: 3,
   last_contact_at: now, applied_bundle_version: 3, agent_version: '1.9.1', groups: [], identity_keys: [], logins_suspended: false,
   login_assignment: { users: [], groups: [] }, schema_versions: [], login_management: true, login_status: { login: null, sudo: null },
-  sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, owners: [], hardware: null, components: [], components_outdated: [],
+  sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, config_status: { applied: 0, failed: 0, pending: 0, drift_corrected: 0 }, owners: [], hardware: null, components: [], components_outdated: [],
 } as DeviceDetail
 
 let wrapper: VueWrapper | null = null
@@ -39,7 +39,7 @@ afterEach(() => {
   setDeviceName.mockReset()
 })
 
-async function mountOverview(opts: { device?: Partial<DeviceDetail>; role?: string; locale?: PortalLocale } = {}) {
+async function mountOverview(opts: { device?: Partial<DeviceDetail>; role?: string; locale?: PortalLocale; findingConditions?: AttentionCondition[] } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: opts.role ?? 'org_admin', locale: 'en', theme: 'system', organization: null, revocation_enabled: true } as never
@@ -52,7 +52,7 @@ async function mountOverview(opts: { device?: Partial<DeviceDetail>; role?: stri
   })
   const page = {
     device: ref({ ...device, ...opts.device }), groups: ref([{ id: 'g1', name: 'Laptops' }, { id: 'g2', name: 'Finance' }]), selectedGroups, saved,
-    diskState: ref(null), diskTpm: ref(false), updates: ref(null), conditions: ref([]), refresh: ref(0), actions: ref([]), saveGroups, changed: vi.fn(),
+    diskState: ref(null), diskTpm: ref(false), updates: ref(null), conditions: ref([]), findingConditions: ref(opts.findingConditions ?? []), refresh: ref(0), actions: ref([]), saveGroups, changed: vi.fn(),
     run: vi.fn(),
   } as unknown as DevicePage
   const Frame = defineComponent({
@@ -61,7 +61,7 @@ async function mountOverview(opts: { device?: Partial<DeviceDetail>; role?: stri
       return () => h(VApp, null, { default: () => h(DeviceOverview) })
     },
   })
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }, { path: '/findings', name: 'findings', component: { render: () => null } }] })
   await router.push('/')
   wrapper = mount(Frame, {
     global: {
@@ -93,6 +93,23 @@ describe('device overview hardware (PDK-221)', () => {
     const cell = document.querySelector('[data-testid="hardware-serial"] dd')
     expect(cell?.textContent?.trim()).toBe('–')
     expect(cell?.getAttribute('title')).toBe('Not reported by the inventory yet')
+  })
+})
+
+describe('device overview findings (plan M9 decision 35)', () => {
+  it('lists the conditions that have a finding with the finding status and links to the findings', async () => {
+    await mountOverview({ findingConditions: [
+      { kind: 'stale_critical', since: '2026-10-08T10:00:00Z', detail: '', finding: { id: 'f1', status: 'acknowledged', assignee_display: null } },
+    ] })
+    const row = document.querySelector('[data-testid="device-finding-stale_critical"]')
+    expect(row?.textContent).toContain('Silent (critical)')
+    expect(row?.textContent).toContain('Acknowledged')
+    expect(document.querySelector('[data-testid="device-attention-findings"] a')?.getAttribute('href')).toBe('/findings?q=' + device.hostname)
+  })
+
+  it('shows no findings panel without a finding', async () => {
+    await mountOverview()
+    expect(document.querySelector('[data-testid="device-attention-findings"]')).toBeNull()
   })
 })
 

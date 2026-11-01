@@ -8,6 +8,7 @@ package pgstore
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -17,30 +18,60 @@ SELECT count(*) FROM (
   SELECT 1 FROM change_set
   WHERE ($1::text IS NULL OR actor->>'display' ILIKE $1::text ESCAPE '\')
     AND ($2::text[] IS NULL OR source = ANY($2::text[]))
-  LIMIT $3
+    AND ($3::text[] IS NULL OR rollout = ANY($3::text[]))
+  LIMIT $4
 ) matching
 `
 
 type CountChangeSetsParams struct {
 	QPattern   *string
 	Sources    []string
+	Rollouts   []string
 	CountLimit int32
 }
 
 func (q *Queries) CountChangeSets(ctx context.Context, arg CountChangeSetsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countChangeSets, arg.QPattern, arg.Sources, arg.CountLimit)
+	row := q.db.QueryRow(ctx, countChangeSets,
+		arg.QPattern,
+		arg.Sources,
+		arg.Rollouts,
+		arg.CountLimit,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const getChangeSet = `-- name: GetChangeSet :one
-SELECT id, organization_id, applied_at, actor, source, created_n, updated_n, deleted_n, sections, plan FROM change_set WHERE id = $1
+SELECT c.id, c.organization_id, c.applied_at, c.actor, c.source, c.created_n, c.updated_n, c.deleted_n, c.sections, c.plan,
+  c.rollout, c.urgent_reason, c.reverts_change_set_id, (c.before IS NOT NULL)::boolean AS before_available,
+  COALESCE((SELECT r.id FROM change_set r WHERE r.reverts_change_set_id = c.id ORDER BY r.applied_at DESC, r.id DESC LIMIT 1),
+    '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS reverted_by
+FROM change_set c WHERE c.id = $1
 `
 
-func (q *Queries) GetChangeSet(ctx context.Context, id uuid.UUID) (ChangeSet, error) {
+type GetChangeSetRow struct {
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	AppliedAt          time.Time
+	Actor              json.RawMessage
+	Source             string
+	CreatedN           int32
+	UpdatedN           int32
+	DeletedN           int32
+	Sections           []string
+	Plan               json.RawMessage
+	Rollout            string
+	UrgentReason       *string
+	RevertsChangeSetID uuid.NullUUID
+	BeforeAvailable    bool
+	RevertedBy         uuid.UUID
+}
+
+// reverted_by is the nil UUID while nothing reverted the change set. Never selects "before": it holds full file contents and is read only by the revert.
+func (q *Queries) GetChangeSet(ctx context.Context, id uuid.UUID) (GetChangeSetRow, error) {
 	row := q.db.QueryRow(ctx, getChangeSet, id)
-	var i ChangeSet
+	var i GetChangeSetRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrganizationID,
@@ -52,13 +83,29 @@ func (q *Queries) GetChangeSet(ctx context.Context, id uuid.UUID) (ChangeSet, er
 		&i.DeletedN,
 		&i.Sections,
 		&i.Plan,
+		&i.Rollout,
+		&i.UrgentReason,
+		&i.RevertsChangeSetID,
+		&i.BeforeAvailable,
+		&i.RevertedBy,
 	)
 	return i, err
 }
 
+const hasExpiredChangeSetBefore = `-- name: HasExpiredChangeSetBefore :one
+SELECT EXISTS (SELECT 1 FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz)
+`
+
+func (q *Queries) HasExpiredChangeSetBefore(ctx context.Context, cutoff time.Time) (bool, error) {
+	row := q.db.QueryRow(ctx, hasExpiredChangeSetBefore, cutoff)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const insertChangeSet = `-- name: InsertChangeSet :exec
-INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections, plan)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections, plan, before, rollout)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 type InsertChangeSetParams struct {
@@ -71,6 +118,8 @@ type InsertChangeSetParams struct {
 	DeletedN       int32
 	Sections       []string
 	Plan           json.RawMessage
+	Before         json.RawMessage
+	Rollout        string
 }
 
 func (q *Queries) InsertChangeSet(ctx context.Context, arg InsertChangeSetParams) error {
@@ -84,35 +133,63 @@ func (q *Queries) InsertChangeSet(ctx context.Context, arg InsertChangeSetParams
 		arg.DeletedN,
 		arg.Sections,
 		arg.Plan,
+		arg.Before,
+		arg.Rollout,
 	)
 	return err
 }
 
 const listChangeSets = `-- name: ListChangeSets :many
 
-SELECT id, organization_id, applied_at, actor, source, created_n, updated_n, deleted_n, sections, plan FROM change_set
+SELECT id, organization_id, applied_at, actor, source, created_n, updated_n, deleted_n, sections, plan,
+  rollout, urgent_reason, reverts_change_set_id, (before IS NOT NULL)::boolean AS before_available,
+  COALESCE((SELECT r.id FROM change_set r WHERE r.reverts_change_set_id = change_set.id ORDER BY r.applied_at DESC, r.id DESC LIMIT 1),
+    '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS reverted_by
+FROM change_set
 WHERE ($1::text IS NULL OR actor->>'display' ILIKE $1::text ESCAPE '\')
   AND ($2::text[] IS NULL OR source = ANY($2::text[]))
+  AND ($3::text[] IS NULL OR rollout = ANY($3::text[]))
 ORDER BY
-  CASE WHEN $3::text = 'applied_at' THEN applied_at END ASC,
-  CASE WHEN $3::text = '-applied_at' THEN applied_at END DESC,
+  CASE WHEN $4::text = 'applied_at' THEN applied_at END ASC,
+  CASE WHEN $4::text = '-applied_at' THEN applied_at END DESC,
   id
-LIMIT $5 OFFSET $4
+LIMIT $6 OFFSET $5
 `
 
 type ListChangeSetsParams struct {
 	QPattern *string
 	Sources  []string
+	Rollouts []string
 	Sort     string
 	SkipRows int32
 	MaxRows  int32
 }
 
+type ListChangeSetsRow struct {
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	AppliedAt          time.Time
+	Actor              json.RawMessage
+	Source             string
+	CreatedN           int32
+	UpdatedN           int32
+	DeletedN           int32
+	Sections           []string
+	Plan               json.RawMessage
+	Rollout            string
+	UrgentReason       *string
+	RevertsChangeSetID uuid.NullUUID
+	BeforeAvailable    bool
+	RevertedBy         uuid.UUID
+}
+
 // List queries (ADR 0018): see device_group.sql.
-func (q *Queries) ListChangeSets(ctx context.Context, arg ListChangeSetsParams) ([]ChangeSet, error) {
+// Columns as GetChangeSet: no "before", reverted_by the nil UUID while nothing reverted the change set.
+func (q *Queries) ListChangeSets(ctx context.Context, arg ListChangeSetsParams) ([]ListChangeSetsRow, error) {
 	rows, err := q.db.Query(ctx, listChangeSets,
 		arg.QPattern,
 		arg.Sources,
+		arg.Rollouts,
 		arg.Sort,
 		arg.SkipRows,
 		arg.MaxRows,
@@ -121,9 +198,9 @@ func (q *Queries) ListChangeSets(ctx context.Context, arg ListChangeSetsParams) 
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ChangeSet{}
+	items := []ListChangeSetsRow{}
 	for rows.Next() {
-		var i ChangeSet
+		var i ListChangeSetsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OrganizationID,
@@ -135,6 +212,11 @@ func (q *Queries) ListChangeSets(ctx context.Context, arg ListChangeSetsParams) 
 			&i.DeletedN,
 			&i.Sections,
 			&i.Plan,
+			&i.Rollout,
+			&i.UrgentReason,
+			&i.RevertsChangeSetID,
+			&i.BeforeAvailable,
+			&i.RevertedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -157,4 +239,20 @@ SELECT pg_advisory_xact_lock(hashtextextended('config_apply:' || current_setting
 func (q *Queries) LockConfigApply(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, lockConfigApply)
 	return err
+}
+
+const purgeExpiredChangeSetBefore = `-- name: PurgeExpiredChangeSetBefore :execrows
+UPDATE change_set SET before = NULL, before_purged_at = now() WHERE id IN (
+  SELECT id FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz LIMIT 1000
+)
+`
+
+// One batch of before-states older than the cutoff (plan M11 amendment 2026-10-29): the change set stays, its before
+// state is cleared and the time stamped.
+func (q *Queries) PurgeExpiredChangeSetBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeExpiredChangeSetBefore, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

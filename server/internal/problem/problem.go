@@ -122,6 +122,10 @@ var (
 	MCPWriteNotEnabled = &Error{Code: "mcp_write_not_enabled", Status: http.StatusForbidden}
 	RateLimited        = &Error{Code: "rate_limited", Status: http.StatusTooManyRequests}
 	MCPLoginRequired   = &Error{Code: "mcp_login_required", Status: http.StatusUnauthorized}
+	// Notification destinations (plan M9 §6.5): an e-mail destination while the api has no SMTP relay
+	// (PADDOCK_SMTP_ENABLED), and a custom filter naming a code that is not in the audit registry.
+	EmailNotConfigured = &Error{Code: "email_not_configured", Status: http.StatusConflict}
+	UnknownCode        = &Error{Code: "unknown_code", Status: http.StatusBadRequest}
 	// Evidence export (ADR 0032 §5, plan M10 decision 28): a day of the range has no manifest yet, the organization
 	// already has the maximum of pending or running exports, or the package is not ready for download.
 	DayNotSealed   = &Error{Code: "day_not_sealed", Status: http.StatusUnprocessableEntity}

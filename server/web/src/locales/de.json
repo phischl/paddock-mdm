@@ -93,6 +93,7 @@
       "comfortable": "Komfortabel"
     },
     "shortcuts": "Tastenkürzel",
+    "reopenSetup": "Einrichtungsliste anzeigen",
     "collapseNavigation": "Navigation einklappen",
     "expandNavigation": "Navigation ausklappen",
     "switchRole": "{scope, select, organization {Zu {role} ({organization}) wechseln} other {Zu {role} wechseln}}",
@@ -129,6 +130,7 @@
     "software": "Software",
     "vulnerabilities": "Schwachstellen",
     "attention": "Handlungsbedarf",
+    "findings": "Feststellungen",
     "attentionCount": "{count, plural, one {# offener Befund} other {# offene Befunde}}",
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
@@ -151,7 +153,10 @@
     "shortcut": "Tastenkürzel: {keys}",
     "securityReview": "Sicherheitsprüfung",
     "operatorRoots": "Freigegebene Verzeichnisse",
-    "mcpSettings": "MCP"
+    "watchedUnits": "Überwachte Dienste",
+    "mcpSettings": "MCP",
+    "notifications": "Benachrichtigungen",
+    "platformNotifications": "Plattform-Benachrichtigungen"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -301,9 +306,17 @@
     "mcp_tool_not_allowed": "Diese Operation ist über den MCP nicht erlaubt.",
     "mcp_write_not_enabled": "Änderungen über den MCP sind nicht freigegeben.",
     "mcp_login_required": "Melde dich erneut mit paddockctl mcp login an.",
-    "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal."
+    "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal.",
+    "email_not_configured": "Diese Installation hat kein E-Mail-Relay, daher können E-Mail-Ziele nicht aktiviert werden.",
+    "unknown_code": "Einer der Audit-Codes ist nicht registriert.",
+    "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
+    "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal."
   },
   "audit": {
+    "vulnerability": {
+      "critical_summary": "{new_critical, plural, one {# neue kritische Schwachstelle} other {# neue kritische Schwachstellen}} auf {devices, plural, one {# Gerät} other {# Geräten}}",
+      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})"
+    },
     "retention": {
       "purged": "{deleted, plural, one {# abgelaufener Eintrag} other {# abgelaufene Einträge}} von {store} gelöscht"
     },
@@ -445,9 +458,6 @@
       "clock_drift": "Die Uhr des Geräts {target} weicht um {offset_s, number} Sekunden von der des Servers ab (Schwelle {threshold_s, number} Sekunden)",
       "clock_drift_cleared": "Die Uhr des Geräts {target} weicht wieder um höchstens {threshold_s, number} Sekunden von der des Servers ab"
     },
-    "vulnerability": {
-      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})"
-    },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
       "approved": "{actor} hat die Vernichtung von {hostname} freigegeben",
@@ -523,6 +533,7 @@
       "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
       "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
+      "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert",
       "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}",
       "rollout_changed": "{actor} hat die Rollout-Einstellungen geändert: gestufte Rollouts {enabled, select, true {ein} other {aus}}"
     },
@@ -563,7 +574,25 @@
       "step_up": "Identitätsbestätigung",
       "error_code": "Fehlercode"
     },
-    "sourceMcp": "MCP"
+    "sourceMcp": "MCP",
+    "finding": {
+      "acknowledged": "{actor} hat den Befund {code} auf {hostname} zur Kenntnis genommen",
+      "assigned": "{actor} hat den Befund {code} auf {hostname} zugewiesen",
+      "closed": "{actor} hat den Befund {code} auf {hostname} geschlossen: {resolution, select, resolved {behoben} accepted_risk {Risiko akzeptiert} false_positive {Fehlalarm} other {{resolution}}}",
+      "reopened": "{actor} hat den Befund {code} auf {hostname} wieder geöffnet"
+    },
+    "notification": {
+      "destination_created": "{actor} hat das Benachrichtigungsziel {name} angelegt ({type, select, webhook {Webhook} other {E-Mail}})",
+      "destination_updated": "{actor} hat das Benachrichtigungsziel {name} geändert",
+      "destination_deleted": "{actor} hat das Benachrichtigungsziel {name} gelöscht",
+      "destination_secret_rotated": "{actor} hat das Signaturgeheimnis des Benachrichtigungsziels {name} ersetzt",
+      "test_requested": "{actor} hat eine Testbenachrichtigung an {name} angefordert",
+      "test_sent": "Testbenachrichtigung an {name}, angefordert von {requested_by}",
+      "pseudonym_resolved": "{actor} hat das Pseudonym {pseudonym} aufgelöst",
+      "delivered": "{count} Ereignisse an {destination} zugestellt",
+      "destination_stalled": "Zustellungen an {destination} stocken ({last_error})",
+      "destination_resumed": "Zustellungen an {destination} laufen nach {stalled_for_s} s wieder"
+    }
   },
   "organizations": {
     "title": "Organisationen",
@@ -1840,6 +1869,23 @@
       "description": "Sperr- und Vernichtungsanfragen dieser Organisation erscheinen hier mit ihrem Fortschritt."
     }
   },
+  "watchedUnits": {
+    "title": "Überwachte Dienste",
+    "intro": "Fremde Agenten wie ein EDR- oder SIEM-Agent laufen als systemd-Dienste, die Paddock nicht ausliefert. Tragen Sie sie hier ein: Jedes Gerät meldet, wenn einer davon stoppt oder fehlt, genau wie beim eigenen Agenten von Paddock.",
+    "info": "Paddock meldet nur. Es installiert, startet oder startet einen überwachten Dienst nie neu.",
+    "label": "Dienste",
+    "hint": "Namen mit der Endung .service, zum Beispiel wazuh-agent.service. Nach jedem Namen die Eingabetaste drücken. Höchstens {max}.",
+    "placeholder": "wazuh-agent.service",
+    "saved": "Die überwachten Dienste wurden gespeichert. Jedes Gerät erhält sie mit seiner nächsten Konfiguration.",
+    "updatedAt": "Zuletzt gespeichert {at}",
+    "confirmTitle": "Überwachte Dienste speichern?",
+    "confirm": "{count, plural, =0 {Auf keinem Gerät wird ein Dienst überwacht.} one {# Dienst wird auf jedem Gerät überwacht.} other {# Dienste werden auf jedem Gerät überwacht.}}",
+    "errors": {
+      "notService": "{unit} ist kein Dienstname. Verwenden Sie einen Namen mit der Endung .service.",
+      "duplicate": "{unit} ist doppelt aufgeführt.",
+      "tooMany": "Höchstens {max} Dienste können überwacht werden."
+    }
+  },
   "dms": {
     "title": "Totmannschalter",
     "warning": "Ist Paddock länger als diese Frist nicht erreichbar, sperrt sich jedes Gerät mit eingeschaltetem Schalter selbst. Das gilt auch für ein Gerät, dessen Verbindung zu Paddock absichtlich blockiert wird: Ein Angreifer, der das Gerät von Paddock fernhält, kann die Sperre auslösen.",
@@ -2031,6 +2077,91 @@
     },
     "device": "Gerät",
     "conditions": "Befunde"
+  },
+  "findings": {
+    "title": "Feststellungen",
+    "summary": "Manipulationsereignisse und Handlungsbedarf Ihrer Geräte. Übernehmen Sie eine Feststellung, weisen Sie sie zu und schließen Sie sie mit einer Begründung; jeder Schritt steht im Audit-Log.",
+    "code": "Feststellung",
+    "statusColumn": "Status",
+    "device": "Gerät",
+    "occurrences": "Vorkommen",
+    "assignee": "Zuständig",
+    "lastSeen": "Zuletzt gesehen",
+    "cleared": "Erledigt",
+    "clearedHint": "Der Befund ist verschwunden; die Feststellung bleibt, bis jemand sie schließt.",
+    "done": "{finding} ist jetzt {status}.",
+    "deviceTitle": "Feststellungen",
+    "openList": "Feststellungen öffnen",
+    "status": {
+      "open": "Offen",
+      "acknowledged": "Zur Kenntnis genommen",
+      "in_progress": "In Bearbeitung",
+      "resolved": "Behoben",
+      "accepted_risk": "Risiko akzeptiert",
+      "false_positive": "Fehlalarm"
+    },
+    "kinds": {
+      "tamper": "Manipulationsereignis",
+      "attention": "Handlungsbedarf"
+    },
+    "resolutions": {
+      "resolved": "Behoben",
+      "accepted_risk": "Risiko akzeptiert",
+      "false_positive": "Fehlalarm"
+    },
+    "filters": {
+      "status": "Status",
+      "statusHint": "Ohne Auswahl: offen, zur Kenntnis genommen und in Bearbeitung.",
+      "kind": "Art",
+      "cleared": "Erledigt",
+      "clearedHint": "Ohne Auswahl sind erledigte Feststellungen ausgeblendet.",
+      "clearedOnly": "Nur erledigte Feststellungen"
+    },
+    "acknowledge": {
+      "action": "Zur Kenntnis nehmen",
+      "label": "Zur Kenntnis nehmen: {finding}",
+      "title": "Feststellung zur Kenntnis nehmen",
+      "message": "Diese Feststellung als gesehen markieren: {finding}. Sie bleibt offen, bis sie geschlossen wird.",
+      "confirm": "Zur Kenntnis nehmen"
+    },
+    "assign": {
+      "action": "Zuweisen",
+      "label": "Zuweisen: {finding}",
+      "title": "Feststellung zuweisen",
+      "message": "Wer kümmert sich um diese Feststellung? {finding}",
+      "assignee": "Zuständig",
+      "hint": "Administratoren und Operatoren Ihrer Organisation. Leeren Sie das Feld, um die Zuweisung zu entfernen.",
+      "submit": "Zuweisen",
+      "unassign": "Zuweisung entfernen"
+    },
+    "close": {
+      "action": "Schließen",
+      "label": "Schließen: {finding}",
+      "title": "Feststellung schließen",
+      "message": "Diese Feststellung mit einem Ergebnis und einer Begründung schließen: {finding}. Das Audit-Log behält beides.",
+      "resolution": "Ergebnis",
+      "acceptedRiskHint": "Risiko akzeptiert erfordert einen Organisations-Administrator.",
+      "reason": "Begründung",
+      "reasonHint": "Fakten und Ticket-Verweise, keine persönlichen Wertungen.",
+      "reasonRequired": "Geben Sie eine Begründung ein.",
+      "reasonTooLong": "Die Begründung ist zu lang.",
+      "externalRef": "Externer Verweis (optional)",
+      "externalRefHint": "Eine Ticket- oder Änderungsnummer in einem anderen System.",
+      "externalRefTooLong": "Der Verweis ist zu lang.",
+      "submit": "Feststellung schließen"
+    },
+    "reopen": {
+      "action": "Wieder öffnen",
+      "label": "Wieder öffnen: {finding}",
+      "title": "Feststellung wieder öffnen",
+      "message": "Diese Feststellung wieder öffnen: {finding}. Eine Begründung ist nötig und steht im Audit-Log.",
+      "reason": "Begründung",
+      "confirm": "Wieder öffnen"
+    },
+    "empty": {
+      "title": "Keine Feststellungen",
+      "description": "Nichts erfordert eine Entscheidung. Manipulationsereignisse und Handlungsbedarf erscheinen hier, sobald sie auftreten."
+    }
   },
   "palette": {
     "title": "Befehlspalette",
@@ -2360,5 +2491,148 @@
         "platform": "Plattform"
       }
     }
+  },
+  "setup": {
+    "title": "Paddock einrichten",
+    "progress": "{done} von {total} Schritten erledigt",
+    "dismiss": "Ausblenden",
+    "guide": "Anleitung lesen",
+    "states": {
+      "done": "Erledigt",
+      "open": "Offen",
+      "unknown": "Unbekannt",
+      "manual": "Auf dem Host"
+    },
+    "steps": {
+      "organization": "Erste Organisation anlegen",
+      "orgAdmin": "Ersten Organisationsadministrator im Identity Provider zuweisen",
+      "release": "Agent-Release veröffentlichen",
+      "allowlist": "Plattform auf eine IP-Allowlist beschränken (optional)",
+      "breakGlass": "Break-Glass-Konten benennen",
+      "users": "Identitätsquelle anbinden, die Benutzer liefert",
+      "token": "Enrollment-Token erstellen",
+      "agent": "Agent auf einem Gerät installieren und registrieren",
+      "device": "Erstes Gerät freigeben"
+    }
+  },
+  "notifications": {
+    "title": "Benachrichtigungen",
+    "platformTitle": "Plattform-Benachrichtigungen",
+    "summary": "Sendet Sicherheitsereignisse dieser Organisation an einen signierten Webhook oder eine E-Mail-Liste. Zustellung mindestens einmal; das Geheimnis eines Webhooks wird nur beim Anlegen oder Ersetzen angezeigt.",
+    "platformSummary": "Sendet Plattformereignisse (Rollouts, Releases, Schwachstellendaten, IP-Zulassungsliste) an einen signierten Webhook oder eine E-Mail-Liste.",
+    "create": "Ziel hinzufügen",
+    "createTitle": "Neues Benachrichtigungsziel",
+    "editTitle": "Benachrichtigungsziel bearbeiten",
+    "editLabel": "Bearbeiten: {name}",
+    "testLabel": "Test senden: {name}",
+    "rotateLabel": "Geheimnis ersetzen: {name}",
+    "deleteLabel": "Löschen: {name}",
+    "type": "Typ",
+    "types": {
+      "webhook": "Webhook",
+      "email": "E-Mail"
+    },
+    "enabled": "Aktiv",
+    "on": "An",
+    "off": "Aus",
+    "state": "Zustand",
+    "states": {
+      "active": "Aktiv",
+      "stalled": "Blockiert",
+      "disabled": "Deaktiviert"
+    },
+    "lastSuccess": "Letzte Zustellung",
+    "never": "Nie",
+    "lag": "Verzug",
+    "lagValue": {
+      "s": "{value} s",
+      "min": "{value} min",
+      "h": "{value} Std.",
+      "d": "{value} T."
+    },
+    "filterMode": "Ereignisse",
+    "modes": {
+      "security": "Sicherheitsereignisse",
+      "all": "Alle Ereignisse",
+      "custom": "Ausgewählte Ereignisse"
+    },
+    "modeHints": {
+      "security": "Das Sicherheitsprofil: Manipulationen, Befunde, Widerrufe, Anmeldungen und Änderungen geschützter Einstellungen.",
+      "all": "Jedes Audit-Ereignis, auch routinemäßige Änderungen.",
+      "custom": "Nur die aufgeführten Audit-Codes."
+    },
+    "codes": "Audit-Codes",
+    "codesHint": "Registrierte Audit-Codes eingeben oder auswählen, zum Beispiel finding.closed.",
+    "codesCount": "Wählen Sie 1 bis 200 Audit-Codes.",
+    "codesUnknown": "Einer der Codes ist kein registrierter Audit-Code.",
+    "nameHint": "Buchstaben, Ziffern, Leerzeichen, Punkte, Unterstriche und Bindestriche; höchstens 64 Zeichen.",
+    "nameInvalid": "Der Name muss mit einem Buchstaben oder einer Ziffer beginnen und höchstens 64 Zeichen aus Buchstaben, Ziffern, Leerzeichen, '.', '_' und '-' haben.",
+    "url": "Webhook-URL",
+    "urlHint": "Eine https-Adresse, die der Paddock-Server erreicht. Paddock speichert sie verschlüsselt und zeigt sie nie wieder an.",
+    "urlCurrent": "Aktuelle Adresse: {url}. Leer lassen, um sie zu behalten.",
+    "urlUnchanged": "unverändert",
+    "urlRequired": "Geben Sie die Webhook-URL ein.",
+    "urlHttps": "Die URL muss mit https:// beginnen.",
+    "reenterUrl": "Ihre Identität ist bestätigt. Die Webhook-URL wird während der Bestätigung nie aufbewahrt: Geben Sie sie erneut ein und speichern Sie.",
+    "recipients": "Empfänger",
+    "recipientsHint": "Eine E-Mail-Adresse pro Zeile, höchstens 20.",
+    "recipientsCount": "Geben Sie 1 bis 20 E-Mail-Adressen ein.",
+    "recipientsInvalid": "Eine der Adressen ist keine einfache E-Mail-Adresse.",
+    "pseudonymize": "Benutzernamen durch Pseudonyme ersetzen",
+    "includeParams": "Ereignisparameter mitsenden",
+    "heartbeat": "Heartbeat-Intervall (Sekunden)",
+    "heartbeatHint": "0 schaltet den Heartbeat aus; sonst 60 bis 3600.",
+    "heartbeatInvalid": "Geben Sie 0 oder eine Zahl von 60 bis 3600 ein.",
+    "minInterval": "Mindestabstand zwischen E-Mails (Sekunden)",
+    "minIntervalHint": "Ereignisse innerhalb des Abstands werden in einer Nachricht zusammengefasst; 60 bis 3600.",
+    "intervalInvalid": "Geben Sie eine Zahl von 60 bis 3600 ein.",
+    "saved": "Benachrichtigungsziel gespeichert.",
+    "deleted": "Benachrichtigungsziel {name} gelöscht.",
+    "close": "Schließen",
+    "secretTitle": "Signaturgeheimnis",
+    "secret": "Signaturgeheimnis",
+    "shownOnce": "Das Signaturgeheimnis von {name} wird nur jetzt angezeigt. Kopieren Sie es und bewahren Sie es wie ein Passwort auf; Paddock kann es nicht erneut anzeigen.",
+    "deleteTitle": "Benachrichtigungsziel löschen",
+    "deleteConfirm": "{name} mit seinem Zustellzustand löschen? Ereignisse werden dann nicht mehr dorthin gesendet.",
+    "rotateTitle": "Signaturgeheimnis ersetzen",
+    "rotate": "Geheimnis ersetzen",
+    "rotateConfirm": "Das Signaturgeheimnis von {name} ersetzen? Zustellungen werden ab der nächsten Runde mit dem neuen Geheimnis signiert; der Empfänger muss angepasst werden.",
+    "testTitle": "Testbenachrichtigung senden",
+    "test": "Test senden",
+    "testConfirm": "Eine Testzustellung an {name} senden?",
+    "testWaiting": "Test an {name} angefordert. Warte auf das Ergebnis (bis zu 30 Sekunden) …",
+    "testOk": "Die Testzustellung an {name} war erfolgreich.",
+    "testError": "Die Testzustellung an {name} ist fehlgeschlagen: {error}",
+    "testUnknown": "unbekannter Fehler",
+    "testTimeout": "Noch kein Ergebnis für den Test an {name}. Prüfen Sie den Zustand des Ziels gleich noch einmal.",
+    "cursor": {
+      "title": "Ziel aktivieren",
+      "message": "{name} war deaktiviert. Wo soll die Zustellung fortgesetzt werden?",
+      "continue": "{count, plural, one {Das # Ereignis seit der Deaktivierung zustellen} other {Die # Ereignisse seit der Deaktivierung zustellen}}",
+      "continueUnknown": "Die Ereignisse seit der Deaktivierung zustellen",
+      "skip": "Überspringen und mit dem neuesten Ereignis fortfahren",
+      "enable": "Aktivieren"
+    },
+    "pseudonym": {
+      "open": "Pseudonym auflösen",
+      "title": "Pseudonym auflösen",
+      "summary": "Benachrichtigungen können Pseudonyme statt Benutzernamen enthalten. Geben Sie ein Pseudonym ein, um den Benutzer zu sehen; das Ergebnis wird nur einmal angezeigt.",
+      "none": "Kein Ziel ersetzt Benutzernamen durch Pseudonyme, daher gibt es nichts aufzulösen.",
+      "destination": "Ziel",
+      "label": "Pseudonym",
+      "hint": "u_ gefolgt von 24 hexadezimalen Zeichen.",
+      "invalid": "Geben Sie u_ gefolgt von 24 hexadezimalen Kleinbuchstaben ein.",
+      "resolve": "Auflösen",
+      "waiting": "Warte auf das Ergebnis (bis zu 30 Sekunden) …",
+      "match": "Das Pseudonym steht für {username}.",
+      "noMatch": "Kein Benutzer passt zu diesem Pseudonym.",
+      "timeout": "Noch kein Ergebnis. Versuchen Sie es gleich noch einmal."
+    },
+    "empty": {
+      "title": "Keine Benachrichtigungsziele",
+      "description": "Fügen Sie einen Webhook oder eine E-Mail-Liste hinzu, um Sicherheitsereignisse außerhalb des Portals zu erhalten."
+    },
+    "urlRejected": "Der Server hat die URL abgelehnt: Sie muss eine https-Adresse auf Port 443 oder 1024 bis 65535 mit öffentlichem Host sein.",
+    "nameTaken": "Ein Ziel mit diesem Namen existiert bereits."
   }
 }

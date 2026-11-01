@@ -24,6 +24,7 @@ type AuditEvent struct {
 	Params         json.RawMessage
 	CorrelationID  string
 	ObjectKey      string
+	CommitSeq      int64
 }
 
 type AuditExport struct {
@@ -74,6 +75,11 @@ type AuditObject struct {
 	EventCount     int32
 	Sha256         []byte
 	CreatedAt      time.Time
+}
+
+type AuditOrgSeq struct {
+	OrganizationID uuid.UUID
+	LastSeq        int64
 }
 
 type AuditSigningKey struct {

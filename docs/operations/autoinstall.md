@@ -41,7 +41,8 @@ What it does:
   The device must be able to reach that host during the installation.
 - Writes `/etc/paddock/enroll.json` (0600), `/var/lib/paddock/install-passphrase` (0600),
   `/etc/paddock/disk-setup.json` (the organization's `boot_pin_min_length`, *Login & privileges → Disk
-  encryption*, default 8) and the marker `/var/lib/paddock/disk-setup-pending`.
+  encryption*, default 8), the marker `/var/lib/paddock/disk-setup-pending` and the marker
+  `/etc/paddock/autoinstall.marker` (0600), with which the device enrolls as `autoinstall` and is enforced at once.
 - Adds `tpm2-device=auto` to the LUKS entry in `/etc/crypttab` and rebuilds the initramfs. On 24.04 it first
   replaces initramfs-tools by dracut with `/etc/dracut.conf.d/90-paddock-tpm2.conf` (`hostonly="yes"`,
   `add_dracutmodules+=" systemd crypt tpm2-tss lvm "`); the PIN prompt there is a text prompt (no Plymouth).
@@ -62,6 +63,9 @@ UEFI with Secure Boot and a TPM 2.0.
 3. The agent enrolls the device with `/etc/paddock/enroll.json` (and deletes it), creates a recovery key, escrows
    the recovery key and the LUKS header, and then removes the temporary passphrase. From the next boot on, the
    device asks only for the boot PIN.
+
+**Troubleshooting:** recovering a failed first-boot enrollment with `paddockd enroll` makes the device `adopted`,
+so it starts in report-only mode until an administrator enables enforcement for it.
 
 ## Encrypting an installed device
 

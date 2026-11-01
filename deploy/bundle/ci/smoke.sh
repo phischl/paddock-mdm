@@ -191,6 +191,9 @@ step "7 start both hosts"
 # The control plane first: its paddock-migrate provisions the RabbitMQ queue the audit writer consumes.
 cp_paddock up
 audit_paddock up
+# The notifier (plan M9 decision 41) is one of the roles `./paddock up` waited for; `./paddock ps` lists it healthy.
+grep -qx 'paddock-notifier healthy' <<<"$(cp_paddock ps --format '{{.Service}} {{.Health}}' </dev/null)" ||
+  fail "./paddock ps does not list paddock-notifier as healthy"
 
 step "8 probes"
 # probe <name> <method> <path>: the HTTP status through Caddy on 127.0.0.1:443, with the internal root certificate.

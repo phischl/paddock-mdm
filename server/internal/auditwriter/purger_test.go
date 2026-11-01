@@ -291,8 +291,8 @@ func TestPurgerKeepsEventCommittedDuringPurge(t *testing.T) {
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO audit_event (event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, params,
-		                          correlation_id, object_key)
-		 VALUES ($1, $2, $3, now(), 'device_group.created', 'success', 'portal', '{}', '{}', 'late', 'late')`,
+		                          correlation_id, object_key, commit_seq)
+		 VALUES ($1, $2, $3, now(), 'device_group.created', 'success', 'portal', '{}', '{}', 'late', 'late', 3)`,
 		uuid.Must(uuid.NewV7()), org, m.AddDate(0, 0, 20)); err != nil {
 		t.Fatal(err)
 	}
