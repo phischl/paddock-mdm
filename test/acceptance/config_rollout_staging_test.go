@@ -85,6 +85,16 @@ func TestConfigRolloutStaging(t *testing.T) {
 		t.Fatalf("staged apply: %s", res.Body)
 	}
 	rollout := *applied.RolloutID
+	// The rollout must end before the canary group's cleanup deletes the group (R6.13 refuses that while it is open);
+	// cleanups run last-in first-out, so this one runs first.
+	stagedChangeSet := *applied.ChangeSetID
+	t.Cleanup(func() {
+		_, hash := revertDryRun(t, admin.Portal, stagedChangeSet)
+		res := call(t, admin.Portal, http.MethodPost, revertPath(stagedChangeSet, url.Values{"expected_plan": {hash}}), nil)
+		if res.Status != http.StatusOK {
+			t.Errorf("cleanup: revert the staged change set %s: HTTP %d %s", stagedChangeSet, res.Status, res.Body)
+		}
+	})
 	ev := expectOneEvent(t, admin.Portal, res.RequestID, "config.applied", "success")
 	if ev.Params["rollout"] != "staged" || ev.Params["rollout_id"] != rollout {
 		t.Fatalf("config.applied params %v", ev.Params)
