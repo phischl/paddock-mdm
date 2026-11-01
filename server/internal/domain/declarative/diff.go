@@ -32,6 +32,12 @@ func Sections() []string {
 		SectionSettingsWatched, SectionSettingsPrivacy}
 }
 
+// RolloutSections returns the sections a staged rollout stages, in Sections order (plan M11 decision 1): the ones that
+// change what a device applies without touching its identity or privileges.
+func RolloutSections() []string {
+	return []string{SectionManagedFiles, SectionManagedUnits, SectionPackageHolds, SectionSettingsUpdates}
+}
+
 // Actions of a change.
 const (
 	ActionCreate = "create"

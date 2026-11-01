@@ -1256,3 +1256,23 @@ without a migration merge as soon as their dependencies are on the branch. The V
     `immediate` and `urgent` needs no step-up yet. Decision 26's refusal "rollouts are disabled" and its step-up
     apply from PDK-157/158 on. (c) Decision 21.2: reverting a `delete` whose key was created again since replaces the
     current item with the before item instead of appending it (a document never holds a key twice).
+13. **Writes during an open rollout, device groups (PDK-157; architect, 2026-11-01).** The precise reading of decisions
+    25 and 29 and of ADR 0033 E1 (ADR 0033 amendment 2026-11-01). A *section* is a section key of
+    `configrollout.StagedKeys`; `package_holds` and `settings.updates` count as one section. While the organization has
+    a `running` or `halted` rollout:
+    (a) a write that touches a staged (section, key) is refused with 409 `rollout_conflict`, urgent or not;
+    (b) otherwise a non-urgent write that touches another key of a section the rollout stages is refused with 409
+        `rollout_running`; a change set that also touches other sections is refused as a whole, never split;
+    (c) otherwise (only sections the rollout does not stage, or no rollout-able section) the write is `immediate`: it
+        reaches every device and starts no rollout; an urgent write that overlaps no staged key is `urgent`;
+    (d) a rename or deletion of a device group that scopes a staged item or is the rollout's canary group is refused
+        with 409 `rollout_conflict`.
+    Item changes cascaded from a device group the change set deletes or renames (by identity) are never staged: they
+    are immediate for every device, so deleting an unrelated group creates no rollout. Items of a group the change set
+    creates follow the rules above (staged with rollouts on, `rollout_running` while a rollout stages their section).
+    Reverts follow the same rules, except the revert of the open rollout's own change set (decision 21.3). Every
+    refusal is decided inside the audited action. The format of `change_set.before` is unchanged. While a rollout is
+    open, its rules apply even after rollouts are switched off (`rollout_running` and `rollout_conflict` apply; urgent →
+    400); the way out is complete or revert.
+    2026-11-01 (architect): the compiler reads its definitions and the overlay in one read-only REPEATABLE READ
+    transaction, `db.OrgPool.InOrgSnapshot`, recorded in ADR 0002 (amendment 2026-11-01).

@@ -269,7 +269,8 @@ type Definition struct {
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
 
 // withChangeSetParams appends the params of the audit events of configuration writes that record a change set (plan
-// M11 decisions 19 and 26): rollout_id and urgent_reason stay unset until staged rollouts and the urgent opt-out exist.
+// M11 decisions 19, 26 and 31): rollout is immediate, staged or urgent, rollout_id names the rollout a staged change
+// set started, urgent_reason is the reason of the urgent opt-out.
 func withChangeSetParams(params []string) []string {
 	for _, p := range []string{"change_set_id", "rollout", "rollout_id", "urgent_reason"} {
 		if !slices.Contains(params, p) {
@@ -888,10 +889,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceBundleRenderFailed: {
 		Code: CodeDeviceBundleRenderFailed, Emitted: true,
-		Description: "The compiler blocked a device's new bundle because a rendered sudo entry failed the visudo check; the device keeps its previous bundle (actor: system).",
+		Description: "The compiler blocked a device's new bundle because a rendered sudo entry failed the visudo check, or because the device is outside the wave of a configuration rollout whose before-state is missing; the device keeps its previous bundle (actor: system).",
 		Params:      []string{"username", "reason"},
 		Outcomes:    []Outcome{OutcomeFailure},
-		Note:        "error_code is render_failed; reason is visudo's message (at most 500 characters).",
+		Note:        "error_code is render_failed; reason is visudo's message or names the rollout (at most 500 characters); username is empty for a rollout.",
 	},
 	CodeDeviceBundleEntryOmitted: {
 		Code: CodeDeviceBundleEntryOmitted, Emitted: true,
@@ -1209,7 +1210,7 @@ var registry = map[Code]Definition{
 		Description: "A declarative configuration (PUT /api/v1/config, paddockctl apply) was applied in one transaction; the change set lists every change.",
 		Params:      withChangeSetParams([]string{"change_set_id", "created", "updated", "deleted", "sections"}),
 		Outcomes:    adminOutcomes,
-		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied.",
+		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied. With rollouts enabled a change of a rollout-able section is staged (rollout staged, rollout_id) unless urgent (rollout urgent, urgent_reason); rollout_conflict and rollout_running refusals are failures.",
 	},
 	CodeConfigReverted: {
 		Code: CodeConfigReverted, Emitted: true,
@@ -1217,7 +1218,7 @@ var registry = map[Code]Definition{
 		Params: []string{"change_set_id", "reverts_change_set_id", "plan_sha256", "created", "updated", "deleted", "sections",
 			"rollout", "rollout_id", "rollout_status", "urgent_reason"},
 		Outcomes: adminOutcomes,
-		Note:     "Target is the new change set; an inverse plan without changes records zeros, no target and no change set, and the original stays unreverted. Dry runs are not recorded. A refusal (no before-state, already reverted, plan_changed, the refusal of a section) is a failure and nothing is applied. rollout_id and rollout_status are set only when the revert ends a running or halted configuration rollout.",
+		Note:     "Target is the new change set; an inverse plan without changes records zeros, no target and no change set, and the original stays unreverted. Dry runs are not recorded. A refusal (no before-state, already reverted, plan_changed, the refusal of a section) is a failure and nothing is applied. rollout_status reverted and rollout_id are set when the revert ends the running or halted configuration rollout of the change set it reverts; rollout_id alone when the revert itself is staged.",
 	},
 	CodePlatformOSVImported: {
 		Code: CodePlatformOSVImported, Emitted: true,

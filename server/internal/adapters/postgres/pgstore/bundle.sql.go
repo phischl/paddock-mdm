@@ -13,18 +13,21 @@ import (
 )
 
 const insertBundle = `-- name: InsertBundle :exec
-INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key, schema_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key, schema_version,
+  config_rollout_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7,
+  $8)
 `
 
 type InsertBundleParams struct {
-	DeviceID       uuid.UUID
-	Version        int64
-	OrganizationID uuid.UUID
-	ContentSha256  []byte
-	EnvelopeSha256 []byte
-	ObjectKey      string
-	SchemaVersion  int32
+	DeviceID        uuid.UUID
+	Version         int64
+	OrganizationID  uuid.UUID
+	ContentSha256   []byte
+	EnvelopeSha256  []byte
+	ObjectKey       string
+	SchemaVersion   int32
+	ConfigRolloutID uuid.NullUUID
 }
 
 func (q *Queries) InsertBundle(ctx context.Context, arg InsertBundleParams) error {
@@ -36,6 +39,7 @@ func (q *Queries) InsertBundle(ctx context.Context, arg InsertBundleParams) erro
 		arg.EnvelopeSha256,
 		arg.ObjectKey,
 		arg.SchemaVersion,
+		arg.ConfigRolloutID,
 	)
 	return err
 }
@@ -175,7 +179,7 @@ func (q *Queries) ListDevicesWithOutdatedSchema(ctx context.Context) ([]uuid.UUI
 }
 
 const listLatestBundles = `-- name: ListLatestBundles :many
-SELECT DISTINCT ON (device_id) device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at, schema_version FROM bundle ORDER BY device_id, version DESC
+SELECT DISTINCT ON (device_id) device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at, schema_version, config_rollout_id FROM bundle ORDER BY device_id, version DESC
 `
 
 func (q *Queries) ListLatestBundles(ctx context.Context) ([]Bundle, error) {
@@ -196,6 +200,7 @@ func (q *Queries) ListLatestBundles(ctx context.Context) ([]Bundle, error) {
 			&i.ObjectKey,
 			&i.CreatedAt,
 			&i.SchemaVersion,
+			&i.ConfigRolloutID,
 		); err != nil {
 			return nil, err
 		}

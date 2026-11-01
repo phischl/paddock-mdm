@@ -532,6 +532,12 @@ func (h *handlers) GetDeviceEffectiveConfig(ctx context.Context, req adminapi.Ge
 	for _, c := range cfg.Conflicts {
 		out.Conflicts = append(out.Conflicts, adminapi.ConfigConflict{Resource: c.Resource, WinnerId: c.Winner, LoserIds: c.Losers})
 	}
+	if cfg.Rollout != nil {
+		out.Rollout = &struct {
+			Id     uuid.UUID `json:"id"`
+			InWave bool      `json:"in_wave"`
+		}{Id: cfg.Rollout.ID, InWave: cfg.Rollout.InWave}
+	}
 	return adminapi.GetDeviceEffectiveConfig200JSONResponse(out), nil
 }
 

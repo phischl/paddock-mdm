@@ -45,6 +45,7 @@ func (q *Queries) CountChangeSets(ctx context.Context, arg CountChangeSetsParams
 const getChangeSet = `-- name: GetChangeSet :one
 SELECT c.id, c.organization_id, c.applied_at, c.actor, c.source, c.created_n, c.updated_n, c.deleted_n, c.sections, c.plan,
   c.rollout, c.urgent_reason, c.reverts_change_set_id, (c.before IS NOT NULL)::boolean AS before_available,
+  COALESCE((SELECT o.id FROM config_rollout o WHERE o.change_set_id = c.id), '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS rollout_id,
   COALESCE((SELECT r.id FROM change_set r WHERE r.reverts_change_set_id = c.id ORDER BY r.applied_at DESC, r.id DESC LIMIT 1),
     '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS reverted_by
 FROM change_set c WHERE c.id = $1
@@ -65,10 +66,11 @@ type GetChangeSetRow struct {
 	UrgentReason       *string
 	RevertsChangeSetID uuid.NullUUID
 	BeforeAvailable    bool
+	RolloutID          uuid.UUID
 	RevertedBy         uuid.UUID
 }
 
-// reverted_by is the nil UUID while nothing reverted the change set. Never selects "before": it holds full file contents and is read only by the revert.
+// reverted_by is the nil UUID while nothing reverted the change set, rollout_id while it started no rollout. Never selects "before": it holds full file contents and is read only by the revert.
 func (q *Queries) GetChangeSet(ctx context.Context, id uuid.UUID) (GetChangeSetRow, error) {
 	row := q.db.QueryRow(ctx, getChangeSet, id)
 	var i GetChangeSetRow
@@ -87,6 +89,7 @@ func (q *Queries) GetChangeSet(ctx context.Context, id uuid.UUID) (GetChangeSetR
 		&i.UrgentReason,
 		&i.RevertsChangeSetID,
 		&i.BeforeAvailable,
+		&i.RolloutID,
 		&i.RevertedBy,
 	)
 	return i, err
@@ -120,9 +123,12 @@ func (q *Queries) GetChangeSetForRevert(ctx context.Context, id uuid.UUID) (GetC
 }
 
 const hasExpiredChangeSetBefore = `-- name: HasExpiredChangeSetBefore :one
-SELECT EXISTS (SELECT 1 FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz)
+SELECT EXISTS (SELECT 1 FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz
+  AND NOT EXISTS (SELECT 1 FROM config_rollout r WHERE r.change_set_id = change_set.id AND r.status IN ('running', 'halted')))
 `
 
+// The change set of an open (running or halted) rollout keeps its before-state until the rollout is completed or
+// reverted: the compiler overlays it for the devices outside the wave (ADR 0032 and 0033 amendments 2026-11-01).
 func (q *Queries) HasExpiredChangeSetBefore(ctx context.Context, cutoff time.Time) (bool, error) {
 	row := q.db.QueryRow(ctx, hasExpiredChangeSetBefore, cutoff)
 	var exists bool
@@ -178,6 +184,7 @@ const listChangeSets = `-- name: ListChangeSets :many
 
 SELECT id, organization_id, applied_at, actor, source, created_n, updated_n, deleted_n, sections, plan,
   rollout, urgent_reason, reverts_change_set_id, (before IS NOT NULL)::boolean AS before_available,
+  COALESCE((SELECT o.id FROM config_rollout o WHERE o.change_set_id = change_set.id), '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS rollout_id,
   COALESCE((SELECT r.id FROM change_set r WHERE r.reverts_change_set_id = change_set.id ORDER BY r.applied_at DESC, r.id DESC LIMIT 1),
     '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS reverted_by
 FROM change_set
@@ -215,6 +222,7 @@ type ListChangeSetsRow struct {
 	UrgentReason       *string
 	RevertsChangeSetID uuid.NullUUID
 	BeforeAvailable    bool
+	RolloutID          uuid.UUID
 	RevertedBy         uuid.UUID
 }
 
@@ -251,6 +259,7 @@ func (q *Queries) ListChangeSets(ctx context.Context, arg ListChangeSetsParams) 
 			&i.UrgentReason,
 			&i.RevertsChangeSetID,
 			&i.BeforeAvailable,
+			&i.RolloutID,
 			&i.RevertedBy,
 		); err != nil {
 			return nil, err
@@ -278,12 +287,14 @@ func (q *Queries) LockConfigApply(ctx context.Context) error {
 
 const purgeExpiredChangeSetBefore = `-- name: PurgeExpiredChangeSetBefore :execrows
 UPDATE change_set SET before = NULL, before_purged_at = now() WHERE id IN (
-  SELECT id FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz LIMIT 1000
+  SELECT id FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz
+    AND NOT EXISTS (SELECT 1 FROM config_rollout r WHERE r.change_set_id = change_set.id AND r.status IN ('running', 'halted'))
+  LIMIT 1000
 )
 `
 
 // One batch of before-states older than the cutoff (plan M11 amendment 2026-10-29): the change set stays, its before
-// state is cleared and the time stamped.
+// state is cleared and the time stamped. Change sets of open rollouts are kept, as in HasExpiredChangeSetBefore.
 func (q *Queries) PurgeExpiredChangeSetBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeExpiredChangeSetBefore, cutoff)
 	if err != nil {

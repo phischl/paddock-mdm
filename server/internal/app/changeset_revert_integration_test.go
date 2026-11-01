@@ -173,8 +173,8 @@ func revertPlan(ctx context.Context, h writeHarness, id uuid.UUID) (declarative.
 	return p, err
 }
 
-// TestChangeSetRevertOptions (plan M11 amendment R6.12): urgent needs a reason, the reason has 2 to 500 characters, and
-// an urgent revert stores its reason as urgent_reason while the rollout stays immediate.
+// TestChangeSetRevertOptions (plan M11 amendment R6.12, decision 26): urgent needs a reason, the reason has 2 to 500
+// characters, urgent is refused while rollouts are disabled, and an urgent revert stores its reason as urgent_reason.
 func TestChangeSetRevertOptions(t *testing.T) {
 	h := newWriteHarness(t)
 	admin := h.account(t, principal.RoleOrgAdmin, false)
@@ -211,14 +211,19 @@ func TestChangeSetRevertOptions(t *testing.T) {
 		t.Errorf("dry run urgent without reason = %v, want invalid_request", err)
 	}
 
-	id, _, err := h.config.Revert(ctx, original, plan.SHA256(), app.RevertOptions{Urgent: true, Reason: "outage\n\tdetails"})
+	urgentOpts := app.RevertOptions{Urgent: true, Reason: "outage\n\tdetails"}
+	if _, _, err := h.config.Revert(ctx, original, plan.SHA256(), urgentOpts); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("urgent while rollouts are disabled = %v, want invalid_request", err)
+	}
+	enableRollouts(t, h, []int{100}, nil)
+	id, _, err := h.config.Revert(principal.With(context.Background(), h.account(t, principal.RoleOrgAdmin, true)), original, plan.SHA256(), urgentOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var rollout string
 	var reason, urgent *string
 	if err := h.super.QueryRow(context.Background(), "SELECT rollout, reason, urgent_reason FROM change_set WHERE id = $1", id).Scan(&rollout, &reason, &urgent); err != nil ||
-		rollout != app.RolloutImmediate || reason == nil || *reason != "outage\n\tdetails" || urgent == nil || *urgent != "outage\n\tdetails" {
+		rollout != app.RolloutUrgent || reason == nil || *reason != "outage\n\tdetails" || urgent == nil || *urgent != "outage\n\tdetails" {
 		t.Fatalf("stored rollout %s reason %v urgent_reason %v, %v", rollout, reason, urgent, err)
 	}
 	_, events := h.recorded(t, h.corr)

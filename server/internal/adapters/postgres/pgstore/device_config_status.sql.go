@@ -313,7 +313,7 @@ func (q *Queries) ListConfigStatus(ctx context.Context, arg ListConfigStatusPara
 }
 
 const listDeviceBundles = `-- name: ListDeviceBundles :many
-SELECT b.version, b.created_at, b.schema_version, r.outcome AS report_outcome, r.mode AS report_mode, r.changed AS report_changed,
+SELECT b.version, b.created_at, b.schema_version, b.config_rollout_id, r.outcome AS report_outcome, r.mode AS report_mode, r.changed AS report_changed,
        r.error_count AS report_error_count, r.reason AS report_reason, r.occurred_at AS report_occurred_at
 FROM bundle b LEFT JOIN device_bundle_report r ON r.device_id = b.device_id AND r.version = b.version
 WHERE b.device_id = $1
@@ -341,6 +341,7 @@ type ListDeviceBundlesRow struct {
 	Version          int64
 	CreatedAt        time.Time
 	SchemaVersion    int32
+	ConfigRolloutID  uuid.NullUUID
 	ReportOutcome    *string
 	ReportMode       *string
 	ReportChanged    *int32
@@ -370,6 +371,7 @@ func (q *Queries) ListDeviceBundles(ctx context.Context, arg ListDeviceBundlesPa
 			&i.Version,
 			&i.CreatedAt,
 			&i.SchemaVersion,
+			&i.ConfigRolloutID,
 			&i.ReportOutcome,
 			&i.ReportMode,
 			&i.ReportChanged,

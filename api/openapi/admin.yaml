@@ -446,7 +446,7 @@ paths:
     patch:
       operationId: updateDeviceGroup
       tags: [device-groups]
-      description: "Roles: org_admin, org_operator."
+      description: "Roles: org_admin, org_operator. While a configuration rollout is open, renaming a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict (plan M11 amendment R6.13)."
       x-paddock-audit: device_group.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -469,7 +469,7 @@ paths:
     delete:
       operationId: deleteDeviceGroup
       tags: [device-groups]
-      description: "Roles: org_admin."
+      description: "Roles: org_admin. While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13)."
       x-paddock-audit: device_group.deleted
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -480,6 +480,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /api/v1/audit-events:
     get:
@@ -1051,10 +1052,17 @@ paths:
         changes records a change set; one without changes records the event with zeros and no change set.
         expected_plan (plan M6c amendment 2026-10-08) is the plan_sha256 of a dry run the client confirmed: when the
         plan computed now differs, the apply is refused with 412 plan_changed (audited as failure) and nothing is
-        applied.
+        applied. Staged rollouts (plan M11 decisions 25-29): with rollouts enabled, an apply that changes managed
+        files, managed units, package holds or the update settings starts a rollout (rollout staged, rollout_id) unless
+        urgent is set. While a rollout is open, a change of a key it stages is refused with 409 rollout_conflict (urgent
+        too), any other change of a section it stages with 409 rollout_running (package holds and update settings are
+        one section; a mixed apply is refused as a whole), and a change of only other sections is immediate. The same
+        rules apply to every per-resource write and to reverts (ADR 0033 amendment 2026-11-01).
       x-paddock-audit: config.applied
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
         - name: dry_run
           in: query
           description: Compute and check the plan without applying it.
@@ -1154,8 +1162,9 @@ paths:
         different plan is refused with 412 plan_changed. The revert is recorded as a new change set whose
         reverts_change_set_id is the original. 409 invalid_state when the change set has no before-state (recorded
         before before-states were stored, or purged after 90 days) or was already reverted. 404 not_found for an
-        unknown change set or one of another organization. urgent and reason are stored; until staged rollouts exist
-        every revert reaches every device at once.
+        unknown change set or one of another organization. The revert of the change set of the open rollout ends that
+        rollout (status reverted) and reaches every device at once; any other revert follows the staging and conflict
+        rules of PUT /api/v1/config, with urgent and reason as the opt-out.
       x-paddock-audit: config.reverted
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -1169,11 +1178,11 @@ paths:
           schema: { type: string, pattern: '^[0-9a-f]{64}$' }
         - name: urgent
           in: query
-          description: Opt out of a staged rollout (needs reason). Stored; without effect until staged rollouts exist.
+          description: Opt out of a staged rollout; needs reason, a step-up and enabled rollouts, as RolloutUrgent.
           schema: { type: boolean, default: false }
         - name: reason
           in: query
-          description: Why the change set is reverted (2 to 500 characters).
+          description: Why the change set is reverted (2 to 500 characters); with urgent also the urgent reason.
           schema: { type: string, minLength: 2, maxLength: 500 }
       responses:
         "200":
@@ -1660,7 +1669,7 @@ paths:
       description: |
         Roles: org_admin, org_operator, org_auditor. Every configuration version compiled for the device, newest
         first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. Outcome none lists
-        the versions without a report. config_rollout_id is null until configuration rollouts exist.
+        the versions without a report. config_rollout_id names the configuration rollout whose wave the device was in.
       x-paddock-list:
         sort: [version, created_at]
         default_sort: -version
@@ -1805,6 +1814,8 @@ paths:
       x-paddock-audit: managed_file.created
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       requestBody:
         required: true
         content:
@@ -1851,6 +1862,8 @@ paths:
       x-paddock-audit: managed_file.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       requestBody:
         required: true
         content:
@@ -1875,6 +1888,8 @@ paths:
       x-paddock-audit: managed_file.deleted
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       responses:
         "204":
           description: Deleted.
@@ -1882,6 +1897,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /api/v1/managed-units:
     get:
@@ -1915,6 +1931,8 @@ paths:
       x-paddock-audit: managed_unit.created
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       requestBody:
         required: true
         content:
@@ -1958,6 +1976,8 @@ paths:
       x-paddock-audit: managed_unit.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       requestBody:
         required: true
         content:
@@ -1982,6 +2002,8 @@ paths:
       x-paddock-audit: managed_unit.deleted
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       responses:
         "204":
           description: Deleted.
@@ -1989,6 +2011,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /api/v1/users:
     get:
@@ -2654,6 +2677,8 @@ paths:
       x-paddock-audit: settings.updates_changed
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       requestBody:
         required: true
         content:
@@ -2668,6 +2693,7 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
 
   /api/v1/settings/rollout:
@@ -2787,6 +2813,8 @@ paths:
       x-paddock-audit: package_hold.created
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       requestBody:
         required: true
         content:
@@ -2828,6 +2856,8 @@ paths:
       x-paddock-audit: package_hold.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       requestBody:
         required: true
         content:
@@ -2843,6 +2873,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
     delete:
       operationId: deletePackageHold
       tags: [updates]
@@ -2850,6 +2881,8 @@ paths:
       x-paddock-audit: package_hold.deleted
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/RolloutUrgent"
+        - $ref: "#/components/parameters/RolloutReason"
       responses:
         "204":
           description: Deleted.
@@ -2857,6 +2890,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/overview:
     get:
       operationId: getOverview
@@ -5462,6 +5496,19 @@ components:
         type: string
         enum: [username, -username, display_name, -display_name, role, -role]
         default: username
+    RolloutUrgent:
+      name: urgent
+      in: query
+      description: |
+        Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+        step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+        (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+      schema: { type: boolean, default: false }
+    RolloutReason:
+      name: reason
+      in: query
+      description: Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+      schema: { type: string, minLength: 2, maxLength: 500 }
     Csrf:
       name: X-Paddock-CSRF
       in: header
@@ -6727,13 +6774,18 @@ components:
           description: Hex SHA-256 of the plan's canonical JSON; send it as expected_plan to apply exactly this plan.
         change_set_id: { type: string, format: uuid, nullable: true, description: Null for dry runs and empty plans. }
         plan: { $ref: "#/components/schemas/ConfigPlan" }
+        rollout:
+          allOf: [{ $ref: "#/components/schemas/ChangeSetRollout" }]
+          nullable: true
+          description: The rollout mode of the recorded change set; null for dry runs and empty plans.
+        rollout_id: { type: string, format: uuid, nullable: true, description: The rollout a staged change set started. }
     ChangeSetSource:
       type: string
       enum: [session, api_token]
     ChangeSetRollout:
       type: string
       enum: [immediate, staged, urgent]
-      description: "immediate: every device receives the change at once. staged and urgent are set by staged rollouts."
+      description: "immediate: every device receives the change at once. staged: the change set started a rollout. urgent: it would have been staged and skipped the rollout with a reason."
     ChangeSetActor:
       type: object
       required: [type, display]
@@ -6768,7 +6820,7 @@ components:
         before_available:
           type: boolean
           description: Whether the before-states are stored. False for change sets recorded before they were stored and after they were purged.
-        rollout_id: { type: string, format: uuid, nullable: true, description: The staged rollout of this change set; null until staged rollouts exist. }
+        rollout_id: { type: string, format: uuid, nullable: true, description: The rollout this change set started; null unless staged. }
     ChangeSetPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -7219,7 +7271,7 @@ components:
         version: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
         schema_version: { type: integer }
-        config_rollout_id: { type: string, format: uuid, nullable: true, description: The configuration rollout that produced the version; null until configuration rollouts exist. }
+        config_rollout_id: { type: string, format: uuid, nullable: true, description: The configuration rollout whose staged change the version carries; null otherwise. }
         report:
           nullable: true
           description: What the device reported about the version; null until it reported.
@@ -8528,6 +8580,16 @@ components:
         conflicts:
           type: array
           items: { $ref: "#/components/schemas/ConfigConflict" }
+        rollout:
+          type: object
+          nullable: true
+          description: |
+            The organization's open configuration rollout; null without one. The configuration above is the live one;
+            a device outside the wave (in_wave false) keeps the before-state of the rollout's staged keys.
+          required: [id, in_wave]
+          properties:
+            id: { type: string, format: uuid }
+            in_wave: { type: boolean }
     ManagedFileTier:
       type: string
       enum: [ordinary, sensitive, denied]

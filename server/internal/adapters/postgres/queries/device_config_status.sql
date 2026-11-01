@@ -109,7 +109,7 @@ SELECT count(*) FROM (
 
 -- Every bundle version of the device with the device's report of it; outcome none selects versions without a report.
 -- name: ListDeviceBundles :many
-SELECT b.version, b.created_at, b.schema_version, r.outcome AS report_outcome, r.mode AS report_mode, r.changed AS report_changed,
+SELECT b.version, b.created_at, b.schema_version, b.config_rollout_id, r.outcome AS report_outcome, r.mode AS report_mode, r.changed AS report_changed,
        r.error_count AS report_error_count, r.reason AS report_reason, r.occurred_at AS report_occurred_at
 FROM bundle b LEFT JOIN device_bundle_report r ON r.device_id = b.device_id AND r.version = b.version
 WHERE b.device_id = @device_id

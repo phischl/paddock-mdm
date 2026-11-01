@@ -4,27 +4,63 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/configrollout"
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
-// RolloutImmediate is the rollout of a change set every device receives at once; staging and the urgent opt-out
-// (plan M11 decisions 25 and 26) replace it for the change sets they apply to.
-const RolloutImmediate = "immediate"
+// Rollout modes of a change set (plan M11 decision 4).
+const (
+	// RolloutImmediate: every device receives the change at once (rollouts disabled, or nothing rollout-able changed).
+	RolloutImmediate = "immediate"
+	// RolloutStaged: the change set started a configuration rollout.
+	RolloutStaged = "staged"
+	// RolloutUrgent: the change would have been staged, the caller opted out with a reason.
+	RolloutUrgent = "urgent"
+)
+
+// WriteOptions are the urgent opt-out of a configuration write (plan M11 decision 26): Urgent skips the staged
+// rollout and needs Reason (2–500 characters) and a fresh step-up. Reason without Urgent is stored as the change set's
+// reason.
+type WriteOptions struct {
+	Urgent bool
+	Reason string
+}
+
+// writeOptions returns the options of a use case whose options are optional.
+func writeOptions(opts []WriteOptions) WriteOptions {
+	if len(opts) == 0 {
+		return WriteOptions{}
+	}
+	return opts[0]
+}
 
 // withChangeSet makes a configuration write record its change set (plan M11 decisions 18 and 19, ADR 0011): it reads
 // the configuration before fn runs, and afterwards, in the same transaction, diffs it against the configuration fn
 // left and stores one change set with the before-states of what changed. The diff covers whatever fn wrote, so a
 // device group deletion lists every definition that went with the group. A write that changes nothing records none.
 func withChangeSet(fn func(ctx context.Context, q *pgstore.Queries, rec Recorder) error) func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return withStagedChangeSet(WriteOptions{}, fn)
+}
+
+// withStagedChangeSet is withChangeSet for the writes that take the urgent opt-out (plan M11 decision 26). Both apply
+// the conflict and staging rules of the organization's rollouts (decisions 25 and 29) to the recorded plan.
+func withStagedChangeSet(opts WriteOptions, fn func(ctx context.Context, q *pgstore.Queries, rec Recorder) error) func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 	return func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		// The lock of the declarative apply: it keeps the before-state equal to what fn replaces, and it is taken first
 		// everywhere, so the writers cannot deadlock on each other's later locks.
 		if err := q.LockConfigApply(ctx); err != nil {
+			return err
+		}
+		w, err := startRolloutWrite(ctx, q, rec, opts)
+		if err != nil {
 			return err
 		}
 		before, err := loadConfig(ctx, q)
@@ -34,14 +70,15 @@ func withChangeSet(fn func(ctx context.Context, q *pgstore.Queries, rec Recorder
 		if err := fn(ctx, q, rec); err != nil {
 			return err
 		}
-		return recordChangeSet(ctx, q, rec, before)
+		return recordChangeSet(ctx, q, rec, before, w)
 	}
 }
 
 // recordChangeSet stores the change set of what turned before into the transaction's current configuration and names
 // it in the audit event (param change_set_id). The action's own audit event is the only one: a change set is evidence
-// next to it, not an action.
-func recordChangeSet(ctx context.Context, q *pgstore.Queries, rec Recorder, before configState) error {
+// next to it, not an action. Staged keys come from the recorded plan (plan M11 amendment R6.10), so a write that
+// touches a key of the open rollout is refused here and rolled back with everything fn wrote.
+func recordChangeSet(ctx context.Context, q *pgstore.Queries, rec Recorder, before configState, w rolloutWrite) error {
 	after, err := loadConfig(ctx, q)
 	if err != nil {
 		return fmt.Errorf("read the configuration after the change: %w", err)
@@ -54,13 +91,237 @@ func recordChangeSet(ctx context.Context, q *pgstore.Queries, rec Recorder, befo
 	if !ok {
 		return fmt.Errorf("record change set: no principal")
 	}
+	st, err := w.stage(before, plan, uuid.Nil, renamedGroups(before, after))
+	if err != nil {
+		return err
+	}
 	id := uuid.Must(uuid.NewV7())
-	if err := insertChangeSet(ctx, q, id, p, false, plan, plan.SectionsOf(), before, changeSetMeta{}); err != nil {
+	if err := insertChangeSet(ctx, q, id, p, false, plan, plan.SectionsOf(), before, w.meta(st.mode)); err != nil {
 		return err
 	}
 	rec.SetParam("change_set_id", id.String())
-	rec.SetParam("rollout", RolloutImmediate)
+	return w.finish(ctx, q, rec, id, st)
+}
+
+// rolloutWrite carries the urgent opt-out and the rollout settings of one configuration write from its start to the
+// recording of its change set.
+type rolloutWrite struct {
+	opts     WriteOptions
+	settings RolloutConfig
+	// open is the organization's open rollout before the write; nil without one. Read before the write because a
+	// deleted canary group would already be gone from it (ON DELETE SET NULL).
+	open *pgstore.GetOpenConfigRolloutRow
+}
+
+// startRolloutWrite checks the urgent opt-out inside the action, so a refusal is audited (plan M11 decision 26): a
+// reason of 2–500 characters, urgent only with a reason and only while rollouts are enabled, and a fresh step-up. rec
+// is nil for dry runs: they change nothing, so they need no step-up and record nothing.
+func startRolloutWrite(ctx context.Context, q *pgstore.Queries, rec Recorder, opts WriteOptions) (rolloutWrite, error) {
+	if _, err := writeMeta(opts); err != nil {
+		return rolloutWrite{}, err
+	}
+	if opts.Urgent && rec != nil {
+		rec.SetParam("urgent_reason", opts.Reason)
+	}
+	settings, err := LoadRolloutSettings(ctx, q)
+	if err != nil {
+		return rolloutWrite{}, err
+	}
+	if opts.Urgent {
+		if !settings.Enabled {
+			return rolloutWrite{}, problem.InvalidRequest.WithDetail("rollouts are disabled for this organization")
+		}
+		if rec != nil {
+			if err := rec.RequireStepUp(); err != nil {
+				return rolloutWrite{}, err
+			}
+		}
+	}
+	w := rolloutWrite{opts: opts, settings: settings}
+	switch open, err := q.GetOpenConfigRollout(ctx); {
+	case err == nil:
+		w.open = &open
+	case !db.IsNoRows(err):
+		return rolloutWrite{}, err
+	}
+	return w, nil
+}
+
+// staging is the rollout decision of one change set.
+type staging struct {
+	mode string
+	// ends is the open rollout the write reverts the change set of; it ends with the write (plan M11 decision 21.3).
+	ends *pgstore.GetOpenConfigRolloutRow
+}
+
+// stage applies the conflict rule (plan M11 decision 29) and the staging rule (decision 25) as amendment R6.13 states
+// them to plan, which turns before into the new configuration; before must not yet reflect the write. reverts is the
+// change set a revert undoes (uuid.Nil otherwise): the revert of the open rollout's change set is always immediate,
+// touches exactly the staged keys and ends the rollout. renamed are the new names of groups the write renamed by
+// identity, whose items are not staged.
+func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts uuid.UUID, renamed map[string]bool) (staging, error) {
+	open := w.open
+	stageable := configrollout.StagedKeysExcept(plan, renamed)
+	switch {
+	case open == nil:
+		return staging{mode: rolloutModeFor(w.settings.Settings, stageable, w.opts.Urgent)}, nil
+	case reverts != uuid.Nil && reverts == open.ChangeSetID:
+		return staging{mode: RolloutImmediate, ends: open}, nil
+	}
+	staged, err := stagedKeysOf(*open)
+	if err != nil {
+		return staging{}, err
+	}
+	if err := requireNotStaged(open.ID, staged, plan); err != nil {
+		return staging{}, err
+	}
+	if err := requireGroupsNotStaged(*open, staged, before, plan); err != nil {
+		return staging{}, err
+	}
+	if w.opts.Urgent {
+		return staging{mode: rolloutModeFor(w.settings.Settings, stageable, true)}, nil
+	}
+	// One open rollout per organization (ADR 0033 E1, amendment 2026-11-01): a change of a section the rollout stages
+	// would be a second staged change set and is refused as a whole, even after rollouts were switched off; a change of
+	// only other sections is not a rollout and reaches every device.
+	stagedSections := map[string]bool{}
+	for section := range staged {
+		stagedSections[configrollout.SectionGroup(section)] = true
+	}
+	for section := range stageable {
+		if stagedSections[configrollout.SectionGroup(section)] {
+			return staging{}, problem.RolloutRunning.WithDetail("complete or revert rollout " + open.ID.String() + " first")
+		}
+	}
+	return staging{mode: RolloutImmediate}, nil
+}
+
+// stagedKeysOf returns the staged keys of the open rollout by section.
+func stagedKeysOf(open pgstore.GetOpenConfigRolloutRow) (map[string]map[string]bool, error) {
+	var plan declarative.Plan
+	if err := json.Unmarshal(open.Plan, &plan); err != nil {
+		return nil, fmt.Errorf("decode the plan of rollout %s: %w", open.ID, err)
+	}
+	return configrollout.StagedKeys(plan), nil
+}
+
+// meta returns the change set columns of the write's options and rollout mode.
+func (w rolloutWrite) meta(mode string) changeSetMeta {
+	m, _ := writeMeta(w.opts) // checked by startRolloutWrite
+	m.Rollout = mode
+	return m
+}
+
+// finish names the rollout mode in the audit event and starts the staged rollout (plan M11 decision 31) or ends the
+// reverted one, in the transaction of change set id.
+func (w rolloutWrite) finish(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID, st staging) error {
+	rec.SetParam("rollout", st.mode)
+	switch {
+	case st.mode == RolloutStaged:
+		p, _ := principal.From(ctx)
+		waves := make([]int32, len(w.settings.Waves))
+		for i, v := range w.settings.Waves {
+			waves[i] = int32(v) //nolint:gosec // 1..100 (ValidateWaves)
+		}
+		canary := uuid.NullUUID{}
+		if w.settings.CanaryDeviceGroupID != nil {
+			canary = uuid.NullUUID{UUID: *w.settings.CanaryDeviceGroupID, Valid: true}
+		}
+		r, err := q.InsertConfigRollout(ctx, pgstore.InsertConfigRolloutParams{
+			ID: uuid.Must(uuid.NewV7()), OrganizationID: p.OrganizationID, ChangeSetID: id, Waves: waves,
+			MinWaveMinutes: int32(w.settings.MinWaveMinutes), FailureThresholdPercent: int32(w.settings.FailureThresholdPercent), //nolint:gosec // validated settings
+			FailureThresholdMin: int32(w.settings.FailureThresholdMin), CanaryDeviceGroupID: canary, StartedBy: actorName(ctx), //nolint:gosec // validated settings
+		})
+		if db.IsUniqueViolation(err, "config_rollout_one_open_idx") {
+			return problem.RolloutRunning.WithDetail("another rollout started concurrently; complete or revert it first")
+		}
+		if err != nil {
+			return fmt.Errorf("start the rollout of change set %s: %w", id, err)
+		}
+		rec.SetParam("rollout_id", r.ID.String())
+	case st.ends != nil:
+		reason := "reverted by change set " + id.String()
+		n, err := q.EndConfigRolloutReverted(ctx, pgstore.EndConfigRolloutRevertedParams{ID: st.ends.ID, EndedReason: &reason})
+		if err != nil {
+			return fmt.Errorf("end rollout %s: %w", st.ends.ID, err)
+		}
+		if n != 1 {
+			return problem.RolloutConflict.WithDetail("rollout " + st.ends.ID.String() + " ended concurrently; review the change set and revert again")
+		}
+		rec.SetParam("rollout_id", st.ends.ID.String())
+		rec.SetParam("rollout_status", configrollout.StatusReverted)
+	}
 	return nil
+}
+
+// rolloutModeFor is the staging rule (plan M11 decision 25): staged when rollouts are enabled and the write has keys a
+// rollout stages (stageable, from configrollout.StagedKeysExcept), urgent when the caller opted out of that, else
+// immediate.
+func rolloutModeFor(settings configrollout.Settings, stageable map[string]map[string]bool, urgent bool) string {
+	switch {
+	case !settings.Enabled || len(stageable) == 0:
+		return RolloutImmediate
+	case urgent:
+		return RolloutUrgent
+	default:
+		return RolloutStaged
+	}
+}
+
+// renamedGroups returns the names of after's device groups that before had under another name: a rename keeps the
+// group's identity, which the plan's natural keys do not show.
+func renamedGroups(before, after configState) map[string]bool {
+	ids := map[uuid.UUID]bool{}
+	for _, id := range before.groups {
+		ids[id] = true
+	}
+	out := map[string]bool{}
+	for name, id := range after.groups {
+		if _, kept := before.groups[name]; !kept && ids[id] {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// requireGroupsNotStaged refuses a rename or deletion of a device group that scopes a staged item or is the canary
+// group of the open rollout (plan M11 amendment R6.13): the overlay finds before items by group name, and canary
+// devices would leave the wave. before is the configuration the plan changed.
+func requireGroupsNotStaged(open pgstore.GetOpenConfigRolloutRow, staged map[string]map[string]bool, before configState, plan declarative.Plan) error {
+	scoping := map[string]bool{}
+	for _, keys := range staged {
+		for key := range keys {
+			if g, ok := configrollout.KeyGroup(key); ok {
+				scoping[g] = true
+			}
+		}
+	}
+	for _, c := range plan.Changes {
+		if c.Section != declarative.SectionDeviceGroups || c.Action != declarative.ActionDelete {
+			continue
+		}
+		name := configrollout.KeyName(c.Key)
+		canary := open.CanaryDeviceGroupID.Valid && before.groups[name] == open.CanaryDeviceGroupID.UUID
+		if scoping[name] || canary {
+			return problem.RolloutConflict.WithDetail(fmt.Sprintf("device group %q scopes items of rollout %s or is its canary group; complete or revert the rollout first", name, open.ID))
+		}
+	}
+	return nil
+}
+
+// requireNotStaged refuses a plan that changes a key of staged, the staged keys of the open rollout (plan M11 decision
+// 29), with rollout_conflict, naming the rollout and the first conflicting key.
+func requireNotStaged(rollout uuid.UUID, staged map[string]map[string]bool, plan declarative.Plan) error {
+	i := slices.IndexFunc(plan.Changes, func(c declarative.Change) bool { return staged[c.Section][c.Key] })
+	if i < 0 {
+		return nil
+	}
+	c := plan.Changes[i]
+	what := c.Section
+	if c.Key != "" {
+		what += " " + c.Key
+	}
+	return problem.RolloutConflict.WithDetail(fmt.Sprintf("%s is staged by rollout %s; complete or revert the rollout first", what, rollout))
 }
 
 // beforeStates is the "before" column of a change set: for every update and deletion of plan the item as GET

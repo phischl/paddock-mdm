@@ -333,6 +333,18 @@ func TestChangeSetBeforePurge(t *testing.T) {
 		return id
 	}
 	old, young := insert(100*time.Second), insert(80*time.Second)
+	// An expired change set of an open (here halted) rollout keeps its before-state; one of a completed rollout does not.
+	pinned, done := insert(100*time.Second), insert(100*time.Second)
+	for _, r := range []struct {
+		cs     uuid.UUID
+		status string
+	}{{pinned, "halted"}, {done, "completed"}} {
+		if _, err := w.super.Exec(ctx, `INSERT INTO config_rollout (id, organization_id, change_set_id, waves, min_wave_minutes,
+			failure_threshold_percent, failure_threshold_min, status, started_by, started_at) VALUES ($1, $2, $3, '{100}', 60, 2, 3, $4, 'a', $5)`,
+			uuid.Must(uuid.NewV7()), org, r.cs, r.status, now.Add(-100*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	other := w.organization(t, 0, now)
 	foreign := uuid.Must(uuid.NewV7())
 	if _, err := w.super.Exec(ctx, `INSERT INTO change_set (id, organization_id, applied_at, actor, source, created_n, updated_n, deleted_n, sections, plan, before)
@@ -345,8 +357,15 @@ func TestChangeSetBeforePurge(t *testing.T) {
 		t.Fatalf("admin purge = %d, %v", n, err)
 	}
 	n, err := w.retention.PurgeChangeSetBefore(systemCtx(org), now)
-	if err != nil || n != 1 {
-		t.Fatalf("purged %d (%v), want 1", n, err)
+	if err != nil || n != 2 {
+		t.Fatalf("purged %d (%v), want 2", n, err)
+	}
+	var pinnedBefore, doneBefore []byte
+	if err := w.super.QueryRow(ctx, "SELECT before FROM change_set WHERE id = $1", pinned).Scan(&pinnedBefore); err != nil || pinnedBefore == nil {
+		t.Fatalf("the open rollout's change set lost its before-state: %s, %v", pinnedBefore, err)
+	}
+	if err := w.super.QueryRow(ctx, "SELECT before FROM change_set WHERE id = $1", done).Scan(&doneBefore); err != nil || doneBefore != nil {
+		t.Fatalf("the completed rollout's change set kept its before-state: %s, %v", doneBefore, err)
 	}
 	var oldBefore, youngBefore []byte
 	var purgedAt *time.Time

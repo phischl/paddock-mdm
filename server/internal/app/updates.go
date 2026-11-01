@@ -85,7 +85,7 @@ func (u *Updates) GetSettings(ctx context.Context) (UpdateSettings, error) {
 
 // UpdateSettings replaces the organization's update settings (audited: settings.updates_changed); every device is
 // recompiled. An empty AgentUpdatePolicy keeps the stored one (clients and documents that predate it).
-func (u *Updates) UpdateSettings(ctx context.Context, in updates.Settings) (UpdateSettings, error) {
+func (u *Updates) UpdateSettings(ctx context.Context, in updates.Settings, opts ...WriteOptions) (UpdateSettings, error) {
 	spec := SpecUpdateSettings
 	if org, err := orgOf(ctx); err == nil {
 		spec.Target = &audit.Target{Type: "organization", ID: org.String()}
@@ -96,7 +96,7 @@ func (u *Updates) UpdateSettings(ctx context.Context, in updates.Settings) (Upda
 		"staleness_warning_h": in.StalenessWarningH, "staleness_critical_h": in.StalenessCriticalH,
 	}
 	var out UpdateSettings
-	err := u.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := u.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if in.AgentUpdatePolicy == "" {
 			cur, err := LoadUpdateSettings(ctx, q)
 			if err != nil {
@@ -184,11 +184,11 @@ type HoldInput struct {
 
 // CreateHold holds a package for the organization or a device group (audited: package_hold.created); the affected
 // devices are recompiled.
-func (u *Updates) CreateHold(ctx context.Context, in HoldInput) (pgstore.PackageHold, error) {
+func (u *Updates) CreateHold(ctx context.Context, in HoldInput, opts ...WriteOptions) (pgstore.PackageHold, error) {
 	var h pgstore.PackageHold
 	spec := SpecPackageHoldCreate
 	spec.Params = holdParams(in.Package, in.Version, in.DeviceGroupID, in.Reason)
-	err := u.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := u.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if err := updates.ValidateHold(in.Package, in.Version, in.Reason); err != nil {
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}
@@ -218,11 +218,11 @@ func (u *Updates) CreateHold(ctx context.Context, in HoldInput) (pgstore.Package
 }
 
 // UpdateHold changes the version and the reason of a package hold (audited: package_hold.updated).
-func (u *Updates) UpdateHold(ctx context.Context, id uuid.UUID, version *string, reason string) (pgstore.PackageHold, error) {
+func (u *Updates) UpdateHold(ctx context.Context, id uuid.UUID, version *string, reason string, opts ...WriteOptions) (pgstore.PackageHold, error) {
 	var h pgstore.PackageHold
 	spec := SpecPackageHoldUpdate
 	spec.Target = &audit.Target{Type: "package_hold", ID: id.String()}
-	err := u.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := u.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetPackageHold(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -246,10 +246,10 @@ func (u *Updates) UpdateHold(ctx context.Context, id uuid.UUID, version *string,
 
 // DeleteHold removes a package hold (audited: package_hold.deleted); the affected devices are recompiled and release
 // the hold.
-func (u *Updates) DeleteHold(ctx context.Context, id uuid.UUID) error {
+func (u *Updates) DeleteHold(ctx context.Context, id uuid.UUID, opts ...WriteOptions) error {
 	spec := SpecPackageHoldDelete
 	spec.Target = &audit.Target{Type: "package_hold", ID: id.String()}
-	return u.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return u.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetPackageHold(ctx, id)
 		if err != nil {
 			return notFound(err)
