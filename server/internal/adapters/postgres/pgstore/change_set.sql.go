@@ -123,9 +123,12 @@ func (q *Queries) GetChangeSetForRevert(ctx context.Context, id uuid.UUID) (GetC
 }
 
 const hasExpiredChangeSetBefore = `-- name: HasExpiredChangeSetBefore :one
-SELECT EXISTS (SELECT 1 FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz)
+SELECT EXISTS (SELECT 1 FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz
+  AND NOT EXISTS (SELECT 1 FROM config_rollout r WHERE r.change_set_id = change_set.id AND r.status IN ('running', 'halted')))
 `
 
+// The change set of an open (running or halted) rollout keeps its before-state until the rollout is completed or
+// reverted: the compiler overlays it for the devices outside the wave (ADR 0032 and 0033 amendments 2026-11-01).
 func (q *Queries) HasExpiredChangeSetBefore(ctx context.Context, cutoff time.Time) (bool, error) {
 	row := q.db.QueryRow(ctx, hasExpiredChangeSetBefore, cutoff)
 	var exists bool
@@ -284,12 +287,14 @@ func (q *Queries) LockConfigApply(ctx context.Context) error {
 
 const purgeExpiredChangeSetBefore = `-- name: PurgeExpiredChangeSetBefore :execrows
 UPDATE change_set SET before = NULL, before_purged_at = now() WHERE id IN (
-  SELECT id FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz LIMIT 1000
+  SELECT id FROM change_set WHERE before IS NOT NULL AND applied_at < $1::timestamptz
+    AND NOT EXISTS (SELECT 1 FROM config_rollout r WHERE r.change_set_id = change_set.id AND r.status IN ('running', 'halted'))
+  LIMIT 1000
 )
 `
 
 // One batch of before-states older than the cutoff (plan M11 amendment 2026-10-29): the change set stays, its before
-// state is cleared and the time stamped.
+// state is cleared and the time stamped. Change sets of open rollouts are kept, as in HasExpiredChangeSetBefore.
 func (q *Queries) PurgeExpiredChangeSetBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeExpiredChangeSetBefore, cutoff)
 	if err != nil {

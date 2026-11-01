@@ -56,11 +56,16 @@ SELECT count(*) FROM (
 ) matching;
 
 -- name: HasExpiredChangeSetBefore :one
-SELECT EXISTS (SELECT 1 FROM change_set WHERE before IS NOT NULL AND applied_at < @cutoff::timestamptz);
+-- The change set of an open (running or halted) rollout keeps its before-state until the rollout is completed or
+-- reverted: the compiler overlays it for the devices outside the wave (ADR 0032 and 0033 amendments 2026-11-01).
+SELECT EXISTS (SELECT 1 FROM change_set WHERE before IS NOT NULL AND applied_at < @cutoff::timestamptz
+  AND NOT EXISTS (SELECT 1 FROM config_rollout r WHERE r.change_set_id = change_set.id AND r.status IN ('running', 'halted')));
 
 -- name: PurgeExpiredChangeSetBefore :execrows
 -- One batch of before-states older than the cutoff (plan M11 amendment 2026-10-29): the change set stays, its before
--- state is cleared and the time stamped.
+-- state is cleared and the time stamped. Change sets of open rollouts are kept, as in HasExpiredChangeSetBefore.
 UPDATE change_set SET before = NULL, before_purged_at = now() WHERE id IN (
-  SELECT id FROM change_set WHERE before IS NOT NULL AND applied_at < @cutoff::timestamptz LIMIT 1000
+  SELECT id FROM change_set WHERE before IS NOT NULL AND applied_at < @cutoff::timestamptz
+    AND NOT EXISTS (SELECT 1 FROM config_rollout r WHERE r.change_set_id = change_set.id AND r.status IN ('running', 'halted'))
+  LIMIT 1000
 );

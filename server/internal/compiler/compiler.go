@@ -260,7 +260,7 @@ var specRenderFailed = app.ActionSpec{Code: audit.CodeDeviceBundleRenderFailed}
 func (c *Compiler) recordFailures(ctx context.Context, failures []renderFailure) {
 	for _, f := range failures {
 		metricBundles.WithLabelValues("render_failed").Inc()
-		slog.ErrorContext(ctx, "bundle blocked: a sudo entry failed the sudoers check", "device_id", f.device, "reason", f.reason)
+		slog.ErrorContext(ctx, "bundle blocked; the device keeps its previous bundle", "device_id", f.device, "reason", f.reason)
 		spec := specRenderFailed
 		spec.Target = &audit.Target{Type: "device", ID: f.device.String()}
 		spec.Params = map[string]any{"username": f.username, "reason": truncateReason(f.reason)}
@@ -358,9 +358,14 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	}
 	var rollout uuid.NullUUID
 	if overlay != nil {
-		if overlay.eligible(t.id) {
+		switch {
+		case overlay.eligible(t.id):
 			rollout = uuid.NullUUID{UUID: overlay.id, Valid: true}
-		} else {
+		case overlay.beforeMissing:
+			// Fail closed: without the before-state the device would get the staged change early or lose items.
+			return rendered{}, false, &renderFailure{device: t.id,
+				reason: "the before-state of configuration rollout " + overlay.id.String() + " is missing; the device keeps its previous bundle until the rollout is completed"}, nil
+		default:
 			defs, keys.Updates = overlay.apply(defs, keys.Updates)
 		}
 	}

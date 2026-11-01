@@ -203,3 +203,30 @@ func TestRolloutOverlayNeverWidens(t *testing.T) {
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	w.expectBefore(w.out)
 }
+
+// TestRolloutOverlayFailsClosedWithoutBefore (PDK-157 external review 3, X3-H1): when the open rollout's before-state
+// is gone while it stages updates and deletions, a device outside the wave keeps its previous bundle and the blocked
+// bundle is audited as a render failure; devices inside the wave still get new bundles.
+func TestRolloutOverlayFailsClosedWithoutBefore(t *testing.T) {
+	w := newStagedWorld(t)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	w.expectBefore(w.out)
+	outVersion, inVersion := w.version(w.out), w.version(w.in)
+
+	w.exec("UPDATE change_set SET before = NULL, before_purged_at = now() WHERE id = $1", w.changeSet)
+	w.exec("UPDATE managed_file SET content = 'changed' WHERE organization_id = $1 AND path = '/etc/acme/d.conf'", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if v := w.version(w.out); v != outVersion {
+		t.Fatalf("the device outside the wave got version %d, want it kept at %d", v, outVersion)
+	}
+	w.expectBefore(w.out)
+	if v := w.version(w.in); v != inVersion+1 {
+		t.Fatalf("the device inside the wave is at version %d, want %d", v, inVersion+1)
+	}
+	var reason string
+	if err := w.super.QueryRow(context.Background(), `SELECT params->>'reason' FROM action WHERE target->>'id' = $1
+		AND code = 'device.bundle_render_failed' AND outcome = 'failure' AND error_code = 'render_failed'`, w.out.String()).Scan(&reason); err != nil ||
+		!strings.Contains(reason, w.rollout.String()) {
+		t.Fatalf("render failure of %s: %q, %v", w.out, reason, err)
+	}
+}

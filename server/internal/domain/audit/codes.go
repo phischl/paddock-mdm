@@ -889,10 +889,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceBundleRenderFailed: {
 		Code: CodeDeviceBundleRenderFailed, Emitted: true,
-		Description: "The compiler blocked a device's new bundle because a rendered sudo entry failed the visudo check; the device keeps its previous bundle (actor: system).",
+		Description: "The compiler blocked a device's new bundle because a rendered sudo entry failed the visudo check, or because the device is outside the wave of a configuration rollout whose before-state is missing; the device keeps its previous bundle (actor: system).",
 		Params:      []string{"username", "reason"},
 		Outcomes:    []Outcome{OutcomeFailure},
-		Note:        "error_code is render_failed; reason is visudo's message (at most 500 characters).",
+		Note:        "error_code is render_failed; reason is visudo's message or names the rollout (at most 500 characters); username is empty for a rollout.",
 	},
 	CodeDeviceBundleEntryOmitted: {
 		Code: CodeDeviceBundleEntryOmitted, Emitted: true,

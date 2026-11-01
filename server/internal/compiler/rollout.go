@@ -36,6 +36,9 @@ type rolloutOverlay struct {
 	groupNames map[uuid.UUID]string
 	// overlaid is the result of apply: it depends only on the round's definitions, so it is computed once per round.
 	overlaid *overlaid
+	// beforeMissing: the staged plan updates or deletes items but the change set has no before-state (purged or never
+	// stored), so the overlay cannot render the state a device outside the wave must keep.
+	beforeMissing bool
 }
 
 // overlaid are the definitions and updates of a device outside the wave.
@@ -89,6 +92,13 @@ func loadOverlay(ctx context.Context, q *pgstore.Queries) (*rolloutOverlay, erro
 		groupIDs[g.Name] = g.ID
 	}
 	staged := configrollout.StagedKeys(plan)
+	if len(r.Before) == 0 || string(r.Before) == "null" {
+		for _, c := range plan.Changes {
+			if staged[c.Section][c.Key] && c.Action != declarative.ActionCreate {
+				o.beforeMissing = true
+			}
+		}
+	}
 	o.stagedFiles, o.stagedUnits, o.stagedHolds = staged[declarative.SectionManagedFiles], staged[declarative.SectionManagedUnits],
 		staged[declarative.SectionPackageHolds]
 	o.stagedSettings = staged[declarative.SectionSettingsUpdates][""]

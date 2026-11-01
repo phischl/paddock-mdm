@@ -247,3 +247,6 @@ rollout's canary group is refused with 409 `rollout_conflict`; item changes casc
 deletes or renames (by identity) are never staged and reach every device at once, while items of a group it creates
 follow the rules above. While a rollout is open, its rules apply even after rollouts are switched off; the way out is
 complete or revert. Every refusal is decided inside the audited action.
+(architect, 2026-11-01) An open rollout pins the before-state of its change set until it is completed or reverted; the
+retention purge skips it (ADR 0032 amendment 2026-11-01), and should it still be missing, a device outside the wave
+keeps its previous bundle (the compiler records a render failure) instead of receiving the staged change.

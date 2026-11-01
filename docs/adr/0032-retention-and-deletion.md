@@ -328,3 +328,8 @@ report of the same version replaces the row, an applied report replaces a reject
 time, and a rejection never replaces an applied report. It is kept with the device record, because `bundle` rows are
 never purged, and has no purge job in this milestone. Growth is bounded by the number of compiled bundle versions per device; a purge
 together with superseded bundles is a follow-up. Legal basis unchanged: Art. 6(1)(f) (A.8.9).
+
+## Amendment 2026-11-01 (plan M11, PDK-157) — before-state of an open rollout
+
+(architect, 2026-11-01) An open (running or halted) configuration rollout pins the before-state of its change set
+until it is completed or reverted: the purge of `change_set.before` after 90 days skips that change set.
