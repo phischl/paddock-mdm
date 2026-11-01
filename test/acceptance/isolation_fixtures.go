@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,8 @@ type isolationWorld struct {
 	globexChangeSet string
 	// globexResource is a failed resource of globexDevice's apply status (seedGlobexConfigStatus).
 	globexResource string
+	// globexBundleVersion is a bundle version of globexDevice with at least two digits (seedGlobexBundleVersion).
+	globexBundleVersion int64
 	// globexFinding is the open tamper finding of globexDevice (seedGlobexFinding).
 	globexFinding string
 	// globexExport is an evidence export of globex (seedGlobexExport).
@@ -828,7 +831,7 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/devices/{id}/software":         {{"q": {"globex-iso"}}},
 	"/api/v1/devices/{id}/vulnerabilities":  {{"q": {"globex-iso"}}, {"severity": {"high"}}},
 	"/api/v1/devices/{id}/config-status":    {{"q": {"globex-iso"}}, {"status": {"failed", "pending"}}},
-	"/api/v1/devices/{id}/bundles":          {{"q": {"1"}}, {"outcome": {"applied", "none"}}},
+	"/api/v1/devices/{id}/bundles":          {{"outcome": {"applied", "none"}}},
 	"/api/v1/config-status":                 {{"q": {"globex-iso"}, "page_size": {"100"}}, {"status": {"failed"}, "page_size": {"100"}}},
 	"/api/v1/vulnerabilities/{cve}/devices": {{"q": {"globex-iso"}}},
 	"/api/v1/revocation-requests": {
@@ -918,9 +921,67 @@ func currentPrivacySettings(t *testing.T, p *env.Portal) map[string]any {
 // retention purges within minutes.
 var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
 	"/api/v1/devices/{id}/logins":     seedGlobexLogin,
+	"/api/v1/devices/{id}/bundles":    seedGlobexBundleVersion,
 	"/api/v1/audit/verification-runs": seedGlobexVerificationRun,
 	"/api/v1/audit/manifests":         seedGlobexManifest,
 	"/api/v1/audit/exports":           seedGlobexExport,
+}
+
+// bundleVersionJump is how far seedGlobexBundleVersion raises the bundle sequence of globexDevice.
+const bundleVersionJump = 10
+
+// seedGlobexBundleVersion gives globexDevice a bundle version with at least two digits, which the bundle history
+// search needs (its terms have 2 to 100 characters and match the version's digits): a fresh device's versions are
+// small, so the device's bundle sequence jumps by bundleVersionJump, as bump-bundle-seq does for every device, and a
+// managed file of globex's group makes the compiler publish the next version from the raised sequence. Versions
+// are assigned from the sequence, so the new version exceeds the old one by more than bundleVersionJump.
+func seedGlobexBundleVersion(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	if w.globexBundleVersion != 0 {
+		return
+	}
+	before := waitBundleVersion(t, w.carol, w.globexDevice)
+	dsn, err := stack.PaddockOwnerDSN()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t, time.Minute)
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if _, err := conn.Exec(ctx, `UPDATE device SET bundle_seq = bundle_seq + $2 WHERE id = $1`, w.globexDevice, bundleVersionJump); err != nil {
+		t.Fatalf("raise the bundle sequence of %s: %v", w.globexDevice, err)
+	}
+	res := call(t, w.carol, http.MethodPost, "/api/v1/managed-files", map[string]any{
+		"path": "/etc/paddock-gates/globex-iso-bundle-" + uniqueSuffix() + ".conf", "content": "globex", "device_group_id": w.globexDeviceGroup,
+	})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexIDs = append(w.globexIDs, createdID(t, w.carol, "/api/v1/managed-files", res))
+	// The device's bundle_version is the sequence itself, which the jump raised at once: only the history list shows
+	// whether the bundle was published.
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+		polled := time.Now()
+		res := call(t, w.carol, http.MethodGet, "/api/v1/devices/"+w.globexDevice+"/bundles?sort=-version&page_size=10", nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var page struct {
+			Items []struct {
+				Version int64 `json:"version"`
+			} `json:"items"`
+		}
+		if err := res.JSON(&page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) > 0 && page.Items[0].Version >= before+bundleVersionJump {
+			w.globexBundleVersion = page.Items[0].Version
+			return
+		}
+		if polled.After(deadline) {
+			t.Fatalf("the bundle history of globex device %s has no version of %d or more: %s", w.globexDevice, before+bundleVersionJump, res.Body)
+		}
+	}
 }
 
 // seedGlobexExport makes sure globex has an evidence export and adds its ID to the globex IDs: the one of an earlier
@@ -1041,6 +1102,11 @@ func seedGlobexVerificationRun(t *testing.T, w *isolationWorld) {
 var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
 	"/api/v1/devices/{id}/logins": {
 		func(w *isolationWorld) url.Values { return url.Values{"username": {strings.ToLower(w.globexLogin)}} },
+	},
+	"/api/v1/devices/{id}/bundles": {
+		func(w *isolationWorld) url.Values {
+			return url.Values{"q": {strconv.FormatInt(w.globexBundleVersion, 10)}}
+		},
 	},
 	"/api/v1/attention/devices": {
 		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexDevice}} },
