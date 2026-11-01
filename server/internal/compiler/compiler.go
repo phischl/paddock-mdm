@@ -187,7 +187,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	if err != nil {
 		return err
 	}
-	err = c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	// One snapshot for every read of the round: a change set and its rollout commit together, so the definitions, the
+	// update settings and the overlay never come from different sides of a staged apply or of a rollout's revert.
+	err = c.pool.InOrgSnapshot(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		identity := &identityLoader{q: q}
 		ids, forced, err := expand(ctx, q, events, identity)
 		if err != nil || len(ids) == 0 {

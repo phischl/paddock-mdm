@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/policy"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/configrollout"
@@ -33,6 +34,14 @@ type rolloutOverlay struct {
 	stagedSettings                        bool
 	// groupNames maps the organization's device group IDs to their names, which the keys use.
 	groupNames map[uuid.UUID]string
+	// overlaid is the result of apply: it depends only on the round's definitions, so it is computed once per round.
+	overlaid *overlaid
+}
+
+// overlaid are the definitions and updates of a device outside the wave.
+type overlaid struct {
+	defs    app.ManagedDefinitions
+	updates *orgUpdates
 }
 
 // loadOverlay returns the open rollout of the context's organization; nil without one. Completed and reverted rollouts
@@ -90,7 +99,9 @@ func loadOverlay(ctx context.Context, q *pgstore.Queries) (*rolloutOverlay, erro
 }
 
 // loadBefore turns the stored before items of the staged keys into the compiler's definitions. An item whose device
-// group no longer exists is left out: it can reach no device, and scoping it to every device would widen it.
+// group no longer exists is left out: it can reach no device, and scoping it to every device would widen it. A file
+// on a denied path is left out like app.LoadManagedDefinitions leaves out a stored one (ADR 0034 decision 2): the
+// before-state never ships what the live state would not.
 func (o *rolloutOverlay) loadBefore(before map[string]map[string]json.RawMessage, groupIDs map[string]uuid.UUID) error {
 	group := func(name *string) (*uuid.UUID, bool) {
 		if name == nil {
@@ -106,6 +117,9 @@ func (o *rolloutOverlay) loadBefore(before map[string]map[string]json.RawMessage
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return fmt.Errorf("managed file %s: %w", key, err)
+		}
+		if policy.ValidatePath(f.Path) != nil {
+			continue
 		}
 		if g, ok := group(f.DeviceGroup); ok && o.stagedFiles[key] {
 			o.files = append(o.files, managedconfig.File{ID: f.ID, GroupID: g, Path: f.Path, Mode: f.Mode, Owner: f.Owner,
@@ -162,8 +176,18 @@ func (o *rolloutOverlay) eligible(device uuid.UUID) bool {
 
 // apply returns copies of defs and u in which every staged key carries its before-state: a staged creation is removed,
 // a staged update or deletion is replaced by (or restored as) its before item, staged update settings are replaced by
-// the before settings. defs and u are not changed; they serve the other devices of the round.
+// the before settings. defs and u are not changed; they serve the other devices of the round. defs and u are the same
+// for every device of a round, so the first result is reused.
 func (o *rolloutOverlay) apply(defs app.ManagedDefinitions, u *orgUpdates) (app.ManagedDefinitions, *orgUpdates) {
+	if o.overlaid == nil {
+		d, next := o.overlay(defs, u)
+		o.overlaid = &overlaid{defs: d, updates: next}
+	}
+	return o.overlaid.defs, o.overlaid.updates
+}
+
+// overlay computes apply's result.
+func (o *rolloutOverlay) overlay(defs app.ManagedDefinitions, u *orgUpdates) (app.ManagedDefinitions, *orgUpdates) {
 	out := defs
 	out.Files = make([]managedconfig.File, 0, len(defs.Files)+len(o.files))
 	for _, f := range defs.Files {

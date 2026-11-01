@@ -92,7 +92,7 @@ func (d *Declarative) Plan(ctx context.Context, raw []byte, opts ...WriteOptions
 		}
 		inheritOmitted(&desired, st.doc)
 		plan = declarative.Diff(st.doc, desired)
-		if _, err := w.stage(ctx, q, plan, uuid.Nil); err != nil {
+		if _, err := w.stage(st, plan, uuid.Nil); err != nil {
 			return err
 		}
 		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }}
@@ -160,7 +160,7 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 		if len(plan.Changes) == 0 {
 			return nil
 		}
-		staged, err := w.stage(ctx, q, plan, uuid.Nil)
+		staged, err := w.stage(st, plan, uuid.Nil)
 		if err != nil {
 			return err
 		}
@@ -249,7 +249,7 @@ func (d *Declarative) Revert(ctx context.Context, id uuid.UUID, expectedPlan str
 		if len(plan.Changes) == 0 {
 			return nil
 		}
-		staged, err := w.stage(ctx, q, plan, id)
+		staged, err := w.stage(st, plan, id)
 		if err != nil {
 			return err
 		}
@@ -292,7 +292,7 @@ func (d *Declarative) revertDryRun(ctx context.Context, id uuid.UUID, opts Rever
 		}
 		plan = declarative.Diff(st.doc, desired)
 		if len(plan.Changes) > 0 {
-			if _, err := w.stage(ctx, q, plan, id); err != nil {
+			if _, err := w.stage(st, plan, id); err != nil {
 				return err
 			}
 		}

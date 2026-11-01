@@ -755,3 +755,36 @@ func TestWithLeaderLocks(t *testing.T) {
 		t.Fatalf("first key not released after the failed attempt: ok %v, err %v", ok, err)
 	}
 }
+
+// TestInOrgSnapshot: every query of an InOrgSnapshot transaction sees the snapshot of its first query, so a change
+// committed in between is invisible (the compiler reads its definitions and the rollout overlay this way).
+func TestInOrgSnapshot(t *testing.T) {
+	f := newFixture(t)
+	err := f.org.InOrgSnapshot(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
+		before, err := q.ListAllDeviceGroups(ctx)
+		if err != nil {
+			return err
+		}
+		insertGroup(t, f.org, f.orgA, "group-a-concurrent")
+		after, err := q.ListAllDeviceGroups(ctx)
+		if err != nil {
+			return err
+		}
+		if len(after) != len(before) {
+			t.Errorf("the snapshot saw a concurrent commit: %d groups, then %d", len(before), len(after))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = f.org.InOrg(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
+		groups, err := q.ListAllDeviceGroups(ctx)
+		n = len(groups)
+		return err
+	})
+	if n != 2 {
+		t.Fatalf("%d groups after the snapshot, want 2", n)
+	}
+}

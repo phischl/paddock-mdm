@@ -242,5 +242,7 @@ rollout, a write that is not urgent:
 
 An urgent write that touches a staged key is refused with 409 `rollout_conflict`; one that does not is `urgent` and
 reaches every device. Reverts follow the same rule, except the revert of the open rollout's own change set, which is
-immediate and ends the rollout (option G1). A device group deletion is a write of every section it cascades into.
-Every refusal is decided inside the audited action.
+immediate and ends the rollout (option G1). A rename or deletion of a device group that scopes a staged item or is the
+rollout's canary group is refused with 409 `rollout_conflict`; item changes cascaded from a device group a change set
+renames, deletes or creates are never staged and reach every device at once. Every refusal is decided inside the
+audited action.

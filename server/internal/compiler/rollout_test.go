@@ -183,3 +183,41 @@ func TestRolloutOverlayHaltedCompletedReverted(t *testing.T) {
 		w.expectBefore(w.out)
 	}
 }
+
+// TestRolloutOverlayNeverWidens (PDK-157 review 1, B1/B2): outside the wave the overlay never ships a before item on a
+// denied path (ADR 0034 decision 2) or one whose device group is gone, and it stages no item change cascaded from a
+// device group the change set renamed (plan M11 amendment R6.13): such an item stays live.
+func TestRolloutOverlayNeverWidens(t *testing.T) {
+	w := newStagedWorld(t)
+	g3 := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'g3')", g3, w.org)
+	w.exec("INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)", w.org, g3, w.out)
+	w.exec("INSERT INTO managed_file (id, organization_id, device_group_id, path, mode, content) VALUES ($1, $2, $3, '/etc/acme/r.conf', '0644', 'renamed')",
+		uuid.Must(uuid.NewV7()), w.org, g3)
+	changes, _ := json.Marshal([]map[string]any{
+		{"section": "managed_files", "key": `[null,"/etc/sudoers.d/legacy"]`, "action": "delete"},
+		{"section": "managed_files", "key": `["gone","/etc/acme/gone.conf"]`, "action": "delete"},
+		{"section": "device_groups", "key": `["gx"]`, "action": "delete"},
+		{"section": "device_groups", "key": `["g3"]`, "action": "create"},
+		{"section": "managed_files", "key": `["gx","/etc/acme/r.conf"]`, "action": "delete"},
+		{"section": "managed_files", "key": `["g3","/etc/acme/r.conf"]`, "action": "create"},
+	})
+	before, _ := json.Marshal(map[string]any{
+		`[null,"/etc/sudoers.d/legacy"]`: map[string]any{"id": uuid.Must(uuid.NewV7()), "path": "/etc/sudoers.d/legacy", "device_group": nil,
+			"mode": "0440", "owner": "root", "group": "root", "content": "ALL ALL=(ALL) NOPASSWD: ALL"},
+		`["gone","/etc/acme/gone.conf"]`: map[string]any{"id": uuid.Must(uuid.NewV7()), "path": "/etc/acme/gone.conf", "device_group": "gone",
+			"mode": "0644", "owner": "root", "group": "root", "content": "gone"},
+		`["gx","/etc/acme/r.conf"]`: map[string]any{"id": uuid.Must(uuid.NewV7()), "path": "/etc/acme/r.conf", "device_group": "gx",
+			"mode": "0644", "owner": "root", "group": "root", "content": "old"},
+	})
+	w.exec(`UPDATE change_set SET plan = jsonb_set(plan, '{changes}', (plan->'changes') || $2::jsonb),
+		before = jsonb_set(before, '{managed_files}', (before->'managed_files') || $3::jsonb) WHERE id = $1`, w.changeSet, changes, before)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	b := w.fetch(w.out)
+	if got := managedIDs(b); got != "file:/etc/acme/a.conf,file:/etc/acme/c.conf,file:/etc/acme/d.conf,file:/etc/acme/r.conf,unit:x.service" {
+		t.Fatalf("overlaid resources %s", got)
+	}
+	if f := spec[bundle.FileSpec](t, b, "file:/etc/acme/r.conf"); f.Content != "renamed" {
+		t.Fatalf("the renamed group's file %+v, want the live one", f)
+	}
+}

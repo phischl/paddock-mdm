@@ -180,11 +180,6 @@ func rolloutSection(section string) bool {
 	return slices.Contains(declarative.RolloutSections(), section)
 }
 
-// Touches reports whether plan changes a section a rollout stages.
-func Touches(p declarative.Plan) bool {
-	return slices.ContainsFunc(p.Changes, func(c declarative.Change) bool { return rolloutSection(c.Section) })
-}
-
 // SectionGroup is the section of the one-open-rollout rule (ADR 0033 E1, amendment 2026-11-01): package holds and the
 // update settings render into the same bundle resource (updates) and count as one section.
 func SectionGroup(section string) string {
@@ -194,11 +189,20 @@ func SectionGroup(section string) string {
 	return section
 }
 
-// StagedKeys returns the keys of plan's changes in rollout-able sections by section (settings.updates: the key "").
+// Touches reports whether plan changes a key a rollout would stage.
+func Touches(p declarative.Plan) bool { return len(StagedKeys(p)) > 0 }
+
+// StagedKeys returns the keys of plan's changes in rollout-able sections by section (settings.updates: the key ""),
+// without the changes cascaded from a device group the plan renames, deletes or creates: those are never staged (plan
+// M11 amendment R6.13), because an overlay could not restore an item whose group is gone or renamed.
 func StagedKeys(p declarative.Plan) map[string]map[string]bool {
+	cascaded := ChangedGroups(p)
 	out := map[string]map[string]bool{}
 	for _, c := range p.Changes {
 		if !rolloutSection(c.Section) {
+			continue
+		}
+		if g, ok := KeyGroup(c.Key); ok && cascaded[g] {
 			continue
 		}
 		if out[c.Section] == nil {
@@ -214,25 +218,49 @@ func StagedKeys(p declarative.Plan) map[string]map[string]bool {
 // of one of these resources counts against the rollout.
 func StagedResourceIDs(p declarative.Plan) []string {
 	var out []string
-	for _, c := range p.Changes {
-		switch c.Section {
-		case declarative.SectionManagedFiles:
-			out = append(out, "file:"+keyName(c.Key))
-		case declarative.SectionManagedUnits:
-			out = append(out, "unit:"+keyName(c.Key))
-		case declarative.SectionPackageHolds, declarative.SectionSettingsUpdates:
-			out = append(out, "updates")
+	for section, keys := range StagedKeys(p) {
+		for key := range keys {
+			switch section {
+			case declarative.SectionManagedFiles:
+				out = append(out, "file:"+KeyName(key))
+			case declarative.SectionManagedUnits:
+				out = append(out, "unit:"+KeyName(key))
+			case declarative.SectionPackageHolds, declarative.SectionSettingsUpdates:
+				out = append(out, "updates")
+			}
 		}
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
 }
 
-// keyName is the name part of a group-scoped key ([group, name]).
-func keyName(key string) string {
+// ChangedGroups returns the names of the device groups plan deletes or creates; a rename is a deletion of the old name
+// and a creation of the new one (natural keys).
+func ChangedGroups(p declarative.Plan) map[string]bool {
+	out := map[string]bool{}
+	for _, c := range p.Changes {
+		if c.Section == declarative.SectionDeviceGroups && c.Action != declarative.ActionUpdate {
+			out[KeyName(c.Key)] = true
+		}
+	}
+	return out
+}
+
+// KeyGroup returns the device group of a group-scoped key ([group, name]); false for an item of every device and for
+// keys that are not group-scoped.
+func KeyGroup(key string) (string, bool) {
 	var parts []*string
-	if err := json.Unmarshal([]byte(key), &parts); err != nil || len(parts) < 2 || parts[1] == nil {
+	if err := json.Unmarshal([]byte(key), &parts); err != nil || len(parts) < 2 || parts[0] == nil {
+		return "", false
+	}
+	return *parts[0], true
+}
+
+// KeyName is the name part of a key: the last part of a group-scoped key ([group, name]) or the only one ([name]).
+func KeyName(key string) string {
+	var parts []*string
+	if err := json.Unmarshal([]byte(key), &parts); err != nil || len(parts) == 0 || parts[len(parts)-1] == nil {
 		return key
 	}
-	return *parts[1]
+	return *parts[len(parts)-1]
 }

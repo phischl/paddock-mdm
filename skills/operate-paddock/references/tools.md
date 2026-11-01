@@ -38,11 +38,11 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
 | `createDeviceGroup` | write | no | POST /api/v1/device-groups |
-| `deleteDeviceGroup` | write | yes | DELETE /api/v1/device-groups/{id} |
+| `deleteDeviceGroup` | write | yes | While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13). |
 | `getDeviceGroup` | read | no | GET /api/v1/device-groups/{id} |
 | `listDeviceGroupDevices` | read | no | The members of a device group. |
 | `listDeviceGroups` | read | no | GET /api/v1/device-groups |
-| `updateDeviceGroup` | write | no | PATCH /api/v1/device-groups/{id} |
+| `updateDeviceGroup` | write | no | While a configuration rollout is open, renaming a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict (plan M11 amendment R6.13). |
 
 ## devices
 

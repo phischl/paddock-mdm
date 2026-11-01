@@ -186,7 +186,7 @@ func TestDecide(t *testing.T) {
 
 func TestStagedKeysAndResourceIDs(t *testing.T) {
 	plan := declarative.Plan{Changes: []declarative.Change{
-		{Section: declarative.SectionDeviceGroups, Key: `["lab"]`, Action: declarative.ActionCreate},
+		{Section: declarative.SectionDeviceGroups, Key: `["lab"]`, Action: declarative.ActionUpdate},
 		{Section: declarative.SectionManagedFiles, Key: `["lab","/etc/motd"]`, Action: declarative.ActionCreate},
 		{Section: declarative.SectionManagedFiles, Key: `[null,"/etc/motd"]`, Action: declarative.ActionUpdate},
 		{Section: declarative.SectionManagedUnits, Key: `[null,"foo.service"]`, Action: declarative.ActionDelete},
@@ -216,5 +216,34 @@ func TestSectionGroup(t *testing.T) {
 		SectionGroup(declarative.SectionManagedFiles) == SectionGroup(declarative.SectionManagedUnits) ||
 		SectionGroup(declarative.SectionManagedFiles) != declarative.SectionManagedFiles {
 		t.Fatal("SectionGroup")
+	}
+}
+
+// TestStagedKeysSkipGroupCascades (plan M11 amendment R6.13): the item changes of a renamed, deleted or created device
+// group are never staged; other changes of the same plan are.
+func TestStagedKeysSkipGroupCascades(t *testing.T) {
+	plan := declarative.Plan{Changes: []declarative.Change{
+		{Section: declarative.SectionDeviceGroups, Key: `["old"]`, Action: declarative.ActionDelete},
+		{Section: declarative.SectionDeviceGroups, Key: `["new"]`, Action: declarative.ActionCreate},
+		{Section: declarative.SectionDeviceGroups, Key: `["kept"]`, Action: declarative.ActionUpdate},
+		{Section: declarative.SectionManagedFiles, Key: `["old","/etc/motd"]`, Action: declarative.ActionDelete},
+		{Section: declarative.SectionManagedFiles, Key: `["new","/etc/motd"]`, Action: declarative.ActionCreate},
+		{Section: declarative.SectionPackageHolds, Key: `["kept","openssl"]`, Action: declarative.ActionCreate},
+	}}
+	want := map[string]map[string]bool{declarative.SectionPackageHolds: {`["kept","openssl"]`: true}}
+	if got := StagedKeys(plan); !reflect.DeepEqual(got, want) {
+		t.Fatalf("StagedKeys = %v", got)
+	}
+	if got := StagedResourceIDs(plan); !reflect.DeepEqual(got, []string{"updates"}) {
+		t.Fatalf("StagedResourceIDs = %v", got)
+	}
+	if !Touches(plan) || Touches(declarative.Plan{Changes: plan.Changes[:5]}) {
+		t.Fatal("Touches")
+	}
+	if g, ok := KeyGroup(`["old","/etc/motd"]`); !ok || g != "old" {
+		t.Fatal("KeyGroup")
+	}
+	if _, ok := KeyGroup(`[null,"/etc/motd"]`); ok {
+		t.Fatal("KeyGroup of an item of every device")
 	}
 }

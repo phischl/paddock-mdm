@@ -26,6 +26,7 @@ CREATE TABLE config_rollout (
   ended_reason text,
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (current_wave_index >= 0 AND current_wave_index < cardinality(waves)),
+  UNIQUE (organization_id, id),
   -- A composite key keeps the group inside the organization; SET NULL names the column so the organization stays.
   FOREIGN KEY (organization_id, canary_device_group_id) REFERENCES device_group (organization_id, id)
     ON DELETE SET NULL (canary_device_group_id)
@@ -41,13 +42,19 @@ GRANT SELECT, INSERT, UPDATE ON config_rollout TO paddock_api;
 GRANT SELECT ON config_rollout TO paddock_compiler;
 GRANT SELECT, UPDATE ON config_rollout TO paddock_worker;
 
-ALTER TABLE bundle ADD COLUMN config_rollout_id uuid REFERENCES config_rollout(id);
+ALTER TABLE bundle ADD COLUMN config_rollout_id uuid,
+  -- Composite, as for the canary group: a bundle can only name a rollout of its own organization. The column-list
+  -- SET NULL keeps organization_id; rollouts are never deleted, so it is a safety net only.
+  ADD FOREIGN KEY (organization_id, config_rollout_id) REFERENCES config_rollout (organization_id, id)
+    ON DELETE SET NULL (config_rollout_id);
 CREATE INDEX bundle_rollout_idx ON bundle (config_rollout_id) WHERE config_rollout_id IS NOT NULL;
 
 -- The compiler overlays the before-states of the open rollout's change set; the worker derives the staged resource IDs
 -- from its plan and counts the reports of the bundles that carry the rollout.
+-- The compiler reads only the change set of an open rollout: before holds full file contents.
 CREATE POLICY compiler_rollout ON change_set TO paddock_compiler
-  USING (organization_id = current_setting('paddock.org_id')::uuid);
+  USING (organization_id = current_setting('paddock.org_id')::uuid
+    AND EXISTS (SELECT 1 FROM config_rollout r WHERE r.change_set_id = change_set.id AND r.status IN ('running', 'halted')));
 GRANT SELECT (id, organization_id, plan, before) ON change_set TO paddock_compiler;
 GRANT SELECT (plan) ON change_set TO paddock_worker;
 GRANT SELECT (config_rollout_id) ON bundle TO paddock_worker;
@@ -90,8 +97,8 @@ CREATE FUNCTION paddock_config_rollout_stats(rollout uuid, pct int, canary uuid,
                SELECT 1 FROM device_resource_status s
                WHERE s.device_id = l.device_id AND s.bundle_version = l.version AND s.status = 'failed'
                  AND s.resource_id = ANY(staged_ids)))) $$;
+-- Only the worker's evaluation (PDK-158) calls the functions; the api and the compiler compute the bucket in Go.
 REVOKE ALL ON FUNCTION paddock_config_rollout_bucket(uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION paddock_config_rollout_stats(uuid, int, uuid, timestamptz, text[]) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION paddock_config_rollout_bucket(uuid, uuid) TO paddock_api, paddock_compiler, paddock_worker;
-GRANT EXECUTE ON FUNCTION paddock_config_rollout_stats(uuid, int, uuid, timestamptz, text[])
-  TO paddock_api, paddock_compiler, paddock_worker;
+GRANT EXECUTE ON FUNCTION paddock_config_rollout_bucket(uuid, uuid) TO paddock_worker;
+GRANT EXECUTE ON FUNCTION paddock_config_rollout_stats(uuid, int, uuid, timestamptz, text[]) TO paddock_worker;

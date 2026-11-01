@@ -384,3 +384,83 @@ func TestConfigRolloutStats(t *testing.T) {
 		t.Fatalf("eligible %d failed %d, want %d and 3", eligible, failed, wantEligible)
 	}
 }
+
+// TestConfigRolloutDeviceGroups (plan M11 amendment R6.13 (d)): while a rollout is open, renaming or deleting a device
+// group that scopes a staged item, or the canary group, is one audited rollout_conflict; an unrelated group is renamed
+// and deleted immediately, also when it has items in a staged section, and starts no rollout.
+func TestConfigRolloutDeviceGroups(t *testing.T) {
+	h := newWriteHarness(t)
+	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgAdmin, false))
+	scoping, canary, unrelated := h.group(t, h.org), h.group(t, h.org), h.group(t, h.org)
+	if _, err := h.files.CreateFile(ctx, app.FileInput{DeviceGroupID: &unrelated, Path: strPtr("/etc/acme/unrelated.conf"), Content: strPtr("x")}); err != nil {
+		t.Fatal(err)
+	}
+	enableRollouts(t, h, []int{10, 100}, &canary)
+	if _, err := h.files.CreateFile(ctx, app.FileInput{DeviceGroupID: &scoping, Path: strPtr("/etc/acme/staged.conf"), Content: strPtr("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if h.rollouts(t) != 1 {
+		t.Fatalf("%d rollouts, want the staged one", h.rollouts(t))
+	}
+	refused := func(name, code string, fn func() error) {
+		t.Helper()
+		var err error
+		got := h.during(t, func() { err = fn() })
+		if !errors.Is(err, problem.RolloutConflict) || !slices.Equal(got, []string{code + ":failure:rollout_conflict"}) {
+			t.Errorf("%s = %v, actions %v", name, err, got)
+		}
+	}
+	rename := func(id uuid.UUID, name string) func() error {
+		return func() error {
+			_, err := h.groups.Update(ctx, id, &name, nil, app.DeviceGroupPolicyPatch{})
+			return err
+		}
+	}
+	refused("rename of the scoping group", "device_group.updated", rename(scoping, "renamed-scoping"))
+	refused("deletion of the scoping group", "device_group.deleted", func() error { return h.groups.Delete(ctx, scoping) })
+	refused("rename of the canary group", "device_group.updated", rename(canary, "renamed-canary"))
+	refused("deletion of the canary group", "device_group.deleted", func() error { return h.groups.Delete(ctx, canary) })
+
+	// The unrelated group's items are in the staged section, but cascades of a group change are never staged.
+	if err := rename(unrelated, "renamed-unrelated")(); err != nil {
+		t.Fatalf("rename of an unrelated group = %v", err)
+	}
+	if p := h.lastEvent(t); p["rollout"] != app.RolloutImmediate || p["rollout_id"] != nil {
+		t.Fatalf("rename params %v", p)
+	}
+	if err := h.groups.Delete(ctx, unrelated); err != nil {
+		t.Fatalf("deletion of an unrelated group = %v", err)
+	}
+	if p := h.lastEvent(t); p["rollout"] != app.RolloutImmediate || h.rollouts(t) != 1 {
+		t.Fatalf("deletion params %v, %d rollouts", p, h.rollouts(t))
+	}
+}
+
+// TestConfigRolloutGroupCascadesAreImmediate (R6.13): with rollouts on and no open rollout, renaming or deleting a
+// group with items records an immediate change set and starts no rollout (H1/M1 of PDK-157 review 1).
+func TestConfigRolloutGroupCascadesAreImmediate(t *testing.T) {
+	h := newWriteHarness(t)
+	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgAdmin, false))
+	group := h.group(t, h.org)
+	if _, err := h.files.CreateFile(ctx, app.FileInput{DeviceGroupID: &group, Path: strPtr("/etc/acme/grouped.conf"), Content: strPtr("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.files.CreateUnit(ctx, app.UnitInput{DeviceGroupID: &group, Unit: strPtr("grouped.service")}); err != nil {
+		t.Fatal(err)
+	}
+	enableRollouts(t, h, []int{10, 100}, nil)
+	name := "renamed-" + group.String()[24:]
+	if _, err := h.groups.Update(ctx, group, &name, nil, app.DeviceGroupPolicyPatch{}); err != nil {
+		t.Fatal(err)
+	}
+	cs := h.lastChangeSet(t)
+	if p := h.lastEvent(t); p["rollout"] != app.RolloutImmediate || h.rollout(t, cs.id).present || len(cs.plan.Changes) < 3 {
+		t.Fatalf("rename: params %v, plan %+v", p, cs.plan)
+	}
+	if err := h.groups.Delete(ctx, group); err != nil {
+		t.Fatal(err)
+	}
+	if p := h.lastEvent(t); p["rollout"] != app.RolloutImmediate || h.rollouts(t) != 0 {
+		t.Fatalf("deletion: params %v, %d rollouts", p, h.rollouts(t))
+	}
+}

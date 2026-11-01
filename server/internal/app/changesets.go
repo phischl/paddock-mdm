@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 
@@ -92,7 +91,7 @@ func recordChangeSet(ctx context.Context, q *pgstore.Queries, rec Recorder, befo
 	if !ok {
 		return fmt.Errorf("record change set: no principal")
 	}
-	st, err := w.stage(ctx, q, plan, uuid.Nil)
+	st, err := w.stage(before, plan, uuid.Nil)
 	if err != nil {
 		return err
 	}
@@ -109,6 +108,9 @@ func recordChangeSet(ctx context.Context, q *pgstore.Queries, rec Recorder, befo
 type rolloutWrite struct {
 	opts     WriteOptions
 	settings RolloutConfig
+	// open is the organization's open rollout before the write; nil without one. Read before the write because a
+	// deleted canary group would already be gone from it (ON DELETE SET NULL).
+	open *pgstore.GetOpenConfigRolloutRow
 }
 
 // startRolloutWrite checks the urgent opt-out inside the action, so a refusal is audited (plan M11 decision 26): a
@@ -135,7 +137,14 @@ func startRolloutWrite(ctx context.Context, q *pgstore.Queries, rec Recorder, op
 			}
 		}
 	}
-	return rolloutWrite{opts: opts, settings: settings}, nil
+	w := rolloutWrite{opts: opts, settings: settings}
+	switch open, err := q.GetOpenConfigRollout(ctx); {
+	case err == nil:
+		w.open = &open
+	case !db.IsNoRows(err):
+		return rolloutWrite{}, err
+	}
+	return w, nil
 }
 
 // staging is the rollout decision of one change set.
@@ -145,24 +154,26 @@ type staging struct {
 	ends *pgstore.GetOpenConfigRolloutRow
 }
 
-// stage applies the conflict rule (plan M11 decision 29) and the staging rule (decision 25) to plan. reverts is the
-// change set a revert undoes (uuid.Nil otherwise): the revert of the open rollout's change set is always immediate,
-// touches exactly the staged keys and ends the rollout.
-func (w rolloutWrite) stage(ctx context.Context, q *pgstore.Queries, plan declarative.Plan, reverts uuid.UUID) (staging, error) {
-	open, err := q.GetOpenConfigRollout(ctx)
+// stage applies the conflict rule (plan M11 decision 29) and the staging rule (decision 25) as amendment R6.13 states
+// them to plan, which turned before into the new configuration. reverts is the change set a revert undoes (uuid.Nil
+// otherwise): the revert of the open rollout's change set is always immediate, touches exactly the staged keys and
+// ends the rollout.
+func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts uuid.UUID) (staging, error) {
+	open := w.open
 	switch {
-	case db.IsNoRows(err):
+	case open == nil:
 		return staging{mode: rolloutModeFor(w.settings.Settings, plan, w.opts.Urgent)}, nil
-	case err != nil:
-		return staging{}, err
 	case reverts != uuid.Nil && reverts == open.ChangeSetID:
-		return staging{mode: RolloutImmediate, ends: &open}, nil
+		return staging{mode: RolloutImmediate, ends: open}, nil
 	}
-	staged, err := stagedKeysOf(open)
+	staged, err := stagedKeysOf(*open)
 	if err != nil {
 		return staging{}, err
 	}
 	if err := requireNotStaged(open.ID, staged, plan); err != nil {
+		return staging{}, err
+	}
+	if err := requireGroupsNotStaged(*open, staged, before, plan); err != nil {
 		return staging{}, err
 	}
 	if w.opts.Urgent {
@@ -175,8 +186,10 @@ func (w rolloutWrite) stage(ctx context.Context, q *pgstore.Queries, plan declar
 	for section := range staged {
 		stagedSections[configrollout.SectionGroup(section)] = true
 	}
-	if slices.ContainsFunc(plan.Changes, func(c declarative.Change) bool { return stagedSections[configrollout.SectionGroup(c.Section)] }) {
-		return staging{}, problem.RolloutRunning.WithDetail("complete or revert rollout " + open.ID.String() + " first")
+	for section := range configrollout.StagedKeys(plan) {
+		if stagedSections[configrollout.SectionGroup(section)] {
+			return staging{}, problem.RolloutRunning.WithDetail("complete or revert rollout " + open.ID.String() + " first")
+		}
 	}
 	return staging{mode: RolloutImmediate}, nil
 }
@@ -217,6 +230,9 @@ func (w rolloutWrite) finish(ctx context.Context, q *pgstore.Queries, rec Record
 			MinWaveMinutes: int32(w.settings.MinWaveMinutes), FailureThresholdPercent: int32(w.settings.FailureThresholdPercent), //nolint:gosec // validated settings
 			FailureThresholdMin: int32(w.settings.FailureThresholdMin), CanaryDeviceGroupID: canary, StartedBy: actorName(ctx), //nolint:gosec // validated settings
 		})
+		if db.IsUniqueViolation(err, "config_rollout_one_open_idx") {
+			return problem.RolloutRunning.WithDetail("another rollout started concurrently; complete or revert it first")
+		}
 		if err != nil {
 			return fmt.Errorf("start the rollout of change set %s: %w", id, err)
 		}
@@ -228,7 +244,7 @@ func (w rolloutWrite) finish(ctx context.Context, q *pgstore.Queries, rec Record
 			return fmt.Errorf("end rollout %s: %w", st.ends.ID, err)
 		}
 		if n != 1 {
-			return errors.New("the rollout ended concurrently")
+			return problem.RolloutConflict.WithDetail("rollout " + st.ends.ID.String() + " ended concurrently; review the change set and revert again")
 		}
 		rec.SetParam("rollout_id", st.ends.ID.String())
 		rec.SetParam("rollout_status", configrollout.StatusReverted)
@@ -247,6 +263,31 @@ func rolloutModeFor(settings configrollout.Settings, plan declarative.Plan, urge
 	default:
 		return RolloutStaged
 	}
+}
+
+// requireGroupsNotStaged refuses a rename or deletion of a device group that scopes a staged item or is the canary
+// group of the open rollout (plan M11 amendment R6.13): the overlay finds before items by group name, and canary
+// devices would leave the wave. before is the configuration the plan changed.
+func requireGroupsNotStaged(open pgstore.GetOpenConfigRolloutRow, staged map[string]map[string]bool, before configState, plan declarative.Plan) error {
+	scoping := map[string]bool{}
+	for _, keys := range staged {
+		for key := range keys {
+			if g, ok := configrollout.KeyGroup(key); ok {
+				scoping[g] = true
+			}
+		}
+	}
+	for _, c := range plan.Changes {
+		if c.Section != declarative.SectionDeviceGroups || c.Action != declarative.ActionDelete {
+			continue
+		}
+		name := configrollout.KeyName(c.Key)
+		canary := open.CanaryDeviceGroupID.Valid && before.groups[name] == open.CanaryDeviceGroupID.UUID
+		if scoping[name] || canary {
+			return problem.RolloutConflict.WithDetail(fmt.Sprintf("device group %q scopes items of rollout %s or is its canary group; complete or revert the rollout first", name, open.ID))
+		}
+	}
+	return nil
 }
 
 // requireNotStaged refuses a plan that changes a key of staged, the staged keys of the open rollout (plan M11 decision

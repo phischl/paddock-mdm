@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "18df6afc6391cb5108f2043b9053ed817038e5cd94b1c12a492cd006f11c7305"
+const Version = "0ad50eb0335f2cccc1ee0f7b056412adce8bafe867afafc424e4cd50492bd469"
 
 var tools = []Tool{
 	{
@@ -545,7 +545,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "device_group.deleted",
 		Summary:     "",
-		Description: "Roles: org_admin.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin. While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -3191,7 +3191,7 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "device_group.updated",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin, org_operator. While a configuration rollout is open, renaming a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict (plan M11 amendment R6.13).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"agent_update_policy\":{\"anyOf\":[{\"allOf\":[{\"description\":\"automatic follows the platform's rollout waves; manual installs only on an administrator's request per device.\",\"enum\":[\"automatic\",\"manual\"],\"type\":\"string\"}],\"description\":\"null inherits the organization's agent update policy, absent keeps the value.\"},{\"type\":\"null\"}]},\"description\":{\"maxLength\":1000,\"type\":\"string\"},\"disk_unlock_mode\":{\"anyOf\":[{\"allOf\":[{\"description\":\"TPM2 + boot PIN, or TPM2 alone while Secure Boot is unchanged (ADR 0038).\",\"enum\":[\"tpm_pin\",\"tpm_only\"],\"type\":\"string\"}],\"description\":\"null inherits the organization's disk unlock mode, absent keeps the value.\"},{\"type\":\"null\"}]},\"name\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"},\"staleness\":{\"anyOf\":[{\"allOf\":[{\"additionalProperties\":false,\"description\":\"Contact thresholds in hours: warning after warning_h (1–720), critical (presumed lost) after critical_h (above warning_h, at most 2160). A device in several groups takes the most lenient values.\",\"properties\":{\"critical_h\":{\"type\":\"integer\"},\"warning_h\":{\"type\":\"integer\"}},\"required\":[\"warning_h\",\"critical_h\"],\"type\":\"object\"}],\"description\":\"The contact thresholds of the members in hours (plan M8d decision 11); null clears the override (the organization's thresholds apply), absent keeps it.\"},{\"type\":\"null\"}]}},\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{

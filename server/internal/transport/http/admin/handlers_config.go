@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -58,7 +59,7 @@ func (h *handlers) ApplyConfig(ctx context.Context, req adminapi.ApplyConfigRequ
 		var id uuid.UUID
 		id, plan, err = h.declarative.Apply(ctx, raw, expected, opts)
 		if err == nil {
-			err = h.appliedRollout(ctx, id, &out)
+			h.appliedRollout(ctx, id, &out)
 		}
 	}
 	if err != nil {
@@ -69,19 +70,20 @@ func (h *handlers) ApplyConfig(ctx context.Context, req adminapi.ApplyConfigRequ
 }
 
 // appliedRollout fills the change set and its rollout into the result of an apply or revert; an empty plan recorded
-// no change set and leaves them null.
-func (h *handlers) appliedRollout(ctx context.Context, id uuid.UUID, out *adminapi.ConfigApplyResult) error {
+// no change set and leaves them null. The write is committed, so a failed read of its rollout leaves the rollout null
+// instead of failing the response.
+func (h *handlers) appliedRollout(ctx context.Context, id uuid.UUID, out *adminapi.ConfigApplyResult) {
 	if id == uuid.Nil {
-		return nil
+		return
 	}
 	out.ChangeSetId = &id
 	cs, err := h.declarative.GetChangeSet(ctx, id)
 	if err != nil {
-		return err
+		slog.WarnContext(ctx, "reading the rollout of a committed change set failed", "change_set_id", id, "error", err)
+		return
 	}
 	rollout := adminapi.ChangeSetRollout(cs.Rollout)
 	out.Rollout, out.RolloutId = &rollout, cs.RolloutID
-	return nil
 }
 
 // rolloutOptions is the urgent opt-out of a configuration write (plan M11 decision 26).
@@ -103,9 +105,7 @@ func (h *handlers) RevertChangeSet(ctx context.Context, req adminapi.RevertChang
 		return nil, err
 	}
 	out := adminapi.ConfigApplyResult{DryRun: opts.DryRun, Plan: toConfigPlan(plan), PlanSha256: plan.SHA256()}
-	if err := h.appliedRollout(ctx, id, &out); err != nil {
-		return nil, err
-	}
+	h.appliedRollout(ctx, id, &out)
 	return adminapi.RevertChangeSet200JSONResponse(out), nil
 }
 

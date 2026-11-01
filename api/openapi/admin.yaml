@@ -446,7 +446,7 @@ paths:
     patch:
       operationId: updateDeviceGroup
       tags: [device-groups]
-      description: "Roles: org_admin, org_operator."
+      description: "Roles: org_admin, org_operator. While a configuration rollout is open, renaming a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict (plan M11 amendment R6.13)."
       x-paddock-audit: device_group.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -469,7 +469,7 @@ paths:
     delete:
       operationId: deleteDeviceGroup
       tags: [device-groups]
-      description: "Roles: org_admin."
+      description: "Roles: org_admin. While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13)."
       x-paddock-audit: device_group.deleted
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -480,6 +480,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /api/v1/audit-events:
     get:

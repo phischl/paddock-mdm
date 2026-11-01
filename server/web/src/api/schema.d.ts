@@ -326,11 +326,11 @@ export interface paths {
         get: operations["getDeviceGroup"];
         put?: never;
         post?: never;
-        /** @description Roles: org_admin. */
+        /** @description Roles: org_admin. While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13). */
         delete: operations["deleteDeviceGroup"];
         options?: never;
         head?: never;
-        /** @description Roles: org_admin, org_operator. */
+        /** @description Roles: org_admin, org_operator. While a configuration rollout is open, renaming a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict (plan M11 amendment R6.13). */
         patch: operations["updateDeviceGroup"];
         trace?: never;
     };
@@ -7170,6 +7170,7 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updateDeviceGroup: {
