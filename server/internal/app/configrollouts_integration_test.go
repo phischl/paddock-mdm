@@ -415,6 +415,13 @@ func TestConfigRolloutHaltReasonNUL(t *testing.T) {
 	if got := h.rollout(t, r.changeSet); got.status != configrollout.StatusRunning {
 		t.Fatalf("rollout %+v", got)
 	}
+	// The reason is checked before the rollout is read: an unknown rollout with a bad reason is invalid_request, once.
+	if _, err := h.api.Halt(h.admin, uuid.Must(uuid.NewV7()), ""); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("halt of an unknown rollout without a reason = %v", err)
+	}
+	if events := h.events(t, audit.CodeConfigRolloutHalted); len(events) != 2 || events[1].ErrorCode != "invalid_request" {
+		t.Fatalf("halted events %+v", events)
+	}
 }
 
 // TestConfigRolloutResumeRestartsWave (plan M11 amendment R6.14): resume restarts the wave's minimum duration, so the

@@ -452,12 +452,16 @@ func sortRolloutDevices(devices []ConfigRolloutDevice, sort string) {
 func (c *ConfigRollouts) Halt(ctx context.Context, id uuid.UUID, reason string) (pgstore.ConfigRollout, error) {
 	reason = strings.TrimSpace(reason)
 	return c.transition(ctx, SpecConfigRolloutHalt, id, nil,
-		func(ctx context.Context, q *pgstore.Queries, rec Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
-			// Validated before it becomes an audit param: a NUL cannot be stored in the event either (jsonb).
+		// Validated before the rollout is read, as every request is, and before it becomes an audit param: a NUL cannot
+		// be stored in the event either (jsonb).
+		func(rec Recorder) error {
 			if n := utf8.RuneCountInString(reason); n < 2 || n > rolloutHaltReasonMax || !reasonText(reason) {
-				return r, problem.InvalidRequest.WithDetail("reason must have 2 to 500 characters without control characters")
+				return problem.InvalidRequest.WithDetail("reason must have 2 to 500 characters without control characters")
 			}
 			rec.SetParam("reason", reason)
+			return nil
+		},
+		func(ctx context.Context, q *pgstore.Queries, _ Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
 			if r.Status != configrollout.StatusRunning {
 				return r, problem.InvalidState.WithDetail("the rollout is " + r.Status)
 			}
@@ -468,7 +472,7 @@ func (c *ConfigRollouts) Halt(ctx context.Context, id uuid.UUID, reason string) 
 // Resume continues a halted rollout in the wave where it stopped; failures reported before the resume no longer count.
 // The devices inside the wave do not change, so nothing is recompiled.
 func (c *ConfigRollouts) Resume(ctx context.Context, id uuid.UUID) (pgstore.ConfigRollout, error) {
-	return c.transition(ctx, SpecConfigRolloutResume, id, nil,
+	return c.transition(ctx, SpecConfigRolloutResume, id, nil, nil,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
 			if r.Status != configrollout.StatusHalted {
 				return r, problem.InvalidState.WithDetail("the rollout is " + r.Status)
@@ -479,13 +483,13 @@ func (c *ConfigRollouts) Resume(ctx context.Context, id uuid.UUID) (pgstore.Conf
 
 // Advance moves a running rollout to its next wave at once; refused in the last wave and while halted.
 func (c *ConfigRollouts) Advance(ctx context.Context, id uuid.UUID) (pgstore.ConfigRollout, error) {
-	return c.transition(ctx, SpecConfigRolloutAdvance, id, map[string]any{"manual": true}, advance)
+	return c.transition(ctx, SpecConfigRolloutAdvance, id, map[string]any{"manual": true}, nil, advance)
 }
 
 // Complete ends a running or halted rollout: every device receives the staged change at its next check-in.
 func (c *ConfigRollouts) Complete(ctx context.Context, id uuid.UUID) (pgstore.ConfigRollout, error) {
 	reason := "completed by " + actorName(ctx)
-	return c.transition(ctx, SpecConfigRolloutComplete, id, map[string]any{"manual": true}, complete(reason))
+	return c.transition(ctx, SpecConfigRolloutComplete, id, map[string]any{"manual": true}, nil, complete(reason))
 }
 
 // advance is the change of SpecConfigRolloutAdvance.
@@ -521,10 +525,10 @@ func complete(reason string) func(ctx context.Context, q *pgstore.Queries, rec R
 }
 
 // transition runs change on rollout id under its row lock as the audited action spec, with params and the rollout's
-// IDs and wave. The rollout settings are not consulted: an open rollout keeps its rules after rollouts were switched
+// IDs and wave; validate (optional) checks the request inside the action before the rollout is read. The rollout settings are not consulted: an open rollout keeps its rules after rollouts were switched
 // off, and these actions are the way out (plan M11 amendment R6.13).
 func (c *ConfigRollouts) transition(ctx context.Context, spec ActionSpec, id uuid.UUID, params map[string]any,
-	change func(ctx context.Context, q *pgstore.Queries, rec Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error)) (pgstore.ConfigRollout, error) {
+	validate func(rec Recorder) error, change func(ctx context.Context, q *pgstore.Queries, rec Recorder, r pgstore.ConfigRollout) (pgstore.ConfigRollout, error)) (pgstore.ConfigRollout, error) {
 	t := rolloutTarget(id)
 	spec.Target = &t
 	spec.Params = map[string]any{"rollout_id": id.String()}
@@ -533,6 +537,11 @@ func (c *ConfigRollouts) transition(ctx context.Context, spec ActionSpec, id uui
 	}
 	var out pgstore.ConfigRollout
 	err := c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		if validate != nil {
+			if err := validate(rec); err != nil {
+				return err
+			}
+		}
 		r, err := q.LockConfigRollout(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -625,7 +634,7 @@ func (c *ConfigRollouts) evaluate(ctx context.Context, r runningRollout, now tim
 	}
 	slog.InfoContext(ctx, "config rollout changed", "rollout", r.ID, "code", spec.Code, "eligible", eligible, "failed", failed)
 	read := r.ConfigRollout
-	return ignoreStale(c.transition(ctx, spec, r.ID, params,
+	return ignoreStale(c.transition(ctx, spec, r.ID, params, nil,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder, cur pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
 			// The decision was read outside this transaction; an administrator may have acted since, also by halting
 			// and resuming, which discards the failures the decision counted.
