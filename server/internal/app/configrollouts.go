@@ -136,11 +136,12 @@ const (
 	stateFailed
 )
 
-// countsAgainst reports whether rep counts toward the failure rate of r: reported since the rollout's start or last
-// resume. The time is checked after the newest report was picked (plan M11 amendment R6.14), so an older version
-// reported late does not hide a newer one.
+// countsAgainst reports whether rep counts toward the failure rate of r: received by the server since the rollout's
+// start or last resume (plan M11 amendment R6.14). The server's time, not the device's: a device clock running behind
+// would otherwise date a failure right after the start before it. The time is checked after the newest report was
+// picked, so an older version reported late does not hide a newer one.
 func countsAgainst(r pgstore.ConfigRollout, rep pgstore.ListConfigRolloutReportsRow) bool {
-	return !rep.OccurredAt.Before(r.EvaluationSince)
+	return !rep.RecordedAt.Before(r.EvaluationSince)
 }
 
 // classify is the one rule of the worker's evaluation and of the API's counts (plan M11 decision 27, amendments R6.6
@@ -390,8 +391,8 @@ func (c *ConfigRollouts) ListDevices(ctx context.Context, id uuid.UUID, query Co
 }
 
 // rolloutDevice is device d as rollout r sees it. The report is the device's newest report on a bundle of r, the one
-// its counts read (classify); the failed resources it lists are those that count, and the plan errors of a
-// report-only device, which are shown but never count.
+// its counts read (classify); a failure that no longer counts is shown as none. The failed resources it lists are those
+// that count, and the plan errors of a report-only device, which are shown but never count.
 func rolloutDevice(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRow, rep *pgstore.ListConfigRolloutReportsRow,
 	staged []string, canary map[uuid.UUID]bool) ConfigRolloutDevice {
 	out := ConfigRolloutDevice{
@@ -404,13 +405,16 @@ func rolloutDevice(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRo
 	if rep == nil {
 		return out
 	}
-	out.ReportOutcome = rep.Outcome
 	reportOnly := rep.Mode == protocol.BundleModeReportOnly && rep.Outcome == RolloutReportApplied
-	if reportOnly {
-		out.ReportOutcome = RolloutReportReportOnly
-	}
-	if !reportOnly && !countsAgainst(r, *rep) {
+	failure := !reportOnly && (rep.Outcome == RolloutReportRejected || stagedFailure(rep.FailedResourceIds, staged))
+	switch {
+	case failure && !countsAgainst(r, *rep):
+		// A failure the counts discarded at the last resume is not listed (amendment R6.14 c): the device is pending.
 		return out
+	case reportOnly:
+		out.ReportOutcome = RolloutReportReportOnly
+	default:
+		out.ReportOutcome = rep.Outcome
 	}
 	for _, id := range rep.FailedResourceIds {
 		if slices.Contains(staged, id) {

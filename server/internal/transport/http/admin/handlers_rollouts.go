@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -99,11 +100,7 @@ func (h *handlers) HaltConfigRollout(ctx context.Context, req adminapi.HaltConfi
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.rolloutAfterAction(ctx, r)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.HaltConfigRollout200JSONResponse(out), nil
+	return adminapi.HaltConfigRollout200JSONResponse(h.rolloutAfterAction(ctx, r)), nil
 }
 
 func (h *handlers) ResumeConfigRollout(ctx context.Context, req adminapi.ResumeConfigRolloutRequestObject) (adminapi.ResumeConfigRolloutResponseObject, error) {
@@ -111,11 +108,7 @@ func (h *handlers) ResumeConfigRollout(ctx context.Context, req adminapi.ResumeC
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.rolloutAfterAction(ctx, r)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.ResumeConfigRollout200JSONResponse(out), nil
+	return adminapi.ResumeConfigRollout200JSONResponse(h.rolloutAfterAction(ctx, r)), nil
 }
 
 func (h *handlers) AdvanceConfigRollout(ctx context.Context, req adminapi.AdvanceConfigRolloutRequestObject) (adminapi.AdvanceConfigRolloutResponseObject, error) {
@@ -123,11 +116,7 @@ func (h *handlers) AdvanceConfigRollout(ctx context.Context, req adminapi.Advanc
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.rolloutAfterAction(ctx, r)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.AdvanceConfigRollout200JSONResponse(out), nil
+	return adminapi.AdvanceConfigRollout200JSONResponse(h.rolloutAfterAction(ctx, r)), nil
 }
 
 func (h *handlers) CompleteConfigRollout(ctx context.Context, req adminapi.CompleteConfigRolloutRequestObject) (adminapi.CompleteConfigRolloutResponseObject, error) {
@@ -135,20 +124,19 @@ func (h *handlers) CompleteConfigRollout(ctx context.Context, req adminapi.Compl
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.rolloutAfterAction(ctx, r)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.CompleteConfigRollout200JSONResponse(out), nil
+	return adminapi.CompleteConfigRollout200JSONResponse(h.rolloutAfterAction(ctx, r)), nil
 }
 
-// rolloutAfterAction is the response of a wave action: the changed rollout with its counts.
-func (h *handlers) rolloutAfterAction(ctx context.Context, r pgstore.ConfigRollout) (adminapi.ConfigRollout, error) {
+// rolloutAfterAction is the response of a wave action: the changed rollout with its counts, zero when they cannot be
+// read after the action.
+func (h *handlers) rolloutAfterAction(ctx context.Context, r pgstore.ConfigRollout) adminapi.ConfigRollout {
 	d, err := h.configRollouts.Get(ctx, r.ID)
 	if err != nil {
-		return adminapi.ConfigRollout{}, err
+		// The action committed and was audited: a 500 would make a client repeat it (an advance widens one more wave).
+		slog.WarnContext(ctx, "read the counts after a rollout action; answering with zero counts", "rollout", r.ID, "error", err)
+		return toConfigRollout(r, app.RolloutCounts{})
 	}
-	return toConfigRollout(r, d.Counts), nil
+	return toConfigRollout(r, d.Counts)
 }
 
 func toConfigRollout(r pgstore.ConfigRollout, c app.RolloutCounts) adminapi.ConfigRollout {

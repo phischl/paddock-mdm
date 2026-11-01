@@ -79,14 +79,15 @@ func (h rolloutHarness) device(t *testing.T, rollout uuid.UUID, percent int, in 
 	}
 }
 
-// report stores bundle version of device d carrying rollout (uuid.Nil: none), its report and a failed resource.
+// report stores bundle version of device d carrying rollout (uuid.Nil: none), its report, received by the server at
+// at, and a failed resource.
 func (h rolloutHarness) report(t *testing.T, d, rollout uuid.UUID, version int, outcome, mode, failed string, at time.Time) {
 	t.Helper()
 	carries := uuid.NullUUID{UUID: rollout, Valid: rollout != uuid.Nil}
 	h.exec(t, `INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key, schema_version, config_rollout_id)
 		VALUES ($1, $2, $3, '\x00', '\x00', 'k', 2, $4)`, d, version, h.org, carries)
-	h.exec(t, `INSERT INTO device_bundle_report (device_id, organization_id, version, outcome, mode, occurred_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		d, h.org, version, outcome, mode, at)
+	h.exec(t, `INSERT INTO device_bundle_report (device_id, organization_id, version, outcome, mode, occurred_at, recorded_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $6)`, d, h.org, version, outcome, mode, at)
 	if failed != "" {
 		h.exec(t, `INSERT INTO device_resource_status (device_id, organization_id, resource_id, status, bundle_version, occurred_at)
 			VALUES ($1, $2, $3, 'failed', $4, $5) ON CONFLICT (device_id, resource_id) DO UPDATE SET bundle_version = excluded.bundle_version`,
@@ -500,6 +501,65 @@ func TestConfigRolloutCountingRule(t *testing.T) {
 			if dev.ReportOutcome != app.RolloutReportRejected {
 				t.Errorf("rejected device %+v", dev)
 			}
+		}
+	}
+}
+
+// TestConfigRolloutServerTime (review N1, amendment R6.14 b): a failure counts by the time the server received it, so
+// the rejection of a device whose clock runs behind, stamped before the rollout started, still halts it.
+func TestConfigRolloutServerTime(t *testing.T) {
+	h := newRolloutHarness(t)
+	enableRollouts(t, h.writeHarness, []int{100}, nil)
+	r := h.stage(t, "/etc/acme/clock.conf")
+	h.exec(t, "UPDATE config_rollout SET failure_threshold_min = 1, failure_threshold_percent = 0 WHERE id = $1", r.id)
+	d := h.device(t, r.id, 100, true)
+	h.report(t, d, r.id, 1, "rejected", "enforce", "", time.Now())
+	h.exec(t, "UPDATE device_bundle_report SET occurred_at = now() - interval '4 minutes' WHERE device_id = $1", d)
+	if got, err := h.api.Get(h.admin, r.id); err != nil || got.Counts.Failed != 1 {
+		t.Fatalf("counts %+v, %v", got.Counts, err)
+	}
+	if err := h.worker.Evaluate(h.system, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.rollout(t, r.changeSet); got.status != configrollout.StatusHalted {
+		t.Fatalf("not halted on a rejection received after the start: %+v", got)
+	}
+}
+
+// TestConfigRolloutDiscardedFailureNotListed (review N2, amendment R6.14 c): after a resume a failure received before it
+// no longer counts, and the device list shows the device as none, so the report_outcome filter agrees with the counts.
+func TestConfigRolloutDiscardedFailureNotListed(t *testing.T) {
+	h := newRolloutHarness(t)
+	enableRollouts(t, h.writeHarness, []int{100}, nil)
+	r := h.stage(t, "/etc/acme/discarded.conf")
+	staged := "file:/etc/acme/discarded.conf"
+	rejected, failed := h.device(t, r.id, 100, true), h.device(t, r.id, 100, true)
+	h.report(t, rejected, r.id, 1, "rejected", "enforce", "", time.Now())
+	h.report(t, failed, r.id, 1, "applied", "enforce", staged, time.Now())
+	if _, err := h.api.Halt(h.admin, r.id, "look"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.api.Resume(h.admin, r.id); err != nil {
+		t.Fatal(err)
+	}
+	d, err := h.api.Get(h.admin, r.id)
+	if err != nil || d.Counts != (app.RolloutCounts{Eligible: 2, Pending: 2}) {
+		t.Fatalf("counts after the resume %+v, %v", d.Counts, err)
+	}
+	page := app.ListPage{Sort: "hostname", Limit: 10}
+	all, err := h.api.ListDevices(h.admin, r.id, app.ConfigRolloutDeviceQuery{Page: page})
+	if err != nil || all.Count != 2 {
+		t.Fatalf("devices %+v, %v", all, err)
+	}
+	for _, dev := range all.Items {
+		if dev.ReportOutcome != app.RolloutReportNone || len(dev.FailedResourceIDs) != 0 {
+			t.Errorf("discarded failure listed: %+v", dev)
+		}
+	}
+	for _, outcome := range []string{app.RolloutReportRejected, app.RolloutReportApplied} {
+		got, err := h.api.ListDevices(h.admin, r.id, app.ConfigRolloutDeviceQuery{Page: page, ReportOutcomes: []string{outcome}})
+		if err != nil || got.Count != 0 {
+			t.Errorf("report_outcome=%s: %+v, %v", outcome, got, err)
 		}
 	}
 }

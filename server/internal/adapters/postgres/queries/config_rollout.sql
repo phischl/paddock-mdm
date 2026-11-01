@@ -91,15 +91,20 @@ SELECT count(*) FROM (
 
 -- name: ListConfigRolloutReports :many
 -- The newest report of every device on a bundle that carries one of the rollouts, with the resources that failed in
--- that version: what the counts of a rollout and its device list read (plan M11 amendment R6.14).
-SELECT DISTINCT ON (b.config_rollout_id, r.device_id) b.config_rollout_id::uuid AS rollout_id, r.device_id, r.version,
-  r.outcome, r.mode, r.occurred_at,
+-- that version: what the counts of a rollout and its device list read (plan M11 amendment R6.14). recorded_at is when
+-- the server received the report. The newest report is picked first, so the failed resources are read once per device.
+WITH latest AS (
+  SELECT DISTINCT ON (b.config_rollout_id, r.device_id) b.config_rollout_id AS rollout_id, r.device_id, r.version,
+    r.outcome, r.mode, r.occurred_at, r.recorded_at
+  FROM device_bundle_report r JOIN bundle b ON b.device_id = r.device_id AND b.version = r.version
+  WHERE b.config_rollout_id = ANY(@rollout_ids::uuid[])
+  ORDER BY b.config_rollout_id, r.device_id, r.version DESC
+)
+SELECT l.rollout_id::uuid AS rollout_id, l.device_id, l.version, l.outcome, l.mode, l.occurred_at, l.recorded_at,
   ARRAY(SELECT s.resource_id FROM device_resource_status s
-        WHERE s.device_id = r.device_id AND s.bundle_version = r.version AND s.status = 'failed'
+        WHERE s.device_id = l.device_id AND s.bundle_version = l.version AND s.status = 'failed'
         ORDER BY s.resource_id)::text[] AS failed_resource_ids
-FROM device_bundle_report r JOIN bundle b ON b.device_id = r.device_id AND b.version = r.version
-WHERE b.config_rollout_id = ANY(@rollout_ids::uuid[])
-ORDER BY b.config_rollout_id, r.device_id, r.version DESC;
+FROM latest l;
 
 -- name: ListConfigRolloutDevices :many
 -- The active devices with their newest bundle, ordered by hostname: the rollout's device list sorts the rest in memory,

@@ -772,9 +772,10 @@ export interface paths {
          * @description Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11
          *     decision 34), each with its counts, which are also what the worker evaluates: eligible are the active devices
          *     inside the wave the rollout reached (every device once it completed). Of each device the newest report on a
-         *     bundle of the rollout is read: failed when, reported since the rollout's start or last resume, it is a rejection
-         *     or an apply with a failed staged resource; applied when it is an apply without a failed staged resource; pending
-         *     otherwise. The failed resources of a report-only device are plan errors and never count; its rejection does.
+         *     bundle of the rollout is read: failed when, received by the server since the rollout's start or last resume, it
+         *     is a rejection or an enforced apply with a failed staged resource; applied when it is an enforced apply without
+         *     a failed staged resource; pending otherwise, also a report-only apply. The failed resources of a report-only
+         *     device are plan errors and never count; its rejection does.
          */
         get: operations["listConfigRollouts"];
         put?: never;
@@ -4613,6 +4614,7 @@ export interface components {
             /** Format: date-time */
             ended_at: string | null;
             ended_reason: string | null;
+            /** @description The counts of the rollout. After a wave action they are all zero when they could not be read once the action had been applied. */
             counts: components["schemas"]["ConfigRolloutCounts"];
         };
         ConfigRolloutPage: {
@@ -4648,12 +4650,13 @@ export interface components {
             /**
              * @description The device's newest report on a bundle of the rollout, the one the counts read: applied, rejected,
              *     report_only (an apply of a report-only device; its plan errors are listed in failed_resource_ids but never
-             *     count) or none (no report on a bundle of the rollout).
+             *     count) or none (no report on a bundle of the rollout, or a failure received before the rollout's last
+             *     resume, which no longer counts: the device is pending).
              */
             report_outcome: string;
             /**
              * @description The staged resources that failed in that report and count against the rollout, and the plan errors of a
-             *     report-only device. Failures reported before the rollout's last resume no longer count and are not listed;
+             *     report-only device. Failures received before the rollout's last resume no longer count and are not listed;
              *     the device is pending until it reports again.
              */
             failed_resource_ids: string[];

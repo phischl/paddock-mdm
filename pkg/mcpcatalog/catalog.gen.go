@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "6bdd9e4531a25f9a788f209aa4ce5ff7acf9f25955b11269b87288ff85135880"
+const Version = "d2b7efe8c2694c48823d097411cb674402c78a89fccdb330f4571fe98dae6c87"
 
 var tools = []Tool{
 	{
@@ -2147,7 +2147,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11 decision 34), each with its counts, which are also what the worker evaluates: eligible are the active devices inside the wave the rollout reached (every device once it completed). Of each device the newest report on a bundle of the rollout is read: failed when, reported since the rollout's start or last resume, it is a rejection or an apply with a failed staged resource; applied when it is an apply without a failed staged resource; pending otherwise. The failed resources of a report-only device are plan errors and never count; its rejection does.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: started_at, status), q (search over: started_by).",
+		Description: "Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11 decision 34), each with its counts, which are also what the worker evaluates: eligible are the active devices inside the wave the rollout reached (every device once it completed). Of each device the newest report on a bundle of the rollout is read: failed when, received by the server since the rollout's start or last resume, it is a rejection or an enforced apply with a failed staged resource; applied when it is an enforced apply without a failed staged resource; pending otherwise, also a report-only apply. The failed resources of a report-only device are plan errors and never count; its rejection does.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: started_at, status), q (search over: started_by).",
 		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-started_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"started_at\",\"-started_at\",\"status\",\"-status\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"running\",\"halted\",\"completed\",\"reverted\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{

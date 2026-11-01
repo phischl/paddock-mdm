@@ -1282,12 +1282,13 @@ without a migration merge as soon as their dependencies are on the branch. The V
         device), so the rollout page shows what the worker evaluates. `paddock_config_rollout_stats` (`00093`) stays in
         place unused; PDK-160's migration `00094` drops it.
     (b) The rule for a device inside the wave: the newest report on a bundle of the rollout is picked first, then the
-        time filter applies. Failed: reported at or after `evaluation_since`, a rejection, or an apply with a failed
-        staged resource. Report-only exempts only failed resources (plan errors, R6.6); a rejection of a report-only
+        time filter applies. Failed: recorded (received by the server, `device_bundle_report.recorded_at`) at or after
+        `evaluation_since`, a rejection, or an apply with a failed staged resource. Report-only exempts only failed resources (plan errors, R6.6); a rejection of a report-only
         device counts. The report's `mode` is taken as the device reports it. Applied: an enforced apply without a
         failed staged resource. Pending: everything else.
     (c) `GET /config-rollouts/{id}/devices` shows that same report (`report_outcome`, `failed_resource_ids`); failures
-        reported before the last resume no longer count and are not listed.
+        received before the last resume no longer count and are not listed (`report_outcome: none`, the device is
+        pending), and the `report_outcome` filter agrees with the counts.
     (d) Resume restarts both `evaluation_since` and `wave_started_at`: the current wave gets its full observation period
         again.
     (e) `advance` joins the destructive path segments of `destructive()` in `server/internal/mcpgen/mcpgen.go`
