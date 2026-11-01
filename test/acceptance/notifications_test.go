@@ -193,8 +193,8 @@ func TestNotificationDestinations(t *testing.T) {
 		}
 		expectOneEvent(t, admin.Portal, res.RequestID, "notification.destination_secret_rotated", "success")
 
-		// Waiting for the audit events above can outlast the development step-up window (30 s) on a loaded host; the
-		// pending-test refusal is checked with a fresh step-up so that it, not the window, decides the answer.
+		// Waiting for audit events can outlast the development step-up window (30 s) on a loaded host: both test requests
+		// follow a fresh step-up directly, so the pending-test refusal, not the window, decides the second answer.
 		admin.stepUp(t)
 		res = call(t, admin.Portal, http.MethodPost, path+"/test", nil)
 		expectStatus(t, res, http.StatusAccepted, "")
@@ -204,9 +204,10 @@ func TestNotificationDestinations(t *testing.T) {
 		if err := res.JSON(&test); err != nil || test.DeliveryID == "" {
 			t.Fatalf("test: %s", res.Body)
 		}
-		expectOneEvent(t, admin.Portal, res.RequestID, "notification.test_requested", "success")
+		first := res.RequestID
 		res = call(t, admin.Portal, http.MethodPost, path+"/test", nil)
 		expectStatus(t, res, http.StatusConflict, "invalid_state")
+		expectOneEvent(t, admin.Portal, first, "notification.test_requested", "success")
 	})
 
 	t.Run("resolve pseudonym", func(t *testing.T) {
