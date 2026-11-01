@@ -70,26 +70,53 @@ func (q *Queries) CountAttentionDevices(ctx context.Context, arg CountAttentionD
 
 const listAttention = `-- name: ListAttention :many
 
-SELECT kind, device_id, hostname, since, detail, id FROM attention_condition
-WHERE ($1::text IS NULL OR hostname ILIKE $1::text ESCAPE '\')
-  AND ($2::text[] IS NULL OR kind = ANY($2::text[]))
+WITH page AS (
+  SELECT kind, device_id, hostname, since, detail, id FROM attention_condition
+  WHERE ($2::text IS NULL OR hostname ILIKE $2::text ESCAPE '\')
+    AND ($3::text[] IS NULL OR kind = ANY($3::text[]))
+  ORDER BY
+    CASE WHEN $1::text = 'since' THEN since END ASC,
+    CASE WHEN $1::text = '-since' THEN since END DESC,
+    CASE WHEN $1::text = 'kind' THEN kind END ASC,
+    CASE WHEN $1::text = '-kind' THEN kind END DESC,
+    CASE WHEN $1::text = 'hostname' THEN hostname END ASC,
+    CASE WHEN $1::text = '-hostname' THEN hostname END DESC,
+    id
+  LIMIT $5 OFFSET $4
+)
+SELECT p.kind, p.device_id, p.hostname, p.since, p.detail, p.id,
+       f.id AS finding_id, f.status AS finding_status, a.display_name AS finding_assignee_display
+FROM page p
+LEFT JOIN finding f ON f.kind = 'attention' AND f.key = 'attention:' || p.id AND f.cleared_at IS NULL
+LEFT JOIN admin_account a ON a.id = f.assignee_account_id
 ORDER BY
-  CASE WHEN $3::text = 'since' THEN since END ASC,
-  CASE WHEN $3::text = '-since' THEN since END DESC,
-  CASE WHEN $3::text = 'kind' THEN kind END ASC,
-  CASE WHEN $3::text = '-kind' THEN kind END DESC,
-  CASE WHEN $3::text = 'hostname' THEN hostname END ASC,
-  CASE WHEN $3::text = '-hostname' THEN hostname END DESC,
-  id
-LIMIT $5 OFFSET $4
+  CASE WHEN $1::text = 'since' THEN p.since END ASC,
+  CASE WHEN $1::text = '-since' THEN p.since END DESC,
+  CASE WHEN $1::text = 'kind' THEN p.kind END ASC,
+  CASE WHEN $1::text = '-kind' THEN p.kind END DESC,
+  CASE WHEN $1::text = 'hostname' THEN p.hostname END ASC,
+  CASE WHEN $1::text = '-hostname' THEN p.hostname END DESC,
+  p.id
 `
 
 type ListAttentionParams struct {
+	Sort     string
 	QPattern *string
 	Kinds    []string
-	Sort     string
 	SkipRows int32
 	MaxRows  int32
+}
+
+type ListAttentionRow struct {
+	Kind                   string
+	DeviceID               uuid.UUID
+	Hostname               string
+	Since                  time.Time
+	Detail                 string
+	ID                     string
+	FindingID              uuid.NullUUID
+	FindingStatus          *string
+	FindingAssigneeDisplay *string
 }
 
 // The attention list (plan M5b decision 11) over the view attention_condition. Kinds: stale_warning, stale_critical,
@@ -97,11 +124,12 @@ type ListAttentionParams struct {
 // revocation_pending, revocation_expired, agent_rollback_pending, agent_not_running, config_behind,
 // disk_conversion_failed (warn, plan M8e decision 6), clock_drift (warn, plan M8b decision 15), event_gap (warn, plan M8b
 // decision 23).
-func (q *Queries) ListAttention(ctx context.Context, arg ListAttentionParams) ([]AttentionCondition, error) {
+// Each condition carries its live finding (plan M9 decision 34), joined for the rows of the page only.
+func (q *Queries) ListAttention(ctx context.Context, arg ListAttentionParams) ([]ListAttentionRow, error) {
 	rows, err := q.db.Query(ctx, listAttention,
+		arg.Sort,
 		arg.QPattern,
 		arg.Kinds,
-		arg.Sort,
 		arg.SkipRows,
 		arg.MaxRows,
 	)
@@ -109,9 +137,9 @@ func (q *Queries) ListAttention(ctx context.Context, arg ListAttentionParams) ([
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AttentionCondition{}
+	items := []ListAttentionRow{}
 	for rows.Next() {
-		var i AttentionCondition
+		var i ListAttentionRow
 		if err := rows.Scan(
 			&i.Kind,
 			&i.DeviceID,
@@ -119,6 +147,9 @@ func (q *Queries) ListAttention(ctx context.Context, arg ListAttentionParams) ([
 			&i.Since,
 			&i.Detail,
 			&i.ID,
+			&i.FindingID,
+			&i.FindingStatus,
+			&i.FindingAssigneeDisplay,
 		); err != nil {
 			return nil, err
 		}
@@ -136,11 +167,15 @@ WITH ranked AS MATERIALIZED (
   SELECT c.device_id, c.hostname, c.kind, c.since, c.detail,
          CASE WHEN c.kind IN ('presumed_lost', 'stale_critical', 'quarantined', 'revocation_expired') THEN 2
               WHEN c.kind = 'revocation_pending' THEN 0
-              ELSE 1 END AS rank
+              ELSE 1 END AS rank,
+         CASE WHEN f.id IS NULL THEN NULL
+              ELSE json_build_object('id', f.id, 'status', f.status, 'assignee_display', a.display_name) END AS finding
   FROM attention_condition c
+  LEFT JOIN finding f ON f.kind = 'attention' AND f.key = 'attention:' || c.id AND f.cleared_at IS NULL
+  LEFT JOIN admin_account a ON a.id = f.assignee_account_id
 ), grouped AS (
   SELECT r.device_id, r.hostname, max(r.rank)::int AS severity, max(r.since)::timestamptz AS since,
-         json_agg(json_build_object('kind', r.kind, 'since', r.since, 'detail', r.detail) ORDER BY r.rank DESC, r.since DESC, r.kind) AS conditions
+         json_agg(json_build_object('kind', r.kind, 'since', r.since, 'detail', r.detail, 'finding', r.finding) ORDER BY r.rank DESC, r.since DESC, r.kind) AS conditions
   FROM ranked r
   WHERE ($2::text IS NULL OR r.hostname ILIKE $2::text ESCAPE '\')
     AND ($3::uuid IS NULL OR r.device_id = $3::uuid)
@@ -203,7 +238,7 @@ type ListAttentionDevicesRow struct {
 // reuses prepared statements, so after five executions a generic plan estimates those filters as near-empty and
 // probes the view's tables once per device (list and count together about 300 ms instead of 85 ms at 10 000 stale
 // devices, docs/operations/capacity.md). The device page (device_id) reads the whole view as well, a few tens of
-// milliseconds.
+// milliseconds. Each condition carries its live finding (plan M9 decision 34).
 func (q *Queries) ListAttentionDevices(ctx context.Context, arg ListAttentionDevicesParams) ([]ListAttentionDevicesRow, error) {
 	rows, err := q.db.Query(ctx, listAttentionDevices,
 		arg.Sort,

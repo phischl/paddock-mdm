@@ -174,6 +174,29 @@ services:
       - authentik_service_token
       - internal_ca_bundle
 
+  paddock-notifier:
+    environment:
+      PADDOCK_ENV: production
+      PADDOCK_PUBLIC_ADMIN_URL: https://admin.${PADDOCK_DOMAIN}
+      PADDOCK_OPENBAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/secrets/internal_ca_bundle
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      # The operator's SMTP relay (docs/operations/install.md); no host means no e-mail destinations.
+      PADDOCK_SMTP_HOST: ${PADDOCK_SMTP_HOST:-}
+      PADDOCK_SMTP_PORT: ${PADDOCK_SMTP_PORT:-}
+      PADDOCK_SMTP_TLS: ${PADDOCK_SMTP_TLS:-}
+      PADDOCK_SMTP_USERNAME: ${PADDOCK_SMTP_USERNAME:-}
+      PADDOCK_SMTP_FROM: ${PADDOCK_SMTP_FROM:-}
+    secrets: !override
+      - db_paddock_notifier_url
+      - db_paddock_platform_url
+      # postgres://…@<audit host>:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle
+      - db_paddock_audit_reader_url
+      - approle_notifier_role_id
+      - approle_notifier_secret_id
+      - smtp_password
+      - internal_ca_bundle
+
 secrets:
   # Production release keys live apart from the development keys of `make dev-release-key` (.secrets/release/), so
   # that `./paddock check` can tell them apart; their secret keys never reach this host (docs/operations/agent-releases.md).

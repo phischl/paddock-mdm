@@ -120,6 +120,14 @@ services:
       # never from GitHub (ADR 0043 decision 9); without the gate running, the check fails with
       # release_source_unavailable.
       PADDOCK_AGENT_RELEASE_SOURCE_URL: ${PADDOCK_AGENT_RELEASE_SOURCE_URL:-http://github-fixture:8080}
+      # Webhook destinations may point at the acceptance sinks on the host (private addresses, plain http); plan M9
+      # gate N5. Honoured only with PADDOCK_ENV=development.
+      PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE: "true"
+      # The development notifier has a relay (the acceptance SMTP sink), so e-mail destinations are offered; plan M9
+      # gate N6.
+      PADDOCK_SMTP_ENABLED: "true"
+    # The api resolves a webhook host when a destination is saved; the acceptance sinks run on the test host.
+    extra_hosts: ["acceptance-host:host-gateway"]
 
   # The revocation path is enabled in development and test stacks only (plan M4c decision 1); gate R5 runs with
   # PADDOCK_REVOCATION_ENABLED=false.
@@ -196,6 +204,25 @@ services:
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       BAO_CACERT: !reset null
     secrets: !override [db_paddock_unsealer_url, openbao_auto_unseal_shares]
+
+  # The notifier's development values (plan M9 decision 26). Acceptance sinks listen on the test host and are reached as
+  # acceptance-host from both development stacks (plan M9 amendment B0.5).
+  paddock-notifier:
+    build: *paddock-build
+    environment:
+      PADDOCK_ENV: development
+      # Private addresses and plain http for the acceptance sinks (development only; refused in production).
+      PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE: "true"
+      PADDOCK_NOTIFY_POLL_INTERVAL: ${PADDOCK_NOTIFY_POLL_INTERVAL:-5s}
+      PADDOCK_NOTIFY_STALL_AFTER: ${PADDOCK_NOTIFY_STALL_AFTER:-1m}
+      # E-mail goes to the acceptance SMTP sink on the test host (plan M9 decision 26, gate N6). The sink speaks no TLS:
+      # PADDOCK_SMTP_TLS=none is refused outside development, and without credentials nothing secret travels.
+      PADDOCK_SMTP_HOST: acceptance-host
+      PADDOCK_SMTP_PORT: ${PADDOCK_ACCEPTANCE_SMTP_PORT:-2525}
+      PADDOCK_SMTP_TLS: none
+      PADDOCK_SMTP_FROM: paddock@paddock.localhost
+      PADDOCK_SMTP_TIMEOUT: 10s
+    extra_hosts: ["acceptance-host:host-gateway"]
 
 secrets:
   dev_platform_admin_password: { file: ./.secrets/dev_platform_admin_password }

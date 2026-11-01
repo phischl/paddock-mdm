@@ -99,7 +99,19 @@ This section does not apply to the move to 0.1.0-alpha.7, which is a fresh insta
    ./paddock compose run --rm --no-deps fleet-backup once   # fleet-backup-upload uploads it within a minute
    ```
 
-4. Start B:
+4. Audit host only, when the release notes of a version between A and B name **audit migrations** (`Schema: … audit
+   migrations …`): stop the running audit writer first, in A's directory:
+
+   ```sh
+   ./paddock compose stop paddock-audit-writer
+   ```
+
+   B's writer starts only after the audit migrations, but A's writer would keep running while they hold their table
+   locks; its writes fail and are redelivered until the queue dead-letters them. Stopped, new audit events wait in the
+   queue, and `./paddock up` starts B's writer, which writes them. A backfill can take minutes on a large index
+   (`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
+
+5. Start B:
 
    ```sh
    ./paddock up        # recreates the containers with B's images; paddock-migrate applies the schema migrations
@@ -113,7 +125,7 @@ This section does not apply to the move to 0.1.0-alpha.7, which is a fresh insta
    if it timed out, unseal and run `./paddock up` again. With automatic unseal on (`docs/operations/openbao.md`
    section 6) the unsealer does this. `./paddock up` never unseals by itself: the shares are not on the host.
 
-5. Watch the readiness of the roles and the alerts for an hour (`docs/operations/monitoring.md`). Keep A's directory
+6. Watch the readiness of the roles and the alerts for an hour (`docs/operations/monitoring.md`). Keep A's directory
    until the next upgrade: it is the rollback. A's `.secrets/` stays a full copy of the secrets, including the
    OpenBao shares file `.secrets/openbao/auto-unseal-shares` when automatic unseal is on. When you disable automatic
    unseal later, delete that file in A's directory as well (`docs/operations/openbao.md` section 6, *Disabling*) —
@@ -121,6 +133,59 @@ This section does not apply to the move to 0.1.0-alpha.7, which is a fresh insta
    host may have been copied. When you delete A's directory, delete its `.secrets/` with it.
 
 Then the audit host, the same way without step 3.
+
+## Notifications on a cluster initialized before them
+
+A control-plane cluster creates its database roles once, at initialization (`postgres/init/10-roles.sh`). A cluster
+initialized before the notifications (plan M9) lacks the role `paddock_notifier`, and the migration 00085 that
+creates the notification tables refuses to run without it. A fresh installation (the move to 0.1.0-alpha.7 is one)
+creates the role itself; this section is for clusters that already run a build without it. On the control plane,
+in B's directory, in this order:
+
+1. Right after `./paddock migrate-from` (step 2), run `./paddock secrets`. It adds the notifier's files to the copied
+   `.secrets/`: `db_paddock_notifier_password`, `db_paddock_notifier_url`, an empty `smtp_password` and empty
+   `approle/paddock-notifier/role_id` and `secret_id`. Until the next two steps are done, `./paddock check` of step 2
+   fails on `approle_notifier_role_id` and `approle_notifier_secret_id` (empty); that is expected.
+2. Create the database role (below).
+3. Run `./paddock bootstrap openbao` (below); it fills the AppRole files.
+4. Run `./paddock check` again: every item PASS. Only then continue with step 3 of the upgrade.
+
+The database role, with A's stack still running:
+
+```sh
+./paddock compose up -d postgres
+NOTIFIER_PASSWORD="$(cat .secrets/db_paddock_notifier_password)" ./paddock compose exec -T -e NOTIFIER_PASSWORD \
+  postgres psql -v ON_ERROR_STOP=1 -q -U postgres -d paddock <<'SQL'
+\set pw `printf '%s' "$NOTIFIER_PASSWORD"`
+SELECT format('CREATE ROLE paddock_notifier LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD %L', :'pw')
+  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'paddock_notifier') \gexec
+GRANT CONNECT ON DATABASE paddock TO paddock_notifier;
+GRANT USAGE ON SCHEMA public TO paddock_notifier;
+SQL
+```
+
+The password reaches `psql` through the container's environment, never a command line. The step is idempotent.
+
+The OpenBao bootstrap, with A's stack running and OpenBao unsealed: run `./paddock bootstrap openbao` once in B's
+directory with a root token (`docs/operations/openbao.md` section 1; revoke the token afterwards). It adds the Transit
+keys `notification-wrap` and `notification-pseudonym`, the permissions of `paddock-api` on them, the policy and
+AppRole `paddock-notifier`, and keeps every existing secret ID. It writes the notifier's AppRole files to
+`.secrets/approle/paddock-notifier/role_id` and `secret_id` of B's directory; the notifier runs on the control plane,
+so nothing goes to the audit host. If you ran the bootstrap in another directory, copy that directory's
+`.secrets/approle/paddock-notifier/` to B's `.secrets/approle/` (`cp -a`) before step 5: B's `./paddock up` starts the
+new role `paddock-notifier` and waits for it, and it cannot become healthy with empty AppRole files.
+
+B's `.env.example` brings new keys; copy them into `.env` before the second `./paddock check`:
+
+- `PADDOCK_SMTP_ENABLED=false`, or, with an SMTP relay for e-mail destinations, `true` together with
+  `PADDOCK_SMTP_HOST`, `PADDOCK_SMTP_PORT`, `PADDOCK_SMTP_TLS`, `PADDOCK_SMTP_FROM` and, for a relay with
+  authentication, `PADDOCK_SMTP_USERNAME` with the password in `.secrets/smtp_password` (`docs/operations/install.md`,
+  *E-mail relay*). `./paddock check` fails while `PADDOCK_SMTP_ENABLED` and `PADDOCK_SMTP_HOST` disagree.
+
+The same release adds the commit sequence of the audit index: its audit migration backfills every existing event, so
+stop the audit writer first (step 4). The backfill takes about 1.5 minutes per million events in the index (measured:
+1 000 000 events in 1 min 26 s on PostgreSQL 18); count them with `SELECT count(*) FROM audit_event` on
+`paddock_audit` (`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
 
 ## Rollback
 

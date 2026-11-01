@@ -1,7 +1,7 @@
 import { computed, ref, type InjectionKey } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type {
-  AttentionKind, DeviceDetail, DeviceUpdates, DiskState, EffectiveConfig, EffectiveSudo, RevocationRequest, User, UserGroup,
+  AttentionCondition, AttentionKind, DeviceDetail, DeviceUpdates, DiskState, EffectiveConfig, EffectiveSudo, RevocationRequest, User, UserGroup,
 } from '../api/client'
 import { useConfirm, type ConfirmOptions } from '../composables/useConfirm'
 import {
@@ -44,6 +44,8 @@ export function useDeviceDetailPage(id: () => string) {
   const diskTpm = ref(false)
   const updates = ref<DeviceUpdates | null>(null)
   const conditions = ref<AttentionKind[]>([])
+  /** The open conditions that have a finding, for the Overview tab (plan M9 decision 35). */
+  const findingConditions = ref<AttentionCondition[]>([])
   const revocations = ref<RevocationRequest[]>([])
   /** Bumped after an action that changes what the cards show (a command was issued); the cards reload on it. */
   const refresh = ref(0)
@@ -78,6 +80,7 @@ export function useDeviceDetailPage(id: () => string) {
     diskTpm.value = diskUsesTpm(typeof disk === 'string' ? null : disk)
     updates.value = typeof u === 'string' ? null : u
     conditions.value = attention?.conditions.map((c) => c.kind) ?? []
+    findingConditions.value = attention?.conditions.filter((c) => c.finding) ?? []
     revocations.value = revs?.items ?? []
   }
 
@@ -181,6 +184,6 @@ export function useDeviceDetailPage(id: () => string) {
   return {
     device, config, groups, selectedGroups, problem, saved, actions, load, run, saveGroups, resumeGroups,
     users, userGroups, loginUsers, loginGroups, loginSaved, sudo, loadSubjects, saveLogin, toggleSuspension,
-    diskState, diskTpm, updates, conditions, revocations, refresh, changed,
+    diskState, diskTpm, updates, conditions, findingConditions, revocations, refresh, changed,
   }
 }

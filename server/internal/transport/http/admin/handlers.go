@@ -46,6 +46,7 @@ type handlers struct {
 	userGroups    *app.UserGroups
 	logins        *app.Logins
 	loginSettings *app.LoginSettings
+	watchedUnits  *app.WatchedUnits
 	loginHistory  *app.LoginHistory
 	agentUpdates  *app.AgentUpdates
 	uninstalls    *app.Uninstalls
@@ -63,8 +64,13 @@ type handlers struct {
 	privacy     *app.Privacy
 	readAudit   *app.ReadAudit
 	attention   *app.Attention
-	ipAllowlist *app.IPAllowlist
-	overview    *app.Overview
+	// findings and the account list of their assignee picker (plan M9 decision 34).
+	findings    *app.Findings
+	accountList *app.AccountList
+	// notifications are the notification destinations (plan M9 decisions 14–19).
+	notifications *app.Notifications
+	ipAllowlist   *app.IPAllowlist
+	overview      *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).
@@ -358,6 +364,43 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 		}
 	}
 	return adminapi.ListAuditEvents200JSONResponse(listing.NewPage(items, params, res.Count)), nil
+}
+
+func (h *handlers) FeedAuditEvents(ctx context.Context, req adminapi.FeedAuditEventsRequestObject) (adminapi.FeedAuditEventsResponseObject, error) {
+	after, limit := int64(0), app.DefaultFeedLimit
+	if req.Params.After != nil {
+		after = *req.Params.After
+	}
+	if req.Params.Limit != nil {
+		limit = *req.Params.Limit
+	}
+	res, err := h.audit.Feed(ctx, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]adminapi.AuditFeedEvent, len(res.Events))
+	for i, e := range res.Events {
+		if events[i], err = toAuditFeedEvent(e); err != nil {
+			return nil, err
+		}
+	}
+	return adminapi.FeedAuditEvents200JSONResponse(adminapi.AuditFeedPage{
+		Schema: adminapi.PaddockAuditFeedV1, Events: events, NextAfter: res.NextAfter, Latest: res.Latest,
+	}), nil
+}
+
+// toAuditFeedEvent maps an index row to a feed item: the stored event with its organization and without the
+// read-time device enrichment.
+func toAuditFeedEvent(e auditstore.AuditEvent) (adminapi.AuditFeedEvent, error) {
+	ev, err := toAuditEvent(e)
+	if err != nil {
+		return adminapi.AuditFeedEvent{}, err
+	}
+	return adminapi.AuditFeedEvent{CommitSeq: e.CommitSeq, Event: adminapi.AuditEventStored{
+		Actor: ev.Actor, Code: ev.Code, CorrelationId: ev.CorrelationId, ErrorCode: ev.ErrorCode, EventId: ev.EventId,
+		OrganizationId: e.OrganizationID, OccurredAt: ev.OccurredAt, Outcome: ev.Outcome, Params: ev.Params,
+		RecordedAt: ev.RecordedAt, Source: ev.Source, Target: ev.Target,
+	}}, nil
 }
 
 // toAuditEvent maps an index row to the API. The writer keeps error_code inside params in the index (there is no

@@ -264,3 +264,33 @@ describe('useConfirm', () => {
     expect(await second).toBe(true)
   })
 })
+
+describe('useConfirm focus return', () => {
+  it.each([['cancelled', false], ['confirmed', { reason: '' }]] as const)('returns the focus to the asking control when %s', async (_, answer) => {
+    const button = document.createElement('button')
+    document.body.append(button)
+    button.focus()
+    const asked = useConfirm()({ title: 'T', message: 'M', confirmLabel: 'Go' })
+    settleConfirm(answer)
+    await asked
+    await new Promise((r) => setTimeout(r, 20))
+    expect(document.activeElement).toBe(button)
+    button.remove()
+  })
+
+  it('does not take the focus from the dialog of a request that replaces the first', async () => {
+    const button = document.createElement('button')
+    document.body.append(button)
+    button.focus()
+    const confirm = useConfirm()
+    void confirm({ title: 'A', message: 'M', confirmLabel: 'Go' })
+    const inDialog = document.createElement('input')
+    document.body.append(inDialog)
+    inDialog.focus()
+    void confirm({ title: 'B', message: 'M', confirmLabel: 'Go' })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(document.activeElement).toBe(inDialog)
+    button.remove()
+    inDialog.remove()
+  })
+})

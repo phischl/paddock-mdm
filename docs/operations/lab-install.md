@@ -219,6 +219,7 @@ be chosen.
 | 13 | release public keys | `.secrets/release-production/` (step 7) | `minisign.pub`, `revoke-minisign.pub` |
 | 14 | five OpenBao custodians | the unseal shares of step 5 | five people, or five safe places |
 | 15 | backups (optional) | `PADDOCK_LAB_BACKUP`, `PADDOCK_BACKUP_S3_*` | `no` (section 7) |
+| 16 | SMTP relay for e-mail notifications (optional) | `PADDOCK_SMTP_ENABLED`, `PADDOCK_SMTP_*` (`docs/operations/install.md`, *E-mail relay*) | `false` |
 
 With the proxy on the Paddock host (section 4), rows 7, 9, 10 and 12 change: `127.0.0.1`, the host's LAN address,
 the gateway of `paddock_cp`, and the subnets of `paddock_cp` and `paddock_audit-index` separated by a space; the
@@ -327,6 +328,8 @@ Every production item that applies to one host runs unchanged:
 - `audit index retention of the retention round` (`PADDOCK_AUDIT_INDEX_RETENTION_DAYS` set, at least 400 days and at
   least `PADDOCK_AUDIT_RETENTION_DAYS`; the worker does not start otherwise)
 - `authentik web workers` (`PADDOCK_AUTHENTIK_WEB_WORKERS` is an integer of at least 1)
+- `notifications: SMTP presence flag matches the relay` (`PADDOCK_SMTP_ENABLED` is `true` exactly when
+  `PADDOCK_SMTP_HOST` is set; `PADDOCK_SMTP_TLS=none` fails `no development-only variables`)
 - `release public keys are production keys`
 - `audit bucket has Object Lock COMPLIANCE` (with `--online`; at least 400 days)
 

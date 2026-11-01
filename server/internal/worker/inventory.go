@@ -46,6 +46,7 @@ type Inventory struct {
 	settings InventorySettings
 	source   ports.Inventory
 	sync     *app.InventorySync
+	summary  *app.VulnerabilitySummary
 	org      *db.OrgPool
 	platform *db.PlatformPool
 	every    time.Duration
@@ -60,9 +61,9 @@ type Inventory struct {
 }
 
 // NewInventory creates the inventory rounds.
-func NewInventory(settings InventorySettings, source ports.Inventory, sync *app.InventorySync, org *db.OrgPool,
-	platform *db.PlatformPool, every time.Duration) *Inventory {
-	return &Inventory{settings: settings, source: source, sync: sync, org: org, platform: platform, every: every,
+func NewInventory(settings InventorySettings, source ports.Inventory, sync *app.InventorySync, summary *app.VulnerabilitySummary,
+	org *db.OrgPool, platform *db.PlatformPool, every time.Duration) *Inventory {
+	return &Inventory{settings: settings, source: source, sync: sync, summary: summary, org: org, platform: platform, every: every,
 		retry: inventoryRetryInterval, now: time.Now}
 }
 
@@ -158,6 +159,9 @@ func (i *Inventory) Round(ctx context.Context) error {
 	if err := i.reportAgents(ctx, start); err != nil {
 		return err
 	}
+	if err := i.summarize(ctx, start); err != nil {
+		return err
+	}
 	i.since, i.vulnState, i.rounds = start.Add(-time.Minute), vulnState, i.rounds+1 // a margin for clocks and in-flight updates
 	slog.InfoContext(ctx, "inventory synced", "hosts", len(hosts), "unmapped", unmapped, "full", since.IsZero())
 	return nil
@@ -193,6 +197,20 @@ func (i *Inventory) reportAgents(ctx context.Context, now time.Time) error {
 		}
 		for _, d := range devices {
 			slog.WarnContext(ctx, "fleetd reports the agent not running", "organization_id", org, "device_id", d)
+		}
+	}
+	return nil
+}
+
+// summarize records the critical CVE summary of every organization (plan M9 decision 37).
+func (i *Inventory) summarize(ctx context.Context, now time.Time) error {
+	orgs, err := i.org.OrganizationIDs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, org := range orgs {
+		if err := i.summary.Record(systemContext(ctx, org, "inventory-sync"), now); err != nil {
+			return fmt.Errorf("vulnerability summary of organization %s: %w", org, err)
 		}
 	}
 	return nil

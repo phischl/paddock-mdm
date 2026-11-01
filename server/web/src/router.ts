@@ -6,6 +6,7 @@ export const router = createRouter({
   routes: [
     { path: '/', name: 'home', component: () => import('./views/Overview.vue') },
     { path: '/attention', name: 'attention', component: () => import('./views/Attention.vue') },
+    { path: '/findings', name: 'findings', component: () => import('./views/Findings.vue') },
     { path: '/security-review', name: 'security-review', component: () => import('./views/SecurityReview.vue') },
     { path: '/login-denied', name: 'login-denied', component: () => import('./views/LoginDenied.vue'), meta: { public: true } },
     { path: '/device-groups', name: 'device-groups', component: () => import('./views/DeviceGroups.vue') },
@@ -45,9 +46,11 @@ export const router = createRouter({
     { path: '/settings/login', name: 'login-settings', component: () => import('./views/LoginSettings.vue') },
     { path: '/settings/dms', name: 'dms-settings', component: () => import('./views/DMSSettings.vue') },
     { path: '/settings/managed-files', name: 'managed-file-settings', component: () => import('./views/ManagedFileSettings.vue') },
+    { path: '/settings/watched-units', name: 'watched-units', component: () => import('./views/WatchedUnits.vue') },
     { path: '/settings/updates', name: 'update-settings', component: () => import('./views/UpdateSettings.vue') },
     { path: '/settings/privacy', name: 'privacy-settings', component: () => import('./views/PrivacySettings.vue') },
     { path: '/settings/mcp', name: 'mcp-settings', component: () => import('./views/McpSettings.vue') },
+    { path: '/settings/notifications', name: 'notification-destinations', component: () => import('./views/NotificationDestinations.vue') },
     { path: '/package-holds', name: 'package-holds', component: () => import('./views/PackageHolds.vue') },
     { path: '/revocations', name: 'revocations', component: () => import('./views/RevocationRequests.vue') },
     { path: '/audit', name: 'audit', component: () => import('./views/Audit.vue') },
@@ -60,6 +63,7 @@ export const router = createRouter({
     { path: '/platform/sessions', name: 'platform-sessions', component: () => import('./views/PlatformSessions.vue') },
     { path: '/platform/openbao', name: 'platform-openbao', component: () => import('./views/PlatformOpenBao.vue') },
     { path: '/platform/mcp', name: 'platform-mcp', component: () => import('./views/PlatformMcp.vue') },
+    { path: '/platform/notifications', name: 'platform-notifications', component: () => import('./views/PlatformNotifications.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFound.vue') },
   ],
 })

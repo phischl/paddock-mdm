@@ -49,6 +49,8 @@ cannot be allow-listed. A refused request is `403 ip_not_allowed`.
 | `paddockctl mcp logout` | Ends the MCP session, revokes its refresh token and deletes the session file. |
 | `paddockctl audit verify-export <file> [--fingerprint <hex>] [-o text\|json]` | Verifies an audit evidence package offline: no configuration, token or network. See [Verifying an evidence package](#verifying-an-evidence-package). |
 | `paddockctl devices list [--page N] [--page-size 10\|25\|50\|100] [--sort <field>] [-q <text>] [--state <s>]… [--device-group-id <uuid>] [--disk-state <s>]… [-o table\|json]` | Lists devices with the parameters of the admin API's list contract; `-o json` prints the API's answer unchanged. |
+| `paddockctl audit feed [--after N] [--limit L] [--follow]` | Reads the organization's audit events from the cursor feed (`org_admin` or `org_auditor` token): one JSON event per line on stdout, the cursor on stderr as `next_after=<n>` (pass it as `--after` next time). `--limit` is 1 to 1000 (default 100). `--follow` keeps reading, polling every 30 seconds once caught up, until interrupted. A 403 exits with code 1 and the problem code. |
+| `paddockctl findings list [--page N] [--page-size 10\|25\|50\|100] [--sort <field>] [-q <text>] [--status <s>]… [--kind <k>] [--cleared] [-o table\|json]` | Lists findings with the list contract of the admin API; cleared findings only with `--cleared`. `-o json` prints the API's answer unchanged. Findings are acted on in the portal only. |
 
 A plan shows one line per created (`+`) and deleted (`-`) item and one line per changed field (`~ settings.login
 hello_enabled: false -> true`), then `Plan: N to create, M to update, K to delete`. An item is named by its key, the

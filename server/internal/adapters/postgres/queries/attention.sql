@@ -5,18 +5,34 @@
 -- decision 23).
 
 -- name: ListAttention :many
-SELECT * FROM attention_condition
-WHERE (sqlc.narg(q_pattern)::text IS NULL OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
-  AND (sqlc.narg(kinds)::text[] IS NULL OR kind = ANY(sqlc.narg(kinds)::text[]))
+-- Each condition carries its live finding (plan M9 decision 34), joined for the rows of the page only.
+WITH page AS (
+  SELECT * FROM attention_condition
+  WHERE (sqlc.narg(q_pattern)::text IS NULL OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+    AND (sqlc.narg(kinds)::text[] IS NULL OR kind = ANY(sqlc.narg(kinds)::text[]))
+  ORDER BY
+    CASE WHEN @sort::text = 'since' THEN since END ASC,
+    CASE WHEN @sort::text = '-since' THEN since END DESC,
+    CASE WHEN @sort::text = 'kind' THEN kind END ASC,
+    CASE WHEN @sort::text = '-kind' THEN kind END DESC,
+    CASE WHEN @sort::text = 'hostname' THEN hostname END ASC,
+    CASE WHEN @sort::text = '-hostname' THEN hostname END DESC,
+    id
+  LIMIT @max_rows OFFSET @skip_rows
+)
+SELECT p.kind, p.device_id, p.hostname, p.since, p.detail, p.id,
+       f.id AS finding_id, f.status AS finding_status, a.display_name AS finding_assignee_display
+FROM page p
+LEFT JOIN finding f ON f.kind = 'attention' AND f.key = 'attention:' || p.id AND f.cleared_at IS NULL
+LEFT JOIN admin_account a ON a.id = f.assignee_account_id
 ORDER BY
-  CASE WHEN @sort::text = 'since' THEN since END ASC,
-  CASE WHEN @sort::text = '-since' THEN since END DESC,
-  CASE WHEN @sort::text = 'kind' THEN kind END ASC,
-  CASE WHEN @sort::text = '-kind' THEN kind END DESC,
-  CASE WHEN @sort::text = 'hostname' THEN hostname END ASC,
-  CASE WHEN @sort::text = '-hostname' THEN hostname END DESC,
-  id
-LIMIT @max_rows OFFSET @skip_rows;
+  CASE WHEN @sort::text = 'since' THEN p.since END ASC,
+  CASE WHEN @sort::text = '-since' THEN p.since END DESC,
+  CASE WHEN @sort::text = 'kind' THEN p.kind END ASC,
+  CASE WHEN @sort::text = '-kind' THEN p.kind END DESC,
+  CASE WHEN @sort::text = 'hostname' THEN p.hostname END ASC,
+  CASE WHEN @sort::text = '-hostname' THEN p.hostname END DESC,
+  p.id;
 
 -- name: CountAttention :one
 SELECT count(*) FROM (
@@ -37,18 +53,22 @@ SELECT count(*) FROM (
 -- reuses prepared statements, so after five executions a generic plan estimates those filters as near-empty and
 -- probes the view's tables once per device (list and count together about 300 ms instead of 85 ms at 10 000 stale
 -- devices, docs/operations/capacity.md). The device page (device_id) reads the whole view as well, a few tens of
--- milliseconds.
+-- milliseconds. Each condition carries its live finding (plan M9 decision 34).
 
 -- name: ListAttentionDevices :many
 WITH ranked AS MATERIALIZED (
   SELECT c.device_id, c.hostname, c.kind, c.since, c.detail,
          CASE WHEN c.kind IN ('presumed_lost', 'stale_critical', 'quarantined', 'revocation_expired') THEN 2
               WHEN c.kind = 'revocation_pending' THEN 0
-              ELSE 1 END AS rank
+              ELSE 1 END AS rank,
+         CASE WHEN f.id IS NULL THEN NULL
+              ELSE json_build_object('id', f.id, 'status', f.status, 'assignee_display', a.display_name) END AS finding
   FROM attention_condition c
+  LEFT JOIN finding f ON f.kind = 'attention' AND f.key = 'attention:' || c.id AND f.cleared_at IS NULL
+  LEFT JOIN admin_account a ON a.id = f.assignee_account_id
 ), grouped AS (
   SELECT r.device_id, r.hostname, max(r.rank)::int AS severity, max(r.since)::timestamptz AS since,
-         json_agg(json_build_object('kind', r.kind, 'since', r.since, 'detail', r.detail) ORDER BY r.rank DESC, r.since DESC, r.kind) AS conditions
+         json_agg(json_build_object('kind', r.kind, 'since', r.since, 'detail', r.detail, 'finding', r.finding) ORDER BY r.rank DESC, r.since DESC, r.kind) AS conditions
   FROM ranked r
   WHERE (sqlc.narg(q_pattern)::text IS NULL OR r.hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(device_id)::uuid IS NULL OR r.device_id = sqlc.narg(device_id)::uuid)

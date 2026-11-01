@@ -50,6 +50,9 @@ type Settings struct {
 	Updates *UpdateSettings `json:"updates,omitempty"`
 	// ManagedFiles are the operator roots of the managed files (plan M8s decision 7c).
 	ManagedFiles *ManagedFileSettings `json:"managed_files,omitempty"`
+	// WatchedUnits are the third-party units of the presence policy (plan M9 decision 38); an empty list is present and
+	// clears them.
+	WatchedUnits *[]string `json:"watched_units,omitempty"`
 	// Privacy are the privacy settings (plan M10 decision 9).
 	Privacy *PrivacySettings `json:"privacy,omitempty"`
 }
