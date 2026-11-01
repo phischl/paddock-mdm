@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "048f4a52c95738fb14b14f5b11659142223dfe7e5bfb8615f3bb9d23d469d98e"
+const Version = "2b22b4ee134f460fa0fc060de4f6fd48cbc56a2aa28bdc8b47b2176a39052995"
 
 var tools = []Tool{
 	{
@@ -2003,8 +2003,8 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: applied_at), q (search over: actor_display).",
-		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-applied_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"applied_at\",\"-applied_at\"],\"type\":\"string\"},\"source\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"session\",\"api_token\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
+		Description: "Roles: org_admin, org_operator, org_auditor. Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: applied_at), q (search over: actor_display).",
+		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"rollout\":{\"description\":\"Repeatable.\",\"items\":{\"description\":\"immediate: every device receives the change at once. staged and urgent are set by staged rollouts.\",\"enum\":[\"immediate\",\"staged\",\"urgent\"],\"type\":\"string\"},\"type\":\"array\"},\"sort\":{\"default\":\"-applied_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"applied_at\",\"-applied_at\"],\"type\":\"string\"},\"source\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"session\",\"api_token\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listComponentTargets",

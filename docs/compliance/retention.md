@@ -75,8 +75,7 @@ Every purge leaves an audit event in the same WORM chain as every other event, r
 - **`retention.purged`**: one event per run, organization and store when at least one row was deleted (or when the
   purge failed). Parameters: `store` (`device_login_event`, `device_user_seen`, `read_audit_window`, `audit_index`,
   `audit_exports`, `device_command`, `device_alert`, `device_event_gap`, `action` (ADR 0032 amendments 2026-10-18 and
-  2026-10-31; the platform pseudo-organization's actions in that pseudo-organization); `change_set_before` only once M11 (PDK-154) adds
-  that pass), `deleted` (number of rows), `cutoff` (RFC 3339;
+  2026-10-31; the platform pseudo-organization's actions in that pseudo-organization), `change_set_before`), `deleted` (number of rows), `cutoff` (RFC 3339;
   rows older than it were deleted) and, for the audit index, `partition` (one event per dropped partition, recorded in the
   platform pseudo-organization); an expired export carries `export_id` and is recorded in its organization.
 - **`device.inventory_purged`**: one event per retired device whose inventory was deleted, in Paddock and in Fleet
@@ -136,5 +135,4 @@ until a later decision adds a purge:
   (planned: `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after closing, delivery or day, with `retention.purged`); the
   destinations, the pseudonym key and `watched_unit` stay as long as the organization keeps them.
 
-Finished commands, cleared alerts, filled event gaps and finished actions are purged by the worker's retention round (PDK-180). The purge of `change_set.before` joins the same round with the M11 change
-that creates the column.
+Finished commands, cleared alerts, filled event gaps and finished actions are purged by the worker's retention round (PDK-180). The purge of `change_set.before` runs in the same round (PDK-154).

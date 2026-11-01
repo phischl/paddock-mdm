@@ -760,6 +760,7 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/change-sets": {
 		{"q": {"carol"}},
 		{"source": {"session"}, "sort": {"applied_at"}, "page_size": {"100"}},
+		{"rollout": {"immediate"}, "page_size": {"100"}},
 	},
 	"/api/v1/api-tokens": {
 		{"q": {"globex-iso"}},
