@@ -1269,7 +1269,10 @@
       "hint": "Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update.",
       "targetHint": "Target = last completed release. A running rollout does not move it; a component newer than its target counts as up to date."
     },
-    "componentFilter": "Component outdated"
+    "componentFilter": "Component outdated",
+    "reportOnly": {
+      "banner": "This device is in report-only mode: it reports what it would change and changes nothing. Pending rows list the planned changes."
+    }
   },
   "tokens": {
     "title": "Enrollment tokens",
@@ -1500,12 +1503,11 @@
       "drift_corrected": "Drift corrected"
     },
     "count": {
-      "applied": "{count} applied",
-      "failed": "{count} failed",
-      "pending": "{count} pending",
-      "drift_corrected": "{count} drift corrected"
+      "applied": "{count, plural, one {# applied} other {# applied}}",
+      "failed": "{count, plural, one {# failed} other {# failed}}",
+      "pending": "{count, plural, one {# pending} other {# pending}}",
+      "drift_corrected": "{count, plural, one {# drift corrected} other {# drifts corrected}}"
     },
-    "reportOnly": "This device is in report-only mode: it reports what it would change and changes nothing. Pending rows list the planned changes.",
     "changes": "Planned changes",
     "noDetails": "No further details.",
     "bundles": "Bundle history",
@@ -1538,7 +1540,8 @@
         "title": "No apply status yet",
         "description": "No device has reported what it applied."
       }
-    }
+    },
+    "schema": "Schema"
   },
   "managed": {
     "scope": "Applies to",

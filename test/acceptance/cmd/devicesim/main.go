@@ -148,13 +148,15 @@ func reportConfig(ctx context.Context, dev *devicesim.Device, resources []map[st
 		}
 		if out.Bundle != nil {
 			failed := 0
+			errs := []map[string]string{}
 			for _, r := range resources {
 				if r["status"] == "failed" {
 					failed++
+					errs = append(errs, map[string]string{"id": r["id"], "message": r["message"]})
 				}
 			}
 			data, err := json.Marshal(map[string]any{
-				"version": out.Bundle.Version, "changed": len(resources) - failed, "mode": "enforce", "resources": resources,
+				"version": out.Bundle.Version, "changed": len(resources) - failed, "mode": "enforce", "errors": errs, "resources": resources,
 			})
 			if err != nil {
 				return err

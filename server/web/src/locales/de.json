@@ -1269,7 +1269,10 @@
       "hint": "Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach.",
       "targetHint": "Ziel = letztes abgeschlossenes Release. Ein laufender Rollout verschiebt es nicht; eine Komponente, die neuer als ihr Ziel ist, gilt als aktuell."
     },
-    "componentFilter": "Komponente veraltet"
+    "componentFilter": "Komponente veraltet",
+    "reportOnly": {
+      "banner": "Dieses Gerät ist im Berichtsmodus: Es meldet, was es ändern würde, und ändert nichts. Ausstehende Zeilen nennen die geplanten Änderungen."
+    }
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -1500,12 +1503,11 @@
       "drift_corrected": "Abweichung korrigiert"
     },
     "count": {
-      "applied": "{count} angewendet",
-      "failed": "{count} fehlgeschlagen",
-      "pending": "{count} ausstehend",
-      "drift_corrected": "{count} Abweichung korrigiert"
+      "applied": "{count, plural, one {# angewendet} other {# angewendet}}",
+      "failed": "{count, plural, one {# fehlgeschlagen} other {# fehlgeschlagen}}",
+      "pending": "{count, plural, one {# ausstehend} other {# ausstehend}}",
+      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}"
     },
-    "reportOnly": "Dieses Gerät ist im Berichtsmodus: Es meldet, was es ändern würde, und ändert nichts. Ausstehende Zeilen nennen die geplanten Änderungen.",
     "changes": "Geplante Änderungen",
     "noDetails": "Keine weiteren Details.",
     "bundles": "Bundle-Verlauf",
@@ -1538,7 +1540,8 @@
         "title": "Noch kein Anwendungsstatus",
         "description": "Kein Gerät hat bisher gemeldet, was es angewendet hat."
       }
-    }
+    },
+    "schema": "Schema"
   },
   "managed": {
     "scope": "Gilt für",

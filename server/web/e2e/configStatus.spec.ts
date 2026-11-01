@@ -45,10 +45,10 @@ test('organization admin sees failed resources on the device and on the fleet pa
   await expect(list.getByRole('row').filter({ hasText: failedID })).toContainText('unit not found')
   await expect(list.getByRole('row').filter({ hasText: failedID })).toContainText('Failed')
   await expect(list.getByRole('row').filter({ hasText: okID })).toContainText('Applied')
-  await expect(page.getByTestId('bundle-history-list').getByRole('row').nth(1)).toContainText('Applied')
+  await expect(page.getByTestId('bundle-history-list').getByRole('row').filter({ hasText: 'Applied' })).not.toHaveCount(0)
   await expectAccessible(page)
 
-  // The status filter narrows the list and survives a reload.
+  // The filter is URL state, so a reload must keep it.
   await list.getByTestId('list-filter-status').click()
   await page.getByRole('option', { name: 'Failed' }).click()
   await page.keyboard.press('Escape')

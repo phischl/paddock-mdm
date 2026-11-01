@@ -1,16 +1,16 @@
 <script setup lang="ts">
+// The Apply status tab of a device (plan M11 decision 15): what applied, failed or is pending, and its versions.
 import { computed, inject } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
-import type { DeviceBundle, DeviceResourceStatus, ResourceState } from '../api/client'
-import { isReportOnly, listDeviceBundles, listDeviceConfigStatus, resourceStateFilter, resourceStateView } from '../lib/configStatus'
+import type { DeviceBundle, DeviceResourceStatus } from '../api/client'
+import { isReportOnly, listDeviceBundles, listDeviceConfigStatus, resourceStateFilter, resourceStateView, states } from '../lib/configStatus'
 import { deviceDetailKey } from '../lib/deviceDetailPage'
 import type { ListColumn } from '../lib/listQuery'
 
-/** The Apply status tab of a device (plan M11 decision 15): what applied, failed or is pending, and its versions. */
 const page = inject(deviceDetailKey)
 if (!page) throw new Error('DeviceApplyStatus outside the device frame')
 const { t } = useI18n()
@@ -20,7 +20,6 @@ const fetchStatus = computed(() => listDeviceConfigStatus(id.value))
 const fetchBundles = computed(() => listDeviceBundles(id.value))
 const counts = computed(() => page.device.value?.config_status)
 const reportOnly = computed(() => !!page.device.value && isReportOnly(page.device.value))
-const states: ResourceState[] = ['applied', 'failed', 'pending', 'drift_corrected']
 
 const statusColumns: ListColumn[] = [
   { key: 'resource_id', title: 'configStatus.resource', sortable: true },
@@ -33,6 +32,7 @@ const statusColumns: ListColumn[] = [
 const bundleColumns: ListColumn[] = [
   { key: 'version', title: 'configStatus.version', sortable: true },
   { key: 'created_at', title: 'configStatus.compiled', sortable: true },
+  { key: 'schema_version', title: 'configStatus.schema' },
   { key: 'outcome', title: 'configStatus.outcome' },
   { key: 'mode', title: 'configStatus.mode' },
   { key: 'changed', title: 'configStatus.changed' },
@@ -57,7 +57,7 @@ function outcomeView(b: DeviceBundle): { status: 'ok' | 'critical' | 'neutral'; 
       variant="tonal"
       data-testid="apply-report-only"
     >
-      {{ t('configStatus.reportOnly') }}
+      {{ t('devices.reportOnly.banner') }}
     </v-alert>
     <p
       v-if="counts"

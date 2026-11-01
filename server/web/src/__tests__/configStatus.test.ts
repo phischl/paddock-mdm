@@ -9,6 +9,7 @@ import { createPortalI18n } from '../i18n'
 import { isReportOnly, listConfigStatus, listDeviceBundles, listDeviceConfigStatus, resourceStateView } from '../lib/configStatus'
 import { deviceDetailKey, type DevicePage } from '../lib/deviceDetailPage'
 import { vuetify } from '../plugins/vuetify'
+import ConfigStatus from '../views/ConfigStatus.vue'
 import DeviceApplyStatus from '../views/DeviceApplyStatus.vue'
 
 const get = vi.hoisted(() => vi.fn())
@@ -122,5 +123,33 @@ describe('DeviceApplyStatus', () => {
   it('shows the report-only banner for a device in report-only mode', async () => {
     await mountTab({ config_mode: 'report_only' })
     expect(document.querySelector('[data-testid="apply-report-only"]')).not.toBeNull()
+  })
+})
+
+describe('ConfigStatus', () => {
+  it('lists the worst resources first and marks a failure count above zero in the error colour', async () => {
+    get.mockResolvedValue({
+      data: {
+        ...empty, sort: '-failed',
+        items: [
+          { resource_id: 'unit:bad.service', type: 'unit', applied: 1, failed: 2, pending: 0, drift_corrected: 0, last_failure_at: '2026-10-10T12:00:00Z' },
+          { resource_id: 'file:/etc/ok.conf', type: 'file', applied: 3, failed: 0, pending: 0, drift_corrected: 0, last_failure_at: null },
+        ],
+      },
+    })
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/config-status', name: 'config-status', component: ConfigStatus }] })
+    await router.push('/config-status')
+    const wrapper = mount(VApp, {
+      slots: { default: () => h(ConfigStatus) }, global: { plugins: [createPortalI18n(), vuetify, pinia, router] }, attachTo: document.body,
+    })
+    await flushPromises()
+    expect(get.mock.calls[0][1].params.query.sort).toBe('-failed')
+    const failed = [...document.querySelectorAll('[data-testid="config-status-failed"]')]
+    expect(failed.map((f) => f.textContent)).toEqual(['2', '0'])
+    expect(failed[0].className).toContain('pd-tab-count--critical')
+    expect(failed[1].className).not.toContain('pd-tab-count--critical')
+    wrapper.unmount()
   })
 })

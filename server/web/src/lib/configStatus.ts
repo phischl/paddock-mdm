@@ -5,7 +5,7 @@ import {
 import type { ListFilter, ListParams, Page } from './listQuery'
 import type { StatusView } from './status'
 
-const states: ResourceState[] = ['applied', 'failed', 'pending', 'drift_corrected']
+export const states: ResourceState[] = ['applied', 'failed', 'pending', 'drift_corrected']
 
 /** The status filter of the apply status lists. */
 export const resourceStateFilter: ListFilter = {
