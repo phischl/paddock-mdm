@@ -124,35 +124,49 @@ func (q *Queries) CountDeviceResourceStatusList(ctx context.Context, arg CountDe
 
 const deleteDeviceResourceStatusNotIn = `-- name: DeleteDeviceResourceStatusNotIn :exec
 DELETE FROM device_resource_status
-WHERE device_id = $1 AND resource_id <> ALL($2::text[]) AND occurred_at <= $3
+WHERE device_id = $1 AND resource_id <> ALL($2::text[])
+  AND (bundle_version, occurred_at) <= ($3::bigint, $4::timestamptz)
 `
 
 type DeleteDeviceResourceStatusNotInParams struct {
-	DeviceID    uuid.UUID
-	ResourceIds []string
-	OccurredAt  time.Time
+	DeviceID      uuid.UUID
+	ResourceIds   []string
+	BundleVersion int64
+	OccurredAt    time.Time
 }
 
 // Resources that left the bundle; rows a newer report wrote stay.
 func (q *Queries) DeleteDeviceResourceStatusNotIn(ctx context.Context, arg DeleteDeviceResourceStatusNotInParams) error {
-	_, err := q.db.Exec(ctx, deleteDeviceResourceStatusNotIn, arg.DeviceID, arg.ResourceIds, arg.OccurredAt)
+	_, err := q.db.Exec(ctx, deleteDeviceResourceStatusNotIn,
+		arg.DeviceID,
+		arg.ResourceIds,
+		arg.BundleVersion,
+		arg.OccurredAt,
+	)
 	return err
 }
 
 const deleteFailedDeviceResourceStatusNotIn = `-- name: DeleteFailedDeviceResourceStatusNotIn :exec
 DELETE FROM device_resource_status
-WHERE device_id = $1 AND status = 'failed' AND resource_id <> ALL($2::text[]) AND occurred_at <= $3
+WHERE device_id = $1 AND status = 'failed' AND resource_id <> ALL($2::text[])
+  AND (bundle_version, occurred_at) <= ($3::bigint, $4::timestamptz)
 `
 
 type DeleteFailedDeviceResourceStatusNotInParams struct {
-	DeviceID    uuid.UUID
-	ResourceIds []string
-	OccurredAt  time.Time
+	DeviceID      uuid.UUID
+	ResourceIds   []string
+	BundleVersion int64
+	OccurredAt    time.Time
 }
 
 // The report of an agent without per-resource outcomes names only failures: other rows stay.
 func (q *Queries) DeleteFailedDeviceResourceStatusNotIn(ctx context.Context, arg DeleteFailedDeviceResourceStatusNotInParams) error {
-	_, err := q.db.Exec(ctx, deleteFailedDeviceResourceStatusNotIn, arg.DeviceID, arg.ResourceIds, arg.OccurredAt)
+	_, err := q.db.Exec(ctx, deleteFailedDeviceResourceStatusNotIn,
+		arg.DeviceID,
+		arg.ResourceIds,
+		arg.BundleVersion,
+		arg.OccurredAt,
+	)
 	return err
 }
 
@@ -177,18 +191,23 @@ func (q *Queries) GetLatestAppliedBundleMode(ctx context.Context, arg GetLatestA
 
 const hasNewerAppliedBundleReport = `-- name: HasNewerAppliedBundleReport :one
 SELECT EXISTS (
-  SELECT 1 FROM device_bundle_report WHERE device_id = $1 AND outcome = 'applied' AND occurred_at > $2
+  SELECT 1 FROM device_bundle_report
+  WHERE device_id = $1 AND outcome = 'applied'
+    AND (version > $2 OR (version = $2 AND occurred_at > $3))
 )
 `
 
 type HasNewerAppliedBundleReportParams struct {
 	DeviceID   uuid.UUID
+	Version    int64
 	OccurredAt time.Time
 }
 
 // A newer applied report owns the resource rows of the device: an older event must neither insert nor delete any.
+// Reports are ordered by bundle version first and by occurred_at within a version (plan M11 decision 13, architect
+// decision 2026-11-01): the device's clock may step back, its versions never do.
 func (q *Queries) HasNewerAppliedBundleReport(ctx context.Context, arg HasNewerAppliedBundleReportParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasNewerAppliedBundleReport, arg.DeviceID, arg.OccurredAt)
+	row := q.db.QueryRow(ctx, hasNewerAppliedBundleReport, arg.DeviceID, arg.Version, arg.OccurredAt)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
@@ -433,12 +452,17 @@ func (q *Queries) LockDeviceConfigStatus(ctx context.Context, deviceID uuid.UUID
 
 const upsertDeviceBundleReport = `-- name: UpsertDeviceBundleReport :exec
 INSERT INTO device_bundle_report (device_id, organization_id, version, outcome, mode, changed, error_count, reason, occurred_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+SELECT $1::uuid, $2::uuid, $3::bigint, $4::text, $5::text, $6::int,
+       $7::int, $8::text, $9::timestamptz
+WHERE EXISTS (
+  SELECT 1 FROM bundle WHERE device_id = $1::uuid AND organization_id = $2::uuid AND version = $3::bigint
+)
 ON CONFLICT (device_id, version) DO UPDATE SET
   outcome = EXCLUDED.outcome, mode = EXCLUDED.mode, changed = EXCLUDED.changed, error_count = EXCLUDED.error_count,
   reason = EXCLUDED.reason, occurred_at = EXCLUDED.occurred_at, recorded_at = now()
-WHERE EXCLUDED.occurred_at > device_bundle_report.occurred_at
-  AND NOT (device_bundle_report.outcome = 'applied' AND EXCLUDED.outcome = 'rejected')
+WHERE (EXCLUDED.occurred_at > device_bundle_report.occurred_at
+       AND NOT (device_bundle_report.outcome = 'applied' AND EXCLUDED.outcome = 'rejected'))
+   OR (device_bundle_report.outcome = 'rejected' AND EXCLUDED.outcome = 'applied')
 `
 
 type UpsertDeviceBundleReportParams struct {
@@ -453,9 +477,11 @@ type UpsertDeviceBundleReportParams struct {
 	OccurredAt     time.Time
 }
 
-// A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order). A
-// rejection never replaces the applied report of the same version: HasNewerAppliedBundleReport would lose it, and a
-// late older report would bring back what that version removed (PDK-151 review 2 finding L1).
+// A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order). An
+// applied report always replaces a rejection of the same version and a rejection never replaces an applied report,
+// whatever the order: HasNewerAppliedBundleReport would lose the applied report, and a late older report would bring
+// back what that version removed (PDK-151 review 2 finding L1, review 3 finding L3). Only versions the server compiled
+// for the device get a row, so the history stays bounded by the device's bundles.
 func (q *Queries) UpsertDeviceBundleReport(ctx context.Context, arg UpsertDeviceBundleReportParams) error {
 	_, err := q.db.Exec(ctx, upsertDeviceBundleReport,
 		arg.DeviceID,
@@ -478,7 +504,7 @@ FROM jsonb_to_recordset($5::jsonb) AS r(id text, status text, message text, chan
 ON CONFLICT (device_id, resource_id) DO UPDATE SET
   status = EXCLUDED.status, message = EXCLUDED.message, changes = EXCLUDED.changes,
   bundle_version = EXCLUDED.bundle_version, occurred_at = EXCLUDED.occurred_at
-WHERE EXCLUDED.occurred_at >= device_resource_status.occurred_at
+WHERE (EXCLUDED.bundle_version, EXCLUDED.occurred_at) >= (device_resource_status.bundle_version, device_resource_status.occurred_at)
 `
 
 type UpsertDeviceResourceStatusesParams struct {
@@ -489,7 +515,8 @@ type UpsertDeviceResourceStatusesParams struct {
 	Rows           json.RawMessage
 }
 
-// rows is a JSON array of {id, status, message, changes}; a row with a newer occurred_at is never replaced.
+// rows is a JSON array of {id, status, message, changes}; a row of a newer (bundle_version, occurred_at) is never
+// replaced.
 func (q *Queries) UpsertDeviceResourceStatuses(ctx context.Context, arg UpsertDeviceResourceStatusesParams) error {
 	_, err := q.db.Exec(ctx, upsertDeviceResourceStatuses,
 		arg.DeviceID,

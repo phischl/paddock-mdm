@@ -120,8 +120,8 @@ func TestConfigStatus(t *testing.T) {
 			t.Fatalf("outcome=none lists a reported version: %+v", b)
 		}
 	}
-	// Only versions the server compiled for the device are listed, so the rejection of an unknown version is stored
-	// but not part of the history.
+	// Only versions the server compiled for the device get a report, so the rejection of an unknown version is not
+	// part of the history.
 	for _, b := range bundles("outcome=rejected") {
 		t.Fatalf("a rejection of an unknown version is listed: %+v", b)
 	}

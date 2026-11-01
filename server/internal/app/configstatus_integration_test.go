@@ -48,6 +48,17 @@ func statusRows(t *testing.T, h releaseHarness, device uuid.UUID) map[string]sta
 	return out
 }
 
+// addBundles stores bundle rows of the device: a report is kept only for a version the server compiled for it.
+func addBundles(t *testing.T, h releaseHarness, org, device uuid.UUID, versions ...int64) {
+	t.Helper()
+	for _, v := range versions {
+		if _, err := h.super.Exec(context.Background(), `INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key)
+			VALUES ($1, $2, $3, '\x01', '\x02', 'k')`, device, v, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func record(t *testing.T, h releaseHarness, org, device uuid.UUID, seq int64, typ string, at time.Time, data any) {
 	t.Helper()
 	raw, err := json.Marshal(data)
@@ -65,7 +76,8 @@ func record(t *testing.T, h releaseHarness, org, device uuid.UUID, seq int64, ty
 func TestConfigStatusIngest(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	org, device := h.device(t)
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	addBundles(t, h, org, device, 6, 7, 8)
 	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
 		"version": 7, "changed": 2, "mode": "report_only", "errors": []any{},
 		"resources": []map[string]any{
@@ -127,7 +139,8 @@ func TestConfigStatusIngest(t *testing.T) {
 func TestConfigStatusIngestWithoutResources(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	org, device := h.device(t)
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	addBundles(t, h, org, device, 1, 2)
 	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
 		"version": 1, "resources": []map[string]any{
 			{"id": "file:/etc/ok.conf", "status": "applied"}, {"id": "unit:x.service", "status": "failed", "message": "x"},
@@ -151,7 +164,8 @@ func TestConfigStatusIngestWithoutResources(t *testing.T) {
 func TestConfigStatusRejectedAndDrift(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	org, device := h.device(t)
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	addBundles(t, h, org, device, 3, 4, 5)
 	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
 		"version": 3, "mode": "report_only", "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "time", "status": "applied"}},
 	})
@@ -181,6 +195,7 @@ func TestConfigStatusRejectedAndDrift(t *testing.T) {
 
 	// A device without an applied report has its rejection recorded as enforce, the agent's default mode.
 	org2, fresh := h.device(t)
+	addBundles(t, h, org2, fresh, 1)
 	record(t, h, org2, fresh, 1, protocol.EventBundleRejected, at, map[string]any{"version": 1, "reason": "signature"})
 	if err := h.super.QueryRow(context.Background(), "SELECT mode FROM device_bundle_report WHERE device_id = $1 AND version = 1", fresh).Scan(&mode); err != nil || mode != "enforce" {
 		t.Fatalf("rejection without an applied report: %s (%v)", mode, err)
@@ -193,7 +208,8 @@ func TestConfigStatusIngestSerializesPerDevice(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	org, device := h.device(t)
 	ctx := context.Background()
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	addBundles(t, h, org, device, 1, 2, 3)
 	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
 		"version": 1, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
 	})
@@ -345,36 +361,119 @@ func TestConfigStatusReads(t *testing.T) {
 	}
 }
 
-// TestConfigStatusFutureClock: a report dated far ahead of the server is stored at the server's receipt time plus
-// protocol.MaxClockSkew, so the device's next correct report still wins (PDK-151 review 2 finding M1).
+// TestConfigStatusFutureClock: a report dated ahead of the gateway's receipt is stored at the receipt time, so the
+// device's next correctly stamped report wins, also one that arrives within protocol.MaxClockSkew (PDK-151 review 2
+// finding M1, review 3 finding M2).
 func TestConfigStatusFutureClock(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	org, device := h.device(t)
-	received := time.Now().UTC().Truncate(time.Millisecond)
-	send := func(seq int64, at, receivedAt time.Time, data map[string]any) {
+	addBundles(t, h, org, device, 1, 2)
+	received := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	send := func(seq int64, typ string, at, receivedAt time.Time, data map[string]any) {
 		t.Helper()
 		raw, err := json.Marshal(data)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := h.reports.RecordEvents(systemCtx(org), device, receivedAt, []protocol.Event{
-			{EventSeq: seq, Type: protocol.EventBundleApplied, OccurredAt: at, Data: raw},
+			{EventSeq: seq, Type: typ, OccurredAt: at, Data: raw},
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	send(1, received.Add(365*24*time.Hour), received, map[string]any{
+	send(1, protocol.EventBundleApplied, received.Add(365*24*time.Hour), received, map[string]any{
 		"version": 1, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
 	})
 	var stored time.Time
 	if err := h.super.QueryRow(context.Background(), "SELECT occurred_at FROM device_bundle_report WHERE device_id = $1 AND version = 1", device).Scan(&stored); err != nil ||
-		!stored.Equal(received.Add(protocol.MaxClockSkew)) {
-		t.Fatalf("future report stored at %s, want %s (%v)", stored, received.Add(protocol.MaxClockSkew), err)
+		!stored.Equal(received) {
+		t.Fatalf("future report stored at %s, want %s (%v)", stored, received, err)
+	}
+	soon := received.Add(time.Minute)
+	send(2, protocol.EventConfigDriftCorrected, soon, soon, map[string]any{"version": 1, "resource_ids": []string{"file:/etc/a.conf"}})
+	if rows := statusRows(t, h, device); rows["file:/etc/a.conf"].Status != "drift_corrected" {
+		t.Fatalf("a correct report within the skew lost to the future one: %+v", rows)
 	}
 	later := received.Add(10 * time.Minute)
-	send(2, later, later, map[string]any{"version": 2, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "failed", "message": "x"}}})
+	send(3, protocol.EventBundleApplied, later, later, map[string]any{"version": 2, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "failed", "message": "x"}}})
 	if rows := statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Status != "failed" || rows["file:/etc/a.conf"].Version != 2 {
 		t.Fatalf("the newer report did not win: %+v", rows)
+	}
+}
+
+// TestConfigStatusVersionOrder: applied reports are ordered by bundle version first and by occurred_at within a
+// version (plan M11 decision 13, architect decision 2026-11-01): a clock stepped back by NTP does not hide the next
+// version, a tie in time keeps the higher version, and a late drift report of an older version changes nothing.
+func TestConfigStatusVersionOrder(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	addBundles(t, h, org, device, 6, 7, 8)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, at.Add(4*time.Minute), map[string]any{
+		"version": 6, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
+	})
+	record(t, h, org, device, 2, protocol.EventBundleApplied, at.Add(time.Minute), map[string]any{
+		"version": 7, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "failed", "message": "v7"}},
+	})
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Version != 7 {
+		t.Fatalf("after the clock step back: %+v", rows)
+	}
+
+	tie := at.Add(10 * time.Minute)
+	record(t, h, org, device, 3, protocol.EventBundleApplied, tie, map[string]any{
+		"version": 8, "resources": []map[string]any{{"id": "time", "status": "applied"}},
+	})
+	record(t, h, org, device, 4, protocol.EventBundleApplied, tie, map[string]any{
+		"version": 7, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}},
+	})
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["time"].Version != 8 {
+		t.Fatalf("a tie in time let version 7 win over 8: %+v", rows)
+	}
+
+	record(t, h, org, device, 5, protocol.EventConfigDriftCorrected, at.Add(20*time.Minute), map[string]any{
+		"version": 7, "resource_ids": []string{"file:/etc/a.conf", "time"},
+	})
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["time"].Status != "applied" || rows["time"].Version != 8 {
+		t.Fatalf("a drift report of version 7 changed the state of version 8: %+v", rows)
+	}
+}
+
+// TestConfigStatusUnknownVersion: a report of a version the server never compiled for the device stores no report row.
+func TestConfigStatusUnknownVersion(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{"version": 42, "resources": []map[string]any{}})
+	record(t, h, org, device, 2, protocol.EventBundleRejected, at, map[string]any{"version": 43, "reason": "signature"})
+	var n int
+	if err := h.super.QueryRow(context.Background(), "SELECT count(*) FROM device_bundle_report WHERE device_id = $1", device).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("reports of unknown versions stored: %d (%v)", n, err)
+	}
+}
+
+// TestConfigStatusAppliedReplacesRejection: an applied report replaces a rejection of the same version even when it
+// is dated earlier, so a later, older report cannot bring back what that version removed (PDK-151 review 3 finding L3).
+func TestConfigStatusAppliedReplacesRejection(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	addBundles(t, h, org, device, 3, 4, 5)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, at.Add(-2*time.Minute), map[string]any{
+		"version": 3, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
+	})
+	record(t, h, org, device, 2, protocol.EventBundleRejected, at.Add(time.Minute), map[string]any{"version": 5, "reason": "signature"})
+	record(t, h, org, device, 3, protocol.EventBundleApplied, at, map[string]any{
+		"version": 5, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}},
+	})
+	var outcome string
+	if err := h.super.QueryRow(context.Background(), "SELECT outcome FROM device_bundle_report WHERE device_id = $1 AND version = 5", device).Scan(&outcome); err != nil || outcome != "applied" {
+		t.Fatalf("the late applied report of version 5 did not replace the rejection: %s (%v)", outcome, err)
+	}
+	record(t, h, org, device, 4, protocol.EventBundleApplied, at.Add(-time.Minute), map[string]any{
+		"version": 4, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
+	})
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Version != 5 {
+		t.Fatalf("an older report brought back what version 5 removed: %+v", rows)
 	}
 }
 
@@ -383,7 +482,8 @@ func TestConfigStatusFutureClock(t *testing.T) {
 func TestConfigStatusRejectionKeepsApplied(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	org, device := h.device(t)
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	addBundles(t, h, org, device, 2, 3)
 	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
 		"version": 3, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}},
 	})

@@ -16,10 +16,11 @@ import (
 
 // Bounds of the apply status stored from a device's report (plan M11 decision 13). A device that names more resources
 // than maxStatusResources has the rest ignored: the bundle of a device has tens of resources, so the bound only
-// protects the worker from a misbehaving agent.
+// protects the worker from a misbehaving agent. maxStatusID is the column limit: a longer ID is dropped, never cut,
+// because two cut IDs could merge into one row (PDK-151 review 3).
 const (
 	maxStatusResources = 1000
-	maxStatusID        = 256
+	maxStatusID        = 512
 	maxStatusMessage   = 1024
 	maxStatusChange    = 256
 	maxStatusChanges   = 50
@@ -45,8 +46,10 @@ type statusRow struct {
 // recordConfigStatus stores what the event says about the device's apply status, in the transaction of the event
 // (plan M11 decision 13): the report of the bundle version and the per-resource status. Anything the database would
 // refuse is dropped here instead, so that a malformed report never fails the event batch. The report time comes from
-// the device: it is capped at receivedAt plus protocol.MaxClockSkew, so a clock that ran ahead once cannot make every
-// later report look older (PDK-151 review 2 finding M1).
+// the device and orders reports within a bundle version: it is capped at receivedAt, because an event cannot happen
+// after the gateway received it, so a clock that ran ahead once cannot make the device's later reports look older
+// (PDK-151 review 2 finding M1, review 3 finding M2). sessionLoginEntry allows protocol.MaxClockSkew on top because
+// its cap only bounds retention; here any margin would let a future stamp outrank a correct one.
 func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) error {
 	var data struct {
 		Version     int64              `json:"version"`
@@ -64,8 +67,8 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 	if at.IsZero() {
 		return nil
 	}
-	if latest := receivedAt.Add(protocol.MaxClockSkew); !receivedAt.IsZero() && at.After(latest) {
-		at = latest
+	if !receivedAt.IsZero() && at.After(receivedAt) {
+		at = receivedAt
 	}
 	if err := q.LockDeviceConfigStatus(ctx, deviceID); err != nil {
 		return fmt.Errorf("lock the apply status of the device: %w", err)
@@ -73,9 +76,9 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 	if ev.Type == protocol.EventBundleRejected {
 		return recordRejection(ctx, q, org, deviceID, data.Version, data.Reason, at)
 	}
-	// Newer wins (plan M11 decision 13): the occurred_at guards of the queries protect only rows that exist, so a late
-	// older event would insert again what a newer report removed.
-	newer, err := q.HasNewerAppliedBundleReport(ctx, pgstore.HasNewerAppliedBundleReportParams{DeviceID: deviceID, OccurredAt: at})
+	// Newer wins (plan M11 decision 13, ordered by bundle version, then occurred_at): the guards of the queries protect
+	// only rows that exist, so a late older event would insert again what a newer report removed.
+	newer, err := q.HasNewerAppliedBundleReport(ctx, pgstore.HasNewerAppliedBundleReportParams{DeviceID: deviceID, Version: data.Version, OccurredAt: at})
 	if err != nil {
 		return fmt.Errorf("check for a newer apply report: %w", err)
 	}
@@ -118,7 +121,7 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 		}
 		rows = normalizeStatusRows(rows)
 		if err := q.DeleteDeviceResourceStatusNotIn(ctx, pgstore.DeleteDeviceResourceStatusNotInParams{
-			DeviceID: deviceID, ResourceIds: statusIDs(rows), OccurredAt: at,
+			DeviceID: deviceID, ResourceIds: statusIDs(rows), BundleVersion: data.Version, OccurredAt: at,
 		}); err != nil {
 			return err
 		}
@@ -137,7 +140,7 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 	}
 	rows = normalizeStatusRows(rows)
 	if err := q.DeleteFailedDeviceResourceStatusNotIn(ctx, pgstore.DeleteFailedDeviceResourceStatusNotInParams{
-		DeviceID: deviceID, ResourceIds: statusIDs(rows), OccurredAt: at,
+		DeviceID: deviceID, ResourceIds: statusIDs(rows), BundleVersion: data.Version, OccurredAt: at,
 	}); err != nil {
 		return err
 	}
@@ -178,14 +181,14 @@ func upsertResourceStatuses(ctx context.Context, q *pgstore.Queries, org, device
 	})
 }
 
-// normalizeStatusRows bounds the values, drops entries without an ID and keeps the last entry of a resource: one
-// statement cannot upsert a resource twice.
+// normalizeStatusRows bounds the values, drops entries without an ID or with one longer than maxStatusID and keeps the
+// last entry of a resource: one statement cannot upsert a resource twice.
 func normalizeStatusRows(rows []statusRow) []statusRow {
 	index := map[string]int{}
 	out := make([]statusRow, 0, len(rows))
 	for _, r := range rows {
-		r.ID = boundText(r.ID, maxStatusID)
-		if r.ID == "" {
+		r.ID = stripControls(r.ID)
+		if r.ID == "" || len(r.ID) > maxStatusID {
 			continue
 		}
 		r.Message = boundText(r.Message, maxStatusMessage)

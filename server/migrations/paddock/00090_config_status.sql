@@ -1,8 +1,10 @@
 -- Apply status of a device (plan M11 decisions 12 and 13, PDK-151): what the agent reported for each bundle version
 -- (device_bundle_report) and for each resource of the bundle (device_resource_status). The agent's apply report is
--- status, not evidence: the audit event keeps only what it always carried. Retention class per ADR 0032 §1, row
--- device_bundle_report/device_resource_status: current state only, overwritten by the device's next report; rows of a
--- retired device stay with the device record. The plan names this file 00045; that number was taken.
+-- status, not evidence: the audit event keeps only what it always carried. Retention (docs/compliance/retention.md,
+-- ADR 0032 §1): device_resource_status is current state only, overwritten by the device's next report;
+-- device_bundle_report keeps one row per bundle version the server compiled for the device and follows that bundle row
+-- (device record). Rows of a retired device stay with the device record. The plan names this file 00045; that number
+-- was taken.
 -- Forward-only: there is no Down migration.
 -- +goose Up
 CREATE TABLE device_bundle_report (

@@ -8,9 +8,13 @@
 SELECT pg_advisory_xact_lock(hashtextextended('config_status:' || CAST(@device_id::uuid AS text), 0));
 
 -- A newer applied report owns the resource rows of the device: an older event must neither insert nor delete any.
+-- Reports are ordered by bundle version first and by occurred_at within a version (plan M11 decision 13, architect
+-- decision 2026-11-01): the device's clock may step back, its versions never do.
 -- name: HasNewerAppliedBundleReport :one
 SELECT EXISTS (
-  SELECT 1 FROM device_bundle_report WHERE device_id = @device_id AND outcome = 'applied' AND occurred_at > @occurred_at
+  SELECT 1 FROM device_bundle_report
+  WHERE device_id = @device_id AND outcome = 'applied'
+    AND (version > @version OR (version = @version AND occurred_at > @occurred_at))
 );
 
 -- The mode of the device's last applied report up to occurred_at: a bundle.rejected event carries none, and the device
@@ -19,19 +23,27 @@ SELECT EXISTS (
 SELECT mode FROM device_bundle_report WHERE device_id = @device_id AND outcome = 'applied' AND occurred_at <= @occurred_at
 ORDER BY occurred_at DESC, version DESC LIMIT 1;
 
--- A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order). A
--- rejection never replaces the applied report of the same version: HasNewerAppliedBundleReport would lose it, and a
--- late older report would bring back what that version removed (PDK-151 review 2 finding L1).
+-- A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order). An
+-- applied report always replaces a rejection of the same version and a rejection never replaces an applied report,
+-- whatever the order: HasNewerAppliedBundleReport would lose the applied report, and a late older report would bring
+-- back what that version removed (PDK-151 review 2 finding L1, review 3 finding L3). Only versions the server compiled
+-- for the device get a row, so the history stays bounded by the device's bundles.
 -- name: UpsertDeviceBundleReport :exec
 INSERT INTO device_bundle_report (device_id, organization_id, version, outcome, mode, changed, error_count, reason, occurred_at)
-VALUES (@device_id, @organization_id, @version, @outcome, @mode, @changed, @error_count, sqlc.narg(reason), @occurred_at)
+SELECT @device_id::uuid, @organization_id::uuid, @version::bigint, @outcome::text, @mode::text, @changed::int,
+       @error_count::int, sqlc.narg(reason)::text, @occurred_at::timestamptz
+WHERE EXISTS (
+  SELECT 1 FROM bundle WHERE device_id = @device_id::uuid AND organization_id = @organization_id::uuid AND version = @version::bigint
+)
 ON CONFLICT (device_id, version) DO UPDATE SET
   outcome = EXCLUDED.outcome, mode = EXCLUDED.mode, changed = EXCLUDED.changed, error_count = EXCLUDED.error_count,
   reason = EXCLUDED.reason, occurred_at = EXCLUDED.occurred_at, recorded_at = now()
-WHERE EXCLUDED.occurred_at > device_bundle_report.occurred_at
-  AND NOT (device_bundle_report.outcome = 'applied' AND EXCLUDED.outcome = 'rejected');
+WHERE (EXCLUDED.occurred_at > device_bundle_report.occurred_at
+       AND NOT (device_bundle_report.outcome = 'applied' AND EXCLUDED.outcome = 'rejected'))
+   OR (device_bundle_report.outcome = 'rejected' AND EXCLUDED.outcome = 'applied');
 
--- rows is a JSON array of {id, status, message, changes}; a row with a newer occurred_at is never replaced.
+-- rows is a JSON array of {id, status, message, changes}; a row of a newer (bundle_version, occurred_at) is never
+-- replaced.
 -- name: UpsertDeviceResourceStatuses :exec
 INSERT INTO device_resource_status (device_id, organization_id, resource_id, status, message, changes, bundle_version, occurred_at)
 SELECT @device_id, @organization_id, r.id, r.status, r.message, r.changes, @bundle_version, @occurred_at
@@ -39,17 +51,19 @@ FROM jsonb_to_recordset(@rows::jsonb) AS r(id text, status text, message text, c
 ON CONFLICT (device_id, resource_id) DO UPDATE SET
   status = EXCLUDED.status, message = EXCLUDED.message, changes = EXCLUDED.changes,
   bundle_version = EXCLUDED.bundle_version, occurred_at = EXCLUDED.occurred_at
-WHERE EXCLUDED.occurred_at >= device_resource_status.occurred_at;
+WHERE (EXCLUDED.bundle_version, EXCLUDED.occurred_at) >= (device_resource_status.bundle_version, device_resource_status.occurred_at);
 
 -- Resources that left the bundle; rows a newer report wrote stay.
 -- name: DeleteDeviceResourceStatusNotIn :exec
 DELETE FROM device_resource_status
-WHERE device_id = @device_id AND resource_id <> ALL(@resource_ids::text[]) AND occurred_at <= @occurred_at;
+WHERE device_id = @device_id AND resource_id <> ALL(@resource_ids::text[])
+  AND (bundle_version, occurred_at) <= (@bundle_version::bigint, @occurred_at::timestamptz);
 
 -- The report of an agent without per-resource outcomes names only failures: other rows stay.
 -- name: DeleteFailedDeviceResourceStatusNotIn :exec
 DELETE FROM device_resource_status
-WHERE device_id = @device_id AND status = 'failed' AND resource_id <> ALL(@resource_ids::text[]) AND occurred_at <= @occurred_at;
+WHERE device_id = @device_id AND status = 'failed' AND resource_id <> ALL(@resource_ids::text[])
+  AND (bundle_version, occurred_at) <= (@bundle_version::bigint, @occurred_at::timestamptz);
 
 -- name: CountDeviceResourceStatus :one
 SELECT count(*) FILTER (WHERE status = 'applied')::int AS applied,
