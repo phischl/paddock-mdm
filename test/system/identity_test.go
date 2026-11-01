@@ -655,6 +655,14 @@ echo "rc=$?"
 	// The development retention purges device_user_seen rows older than 365 s (PDK-137), and the L1 login is older than
 	// that by now. Login history is on since LH1, so a new GDM session is reported as session.login and refreshes
 	// dave's row right before the relock (PDK-669). dave is still assigned here, so the greeter admits him.
+	var loginSettings map[string]any
+	res := w.s.Call(t, http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK)
+	if err := json.Unmarshal(res.Body, &loginSettings); err != nil {
+		t.Fatal(err)
+	}
+	if loginSettings["login_history_enabled"] != true {
+		t.Fatalf("login history is off: L2 needs gate LH1 to have switched it on, so the agent reports every session")
+	}
 	refreshed := time.Now().Add(-time.Minute)
 	w.Must("sudo loginctl terminate-user " + w.dave.name)
 	Until(t, "no session of "+w.dave.name, time.Minute, 2*time.Second, nil, func() bool {
