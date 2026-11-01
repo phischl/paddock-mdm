@@ -189,14 +189,21 @@ func SectionGroup(section string) string {
 	return section
 }
 
-// Touches reports whether plan changes a key a rollout would stage.
-func Touches(p declarative.Plan) bool { return len(StagedKeys(p)) > 0 }
-
 // StagedKeys returns the keys of plan's changes in rollout-able sections by section (settings.updates: the key ""),
-// without the changes cascaded from a device group the plan renames, deletes or creates: those are never staged (plan
-// M11 amendment R6.13), because an overlay could not restore an item whose group is gone or renamed.
-func StagedKeys(p declarative.Plan) map[string]map[string]bool {
-	cascaded := ChangedGroups(p)
+// without the changes cascaded from a device group the plan deletes: those are never staged (plan M11 amendment
+// R6.13), because an overlay could not restore an item whose group is gone. Items of a group the plan creates follow
+// the normal rules.
+func StagedKeys(p declarative.Plan) map[string]map[string]bool { return StagedKeysExcept(p, nil) }
+
+// StagedKeysExcept is StagedKeys that also leaves out the item changes of renamed, the new names of device groups the
+// plan renamed by identity (a rename records the deletion of the old name and the creation of the new one). Only the
+// writer that renamed a group knows its identity; such a change set stages nothing, so readers of a stored plan use
+// StagedKeys.
+func StagedKeysExcept(p declarative.Plan, renamed map[string]bool) map[string]map[string]bool {
+	cascaded := DeletedGroups(p)
+	for g := range renamed {
+		cascaded[g] = true
+	}
 	out := map[string]map[string]bool{}
 	for _, c := range p.Changes {
 		if !rolloutSection(c.Section) {
@@ -234,12 +241,11 @@ func StagedResourceIDs(p declarative.Plan) []string {
 	return slices.Compact(out)
 }
 
-// ChangedGroups returns the names of the device groups plan deletes or creates; a rename is a deletion of the old name
-// and a creation of the new one (natural keys).
-func ChangedGroups(p declarative.Plan) map[string]bool {
+// DeletedGroups returns the names of the device groups plan deletes; a rename deletes the old name (natural keys).
+func DeletedGroups(p declarative.Plan) map[string]bool {
 	out := map[string]bool{}
 	for _, c := range p.Changes {
-		if c.Section == declarative.SectionDeviceGroups && c.Action != declarative.ActionUpdate {
+		if c.Section == declarative.SectionDeviceGroups && c.Action == declarative.ActionDelete {
 			out[KeyName(c.Key)] = true
 		}
 	}

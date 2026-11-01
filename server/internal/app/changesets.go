@@ -91,7 +91,7 @@ func recordChangeSet(ctx context.Context, q *pgstore.Queries, rec Recorder, befo
 	if !ok {
 		return fmt.Errorf("record change set: no principal")
 	}
-	st, err := w.stage(before, plan, uuid.Nil)
+	st, err := w.stage(before, plan, uuid.Nil, renamedGroups(before, after))
 	if err != nil {
 		return err
 	}
@@ -155,14 +155,16 @@ type staging struct {
 }
 
 // stage applies the conflict rule (plan M11 decision 29) and the staging rule (decision 25) as amendment R6.13 states
-// them to plan, which turned before into the new configuration. reverts is the change set a revert undoes (uuid.Nil
-// otherwise): the revert of the open rollout's change set is always immediate, touches exactly the staged keys and
-// ends the rollout.
-func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts uuid.UUID) (staging, error) {
+// them to plan, which turns before into the new configuration; before must not yet reflect the write. reverts is the
+// change set a revert undoes (uuid.Nil otherwise): the revert of the open rollout's change set is always immediate,
+// touches exactly the staged keys and ends the rollout. renamed are the new names of groups the write renamed by
+// identity, whose items are not staged.
+func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts uuid.UUID, renamed map[string]bool) (staging, error) {
 	open := w.open
+	stageable := configrollout.StagedKeysExcept(plan, renamed)
 	switch {
 	case open == nil:
-		return staging{mode: rolloutModeFor(w.settings.Settings, plan, w.opts.Urgent)}, nil
+		return staging{mode: rolloutModeFor(w.settings.Settings, stageable, w.opts.Urgent)}, nil
 	case reverts != uuid.Nil && reverts == open.ChangeSetID:
 		return staging{mode: RolloutImmediate, ends: open}, nil
 	}
@@ -177,7 +179,7 @@ func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts u
 		return staging{}, err
 	}
 	if w.opts.Urgent {
-		return staging{mode: rolloutModeFor(w.settings.Settings, plan, true)}, nil
+		return staging{mode: rolloutModeFor(w.settings.Settings, stageable, true)}, nil
 	}
 	// One open rollout per organization (ADR 0033 E1, amendment 2026-11-01): a change of a section the rollout stages
 	// would be a second staged change set and is refused as a whole, even after rollouts were switched off; a change of
@@ -186,7 +188,7 @@ func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts u
 	for section := range staged {
 		stagedSections[configrollout.SectionGroup(section)] = true
 	}
-	for section := range configrollout.StagedKeys(plan) {
+	for section := range stageable {
 		if stagedSections[configrollout.SectionGroup(section)] {
 			return staging{}, problem.RolloutRunning.WithDetail("complete or revert rollout " + open.ID.String() + " first")
 		}
@@ -252,17 +254,34 @@ func (w rolloutWrite) finish(ctx context.Context, q *pgstore.Queries, rec Record
 	return nil
 }
 
-// rolloutModeFor is the staging rule (plan M11 decision 25): staged when rollouts are enabled and plan changes a
-// rollout-able section, urgent when the caller opted out of that, else immediate.
-func rolloutModeFor(settings configrollout.Settings, plan declarative.Plan, urgent bool) string {
+// rolloutModeFor is the staging rule (plan M11 decision 25): staged when rollouts are enabled and the write has keys a
+// rollout stages (stageable, from configrollout.StagedKeysExcept), urgent when the caller opted out of that, else
+// immediate.
+func rolloutModeFor(settings configrollout.Settings, stageable map[string]map[string]bool, urgent bool) string {
 	switch {
-	case !settings.Enabled || !configrollout.Touches(plan):
+	case !settings.Enabled || len(stageable) == 0:
 		return RolloutImmediate
 	case urgent:
 		return RolloutUrgent
 	default:
 		return RolloutStaged
 	}
+}
+
+// renamedGroups returns the names of after's device groups that before had under another name: a rename keeps the
+// group's identity, which the plan's natural keys do not show.
+func renamedGroups(before, after configState) map[string]bool {
+	ids := map[uuid.UUID]bool{}
+	for _, id := range before.groups {
+		ids[id] = true
+	}
+	out := map[string]bool{}
+	for name, id := range after.groups {
+		if _, kept := before.groups[name]; !kept && ids[id] {
+			out[name] = true
+		}
+	}
+	return out
 }
 
 // requireGroupsNotStaged refuses a rename or deletion of a device group that scopes a staged item or is the canary

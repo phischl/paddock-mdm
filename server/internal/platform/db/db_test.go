@@ -778,6 +778,13 @@ func TestInOrgSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	err = f.org.InOrgSnapshot(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
+		_, err := q.InsertDeviceGroup(ctx, pgstore.InsertDeviceGroupParams{ID: uuid.Must(uuid.NewV7()), OrganizationID: f.orgA, Name: "written"})
+		return err
+	})
+	if err == nil {
+		t.Error("the snapshot transaction accepted a write")
+	}
 	var n int
 	_ = f.org.InOrg(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
 		groups, err := q.ListAllDeviceGroups(ctx)

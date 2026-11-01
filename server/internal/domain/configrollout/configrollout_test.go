@@ -206,9 +206,6 @@ func TestStagedKeysAndResourceIDs(t *testing.T) {
 	if got := StagedResourceIDs(plan); !reflect.DeepEqual(got, []string{"file:/etc/motd", "unit:foo.service", "updates"}) {
 		t.Errorf("StagedResourceIDs = %v", got)
 	}
-	if !Touches(plan) || Touches(declarative.Plan{Changes: plan.Changes[:1]}) {
-		t.Error("Touches")
-	}
 }
 
 func TestSectionGroup(t *testing.T) {
@@ -219,8 +216,8 @@ func TestSectionGroup(t *testing.T) {
 	}
 }
 
-// TestStagedKeysSkipGroupCascades (plan M11 amendment R6.13): the item changes of a renamed, deleted or created device
-// group are never staged; other changes of the same plan are.
+// TestStagedKeysSkipGroupCascades (plan M11 amendment R6.13): the item changes of a deleted device group and of a group
+// renamed by identity are never staged; items of a created group and other changes of the same plan are.
 func TestStagedKeysSkipGroupCascades(t *testing.T) {
 	plan := declarative.Plan{Changes: []declarative.Change{
 		{Section: declarative.SectionDeviceGroups, Key: `["old"]`, Action: declarative.ActionDelete},
@@ -230,15 +227,19 @@ func TestStagedKeysSkipGroupCascades(t *testing.T) {
 		{Section: declarative.SectionManagedFiles, Key: `["new","/etc/motd"]`, Action: declarative.ActionCreate},
 		{Section: declarative.SectionPackageHolds, Key: `["kept","openssl"]`, Action: declarative.ActionCreate},
 	}}
-	want := map[string]map[string]bool{declarative.SectionPackageHolds: {`["kept","openssl"]`: true}}
+	want := map[string]map[string]bool{
+		declarative.SectionManagedFiles: {`["new","/etc/motd"]`: true},
+		declarative.SectionPackageHolds: {`["kept","openssl"]`: true},
+	}
 	if got := StagedKeys(plan); !reflect.DeepEqual(got, want) {
 		t.Fatalf("StagedKeys = %v", got)
 	}
-	if got := StagedResourceIDs(plan); !reflect.DeepEqual(got, []string{"updates"}) {
-		t.Fatalf("StagedResourceIDs = %v", got)
+	delete(want, declarative.SectionManagedFiles)
+	if got := StagedKeysExcept(plan, map[string]bool{"new": true}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("StagedKeysExcept(renamed new) = %v", got)
 	}
-	if !Touches(plan) || Touches(declarative.Plan{Changes: plan.Changes[:5]}) {
-		t.Fatal("Touches")
+	if got := StagedResourceIDs(plan); !reflect.DeepEqual(got, []string{"file:/etc/motd", "updates"}) {
+		t.Fatalf("StagedResourceIDs = %v", got)
 	}
 	if g, ok := KeyGroup(`["old","/etc/motd"]`); !ok || g != "old" {
 		t.Fatal("KeyGroup")

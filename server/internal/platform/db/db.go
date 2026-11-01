@@ -119,13 +119,13 @@ func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgs
 
 // InOrgSnapshot is InOrg in a REPEATABLE READ transaction: every query of fn sees the snapshot taken at its first
 // query, so data read by several queries is consistent with itself (the compiler's definitions and its rollout
-// overlay, plan M11 decision 30). Meant for read-only work; a write may fail with a serialization error.
+// overlay, plan M11 decision 30). The transaction is read-only: a write fails.
 func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	org, err := orgFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead},
+	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
 		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }

@@ -170,6 +170,16 @@ func TestConfigRolloutOpenRolloutRules(t *testing.T) {
 	if _, err := h.config.Plan(ctx, raw(t, doc)); !errors.Is(err, problem.RolloutRunning) {
 		t.Errorf("dry run of the mixed apply = %v, want rollout_running", err)
 	}
+	// Items of a group the apply creates follow the normal rules: a file of a new group is a second staged change.
+	doc = h.export(t, admin)
+	groups := append(*doc.DeviceGroups, declarative.DeviceGroup{Name: "created-during-rollout"})
+	files = append(*doc.ManagedFiles, declarative.ManagedFile{Path: "/etc/acme/new-group.conf", DeviceGroup: strPtr("created-during-rollout"),
+		Mode: "0644", Owner: "root", Group: "root", Content: "n"})
+	doc.DeviceGroups, doc.ManagedFiles = &groups, &files
+	refused("new group with a file", "config.applied", problem.RolloutRunning, func() error {
+		_, _, err := h.config.Apply(ctx, raw(t, doc), "")
+		return err
+	})
 	// A device group deletion is a write of every section it cascades into.
 	refused("deletion of the staged file's group", "device_group.deleted", problem.RolloutConflict, func() error {
 		return h.groups.Delete(ctx, group)
@@ -301,10 +311,21 @@ func TestConfigRolloutRevertEndsRollout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run of the rollout's revert = %v", err)
 	}
+	if n := compilerVisibleChangeSets(t, h); n != 1 {
+		t.Fatalf("the compiler reads %d change sets, want the open rollout's", n)
+	}
+	// Switching rollouts off keeps the open rollout's rules (R6.13): urgent is refused, the revert is the way out.
+	if _, err := h.super.Exec(context.Background(), "UPDATE organization_rollout_settings SET enabled = false WHERE organization_id = $1", h.org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.files.CreateFile(ctx, app.FileInput{Path: strPtr("/etc/acme/off.conf"), Content: strPtr("x")}); !errors.Is(err, problem.RolloutRunning) {
+		t.Fatalf("file with rollouts off = %v, want rollout_running", err)
+	}
 	id, _, err := h.config.Revert(ctx, original, plan.SHA256(), app.RevertOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	enableRollouts(t, h, []int{10, 100}, nil)
 	if p := h.lastEvent(t); p["rollout"] != app.RolloutImmediate || p["rollout_id"] != r.id.String() || p["rollout_status"] != configrollout.StatusReverted {
 		t.Fatalf("revert params %v", p)
 	}
@@ -318,6 +339,35 @@ func TestConfigRolloutRevertEndsRollout(t *testing.T) {
 	if next := h.rollout(t, h.lastChangeSet(t).id); next.status != configrollout.StatusRunning {
 		t.Fatalf("next rollout %+v", next)
 	}
+	if _, err := h.super.Exec(context.Background(), "UPDATE config_rollout SET status = 'completed' WHERE organization_id = $1", h.org); err != nil {
+		t.Fatal(err)
+	}
+	if n := compilerVisibleChangeSets(t, h); n != 0 {
+		t.Fatalf("the compiler reads %d change sets without an open rollout, want 0", n)
+	}
+}
+
+// compilerVisibleChangeSets counts the harness organization's change sets that paddock_compiler can read: only the one
+// of an open rollout (its before-states hold full file contents).
+func compilerVisibleChangeSets(t *testing.T, h writeHarness) int {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", h.org.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE paddock_compiler"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := tx.QueryRow(ctx, "SELECT count(id) FROM change_set").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // TestConfigRolloutStats (plan M11 decision 27): eligible counts the active devices in the wave or the canary group;
@@ -390,7 +440,8 @@ func TestConfigRolloutStats(t *testing.T) {
 // and deleted immediately, also when it has items in a staged section, and starts no rollout.
 func TestConfigRolloutDeviceGroups(t *testing.T) {
 	h := newWriteHarness(t)
-	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgAdmin, false))
+	admin := h.account(t, principal.RoleOrgAdmin, false)
+	ctx := principal.With(context.Background(), admin)
 	scoping, canary, unrelated := h.group(t, h.org), h.group(t, h.org), h.group(t, h.org)
 	if _, err := h.files.CreateFile(ctx, app.FileInput{DeviceGroupID: &unrelated, Path: strPtr("/etc/acme/unrelated.conf"), Content: strPtr("x")}); err != nil {
 		t.Fatal(err)
@@ -420,6 +471,17 @@ func TestConfigRolloutDeviceGroups(t *testing.T) {
 	refused("deletion of the scoping group", "device_group.deleted", func() error { return h.groups.Delete(ctx, scoping) })
 	refused("rename of the canary group", "device_group.updated", rename(canary, "renamed-canary"))
 	refused("deletion of the canary group", "device_group.deleted", func() error { return h.groups.Delete(ctx, canary) })
+	// A declarative apply that deletes the canary group: refused like the per-resource deletion, and by its dry run.
+	doc := h.export(t, admin)
+	kept := slices.DeleteFunc(slices.Clone(*doc.DeviceGroups), func(g declarative.DeviceGroup) bool { return g.Name == "g-"+canary.String() })
+	doc.DeviceGroups = &kept
+	refused("declarative deletion of the canary group", "config.applied", func() error {
+		_, _, err := h.config.Apply(ctx, raw(t, doc), "")
+		return err
+	})
+	if _, err := h.config.Plan(ctx, raw(t, doc)); !errors.Is(err, problem.RolloutConflict) {
+		t.Errorf("dry run of the declarative canary deletion = %v, want rollout_conflict", err)
+	}
 
 	// The unrelated group's items are in the staged section, but cascades of a group change are never staged.
 	if err := rename(unrelated, "renamed-unrelated")(); err != nil {

@@ -92,7 +92,7 @@ func (d *Declarative) Plan(ctx context.Context, raw []byte, opts ...WriteOptions
 		}
 		inheritOmitted(&desired, st.doc)
 		plan = declarative.Diff(st.doc, desired)
-		if _, err := w.stage(st, plan, uuid.Nil); err != nil {
+		if _, err := w.stage(st, plan, uuid.Nil, nil); err != nil {
 			return err
 		}
 		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }}
@@ -153,16 +153,18 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 		rec.SetParam("updated", plan.Updated)
 		rec.SetParam("deleted", plan.Deleted)
 		rec.SetParam("sections", sections)
+		// Staged before the run: configExec updates st as it writes, and the rules read the configuration before the
+		// write (a deleted canary group). A declarative apply never renames a group by identity.
+		staged, err := w.stage(st, plan, uuid.Nil, nil)
+		if err != nil {
+			return err
+		}
 		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: rec.RequireStepUp}
 		if err := ex.run(ctx, plan); err != nil {
 			return err
 		}
 		if len(plan.Changes) == 0 {
 			return nil
-		}
-		staged, err := w.stage(st, plan, uuid.Nil)
-		if err != nil {
-			return err
 		}
 		id = uuid.Must(uuid.NewV7())
 		if err := insertChangeSet(ctx, q, id, p, ex.steppedUp, plan, sections, st, w.meta(staged.mode)); err != nil {
@@ -242,16 +244,16 @@ func (d *Declarative) Revert(ctx context.Context, id uuid.UUID, expectedPlan str
 		rec.SetParam("updated", plan.Updated)
 		rec.SetParam("deleted", plan.Deleted)
 		rec.SetParam("sections", sections)
+		staged, err := w.stage(st, plan, id, nil) // before the run, as in Apply
+		if err != nil {
+			return err
+		}
 		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: rec.RequireStepUp}
 		if err := ex.run(ctx, plan); err != nil {
 			return err
 		}
 		if len(plan.Changes) == 0 {
 			return nil
-		}
-		staged, err := w.stage(st, plan, id)
-		if err != nil {
-			return err
 		}
 		newID = uuid.Must(uuid.NewV7())
 		meta := w.meta(staged.mode)
@@ -292,7 +294,7 @@ func (d *Declarative) revertDryRun(ctx context.Context, id uuid.UUID, opts Rever
 		}
 		plan = declarative.Diff(st.doc, desired)
 		if len(plan.Changes) > 0 {
-			if _, err := w.stage(st, plan, id); err != nil {
+			if _, err := w.stage(st, plan, id, nil); err != nil {
 				return err
 			}
 		}
