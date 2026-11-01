@@ -51,11 +51,13 @@ test('operator reverts a change set and cannot revert it twice', async ({ page }
     await expect(blocked).toHaveCount(1)
     await expect(blocked.getByRole('button', { name: /Revert the change set of/ })).toBeDisabled()
     await blocked.hover()
-    await expect(page.getByRole('tooltip')).toHaveText('This change set was already reverted.')
+    // Other tooltips (the app bar's) stay in the DOM while inactive; only this one carries the reason.
+    const reason = 'This change set was already reverted.'
+    await expect(page.getByRole('tooltip').filter({ hasText: reason })).toHaveText(reason)
 
     const rows = list.locator('tbody tr')
     await rows.nth(1).getByRole('button', { name: /Details of the change set/ }).click()
-    const detail = page.getByRole('dialog', { name: 'Change set' })
+    const detail = page.getByRole('dialog', { name: 'Change set', exact: true })
     await expect(detail.getByTestId('change-set-reverted-by')).toBeVisible()
     await detail.getByTestId('change-set-reverted-by').click()
     await expect(detail.getByTestId('change-set-reverts')).toBeVisible()
