@@ -46,10 +46,9 @@ func newWriteHarness(t *testing.T) writeHarness {
 
 // storedChange is a change set row with its before-states.
 type storedChange struct {
-	id      uuid.UUID
-	plan    declarative.Plan
-	before  map[string]map[string]json.RawMessage
-	created int
+	id     uuid.UUID
+	plan   declarative.Plan
+	before map[string]map[string]json.RawMessage
 }
 
 func (h writeHarness) lastChangeSet(t *testing.T) storedChange {
