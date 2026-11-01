@@ -192,18 +192,37 @@ func TestChangeSetRevertOptions(t *testing.T) {
 			t.Errorf("%+v = %v, want invalid_request", opts, err)
 		}
 	}
-	id, _, err := h.config.Revert(ctx, original, plan.SHA256(), app.RevertOptions{Urgent: true, Reason: "outage"})
+	// A reason PostgreSQL cannot store (NUL, invalid UTF-8, control characters) is refused before anything is
+	// written, with exactly one failure event (PDK-155 review 1, B1).
+	bad := []app.RevertOptions{{Reason: "ab\x00cd"}, {Urgent: true, Reason: "ab\x00cd"}, {Reason: "ab\xffcd"},
+		{Urgent: true, Reason: "ab\x1bcd"}}
+	for _, opts := range bad {
+		got := h.during(t, func() {
+			_, _, err = h.config.Revert(ctx, original, plan.SHA256(), opts)
+		})
+		if !errors.Is(err, problem.InvalidRequest) || !slices.Equal(got, []string{"config.reverted:failure:invalid_request"}) {
+			t.Errorf("reason %q urgent %t = %v, actions %v", opts.Reason, opts.Urgent, err, got)
+		}
+		if _, _, err := h.config.Revert(ctx, original, "", app.RevertOptions{DryRun: true, Urgent: opts.Urgent, Reason: opts.Reason}); !errors.Is(err, problem.InvalidRequest) {
+			t.Errorf("dry run with reason %q = %v, want invalid_request", opts.Reason, err)
+		}
+	}
+	if _, _, err := h.config.Revert(ctx, original, "", app.RevertOptions{DryRun: true, Urgent: true}); !errors.Is(err, problem.InvalidRequest) {
+		t.Errorf("dry run urgent without reason = %v, want invalid_request", err)
+	}
+
+	id, _, err := h.config.Revert(ctx, original, plan.SHA256(), app.RevertOptions{Urgent: true, Reason: "outage\n\tdetails"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var rollout string
 	var reason, urgent *string
 	if err := h.super.QueryRow(context.Background(), "SELECT rollout, reason, urgent_reason FROM change_set WHERE id = $1", id).Scan(&rollout, &reason, &urgent); err != nil ||
-		rollout != app.RolloutImmediate || reason == nil || *reason != "outage" || urgent == nil || *urgent != "outage" {
+		rollout != app.RolloutImmediate || reason == nil || *reason != "outage\n\tdetails" || urgent == nil || *urgent != "outage\n\tdetails" {
 		t.Fatalf("stored rollout %s reason %v urgent_reason %v, %v", rollout, reason, urgent, err)
 	}
 	_, events := h.recorded(t, h.corr)
-	if ev := events[len(events)-1]; ev.Params["urgent_reason"] != "outage" {
+	if ev := events[len(events)-1]; ev.Params["urgent_reason"] != "outage\n\tdetails" {
 		t.Fatalf("event params %v", ev.Params)
 	}
 }

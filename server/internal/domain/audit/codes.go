@@ -1214,7 +1214,7 @@ var registry = map[Code]Definition{
 		Params: []string{"change_set_id", "reverts_change_set_id", "plan_sha256", "created", "updated", "deleted", "sections",
 			"rollout", "rollout_id", "rollout_status", "urgent_reason"},
 		Outcomes: adminOutcomes,
-		Note:     "Target is the new change set. Dry runs are not recorded. A refusal (no before-state, already reverted, plan_changed, the refusal of a section) is a failure and nothing is applied. rollout_id and rollout_status are set only when the revert ends a running or halted configuration rollout.",
+		Note:     "Target is the new change set; an inverse plan without changes records zeros, no target and no change set, and the original stays unreverted. Dry runs are not recorded. A refusal (no before-state, already reverted, plan_changed, the refusal of a section) is a failure and nothing is applied. rollout_id and rollout_status are set only when the revert ends a running or halted configuration rollout.",
 	},
 	CodePlatformOSVImported: {
 		Code: CodePlatformOSVImported, Emitted: true,

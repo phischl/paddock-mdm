@@ -1484,7 +1484,7 @@
       "label": "Änderungssatz vom {at} rückgängig machen",
       "title": "Änderungssatz rückgängig machen",
       "message": "Diese Änderungen machen den Änderungssatz vom {at} rückgängig und werden sofort angewendet. Seitdem angelegte Einträge bleiben erhalten.",
-      "emptyPlan": "Die Konfiguration entspricht bereits dem Stand vor diesem Änderungssatz; es würde sich nichts ändern.",
+      "emptyPlan": "Die Konfiguration entspricht bereits dem Stand vor diesem Änderungssatz; es gibt nichts rückgängig zu machen.",
       "planChanged": "Die Konfiguration hat sich geändert, seit der Plan angezeigt wurde. Prüfen Sie den neuen Plan und bestätigen Sie erneut.",
       "done": "Der Änderungssatz vom {at} wurde rückgängig gemacht.",
       "blocked": {

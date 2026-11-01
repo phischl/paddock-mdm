@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -179,7 +180,7 @@ type RevertOptions struct {
 // refusal rules and step-ups. expectedPlan is required unless DryRun.
 func (d *Declarative) Revert(ctx context.Context, id uuid.UUID, expectedPlan string, opts RevertOptions) (uuid.UUID, declarative.Plan, error) {
 	if opts.DryRun {
-		plan, err := d.revertDryRun(ctx, id)
+		plan, err := d.revertDryRun(ctx, id, opts)
 		return uuid.Nil, plan, err
 	}
 	var newID uuid.UUID
@@ -254,10 +255,13 @@ func (d *Declarative) Revert(ctx context.Context, id uuid.UUID, expectedPlan str
 }
 
 // revertDryRun computes and checks the inverse plan in a transaction that is rolled back (not audited), so it refuses
-// exactly what the revert would refuse.
-func (d *Declarative) revertDryRun(ctx context.Context, id uuid.UUID) (declarative.Plan, error) {
+// exactly what the revert would refuse, invalid urgent and reason options included.
+func (d *Declarative) revertDryRun(ctx context.Context, id uuid.UUID, opts RevertOptions) (declarative.Plan, error) {
 	p, err := RequireOrg(ctx, RolesWrite)
 	if err != nil {
+		return declarative.Plan{}, err
+	}
+	if _, err := revertMeta(id, opts); err != nil {
 		return declarative.Plan{}, err
 	}
 	var plan declarative.Plan
@@ -323,8 +327,13 @@ func revertTarget(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (config
 func revertMeta(id uuid.UUID, opts RevertOptions) (changeSetMeta, error) {
 	meta := changeSetMeta{RevertsID: uuid.NullUUID{UUID: id, Valid: true}}
 	if opts.Reason != "" {
-		if n := len([]rune(opts.Reason)); n < 2 || n > 500 {
+		if n := utf8.RuneCountInString(opts.Reason); n < 2 || n > 500 {
 			return meta, problem.InvalidRequest.WithDetail("reason must have 2 to 500 characters")
+		}
+		// PostgreSQL text and jsonb refuse NUL and invalid UTF-8: such a reason would fail the insert and, as
+		// urgent_reason, the audit event of the attempt itself.
+		if !reasonText(opts.Reason) {
+			return meta, problem.InvalidRequest.WithDetail("reason must be valid UTF-8 without control characters other than line breaks and tabs")
 		}
 		meta.Reason = &opts.Reason
 	}
@@ -335,6 +344,13 @@ func revertMeta(id uuid.UUID, opts RevertOptions) (changeSetMeta, error) {
 		meta.UrgentReason = meta.Reason
 	}
 	return meta, nil
+}
+
+// reasonText reports whether s is valid UTF-8 without control characters; line breaks and tabs are allowed in a reason.
+func reasonText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool {
+		return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f
+	})
 }
 
 // endRolloutForRevert is the extension point where a revert of the change set of the organization's running or halted

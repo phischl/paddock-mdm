@@ -119,6 +119,34 @@ describe('revert a change set (plan M11 decision 22)', () => {
     expect(dialog()).toBeNull()
   })
 
+  it('offers no confirmation for an empty inverse plan', async () => {
+    revertDryRun.mockResolvedValueOnce({ dry_run: true, change_set_id: null, plan_sha256: 'h0', plan: { changes: [], created: 0, updated: 0, deleted: 0 } } as ConfigApplyResult)
+    const w = await mountList()
+    await w.find('[data-testid="change-set-revert"]').trigger('click')
+    await flushPromises()
+    expect(dialog()).toBeNull()
+    expect(w.find('[data-testid="change-set-nothing-to-revert"]').text()).toContain('nothing to revert')
+    expect(revertChangeSet).not.toHaveBeenCalled()
+  })
+
+  it('sends one revert for a double click on confirm', async () => {
+    revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
+    let answer!: (r: ConfigApplyResult) => void
+    revertChangeSet.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+    const w = await mountList()
+    await w.find('[data-testid="change-set-revert"]').trigger('click')
+    await flushPromises()
+    const accept = document.querySelector('[data-testid="confirm-accept"]') as HTMLButtonElement
+    accept.click()
+    accept.click()
+    await flushPromises()
+    answer({ ...result('sha256:a', 'h1'), dry_run: false, change_set_id: 'cs-10' })
+    await flushPromises()
+    expect(revertChangeSet).toHaveBeenCalledTimes(1)
+    expect(w.find('[data-testid="change-set-reverted"]').exists()).toBe(true)
+    expect(document.querySelector('.form-error')).toBeNull()
+  })
+
   it('cancels without reverting', async () => {
     revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
     const w = await mountList()

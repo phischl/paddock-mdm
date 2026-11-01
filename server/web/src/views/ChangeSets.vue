@@ -27,6 +27,8 @@ const reverted = ref('')
 const revertTarget = ref<ChangeSet | null>(null)
 const revertResult = ref<ConfigApplyResult | null>(null)
 const planChanged = ref(false)
+const nothingToRevert = ref(false)
+const busy = ref(false)
 
 // The step-up of a revert returns to this page; the pending revert names the change set to show the plan of again.
 const stepUpAction = 'change-set-revert'
@@ -76,6 +78,7 @@ async function openChangeSet(id: string | null | undefined): Promise<void> {
 async function startRevert(cs: ChangeSet): Promise<void> {
   problem.value = ''
   reverted.value = ''
+  nothingToRevert.value = false
   planChanged.value = false
   const res = await revertDryRun(cs.id)
   if (res === stepUpRequired) {
@@ -84,6 +87,11 @@ async function startRevert(cs: ChangeSet): Promise<void> {
   }
   if (typeof res === 'string') {
     problem.value = res
+    return
+  }
+  // An empty inverse plan has nothing to confirm: a revert would record no change set.
+  if (res.plan.changes.length === 0) {
+    nothingToRevert.value = true
     return
   }
   revertTarget.value = cs
@@ -96,7 +104,18 @@ function closeRevert(): void {
   planChanged.value = false
 }
 
+/** Ignores a second confirmation while the first is under way, so a double click sends one revert. */
 async function confirmRevert(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try {
+    await submitRevert()
+  } finally {
+    busy.value = false
+  }
+}
+
+async function submitRevert(): Promise<void> {
   const cs = revertTarget.value
   const confirmed = revertResult.value
   if (!cs || !confirmed) return
@@ -107,6 +126,11 @@ async function confirmRevert(): Promise<void> {
     if (typeof again === 'string') {
       closeRevert()
       problem.value = again
+      return
+    }
+    if (again.plan.changes.length === 0) {
+      closeRevert()
+      nothingToRevert.value = true
       return
     }
     revertResult.value = again
@@ -123,6 +147,10 @@ async function confirmRevert(): Promise<void> {
     return
   }
   selected.value = null
+  if (!res.change_set_id) {
+    nothingToRevert.value = true
+    return
+  }
   reverted.value = formatDateTime(cs.applied_at, locale.value)
   await list.value?.reload()
 }
@@ -151,6 +179,15 @@ async function confirmRevert(): Promise<void> {
       data-testid="change-set-reverted"
     >
       {{ t('changeSets.revert.done', { at: reverted }) }}
+    </v-alert>
+    <v-alert
+      v-if="nothingToRevert"
+      type="info"
+      variant="tonal"
+      class="conflict"
+      data-testid="change-set-nothing-to-revert"
+    >
+      {{ t('changeSets.revert.emptyPlan') }}
     </v-alert>
     <DataList
       ref="list"
@@ -267,13 +304,7 @@ async function confirmRevert(): Promise<void> {
       @confirm="confirmRevert"
       @cancel="closeRevert"
     >
-      <ChangeSetPlan
-        v-if="revertResult.plan.changes.length > 0"
-        :plan="revertResult.plan"
-      />
-      <p v-else>
-        {{ t('changeSets.revert.emptyPlan') }}
-      </p>
+      <ChangeSetPlan :plan="revertResult.plan" />
     </ConfirmDialog>
   </section>
 </template>

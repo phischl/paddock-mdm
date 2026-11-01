@@ -1484,7 +1484,7 @@
       "label": "Revert the change set of {at}",
       "title": "Revert change set",
       "message": "These changes undo the change set of {at} and are applied at once. Items created since then stay.",
-      "emptyPlan": "The configuration already matches the state before this change set; nothing would change.",
+      "emptyPlan": "The configuration already matches the state before this change set; there is nothing to revert.",
       "planChanged": "The configuration changed since the plan was shown. Review the new plan and confirm again.",
       "done": "The change set of {at} was reverted.",
       "blocked": {
