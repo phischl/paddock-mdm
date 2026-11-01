@@ -25,9 +25,19 @@ jobs:
       # The lint image builds, golangci-lint, govulncheck and go-licenses take the workspace's dependencies, govulncheck
       # included, from the runner's module cache instead of the module proxy (PDK-540, PDK-516, PDK-550). go.work makes
       # the download below cover every workspace module, not only server; on a setup-go cache hit it runs offline, a
-      # miss fetches here. go-licenses itself is in no go.sum and still comes from the proxy.
+      # miss fetches here. go-licenses itself is in no go.sum and still comes from the proxy. This download is the only
+      # step that talks to the proxy for the workspace, so it alone retries (PDK-592): proxy.golang.org drops streams
+      # now and then (INTERNAL_ERROR) and Go keeps what it already fetched, so each attempt only fetches the rest.
+      # GOPROXY and GOSUMDB stay at their defaults, every module is still verified against go.sum and sum.golang.org.
       - name: Go modules for the lint images, golangci-lint, govulncheck and go-licenses
-        run: cd server && go mod download
+        run: |
+          cd server
+          for attempt in 1 2 3; do
+            go mod download && exit 0
+            echo "go mod download failed (attempt $attempt of 3)" >&2
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 15))
+          done
+          exit 1
       - run: PADDOCK_CI_GOMODCACHE="$(go env GOMODCACHE)/cache/download" make lint # includes govulncheck for all modules (lint-vuln)
 
   test:
@@ -74,14 +84,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
-      # (PDK-629). These preinstalled toolchains are unused here: the images and trivy run in Docker.
-      - name: Free runner disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
-            /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
-          df -h /
+      - uses: ./.github/actions/free-disk
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/trivy
@@ -167,15 +170,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # baseline tags for compatibility gates (e.g. baseline/m3b-agent)
-      # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
-      # (PDK-629). These preinstalled toolchains are unused here: Go comes from setup-go, and Node, the images and the
-      # release tools run in Docker.
-      - name: Free runner disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
-            /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
-          df -h /
+      - uses: ./.github/actions/free-disk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.3"
@@ -233,15 +228,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
-      # (PDK-629). These preinstalled toolchains are unused here: Go comes from setup-go, and Node, the images and the
-      # release tools run in Docker.
-      - name: Free runner disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
-            /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
-          df -h /
+      - uses: ./.github/actions/free-disk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.3"
@@ -347,15 +334,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
-      # (PDK-629). These preinstalled toolchains are unused here: Go comes from setup-go, and Node, the images and the
-      # release tools run in Docker.
-      - name: Free runner disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
-            /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
-          df -h /
+      - uses: ./.github/actions/free-disk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.3"
