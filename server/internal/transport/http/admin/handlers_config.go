@@ -67,6 +67,26 @@ func (h *handlers) ApplyConfig(ctx context.Context, req adminapi.ApplyConfigRequ
 	return adminapi.ApplyConfig200JSONResponse(out), nil
 }
 
+func (h *handlers) RevertChangeSet(ctx context.Context, req adminapi.RevertChangeSetRequestObject) (adminapi.RevertChangeSetResponseObject, error) {
+	opts := app.RevertOptions{DryRun: req.Params.DryRun != nil && *req.Params.DryRun, Urgent: req.Params.Urgent != nil && *req.Params.Urgent}
+	if req.Params.Reason != nil {
+		opts.Reason = *req.Params.Reason
+	}
+	expected := ""
+	if req.Params.ExpectedPlan != nil {
+		expected = *req.Params.ExpectedPlan
+	}
+	id, plan, err := h.declarative.Revert(ctx, req.Id, expected, opts)
+	if err != nil {
+		return nil, err
+	}
+	out := adminapi.ConfigApplyResult{DryRun: opts.DryRun, Plan: toConfigPlan(plan), PlanSha256: plan.SHA256()}
+	if id != uuid.Nil {
+		out.ChangeSetId = &id
+	}
+	return adminapi.RevertChangeSet200JSONResponse(out), nil
+}
+
 func (h *handlers) ListChangeSets(ctx context.Context, req adminapi.ListChangeSetsRequestObject) (adminapi.ListChangeSetsResponseObject, error) {
 	params, err := listing.Parse(changeSetList, listing.Query{
 		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,

@@ -1246,3 +1246,13 @@ without a migration merge as soon as their dependencies are on the branch. The V
     device clock therefore never makes an older version's status win; drift reports carry their bundle version. A
     rejection never replaces the applied report of the same version, in any arrival order, and a report row is
     stored only for a bundle version that exists for the device.
+12. **Revert: MCP flag, urgent opt-out before staging, re-created keys (PDK-155; architect, 2026-11-01).**
+    (a) R2.2's check failed: the generator's segment list did not contain `revert` or `complete`. Both are added to
+    `destructive()` in `server/internal/mcpgen/mcpgen.go` (plan M14 §3.1 item 3, amendment 2026-11-01), so
+    `revertChangeSet` and `completeConfigRollout` are generated with `Destructive: true`; no new `x-paddock-mcp` key.
+    (b) Until PDK-157/158 a revert accepts `urgent` and `reason` without their staging effect: `reason` has 2–500
+    characters, `urgent=true` without `reason` is 400 `invalid_request`, the reason is stored in `change_set.reason`
+    and, only when `urgent=true`, also in `change_set.urgent_reason` (audit param `urgent_reason`); `rollout` stays
+    `immediate` and `urgent` needs no step-up yet. Decision 26's refusal "rollouts are disabled" and its step-up
+    apply from PDK-157/158 on. (c) Decision 21.2: reverting a `delete` whose key was created again since replaces the
+    current item with the before item instead of appending it (a document never holds a key twice).

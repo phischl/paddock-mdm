@@ -55,7 +55,7 @@ func recordChangeSet(ctx context.Context, q *pgstore.Queries, rec Recorder, befo
 		return fmt.Errorf("record change set: no principal")
 	}
 	id := uuid.Must(uuid.NewV7())
-	if err := insertChangeSet(ctx, q, id, p, false, plan, plan.SectionsOf(), before); err != nil {
+	if err := insertChangeSet(ctx, q, id, p, false, plan, plan.SectionsOf(), before, changeSetMeta{}); err != nil {
 		return err
 	}
 	rec.SetParam("change_set_id", id.String())

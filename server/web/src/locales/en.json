@@ -377,7 +377,8 @@
       "revoked": "{actor} revoked the enrollment token {name}"
     },
     "config": {
-      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)"
+      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)",
+      "reverted": "{actor} reverted a change set ({created} created, {updated} updated, {deleted} deleted)"
     },
     "api_token": {
       "created": "{actor} created the API token {name} ({role})",
@@ -1509,6 +1510,22 @@
     "before": "Before",
     "after": "After",
     "close": "Close",
+    "planRegion": "Plan of the change set, scrollable",
+    "revertsLabel": "Reverts the change set",
+    "revertedByLabel": "Reverted by the change set",
+    "revert": {
+      "action": "Revert",
+      "label": "Revert the change set of {at}",
+      "title": "Revert change set",
+      "message": "These changes undo the change set of {at} and are applied at once. Items created since then stay.",
+      "emptyPlan": "The configuration already matches the state before this change set; there is nothing to revert.",
+      "planChanged": "The configuration changed since the plan was shown. Review the new plan and confirm again.",
+      "done": "The change set of {at} was reverted.",
+      "blocked": {
+        "reverted": "This change set was already reverted.",
+        "noBefore": "The previous state of this change set is not stored (recorded before it was kept, or removed after 90 days)."
+      }
+    },
     "empty": {
       "title": "No change sets yet",
       "description": "Change sets are recorded when paddockctl or the API applies a configuration."

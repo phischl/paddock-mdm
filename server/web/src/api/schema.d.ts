@@ -723,6 +723,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/change-sets/{id}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Applies the inverse of a change set in one transaction (plan M11 decision 21):
+         *     an item it created is deleted, an item it updated or deleted is restored from its stored before-state; items
+         *     created since are kept, and an item whose deleted key was created again since is set back to the before-state.
+         *     The rules of the per-resource endpoints apply unchanged, as for PUT /api/v1/config (organization
+         *     administrators only for device group deletions and settings, a step-up for full profiles, the managed-file
+         *     operator roots and the watched units). With dry_run=true the plan is computed and checked but nothing is
+         *     applied and nothing is audited. Otherwise expected_plan is required (400 invalid_request without it) and a
+         *     different plan is refused with 412 plan_changed. The revert is recorded as a new change set whose
+         *     reverts_change_set_id is the original. 409 invalid_state when the change set has no before-state (recorded
+         *     before before-states were stored, or purged after 90 days) or was already reverted. 404 not_found for an
+         *     unknown change set or one of another organization. urgent and reason are stored; until staged rollouts exist
+         *     every revert reaches every device at once.
+         */
+        post: operations["revertChangeSet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autoinstall": {
         parameters: {
             query?: never;
@@ -7836,6 +7868,45 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    revertChangeSet: {
+        parameters: {
+            query?: {
+                /** @description Compute and check the inverse plan without applying it. */
+                dry_run?: boolean;
+                /** @description plan_sha256 of the confirmed dry run; required unless dry_run. A different plan is refused with 412 plan_changed. */
+                expected_plan?: string;
+                /** @description Opt out of a staged rollout (needs reason). Stored; without effect until staged rollouts exist. */
+                urgent?: boolean;
+                /** @description Why the change set is reverted (2 to 500 characters). */
+                reason?: string;
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The inverse plan, applied unless dry_run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigApplyResult"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
         };
     };
     generateAutoinstall: {

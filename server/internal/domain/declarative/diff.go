@@ -3,6 +3,7 @@ package declarative
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -274,6 +275,116 @@ func BeforeItems(current Document, plan Plan) map[string]map[string]any {
 		}
 	}
 	return out
+}
+
+// ErrBeforeMissing is returned by Revert when an update or deletion of the original plan has no stored before item.
+var ErrBeforeMissing = errors.New("declarative: before-state missing")
+
+// Revert returns current with the changes of original undone (plan M11 decision 21.2): a created item is removed, a
+// deleted or updated item is restored from before (section → key → item as GET /api/v1/config exports it; extra fields
+// such as "id" are ignored). A restored item replaces an item with the same key, so a key created again since the
+// original is set back to its before-state instead of appearing twice (plan M11 amendment R6.12). Items the original
+// did not touch, including those created since, stay. current is not modified.
+func Revert(current Document, original Plan, before map[string]map[string]json.RawMessage) (Document, error) {
+	out := current
+	if current.Settings != nil {
+		s := *current.Settings
+		out.Settings = &s
+	}
+	for _, c := range original.Changes {
+		var err error
+		switch c.Section {
+		case SectionDeviceGroups:
+			out.DeviceGroups, err = revertItem(out.DeviceGroups, DeviceGroup.Key, c, before)
+		case SectionPermissionProfiles:
+			out.PermissionProfiles, err = revertItem(out.PermissionProfiles, PermissionProfile.Key, c, before)
+		case SectionManagedFiles:
+			out.ManagedFiles, err = revertItem(out.ManagedFiles, ManagedFile.Key, c, before)
+		case SectionManagedUnits:
+			out.ManagedUnits, err = revertItem(out.ManagedUnits, ManagedUnit.Key, c, before)
+		case SectionPackageHolds:
+			out.PackageHolds, err = revertItem(out.PackageHolds, PackageHold.Key, c, before)
+		case SectionProfileAssignments:
+			out.ProfileAssignments, err = revertItem(out.ProfileAssignments, ProfileAssignment.Key, c, before)
+		default:
+			err = revertSettings(&out, c, before)
+		}
+		if err != nil {
+			return Document{}, err
+		}
+	}
+	return out, nil
+}
+
+func beforeItem[T any](c Change, before map[string]map[string]json.RawMessage) (T, error) {
+	var item T
+	raw, ok := before[c.Section][c.Key]
+	if !ok {
+		return item, fmt.Errorf("%w: %s %s", ErrBeforeMissing, c.Section, c.Key)
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, fmt.Errorf("decode before-state of %s %s: %w", c.Section, c.Key, err)
+	}
+	return item, nil
+}
+
+func revertItem[T any](items *[]T, key func(T) Key, c Change, before map[string]map[string]json.RawMessage) (*[]T, error) {
+	var out []T
+	if items != nil {
+		out = slices.Clone(*items)
+	}
+	i := slices.IndexFunc(out, func(it T) bool { return key(it).String() == c.Key })
+	if c.Action == ActionCreate {
+		if i >= 0 {
+			out = slices.Delete(out, i, i+1)
+		}
+		return &out, nil
+	}
+	item, err := beforeItem[T](c, before)
+	if err != nil {
+		return nil, err
+	}
+	if got := key(item).String(); got != c.Key {
+		return nil, fmt.Errorf("before-state of %s %s has the key %s", c.Section, c.Key, got)
+	}
+	if i >= 0 {
+		out[i] = item
+	} else {
+		out = append(out, item)
+	}
+	return &out, nil
+}
+
+func revertSettings(d *Document, c Change, before map[string]map[string]json.RawMessage) error {
+	if c.Action == ActionCreate {
+		return nil
+	}
+	if d.Settings == nil {
+		d.Settings = &Settings{}
+	}
+	switch c.Section {
+	case SectionSettingsUpdates:
+		v, err := beforeItem[UpdateSettings](c, before)
+		d.Settings.Updates = &v
+		return err
+	case SectionSettingsLogin:
+		v, err := beforeItem[LoginSettings](c, before)
+		d.Settings.Login = &v
+		return err
+	case SectionSettingsManaged:
+		v, err := beforeItem[ManagedFileSettings](c, before)
+		d.Settings.ManagedFiles = &v
+		return err
+	case SectionSettingsWatched:
+		v, err := beforeItem[[]string](c, before)
+		d.Settings.WatchedUnits = &v
+		return err
+	case SectionSettingsPrivacy:
+		v, err := beforeItem[PrivacySettings](c, before)
+		d.Settings.Privacy = &v
+		return err
+	}
+	return fmt.Errorf("revert: unknown section %s", c.Section)
 }
 
 func isSettings(s string) bool {

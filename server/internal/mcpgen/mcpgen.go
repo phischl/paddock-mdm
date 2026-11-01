@@ -162,14 +162,14 @@ func scopeOf(path string) string {
 }
 
 // destructive marks DELETE and the actions whose last path segment removes, revokes or stops something (plan M14
-// §3.1 item 3).
+// §3.1 item 3, amendment 2026-11-01: revert and complete).
 func destructive(method, path string) bool {
 	if method == http.MethodDelete {
 		return true
 	}
 	switch path[strings.LastIndex(path, "/")+1:] {
 	case "revoke", "retire", "reject", "lock", "destroy", "uninstall", "halt", "suspend-logins", "cancel", "disable",
-		"end-all":
+		"end-all", "revert", "complete":
 		return true
 	}
 	return false

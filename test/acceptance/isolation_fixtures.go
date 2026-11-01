@@ -474,6 +474,9 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/change-sets?page_size=100", nil
 	}},
 	"GET /api/v1/change-sets/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/change-sets/" + w.globexChangeSet }, nil),
+	"POST /api/v1/change-sets/{id}/revert": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/change-sets/" + w.globexChangeSet + "/revert?dry_run=true"
+	}, nil),
 
 	"GET /api/v1/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/devices?page_size=100", nil

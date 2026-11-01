@@ -172,6 +172,8 @@ const (
 
 	// Declarative configuration (plan M6c decision 16).
 	CodeConfigApplied Code = "config.applied"
+	// CodeConfigReverted is the revert of a change set (plan M11 decision 21).
+	CodeConfigReverted Code = "config.reverted"
 
 	// Restore commands of paddock-server admin (plan M6c decision 21).
 	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
@@ -1208,6 +1210,14 @@ var registry = map[Code]Definition{
 		Params:      withChangeSetParams([]string{"change_set_id", "created", "updated", "deleted", "sections"}),
 		Outcomes:    adminOutcomes,
 		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied.",
+	},
+	CodeConfigReverted: {
+		Code: CodeConfigReverted, Emitted: true,
+		Description: "A change set was reverted (POST /api/v1/change-sets/{id}/revert): the inverse of its changes was applied in one transaction and recorded as a new change set that references the original.",
+		Params: []string{"change_set_id", "reverts_change_set_id", "plan_sha256", "created", "updated", "deleted", "sections",
+			"rollout", "rollout_id", "rollout_status", "urgent_reason"},
+		Outcomes: adminOutcomes,
+		Note:     "Target is the new change set; an inverse plan without changes records zeros, no target and no change set, and the original stays unreverted. Dry runs are not recorded. A refusal (no before-state, already reverted, plan_changed, the refusal of a section) is a failure and nothing is applied. rollout_id and rollout_status are set only when the revert ends a running or halted configuration rollout.",
 	},
 	CodePlatformOSVImported: {
 		Code: CodePlatformOSVImported, Emitted: true,

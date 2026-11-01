@@ -467,3 +467,22 @@ func TestSkillSummary(t *testing.T) {
 		t.Errorf("cell = %q", got)
 	}
 }
+
+func TestDestructiveSegments(t *testing.T) {
+	cases := []struct {
+		method, path string
+		want         bool
+	}{
+		{"POST", "/api/v1/change-sets/{id}/revert", true},
+		{"POST", "/api/v1/config-rollouts/{id}/complete", true},
+		{"POST", "/api/v1/config-rollouts/{id}/halt", true},
+		{"POST", "/api/v1/config-rollouts/{id}/resume", false},
+		{"DELETE", "/api/v1/things/{id}", true},
+		{"POST", "/api/v1/things/{id}/approve", false},
+	}
+	for _, c := range cases {
+		if got := destructive(c.method, c.path); got != c.want {
+			t.Errorf("destructive(%s %s) = %t, want %t", c.method, c.path, got, c.want)
+		}
+	}
+}

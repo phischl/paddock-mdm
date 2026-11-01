@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h, nextTick } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { VDialog } from 'vuetify/components'
@@ -140,6 +140,97 @@ describe('ConfirmDialog', () => {
     expect(accept().disabled).toBe(false)
     accept().click()
     expect(w.emitted('confirm')).toHaveLength(1)
+  })
+})
+
+describe('ConfirmDialog focus (PDK-155 fix round 2)', () => {
+  function opener(): HTMLButtonElement {
+    const button = document.createElement('button')
+    button.textContent = 'Revert'
+    document.body.appendChild(button)
+    button.focus()
+    return button
+  }
+
+  it('focuses Cancel without scrolling the card away from the title', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    mountDialog()
+    await flushPromises()
+    await nextTick()
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+    expect(document.activeElement).toBe(el('confirm-cancel'))
+    expect(el('confirm-dialog')?.scrollTop).toBe(0)
+    focus.mockRestore()
+  })
+
+  it('returns the focus to the opener after Cancel when the page closes the dialog', async () => {
+    const button = opener()
+    const w = mountDialog()
+    await flushPromises()
+    el('confirm-cancel')?.click()
+    expect(w.emitted('cancel')).toHaveLength(1)
+    await w.setProps({ modelValue: false })
+    await flushPromises()
+    await nextTick()
+    expect(document.activeElement).toBe(button)
+    button.remove()
+  })
+
+  it('returns the focus to the opener when a page unmounts the dialog after Escape', async () => {
+    const button = opener()
+    const w = mountDialog()
+    await flushPromises()
+    el('confirm-dialog')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(w.emitted('cancel')).toHaveLength(1)
+    w.unmount()
+    wrapper = null
+    await flushPromises()
+    await nextTick()
+    expect(document.activeElement).toBe(button)
+    button.remove()
+  })
+
+  it('returns the focus to the opener when a page unmounts the dialog after confirm', async () => {
+    const button = opener()
+    const w = mountDialog()
+    await flushPromises()
+    el('confirm-accept')?.click()
+    expect(w.emitted('confirm')).toHaveLength(1)
+    w.unmount()
+    wrapper = null
+    await flushPromises()
+    await nextTick()
+    expect(document.activeElement).toBe(button)
+    button.remove()
+  })
+
+  it('leaves the focus alone when the dialog goes without an answer', async () => {
+    const button = opener()
+    const w = mountDialog()
+    await flushPromises()
+    w.unmount()
+    wrapper = null
+    await flushPromises()
+    expect(document.activeElement).not.toBe(button)
+    button.remove()
+  })
+})
+
+describe('ConfirmDialog detail slot (PDK-155)', () => {
+  it('stays narrow without a slot and widens for the slot content', async () => {
+    mountDialog()
+    await flushPromises()
+    expect(wrapper?.findComponent(VDialog).props('maxWidth')).toBe(480)
+    wrapper?.unmount()
+    wrapper = mount(ConfirmDialog, {
+      props: { modelValue: true, title: 'Revert change set', message: 'Undo it?', confirmLabel: 'Revert' },
+      slots: { default: () => h('p', { 'data-testid': 'slot-detail' }, 'the plan') },
+      global: { plugins: [createPortalI18n(), vuetify] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(wrapper.findComponent(VDialog).props('maxWidth')).toBe('64rem')
+    expect(el('slot-detail')?.textContent).toBe('the plan')
   })
 })
 
