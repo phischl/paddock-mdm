@@ -193,6 +193,9 @@ func TestNotificationDestinations(t *testing.T) {
 		}
 		expectOneEvent(t, admin.Portal, res.RequestID, "notification.destination_secret_rotated", "success")
 
+		// Waiting for the audit events above can outlast the development step-up window (30 s) on a loaded host; the
+		// pending-test refusal is checked with a fresh step-up so that it, not the window, decides the answer.
+		admin.stepUp(t)
 		res = call(t, admin.Portal, http.MethodPost, path+"/test", nil)
 		expectStatus(t, res, http.StatusAccepted, "")
 		var test struct {
