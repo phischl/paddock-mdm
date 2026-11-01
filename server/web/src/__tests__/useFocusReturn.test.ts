@@ -64,4 +64,34 @@ describe('useFocusReturn', () => {
     vi.advanceTimersByTime(1000)
     expect(document.activeElement).toBe(button)
   })
+
+  it('waits while the opening control is disabled and focuses it once it is enabled again', async () => {
+    const { button } = page()
+    button.disabled = true
+    const focus = useFocusReturn()
+    focus.remember({ currentTarget: button } as unknown as Event)
+    focus.restore()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(document.activeElement).not.toBe(button)
+    button.disabled = false
+    await new Promise((r) => setTimeout(r, 0))
+    expect(document.activeElement).toBe(button)
+  })
+
+  it('uses the fallback when the disabled control is removed while waiting', async () => {
+    const { main, button } = page()
+    const alert = document.createElement('div')
+    alert.tabIndex = -1
+    main.append(alert)
+    button.disabled = true
+    const focus = useFocusReturn()
+    focus.remember({ currentTarget: button } as unknown as Event)
+    focus.restore(() => alert)
+    await nextTick()
+    expect(document.activeElement).not.toBe(alert)
+    button.remove()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(document.activeElement).toBe(alert)
+  })
 })
