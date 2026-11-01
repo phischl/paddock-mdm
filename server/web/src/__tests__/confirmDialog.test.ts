@@ -190,6 +190,20 @@ describe('ConfirmDialog focus (PDK-155 fix round 2)', () => {
     button.remove()
   })
 
+  it('returns the focus to the opener when a page unmounts the dialog after confirm', async () => {
+    const button = opener()
+    const w = mountDialog()
+    await flushPromises()
+    el('confirm-accept')?.click()
+    expect(w.emitted('confirm')).toHaveLength(1)
+    w.unmount()
+    wrapper = null
+    await flushPromises()
+    await nextTick()
+    expect(document.activeElement).toBe(button)
+    button.remove()
+  })
+
   it('leaves the focus alone when the dialog goes without an answer', async () => {
     const button = opener()
     const w = mountDialog()
