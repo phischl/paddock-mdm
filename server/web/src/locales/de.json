@@ -15,6 +15,32 @@
     "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",
     "saved": "Die Datenschutzeinstellungen wurden gespeichert."
   },
+  "rolloutSettings": {
+    "title": "Rollout-Einstellungen",
+    "intro": "Gestufte Rollouts wenden eine Konfigurationsänderung zuerst auf einen Teil der Geräte an, Welle für Welle, und halten automatisch an, wenn zu viele Geräte fehlschlagen. Sie sind standardmäßig aus. Ein laufender Rollout behält die Werte, mit denen er gestartet wurde.",
+    "general": "Gestufte Rollouts",
+    "enabled": "Konfigurationsänderungen in Wellen ausrollen",
+    "waves": "Wellen",
+    "wavesHint": "Prozentanteile der Geräte, streng aufsteigend und mit 100 endend, höchstens 10 Wellen, durch Kommas getrennt, zum Beispiel 1, 10, 50, 100.",
+    "wavesInvalid": "Geben Sie 1 bis 10 streng aufsteigende ganze Zahlen von 1 bis 100 ein, durch Kommas getrennt und mit 100 endend.",
+    "minWaveMinutes": "Mindestdauer einer Welle",
+    "minWaveMinutesHint": "Eine Welle dauert mindestens so viele Minuten, bevor die nächste beginnt. Mindestens {min} Minuten ({devMin} in einer Entwicklungsumgebung).",
+    "minWaveInvalid": "Geben Sie eine ganze Zahl von Minuten ein, mindestens {min} ({devMin} in einer Entwicklungsumgebung).",
+    "minWaveRefused": "Die Mindestdauer einer Welle ist zu kurz: mindestens {min} Minuten ({devMin} in einer Entwicklungsumgebung).",
+    "thresholds": "Fehlerschwelle",
+    "thresholdPercent": "Fehlerrate, die einen Rollout anhält",
+    "thresholdPercentHint": "Prozent der Geräte einer Welle, die fehlgeschlagen sind (0–100).",
+    "thresholdPercentInvalid": "Geben Sie eine ganze Zahl von 0 bis 100 ein.",
+    "thresholdMin": "Mindestanzahl fehlgeschlagener Geräte",
+    "thresholdMinHint": "Ein Rollout hält nur an, wenn mindestens so viele Geräte fehlgeschlagen sind.",
+    "thresholdMinInvalid": "Geben Sie eine ganze Zahl ein, mindestens 0.",
+    "canary": "Canary-Gruppe",
+    "canaryGroup": "Canary-Gerätegruppe",
+    "canaryHint": "Die Geräte dieser Gruppe erhalten eine Änderung immer zuerst, unabhängig von den Wellen.",
+    "canaryNone": "Keine",
+    "readOnly": "Nur Organisationsadministratoren können die Rollout-Einstellungen ändern.",
+    "saved": "Die Rollout-Einstellungen wurden gespeichert."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent-Updates",
@@ -109,6 +135,7 @@
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
     "privacySettings": "Datenschutz",
+    "rolloutSettings": "Rollouts",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
     "configStatus": "Konfigurationsstatus",
@@ -508,7 +535,8 @@
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
       "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
       "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert",
-      "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}"
+      "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}",
+      "rollout_changed": "{actor} hat die Rollout-Einstellungen geändert: gestufte Rollouts {enabled, select, true {ein} other {aus}}"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",

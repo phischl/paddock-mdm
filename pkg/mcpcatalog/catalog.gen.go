@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "c8dd9312c9fb8fb79179b65921fdfe97ba09d545c0f97bd12a621972235c9104"
+const Version = "fab0d0c2612177581a4486a17cfcc2cbce44d049739c87dcb090e434fd8526d8"
 
 var tools = []Tool{
 	{
@@ -1611,6 +1611,24 @@ var tools = []Tool{
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
+		Name:        "getRolloutSettings",
+		Method:      "GET",
+		Path:        "/api/v1/settings/rollout",
+		Pattern:     "GET /api/v1/settings/rollout",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The settings of staged configuration rollouts (plan M11 decision 24); the defaults (rollouts off) until changed.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
 		Name:        "getSecurityReview",
 		Method:      "GET",
 		Path:        "/api/v1/security-review",
@@ -2003,8 +2021,8 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: applied_at), q (search over: actor_display).",
-		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-applied_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"applied_at\",\"-applied_at\"],\"type\":\"string\"},\"source\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"session\",\"api_token\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
+		Description: "Roles: org_admin, org_operator, org_auditor. Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: applied_at), q (search over: actor_display).",
+		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"rollout\":{\"description\":\"Repeatable.\",\"items\":{\"description\":\"immediate: every device receives the change at once. staged and urgent are set by staged rollouts.\",\"enum\":[\"immediate\",\"staged\",\"urgent\"],\"type\":\"string\"},\"type\":\"array\"},\"sort\":{\"default\":\"-applied_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"applied_at\",\"-applied_at\"],\"type\":\"string\"},\"source\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"session\",\"api_token\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listComponentTargets",
@@ -3427,6 +3445,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Changes the device group scope (null = every device). The assignment of a profile that is effectively Full needs a step-up within the last 300 s (403 step_up_required); API tokens cannot satisfy it.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"description\":\"A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that\\ngives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a\\nstep-up (403 step_up_required); API tokens cannot satisfy it.\\n\",\"properties\":{\"device_group_id\":{\"format\":\"uuid\",\"type\":[\"string\",\"null\"]}},\"required\":[\"device_group_id\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "updateRolloutSettings",
+		Method:      "PUT",
+		Path:        "/api/v1/settings/rollout",
+		Pattern:     "PUT /api/v1/settings/rollout",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "settings.rollout_changed",
+		Summary:     "",
+		Description: "Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first. An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404 not_found. A rollout that is already running keeps the values it started with.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"canary_device_group_id\":{\"description\":\"Omit or null for none.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"enabled\":{\"type\":\"boolean\"},\"failure_threshold_min\":{\"minimum\":0,\"type\":\"integer\"},\"failure_threshold_percent\":{\"maximum\":100,\"minimum\":0,\"type\":\"integer\"},\"min_wave_minutes\":{\"description\":\"At least 15 (1 in a development stack).\",\"type\":\"integer\"},\"waves\":{\"description\":\"Strictly increasing, ending with 100.\",\"items\":{\"maximum\":100,\"minimum\":1,\"type\":\"integer\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"enabled\",\"waves\",\"min_wave_minutes\",\"failure_threshold_percent\",\"failure_threshold_min\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "updateUpdateSettings",

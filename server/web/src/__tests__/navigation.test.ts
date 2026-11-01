@@ -102,7 +102,7 @@ describe('navigation drawer', () => {
       'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package holds', 'Change sets', 'Configuration status',
       'Security review', 'Revocations', "Dead man's switch", 'Watched units', 'Login & privileges',
       'Software', 'Vulnerabilities',
-      'Users', 'Groups', 'API tokens', 'Notifications', 'MCP', 'Updates', 'Privacy', 'Audit log', 'Evidence integrity',
+      'Users', 'Groups', 'API tokens', 'Notifications', 'MCP', 'Updates', 'Rollouts', 'Privacy', 'Audit log', 'Evidence integrity',
       'Evidence exports',
     ])
     const security = w.find('[data-testid="nav-group-security"]')

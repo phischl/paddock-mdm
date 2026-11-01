@@ -50,6 +50,7 @@ export const router = createRouter({
     { path: '/settings/managed-files', name: 'managed-file-settings', component: () => import('./views/ManagedFileSettings.vue') },
     { path: '/settings/watched-units', name: 'watched-units', component: () => import('./views/WatchedUnits.vue') },
     { path: '/settings/updates', name: 'update-settings', component: () => import('./views/UpdateSettings.vue') },
+    { path: '/settings/rollout', name: 'rollout-settings', component: () => import('./views/RolloutSettings.vue') },
     { path: '/settings/privacy', name: 'privacy-settings', component: () => import('./views/PrivacySettings.vue') },
     { path: '/settings/mcp', name: 'mcp-settings', component: () => import('./views/McpSettings.vue') },
     { path: '/settings/notifications', name: 'notification-destinations', component: () => import('./views/NotificationDestinations.vue') },

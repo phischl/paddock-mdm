@@ -15,6 +15,32 @@
     "readOnly": "Only organization administrators can change the privacy settings.",
     "saved": "The privacy settings were saved."
   },
+  "rolloutSettings": {
+    "title": "Rollout settings",
+    "intro": "Staged rollouts apply a configuration change to a share of the devices first, wave by wave, and stop automatically when too many devices fail. They are off by default. A running rollout keeps the values it started with.",
+    "general": "Staged rollouts",
+    "enabled": "Roll configuration changes out in waves",
+    "waves": "Waves",
+    "wavesHint": "Percentages of the devices, strictly increasing and ending with 100, at most 10 waves, separated by commas, for example 1, 10, 50, 100.",
+    "wavesInvalid": "Enter 1 to 10 strictly increasing whole numbers from 1 to 100, separated by commas, ending with 100.",
+    "minWaveMinutes": "Minimum duration of a wave",
+    "minWaveMinutesHint": "A wave lasts at least this many minutes before the next one starts. At least {min} minutes ({devMin} in a development stack).",
+    "minWaveInvalid": "Enter a whole number of minutes, at least {min} ({devMin} in a development stack).",
+    "minWaveRefused": "The minimum duration of a wave is too short: at least {min} minutes ({devMin} in a development stack).",
+    "thresholds": "Failure threshold",
+    "thresholdPercent": "Failure rate that stops a rollout",
+    "thresholdPercentHint": "Percent of the devices of a wave that failed (0–100).",
+    "thresholdPercentInvalid": "Enter a whole number from 0 to 100.",
+    "thresholdMin": "Minimum number of failed devices",
+    "thresholdMinHint": "A rollout stops only when at least this many devices failed.",
+    "thresholdMinInvalid": "Enter a whole number, at least 0.",
+    "canary": "Canary group",
+    "canaryGroup": "Canary device group",
+    "canaryHint": "The devices of this group always receive a change first, whatever the waves say.",
+    "canaryNone": "None",
+    "readOnly": "Only organization administrators can change the rollout settings.",
+    "saved": "The rollout settings were saved."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent updates",
@@ -109,6 +135,7 @@
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
     "privacySettings": "Privacy",
+    "rolloutSettings": "Rollouts",
     "apiTokens": "API tokens",
     "changeSets": "Change sets",
     "configStatus": "Configuration status",
@@ -508,7 +535,8 @@
       "updates_changed": "{actor} changed the update settings",
       "managed_files_changed": "{actor} changed the operator roots of the managed files",
       "watched_units_changed": "{actor} changed the watched units of the presence policy",
-      "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}"
+      "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}",
+      "rollout_changed": "{actor} changed the rollout settings: staged rollouts {enabled, select, true {on} other {off}}"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",

@@ -20,7 +20,7 @@ func TestM8sCodes(t *testing.T) {
 		{CodeManagedFileSensitiveConfirmed, []string{"path", "device_group_id", "tier"}, all},
 		{CodeOrganizationSecurityReviewRequired, []string{"root_grant_profiles", "sensitive_files", "denied_files"}, []Outcome{OutcomeSuccess}},
 		{CodeDeviceHeaderObjectRejected, []string{"generation", "volume", "declared_size", "object_size"}, []Outcome{OutcomeFailure}},
-		{CodeSettingsManagedFilesChanged, []string{"old_operator_roots", "operator_roots"}, all},
+		{CodeSettingsManagedFilesChanged, []string{"old_operator_roots", "operator_roots", "change_set_id", "rollout", "rollout_id", "urgent_reason"}, all},
 	} {
 		if !tc.code.Registered() {
 			t.Errorf("%s is not registered", tc.code)
@@ -184,6 +184,24 @@ func TestM9NotificationCodes(t *testing.T) {
 		}
 		if !slices.Equal(d.Params, tc.params) || !slices.Equal(d.Outcomes, tc.outcomes) {
 			t.Errorf("%s: params %v outcomes %v, want %v %v", tc.code, d.Params, d.Outcomes, tc.params, tc.outcomes)
+		}
+	}
+}
+
+// TestChangeSetParams (plan M11 decision 19): every code of a configuration write that records a change set allows the
+// params that name it, each once.
+func TestChangeSetParams(t *testing.T) {
+	for _, code := range []Code{CodeConfigApplied, CodeManagedFileCreated, CodeManagedFileUpdated, CodeManagedFileDeleted,
+		CodeManagedUnitCreated, CodeManagedUnitUpdated, CodeManagedUnitDeleted, CodePackageHoldCreated, CodePackageHoldUpdated,
+		CodePackageHoldDeleted, CodeSettingsUpdatesChanged, CodeSettingsLoginChanged, CodeSettingsPrivacyChanged,
+		CodeSettingsManagedFilesChanged, CodeSettingsWatchedUnitsChanged, CodePermissionProfileCreated,
+		CodePermissionProfileUpdated, CodePermissionProfileDeleted, CodeProfileAssignmentCreated, CodeProfileAssignmentUpdated,
+		CodeProfileAssignmentDeleted, CodeDeviceGroupCreated, CodeDeviceGroupUpdated, CodeDeviceGroupDeleted, CodeUserDeleted, CodeUserGroupDeleted} {
+		d, _ := Lookup(code)
+		for _, p := range []string{"change_set_id", "rollout", "rollout_id", "urgent_reason"} {
+			if n := slices.Index(d.Params, p); n < 0 || slices.Index(d.Params[n+1:], p) >= 0 {
+				t.Errorf("%s: param %s is missing or repeated in %v", code, p, d.Params)
+			}
 		}
 	}
 }

@@ -320,25 +320,27 @@ func (g *UserGroups) Delete(ctx context.Context, id uuid.UUID) error {
 			if externalErr != nil {
 				return nil
 			}
-			// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
-			if err := q.LockOrganizationPrivileges(ctx); err != nil {
-				return err
-			}
-			if _, err := q.DeleteLoginAssignmentsOfSubject(ctx, id); err != nil {
-				return err
-			}
-			if _, err := q.DeleteProfileAssignmentsOfSubject(ctx, uuid.NullUUID{UUID: id, Valid: true}); err != nil {
-				return err
-			}
-			if _, err := q.DeleteUserGroup(ctx, id); err != nil {
-				return err
-			}
-			org, err := orgOf(ctx)
-			if err != nil {
-				return err
-			}
-			rec.StateChanged(statechange.ScopeOrg, org)
-			return nil
+			return withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+				// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+				if err := q.LockOrganizationPrivileges(ctx); err != nil {
+					return err
+				}
+				if _, err := q.DeleteLoginAssignmentsOfSubject(ctx, id); err != nil {
+					return err
+				}
+				if _, err := q.DeleteProfileAssignmentsOfSubject(ctx, uuid.NullUUID{UUID: id, Valid: true}); err != nil {
+					return err
+				}
+				if _, err := q.DeleteUserGroup(ctx, id); err != nil {
+					return err
+				}
+				org, err := orgOf(ctx)
+				if err != nil {
+					return err
+				}
+				rec.StateChanged(statechange.ScopeOrg, org)
+				return nil
+			})(ctx, q, rec)
 		})
 }
 

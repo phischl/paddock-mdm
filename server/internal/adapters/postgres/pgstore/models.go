@@ -175,16 +175,22 @@ type Bundle struct {
 }
 
 type ChangeSet struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	AppliedAt      time.Time
-	Actor          json.RawMessage
-	Source         string
-	CreatedN       int32
-	UpdatedN       int32
-	DeletedN       int32
-	Sections       []string
-	Plan           json.RawMessage
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	AppliedAt          time.Time
+	Actor              json.RawMessage
+	Source             string
+	CreatedN           int32
+	UpdatedN           int32
+	DeletedN           int32
+	Sections           []string
+	Plan               json.RawMessage
+	Before             json.RawMessage
+	BeforePurgedAt     *time.Time
+	RevertsChangeSetID uuid.NullUUID
+	Rollout            string
+	UrgentReason       *string
+	Reason             *string
 }
 
 type ComponentTarget struct {
@@ -702,6 +708,18 @@ type OrganizationRoleSnapshot struct {
 	OrganizationID uuid.UUID
 	TakenAt        time.Time
 	Role           string
+}
+
+type OrganizationRolloutSetting struct {
+	OrganizationID          uuid.UUID
+	Enabled                 bool
+	Waves                   []int32
+	MinWaveMinutes          int32
+	FailureThresholdPercent int32
+	FailureThresholdMin     int32
+	CanaryDeviceGroupID     uuid.NullUUID
+	UpdatedAt               time.Time
+	UpdatedBy               uuid.NullUUID
 }
 
 type OrganizationUpdateSetting struct {

@@ -1084,12 +1084,12 @@ paths:
     get:
       operationId: listChangeSets
       tags: [config]
-      description: "Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something."
+      description: "Roles: org_admin, org_operator, org_auditor. Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource."
       x-paddock-list:
         sort: [applied_at]
         default_sort: -applied_at
         search: [actor_display]
-        filters: [source]
+        filters: [source, rollout]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -1103,6 +1103,14 @@ paths:
           schema:
             type: array
             items: { $ref: "#/components/schemas/ChangeSetSource" }
+        - name: rollout
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ChangeSetRollout" }
       responses:
         "200":
           description: One page of change sets.
@@ -2611,6 +2619,47 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/settings/rollout:
+    get:
+      operationId: getRolloutSettings
+      tags: [settings]
+      description: "Roles: org_admin, org_operator, org_auditor. The settings of staged configuration rollouts (plan M11 decision 24); the defaults (rollouts off) until changed."
+      responses:
+        "200":
+          description: The rollout settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RolloutSettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateRolloutSettings
+      tags: [settings]
+      description: |
+        Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1
+        and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent
+        (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first.
+        An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404
+        not_found. A rollout that is already running keeps the values it started with.
+      x-paddock-audit: settings.rollout_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RolloutSettingsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RolloutSettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /api/v1/settings/privacy:
     get:
@@ -6631,6 +6680,10 @@ components:
     ChangeSetSource:
       type: string
       enum: [session, api_token]
+    ChangeSetRollout:
+      type: string
+      enum: [immediate, staged, urgent]
+      description: "immediate: every device receives the change at once. staged and urgent are set by staged rollouts."
     ChangeSetActor:
       type: object
       required: [type, display]
@@ -6650,7 +6703,7 @@ components:
           items: { type: string }
     ChangeSet:
       type: object
-      required: [id, applied_at, actor, source, summary, plan]
+      required: [id, applied_at, actor, source, summary, plan, rollout, before_available]
       properties:
         id: { type: string, format: uuid }
         applied_at: { type: string, format: date-time }
@@ -6658,6 +6711,14 @@ components:
         source: { $ref: "#/components/schemas/ChangeSetSource" }
         summary: { $ref: "#/components/schemas/ChangeSetSummary" }
         plan: { $ref: "#/components/schemas/ConfigPlan" }
+        rollout: { $ref: "#/components/schemas/ChangeSetRollout" }
+        urgent_reason: { type: string, nullable: true, description: Why the change skipped staging; null otherwise. }
+        reverts_change_set_id: { type: string, format: uuid, nullable: true, description: The change set this one reverts. }
+        reverted_by: { type: string, format: uuid, nullable: true, description: The newest change set that reverts this one. }
+        before_available:
+          type: boolean
+          description: Whether the before-states are stored. False for change sets recorded before they were stored and after they were purged.
+        rollout_id: { type: string, format: uuid, nullable: true, description: The staged rollout of this change set; null until staged rollouts exist. }
     ChangeSetPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -7498,6 +7559,37 @@ components:
           description: Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it.
           allOf:
             - $ref: "#/components/schemas/AgentUpdatePolicy"
+    RolloutSettings:
+      type: object
+      required: [enabled, waves, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id]
+      properties:
+        enabled: { type: boolean, description: Staged configuration rollouts are off by default. }
+        waves:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { type: integer, minimum: 1, maximum: 100 }
+        min_wave_minutes: { type: integer, minimum: 1 }
+        failure_threshold_percent: { type: integer, minimum: 0, maximum: 100 }
+        failure_threshold_min: { type: integer, minimum: 0 }
+        canary_device_group_id: { type: string, format: uuid, nullable: true, description: Devices of this group always go first; null = none. }
+        updated_at: { type: string, format: date-time }
+    RolloutSettingsUpdate:
+      type: object
+      required: [enabled, waves, min_wave_minutes, failure_threshold_percent, failure_threshold_min]
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        waves:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { type: integer, minimum: 1, maximum: 100 }
+          description: Strictly increasing, ending with 100.
+        min_wave_minutes: { type: integer, description: "At least 15 (1 in a development stack)." }
+        failure_threshold_percent: { type: integer, minimum: 0, maximum: 100 }
+        failure_threshold_min: { type: integer, minimum: 0 }
+        canary_device_group_id: { type: string, format: uuid, nullable: true, description: Omit or null for none. }
     PrivacySettings:
       type: object
       required: [retired_inventory_days, audit_search_recorded, inventory_view_recorded, updated_at]
