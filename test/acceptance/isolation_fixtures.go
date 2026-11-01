@@ -959,15 +959,27 @@ func seedGlobexBundleVersion(t *testing.T, w *isolationWorld) {
 	})
 	expectStatus(t, res, http.StatusCreated, "")
 	w.globexIDs = append(w.globexIDs, createdID(t, w.carol, "/api/v1/managed-files", res))
+	// The device's bundle_version is the sequence itself, which the jump raised at once: only the history list shows
+	// whether the bundle was published.
 	for deadline := time.Now().Add(time.Minute); ; time.Sleep(time.Second) {
 		// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
 		polled := time.Now()
-		if v := getDevice(t, w.carol, w.globexDevice).BundleVersion; v >= before+bundleVersionJump {
-			w.globexBundleVersion = v
+		res := call(t, w.carol, http.MethodGet, "/api/v1/devices/"+w.globexDevice+"/bundles?sort=-version&page_size=10", nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var page struct {
+			Items []struct {
+				Version int64 `json:"version"`
+			} `json:"items"`
+		}
+		if err := res.JSON(&page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) > 0 && page.Items[0].Version >= before+bundleVersionJump {
+			w.globexBundleVersion = page.Items[0].Version
 			return
 		}
 		if polled.After(deadline) {
-			t.Fatalf("globex device %s has no bundle version of %d or more", w.globexDevice, before+bundleVersionJump)
+			t.Fatalf("the bundle history of globex device %s has no version of %d or more: %s", w.globexDevice, before+bundleVersionJump, res.Body)
 		}
 	}
 }
