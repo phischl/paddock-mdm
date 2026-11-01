@@ -298,6 +298,8 @@ func TestConfigStatusReads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	addBundles(t, h, org, retired, 1)
+	addBundles(t, h, otherOrg, otherDevice, 1)
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
 		"version": 1, "resources": []map[string]any{
@@ -497,5 +499,79 @@ func TestConfigStatusRejectionKeepsApplied(t *testing.T) {
 	})
 	if rows := statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Version != 3 {
 		t.Fatalf("a late older report came back after a rejection: %+v", rows)
+	}
+}
+
+// TestConfigStatusUncompiledVersion: no event of a version the server never compiled for the device changes its apply
+// status, so such a report (a restored database, a misbehaving agent) neither pins the rows nor hides a later real
+// report (PDK-151 pre-merge polish).
+func TestConfigStatusUncompiledVersion(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	addBundles(t, h, org, device, 4, 5)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, at.Add(-2*time.Minute), map[string]any{
+		"version": 4, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}, {"id": "unit:old.service", "status": "applied"}},
+	})
+	record(t, h, org, device, 2, protocol.EventBundleApplied, at, map[string]any{
+		"version": 6, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "failed"}, {"id": "ghost", "status": "applied"}},
+	})
+	record(t, h, org, device, 3, protocol.EventBundleApplied, at, map[string]any{
+		"version": int64(1) << 50, "resources": []map[string]any{{"id": "ghost", "status": "applied"}},
+	})
+	record(t, h, org, device, 4, protocol.EventConfigDriftCorrected, at, map[string]any{"version": 6, "resource_ids": []string{"file:/etc/a.conf"}})
+	record(t, h, org, device, 5, protocol.EventBundleRejected, at, map[string]any{"version": 6, "reason": "signature"})
+	if rows := statusRows(t, h, device); len(rows) != 2 || rows["file:/etc/a.conf"].Status != "applied" || rows["file:/etc/a.conf"].Version != 4 {
+		t.Fatalf("an uncompiled version changed the rows: %+v", rows)
+	}
+	record(t, h, org, device, 6, protocol.EventBundleApplied, at.Add(-time.Minute), map[string]any{
+		"version": 5, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}},
+	})
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["file:/etc/a.conf"].Version != 5 {
+		t.Fatalf("the late report of version 5 lost to an uncompiled version: %+v", rows)
+	}
+	var n int
+	if err := h.super.QueryRow(context.Background(), "SELECT count(*) FROM device_bundle_report WHERE device_id = $1 AND version > 5", device).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("reports of uncompiled versions stored: %d (%v)", n, err)
+	}
+}
+
+// TestConfigStatusTieLaterWins: two applied reports of one version with the same (capped) time leave the report row and
+// the resource rows of the one processed last (PDK-151 pre-merge polish).
+func TestConfigStatusTieLaterWins(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	addBundles(t, h, org, device, 1)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, at, map[string]any{
+		"version": 1, "mode": "report_only", "changed": 1, "resources": []map[string]any{{"id": "file:/etc/a.conf", "status": "applied"}},
+	})
+	record(t, h, org, device, 2, protocol.EventBundleApplied, at, map[string]any{
+		"version": 1, "mode": "enforce", "changed": 2, "resources": []map[string]any{{"id": "unit:b.service", "status": "failed", "message": "second"}},
+	})
+	var mode string
+	var changed int
+	if err := h.super.QueryRow(context.Background(), "SELECT mode, changed FROM device_bundle_report WHERE device_id = $1 AND version = 1", device).Scan(&mode, &changed); err != nil ||
+		mode != "enforce" || changed != 2 {
+		t.Fatalf("report row %s %d, want the second report (%v)", mode, changed, err)
+	}
+	if rows := statusRows(t, h, device); len(rows) != 1 || rows["unit:b.service"].Message != "second" {
+		t.Fatalf("resource rows %+v, want the second report", rows)
+	}
+}
+
+// TestConfigStatusRejectionModeByVersion: a rejection takes the mode of the applied report of the highest lower
+// version, whatever the device's clock said (PDK-151 pre-merge polish).
+func TestConfigStatusRejectionModeByVersion(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	addBundles(t, h, org, device, 1, 2, 3)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, at.Add(10*time.Minute), map[string]any{"version": 1, "mode": "report_only", "resources": []map[string]any{}})
+	record(t, h, org, device, 2, protocol.EventBundleApplied, at, map[string]any{"version": 2, "mode": "enforce", "resources": []map[string]any{}})
+	record(t, h, org, device, 3, protocol.EventBundleRejected, at.Add(20*time.Minute), map[string]any{"version": 3, "reason": "signature"})
+	var mode string
+	if err := h.super.QueryRow(context.Background(), "SELECT mode FROM device_bundle_report WHERE device_id = $1 AND version = 3", device).Scan(&mode); err != nil || mode != "enforce" {
+		t.Fatalf("rejection mode %s, want enforce from version 2 (%v)", mode, err)
 	}
 }

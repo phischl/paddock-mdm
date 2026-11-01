@@ -74,9 +74,9 @@ func seedGlobexFinding(t *testing.T, w *isolationWorld) {
 func seedGlobexConfigStatus(t *testing.T, w *isolationWorld) {
 	t.Helper()
 	w.globexResource = "unit:globex-iso-" + uniqueSuffix() + ".service"
-	version := getDevice(t, w.carol, w.globexDevice).BundleVersion
+	version := waitBundleVersion(t, w.carol, w.globexDevice)
 	sendBundleEvent(t, w.globexSim, 2, protocol.EventBundleApplied, map[string]any{
-		"version": max(version, 1), "changed": 0, "mode": "enforce",
+		"version": version, "changed": 0, "mode": "enforce",
 		"resources": []map[string]any{{"id": w.globexResource, "status": "failed", "message": "globex-iso failure"}},
 	})
 	waitDeviceResources(t, w.carol, w.globexDevice, "q=globex-iso", func(i []resourceStatusItem) bool { return len(i) == 1 })

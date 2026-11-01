@@ -17,13 +17,22 @@ SELECT EXISTS (
     AND (version > @version OR (version = @version AND occurred_at > @occurred_at))
 );
 
--- The mode of the device's last applied report up to occurred_at: a bundle.rejected event carries none, and the device
--- keeps running the bundle it applied before.
+-- The mode of the device's applied report of the highest version below the rejected one: a bundle.rejected event
+-- carries none, and the device keeps running the bundle it applied before. Ordered by version, not by device time
+-- (architect decision 2026-11-01).
 -- name: GetLatestAppliedBundleMode :one
-SELECT mode FROM device_bundle_report WHERE device_id = @device_id AND outcome = 'applied' AND occurred_at <= @occurred_at
-ORDER BY occurred_at DESC, version DESC LIMIT 1;
+SELECT mode FROM device_bundle_report WHERE device_id = @device_id AND outcome = 'applied' AND version < @version
+ORDER BY version DESC LIMIT 1;
 
--- A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order). An
+-- Only a version the server compiled for the device changes its apply status: a report of any other version could
+-- outrank every real one (PDK-151 pre-merge polish).
+-- name: DeviceBundleVersionExists :one
+SELECT EXISTS (
+  SELECT 1 FROM bundle WHERE device_id = @device_id AND organization_id = @organization_id AND version = @version
+);
+
+-- A report with a newer or equal occurred_at wins, so on a tie the later-processed report wins as in the resource rows;
+-- an older one changes nothing (events may arrive out of order). An
 -- applied report always replaces a rejection of the same version and a rejection never replaces an applied report,
 -- whatever the order: HasNewerAppliedBundleReport would lose the applied report, and a late older report would bring
 -- back what that version removed (PDK-151 review 2 finding L1, review 3 finding L3). Only versions the server compiled
@@ -38,7 +47,7 @@ WHERE EXISTS (
 ON CONFLICT (device_id, version) DO UPDATE SET
   outcome = EXCLUDED.outcome, mode = EXCLUDED.mode, changed = EXCLUDED.changed, error_count = EXCLUDED.error_count,
   reason = EXCLUDED.reason, occurred_at = EXCLUDED.occurred_at, recorded_at = now()
-WHERE (EXCLUDED.occurred_at > device_bundle_report.occurred_at
+WHERE (EXCLUDED.occurred_at >= device_bundle_report.occurred_at
        AND NOT (device_bundle_report.outcome = 'applied' AND EXCLUDED.outcome = 'rejected'))
    OR (device_bundle_report.outcome = 'rejected' AND EXCLUDED.outcome = 'applied');
 

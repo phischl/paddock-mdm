@@ -170,20 +170,42 @@ func (q *Queries) DeleteFailedDeviceResourceStatusNotIn(ctx context.Context, arg
 	return err
 }
 
+const deviceBundleVersionExists = `-- name: DeviceBundleVersionExists :one
+SELECT EXISTS (
+  SELECT 1 FROM bundle WHERE device_id = $1 AND organization_id = $2 AND version = $3
+)
+`
+
+type DeviceBundleVersionExistsParams struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	Version        int64
+}
+
+// Only a version the server compiled for the device changes its apply status: a report of any other version could
+// outrank every real one (PDK-151 pre-merge polish).
+func (q *Queries) DeviceBundleVersionExists(ctx context.Context, arg DeviceBundleVersionExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, deviceBundleVersionExists, arg.DeviceID, arg.OrganizationID, arg.Version)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const getLatestAppliedBundleMode = `-- name: GetLatestAppliedBundleMode :one
-SELECT mode FROM device_bundle_report WHERE device_id = $1 AND outcome = 'applied' AND occurred_at <= $2
-ORDER BY occurred_at DESC, version DESC LIMIT 1
+SELECT mode FROM device_bundle_report WHERE device_id = $1 AND outcome = 'applied' AND version < $2
+ORDER BY version DESC LIMIT 1
 `
 
 type GetLatestAppliedBundleModeParams struct {
-	DeviceID   uuid.UUID
-	OccurredAt time.Time
+	DeviceID uuid.UUID
+	Version  int64
 }
 
-// The mode of the device's last applied report up to occurred_at: a bundle.rejected event carries none, and the device
-// keeps running the bundle it applied before.
+// The mode of the device's applied report of the highest version below the rejected one: a bundle.rejected event
+// carries none, and the device keeps running the bundle it applied before. Ordered by version, not by device time
+// (architect decision 2026-11-01).
 func (q *Queries) GetLatestAppliedBundleMode(ctx context.Context, arg GetLatestAppliedBundleModeParams) (string, error) {
-	row := q.db.QueryRow(ctx, getLatestAppliedBundleMode, arg.DeviceID, arg.OccurredAt)
+	row := q.db.QueryRow(ctx, getLatestAppliedBundleMode, arg.DeviceID, arg.Version)
 	var mode string
 	err := row.Scan(&mode)
 	return mode, err
@@ -460,7 +482,7 @@ WHERE EXISTS (
 ON CONFLICT (device_id, version) DO UPDATE SET
   outcome = EXCLUDED.outcome, mode = EXCLUDED.mode, changed = EXCLUDED.changed, error_count = EXCLUDED.error_count,
   reason = EXCLUDED.reason, occurred_at = EXCLUDED.occurred_at, recorded_at = now()
-WHERE (EXCLUDED.occurred_at > device_bundle_report.occurred_at
+WHERE (EXCLUDED.occurred_at >= device_bundle_report.occurred_at
        AND NOT (device_bundle_report.outcome = 'applied' AND EXCLUDED.outcome = 'rejected'))
    OR (device_bundle_report.outcome = 'rejected' AND EXCLUDED.outcome = 'applied')
 `
@@ -477,7 +499,8 @@ type UpsertDeviceBundleReportParams struct {
 	OccurredAt     time.Time
 }
 
-// A report with a newer occurred_at wins; one that is not newer changes nothing (events may arrive out of order). An
+// A report with a newer or equal occurred_at wins, so on a tie the later-processed report wins as in the resource rows;
+// an older one changes nothing (events may arrive out of order). An
 // applied report always replaces a rejection of the same version and a rejection never replaces an applied report,
 // whatever the order: HasNewerAppliedBundleReport would lose the applied report, and a late older report would bring
 // back what that version removed (PDK-151 review 2 finding L1, review 3 finding L3). Only versions the server compiled

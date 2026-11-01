@@ -73,6 +73,13 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 	if err := q.LockDeviceConfigStatus(ctx, deviceID); err != nil {
 		return fmt.Errorf("lock the apply status of the device: %w", err)
 	}
+	known, err := q.DeviceBundleVersionExists(ctx, pgstore.DeviceBundleVersionExistsParams{DeviceID: deviceID, OrganizationID: org, Version: data.Version})
+	if err != nil {
+		return fmt.Errorf("check the reported bundle version: %w", err)
+	}
+	if !known {
+		return nil
+	}
 	if ev.Type == protocol.EventBundleRejected {
 		return recordRejection(ctx, q, org, deviceID, data.Version, data.Reason, at)
 	}
@@ -148,14 +155,15 @@ func recordConfigStatus(ctx context.Context, q *pgstore.Queries, org, deviceID u
 }
 
 // recordRejection stores the device's rejection of a bundle version. The event carries no mode, so the report takes
-// the mode of the device's last applied report before it, enforce when there is none (the agent's default).
+// the mode of the device's applied report of the highest lower version, enforce when there is none (the agent's
+// default).
 func recordRejection(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, version int64, why *string, at time.Time) error {
 	var reason *string
 	if why != nil {
 		r := boundText(*why, maxParamString)
 		reason = &r
 	}
-	mode, err := q.GetLatestAppliedBundleMode(ctx, pgstore.GetLatestAppliedBundleModeParams{DeviceID: deviceID, OccurredAt: at})
+	mode, err := q.GetLatestAppliedBundleMode(ctx, pgstore.GetLatestAppliedBundleModeParams{DeviceID: deviceID, Version: version})
 	switch {
 	case db.IsNoRows(err):
 		mode = protocol.BundleModeEnforce

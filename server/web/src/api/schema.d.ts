@@ -4723,7 +4723,7 @@ export interface components {
             /** @enum {string} */
             outcome: "applied" | "rejected";
             /**
-             * @description Mode of the apply. A rejection carries no mode: it shows the mode of the device's last applied report before it, enforce when there is none.
+             * @description Mode of the apply. A rejection carries no mode: it shows the mode of the device's applied report of the highest lower version, enforce when there is none.
              * @enum {string}
              */
             mode: "enforce" | "report_only";

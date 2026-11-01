@@ -19,13 +19,7 @@ func TestConfigStatus(t *testing.T) {
 	d := activeDevice(t, alice, "", "cs-"+suffix)
 	okID, failedID := "file:/etc/paddock-gates/cs-ok-"+suffix+".conf", "unit:cs-failed-"+suffix+".service"
 
-	var version int64
-	for deadline := time.Now().Add(time.Minute); version == 0; time.Sleep(time.Second) {
-		version = getDevice(t, alice, d.DeviceID).BundleVersion
-		if version == 0 && time.Now().After(deadline) {
-			t.Fatal("the device has no bundle")
-		}
-	}
+	version := waitBundleVersion(t, alice, d.DeviceID)
 	sendBundleEvent(t, d, 1, protocol.EventBundleApplied, map[string]any{
 		"version": version, "changed": 1, "mode": "enforce", "errors": []map[string]string{{"id": failedID, "message": "unit not found"}},
 		"resources": []map[string]any{

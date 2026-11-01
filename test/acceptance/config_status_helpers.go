@@ -55,3 +55,17 @@ func waitDeviceResources(t *testing.T, p *env.Portal, deviceID, query string, wa
 		time.Sleep(time.Second)
 	}
 }
+
+// waitBundleVersion waits up to a minute until the server has compiled a bundle for the device and returns its version:
+// the apply status of a version the server never compiled is not stored.
+func waitBundleVersion(t *testing.T, p *env.Portal, deviceID string) int64 {
+	t.Helper()
+	var version int64
+	for deadline := time.Now().Add(time.Minute); version == 0; time.Sleep(time.Second) {
+		version = getDevice(t, p, deviceID).BundleVersion
+		if version == 0 && time.Now().After(deadline) {
+			t.Fatal("the device has no bundle")
+		}
+	}
+	return version
+}
