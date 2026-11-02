@@ -542,8 +542,9 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 	} else {
 		// Content, not the bundle version: a compile of an earlier change (group membership, a redraw's revert) may
 		// still publish a version while the rollout is staged, and only the content tells what the device gets.
-		for start := time.Now(); time.Since(start) < 2*time.Minute; time.Sleep(40 * time.Second) {
+		for start := time.Now(); time.Since(start) < 2*time.Minute; {
 			d.Checkin()
+			time.Sleep(40 * time.Second)
 			if bundleCarries(t, d, rolloutID) {
 				t.Fatal("the bundle of the VM outside the wave carries the rollout")
 			}
@@ -554,6 +555,13 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 	}
 
 	vm.Together(t, rolloutGate, "complete", func() string {
+		running := false
+		for _, ro := range listRollouts(t, s, "running") {
+			running = running || ro.ID == rolloutID
+		}
+		if !running {
+			t.Fatalf("rollout %s was already ended (the other VM failed)", rolloutID)
+		}
 		s.StepUp(t)
 		s.Call(t, http.MethodPost, "/api/v1/config-rollouts/"+rolloutID+"/complete", nil, http.StatusOK)
 		return ""
