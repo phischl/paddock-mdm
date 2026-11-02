@@ -2,6 +2,7 @@ import type { RouteLocationRaw } from 'vue-router'
 import {
   api, listPage, problemCode, type AttentionDevice, type AuditEvent, type Overview, type OverviewSeverityBuckets,
 } from '../api/client'
+import type { components } from '../api/schema'
 import type { Page } from './listQuery'
 import type { Status } from './status'
 
@@ -9,6 +10,12 @@ import type { Status } from './status'
 export async function getOverview(): Promise<Overview | string> {
   const { data, error } = await api.GET('/api/v1/overview')
   return data ?? problemCode(error)
+}
+
+/** The counts of a configuration rollout, the one counting rule of the server (plan M11 amendments R6.14, R6.16); a problem code when they cannot be read. */
+export async function getRolloutCounts(id: string): Promise<components['schemas']['ConfigRolloutCounts'] | string> {
+  const { data, error } = await api.GET('/api/v1/config-rollouts/{id}', { params: { path: { id } } })
+  return data?.rollout.counts ?? problemCode(error)
 }
 
 /** The first page of the attention list grouped by device, most severe first. */

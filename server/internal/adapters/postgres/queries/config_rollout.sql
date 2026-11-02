@@ -53,11 +53,11 @@ WHERE id = @id RETURNING *;
 UPDATE config_rollout SET status = 'completed', ended_at = now(), ended_reason = @ended_reason, updated_at = now()
 WHERE id = @id RETURNING *;
 
--- name: GetOpenConfigRolloutWithPlan :one
--- The open rollout for the overview, with the plan of its change set, whose keys are staged.
-SELECT sqlc.embed(r), c.plan
-FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
-WHERE r.status IN ('running', 'halted');
+-- name: GetOpenConfigRolloutSummary :one
+-- The open rollout without counts for the overview (plan M11 amendment R6.16): counting it is the rollout API's work.
+SELECT id, status, waves, current_wave_index, started_at
+FROM config_rollout
+WHERE status IN ('running', 'halted');
 
 -- name: ListRunningConfigRollouts :many
 -- The rollouts the worker evaluates, with the plan of their change set, whose keys are staged.

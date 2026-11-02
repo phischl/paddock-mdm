@@ -41,9 +41,7 @@ type overview struct {
 		Rollout *struct {
 			ID     string `json:"id"`
 			Status string `json:"status"`
-			Counts struct {
-				Eligible, Applied, Failed, Pending int
-			} `json:"counts"`
+			Waves  []int  `json:"waves"`
 		} `json:"rollout"`
 		FailedResources   int `json:"failed_resources"`
 		FailedDevices     int `json:"failed_devices"`
@@ -173,6 +171,22 @@ func TestOverviewGate(t *testing.T) {
 	open := listCount(t, alice, "/api/v1/config-rollouts", url.Values{"status": {"running", "halted"}, "page_size": {"10"}})
 	if (o.Configuration.Rollout != nil) != (open == 1) {
 		t.Fatalf("configuration.rollout %+v, %d open rollouts in the list", o.Configuration.Rollout, open)
+	}
+	if r := o.Configuration.Rollout; r != nil {
+		res := call(t, alice, http.MethodGet, "/api/v1/config-rollouts/"+r.ID, nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var detail struct {
+			Rollout struct {
+				Status string `json:"status"`
+				Waves  []int  `json:"waves"`
+			} `json:"rollout"`
+		}
+		if err := res.JSON(&detail); err != nil {
+			t.Fatal(err)
+		}
+		if detail.Rollout.Status != r.Status || len(detail.Rollout.Waves) != len(r.Waves) {
+			t.Fatalf("overview rollout %+v, rollout API %+v", r, detail.Rollout)
+		}
 	}
 
 	carol := login(t, env.Carol)

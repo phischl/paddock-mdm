@@ -2516,7 +2516,7 @@
     "configuration": {
       "title": "Konfiguration",
       "rollout": "Offener Rollout",
-      "rolloutLine": "Welle {wave} von {waves}, fehlgeschlagen {failed}",
+      "rolloutLine": "Welle {wave} von {waves}",
       "noRollout": "Keiner offen",
       "status": {
         "running": "Läuft",
@@ -2524,7 +2524,11 @@
       },
       "failedResources": "Fehlgeschlagene Ressourcen",
       "failedResourcesValue": "{resources, plural, one {# Ressource} other {# Ressourcen}} auf {devices, plural, one {# Gerät} other {# Geräten}}",
-      "reportOnly": "Geräte im Report-only-Modus"
+      "reportOnly": "Geräte im Report-only-Modus",
+      "rolloutFailed": "fehlgeschlagen {failed}",
+      "countsError": "Die Rollout-Zahlen konnten nicht geladen werden.",
+      "retry": "Erneut versuchen",
+      "loadingCounts": "Rollout-Zahlen werden geladen"
     },
     "audit": {
       "title": "Letzte Audit-Ereignisse",

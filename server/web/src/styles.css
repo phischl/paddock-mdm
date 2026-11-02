@@ -320,6 +320,7 @@ a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary);
 .pd-placeholder { background: var(--pd-surface-3); border-radius: var(--pd-radius-md); margin-bottom: 14px; }
 .pd-placeholder--strip { height: 76px; }
 .pd-placeholder--panel { height: 240px; }
+.pd-placeholder--inline { display: inline-block; width: 72px; height: 1em; margin: 0 8px; vertical-align: middle; }
 .pd-table-scroll { overflow-x: auto; }
 .pd-table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .pd-table th {

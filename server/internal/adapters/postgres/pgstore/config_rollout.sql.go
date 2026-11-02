@@ -257,41 +257,30 @@ func (q *Queries) GetOpenConfigRolloutOverlay(ctx context.Context) (GetOpenConfi
 	return i, err
 }
 
-const getOpenConfigRolloutWithPlan = `-- name: GetOpenConfigRolloutWithPlan :one
-SELECT r.id, r.organization_id, r.change_set_id, r.waves, r.current_wave_index, r.wave_started_at, r.min_wave_minutes, r.failure_threshold_percent, r.failure_threshold_min, r.canary_device_group_id, r.status, r.halted_reason, r.evaluation_since, r.started_by, r.started_at, r.ended_at, r.ended_reason, r.updated_at, c.plan
-FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
-WHERE r.status IN ('running', 'halted')
+const getOpenConfigRolloutSummary = `-- name: GetOpenConfigRolloutSummary :one
+SELECT id, status, waves, current_wave_index, started_at
+FROM config_rollout
+WHERE status IN ('running', 'halted')
 `
 
-type GetOpenConfigRolloutWithPlanRow struct {
-	ConfigRollout ConfigRollout
-	Plan          json.RawMessage
+type GetOpenConfigRolloutSummaryRow struct {
+	ID               uuid.UUID
+	Status           string
+	Waves            []int32
+	CurrentWaveIndex int32
+	StartedAt        time.Time
 }
 
-// The open rollout for the overview, with the plan of its change set, whose keys are staged.
-func (q *Queries) GetOpenConfigRolloutWithPlan(ctx context.Context) (GetOpenConfigRolloutWithPlanRow, error) {
-	row := q.db.QueryRow(ctx, getOpenConfigRolloutWithPlan)
-	var i GetOpenConfigRolloutWithPlanRow
+// The open rollout without counts for the overview (plan M11 amendment R6.16): counting it is the rollout API's work.
+func (q *Queries) GetOpenConfigRolloutSummary(ctx context.Context) (GetOpenConfigRolloutSummaryRow, error) {
+	row := q.db.QueryRow(ctx, getOpenConfigRolloutSummary)
+	var i GetOpenConfigRolloutSummaryRow
 	err := row.Scan(
-		&i.ConfigRollout.ID,
-		&i.ConfigRollout.OrganizationID,
-		&i.ConfigRollout.ChangeSetID,
-		&i.ConfigRollout.Waves,
-		&i.ConfigRollout.CurrentWaveIndex,
-		&i.ConfigRollout.WaveStartedAt,
-		&i.ConfigRollout.MinWaveMinutes,
-		&i.ConfigRollout.FailureThresholdPercent,
-		&i.ConfigRollout.FailureThresholdMin,
-		&i.ConfigRollout.CanaryDeviceGroupID,
-		&i.ConfigRollout.Status,
-		&i.ConfigRollout.HaltedReason,
-		&i.ConfigRollout.EvaluationSince,
-		&i.ConfigRollout.StartedBy,
-		&i.ConfigRollout.StartedAt,
-		&i.ConfigRollout.EndedAt,
-		&i.ConfigRollout.EndedReason,
-		&i.ConfigRollout.UpdatedAt,
-		&i.Plan,
+		&i.ID,
+		&i.Status,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.StartedAt,
 	)
 	return i, err
 }

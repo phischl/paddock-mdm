@@ -15,7 +15,7 @@ import { modifierLabel } from '../composables/useShortcuts'
 import { useProblemText } from '../lib/problems'
 import { auditText } from '../lib/format'
 import { shortcutOf } from '../lib/navigation'
-import { getOverview, kpiCells, overviewAttention, recentAuditEvents } from '../lib/overview'
+import { getOverview, getRolloutCounts, kpiCells, overviewAttention, recentAuditEvents } from '../lib/overview'
 import { outcomeStatus } from '../lib/status'
 import { formatAbsolute } from '../lib/time'
 import { useSessionStore } from '../stores/session'
@@ -41,10 +41,20 @@ onMounted(async () => {
   ])
   if (typeof o === 'string') problem.value = o
   else overview.value = o
+  if (typeof o !== 'string') void loadRolloutCounts()
   attention.value = a?.items.slice(0, 5) ?? []
   audit.value = e?.items.slice(0, 8) ?? []
   loading.value = false
 })
+
+const rolloutCounts = ref<Awaited<ReturnType<typeof getRolloutCounts>> | null>(null)
+
+/** The counts come from the rollout API in a second request (plan M11 amendment R6.16): counting is too heavy for the overview. */
+async function loadRolloutCounts() {
+  const id = overview.value?.configuration.rollout?.id
+  rolloutCounts.value = null
+  if (id) rolloutCounts.value = await getRolloutCounts(id)
+}
 
 const cells = computed(() => (overview.value ? kpiCells(overview.value) : []))
 /** The counts of the security review (ADR 0034 decision 7); null hides the banner. */
@@ -369,8 +379,33 @@ const rollout = computed(() => configuration.value?.rollout ?? null)
                   :to="'/config-rollouts/' + rollout.id"
                   class="mono"
                 >
-                  {{ t('overview.configuration.rolloutLine', { wave: rollout.current_wave_index + 1, waves: rollout.waves.length, failed: rollout.counts.failed }) }}
+                  {{ t('overview.configuration.rolloutLine', { wave: rollout.current_wave_index + 1, waves: rollout.waves.length }) }}
                 </RouterLink>
+                <span
+                  v-if="rolloutCounts === null"
+                  class="pd-placeholder pd-placeholder--inline"
+                  role="status"
+                  :aria-label="t('overview.configuration.loadingCounts')"
+                  data-testid="overview-configuration-counts-loading"
+                />
+                <span
+                  v-else-if="typeof rolloutCounts === 'string'"
+                  class="form-error"
+                  role="alert"
+                  data-testid="overview-configuration-counts-error"
+                >
+                  {{ t('overview.configuration.countsError') }}
+                  <v-btn
+                    size="x-small"
+                    @click="loadRolloutCounts"
+                  >
+                    {{ t('overview.configuration.retry') }}
+                  </v-btn>
+                </span>
+                <span
+                  v-else
+                  class="mono"
+                >{{ t('overview.configuration.rolloutFailed', { failed: rolloutCounts.failed }) }}</span>
                 <StatusChip
                   :status="rollout.status === 'running' ? 'info' : 'warn'"
                   :label="t('overview.configuration.status.' + rollout.status)"
@@ -394,7 +429,7 @@ const rollout = computed(() => configuration.value?.rollout ?? null)
             <div>
               <dt>{{ t('overview.configuration.reportOnly') }}</dt>
               <dd class="mono pd-tabular">
-                <RouterLink :to="{ name: 'devices', query: { config_mode: 'report_only' } }">
+                <RouterLink :to="{ name: 'devices', query: { state: 'active', config_mode: 'report_only' } }">
                   {{ configuration.report_only_devices }}
                 </RouterLink>
               </dd>

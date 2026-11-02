@@ -52,8 +52,13 @@ func (h *handlers) GetOverview(ctx context.Context, _ adminapi.GetOverviewReques
 		},
 	}
 	if r := o.Configuration.Rollout; r != nil {
-		rollout := toConfigRollout(r.ConfigRollout, r.Counts)
-		out.Configuration.Rollout = &rollout
+		waves := make([]int, len(r.Waves))
+		for i, w := range r.Waves {
+			waves[i] = int(w)
+		}
+		out.Configuration.Rollout = &adminapi.OverviewConfigRollout{
+			Id: r.ID, Status: adminapi.ConfigRolloutStatus(r.Status), Waves: waves, CurrentWaveIndex: int(r.CurrentWaveIndex), StartedAt: r.StartedAt.UTC(),
+		}
 	}
 	for i, c := range o.Vulnerabilities.Top {
 		out.Vulnerabilities.Top[i] = adminapi.OverviewTopCVE{Cve: c.CVE, Severity: adminapi.Severity(c.Severity), Devices: c.Devices, Packages: c.Packages}

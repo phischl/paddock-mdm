@@ -45,7 +45,7 @@ type OverviewResult struct {
 // OverviewConfiguration: the open configuration rollout and the devices and resources that need a look.
 type OverviewConfiguration struct {
 	// Rollout is nil while no rollout is open.
-	Rollout *ConfigRolloutRecord
+	Rollout *pgstore.GetOpenConfigRolloutSummaryRow
 	pgstore.OverviewConfigurationRow
 }
 
@@ -192,29 +192,21 @@ func (o *Overview) Get(ctx context.Context) (OverviewResult, error) {
 	return out, err
 }
 
-// overviewConfiguration reads the configuration card; the rollout's counts are the API's own (classify, plan M11
-// amendment R6.14).
+// overviewConfiguration reads the configuration card. The open rollout comes without counts: counting it reads every
+// active device (plan M11 amendment R6.16), so the portal asks the rollout API for them.
 func overviewConfiguration(ctx context.Context, q *pgstore.Queries) (OverviewConfiguration, error) {
 	var out OverviewConfiguration
 	var err error
 	if out.OverviewConfigurationRow, err = q.OverviewConfiguration(ctx); err != nil {
 		return out, fmt.Errorf("overview configuration: %w", err)
 	}
-	open, err := q.GetOpenConfigRolloutWithPlan(ctx)
+	open, err := q.GetOpenConfigRolloutSummary(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, nil
 	}
 	if err != nil {
 		return out, fmt.Errorf("overview open rollout: %w", err)
 	}
-	staged, err := stagedResourceIDs(open.Plan)
-	if err != nil {
-		return out, err
-	}
-	w, err := loadRolloutWorld(ctx, q, []pgstore.ConfigRollout{open.ConfigRollout}, nil)
-	if err != nil {
-		return out, err
-	}
-	out.Rollout = &ConfigRolloutRecord{ConfigRollout: open.ConfigRollout, Counts: w.counts(open.ConfigRollout, staged)}
+	out.Rollout = &open
 	return out, nil
 }

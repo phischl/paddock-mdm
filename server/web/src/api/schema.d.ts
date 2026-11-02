@@ -5953,14 +5953,23 @@ export interface components {
         };
         /** @description The configuration card. Failures do not count the plan errors of report-only reports, like GET /api/v1/config-status. */
         OverviewConfiguration: {
-            /** @description The open (running or halted) configuration rollout with its counts; null while none is open. */
-            rollout: components["schemas"]["ConfigRollout"] | null;
+            /** @description The open (running or halted) configuration rollout without counts; null while none is open. The counts are those of GET /api/v1/config-rollouts/{id}. */
+            rollout: components["schemas"]["OverviewConfigRollout"] | null;
             /** @description Distinct resources with a failed apply on at least one active device. */
             failed_resources: number;
             /** @description Distinct active devices with at least one failed apply. */
             failed_devices: number;
             /** @description Active devices in report-only mode. */
             report_only_devices: number;
+        };
+        OverviewConfigRollout: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["ConfigRolloutStatus"];
+            waves: number[];
+            current_wave_index: number;
+            /** Format: date-time */
+            started_at: string;
         };
         /** @description The totals of GET /api/v1/security-review. */
         OverviewSecurityReview: {
