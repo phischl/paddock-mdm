@@ -67,10 +67,21 @@ func (w *world) assign(entry uuid.UUID, group any, intent, rule string, version 
 	return id
 }
 
+// osRelease stores the os-release of dev in the shape enrollment stores it: the agent reports the keys lowercased
+// (agent/internal/enroll.osRelease) and app.createDevice marshals the map as it is.
+func (w *world) osRelease(dev uuid.UUID, id, versionID string) {
+	w.t.Helper()
+	raw, err := json.Marshal(map[string]string{"id": id, "version_id": versionID, "pretty_name": "X"})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.exec("UPDATE device SET os_release = $2 WHERE id = $1", dev, raw)
+}
+
 // ubuntu makes dev an Ubuntu 24.04 device with the reported architecture arch.
 func (w *world) ubuntu(dev uuid.UUID, arch string) {
 	w.t.Helper()
-	w.exec(`UPDATE device SET os_release = '{"ID":"ubuntu","VERSION_ID":"24.04"}' WHERE id = $1`, dev)
+	w.osRelease(dev, "ubuntu", "24.04")
 	w.exec("UPDATE device_status SET arch = $2 WHERE device_id = $1", dev, arch)
 }
 
@@ -213,6 +224,23 @@ func TestSoftwareSectionArchitecture(t *testing.T) {
 	w.ubuntu(unknown, "")
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	for d, want := range map[uuid.UUID]string{amd: "editor-amd64", unknown: "editor"} {
+		if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Package != want {
+			t.Errorf("software section %+v, want %s", s, want)
+		}
+	}
+}
+
+// TestSoftwareSectionRelease (PDK-698): the release-specific reference wins over "*" for a device whose os-release is
+// stored as enrollment stores it (lowercase keys); a device of another release gets the wildcard one.
+func TestSoftwareSectionRelease(t *testing.T) {
+	w := newWorld(t)
+	e := w.entry("Editor", nil, [4]string{"ubuntu", "*", "*", "editor"}, [4]string{"ubuntu", "24.04", "*", "editor-noble"})
+	w.assign(e, nil, "required", "latest", nil)
+	noble, plucky := w.v2Device("{1,2}"), w.v2Device("{1,2}")
+	w.osRelease(noble, "ubuntu", "24.04")
+	w.osRelease(plucky, "ubuntu", "26.04")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for d, want := range map[uuid.UUID]string{noble: "editor-noble", plucky: "editor"} {
 		if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Package != want {
 			t.Errorf("software section %+v, want %s", s, want)
 		}
@@ -403,7 +431,7 @@ func TestSoftwareInvalidEntryFailsClosed(t *testing.T) {
 	w.exec(`UPDATE software_catalog_entry SET packages = '[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano"},
 		{"distribution":"Debian!","release":"*","architecture":"*","package":"nano"}]' WHERE id = $1`, forbidden)
 	w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
-	w.exec(`UPDATE device SET os_release = '{"ID":"fedora","VERSION_ID":"40"}' WHERE id = $1`, fedora)
+	w.osRelease(fedora, "fedora", "40")
 	w.assign(w.entry("Fedora tool", nil, [4]string{"fedora", "*", "*", "tool"}), nil, "required", "latest", nil)
 	fedoraBefore := w.version(fedora)
 	w.mustCompile(statechange.ScopeOrg, w.org)
