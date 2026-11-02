@@ -193,11 +193,15 @@ func seedGlobexSoftwareSource(t *testing.T, w *isolationWorld) {
 	deleteSourceOnCleanup(w.top, w.carol, renew, softwareSources+"/"+w.globexSource)
 }
 
-// seedGlobexSoftwareCatalog creates a catalog entry of globex with an assignment and an icon (plan M13a decisions 7 to
+// seedGlobexSoftwareCatalog creates a catalog entry of globex (category globex-iso, using globex's source) with an
+// assignment and an icon (plan M13a decisions 7 to
 // 11); both are deleted with the entry.
 func seedGlobexSoftwareCatalog(t *testing.T, w *isolationWorld) {
 	t.Helper()
-	res := call(t, w.carol, http.MethodPost, softwareCatalog, entryBody("globex-iso"))
+	body := entryBody("globex-iso")
+	body["category"] = "globex-iso"
+	body["source_id"] = w.globexSource
+	res := call(t, w.carol, http.MethodPost, softwareCatalog, body)
 	expectStatus(t, res, http.StatusCreated, "")
 	w.globexEntry = createdID(w.top, w.carol, softwareCatalog, res)
 	w.globexIDs = append(w.globexIDs, w.globexEntry)
@@ -963,7 +967,7 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/software-catalog": {
 		{"q": {"globex-iso"}},
 		{"sort": {"-updated_at"}, "page_size": {"100"}},
-		{"category": {"globex-iso"}, "source_id": {"00000000-0000-0000-0000-000000000000"}},
+		{"category": {"globex-iso"}},
 	},
 	"/api/v1/software-assignments": {{"q": {"globex-iso"}}, {"intent": {"hold"}, "sort": {"intent"}, "page_size": {"100"}}},
 	// globex's waiting Destroy (seedGlobexDevices) is a revocation_pending condition.
@@ -1253,6 +1257,9 @@ func seedGlobexVerificationRun(t *testing.T, w *isolationWorld) {
 // listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c
 // decision 31: the audit log's target_id); the gate runs them like listIsolationQueries.
 var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
+	"/api/v1/software-catalog": {
+		func(w *isolationWorld) url.Values { return url.Values{"source_id": {w.globexSource}} },
+	},
 	"/api/v1/devices/{id}/logins": {
 		func(w *isolationWorld) url.Values { return url.Values{"username": {strings.ToLower(w.globexLogin)}} },
 	},
