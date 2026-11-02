@@ -1,6 +1,7 @@
 package software_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -138,6 +139,14 @@ func TestValidateSourceRefuses(t *testing.T) {
 		{"port out of range", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:99999/"} }, "port"},
 		{"port zero", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:0/"} }, "port"},
 		{"duplicate uri", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/", "https://a.example/"} }, "must not repeat"},
+		{"duplicate uri by host case", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/apt", "https://A.Example/apt"} }, "must not repeat"},
+		{"duplicate uri by default port", func(in *software.SourceInput) {
+			in.URIs = []string{"https://a.example/apt", "https://a.example:443/apt"}
+		}, "must not repeat"},
+		{"duplicate uri by trailing slash", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/apt", "https://a.example/apt/"} }, "must not repeat"},
+		{"empty port", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:/apt"} }, "port"},
+		{"uri with a quote", func(in *software.SourceInput) { in.URIs = []string{`https://a.example/a"b`} }, `", < or >`},
+		{"uri with angle brackets", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/<b>"} }, `", < or >`},
 		{"suite of ..", func(in *software.SourceInput) { in.Suites = []string{".."} }, ".. path segment"},
 		{"suite climbing up", func(in *software.SourceInput) { in.Suites = []string{"../../x"} }, ".. path segment"},
 		{"flat suite climbing up", func(in *software.SourceInput) { in.Suites, in.Components = []string{"../"}, nil }, ".. path segment"},
@@ -218,6 +227,72 @@ func TestValidateSourceSigningKeyIsCanonical(t *testing.T) {
 	if err != nil || k.Fingerprint != rsa3072FP {
 		t.Fatalf("canonical key = %v, %v", k, err)
 	}
+}
+
+// TestValidateSourceSigningKeyLimitIsCanonical (Review 1 / External Review 1 of Fix Round 1): the 65 536-byte limit
+// holds for the stored, re-armored key, so text that fits only in a denser layout (76-character lines, one long line,
+// no checksum) is refused with ErrSource instead of failing at the database.
+func TestValidateSourceSigningKeyLimitIsCanonical(t *testing.T) {
+	base, err := openpgpkey.ParseArmored([]byte(key(t, "rsa3072.asc")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A signature packet whose payload after the subpacket areas is never inspected pads the keyring.
+	padded := func(n int) []byte {
+		body := append([]byte{4, 0x13, 1, 8, 0, 0, 0, 0, 0, 0}, make([]byte, n)...)
+		hdr := []byte{0xC2, 0xFF, byte(len(body) >> 24), byte(len(body) >> 16), byte(len(body) >> 8), byte(len(body))}
+		return append(append(bytes.Clone(base.Keyring), hdr...), body...)
+	}
+	layouts := map[string]func([]byte) string{
+		"76-character lines, checksum": func(b []byte) string { return armorWith(b, 76, true) },
+		"one long line, no checksum":   func(b []byte) string { return armorWith(b, 0, false) },
+		"64-character lines, checksum": func(b []byte) string { return armorWith(b, 64, true) },
+	}
+	for name, layout := range layouts {
+		t.Run(name, func(t *testing.T) {
+			// The largest keyring whose canonical form fits, and the smallest one whose canonical form does not.
+			fits, over := 0, 0
+			for n := 40000; n < 50000; n += 3 {
+				if len(openpgpkey.Armor(padded(n))) > software.MaxSigningKeyLength {
+					fits, over = n-3, n
+					break
+				}
+			}
+			in := valid(t)
+			in.SigningKey = layout(padded(fits))
+			got, err := software.ValidateSource(in)
+			if err != nil || len(got.SigningKey) > software.MaxSigningKeyLength {
+				t.Fatalf("fitting key: %d bytes stored, %v", len(got.SigningKey), err)
+			}
+			in.SigningKey = layout(padded(over))
+			want := "re-armored"
+			if len(in.SigningKey) > software.MaxSigningKeyLength {
+				want = "at most 65536 bytes"
+			}
+			if _, err := software.ValidateSource(in); !errors.Is(err, software.ErrSource) || !strings.Contains(err.Error(), want) {
+				t.Fatalf("over the canonical limit with %d bytes submitted: %v", len(in.SigningKey), err)
+			}
+		})
+	}
+}
+
+// armorWith armors b with lines of width base64 characters (0 = one line) and with or without the checksum line.
+func armorWith(b []byte, width int, checksum bool) string {
+	canonical := string(openpgpkey.Armor(b))
+	lines := strings.Split(strings.TrimSpace(canonical), "\n")
+	enc := strings.Join(lines[2:len(lines)-2], "")
+	var out strings.Builder
+	out.WriteString(lines[0] + "\n\n")
+	for width > 0 && len(enc) > width {
+		out.WriteString(enc[:width] + "\n")
+		enc = enc[width:]
+	}
+	out.WriteString(enc + "\n")
+	if checksum {
+		out.WriteString(lines[len(lines)-2] + "\n")
+	}
+	out.WriteString(lines[len(lines)-1] + "\n")
+	return out.String()
 }
 
 func TestDisplayParam(t *testing.T) {

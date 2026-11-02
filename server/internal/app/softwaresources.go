@@ -139,7 +139,13 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 		merged, fields := mergeSource(old, in)
 		rec.SetParam("name", software.DisplayParam(merged.Name, software.MaxNameLength))
 		rec.SetParam("slug", old.Slug)
-		rec.SetParam("fields", fields)
+		// A submitted key counts as a change until validation shows it is the stored key in other armor, so a refused
+		// key change still names signing_key.
+		if in.SigningKey != nil && *in.SigningKey != old.SigningKey {
+			rec.SetParam("fields", append(slices.Clone(fields), "signing_key"))
+		} else {
+			rec.SetParam("fields", fields)
+		}
 		rec.SetParam("fingerprint", software.DisplayParam(software.NormalizeFingerprint(merged.Fingerprint), maxFingerprintParam))
 		rec.SetParam("old_fingerprint", old.Fingerprint)
 		switch {
@@ -153,8 +159,9 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 			return softwareSourceProblem(err)
 		}
 		if key.SigningKey != old.SigningKey {
-			rec.SetParam("fields", append(fields, "signing_key"))
+			fields = append(fields, "signing_key")
 		}
+		rec.SetParam("fields", fields)
 		rec.SetParam("fingerprint", key.Fingerprint)
 		rec.SetParam("weak_key", key.WeakKey)
 		out, err = q.UpdateSoftwareSource(ctx, pgstore.UpdateSoftwareSourceParams{

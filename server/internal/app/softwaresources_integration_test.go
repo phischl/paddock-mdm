@@ -184,6 +184,24 @@ func TestSoftwareSources(t *testing.T) {
 	if err != nil || unchanged.SigningKey != stored.SigningKey || len(anyStrings(h.lastEvent(t).Params["fields"])) != 0 {
 		t.Fatalf("same key with other armor = %v, fields %v", err, h.lastEvent(t).Params["fields"])
 	}
+
+	// Review 1 of Fix Round 1: a refused key change names signing_key in its failure event.
+	rsa3072 := sourceKey(t, "rsa3072.asc")
+	dsa := sourceKey(t, "dsa.asc")
+	for name, c := range map[string]struct {
+		key, fp string
+		want    *problem.Error
+	}{
+		"fingerprint mismatch": {rsa3072, sourceEd25519FP, problem.FingerprintMismatch},
+		"key policy":           {dsa, sourceDSAFP, problem.InvalidRequest},
+	} {
+		if _, err := sources.Update(ctx(steppedUp), stored.ID, app.SourceUpdate{SigningKey: &c.key, Fingerprint: &c.fp}); !errors.Is(err, c.want) {
+			t.Fatalf("%s = %v", name, err)
+		}
+		if ev := h.lastEvent(t); ev.Outcome != "failure" || !slices.Equal(anyStrings(ev.Params["fields"]), []string{"signing_key"}) {
+			t.Fatalf("%s: event %+v", name, ev)
+		}
+	}
 }
 
 // TestSoftwareSourceAuditParamsBounded (External Review 1 M1): a refused attempt records exactly one event whose

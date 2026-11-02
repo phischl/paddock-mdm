@@ -169,6 +169,11 @@ func validateURIs(uris []string) error {
 		if strings.ContainsFunc(raw, unicode.IsSpace) || strings.ContainsAny(raw, "?#") {
 			return fmt.Errorf("%w: uris must not contain white space, a query or a fragment", ErrSource)
 		}
+		// apt writes the URI into a deb822 field and the portal shows it; quotes and angle brackets have no place in
+		// a repository path.
+		if strings.ContainsAny(raw, `"<>`) {
+			return fmt.Errorf(`%w: uris must not contain ", < or >`, ErrSource)
+		}
 		// The same runes as in names: URIs are shown next to the trust decision and in the audit log.
 		if !utf8.ValidString(raw) || strings.ContainsFunc(raw, invisibleInName) {
 			return fmt.Errorf("%w: uris must not contain control, format, invisible or line separator characters",
@@ -178,16 +183,33 @@ func validateURIs(uris []string) error {
 		if err != nil || u.Hostname() == "" || u.User != nil {
 			return fmt.Errorf("%w: uris must be https://host[/path] without user info", ErrSource)
 		}
-		if p := u.Port(); p != "" {
+		if p := u.Port(); p != "" || strings.HasSuffix(u.Host, ":") {
 			if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
 				return fmt.Errorf("%w: uris must use a port from 1 to 65535", ErrSource)
 			}
 		}
-		if slices.Contains(uris[:i], raw) {
+		if slices.ContainsFunc(uris[:i], func(prev string) bool { return sameURI(prev, u) }) {
 			return fmt.Errorf("%w: uris must not repeat %q", ErrSource, raw)
 		}
 	}
 	return nil
+}
+
+// sameURI reports whether an earlier, already checked URI names the same repository as u: the host compared without
+// case, port 443 equal to none, a trailing "/" ignored.
+func sameURI(prev string, u *url.URL) bool {
+	p, err := url.Parse(prev)
+	if err != nil {
+		return false
+	}
+	key := func(u *url.URL) string {
+		port := u.Port()
+		if port == "443" {
+			port = ""
+		}
+		return strings.ToLower(u.Hostname()) + ":" + port + strings.TrimSuffix(u.EscapedPath(), "/")
+	}
+	return key(p) == key(u)
 }
 
 func validateDistribution(suites, components, archs []string) error {
@@ -257,6 +279,13 @@ func validateSigningKey(signingKey, typed string) (SourceKey, error) {
 		return SourceKey{}, fmt.Errorf("%w: signing_key must be one ASCII-armored OpenPGP v4 public key: %w",
 			ErrSource, err)
 	}
+	// The stored form is the canonical armor, which can be longer than the submitted text (shorter lines, a
+	// checksum); the limit holds for what is stored, so a stored key always fits the same rule on its next update.
+	canonical := string(openpgpkey.Armor(key.Keyring))
+	if len(canonical) > MaxSigningKeyLength {
+		return SourceKey{}, fmt.Errorf("%w: signing_key must be at most %d bytes when re-armored with 64-character lines",
+			ErrSource, MaxSigningKeyLength)
+	}
 	weak, err := KeyPolicy(key)
 	if err != nil {
 		return SourceKey{}, err
@@ -265,8 +294,7 @@ func validateSigningKey(signingKey, typed string) (SourceKey, error) {
 		return SourceKey{}, fmt.Errorf("%w: the key's fingerprint is %s, the entered one is %s", ErrFingerprint,
 			key.Fingerprint, want)
 	}
-	return SourceKey{Fingerprint: key.Fingerprint, Keyring: key.Keyring, SigningKey: string(openpgpkey.Armor(key.Keyring)),
-		WeakKey: weak}, nil
+	return SourceKey{Fingerprint: key.Fingerprint, Keyring: key.Keyring, SigningKey: canonical, WeakKey: weak}, nil
 }
 
 // Curves the upload accepts (ticket PDK-408, architect decision 2026-10-31). Brainpool and secp256k1 are refused;

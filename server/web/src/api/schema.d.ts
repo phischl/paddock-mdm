@@ -5673,7 +5673,7 @@ export interface components {
             /** @description ^[a-z0-9-]{1,32}$; none for a flat repository, at least one otherwise. */
             components?: string[];
             architectures?: components["schemas"]["SoftwareArchitecture"][];
-            /** @description One ASCII-armored OpenPGP v4 public key. */
+            /** @description One ASCII-armored OpenPGP v4 public key. It is stored re-armored with 64-character lines and no armor headers, and that form must also fit 65536 bytes (400 invalid_request otherwise). */
             signing_key: string;
             /** @description The key's fingerprint as published by the vendor; spaces and case are ignored. */
             fingerprint: string;
@@ -5686,7 +5686,7 @@ export interface components {
             suites?: string[];
             components?: string[];
             architectures?: components["schemas"]["SoftwareArchitecture"][];
-            /** @description Only together with fingerprint. */
+            /** @description Only together with fingerprint; the same rules as on creation. */
             signing_key?: string;
             /** @description Only together with signing_key. */
             fingerprint?: string;
