@@ -70,6 +70,31 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   audit writer's evidence export temp space (`docs/operations/audit-bucket.md` section 4); nothing to migrate. Check
   that Docker's data-root (`docker info -f '{{.DockerRootDir}}'`) has free space for one export of
   `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default 4 GiB). A rollback leaves the volume unused; `docker volume rm` removes it.
+- From 0.1.0-alpha.7 (control plane and lab): `./paddock up` starts the new role `paddock-notifier`, which delivers
+  security notifications to webhooks and e-mail (`docs/operations/notifications.md`). The fresh installation creates
+  its database role `paddock_notifier`, its OpenBao AppRole and its files under `.secrets/` (`./paddock secrets`,
+  `./paddock bootstrap openbao`); the section *Notifications on a cluster initialized before them* below is only for
+  development builds between the two releases. Authentik applies the new blueprint `paddock-mcp.yaml` and the
+  updated `paddock-portal.yaml` and `paddock-device.yaml` at its first start: every administrator signs in to the
+  portal with a passkey, and the MCP stays off until an administrator saves an MCP policy (`docs/operations/mcp.md`).
+- From 0.1.0-alpha.7: new settings in `.env.example`. `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` is required (above).
+  `PADDOCK_SMTP_ENABLED` (default `false`; `true` exactly when `PADDOCK_SMTP_HOST` is set) with the commented relay
+  settings `PADDOCK_SMTP_HOST`, `PADDOCK_SMTP_PORT`, `PADDOCK_SMTP_TLS`, `PADDOCK_SMTP_USERNAME` and
+  `PADDOCK_SMTP_FROM`, the relay password in `.secrets/smtp_password` (`docs/operations/install.md`, *E-mail relay*);
+  `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (audit host, default 4 GiB); `PADDOCK_AUTHENTIK_WEB_WORKERS` (default 4, about
+  0.5 GiB more RAM for `authentik-server`; `docs/operations/capacity.md`, "Authentik web workers"). The roles read
+  further settings that the shipped Compose files set or default: `PADDOCK_NOTIFY_POLL_INTERVAL`,
+  `PADDOCK_NOTIFY_STALL_AFTER`, `PADDOCK_NOTIFY_BATCH`, `PADDOCK_SMTP_TIMEOUT` and `PADDOCK_SMTP_CA_FILE`
+  (notifier), `PADDOCK_RETENTION_INTERVAL` (worker), `PADDOCK_AUDIT_EXPORT_POLL_INTERVAL` (audit writer),
+  `PADDOCK_OIDC_MCP_ISSUER` and `PADDOCK_OIDC_MCP_CLIENT_ID` (api). `./paddock check` refuses
+  `PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE` and `PADDOCK_SMTP_TLS=none`.
+- From 0.1.0-alpha.7 (devices): the agent and the supervisor change in this release (watched third-party services,
+  a cancelled or failed in-place encryption is disarmed before a restart can encrypt the disk, stuck
+  supervisor-upgrade markers no longer hold rollouts, an interrupted self-test no longer fails an update). Because the
+  installation is new, there is no upgrade order: remove Paddock from each device while the old server still runs
+  (`docs/operations/uninstall.md`), then publish this release's agent release on the new server
+  (`docs/operations/agent-releases.md`) and enrol the devices with its packages, never with an older agent. The
+  revocation tool `paddock-revoke` is unchanged and stays unsigned; revocation stays disabled.
 
 ## Upgrade (each host)
 

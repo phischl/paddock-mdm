@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Entries of merged changes that are not released yet are in `changelog.d/`.
 
+## [0.1.0-alpha.7] - 2026-11-02
+
+**Breaking: there is no upgrade path from 0.1.0-alpha.6 or earlier.** PostgreSQL moves to 18 (new data directory
+layout), Valkey to 9.1.3, RabbitMQ to 4.4.0 and Fleet's MySQL to 8.4.13; none of them opens the data of the previous
+release. Install this release fresh and enrol every device again (`docs/operations/upgrade.md`, "From
+0.1.0-alpha.7"): the databases, OpenBao with its keys, escrowed recovery keys and enrollments of the old installation
+are lost with it.
+
+AI assistants through the MCP (ADR 0044, plan M14): administrators sign in with `paddockctl mcp login` (Authentik,
+passkey) and connect Claude Code or another MCP client to `paddockctl mcp`; organization and platform MCP policies and
+a personal write opt-in decide what the assistant may do, step-up actions stay in the portal, and the MCP is off until
+a policy is saved. Notifications and findings (plan M9): the new role `paddock-notifier` delivers security events to
+signed webhooks and e-mail lists, the audit cursor feed serves SIEM pulls, findings record the reaction to every
+tamper event and attention condition, devices report a stopped third-party service (watched units), and the worker
+summarizes new critical vulnerabilities once a day. Evidence and privacy (ADR 0032, plan M10): signed evidence exports
+of the audit log with offline verification (`paddockctl audit verify-export`), per-organization privacy settings,
+read-access recording, a retention round for every store with its retention schedule, and the privacy and works
+council pack. The portal shows a setup checklist with the getting-started guide, signs every administrator in with a
+passkey and ends the Authentik session at sign-out. Authentik runs 4 web workers. The agent and the supervisor change
+in this release (watched services, cancelled or failed in-place encryption is disarmed, stuck supervisor-upgrade
+markers, an interrupted self-test no longer fails a rollout): enrol the devices of the new installation with this
+release's agent packages. `paddock-revoke` stays unsigned, and revocation (Lock, Destroy, dead man's switch) stays
+disabled behind `PADDOCK_REVOCATION_ENABLED`.
+
+Schema: migrations 00072–00088 (control-plane database) and audit migrations 00007–00010 (audit database); fresh
+installation only, no upgrade path from 0.1.0-alpha.6 or earlier.
+
 ### Added
 
 - A second development stack on the same host (PDK-519): `PADDOCK_INSTANCE=2 make dev-secrets` in a second checkout
@@ -66,6 +93,297 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
   limited. `GET /api/v1/me`, `GET /api/v1/mcp/access` (what the caller's MCP sessions may do) and
   `GET /api/v1/mcp/catalog` (the tool catalog) always answer. New metric `paddock_mcp_requests_total{class, result}`.
   An MCP session calling `POST /api/v1/me/mcp-write/enable` or `…/disable` now gets 403 `mcp_tool_not_allowed`.
+- The audit index numbers every event per organization in the order the audit writer committed it (`commit_seq`), so
+  consumers can read the audit trail without skipping late events from offline devices and can detect gaps. The
+  upgrade numbers the existing events once; plan about 1.5 minutes per million audit events. The upgrade procedure
+  has a new step: when audit migrations are pending, stop the audit writer before `./paddock up`, so that new events
+  wait in its queue (`docs/operations/upgrade.md`). An event that a concurrent writer indexed first now fails the
+  batch and leads to a redelivery instead of being skipped.
+- Audit cursor feed: `GET /api/v1/audit-events/feed?after=&limit=` lets an auditor or administrator (session or API
+  token) read every audit event of the organization exactly once in commit order, for a SIEM pull that catches up
+  after an outage. It is not offered to MCP clients.
+- Groundwork for notifications (plan M9, PDK-122): the control-plane database gains the notification tables
+  (destinations, their delivery state, deliveries, pseudonym keys and lookups) under row-level security, and the new
+  database role `paddock_notifier`, which reads destinations and records deliveries but cannot change destinations.
+  OpenBao gains the derived Transit keys `notification-wrap` and `notification-pseudonym` (AES-256-GCM, bound per
+  organization): the api may only encrypt destination secrets and obtain wrapped pseudonym keys, the new AppRole
+  `paddock-notifier` may only decrypt them. Nothing is delivered yet. A cluster initialized before this change needs the one-time role creation of
+  `docs/operations/upgrade.md` ("Notifications on a cluster initialized before them") and a re-run of
+  `./paddock bootstrap openbao`.
+- Notification destinations in the admin API (plan M9, PDK-123): organization administrators declare where their
+  security events go (`/api/v1/notification-destinations`), platform administrators the same for platform events
+  (`/api/platform/v1/notification-destinations`): a signed webhook or an e-mail address list, the event filter
+  (security preset, all, or a custom list of audit codes), and whether user names are pseudonymized. The webhook URL
+  and its signing secret are stored encrypted; the secret is shown once at creation and on rotation, the URL never
+  (only scheme, host and a masked path). Every change, the secret rotation, a test request and a pseudonym lookup need
+  a step-up and are audited (`notification.destination_created`, `…_updated`, `…_deleted`, `…_secret_rotated`,
+  `notification.test_requested`, `notification.pseudonym_resolved`); auditors see the configuration. E-mail
+  destinations are accepted only when the api runs with `PADDOCK_SMTP_ENABLED=true`
+  (`GET /api/v1/notification-capabilities`). Nothing is delivered yet.
+- Webhook delivery of notifications (plan M9, PDK-124): the new role `paddock-server serve notifier` reads each
+  organization's and the platform's audit index in commit order and posts the matching events to the webhook
+  destinations as signed JSON (`paddock.notification.v1`; headers `X-Paddock-Timestamp`, `X-Paddock-Signature`
+  `v1=<HMAC-SHA256>`, `X-Paddock-Delivery`, `X-Paddock-Destination`), at most 100 events per delivery with a contiguous
+  per-destination `forward_seq`, so a receiver notices any gap. A failed delivery is retried with the same numbers
+  (5 s doubling up to 10 minutes) and nothing is skipped; a destination failing longer than
+  `PADDOCK_NOTIFY_STALL_AFTER` (default 15 minutes) is marked stalled. Requested test deliveries, heartbeats and
+  pseudonym lookups are served by the notifier as well. New audit events `notification.delivered`,
+  `notification.destination_stalled` and `notification.destination_resumed`; the notifier records
+  `notification.test_sent` for every test. Metrics `paddock_notify_deliveries_total`,
+  `paddock_notify_destination_stalled`, `paddock_notify_lag_seconds`, `paddock_notify_round_seconds` and the alert
+  `PaddockNotificationStalled`. Configuration: `PADDOCK_DB_NOTIFIER_URL_FILE`, `PADDOCK_NOTIFY_POLL_INTERVAL`
+  (default 30 s), `PADDOCK_NOTIFY_STALL_AFTER`, `PADDOCK_NOTIFY_BATCH` (1–100); `PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE`
+  is refused outside development and reported by `prod-check`. Webhooks are called directly, never through a proxy.
+  The production Compose files and the bundle gain the role separately; the development stack runs it already.
+- E-mail delivery of notifications (plan M9, PDK-125): the notifier sends e-mail destinations one plain-text message
+  per delivery through the operator's SMTP relay, to all recipients at once, with the headers `Auto-Submitted:
+  auto-generated`, `X-Paddock-Delivery`, `X-Paddock-Destination` and `X-Paddock-Forward-Seq`. A message shows at most
+  50 events in detail (time, code, outcome, device or target, actor, portal link; parameters only with
+  `include_params`; pseudonymized administrator names with `pseudonymize_users`) and summarizes the rest per code. After
+  each message the destination waits `email_min_interval_s` (digest). Failures are recorded as `smtp_dial`, `smtp_tls`,
+  `smtp_auth`, `smtp_timeout` or `smtp_<reply code>` with the same retry and stall rules as webhooks. Configuration of
+  the notifier: `PADDOCK_SMTP_HOST` (empty = no e-mail), `PADDOCK_SMTP_PORT` (default 587, 465 with implicit TLS),
+  `PADDOCK_SMTP_TLS` (`starttls` default, `implicit`; `none` only with `PADDOCK_ENV=development`),
+  `PADDOCK_SMTP_USERNAME` with `PADDOCK_SMTP_PASSWORD_FILE` (PLAIN, LOGIN or CRAM-MD5, only ever over TLS),
+  `PADDOCK_SMTP_FROM` (required with a host), `PADDOCK_SMTP_TIMEOUT` (default 30 s) and optionally
+  `PADDOCK_SMTP_CA_FILE` for a relay certificate of an internal CA. The relay's certificate is always verified; a relay
+  that does not offer STARTTLS is refused.
+- Findings record the reaction to security events: every tamper event of a device opens a finding (repeated events of
+  the same device and subject are counted on the open one), and every attention condition becomes a finding that is
+  cleared once the condition is gone. Administrators and operators acknowledge, assign, close (resolved, accepted risk
+  — administrators only — or false positive, always with a reason) and reopen findings through
+  `/api/v1/findings`; each step is an audit event (`finding.acknowledged`, `finding.assigned`, `finding.closed`,
+  `finding.reopened`). The attention lists show the finding of each condition, and `GET /api/v1/accounts` lists the
+  organization's accounts for the assignee choice (PDK-126).
+- The portal has a Findings page for the findings of your devices: filter and search them, acknowledge a finding, assign
+  it to an administrator or operator, close it with a resolution and a required reason (accepted risk is for
+  administrators only), or reopen it with a reason. Every step asks in a modal and shows the new status; the attention
+  list and the device page show the status of the finding next to each condition (PDK-127).
+- The portal has a Notifications page for organizations (Organization > Notifications) and one for the platform
+  (Platform > Notifications): add a signed webhook or an e-mail list, choose which events it receives, see whether
+  delivery works and since when it lags, send a test, replace the signing secret and delete a destination. The signing
+  secret is shown once, enabling a disabled destination asks whether to deliver or skip the events in between, and
+  organization administrators can resolve a pseudonym back to a user name. Changes ask for a fresh identity
+  confirmation; the e-mail type appears only when the installation has an e-mail relay (PDK-128).
+- Critical vulnerability summary (plan M9, PDK-129): once per UTC day and organization the worker records `vulnerability.critical_summary` when critical vulnerabilities were found on devices since the previous summary (the first covers 24 hours). It names the number of findings, the number of devices and up to 20 CVE ids, and belongs to the security preset, so a notification destination on that preset is told about new critical exposure without receiving the inventory.
+- Presence policy, server side (plan M9, PDK-130): an organization administrator lists the third-party systemd services
+  (for example `wazuh-agent.service` of an EDR or SIEM agent) that the devices should report when they stop, with
+  `GET|PUT /api/v1/settings/watched-units`, on the new portal page Settings > Watched units, or as
+  `settings.watched_units` in the declarative document (`paddock.yml`). Changing the list needs a step-up and is
+  audited as `settings.watched_units_changed` with the added and removed units. At most 32 services; Paddock's own
+  units and the protected prefixes are refused. Every v2 bundle of the organization carries the list as the `watch`
+  section (absent while the list is empty); agents that do not know the section ignore it. Paddock only reports a
+  stopped unit and never installs, starts or restarts it.
+- Presence policy, agent side (plan M9, PDK-131): the agent checks the organization's watched third-party services on
+  every bundle apply and drift pass and reports one that is not running as `device.tamper_service_stopped` with the
+  unit and its state (`inactive`, `failed`, or `missing` when the unit is unknown to systemd), once per stop; a
+  service that runs again and stops later is reported again. The agent never starts, stops, enables, masks or
+  installs a watched service; to keep a service running, manage it as a unit resource.
+- The notifier ships in the operator bundle (plan M9, PDK-132): `./paddock up` starts the new role `paddock-notifier`
+  on the control plane and on a lab host, hardened like every role, with TLS to OpenBao, scraped by Prometheus
+  (`paddock-notifier:9090`). `.env` gains `PADDOCK_SMTP_ENABLED` (default `false`) and the commented SMTP relay settings
+  `PADDOCK_SMTP_HOST`, `PADDOCK_SMTP_PORT`, `PADDOCK_SMTP_TLS`, `PADDOCK_SMTP_USERNAME` and `PADDOCK_SMTP_FROM`;
+  `./paddock secrets` creates the notifier's database URL, its AppRole placeholders and an empty `.secrets/smtp_password`
+  (the relay password, only with a username). `./paddock check` refuses `PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE`,
+  `PADDOCK_SMTP_TLS=none`, and a `PADDOCK_SMTP_ENABLED` that does not match whether `PADDOCK_SMTP_HOST` is set (item
+  `notifications: SMTP presence flag matches the relay`). A cluster that already runs needs the database role
+  `paddock_notifier` and `./paddock bootstrap openbao` before the upgrade (`docs/operations/upgrade.md`, *Notifications
+  on a cluster initialized before them*). Development stacks: run `make dev-secrets` once for `.secrets/smtp_password`.
+- Operator documentation for the notifications of plan M9 (PDK-133): `docs/operations/notifications.md` (webhook and
+  e-mail destinations, the envelope and its signature with verification snippets in Python and Go, retry and stalling,
+  pseudonyms, troubleshooting by error class), `docs/operations/siem.md` (the audit cursor feed and a pull loop for a
+  SIEM) and `docs/operations/third-party-agents.md` (the presence policy and a privacy-minimal Wazuh agent); the
+  compliance pack gains "What leaves the server", two residual risks, the A.5.25 and A.5.26 controls and the retention
+  rows of the new tables.
+- The security preset of notification destinations now includes `audit.export_requested` and
+  `audit.export_downloaded`, so a destination that filters on security events is told when an evidence package is
+  requested or downloaded.
+- `paddockctl audit feed` reads the audit cursor feed as JSON lines (optionally following it), and `paddockctl findings list`
+  lists findings with status, kind and cleared filters, so SIEM pulls and scripts need no hand-written `curl` loops.
+- Retention schedule (`docs/compliance/retention.md`, ADR 0032): how long Paddock keeps every store, on which legal
+  basis, which job deletes it and which audit event (`retention.purged`, `device.inventory_purged`) proves the
+  deletion, with the deletion lag in backups, the handling of erasure requests and what is not purged yet. The privacy
+  document, the ISO/IEC 27001 mapping (new rows A.5.28, A.5.34, A.8.10), the residual risks (RR-94 to RR-96) and the
+  audit bucket runbook follow the schedule.
+- Privacy settings per organization (ADR 0032 §2, PDK-136): `GET`/`PUT /api/v1/settings/privacy` and the portal page
+  *Privacy settings* (`/settings/privacy`, organization administrators change them, operators and auditors read them)
+  set how many days the inventory of a retired device is kept (`retired_inventory_days`, 1–365, default 30) and
+  whether searches of the audit log (`audit_search_recorded`) and views of device inventory
+  (`inventory_view_recorded`) are recorded (both off by default). Every change is recorded as
+  `settings.privacy_changed` with the three values. `paddock.yml` gains the section `settings.privacy`, exported by
+  `paddockctl get config` and applied by `paddockctl apply` like `settings.updates`. The settings take effect with the
+  retention job and the read-access recording that follow. Schema: migration `00074`.
+- One retention round in `paddock-worker` (ADR 0032, PDK-137) replaces the login history purge: every 6 hours
+  (`PADDOCK_RETENTION_INTERVAL`, a Go duration between `1m` and `24h`; `paddock prodcheck` fails on any other value) it purges,
+  per organization, the login history and the users seen on devices whose last login is older than 365 days. It deletes
+  in batches of 1 000 rows, each committed on its own so device logins do not wait for a long purge; one purge runs
+  for at most 5 minutes, and a larger backlog continues in the next round. Each purge that
+  finds expired rows is recorded as one `retention.purged` event with its store (`device_login_event`,
+  `device_user_seen`), the cutoff and the number of deleted rows; when a batch fails, the event has outcome failure and
+  counts the rows of the batches committed before it. New metrics
+  `paddock_retention_last_success_timestamp_seconds{store}`, `paddock_retention_deleted_total{store}` and
+  `paddock_retention_stores`, alerts `PaddockRetentionPurgeStale` (critical, a store not purged for 48 hours) and
+  `PaddockRetentionPurgeMissing` (warning). Schema: migration `00075` (the worker may delete users seen on devices; an index for the purge).
+- The worker's retention round (ADR 0032, PDK-138) deletes the inventory of retired devices: once a device has been
+  retired for the organization's `retired_inventory_days` (privacy settings, default 30), its software, vulnerability
+  findings, policy results and hardware facts are deleted in Paddock and its host is deleted in Fleet, longest retired
+  first and as many devices per organization as the pass's time budget allows. Each device is recorded as one
+  `device.inventory_purged` event with the deleted counts, whether the Fleet host was deleted and, in
+  `fleet_host_in_use`, why it was kept. While Fleet is unavailable the event has outcome failure
+  (`upstream_unavailable`), nothing is deleted in Paddock and the device is retried in the next round; a device that
+  fails does not hold up the others. After three Fleet failures in a row the round stops asking Fleet and records one
+  `retention.purged` failure (`store` `retired_inventory`, `upstream_unavailable`) per organization it skipped. A
+  Fleet host that a device of any organization still references is kept. While an active, quarantined or pending
+  device of the same hardware has not synced its inventory yet, the host and the retired device's host reference are
+  kept and the device is checked again every round. `paddock_retention_stores` is now 3 (new store
+  `retired_inventory`, whose `paddock_retention_deleted_total` counts purged devices).
+- Read-access recording (ADR 0032 §4, PDK-139): while an organization switches it on in its privacy settings, a
+  search of the audit log (`GET /api/v1/audit-events`, also through the MCP and with API tokens) is recorded as
+  `audit.searched` once per actor, clock hour and set of filters, with its filters and whether a search text was used
+  but never the text (searches that differ only in their text share one event); a `target_id` that is not a device of
+  the organization is recorded only as `target_id_used`. A view of a device's software or vulnerabilities is recorded
+  as `device.inventory_viewed` once per actor, device and UTC day. While recording is on, a refused search or view
+  (invalid range or paging, missing device) is recorded as a failure with its reason; a view of a device outside the
+  organization records only `target_id_used`, never the device ID. When the switch cannot be read, the read fails and
+  nothing is recorded. A role that may not read the audit log is recorded as denied. The coalescing keys are kept 48 hours; the worker's retention round deletes older
+  ones as a fourth pass with a `retention.purged` event (store `read_audit_window`), and `paddock_retention_stores` is
+  now 4. Schema: migration `00079`.
+- Audit index purge (ADR 0032, PDK-140): the audit writer drops a monthly partition of the audit index every night at
+  01:15 UTC once every event in it was recorded more than `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` ago (default and
+  minimum: `PADDOCK_AUDIT_RETENTION_DAYS`, so the index never goes ahead of the WORM retention). Each drop is recorded
+  as `retention.purged` (store `audit_index`) in the platform pseudo-organization; the WORM bucket, `audit_object` and
+  `audit_manifest` are never touched. New command `paddock-server audit purge [--dry-run]`, metrics
+  `paddock_audit_index_purge_last_success_timestamp_seconds` and `paddock_audit_index_partitions_dropped_total`, and
+  the warning `PaddockAuditIndexPurgeStale`. Audit migration 00007 adds the owner-executed function
+  `audit_purge_partition`; the writer role still holds no `DELETE` on the index.
+- Privacy and works council pack (`docs/compliance/privacy-pack/`): four templates the operator completes, not legal
+  advice: a transparency notice for employees (GDPR Art. 13), input for the record of processing (Art. 30) with one
+  table per processing activity, input for the data protection impact assessment (Art. 35) with the risks from the
+  employee's perspective, and an annex for the works council agreement (BetrVG § 87(1) no. 6) with every data
+  category, the portal pages that show data about persons, the roles, the privacy switches with their agreed values
+  and the change procedure.
+- Evidence export requests (ADR 0032 §5, PDK-142): organization administrators and auditors request a signed
+  evidence package for a range of sealed recording days with `POST /api/v1/audit/exports` (`from_day`, `to_day`,
+  `purpose`) after a step-up, and follow their requests with `GET /api/v1/audit/exports` (list contract: sort,
+  search over purpose and requester, `status` filter) and `GET /api/v1/audit/exports/{id}`. `to_day` is at most 400
+  days after `from_day`, both days must be sealed (`422 day_not_sealed`), and at most two exports of an organization may be pending or
+  running (`409 too_many_exports`). Every request is recorded as `audit.export_requested`; MCP sessions and API tokens
+  are refused like every step-up action. The package itself is built by a later release; until then a request stays
+  `pending`. Schema: audit migration `00008` (the audit reader role may now insert pending export requests and read the
+  organization's audit objects).
+- Evidence package builder (ADR 0032 §5, PDK-143): the audit writer builds every requested evidence export without
+  operator action. The package is a tar of the signed daily manifests, every audit object they list byte for byte,
+  the decoded events (`events.jsonl`), a canonical `export.json` (schema `paddock.audit-export.v1`, organization named
+  by its ID) and its signature `export.sig` with the `audit-chain` key. A chain with problems is still delivered with
+  `verify_ok=false` and the problems listed; a range with a day without a manifest fails. Exports become `ready`
+  (downloadable for 7 days, then `expired` and deleted with a `retention.purged` event of store `audit_exports`) or
+  `failed`; an export left `running` for 2 hours is failed as "exporter restarted". Each build is recorded as
+  `audit.export_completed`. New: `PADDOCK_AUDIT_EXPORT_POLL_INTERVAL` (`paddock-audit-writer`, default `30s`),
+  metrics `paddock_audit_export_total{result}`, `paddock_audit_export_pending_age_seconds`,
+  `paddock_audit_export_build_seconds`, alerts `PaddockAuditExportFailed` and `PaddockAuditExportStuck`.
+- Evidence package download (ADR 0032 §5, PDK-144): `GET /api/v1/audit/exports/{id}/download` streams the package of a
+  ready export (`application/x-tar`) to an `org_admin` or `org_auditor` with the session. The response carries the
+  package size as `Content-Length`, the file name
+  `paddock-audit-export-<organization slug>-<from_day>_<to_day>-<first 8 hex of the id>.tar` and the package's SHA-256 as
+  `X-Paddock-Package-SHA256`, so the file can be checked after the transfer. An export that is pending, running, failed
+  or expired answers `409 export_not_ready`; another organization's export answers `404 not_found`. Every download
+  attempt is recorded as `audit.export_downloaded` before the first byte is sent (range, size and checksum of the
+  package). No range requests; a broken transfer starts again from the beginning.
+- Evidence exports in the portal (ADR 0032, PDK-145): organization administrators and auditors request, follow and
+  download signed evidence packages of the audit log on the new page *Evidence exports* (Audit log, navigation). The
+  request needs a step-up; the page shows status, purpose, requester, size and the chain check of every export, offers
+  the download of ready packages and lists the signing keys with their fingerprints to compare with an independently
+  recorded value.
+- Offline verification of evidence packages (ADR 0032, PDK-146): `paddockctl audit verify-export <file>
+  [--fingerprint <hex>] [-o text|json]` checks the package signature against the audit-chain key fingerprint the
+  auditor obtained out of band, every manifest signature and link, every object hash and that `events.jsonl` equals the
+  decoded objects, and lists all problems. It needs no configuration, token or network and never extracts the package.
+  Exit 0 = verifies, 1 = problems, 2 = usage or unreadable file. See `docs/operations/paddockctl.md`.
+- Audit signing keys (ADR 0032 §5, PDK-148): the audit writer publishes the public key of every `audit-chain` version it
+  signs with (daily manifests and evidence packages) in the audit database, insert-only. `GET /api/v1/audit/keys`
+  (roles `org_admin`, `org_auditor`) lists them by version with their SHA-256 fingerprints, so an auditor can compare
+  the fingerprint named in an evidence package with a value recorded independently. `paddock-server audit keys` (in the
+  audit-writer container) prints `audit-chain v<N> <fingerprint>` per version straight from OpenBao for that
+  out-of-band copy. A seal or export whose key cannot be published, or differs from the key already
+  published for that version, fails instead of signing with an unpublished key; the seal-staleness alert surfaces it.
+- Retention of control-plane history (ADR 0032 amendments 2026-10-18 and 2026-10-31, PDK-180): the worker's retention
+  round now deletes finished device commands, cleared device alerts, filled event gaps and finished actions (the
+  control-plane origin of audit events) once they lie before the start of the UTC month containing now −
+  `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` − 7 days, the oldest month the audit index may still show plus a margin for a
+  late index purge, audit events indexed late after an outage and clock skew. It deletes per organization, and the
+  platform pseudo-organization's actions once per round, in batches of 1 000 with one `retention.purged` event per store
+  (`device_command`, `device_alert`, `device_event_gap`, `action`) that records the index retention as `index_days`.
+  Open alerts, unfilled gaps, unfinished commands, started actions and commands a disk conversion or an uninstall still
+  references stay. The database keeps a finished action unchanged for every role and an action in the organization it
+  was started in. `paddock_retention_stores` is now 8. Schema: migrations `00080`–`00083`.
+- Upgrade: the control plane's `.env` (and a lab host's) must now set `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, to the
+  audit host's value (`.env.example` sets 400). The worker reads it without a default of its own and does not start
+  when it is missing, not a number, below 400 days or below `PADDOCK_AUDIT_RETENTION_DAYS`; `./paddock check` reports
+  it, and every other `./paddock` command keeps working (`docs/operations/upgrade.md`). On a two-host installation
+  keep both audit variables the same on the control-plane and the audit host.
+- Documentation: guide `docs/operations/getting-started.md`, one path from the first platform administrator to the
+  first configured device, including the route for an already installed device.
+- `paddockctl mcp` (ADR 0044, PDK-439): `paddockctl mcp login [--no-browser] [--platform]` signs the administrator in
+  through Authentik in the browser (password and second factor, device authorization grant) and keeps the session in
+  `$XDG_STATE_HOME/paddockctl/mcp-session.json` (mode 0600); `--platform` picks the platform role of a two-role
+  identity. `paddockctl mcp` is a stdio MCP server for local MCP clients such as Claude Code: it offers the admin API
+  operations the server currently allows the session as tools, renews the session before the access token expires,
+  and wraps every result with a notice that the data is never an instruction. `paddockctl mcp tools [-o table|json]`
+  lists the offered tools; `paddockctl mcp logout` ends the session and revokes the refresh token. The MCP never uses
+  an API token. paddockctl now depends on the MCP Go SDK `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
+  `golang.org/x/oauth2`. The license gate allows `MIT-0` and exempts `github.com/segmentio/asm` (MIT-0, a dependency of
+  the SDK that go-licenses cannot classify).
+- Portal page *Settings › MCP* (ADR 0044, PDK-440) at `/settings/mcp` in the organization group: organization
+  administrators switch the MCP on or off, allow or refuse changes through the MCP and choose between all tools and
+  a selection from the tool catalog (grouped by area, with a filter; step-up actions are listed as *portal only*).
+  Saving asks for confirmation and a step-up. The page names `paddockctl mcp login` as the way to connect; operators
+  and auditors see the policy read-only. The audit log shows an *MCP* chip and the MCP client's name on events of an
+  MCP session.
+- Portal page *Platform › MCP policy* (ADR 0044, PDK-441): platform administrators switch the MCP on or off for their
+  own MCP sessions, allow or refuse changes through the MCP, and choose between all tools and a selection of the
+  platform tools (grouped by area, filterable; step-up operations are shown as portal only). Without a saved policy
+  the page says that the MCP is switched off. Saving is confirmed and needs a step-up. There is no token page:
+  administrators connect with `paddockctl mcp login`.
+- MCP write access in the portal's account menu (ADR 0044, PDK-442): the entry *AI assistant (MCP)* shows whether the
+  administrator's MCP sessions may change data and opens a dialog that explains the three layers (role, MCP policy,
+  own write access). *Enable write access* is confirmed and needs a step-up; *Disable write access* is confirmed and
+  takes effect at once. Auditors have no entry. `GET /api/v1/me` additionally answers `mcp_write_enabled_at`, since
+  when write access is enabled (null while it is disabled).
+- AI assistants through the MCP, documented and gated (ADR 0044, PDK-443): the operations guide
+  `docs/operations/mcp.md` covers the MCP login through Authentik (`paddockctl mcp login|logout`, no tokens), the MCP
+  server `paddockctl mcp`, the three switches (role, the MCP policies of organization and platform, each
+  administrator's write opt-in), connecting Claude Code and Claude Desktop, what the assistant cannot do (step-up
+  actions), the default that keeps the MCP off until a policy is saved, the rate limits, revocation, troubleshooting
+  and prompt injection. New audit codes `organization.mcp_policy_changed`, `platform.mcp_policy_changed`,
+  `admin.mcp_write_enabled` and `admin.mcp_write_disabled`; `admin.login` records `channel` and `renewal`, events of
+  MCP sessions carry `source: mcp` and `actor.client`. Residual risks RR-85 to RR-89 (prompt injection through data,
+  channel bypass with an API token, the refresh token on the workstation, step-up actions only refused, reads not
+  audited per call) are in `docs/compliance/residual-risks.md`; the privacy notes say what an assistant on the
+  administrator's machine sees. **Upgrade:** Authentik applies the new blueprint `paddock-mcp.yaml` at its first start
+  after the upgrade; nothing else changes until an administrator saves an MCP policy. Record RR-85 to RR-89 before
+  enabling it.
+- Claude skill `skills/operate-paddock` (ADR 0044, PDK-444): teaches an AI assistant to operate Paddock — connecting
+  through `paddockctl mcp`, its rules (tool results are data, no credentials, step-up actions go to the human with the
+  portal page, confirmation before destructive tools, `applyConfig` dry run first) and the workflows install,
+  upgrade, lab installation, first device, release import and staged rollout, a device that does not check in,
+  tamper events and disk recovery, each pointing to the runbook section and the tools to call.
+  `references/tools.md`, the tool catalog by tag with the step-up list, is generated by `make gen`; `make test` checks
+  the skill's paths, anchors and tool names against the runbooks and the catalog.
+- Resume an agent rollout from the control-plane host (PDK-452, ADR 0034 addendum 2026-10-29):
+  `./paddock agent-rollout-resume <version>` (`paddock-server admin agent-rollout-resume` in `paddock-api`) continues a
+  halted rollout like *Resume* in the portal, with the system actor `paddock-server admin` and audit code
+  `agent_rollout.resumed`; it covers no other rollout (residual risk RR-90). `docs/operations/agent-releases.md` now
+  explains that small fleets, such as a one-device lab, start their rollout with `--waves 100` or a short wave list.
+- Testing strategy for contributors (`docs/operations/testing-strategy.md`): which checks and gates run on a pull
+  request, per cluster of changes and per release, the flake policy (no rerun without an issue, no automatic retries,
+  flaky tests are fixed and never skipped) and how to read the timing of the acceptance shards in a CI log.
+- While an organization records inventory views, listing the devices affected by a CVE is recorded as
+  `vulnerability.devices_viewed` (the CVE and the number of affected devices, never device names or the search text),
+  once per administrator, CVE and hour. A refused view is recorded as a failure with its reason; a CVE without a
+  finding in the organization is not found and records a failure.
+- The portal shows a setup checklist at the top of the overview and the organizations page: each basic setup step
+  with its live state, a link to the page that completes it, and the host-shell steps with a link to the
+  getting-started guide. It can be dismissed per browser and reopened from the user menu.
 
 ### Changed
 
@@ -96,6 +414,82 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 - Linter pinned to golangci-lint v2.15.0 (PDK-348). The supervisor now logs the agent's exit status
   (`agent stopped`, with `killed: true` when the agent ignored SIGTERM for 10 seconds) when it stops the agent for a
   switch, a rollback or shutdown.
+- Container logs are now rotated: every service of the control plane, the audit host, the lab and the backup overlay
+  logs with Docker's `json-file` driver at 50 MB × 10 files per container, so the logs (including Caddy's access log
+  with client addresses) no longer grow without limit. `./paddock check` gains the item `container logs are rotated`,
+  which fails for any service without `max-size`. `docs/operations/install.md` describes what the logs contain and
+  that a central log system is the operator's choice (PDK-149).
+- Documentation: the device login counts one of the user's recovery codes as the second factor, like the portal and
+  Authentik's own sign-in (decided 2026-10-18 for the portal, 2026-10-29 for the device login), as long as the user's
+  TOTP authenticator is still registered. Residual risk RR-62 now names the device login, whose device-code sign-in
+  runs the portal sign-in first; `docs/operations/device-login.md` describes the lost-authenticator sign-in (one
+  recovery code per prompt, no passkey enrolment) and a lab check that a used recovery code is refused at the device
+  approval. No behaviour change (PDK-325).
+- **Breaking: 0.1.0-alpha.7 has no upgrade path from earlier releases.** PostgreSQL moves from 17 to 18 for the
+  control plane, Authentik's database and the audit database, and the data directory layout follows the PostgreSQL
+  18 image (`/var/lib/postgresql/18/docker` inside the volume). An installation of 0.1.0-alpha.6 or earlier is
+  installed fresh (`docs/operations/upgrade.md`, "From 0.1.0-alpha.7"): every database, OpenBao's keys, escrowed
+  recovery keys and device enrollments of the old installation are gone, and every device is enrolled again. A
+  backup repository that already holds the stanzas is refused (logged, no backups) until the operator runs
+  `./paddock compose run --rm --no-deps pgbackrest stanza-upgrade` once, and the same for `pgbackrest-authentik`.
+- Valkey moves to 9.1.3 for the control plane's cache and for Fleet's Redis. Fresh installations only (PDK-344).
+- Fleet's MySQL stays on the 8.4 LTS line Fleet documents and moves to 8.4.13; the upstream version watch follows
+  that line only.
+- RabbitMQ moves to 4.4.0 (Erlang/OTP 29). Fresh installations only (see the breaking note of this release)
+  (PDK-354).
+- CI: a pull request that changes the deployment (`deploy/`, the `Makefile` or the new workflow) now builds the
+  operator bundle from its own code and runs both bundle smoke tests (default profile and lab profile behind Nginx)
+  before the merge, in the new workflow `bundle-smoke`. It pushes and signs nothing; the `edge` job on `main` is
+  unchanged. No operator step (PDK-389).
+- A device that refuses the removal of Paddock because the request itself is invalid no longer leaves the request
+  open: it ends at once, with one audit event by the device, so an administrator can request it again. A refusal that
+  clears up (an in-place encryption or a Lock or Destroy pending) keeps the request open, and the device page and the
+  admin API now show why the device refused (PDK-403).
+- Role membership audit and administrator accounts (PDK-424, ISO 27001 A.5.18): when all role groups of an
+  organization come back empty while role holders are recorded or administrator accounts are enabled, the worker now
+  checks whether its Authentik service token can still see the directory: each role group must be readable by name and
+  a user listing must return at least one user who is not a service account. If both hold, the organization really
+  lost its last role holders: each one is recorded as `admin.role_revoked` after two consecutive rounds, and the
+  administrator accounts are disabled and their sessions ended. Otherwise the round is refused as before, and nothing
+  is recorded or changed. New metric `paddock_identity_directory_refusals_total` counts refused organization rounds;
+  from three refusals in a row the worker logs a warning naming the organization, and the new alert
+  `PaddockRoleDirectoryRefused` (warning) fires when refusals continue for 15 minutes.
+- `make lint` fails when a module of the Go workspace is not tidy (`lint-tidy`, `go mod tidy -diff` per module; it
+  changes no file) (PDK-457).
+- Sign-in of an identity with the platform role and an organization role (ADR 0045 amendment 2026-10-29, PDK-458):
+  when the organization is unknown or not active, a plain sign-in now enters the platform role instead of
+  being refused, so a stale organization group no longer locks a platform administrator out. The `admin.login` event
+  carries the new param `fallback: organization_inactive`, `GET /api/v1/me` answers the new optional field
+  `role_fallback`, and the portal shows a notice for the whole session. A switch to the organization role stays
+  refused with `organization_inactive`.
+- Changelog entries of merged changes that are not released yet are collected as one file per change in
+  `changelog.d/` and assembled into `CHANGELOG.md` at release (`make changelog`); the release notes keep their
+  format (PDK-518).
+- A pull request to `main` that changes only documentation (`docs/` except `docs/assets/`, `changelog.d/` or a
+  Markdown file in the repository root) skips the acceptance stage in CI; the required `acceptance` check still
+  reports and fails whenever the gates should have run and did not all pass. Pushes to `main` and the weekly
+  schedule always run the full stage (PDK-537).
+- Authentik now runs 4 web worker processes instead of its default 2, configurable with
+  `PADDOCK_AUTHENTIK_WEB_WORKERS` in `.env` (development, production and lab stacks). With 2, simultaneous logins
+  queued until clients gave up after 30 seconds. Each worker uses up to one CPU core and about 250 MiB RAM, so
+  `authentik-server` needs about 0.5 GiB more; size the setting with `docs/operations/capacity.md`, "Authentik web
+  workers".
+- `./paddock check` fails the new item `authentik web workers` when `PADDOCK_AUTHENTIK_WEB_WORKERS` is not an integer
+  of at least 1: Authentik would fall back to 2 workers on such a value, or serve no login with 0.
+- `make acceptance` takes `ACCEPTANCE_GO_PARALLEL=<n>` and passes `-parallel <n>` to `go test`; without it go test caps
+  a gate's parallel cases at the number of CPUs, below `PADDOCK_ACCEPTANCE_PARALLEL`. CI sets both to 8, so the
+  exactly-once gate runs 8 cases at a time instead of 4 on a GitHub runner. Local runs are unchanged (PDK-556).
+- Evidence exports: the audit writer now spools a package's events on its own disk volume (`audit-writer-tmp`)
+  instead of in memory, and an export larger than `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (`paddock-audit-writer`, default
+  4 GiB) fails cleanly with the reason `export_too_large`, before any of it is stored, instead of exhausting the audit
+  host. Objects larger than 256 MiB are no longer read into memory by the export or the chain verification, and
+  objects are decompressed as a stream. Make sure Docker's data-root on the audit host has free disk space for at least
+  one export of that size.
+- Evidence packages: `export.json` now records the SHA-256 of `README.md` (`readme_sha256`), so the signature also covers
+  the README an auditor reads first. `paddockctl audit verify-export` reports a changed or missing README, or an
+  `export.json` without the field, as a problem; packages built before this change no longer verify OK. The package
+  download is refused for an export with no recorded size, its overall time limit is capped at 24 hours, and `HEAD`
+  on the download answers `405` with `Allow: GET`.
 
 ### Fixed
 
@@ -142,6 +536,197 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
   in the identity provider, the next listing that misses that holder no longer records `admin.role_revoked`; the
   revocation needs two consecutive misses after a successful mark. The worker process remembers the failure until its
   next successful round for that role.
+- A corrupt or unreadable supervisor-upgrade marker no longer keeps a device out of every agent and supervisor
+  rollout (PDK-337): like the removal of Paddock, an agent update and a further supervisor upgrade wait for such a
+  marker only until its modification time is older than 30 minutes, then go ahead and log a warning.
+- `make system-test` and `make acceptance` fail with `no test ran` when the test filter `T` matches no test instead of
+  reporting the empty run as passed (PDK-339), and pass `T` to `go test -run` verbatim, so a `$` anchor no longer gets
+  lost in make's variable expansion (`T='^TestIdentityGates$/.*/^L1_login$'`); `$$` keeps working.
+- Device removal: a removal that does not run (withdrawn, failed to start, or given up on an unreadable plan) no
+  longer leaves its plan, its program copy or an empty `/root/paddock-uninstall/` directory on the device. The
+  uninstall runbook lists what may remain there.
+- End all sessions (PDK-342): the `platform.sessions_ended` audit event reports the identity-provider sessions that
+  actually ended. Before, when Authentik answered the session deletion slowly and Paddock repeated it, the event could
+  report 0 ended sessions although every session had ended.
+- `make system-test`, `make acceptance` and `make e2e` check up front that the checkout has `deploy/compose/.env` and
+  the development secrets and stop with a clear message, instead of failing minutes into a run with "couldn't find env
+  file" (PDK-353). `make e2e` from a worktree whose `.secrets` is a symlink to another checkout no longer fails every
+  login and every certificate check: the resolved secrets directory is mounted into the Playwright container and also
+  handed to the device simulator and the release helper.
+- Uninstall (PDK-357): when cancelling an uninstall, or requesting a new one over an overdue request, fails after the
+  server had already reserved the device's command result, the reservation is now released. Before, the device's
+  later result was refused as a conflict although the command was still open, so the removal never started and the
+  request only ended when it expired.
+- Agent updates (PDK-372): a supervisor stopped or restarted while a new agent release runs its self-test no longer
+  can report that release as `self_test_failed`. The interrupted update stays pending and the restarted supervisor
+  runs the self-test again, so a host shutdown or a supervisor restart during an update no longer counts as a failure
+  against the rollout.
+- In-place encryption: when a bootable kernel's initrd in `/boot` was a symbolic link to a temporary initrd left by
+  an interrupted agent run, the initrd regeneration and the cleanup stayed pending with
+  `key_material_shared_bootable` until an administrator stepped in. The agent now rebuilds that kernel's initrd into
+  a regular file first and then overwrites and removes the temporary file; the kernel keeps booting throughout.
+- Secret scan (PDK-388): the canary check of the generated gitleaks configuration gives the same verdict on every
+  run. Its random fake token could contain a value that the default configuration's own global allowlist skips
+  (`false`, a trailing `null`, the alphabet stopword), and the check then failed about twice in a million tokens on a
+  configuration that was fine. The token now never contains an `l`, which each of those entries needs; a
+  configuration that drops the token rule or skips a canary path still fails.
+- Retiring a device no longer leaves its in-place encryption open on the server (PDK-396): a conversion the device
+  had already prepared, or one whose cancellation was on its way, is now closed as cancelled, and a cancellation the
+  device has not yet received is withdrawn. The retirement's audit event records the closure.
+- Portal, attention page (PDK-417): the kind filter now offers "In-place encryption failed", so failed in-place
+  encryptions can be listed on their own.
+- Clock drift (PDK-418): a check-in that arrives while the worker records a clock drift episode can no longer open
+  the episode (`device.clock_drift`) on an offset already back within 60 s or close it (`device.clock_drift_cleared`)
+  on an offset that is again beyond 30 s; the episode is changed only when the offset at that moment still meets the
+  threshold.
+- Nightly audit verification (PDK-420): a restart of the audit writer no longer clears an active
+  `PaddockAuditChainBroken`. At start the writer now sets `paddock_audit_verify_failed_organizations` from the newest
+  recorded nightly window and sample day of every organization, instead of 0 until the next 00:45 UTC cycle.
+- Nightly audit verification (PDK-421): with more than one audit-writer replica, a replica that loses the
+  `audit-verify` lock no longer raises a false `PaddockAuditVerifyStale` after two nights, and no longer keeps a stale
+  `PaddockAuditChainBroken` value. Until the next cycle is due, it re-reads the runs the verifying replica records
+  every minute and sets `paddock_audit_verify_last_run_timestamp_seconds` and
+  `paddock_audit_verify_failed_organizations` from them. Organizations whose verification errored without a recorded
+  run count only on the verifying replica. The alert rules are unchanged.
+- Agent rollouts (PDK-452): two concurrent starts of the same release now refuse the second with `already_exists`
+  (409) instead of an internal error, and concurrent halts or resumes of one rollout change it once, record one
+  successful audit event and refuse the others with `invalid_state`. Before, every concurrent halt succeeded and each
+  recorded its own `agent_rollout.halted` event.
+- `make e2e` with the development secrets in another directory (PDK-453): `SECRETS_DIR` now reaches the device
+  simulator and the release helper as well as the specs, and a `.secrets` that is a symlink to another checkout is
+  resolved and mounted into the Playwright container. Before, the device specs failed with `certificate signed by
+  unknown authority`, and from such a checkout every login failed.
+- `make acceptance` without `SHARD` or `T` no longer hits its timeout before the suite ends (PDK-463): a serial run
+  now defaults to `ACCEPTANCE_TIMEOUT=180m` (the gates take ~131 min in a row); a shard or a single gate keeps 120m,
+  and an explicit value still wins. `docs/operations/local-dev.md` describes running the suite serially or shard by
+  shard (`SHARD=i/N`) against one stack.
+- MCP sign-out (PDK-468): `paddockctl mcp logout` now ends the sessions of every access token of the sign-in's
+  refresh chain, not only of the current one, also after the 8-hour sign-in expired; before, the sessions of earlier
+  access tokens stayed valid for up to 30 minutes. Deactivation, a role change and *End all sessions* end them the
+  same way. After a session store outage, the first session of a device login needs `paddockctl mcp login` again;
+  renewals recover on their own.
+- Agent updates (PDK-469): the supervisor removes a finished release's staged files before its update request, so the
+  agent can no longer stage a new release into the moment between the two and lose its files to the old cleanup.
+- Clone detection: a device is no longer quarantined as a suspected clone after its check-ins failed on the server
+  side, for example while the ingest queue was full or the server was slow to accept the check-in. A failed check-in
+  no longer counts as an issued sequence number, so two such failures in a row no longer leave a genuine device "two
+  behind". The rule itself is unchanged: a device that sends a sequence number older than the one before the last
+  issued one is still quarantined.
+- Clone detection: after Valkey lost its data, a device's check-in sequence no longer restarts at 1 when the device
+  checks in before the worker has rebuilt the cache. The gateway answers such a check-in with a retryable 503 until
+  the device's counter is restored from the database; a counter that survived is left unchanged, so a healthy device
+  is never quarantined because of a rebuild. Until a counter restored from lagging data has caught up, clone detection
+  for that device is weaker (residual risk RR-97). A cache rebuild that fails for one organization no longer stops the
+  rebuild of the others.
+- A user's login on a device no longer produces a false "event gap" tamper trace (PDK-476): the server now records
+  the sequence number of every login event like that of any other device event, so gap detection no longer reports
+  logins as missing events. Logins are still not written to the audit trail. Gaps that earlier logins already caused
+  are not closed by this change.
+- A device no longer falls out of agent and supervisor rollouts in the remaining edge cases of a stuck
+  supervisor-upgrade marker (PDK-479): a marker the agent cannot inspect, or one whose age a clock set back makes look
+  younger, holds updates, the removal of Paddock and in-place encryption work for at most 30 minutes from when the agent
+  first sees it. A corrupt supervisor-upgrade result is discarded with a warning instead of blocking every further
+  supervisor upgrade.
+- A cancelled in-place encryption no longer encrypts the disk when the device restarts before its cleanup has
+  finished: the cancel disarms the prepared start-up images at once, keeps new ones from picking the encryption step
+  up again, and repeats this until the cleanup is done. When it cannot (for example a full `/boot`), the
+  device reports `device.disk_conversion_neutralize_failed`; a conversion that encrypts anyway after a cancel is
+  continued with its escrowed recovery key and recorded as `device.disk_conversion_completed_after_cancel`. Until the
+  device has reinstalled the unlock path for such a disk, a kernel whose start-up image was disarmed cannot open it;
+  a failed reinstall is reported as `device.disk_conversion_unlock_restore_failed`.
+- `paddockctl mcp tools` now prints `the MCP is switched off for this scope` on stderr when no saved policy enables
+  the MCP, like `paddockctl mcp` does; the list on stdout stays empty and valid for `-o json`.
+- End all sessions with many organizations (PDK-501): Paddock now looks up the portal users of all role groups in a
+  few batched Authentik requests instead of one request per role group. Before, with about 90 organizations the
+  lookup exceeded the request's time budget and *End all sessions* failed with `upstream_unavailable`, so an
+  installation of that size could not end all sessions in an incident.
+- A portal or MCP sign-in that fails because the database cannot resolve the organization or the administrator
+  account now records a failed `admin.login` event with reason `login_failed`; before, the attempt left no audit event.
+- The lint job in CI builds the server and compiler images and runs govulncheck from the Go modules that the runner
+  already has in its module cache instead of downloading them again from proxy.golang.org, so a stream error of the
+  module proxy no longer fails these lint steps when the Go dependencies are unchanged (PDK-516).
+- Faster local stack start (PDK-517): `make up` and `make fleet-bootstrap` finish about 2 minutes sooner. The Fleet
+  bootstrap no longer waits a fixed 2 minutes for Fleet; it checks Fleet's health endpoint and, if Fleet is not ready
+  for its setup yet, retries a few times and then stops with an error naming the step that failed.
+- Device login (PDK-521, plan M8f amendment 2026-10-29): approving a device sign-in on a second device asks for the
+  second factor of the device approval once, whether the code is typed on the `/device` page or opened with the QR
+  code. Before, typing the code asked twice when the first prompt was answered with a recovery code, so such a user
+  spent three recovery codes instead of two. Now a user who answers with recovery codes spends two codes when not
+  signed in on the second device and one when signed in. The Authentik blueprint `paddock-device.yaml` removes the prompt from the device-code page's flow
+  `paddock-device-code` on upgrade; the device approval keeps it.
+- Platform administrators (PDK-534, ISO 27001 A.5.18): when the last members leave `paddock.platform.admins`, the
+  worker now ends their portal sessions. An empty listing of the group is trusted only when the directory check of
+  PDK-424 shows that the Authentik service token can still see the directory (the group is readable by name and a user
+  listing returns at least one user who is not a service account); otherwise the round is refused as before and no
+  session is ended. Refused platform rounds now count in `paddock_identity_directory_refusals_total`, the warning after
+  three refusals in a row names the platform with the nil organization ID, and the alert `PaddockRoleDirectoryRefused`
+  covers the platform round.
+- Nightly audit verification (PDK-535): an audit-writer replica that starts while another replica verifies the audit
+  chain no longer keeps a mix of that night's and the previous night's results in
+  `paddock_audit_verify_failed_organizations` until its own next cycle, which could raise a false
+  `PaddockAuditChainBroken` or hide a real one for up to a day. After start it re-reads the recorded runs every minute
+  until its own cycle is due. The alert rules are unchanged.
+- A pull request retargeted from another branch to `main` no longer counts as having passed the required
+  `acceptance` check without the acceptance gates: off `main` the check reports under the name
+  `acceptance (not required off main)`, so after retargeting the pull request waits for a new run (PDK-538).
+- The acceptance jobs in CI build the server images from the Go modules that the runner already has in its module
+  cache instead of downloading them again from proxy.golang.org inside every image build, so a stream error of the
+  module proxy no longer fails a run whose Go dependencies are unchanged (PDK-540).
+- MCP sign-in (PDK-546): a sign-out or a deactivation that lands while a device login opens its first session now
+  refuses that login instead of leaving it renewable for the rest of the 8-hour sign-in. A session call whose access
+  token belongs to another sign-in than its ID token is refused with `invalid_request`.
+- The lint job in CI runs golangci-lint and the Go license gate from the Go modules that the runner already has in its
+  module cache instead of downloading them again from proxy.golang.org, so a stream error of the module proxy no longer
+  fails these lint steps when the Go dependencies are unchanged; only the license tool itself is still fetched
+  (PDK-550).
+- Audit index: the partition-creating function `audit_ensure_partition` now pins its `search_path` (`pg_temp` last,
+  schema-qualified names), so a session of the audit writer role can no longer shadow the index tables with temporary
+  ones (audit migration 00009, PDK-558).
+- The device page no longer says that a device removes Paddock at its next check-in when the device refused the
+  removal or its command failed or expired. It shows the refusal reason, or that the command will not run any more,
+  together with the hint to cancel the request and request it again (PDK-563).
+- A failed in-place encryption no longer encrypts the disk when the device restarts before its cleanup has finished.
+  This includes an encryption step that was skipped at a restart, for example because the device ran on battery:
+  the next restart on mains power no longer encrypts the disk. The failure disarms the prepared start-up images in
+  the same way as a cancel does, and repeats this until the cleanup is done. When it cannot, the device reports
+  `device.disk_conversion_neutralize_failed`.
+- The retention round's Fleet breaker for the retired inventory (PDK-138) counts only failures of Fleet itself or of
+  the way to it (`upstream_unavailable`: server errors, timeouts, connection errors, a 4xx without Fleet's own error
+  body such as a blocking proxy, and redirects). Fleet itself refusing to delete a single host fails only that device
+  with `invalid_state`, so a few permanently refused hosts no longer stop the retired-inventory purge of every
+  organization.
+- The Fleet client no longer follows redirects. A redirected host deletion used to turn into a read whose success was
+  recorded as a deleted host while the host stayed in Fleet; it now fails and is retried.
+- A retired device's Fleet host is no longer deleted while it still checks in to Fleet after the retirement (within
+  the last 7 days); it is kept like a host that a re-enrolled device of the same hardware may still use
+  (`fleet_host_kept` in `device.inventory_purged`).
+- A retired device whose Fleet host is kept records a `device.inventory_purged` event only when the reason changes or
+  the device was retired again, not every round, and a Fleet hiccup during that check no longer records an event.
+  `paddock_retention_deleted_total{store="retired_inventory"}` counts a device only when rows or its Fleet host were
+  deleted. After 30 unchanged rounds a kept host records one new `device.inventory_host_kept` event. This needs
+  Paddock migration 00078.
+- A Fleet answer without the host's last check-in time no longer counts as a host that never checked in; it fails and
+  the host is kept until the next round.
+- A retention pass that cannot load the privacy settings or list the retired devices now records a `retention.purged`
+  failure for the organization.
+- A genuine device is no longer quarantined as a suspected clone after its check-ins stalled while it already retried
+  (PDK-590): clone detection now compares a device's sequence number with the last number the server actually
+  delivered to it, so a check-in that stalled (for example while the message broker blocked publishing) or that the
+  device gave up on no longer counts. A clone that checks in with an outdated number is still quarantined; only
+  the first check-in of a device after the upgrade or after the check-in cache was lost is not checked.
+- Evidence exports: a hung package build no longer delays the expiry of ready packages or the failing of abandoned
+  builds, and a build is aborted after 2 hours with a failure record. A build that another audit writer has already
+  given up on no longer writes package data, and a package that became ready, failed or expired while the database
+  connection failed now always gets exactly one record. One package that cannot be expired or failed no longer holds
+  up the others.
+- Authentik no longer records a "Failed to execute property mapping" error (NameError `token`) for the Paddock
+  authenticator classes mappings whenever a client fetches the OpenID discovery document of the portal, step-up or
+  MCP application (PDK-618). Sign-in, step-up and MCP tokens were not affected; the discovery document now also lists
+  `paddock_mfa_classes` among the supported claims.
+- The evidence exports page and `GET /api/v1/audit/keys` list the current audit signing key on a freshly installed
+  platform before the first day is sealed (PDK-652), so an auditor can record its fingerprint before receiving the
+  first evidence package: the audit writer publishes the key at startup and retries until OpenBao and the audit
+  database answer.
 
 ### Security
 
@@ -155,6 +740,43 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
   could exhaust the CPU. The server reads key sets from Authentik to verify sign-ins.
 - undici 6.29.1 in the portal's build tooling (was 6.29.0; CVE-2026-109383, CVE-2026-87018 and CVE-2026-109869, high;
   CVE-2026-109932, medium). undici is only used while the portal is built and never ships with the server.
+- Agent releases (PDK-496): the stored file of a published agent release can no longer be overwritten by an upload
+  that was still running when the release was published. While a file of a release is being uploaded, publishing that
+  release is refused with `invalid_state` (409) until the upload has finished — after an upload that failed without
+  the store rejecting it, for up to ten minutes; an upload that outlasts its time limit is refused. Publishing now also
+  reads every stored file back and refuses, with an audit event naming the files, when one no longer matches its
+  recorded checksum; upload such a file again. A second upload of the same file while one is running is refused with
+  `invalid_state`.
+- Portal sign-in requires a passkey for every role (PDK-500, ADR 0034 amendment 2026-10-29): an existing Authentik
+  session from a sign-in with TOTP only (Authentik's own sign-in or the device-code page) no longer opens the portal
+  for a platform administrator, organization administrator, operator or auditor. Such a sign-in, and a role switch
+  from it, is refused with `/login-denied?reason=passkey_required` and one denied `admin.login` event; the page
+  explains the passkey and offers to sign out of the identity provider. The portal provider gains the mapping
+  `io.paddock/scope-login-mfa` (scope `paddock_mfa`), and `paddock-admin-login` gains the stage
+  `paddock-admin-login-webauthn-confirm` (order 32), where an administrator confirms a passkey just enrolled. Upgrade
+  note: Authentik must have applied the updated `paddock-portal.yaml` blueprint (it does at start) before the api
+  runs the new version, or every portal sign-in is refused. `PADDOCK_LOGIN_MFA_OPTIONAL` (development only) also
+  lifts the passkey requirement.
+- MCP sign-in requires a passkey (PDK-531): `paddockctl mcp login` is held to the same sign-in policy as the portal
+  (PDK-500), so a sign-in that validated TOTP only, or an existing Authentik session from one, is refused with
+  `passkey_required` and one denied `admin.login` event. The provider `paddock-mcp` gains the mapping
+  `io.paddock/scope-login-mfa` (scope `paddock_mfa`), which `paddockctl` now requests. Upgrade note: every MCP user
+  must run `paddockctl mcp login` once more after the upgrade; sessions opened before it are no longer renewed
+  (`mcp_login_required`). Authentik must have applied the updated `paddock-mcp.yaml` blueprint (it does at start)
+  before the api runs the new version, or every MCP sign-in is refused. `PADDOCK_LOGIN_MFA_OPTIONAL` (development
+  only) also lifts the MCP passkey requirement.
+- Portal sign-out (PDK-532): signing out of the portal now also ends the Authentik session of the browser. Before, the
+  portal sent the browser to the portal application's end-session endpoint, which ends the application only, so the
+  next sign-in reused the Authentik session without asking for credentials. The browser now runs Authentik's brand
+  invalidation flow (`/flows/-/default/invalidation/`) and ends on Authentik's start page. The logout response's
+  `end_session_url` names that flow.
+- Action records keep their own times (PDK-635, ADR 0032 amendment 2026-10-31): the database bounds the finish time
+  of an action to its own clock, never earlier and at most five minutes later, whatever time the finishing or inserting
+  statement wrote, so no database role can backdate a finish to have the retention round delete the record early; a
+  started action changes only by being finished, and its ID, code, actor, source, correlation ID, start time and
+  organization can no longer be changed by any role. A started action whose start time lies more than five minutes off
+  the database clock is refused, so keep the control plane's and the database's clocks synchronised. Schema: migration
+  `00084`.
 
 ## [0.1.0-alpha.6] - 2026-10-27
 
