@@ -96,7 +96,11 @@ func osCheck(sys reconcile.System) Check {
 	c := Check{Name: "os"}
 	data, _, err := sys.ReadFile("/etc/os-release")
 	if err != nil || data == nil {
-		c.Status, c.Detail = Fail, "/etc/os-release is not readable"
+		// Ubuntu links /etc/os-release to /usr/lib/os-release, and ReadFile returns no data for a symlink.
+		data, _, err = sys.ReadFile("/usr/lib/os-release")
+	}
+	if err != nil || data == nil {
+		c.Status, c.Detail = Fail, "/etc/os-release and /usr/lib/os-release are not readable"
 		return c
 	}
 	fields := osRelease(string(data))

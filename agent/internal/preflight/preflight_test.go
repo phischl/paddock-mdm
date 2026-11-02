@@ -118,6 +118,25 @@ func TestOS(t *testing.T) {
 	status(t, run(t, s, luksTools{lsblk: plain}, nil), "os", preflight.Fail)
 }
 
+func TestOSFollowsTheUsrLibFallback(t *testing.T) {
+	s := healthy()
+	s.Files["/etc/os-release"] = &fakesys.File{Symlink: true}
+	s.Files["/usr/lib/os-release"] = &fakesys.File{Data: []byte("PRETTY_NAME=\"Ubuntu 24.04 LTS\"\nID=ubuntu\nVERSION_ID=\"24.04\"\n")}
+	c := run(t, s, luksTools{lsblk: plain}, nil)["os"]
+	if c.Status != preflight.OK || c.Detail != "Ubuntu 24.04 LTS" {
+		t.Fatalf("os = %+v", c)
+	}
+
+	s.Files["/etc/os-release"] = &fakesys.File{Data: osRelease("26.04")}
+	if c := run(t, s, luksTools{lsblk: plain}, nil)["os"]; c.Status != preflight.OK || strings.Contains(c.Detail, "24.04") {
+		t.Fatalf("regular /etc/os-release must win: %+v", c)
+	}
+
+	delete(s.Files, "/usr/lib/os-release")
+	s.Files["/etc/os-release"] = &fakesys.File{Symlink: true}
+	status(t, run(t, s, luksTools{lsblk: plain}, nil), "os", preflight.Fail)
+}
+
 func TestFailures(t *testing.T) {
 	s := healthy()
 	delete(s.Files, "/run/systemd/system")
