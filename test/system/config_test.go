@@ -527,10 +527,8 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 		return ""
 	})
 	rolloutID, rest, _ := strings.Cut(staged, " ")
-	attempt, path, _ := strings.Cut(rest, " ")
-	redrawn := attempt != "0"
+	_, path, _ := strings.Cut(rest, " ")
 	resource := "file:" + path
-	before := d.bundleVersion()
 	if isCanary {
 		waitConfig(t, d, "staged file applied", resource, 6*time.Minute, func(r []ResourceStatus) bool {
 			return len(r) == 1 && r[0].Status == "applied"
@@ -542,18 +540,13 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 			t.Error("the canary VM's bundle does not carry the rollout")
 		}
 	} else {
-		start := time.Now()
-		for time.Since(start) < 2*time.Minute {
+		// Content, not the bundle version: a compile of an earlier change (group membership, a redraw's revert) may
+		// still publish a version while the rollout is staged, and only the content tells what the device gets.
+		for start := time.Now(); time.Since(start) < 2*time.Minute; time.Sleep(40 * time.Second) {
 			d.Checkin()
-			time.Sleep(40 * time.Second)
-			// A redraw's revert and second staging recompile asynchronously, so the version may move; the content
-			// checks below hold either way.
-			if v := d.bundleVersion(); v != before && !redrawn {
-				t.Fatalf("the VM outside the wave got bundle %v (had %v)", v, before)
+			if bundleCarries(t, d, rolloutID) {
+				t.Fatal("the bundle of the VM outside the wave carries the rollout")
 			}
-		}
-		if bundleCarries(t, d, rolloutID) {
-			t.Error("the bundle of the VM outside the wave carries the rollout")
 		}
 		if got := d.Must("sudo test -e " + path + " && echo present || echo absent"); got != "absent" || len(d.ConfigStatus(resource)) != 0 {
 			t.Errorf("the staged file reached the VM outside the wave (%s)", got)
