@@ -29,12 +29,11 @@ type orgSoftware struct {
 }
 
 // softwareEntry is a catalog entry as the compiler needs it: its name, source and package references, and invalid,
-// the reason it fails the catalog rules (nil when it passes). decoded is false when the references cannot be read.
+// the reason it fails the catalog rules (nil when it passes).
 type softwareEntry struct {
 	name     string
 	source   uuid.NullUUID
 	packages []software.PackageRef
-	decoded  bool
 	invalid  error
 }
 
@@ -82,7 +81,7 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	}
 	for _, e := range entries {
 		refs, err := software.DecodePackages(e.Packages)
-		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: refs, decoded: err == nil}
+		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: refs}
 		if err == nil {
 			err = software.ValidatePackageRefs(refs)
 		}
@@ -108,8 +107,8 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 // name different versions. Assignments of the organization and of the device's groups apply; each resolves through
 // its entry to the device's package and the results merge per package (software.MergeIntents). Only required packages
 // name their source, and Sources lists exactly those. The section is nil when no package resolves. err names an entry
-// or assignment that fails the current rules and applies to the device (its entry resolves on the device, or its
-// references cannot be read); the device's bundle must then not be published.
+// that fails the current rules and has an assignment whose scope covers the device, or such an assignment whose entry
+// resolves on the device; the device's bundle must then not be published.
 func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict, error) {
 	var effective []software.Effective
 	for _, a := range s.assignments {
@@ -120,13 +119,15 @@ func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) 
 		if !ok {
 			continue
 		}
-		pkg, ok := software.Resolve(e.packages, osID, versionID, arch)
-		if e.decoded && !ok {
-			continue
-		}
+		// An invalid entry fails every device of the assignment's scope, whether or not its references resolve there:
+		// which reference would apply cannot be trusted once the list fails the rules (an empty list resolves nowhere).
 		if e.invalid != nil {
 			return nil, nil, nil, fmt.Errorf("catalog entry %s (%s) fails the catalog rules: %w", a.CatalogEntryID,
 				software.DisplayParam(e.name, 100), e.invalid)
+		}
+		pkg, ok := software.Resolve(e.packages, osID, versionID, arch)
+		if !ok {
+			continue
 		}
 		if err := s.invalidAssignments[a.ID]; err != nil {
 			return nil, nil, nil, fmt.Errorf("software assignment %s of catalog entry %s (%s) fails the assignment rules: %w",

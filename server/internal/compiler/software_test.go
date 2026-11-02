@@ -419,8 +419,8 @@ func (w *world) renderFailures(dev uuid.UUID, what string) int {
 func TestSoftwareInvalidEntryFailsClosed(t *testing.T) {
 	w := newWorld(t)
 	forbidden := w.entry("Nano forbidden", nil, [4]string{"ubuntu", "*", "*", "nano"})
-	w.assign(forbidden, nil, "forbid", "latest", nil)
-	d, fedora := w.v2Device("{1,2}"), w.v2Device("{1,2}")
+	w.assign(forbidden, w.g1, "forbid", "latest", nil)
+	d, fedora := w.v2Device("{1,2}", w.g1), w.v2Device("{1,2}")
 	w.ubuntu(d, "amd64")
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	if s := w.fetch(d).Software; s == nil || s.Packages[0].Intent != bundle.SoftwareForbid {
@@ -449,9 +449,36 @@ func TestSoftwareInvalidEntryFailsClosed(t *testing.T) {
 	}
 
 	w.exec(`UPDATE software_catalog_entry SET packages = '"not a list"' WHERE id = $1`, forbidden)
+	w.exec("INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)", w.org, w.g1, fedora)
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	if w.version(d) != before || w.renderFailures(fedora, forbidden.String()) != 1 {
-		t.Fatal("unreadable references must block every device in the assignment's scope")
+		t.Fatal("an invalid entry must block every device in the assignment's scope, whatever its distribution")
+	}
+}
+
+// TestSoftwareEmptyEntryFailsClosed (PDK-410 external re-check): an entry whose references were emptied outside the
+// API resolves nowhere, but skipping it would drop its organization-wide forbid; every device fails its render and
+// the package another entry requires is not installed.
+func TestSoftwareEmptyEntryFailsClosed(t *testing.T) {
+	w := newWorld(t)
+	empty := w.entry("Vim forbidden", nil, [4]string{"ubuntu", "*", "*", "vim"})
+	w.assign(empty, nil, "forbid", "latest", nil)
+	d := w.v2Device("{1,2}")
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	before := w.version(d)
+	for i, packages := range []string{"[]", "null"} {
+		w.exec("UPDATE software_catalog_entry SET packages = $2::jsonb WHERE id = $1", empty, packages)
+		if i == 0 {
+			w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "required", "latest", nil)
+		}
+		w.mustCompile(statechange.ScopeOrg, w.org)
+		if w.version(d) != before || w.renderFailures(d, empty.String()) != i+1 {
+			t.Fatalf("packages %s: version %d (before %d), the device must keep its previous bundle", packages, w.version(d), before)
+		}
+		if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Intent != bundle.SoftwareForbid {
+			t.Fatalf("packages %s: vim must stay forbidden: %+v", packages, s)
+		}
 	}
 }
 

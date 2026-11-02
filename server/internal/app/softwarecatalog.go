@@ -192,6 +192,15 @@ func (c *SoftwareCatalog) Update(ctx context.Context, id uuid.UUID, in EntryInpu
 		if err := software.ValidateEntry(in.Name, in.Description, in.Category, in.Packages); err != nil {
 			return softwareEntryProblem(err)
 		}
+		intents, err := q.ListSoftwareAssignmentIntentsOfEntry(ctx, id)
+		if err != nil {
+			return err
+		}
+		for _, intent := range intents {
+			if err := software.ValidateAssignmentTarget(intent, in.Packages); err != nil {
+				return softwareAssignmentProblem(err)
+			}
+		}
 		if _, err := entrySourceSlug(ctx, q, in.SourceID); err != nil {
 			return err
 		}
@@ -361,7 +370,8 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 		if in.CatalogEntryID == nil {
 			return problem.InvalidRequest.WithDetail("catalog_entry_id is required")
 		}
-		entry, err := q.GetSoftwareCatalogEntry(ctx, *in.CatalogEntryID)
+		// Locked as Update locks it, so a concurrent package change cannot slip past the intent check of either side.
+		entry, err := q.GetSoftwareCatalogEntryForUpdate(ctx, *in.CatalogEntryID)
 		if err != nil {
 			return notFound(err)
 		}
@@ -412,6 +422,16 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 	spec := SpecSoftwareAssignmentUpdate
 	spec.Target = &audit.Target{Type: "software_assignment", ID: id.String()}
 	err := c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		pre, err := q.GetSoftwareAssignment(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		// The entry is locked first, as Update and Delete of the entry lock it before its assignments; the other
+		// order could deadlock. The entry of an assignment never changes, so the unlocked read names the right one.
+		entry, err := q.GetSoftwareCatalogEntryForUpdate(ctx, pre.CatalogEntryID)
+		if err != nil {
+			return notFound(err)
+		}
 		if _, err := q.GetSoftwareAssignmentForUpdate(ctx, id); err != nil {
 			return notFound(err)
 		}
@@ -435,10 +455,6 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 		}
 		if err := software.ValidateAssignment(in.Intent, in.UpdateRule, in.Version, in.Reason); err != nil {
 			return softwareAssignmentProblem(err)
-		}
-		entry, err := q.GetSoftwareCatalogEntry(ctx, old.CatalogEntryID)
-		if err != nil {
-			return notFound(err)
 		}
 		if err := entryAssignable(in.Intent, entry.Packages); err != nil {
 			return err
