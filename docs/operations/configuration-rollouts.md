@@ -24,7 +24,11 @@ Staged (the *rollout-able sections*): managed files, managed units, package hold
 - agent and supervisor releases (own rollout, [agent releases](agent-releases.md)) and the dead man's switch.
 
 A sudo removal, a user lock or a revocation therefore never waits for a wave. Where a change set mixes sections, only
-its changes to the four rollout-able sections are staged; everything else in it reaches every device at once.
+its changes to the four rollout-able sections are staged; everything else in it reaches every device at once. Item
+changes that follow from deleting or renaming a device group (the group's files, units and holds) are never staged: they
+reach every device at once, so deleting an unrelated group starts no rollout. Items of a group the change set creates
+follow the normal rules. While a rollout is open, renaming or deleting a device group that scopes a staged item, or
+that is the canary group, is refused with 409 `rollout_conflict` (section 6).
 
 ## 2. Settings
 
@@ -88,7 +92,7 @@ rollout's page shows:
 
 ```sh
 curl -sS -H "Authorization: Bearer $PADDOCK_TOKEN" "$PADDOCK_URL/api/v1/config-rollouts?status=running"
-curl -sS -H "Authorization: Bearer $PADDOCK_TOKEN" $PADDOCK_URL/api/v1/config-rollouts/<id>
+curl -sS -H "Authorization: Bearer $PADDOCK_TOKEN" "$PADDOCK_URL/api/v1/config-rollouts/<id>"
 curl -sS -H "Authorization: Bearer $PADDOCK_TOKEN" "$PADDOCK_URL/api/v1/config-rollouts/<id>/devices?in_wave=true&report_outcome=rejected"
 ```
 
@@ -99,7 +103,7 @@ advances after each wave's minimum duration and completes after the last wave; w
 advance, halt, resume or complete it yourself (section 5), or revert the change set (section 7).
 
 ```sh
-curl -sS -X POST $PADDOCK_URL/api/v1/config-rollouts/<id>/halt \
+curl -sS -X POST "$PADDOCK_URL/api/v1/config-rollouts/<id>/halt" \
   -H "Authorization: Bearer $PADDOCK_TOKEN" -H 'X-Paddock-CSRF: 1' -H 'Content-Type: application/json' \
   -d '{"reason":"Unit fails on the 2024 laptops"}'
 ```
@@ -155,7 +159,7 @@ as one audit event. The settings page is not consulted, so every action works af
 | --- | --- | --- | --- |
 | Halt | `POST /api/v1/config-rollouts/{id}/halt` with `{"reason": "…"}` (2 to 500 characters) | running becomes halted; devices keep the state of the wave reached; the rollout stays open | rollout not running |
 | Resume | `POST /api/v1/config-rollouts/{id}/resume` | halted becomes running in the same wave; failures reported before now no longer count and the wave's observation period starts again | rollout not halted |
-| Advance wave | `POST /api/v1/config-rollouts/{id}/advance` | the next wave starts now, without waiting for the observation period | halted, or already in the last wave |
+| Advance wave | `POST /api/v1/config-rollouts/{id}/advance` | the next wave starts now, without waiting for the observation period | not running (halted or ended), or already in the last wave |
 | Complete | `POST /api/v1/config-rollouts/{id}/complete` | every device receives the change at its next check-in; the rollout ends | already completed or reverted |
 
 Automatic behaviour of the worker (every 60 seconds, for running rollouts only):
@@ -182,6 +186,7 @@ inside the audited action:
 | only other sections | immediate, for every device; no new rollout |
 | urgent, touches no staged item | urgent, for every device |
 | renames or deletes a device group that scopes a staged item or is the canary group | 409 `rollout_conflict` |
+| item changes that follow from deleting or renaming a device group | never staged: immediate, for every device; items of a group the change set creates follow the rules above |
 
 A change set that is refused is refused whole, never split. Complete the rollout, or revert its change set, then
 repeat the change. These rules apply even after staged rollouts were switched off while the rollout was open.
@@ -249,10 +254,11 @@ All codes are in the closed registry ([audit codes](../compliance/audit-codes.md
 | `config.applied` | a declarative apply; staged or urgent changes carry the rollout parameters | administrator or token | `change_set_id`, `created`, `updated`, `deleted`, `sections`, `rollout`, `rollout_id`, `urgent_reason` |
 | `managed_file.*`, `managed_unit.*`, `package_hold.*`, `settings.updates_changed` | a portal write of a rollout-able section | administrator | the usual parameters plus `change_set_id`, `rollout`, `rollout_id`, `urgent_reason` |
 | `config.reverted` | a revert | administrator | `change_set_id`, `reverts_change_set_id`, `plan_sha256`, `created`, `updated`, `deleted`, `sections`, `rollout`, `rollout_id`, `rollout_status`, `urgent_reason` |
-| `config_rollout.advanced` | next wave started | system or administrator | `rollout_id`, `change_set_id`, `wave`, `percent`, `manual` |
-| `config_rollout.halted` | halted by the worker or an administrator | system or administrator | `rollout_id`, `change_set_id`, `reason`, `wave`, `eligible`, `failed`, `threshold` |
-| `config_rollout.resumed` | resumed | administrator | `rollout_id`, `change_set_id`, `wave` |
-| `config_rollout.completed` | completed by the worker or an administrator | system or administrator | `rollout_id`, `change_set_id`, `wave`, `manual` |
+| `config_rollout.advanced` | next wave started | system, administrator or operator | `rollout_id`, `change_set_id`, `wave`, `percent`, `manual` |
+| `config_rollout.halted` | halted by the worker or an administrator | system, administrator or operator | `rollout_id`, `change_set_id`, `reason`, `wave`; `eligible`, `failed` and `threshold` only when the worker halts |
+| `config_rollout.resumed` | resumed | administrator or operator | `rollout_id`, `change_set_id`, `wave` |
+| `device.enforcement_enabled` | an adopted device leaves report-only mode ([enroll-existing](enroll-existing.md), section 7) | administrator or operator | `hostname`, `enrollment_method`, `report_only_since` |
+| `config_rollout.completed` | completed by the worker or an administrator | system, administrator or operator | `rollout_id`, `change_set_id`, `wave`, `manual` |
 
 Every attempt, also a refused one, records exactly one event with outcome success, failure or denied. The start of a
 rollout is carried by the event of the change that started it. `config_rollout.halted` is a preset event of the

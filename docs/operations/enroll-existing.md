@@ -176,7 +176,7 @@ is active and report-only. It is recorded as `device.enforcement_enabled` (param
 
 At its next check-in the device receives an enforced bundle and applies it:
 
-- **Foreign sudoers files** in `/etc/sudoers.d` are quarantined to `/var/lib/paddock/quarantine/` (mode 0600, kept for
+- **Foreign sudoers files** in `/etc/sudoers.d` are quarantined to `/var/lib/paddock/quarantine/sudoers.d/` (mode 0600, kept for
   your review) unless the organization allows them. Each file records the tamper event
   `device.tamper_sudoers_d_file` (parameters `file`, `quarantined_as`).
 - **Unexpected members of `sudo` and `admin`** are removed, but only from a group that has a break-glass member (never
