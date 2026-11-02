@@ -100,8 +100,8 @@ func ValidateEntry(name, description, category string, packages []PackageRef) er
 		if !bundle.ValidPackage(p.Package) {
 			return fmt.Errorf("%w: package must match ^[a-z0-9][a-z0-9+.-]+$ (at most 128 characters)", ErrEntry)
 		}
-		if bundle.IsProtectedPackage(p.Package) {
-			return fmt.Errorf("%w: package %s is part of Paddock or its dependencies and cannot be managed", ErrEntry, p.Package)
+		if bundle.EntryRefused(p.Package) {
+			return fmt.Errorf("%w: package %s is part of Paddock or its login stack and cannot be managed", ErrEntry, p.Package)
 		}
 		key := [3]string{p.Distribution, p.Release, p.Architecture}
 		if seen[key] {
@@ -188,13 +188,15 @@ func ValidateAssignment(intent, updateRule string, version *string, reason strin
 	return nil
 }
 
-// ValidateAssignmentTarget refuses an assignment, whatever its intent, of an entry that names a protected package
-// (bundle.ProtectedPackages): such an entry cannot be created any more, but one stored earlier must not reach a
-// device. Violations wrap ErrAssignment.
-func ValidateAssignmentTarget(packages []PackageRef) error {
+// ValidateAssignmentTarget refuses an assignment with intent of an entry whose packages the intent must not touch
+// (bundle.RefusedIntent): forbid or uninstall of a package that Paddock depends on, required or hold of one that
+// conflicts with it, and any intent of an entry stored before ValidateEntry refused it. Violations wrap
+// ErrAssignment.
+func ValidateAssignmentTarget(intent string, packages []PackageRef) error {
 	for _, p := range packages {
-		if bundle.IsProtectedPackage(p.Package) {
-			return fmt.Errorf("%w: package %s is part of Paddock or its dependencies and cannot be assigned", ErrAssignment, p.Package)
+		if bundle.RefusedIntent(p.Package, intent) {
+			return fmt.Errorf("%w: intent %s is not allowed for the package %s, which Paddock depends on or conflicts with",
+				ErrAssignment, intent, p.Package)
 		}
 	}
 	return nil

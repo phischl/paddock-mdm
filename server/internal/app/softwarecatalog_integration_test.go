@@ -340,12 +340,55 @@ func TestSoftwareCatalogProtectedPackages(t *testing.T) {
 		}
 	}
 
+	// An update of an ordinary entry to a protected package is refused, audited once.
+	ordinary, err := catalog.Create(ctx, app.EntryInput{Name: "Ordinary", Packages: []software.PackageRef{{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: "nano"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := h.during(t, func() {
+		_, err := catalog.Update(ctx, ordinary.ID, app.EntryInput{Name: "Ordinary", Packages: []software.PackageRef{{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: "himmelblau-apparmor"}}})
+		if !errors.Is(err, problem.InvalidRequest) {
+			t.Errorf("entry update = %v", err)
+		}
+	})
+	if !slices.Equal(got, []string{"software_catalog_entry.updated:failure:invalid_request"}) {
+		t.Fatalf("entry update actions %v", got)
+	}
+
+	// Removal-protected and conflicting packages: the intent decides.
+	for _, c := range []struct {
+		pkg, intent string
+		refused     bool
+	}{
+		{"sudo", software.IntentForbid, true}, {"sudo", software.IntentUninstall, true}, {"sudo", software.IntentRequired, false},
+		{"dracut", software.IntentUninstall, true}, {"initramfs-tools", software.IntentRequired, true},
+		{"initramfs-tools", software.IntentHold, true}, {"initramfs-tools", software.IntentForbid, false},
+	} {
+		e, err := catalog.Create(ctx, app.EntryInput{Name: "Tier " + c.pkg + " " + c.intent, Packages: []software.PackageRef{{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: c.pkg}}})
+		if err != nil {
+			t.Fatalf("entry naming %s: %v", c.pkg, err)
+		}
+		want := "software_assignment.created:success:"
+		if c.refused {
+			want = "software_assignment.created:failure:invalid_request"
+		}
+		got := h.during(t, func() {
+			_, err := catalog.CreateAssignment(ctx, app.AssignmentInput{CatalogEntryID: &e.ID, Intent: c.intent})
+			if errors.Is(err, problem.InvalidRequest) != c.refused || (!c.refused && err != nil) {
+				t.Errorf("%s %s = %v, refused %v", c.intent, c.pkg, err, c.refused)
+			}
+		})
+		if !slices.Equal(got, []string{want}) {
+			t.Fatalf("%s %s: actions %v, want %s", c.intent, c.pkg, got, want)
+		}
+	}
+
 	assignment := uuid.Must(uuid.NewV7())
 	if _, err := h.super.Exec(context.Background(), `INSERT INTO software_assignment (id, organization_id, catalog_entry_id, intent) VALUES ($1, $2, $3, 'hold')`,
 		assignment, h.org, entry); err != nil {
 		t.Fatal(err)
 	}
-	got := h.during(t, func() {
+	got = h.during(t, func() {
 		if _, err := catalog.UpdateAssignment(ctx, assignment, app.AssignmentInput{Intent: software.IntentForbid}); !errors.Is(err, problem.InvalidRequest) {
 			t.Errorf("update = %v", err)
 		}

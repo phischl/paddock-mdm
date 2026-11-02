@@ -364,3 +364,34 @@ func TestSoftwareCatalogAPI(t *testing.T) {
 	}
 	e.expectEvent(r, "software_assignment.deleted:success:")
 }
+
+// TestSoftwareCatalogProtectedPackagesAPI (architect decision 2026-11-02): an entry naming a Paddock package, and an
+// intent that would remove a package Paddock depends on, answer 400 invalid_request with one failure event.
+func TestSoftwareCatalogProtectedPackagesAPI(t *testing.T) {
+	e := newEnv(t)
+	bob := e.session(e.acme, principal.RoleOrgOperator)
+	entry := func(name, pkg string) map[string]any {
+		return map[string]any{"name": name, "packages": []map[string]any{{"distribution": "ubuntu", "release": "*", "architecture": "*", "package": pkg}}}
+	}
+	r := e.do(call{method: "POST", path: "/api/v1/software-catalog", cookie: bob, body: entry("Agent", "paddock-agent")})
+	if r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" || !strings.Contains(string(r.body), "paddock-agent") {
+		t.Fatalf("entry naming the agent: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "software_catalog_entry.created:failure:invalid_request")
+
+	r = e.do(call{method: "POST", path: "/api/v1/software-catalog", cookie: bob, body: entry("Sudo", "sudo")})
+	if r.status != http.StatusCreated {
+		t.Fatalf("entry naming sudo: %d %s", r.status, r.body)
+	}
+	var sudo adminapi.SoftwareCatalogEntry
+	r.decode(t, &sudo)
+	r = e.do(call{method: "POST", path: "/api/v1/software-assignments", cookie: bob, body: map[string]any{"catalog_entry_id": sudo.Id.String(), "intent": "forbid"}})
+	if r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" {
+		t.Fatalf("forbid sudo: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "software_assignment.created:failure:invalid_request")
+	r = e.do(call{method: "POST", path: "/api/v1/software-assignments", cookie: bob, body: map[string]any{"catalog_entry_id": sudo.Id.String(), "intent": "required"}})
+	if r.status != http.StatusCreated {
+		t.Fatalf("require sudo: %d %s", r.status, r.body)
+	}
+}

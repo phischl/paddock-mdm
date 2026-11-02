@@ -366,7 +366,7 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 			return notFound(err)
 		}
 		rec.SetParam("app", entry.Name)
-		if err := entryAssignable(entry.Packages); err != nil {
+		if err := entryAssignable(in.Intent, entry.Packages); err != nil {
 			return err
 		}
 		group, err := assignmentGroup(ctx, q, in.DeviceGroupID)
@@ -440,7 +440,7 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 		if err != nil {
 			return notFound(err)
 		}
-		if err := entryAssignable(entry.Packages); err != nil {
+		if err := entryAssignable(in.Intent, entry.Packages); err != nil {
 			return err
 		}
 		n, err := q.UpdateSoftwareAssignment(ctx, pgstore.UpdateSoftwareAssignmentParams{
@@ -506,13 +506,13 @@ func entrySourceSlug(ctx context.Context, q *pgstore.Queries, source *uuid.UUID)
 	return s.Slug, nil
 }
 
-// entryAssignable refuses an entry that names a protected package (software.ValidateAssignmentTarget).
-func entryAssignable(raw []byte) error {
+// entryAssignable refuses an intent for an entry whose packages it must not touch (software.ValidateAssignmentTarget).
+func entryAssignable(intent string, raw []byte) error {
 	packages, err := software.DecodePackages(raw)
 	if err != nil {
 		return err
 	}
-	return softwareAssignmentProblem(software.ValidateAssignmentTarget(packages))
+	return softwareAssignmentProblem(software.ValidateAssignmentTarget(intent, packages))
 }
 
 // assignmentGroup returns the name of an assignment's device group ("" for the whole organization); a group of

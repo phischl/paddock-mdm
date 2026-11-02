@@ -1209,23 +1209,28 @@ together with M11's `TestPreflight|TestAdoptionGates|TestConfigRolloutGates` (al
 Decisions on gaps M2, M3, M4, L1 and L2 found while reviewing PDK-409. Where this amendment and §2–§13 or the amendment
 of 2026-10-31 differ, this amendment wins.
 
-- **M3. Protected packages.** `pkg/bundle` owns a closed list (`bundle.ProtectedPackages`, `bundle.IsProtectedPackage`):
-  `cryptsetup`, `fleet-osquery` (fleetd, `reconcile.FleetdPackage`), `himmelblau`, `himmelblau-qr-greeter`,
-  `himmelblau-sshd-config`, `libpam-modules`, `nss-himmelblau`, `paddock-agent`, `paddock-revoke`, `paddock-supervisor`,
-  `pam-himmelblau`, `sudo`, `tpm2-tools` (sources: `packaging/nfpm/*.yaml`, `agent/internal/uninstall/steps.go`,
-  `agent/internal/reconcile/login.go`). The plan allowed every intent for any package; for these packages no intent is
-  allowed, because even `required` or `hold` with a version would move or pin the agent outside the signed A/B update
-  path. Refusal is `400 invalid_request` with one failure audit event: at entry validation (`ValidateEntry`: an entry
-  names no protected package, as entries carry no intents), at assignment validation (`ValidateAssignmentTarget`, for
-  an entry stored earlier), in `bundle.ValidateSoftware` (PDK-410) and in the agent's guard (PDK-412), as defence in
-  depth.
-- **M2. Device OS release.** New ticket PDK-695: the agent reports `os_release` with the check-in; the server updates
+- **M3. Protected packages** (refined by Q1 and Q2 below). `pkg/bundle/protected.go` owns the one list for the server,
+  `bundle.ValidateSoftware` (PDK-410) and the agent's guard (PDK-412), defence in depth; the predicates are
+  `bundle.EntryRefused(pkg)` and `bundle.RefusedIntent(pkg, intent)`. Refusal is `400 invalid_request` with one failure
+  audit event, at entry validation and at assignment validation (create and update).
+- **Q1. Three tiers (architect, 2026-11-02).** (1) *Fully protected*: `paddock-agent`, `paddock-supervisor`,
+  `paddock-revoke`, `fleet-osquery` and every himmelblau package (`himmelblau`, `pam-himmelblau`, `nss-himmelblau`,
+  `himmelblau-qr-greeter`, `himmelblau-sshd-config`, `himmelblau-apparmor`; the predicate also covers `himmelblau-*` and
+  `*-himmelblau`): all four intents are refused and no entry may name them, because any intent would move, pin or
+  remove them outside the signed A/B update path or break the login. (2) *Removal protected*: the Depends of
+  `paddock-agent` (`cryptsetup`, `libpam-modules`, `sudo`, `tpm2-tools`) and `dracut` (installed by
+  `agent/internal/encrypt/prepare.go`): only `forbid` and `uninstall` are refused, entries may name them and the intent
+  decides. (3) *Conflicting*: `initramfs-tools` (installing it removes `dracut`): `required` and `hold` are refused.
+- **Q2. Drift test.** `TestAgentDependenciesAreRemovalProtected` parses the `depends:` of
+  `packaging/nfpm/paddock-agent.yaml` and fails when they differ from the removal-protected list (`dracut` is added
+  separately with its source). Sources of the tiers: `packaging/nfpm/*.yaml`, `reconcile.FleetdPackage`,
+  `reconcile.HimmelblauPackages`, `agent/internal/uninstall/steps.go`.
+- **M2. Device OS release.** Ticket PDK-695 (promoted from a stub): the agent reports `os_release` with the check-in; the server updates
   `device.os_release` with one audit event `device.os_release_changed` and a recompile. Agents that do not report it
   keep the enrollment value.
 - **M4. Forbid and uninstall win over a hold.** A `forbid` or `uninstall` result for a package wins over a
-  `package_hold` of the same package for that device; the hold is dropped from that device's bundle. The bundle gains
-  the additive field `superseded_hold` on `SoftwarePackage`, reported by the agent (PDK-412); the portal view is
-  PDK-692.
+  `package_hold` of the same package for that device; the hold is dropped from that device's bundle. PDK-694 is folded into PDK-410; the overlap is reported by the agent in
+  the software resource status (PDK-412); the portal view is PDK-692.
 - **L1. Versionless holds.** Accepted as is: a versionless `package_hold` unpins a `required` pinned package
   (`updates.Merge` ranks nil first), a versionless software hold does not (`MergeIntents` counts named versions only).
   `TestSoftwareVersionlessHolds` (PDK-410) pins it; neither merge changes.
