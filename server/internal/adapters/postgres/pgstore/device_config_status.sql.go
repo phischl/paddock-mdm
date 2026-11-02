@@ -17,9 +17,11 @@ const countConfigStatus = `-- name: CountConfigStatus :one
 SELECT count(*) FROM (
   SELECT 1
   FROM device_resource_status s JOIN device d ON d.id = s.device_id AND d.state = 'active'
+  LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
   WHERE ($1::text IS NULL OR s.resource_id ILIKE $1::text ESCAPE '\')
   GROUP BY s.resource_id
-  HAVING $2::text[] IS NULL OR count(*) FILTER (WHERE s.status = ANY($2::text[])) > 0
+  HAVING $2::text[] IS NULL OR count(*) FILTER (WHERE s.status = ANY($2::text[])
+    AND (s.status <> 'failed' OR r.mode IS DISTINCT FROM 'report_only')) > 0
   LIMIT $3
 ) matching
 `
@@ -67,11 +69,14 @@ func (q *Queries) CountDeviceBundles(ctx context.Context, arg CountDeviceBundles
 }
 
 const countDeviceResourceStatus = `-- name: CountDeviceResourceStatus :one
-SELECT count(*) FILTER (WHERE status = 'applied')::int AS applied,
-       count(*) FILTER (WHERE status = 'failed')::int AS failed,
-       count(*) FILTER (WHERE status = 'pending')::int AS pending,
-       count(*) FILTER (WHERE status = 'drift_corrected')::int AS drift_corrected
-FROM device_resource_status WHERE device_id = $1
+SELECT count(*) FILTER (WHERE s.status = 'applied')::int AS applied,
+       count(*) FILTER (WHERE s.status = 'failed' AND r.mode IS DISTINCT FROM 'report_only')::int AS failed,
+       count(*) FILTER (WHERE s.status = 'pending')::int AS pending,
+       count(*) FILTER (WHERE s.status = 'drift_corrected')::int AS drift_corrected,
+       count(*) FILTER (WHERE s.status = 'failed' AND r.mode = 'report_only')::int AS plan_errors
+FROM device_resource_status s
+LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
+WHERE s.device_id = $1
 `
 
 type CountDeviceResourceStatusRow struct {
@@ -79,8 +84,11 @@ type CountDeviceResourceStatusRow struct {
 	Failed         int32
 	Pending        int32
 	DriftCorrected int32
+	PlanErrors     int32
 }
 
+// failed counts failed applies only; plan_errors counts the failed rows of report-only reports (plan M11 amendments
+// R6.6, R6.15), which the device's list shows with their report_mode.
 func (q *Queries) CountDeviceResourceStatus(ctx context.Context, deviceID uuid.UUID) (CountDeviceResourceStatusRow, error) {
 	row := q.db.QueryRow(ctx, countDeviceResourceStatus, deviceID)
 	var i CountDeviceResourceStatusRow
@@ -89,6 +97,7 @@ func (q *Queries) CountDeviceResourceStatus(ctx context.Context, deviceID uuid.U
 		&i.Failed,
 		&i.Pending,
 		&i.DriftCorrected,
+		&i.PlanErrors,
 	)
 	return i, err
 }
@@ -239,14 +248,16 @@ const listConfigStatus = `-- name: ListConfigStatus :many
 SELECT resource_id, applied, failed, pending, drift_corrected, last_failure_at FROM (
   SELECT s.resource_id,
          count(*) FILTER (WHERE s.status = 'applied')::int AS applied,
-         count(*) FILTER (WHERE s.status = 'failed')::int AS failed,
+         count(*) FILTER (WHERE s.status = 'failed' AND r.mode IS DISTINCT FROM 'report_only')::int AS failed,
          count(*) FILTER (WHERE s.status = 'pending')::int AS pending,
          count(*) FILTER (WHERE s.status = 'drift_corrected')::int AS drift_corrected,
-         max(s.occurred_at) FILTER (WHERE s.status = 'failed') AS last_failure_at
+         max(s.occurred_at) FILTER (WHERE s.status = 'failed' AND r.mode IS DISTINCT FROM 'report_only') AS last_failure_at
   FROM device_resource_status s JOIN device d ON d.id = s.device_id AND d.state = 'active'
+  LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
   WHERE ($1::text IS NULL OR s.resource_id ILIKE $1::text ESCAPE '\')
   GROUP BY s.resource_id
-  HAVING $2::text[] IS NULL OR count(*) FILTER (WHERE s.status = ANY($2::text[])) > 0
+  HAVING $2::text[] IS NULL OR count(*) FILTER (WHERE s.status = ANY($2::text[])
+    AND (s.status <> 'failed' OR r.mode IS DISTINCT FROM 'report_only')) > 0
 ) resources
 ORDER BY
   CASE WHEN $3::text = 'resource_id' THEN resource_id END ASC,
@@ -279,6 +290,10 @@ type ListConfigStatusRow struct {
 }
 
 // One row per resource ID with the number of active devices per status; a resource of retired devices only is absent.
+// A failed resource written by a report-only report is a plan error, not a failed apply (plan M11 amendments R6.6,
+// R6.15): it is
+// counted in no status here and shown on the device. The report's mode decides, not the device's current one, so a plan
+// error stays one after enforcement until an enforced report replaces the row.
 func (q *Queries) ListConfigStatus(ctx context.Context, arg ListConfigStatusParams) ([]ListConfigStatusRow, error) {
 	rows, err := q.db.Query(ctx, listConfigStatus,
 		arg.QPattern,
@@ -391,10 +406,15 @@ func (q *Queries) ListDeviceBundles(ctx context.Context, arg ListDeviceBundlesPa
 
 const listDeviceResourceStatus = `-- name: ListDeviceResourceStatus :many
 
-SELECT resource_id, status, message, changes, bundle_version, occurred_at FROM device_resource_status
-WHERE device_id = $1
-  AND ($2::text IS NULL OR resource_id ILIKE $2::text ESCAPE '\')
-  AND ($3::text[] IS NULL OR status = ANY($3::text[]))
+SELECT resource_id, status, message, changes, bundle_version, occurred_at, report_mode FROM (
+  SELECT s.resource_id, s.status, s.message, s.changes, s.bundle_version, s.occurred_at,
+         coalesce(r.mode, 'enforce')::text AS report_mode
+  FROM device_resource_status s
+  LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
+  WHERE s.device_id = $1
+    AND ($2::text IS NULL OR s.resource_id ILIKE $2::text ESCAPE '\')
+    AND ($3::text[] IS NULL OR s.status = ANY($3::text[]))
+) rows
 ORDER BY
   CASE WHEN $4::text = 'resource_id' THEN resource_id END ASC,
   CASE WHEN $4::text = '-resource_id' THEN resource_id END DESC,
@@ -422,9 +442,12 @@ type ListDeviceResourceStatusRow struct {
 	Changes       []string
 	BundleVersion int64
 	OccurredAt    time.Time
+	ReportMode    string
 }
 
 // List queries of the admin API (ADR 0018); see device_group.sql.
+// report_mode is the mode of the report that wrote the row (plan M11 amendment R6.15): a failed row of a report-only
+// report is a plan error. A row without its report (none stored for the version) counts as enforced.
 func (q *Queries) ListDeviceResourceStatus(ctx context.Context, arg ListDeviceResourceStatusParams) ([]ListDeviceResourceStatusRow, error) {
 	rows, err := q.db.Query(ctx, listDeviceResourceStatus,
 		arg.DeviceID,
@@ -448,6 +471,7 @@ func (q *Queries) ListDeviceResourceStatus(ctx context.Context, arg ListDeviceRe
 			&i.Changes,
 			&i.BundleVersion,
 			&i.OccurredAt,
+			&i.ReportMode,
 		); err != nil {
 			return nil, err
 		}

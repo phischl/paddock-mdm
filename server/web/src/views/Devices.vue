@@ -7,7 +7,7 @@ import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import type { Device } from '../api/client'
 import {
-  allGroups, componentFilter, contactFilter, groupFilter, listDevices, ownerFilter, ownerNames, securityFilter, stateFilter,
+  allGroups, componentFilter, configModeFilter, contactFilter, enrollmentMethodFilter, groupFilter, listDevices, ownerFilter, ownerNames, securityFilter, stateFilter,
 } from '../lib/devices'
 import { paneQuery } from '../lib/deviceHealth'
 import { diskStateFilter } from '../lib/disk'
@@ -46,6 +46,7 @@ function leaveNameTip(id: string, e: MouseEvent): void {
 
 const filters = computed(() => [
   stateFilter, contactFilter, groupFilter(groups.value), diskStateFilter, securityFilter, ownerFilter(users.value), componentFilter,
+  enrollmentMethodFilter, configModeFilter,
 ])
 const columns: ListColumn[] = [
   { key: 'hostname', title: 'devices.hostname', sortable: true },

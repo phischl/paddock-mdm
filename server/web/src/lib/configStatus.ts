@@ -13,15 +13,19 @@ export const resourceStateFilter: ListFilter = {
   options: states.map((value) => ({ value, title: 'configStatus.states.' + value })),
 }
 
-/** The chip of a resource's apply status (plan M11 decision 15). */
-export function resourceStateView(state: ResourceState): StatusView {
+/**
+ * The chip of a resource's apply status (plan M11 decision 15). A failed resource of a report-only report is a plan
+ * error, its own state and never a failed apply (plan M11 amendments R6.6, R6.15).
+ */
+export function resourceStateView(state: ResourceState, reportOnly = false): StatusView {
+  if (reportOnly && state === 'failed') return { status: 'warn', label: 'configStatus.states.plan_error' }
   const status = { applied: 'ok', failed: 'critical', pending: 'warn', drift_corrected: 'info' } as const
   return { status: status[state], label: 'configStatus.states.' + state }
 }
 
-/** Whether the device only reports what it would change; the field arrives with the enforce action (plan M11). */
-export function isReportOnly(d: DeviceDetail): boolean {
-  return (d as DeviceDetail & { config_mode?: string }).config_mode === 'report_only'
+/** Whether the device only reports what it would change until enforcement is enabled (plan M11 decision 43). */
+export function isReportOnly(d: Pick<DeviceDetail, 'config_mode'>): boolean {
+  return d.config_mode === 'report_only'
 }
 
 /** One page of the apply status of a device's resources for DataList. */

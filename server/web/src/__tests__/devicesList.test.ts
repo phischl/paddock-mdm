@@ -15,6 +15,7 @@ const base = {
   state: 'active', contact: 'ok', hardware_uuid: null, machine_id: null, os_release: {}, enrollment_token_id: null,
   enrolled_at: now, state_changed_at: now, bundle_version: 1, last_contact_at: now, applied_bundle_version: 1, agent_version: '1.0.0',
   owners: [], hardware: null, components: [], components_outdated: [],
+  enrollment_method: 'unknown', config_mode: 'enforce', config_mode_changed_at: null,
 }
 const items = [
   { ...base, id: 'd1', hostname: 'ubuntu', name: 'lap-0421', name_state: 'pending' },

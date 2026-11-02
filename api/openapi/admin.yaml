@@ -1444,7 +1444,8 @@ paths:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
         search: [hostname, name, hardware_uuid, owners.username, owners.display_name, hardware.serial]
-        filters: [state, device_group_id, disk_state, contact, security_updates, owner_id, component_outdated]
+        filters: [state, device_group_id, disk_state, contact, security_updates, owner_id, component_outdated, enrollment_method,
+          config_mode]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -1485,6 +1486,22 @@ paths:
           in: query
           description: true lists the devices with a component older than its target at their last heartbeat, false the others (plan M8d decision 55).
           schema: { type: boolean }
+        - name: enrollment_method
+          in: query
+          description: Repeatable. How the device was enrolled (plan M11 decision 43).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/EnrollmentMethod" }
+        - name: config_mode
+          in: query
+          description: Repeatable. Whether the device's configuration is enforced or only reported (plan M11 decision 43).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ConfigMode" }
       responses:
         "200":
           description: One page of devices.
@@ -1623,6 +1640,34 @@ paths:
       x-paddock-audit: device.retired
       parameters:
         - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200": { $ref: "#/components/responses/Device" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/enforce:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: enforceDevice
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator. Ends the report-only mode of an adopted device (plan M11 decision 42): its next
+        bundle quarantines foreign sudoers files, removes unexpected members of privileged groups (never the last
+        administrator), installs the login component and applies every managed resource. The body repeats the device's
+        hostname as the typed confirmation (400 invalid_request when it differs); a device that is not active and
+        report-only: 409 invalid_state. Not offered to the assistant: the typed confirmation is the administrator's.
+      x-paddock-audit: device.enforcement_enabled
+      x-paddock-mcp: { expose: false }
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceEnforce" }
       responses:
         "200": { $ref: "#/components/responses/Device" }
         "400": { $ref: "#/components/responses/Problem" }
@@ -7223,7 +7268,8 @@ components:
       type: object
       required: [id, hostname, name, name_state, state, hardware_uuid, machine_id, os_release, enrollment_token_id,
                  enrolled_at, state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version,
-                 contact, owners, hardware, components, components_outdated]
+                 contact, owners, hardware, components, components_outdated, enrollment_method, config_mode,
+                 config_mode_changed_at]
       properties:
         id: { type: string, format: uuid }
         hostname:
@@ -7296,6 +7342,34 @@ components:
           type: array
           description: The components older than their target at the last heartbeat (the list column and filter).
           items: { type: string }
+        enrollment_method: { $ref: "#/components/schemas/EnrollmentMethod" }
+        config_mode: { $ref: "#/components/schemas/ConfigMode" }
+        config_mode_changed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When enforcement was enabled; null while the mode is the one the device enrolled with.
+    EnrollmentMethod:
+      type: string
+      enum: [autoinstall, adopted, unknown]
+      description: |
+        How the device was enrolled, as the agent asserted it (plan M11 decision 40): autoinstall by the Paddock
+        autoinstall, adopted by enrolling an installed system, unknown when the agent sent none.
+    ConfigMode:
+      type: string
+      enum: [enforce, report_only]
+      description: |
+        enforce applies the configuration; report_only (an adopted device until an administrator enables enforcement)
+        only reports what it would change.
+    DeviceEnforce:
+      type: object
+      required: [hostname]
+      additionalProperties: false
+      properties:
+        hostname:
+          type: string
+          maxLength: 253
+          description: The device's hostname, typed by the administrator as confirmation.
     DeviceComponent:
       type: object
       required: [name, installed, expected, status]
@@ -7545,7 +7619,7 @@ components:
         apply would change it, changes lists what); drift_corrected (the agent corrected a local change).
     DeviceResourceStatus:
       type: object
-      required: [resource_id, type, status, message, changes, bundle_version, occurred_at]
+      required: [resource_id, type, status, message, changes, bundle_version, occurred_at, report_mode]
       properties:
         resource_id: { type: string, description: "Resource ID such as file:/etc/foo.conf, unit:foo.service or time." }
         type: { type: string, description: "The part of the ID before the colon (file, unit), else the whole ID." }
@@ -7557,6 +7631,12 @@ components:
           items: { type: string }
         bundle_version: { type: integer, format: int64 }
         occurred_at: { type: string, format: date-time, description: When the agent reported it. }
+        report_mode:
+          allOf: [ { $ref: "#/components/schemas/ConfigMode" } ]
+          description: |
+            The mode of the report that wrote the row (plan M11 amendment R6.15); enforce when no report of that version
+            is stored. A failed row of a report_only report is a plan error, never a failed apply (R6.6), also after
+            enforcement until an enforced report replaces it.
     DeviceResourceStatusPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -7612,7 +7692,10 @@ components:
     ResourceStatus:
       type: object
       required: [resource_id, type, applied, failed, pending, drift_corrected, last_failure_at]
-      description: One resource ID with the number of active devices per status.
+      description: |
+        One resource ID with the number of active devices per status. A failed resource written by a report-only
+        report is a plan error, not a failed apply (plan M11 amendments R6.6, R6.15): it is counted in no status here,
+        the status filter failed does not select it, and the device's apply status shows it (report_mode).
       properties:
         resource_id: { type: string }
         type: { type: string }
@@ -7635,13 +7718,16 @@ components:
         sort: { type: string, description: Applied sort. }
     DeviceConfigStatusCounts:
       type: object
-      description: The device's resources per apply status; zeros until the agent reported.
-      required: [applied, failed, pending, drift_corrected]
+      description: >-
+        The device's resources per apply status; zeros until the agent reported. failed counts failed applies only,
+        plan_errors the failed resources of report-only reports (plan M11 amendment R6.15).
+      required: [applied, failed, pending, drift_corrected, plan_errors]
       properties:
         applied: { type: integer }
         failed: { type: integer }
         pending: { type: integer }
         drift_corrected: { type: integer }
+        plan_errors: { type: integer }
     DeviceLoginStatus:
       type: object
       description: The latest login.* and sudo.* report of the device's agent (plan M3b decision 17).
@@ -8135,7 +8221,7 @@ components:
       type: string
       enum: [stale_warning, stale_critical, presumed_lost, quarantined, disk_not_compliant, agent_outdated,
              login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired, agent_rollback_pending,
-             agent_not_running, uninstall_pending, config_behind, disk_conversion_failed, clock_drift, event_gap]
+             agent_not_running, uninstall_pending, config_behind, disk_conversion_failed, clock_drift, event_gap, report_only]
     Attention:
       type: object
       required: [id, kind, device_id, hostname, since, detail, finding]
@@ -8149,10 +8235,10 @@ components:
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
         hostname: { type: string }
-        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported). }
+        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled). }
         detail:
           type: string
-          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as \"<applied> < <newest>\"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as \"<seconds> s\" (server time minus device time); event_gap: the missing event sequence numbers as \"<from>-<to>\"; otherwise empty."
+          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as \"<applied> < <newest>\"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as \"<seconds> s\" (server time minus device time); event_gap: the missing event sequence numbers as \"<from>-<to>\"; report_only: the enrollment method; otherwise empty."
     FindingKind:
       type: string
       enum: [tamper, attention]

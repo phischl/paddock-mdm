@@ -163,6 +163,8 @@ type compileTarget struct {
 	forced    bool   // a forced state change targets the device (plan M6c decision 19)
 	request   updateRequest
 	name      *string // the device's managed name (ADR 0041); nil when not managed
+	// reportOnly marks an adopted device before enforcement (plan M11 decision 41): its bundle only reports.
+	reportOnly bool
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -229,7 +231,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
 				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
 				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
-			t.name = row.Name
+			t.name, t.reportOnly = row.Name, row.ConfigMode == device.ConfigModeReportOnly
 			r, changed, failure, err := c.render(ctx, q, org, t, defs, overlay, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
@@ -350,7 +352,8 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event,
 // Agents that report schema 2 get v2 with the login and sudo resources; all others get v1 exactly as before (plan
 // M3a decision 14a). A sudo entry that fails the server-side check blocks the device's bundle (failure); one with an
 // invalid command is omitted and recorded once the bundle is published. A device outside the wave of the open
-// rollout (overlay, nil without one) renders the before-state of the staged keys.
+// rollout (overlay, nil without one) renders the before-state of the staged keys; a report-only device is never inside a
+// wave (plan M11 decision 30), so it never carries a rollout and never counts.
 func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID, t compileTarget,
 	defs app.ManagedDefinitions, overlay *rolloutOverlay, identity *identityLoader, keys v2Trust) (rendered, bool, *renderFailure, error) {
 	if !device.Compiled(t.state) {
@@ -359,7 +362,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	var rollout uuid.NullUUID
 	if overlay != nil {
 		switch {
-		case overlay.eligible(t.id):
+		case !t.reportOnly && overlay.eligible(t.id):
 			rollout = uuid.NullUUID{UUID: overlay.id, Valid: true}
 		case overlay.beforeMissing:
 			// Fail closed: without the before-state the device would get the staged change early or lose items.
@@ -411,6 +414,9 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
 		Agent: agent, Resources: resources, Keys: v2.Keys,
 		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection, Disk: diskSection,
+	}
+	if t.reportOnly {
+		b.Mode = bundle.ModeReportOnly
 	}
 	if t.v2 {
 		b.Hostname = hostnameSection(ctx, t)

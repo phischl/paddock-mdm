@@ -26,6 +26,8 @@ const (
 	CodeDeviceGroupsChanged      Code = "device.groups_changed"
 	CodeDeviceOwnersChanged      Code = "device.owners_changed"
 	CodeDeviceNameChanged        Code = "device.name_changed"
+	// Adoption (plan M11 decision 42).
+	CodeDeviceEnforcementEnabled Code = "device.enforcement_enabled"
 	// Uninstall (plan M8d decisions 37, 38 and 41).
 	CodeDeviceUninstallRequested   Code = "device.uninstall_requested"
 	CodeDeviceUninstallCancelled   Code = "device.uninstall_cancelled"
@@ -357,9 +359,9 @@ var registry = map[Code]Definition{
 	CodeDeviceEnrolled: {
 		Code: CodeDeviceEnrolled, Emitted: true,
 		Description: "A device enrolled with an enrollment token (actor: the device), or its enrollment was rejected.",
-		Params:      []string{"hostname", "state", "key_protection", "enrolled_with", "auto_approve_withheld"},
+		Params:      []string{"hostname", "state", "key_protection", "enrolled_with", "auto_approve_withheld", "enrollment_method", "config_mode"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "enrolled_with is the ID of the enrollment token. auto_approve_withheld is root_grant when an auto-approve token's device would have given someone root and the device was enrolled pending instead (plan M8s decision 7g-sexies). A failure carries the rejection reason as error_code: invalid_token, token_revoked, token_expired, token_exhausted or invalid_request.",
+		Note:        "enrollment_method is autoinstall, adopted or unknown (the agent sent none) as the device asserts it; config_mode is report_only for an adopted device and enforce otherwise (plan M11 decision 40). enrolled_with is the ID of the enrollment token. auto_approve_withheld is root_grant when an auto-approve token's device would have given someone root and the device was enrolled pending instead (plan M8s decision 7g-sexies). A failure carries the rejection reason as error_code: invalid_token, token_revoked, token_expired, token_exhausted or invalid_request.",
 	},
 	CodeDeviceApproved: {
 		Code: CodeDeviceApproved, Emitted: true,
@@ -385,6 +387,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"hostname", "from_state", "reason", "conversion_cancelled", "conversion_id", "conversion_phase"},
 		Outcomes:    adminOutcomes,
 		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_cancelled (after_delivery) and conversion_id when it closed a prepared conversion or one with an abort on its way as cancelled, withdrawing a pending encrypt_disk_abort; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
+	},
+	CodeDeviceEnforcementEnabled: {
+		Code: CodeDeviceEnforcementEnabled, Emitted: true,
+		Description: "An administrator confirmed with the device's hostname that an adopted device leaves report-only mode; its next bundle applies every managed resource.",
+		Params:      []string{"hostname", "enrollment_method", "report_only_since"},
+		Outcomes:    adminOutcomes,
+		Note:        "report_only_since is when the device entered report-only mode (its enrollment). A hostname that does not match fails with invalid_request, a device that is not active and report-only with invalid_state.",
 	},
 	CodeDeviceUninstallRequested: {
 		Code: CodeDeviceUninstallRequested, Emitted: true,

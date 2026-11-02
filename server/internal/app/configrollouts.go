@@ -18,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/configrollout"
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
+	"github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -57,7 +58,7 @@ func NewConfigRollouts(runner *ActionRunner, org *db.OrgPool) *ConfigRollouts {
 	return &ConfigRollouts{runner: runner, org: org}
 }
 
-// RolloutCounts are the devices of a rollout: eligible are the active devices inside the wave it reached, failed those
+// RolloutCounts are the devices of a rollout: eligible are the enforced active devices inside the wave it reached, failed those
 // whose newest report on a bundle of the rollout since its start or last resume is a rejection or names a failed
 // staged resource (what the worker counts), applied those whose newest such report applied every staged resource, and
 // pending the rest.
@@ -117,9 +118,11 @@ func reachedPercent(r pgstore.ConfigRollout) int {
 	return configrollout.Percent(status, waves, int(r.CurrentWaveIndex))
 }
 
-// inWave reports whether device is inside the wave r reached.
-func inWave(r pgstore.ConfigRollout, device uuid.UUID, canary map[uuid.UUID]bool) bool {
-	return configrollout.Eligible(configrollout.Bucket(device, r.ID), reachedPercent(r), canary[device])
+// inWave reports whether device d is inside the wave r reached. A report-only device never is: the compiler renders
+// the overlay for it (plan M11 decision 30), so it is not eligible and never counts toward the threshold. Its stored
+// mode decides, as for the compiler; the mode of its reports only decides how an eligible device's report counts.
+func inWave(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRow, canary map[uuid.UUID]bool) bool {
+	return d.ConfigMode != device.ConfigModeReportOnly && configrollout.Eligible(configrollout.Bucket(d.ID, r.ID), reachedPercent(r), canary[d.ID])
 }
 
 // stagedFailure reports whether failed names a staged resource.
@@ -172,7 +175,7 @@ func classify(r pgstore.ConfigRollout, rep *pgstore.ListConfigRolloutReportsRow,
 }
 
 // countRollout counts the active devices of r (RolloutCounts).
-func countRollout(r pgstore.ConfigRollout, staged []string, devices []uuid.UUID, canary map[uuid.UUID]bool,
+func countRollout(r pgstore.ConfigRollout, staged []string, devices []pgstore.ListConfigRolloutDevicesRow, canary map[uuid.UUID]bool,
 	reports map[uuid.UUID]pgstore.ListConfigRolloutReportsRow) RolloutCounts {
 	var c RolloutCounts
 	for _, d := range devices {
@@ -181,7 +184,7 @@ func countRollout(r pgstore.ConfigRollout, staged []string, devices []uuid.UUID,
 		}
 		c.Eligible++
 		var rep *pgstore.ListConfigRolloutReportsRow
-		if row, ok := reports[d]; ok {
+		if row, ok := reports[d.ID]; ok {
 			rep = &row
 		}
 		switch classify(r, rep, staged) {
@@ -259,11 +262,7 @@ func (w rolloutWorld) canaryOf(r pgstore.ConfigRollout) map[uuid.UUID]bool {
 
 // counts returns the RolloutCounts of r.
 func (w rolloutWorld) counts(r pgstore.ConfigRollout, staged []string) RolloutCounts {
-	ids := make([]uuid.UUID, len(w.devices))
-	for i, d := range w.devices {
-		ids[i] = d.ID
-	}
-	return countRollout(r, staged, ids, w.canaryOf(r), w.reports[r.ID])
+	return countRollout(r, staged, w.devices, w.canaryOf(r), w.reports[r.ID])
 }
 
 // List returns one page of the organization's rollouts with their counts.
@@ -396,7 +395,7 @@ func (c *ConfigRollouts) ListDevices(ctx context.Context, id uuid.UUID, query Co
 func rolloutDevice(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRow, rep *pgstore.ListConfigRolloutReportsRow,
 	staged []string, canary map[uuid.UUID]bool) ConfigRolloutDevice {
 	out := ConfigRolloutDevice{
-		DeviceID: d.ID, Hostname: d.Hostname, InWave: inWave(r, d.ID, canary), ReportOutcome: RolloutReportNone,
+		DeviceID: d.ID, Hostname: d.Hostname, InWave: inWave(r, d, canary), ReportOutcome: RolloutReportNone,
 		CarriesRollout: d.BundleRolloutID == r.ID, FailedResourceIDs: []string{},
 	}
 	if d.BundleVersion > 0 {

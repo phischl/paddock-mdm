@@ -243,6 +243,9 @@ type Device struct {
 	UninstalledAt               *time.Time
 	RetiredReason               *string
 	Name                        *string
+	EnrollmentMethod            string
+	ConfigMode                  string
+	ConfigModeChangedAt         *time.Time
 }
 
 type DeviceAlert struct {

@@ -70,6 +70,10 @@ function outcomeView(b: DeviceBundle): { status: 'ok' | 'critical' | 'neutral'; 
       >
         <span v-if="i > 0"> · </span>{{ t('configStatus.count.' + s, { count: counts[s] }) }}
       </template>
+      <span
+        v-if="counts.plan_errors > 0"
+        data-testid="apply-plan-errors"
+      > · {{ t('configStatus.count.plan_error', { count: counts.plan_errors }) }}</span>
     </p>
     <DataList
       :columns="statusColumns"
@@ -86,8 +90,8 @@ function outcomeView(b: DeviceBundle): { status: 'ok' | 'critical' | 'neutral'; 
     >
       <template #[`item.status`]="{ item }: { item: DeviceResourceStatus }">
         <StatusChip
-          :status="resourceStateView(item.status).status"
-          :label="t(resourceStateView(item.status).label)"
+          :status="resourceStateView(item.status, item.report_mode === 'report_only').status"
+          :label="t(resourceStateView(item.status, item.report_mode === 'report_only').label)"
         />
       </template>
       <template #[`item.message`]="{ item }: { item: DeviceResourceStatus }">

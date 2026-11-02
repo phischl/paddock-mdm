@@ -62,6 +62,33 @@ func Transition(action Action, from string) (string, error) {
 // device keeps checking in but receives nothing new).
 func Compiled(state string) bool { return state == StateActive }
 
+// Enrollment methods (device.enrollment_method) and configuration modes (device.config_mode), plan M11 §3.1.
+const (
+	EnrollmentAutoinstall = "autoinstall"
+	EnrollmentAdopted     = "adopted"
+	EnrollmentUnknown     = "unknown"
+	ConfigModeEnforce     = "enforce"
+	ConfigModeReportOnly  = "report_only"
+)
+
+// ErrInvalidEnrollmentMethod means the device asserted an enrollment method other than autoinstall or adopted.
+var ErrInvalidEnrollmentMethod = errors.New("enrollment_method must be autoinstall or adopted")
+
+// Adoption returns the enrollment method and configuration mode a device is created with for the method it asserts
+// ("" for agents that send none). The method is the device's own claim, so it only selects report-only for an adopted
+// device (fail safe, plan M11 decision 40) and never grants anything.
+func Adoption(asserted string) (method, mode string, err error) {
+	switch asserted {
+	case "":
+		return EnrollmentUnknown, ConfigModeEnforce, nil
+	case EnrollmentAutoinstall:
+		return EnrollmentAutoinstall, ConfigModeEnforce, nil
+	case EnrollmentAdopted:
+		return EnrollmentAdopted, ConfigModeReportOnly, nil
+	}
+	return "", "", ErrInvalidEnrollmentMethod
+}
+
 // Limits of the device-reported enrollment fields.
 const (
 	maxHostname = 253

@@ -230,3 +230,30 @@ func TestRolloutOverlayFailsClosedWithoutBefore(t *testing.T) {
 		t.Fatalf("render failure of %s: %q, %v", w.out, reason, err)
 	}
 }
+
+// TestReportOnlyBundle (plan M11 decisions 30 and 41): a report-only device inside the wave, by bucket or by the canary
+// group, renders the before-state with mode report_only and never carries the rollout; once enforced, its next bundle
+// has no mode and joins the wave.
+func TestReportOnlyBundle(t *testing.T) {
+	w := newStagedWorld(t)
+	for _, d := range []uuid.UUID{w.in, w.canary} {
+		w.exec("UPDATE device SET enrollment_method = 'adopted', config_mode = 'report_only' WHERE id = $1", d)
+	}
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for _, d := range []uuid.UUID{w.in, w.canary} {
+		w.expectBefore(d)
+		if b := w.fetch(d); b.Mode != bundle.ModeReportOnly {
+			w.t.Fatalf("mode of %s = %q", d, b.Mode)
+		}
+	}
+	if b := w.fetch(w.out); b.Mode != bundle.ModeEnforce {
+		t.Fatalf("mode of the enforced device = %q", b.Mode)
+	}
+
+	w.exec("UPDATE device SET config_mode = 'enforce', config_mode_changed_at = now() WHERE id = $1", w.in)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	w.expectLive(w.in, &w.rollout)
+	if b := w.fetch(w.in); b.Mode != bundle.ModeEnforce {
+		t.Fatalf("mode after enforcement = %q", b.Mode)
+	}
+}

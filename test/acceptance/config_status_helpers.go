@@ -30,6 +30,7 @@ type resourceStatusItem struct {
 	Status     string   `json:"status"`
 	Message    string   `json:"message"`
 	Changes    []string `json:"changes"`
+	ReportMode string   `json:"report_mode"`
 }
 
 // waitDeviceResources polls the device's resource status until want holds: the worker records the report

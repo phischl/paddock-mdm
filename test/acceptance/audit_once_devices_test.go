@@ -66,6 +66,61 @@ func deviceAction(action, code string, allowed, refused func(t *testing.T, w *au
 	}
 }
 
+// adoptedDevice enrolls an active adopted (report-only) device and returns its ID and hostname.
+func adoptedDevice(t *testing.T, w *auditWorld) (string, string) {
+	t.Helper()
+	hostname := "a3-adopted-" + uniqueSuffix()
+	d := newSim(t, createToken(t, w.alice, tokenOptions{autoApprove: true}).EnrollmentConfig)
+	d.EnrollmentMethod = protocol.EnrollmentAdopted
+	if res, err := d.Enroll(testContext(t, time.Minute), hostname); err != nil || res.Status != http.StatusAccepted {
+		t.Fatalf("enroll: %v HTTP %d %s", err, res.Status, res.Body)
+	}
+	s, err := d.WaitEnrollment(testContext(t, 30*time.Second), func(s protocol.EnrollStatus) bool { return s.Status != protocol.EnrollProcessing })
+	if err != nil || s.Status != protocol.EnrollActive {
+		t.Fatalf("enrollment %+v, %v", s, err)
+	}
+	return s.DeviceID, hostname
+}
+
+// enforceCases are the cases of POST /api/v1/devices/{id}/enforce (plan M11 decision 42): success on an adopted
+// device with its hostname, denial for the auditor, a missing device, a hostname that does not match and an enforced
+// device.
+func enforceCases() []auditCase {
+	const code = "device.enforcement_enabled"
+	path := func(id string) string { return "/api/v1/devices/" + id + "/enforce" }
+	return []auditCase{
+		{"success", func(t *testing.T, w *auditWorld) {
+			id, hostname := adoptedDevice(t, w)
+			res := call(t, w.alice, http.MethodPost, path(id), map[string]any{"hostname": hostname})
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, code, "success")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			id, hostname := adoptedDevice(t, w)
+			res := call(t, w.bob, http.MethodPost, path(id), map[string]any{"hostname": hostname})
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, code, "denied")
+		}},
+		{"not found", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPost, path(uuid.NewString()), map[string]any{"hostname": "x"})
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
+		}},
+		{"hostname mismatch", func(t *testing.T, w *auditWorld) {
+			id, hostname := adoptedDevice(t, w)
+			res := call(t, w.alice, http.MethodPost, path(id), map[string]any{"hostname": hostname + "x"})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
+		}},
+		{"conflict", func(t *testing.T, w *auditWorld) {
+			d := activeDevice(t, w.alice, "", "a3-enforced-"+uniqueSuffix())
+			res := call(t, w.alice, http.MethodPost, path(d.DeviceID), map[string]any{"hostname": getDevice(t, w.alice, d.DeviceID).Hostname})
+			expectStatus(t, res, http.StatusConflict, "invalid_state")
+			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
+		}},
+	}
+}
+
 func activeID(t *testing.T, w *auditWorld) string {
 	return activeDevice(t, w.alice, "", "a3-active-"+uniqueSuffix()).DeviceID
 }
@@ -296,6 +351,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 		"POST /api/v1/devices/{id}/reject":             deviceAction("reject", "device.rejected", pendingDevice, activeID),
 		"POST /api/v1/devices/{id}/release-quarantine": deviceAction("release-quarantine", "device.quarantine_released", quarantinedDevice, activeID),
 		"POST /api/v1/devices/{id}/retire":             deviceAction("retire", "device.retired", activeID, pendingDevice),
+		"POST /api/v1/devices/{id}/enforce":            enforceCases(),
 		"PUT /api/v1/devices/{id}/groups": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/groups",
