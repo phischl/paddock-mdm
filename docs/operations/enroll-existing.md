@@ -167,7 +167,7 @@ Everything outside the bundle, such as other watchers of the agent, is unchanged
 
 ## 7. Enable enforcement
 
-Available from the agent release 0.1.0-alpha.7. Open the device (*Devices* → the device → *Overview*) and use *Enable
+Available from the agent release 0.1.0-alpha.8. Open the device (*Devices* → the device → *Overview*) and use *Enable
 enforcement*. The dialog names what will change and asks you to type the device's hostname. Organization administrators
 and operators can do it; it is not offered to an assistant (MCP). The API call is `POST /api/v1/devices/{id}/enforce`
 with `{"hostname": "<hostname>"}`: 400 `invalid_request` for a different hostname, 409 `invalid_state` unless the device
