@@ -181,7 +181,7 @@ async function rotate(): Promise<void> {
       </div>
     </div>
     <p class="pd-type-caption pd-secondary pd-device-meta">
-      <span>{{ t('devices.header.os') }} <span :class="d.os_release.VERSION_ID ? 'mono' : 'pd-muted'">{{ d.os_release.VERSION_ID ?? t('devices.header.unknown') }}</span></span>
+      <span>{{ t('devices.header.os') }} <span :class="d.os_release.version_id ? 'mono' : 'pd-muted'">{{ d.os_release.version_id ?? t('devices.header.unknown') }}</span></span>
       <span aria-hidden="true">·</span>
       <span>{{ t('devices.header.agent') }} <span :class="d.agent_version ? 'mono' : 'pd-muted'">{{ d.agent_version ?? t('devices.header.unknown') }}</span></span>
       <span aria-hidden="true">·</span>

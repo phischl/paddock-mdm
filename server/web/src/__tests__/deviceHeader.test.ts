@@ -32,7 +32,7 @@ const now = '2026-10-10T12:00:00Z'
 function deviceOf(over: Partial<DeviceDetail> = {}): DeviceDetail {
   return {
     id: 'd1', hostname: 'acme-lt-0142', state: 'active', contact: 'ok', hardware_uuid: null, machine_id: null,
-    os_release: { VERSION_ID: '24.04' }, enrollment_token_id: null, enrolled_at: now, state_changed_at: now, bundle_version: 3,
+    os_release: { id: 'ubuntu', version_id: '24.04' }, enrollment_token_id: null, enrolled_at: now, state_changed_at: now, bundle_version: 3,
     last_contact_at: now, applied_bundle_version: 3, agent_version: '1.9.1', groups: [], identity_keys: [], logins_suspended: false,
     login_assignment: { users: [], groups: [] }, schema_versions: [], login_management: true, login_status: { login: null, sudo: null },
     sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, ...over,
@@ -117,6 +117,11 @@ describe('device header band (plan M7c decision 29)', () => {
     expect(w.find('[data-testid="device-state"]').text()).toBe('Online')
     expect(w.findAll('.pd-chip').map((c) => c.text())).toEqual(['Online', 'Encrypted', 'Logins suspended', 'Locked'])
     expect(w.text()).toContain('agent 1.9.1')
+  })
+
+  it('shows the Ubuntu version from the lowercase os-release keys the agent reports', async () => {
+    const { w } = await mountHeader(deviceOf())
+    expect(w.find('.pd-device-meta').text()).toContain('Ubuntu 24.04')
   })
 
   it('names no recent contact and explains the contact states in the state chip tooltip (plan M8x decision 61)', async () => {
