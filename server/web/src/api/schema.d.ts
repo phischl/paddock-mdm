@@ -1991,6 +1991,66 @@ export interface paths {
         patch: operations["updatePackageHold"];
         trace?: never;
     };
+    "/api/v1/software-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's APT package sources (plan M13a decision 1);
+         *     the list never contains the signing key.
+         */
+        get: operations["listSoftwareSources"];
+        put?: never;
+        /**
+         * @description Roles: org_admin. Adds an APT package source with its signing key. A source is root-equivalent: every package
+         *     it signs is installed as root. URIs must use https (400 invalid_request "uris must use https"); they may name
+         *     internal hosts, because only the devices fetch from them, never the server. Suites are either all flat
+         *     (ending in "/", then no components) or none (then at least one component). The signing key is one
+         *     ASCII-armored OpenPGP v4 public key: RSA of at least 2048 bits (2048 to 3071 bits are accepted with
+         *     weak_key true), or Ed25519, Ed448 or NIST P-256/384/521; DSA, ElGamal, Brainpool and secp256k1 are refused
+         *     (400 invalid_request). The typed fingerprint (spaces and case ignored) must equal the key's, else 422
+         *     fingerprint_mismatch naming both. A duplicate slug or name is 409 already_exists. Needs a step-up within the
+         *     last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+         */
+        post: operations["createSoftwareSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. One source with its signing key (a public key); 404 not_found for another organization's. */
+        get: operations["getSoftwareSource"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: org_admin. Removes the source; the devices remove its source file and keyring with their next bundle.
+         *     Needs a step-up within the last 5 minutes (403 step_up_required).
+         */
+        delete: operations["deleteSoftwareSource"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: org_admin. Changes the given fields; absent fields keep their value. The slug is immutable (400
+         *     invalid_request when given). signing_key and fingerprint come only together (400 otherwise). Every rule of
+         *     the creation is checked on the resulting source. Needs a step-up within the last 5 minutes (403
+         *     step_up_required).
+         */
+        patch: operations["updateSoftwareSource"];
+        trace?: never;
+    };
     "/api/v1/overview": {
         parameters: {
             query?: never;
@@ -5575,6 +5635,73 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /** @enum {string} */
+        SoftwareArchitecture: "amd64" | "arm64";
+        SoftwareSourceSummary: {
+            /** Format: uuid */
+            id: string;
+            /** @description Immutable; names the source file and keyring on the devices. */
+            slug: string;
+            name: string;
+            uris: string[];
+            suites: string[];
+            components: string[];
+            /** @description Empty = every architecture. */
+            architectures: components["schemas"]["SoftwareArchitecture"][];
+            /** @description The signing key's v4 fingerprint, 40 uppercase hexadecimal characters. */
+            fingerprint: string;
+            /** @description The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030. */
+            weak_key: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SoftwareSource: components["schemas"]["SoftwareSourceSummary"] & {
+            /** @description The ASCII-armored OpenPGP public key. */
+            signing_key: string;
+        };
+        SoftwareSourceCreate: {
+            /** @description ^[a-z0-9][a-z0-9-]{1,40}$ */
+            slug: string;
+            /** @description 1 to 100 characters after trimming. */
+            name: string;
+            /** @description https only, no query, fragment or user information. */
+            uris: string[];
+            /** @description ^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /. */
+            suites: string[];
+            /** @description ^[a-z0-9-]{1,32}$; none for a flat repository, at least one otherwise. */
+            components?: string[];
+            architectures?: components["schemas"]["SoftwareArchitecture"][];
+            /** @description One ASCII-armored OpenPGP v4 public key. */
+            signing_key: string;
+            /** @description The key's fingerprint as published by the vendor; spaces and case are ignored. */
+            fingerprint: string;
+        };
+        SoftwareSourceUpdate: {
+            /** @description Immutable; any value is refused with 400 invalid_request. */
+            slug?: string;
+            name?: string;
+            uris?: string[];
+            suites?: string[];
+            components?: string[];
+            architectures?: components["schemas"]["SoftwareArchitecture"][];
+            /** @description Only together with fingerprint. */
+            signing_key?: string;
+            /** @description Only together with signing_key. */
+            fingerprint?: string;
+        };
+        SoftwareSourcePage: {
+            items: components["schemas"]["SoftwareSourceSummary"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         InstallNowRequest: {
             packages: string[];
         };
@@ -6958,6 +7085,8 @@ export interface components {
         DeviceStateFilter: components["schemas"]["DeviceState"][];
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareSourceSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
         /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
@@ -10631,6 +10760,155 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareSources: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareSourceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of software sources. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSourcePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareSourceCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The software source. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareSourceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
         };
     };
     getOverview: {

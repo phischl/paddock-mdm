@@ -262,6 +262,11 @@ const (
 	CodeNotificationDelivered          Code = "notification.delivered"
 	CodeNotificationDestinationStalled Code = "notification.destination_stalled"
 	CodeNotificationDestinationResumed Code = "notification.destination_resumed"
+
+	// Software sources (plan M13a §6.3).
+	CodeSoftwareSourceCreated Code = "software_source.created"
+	CodeSoftwareSourceUpdated Code = "software_source.updated"
+	CodeSoftwareSourceDeleted Code = "software_source.deleted"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1589,6 +1594,27 @@ var registry = map[Code]Definition{
 		Params:      []string{"destination", "destination_id", "stalled_for_s", "forward_from", "forward_to"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stall. forward_from and forward_to name the batch that arrived (absent when a heartbeat ended the stall).",
+	},
+	CodeSoftwareSourceCreated: {
+		Code: CodeSoftwareSourceCreated, Emitted: true,
+		Description: "An organization administrator added an APT package source with its signing key; the key's fingerprint is recorded. Adding a source is root-equivalent: every package it signs is installed as root.",
+		Params:      []string{"name", "slug", "uris", "suites", "components", "fingerprint", "weak_key"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with fingerprint_mismatch when the typed fingerprint differs from the key's, already_exists for a duplicate slug or name. weak_key is true for an accepted RSA key of 2048 to 3071 bits.",
+	},
+	CodeSoftwareSourceUpdated: {
+		Code: CodeSoftwareSourceUpdated, Emitted: true,
+		Description: "An organization administrator changed an APT package source: its name, URIs, suites, components, architectures or its signing key; a key change records the old and the new fingerprint.",
+		Params:      []string{"name", "slug", "fields", "fingerprint", "old_fingerprint", "weak_key"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with fingerprint_mismatch when the typed fingerprint differs from the key's, already_exists for a duplicate name.",
+	},
+	CodeSoftwareSourceDeleted: {
+		Code: CodeSoftwareSourceDeleted, Emitted: true,
+		Description: "An organization administrator removed an APT package source; devices remove its source file and keyring at their next check-in.",
+		Params:      []string{"name", "slug", "fingerprint"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

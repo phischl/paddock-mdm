@@ -278,6 +278,7 @@
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
     "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
     "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
+    "fingerprint_mismatch": "Der Fingerabdruck des Schlüssels stimmt nicht mit dem eingegebenen überein.",
     "username_taken": "Dieser Benutzername ist bereits vergeben.",
     "domain_taken": "Eine dieser Domains gehört zu einer anderen Organisation.",
     "attribute_owned_upstream": "Das wird im Quellverzeichnis verwaltet und kann in Paddock nicht geändert werden.",
@@ -553,6 +554,11 @@
       "created": "{actor} hält das Paket {package} zurück",
       "updated": "{actor} hat das Zurückhalten des Pakets {package} geändert",
       "deleted": "{actor} hat das Paket {package} freigegeben"
+    },
+    "software_source": {
+      "created": "{actor} hat die Paketquelle {name} mit dem Schlüssel {fingerprint} hinzugefügt",
+      "updated": "{actor} hat die Paketquelle {name} geändert",
+      "deleted": "{actor} hat die Paketquelle {name} entfernt"
     },
     "permission_profile": {
       "created": "{actor} hat das Berechtigungsprofil {name} angelegt",

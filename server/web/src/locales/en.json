@@ -278,6 +278,7 @@
     "in_use": "This item is still in use. Remove what uses it first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",
     "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected.",
+    "fingerprint_mismatch": "The key's fingerprint does not match the one you entered.",
     "username_taken": "This username is already taken.",
     "domain_taken": "One of these domains belongs to another organization.",
     "attribute_owned_upstream": "This is managed by the upstream directory and cannot be changed in Paddock.",
@@ -553,6 +554,11 @@
       "created": "{actor} held the package {package}",
       "updated": "{actor} changed the hold of the package {package}",
       "deleted": "{actor} released the package {package}"
+    },
+    "software_source": {
+      "created": "{actor} added the package source {name} with the key {fingerprint}",
+      "updated": "{actor} changed the package source {name}",
+      "deleted": "{actor} removed the package source {name}"
     },
     "permission_profile": {
       "created": "{actor} created the permission profile {name}",

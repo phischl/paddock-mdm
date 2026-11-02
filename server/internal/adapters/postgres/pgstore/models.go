@@ -927,6 +927,23 @@ type RevocationRequest struct {
 	Volumes        []uuid.UUID
 }
 
+type SoftwareSource struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Slug           string
+	Name           string
+	Uris           []string
+	Suites         []string
+	Components     []string
+	Architectures  []string
+	SigningKey     string
+	Fingerprint    string
+	WeakKey        bool
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type UserGroup struct {
 	ID                  uuid.UUID
 	OrganizationID      uuid.UUID
