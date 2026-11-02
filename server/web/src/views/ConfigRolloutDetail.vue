@@ -123,7 +123,7 @@ function outcomeStatus(o: string): 'ok' | 'critical' | 'neutral' {
     <template v-if="detail && rollout">
       <div class="page-header">
         <h1>{{ t('configRollouts.heading') }}</h1>
-        <div class="row-actions">
+        <div class="row-actions wrap-actions">
           <v-btn
             v-for="action in actions"
             :key="action"

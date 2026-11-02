@@ -59,6 +59,14 @@ test('organization admin follows a staged rollout and acts on its waves', async 
     await expect(page.getByTestId('config-rollout-devices')).toBeVisible()
     await expectAccessible(page)
 
+    // Four actions on a phone: they wrap, the page never scrolls sideways.
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 375, height: 812 })
+    await expect(page.getByTestId('config-rollout-revert')).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await expectAccessible(page)
+    if (viewport) await page.setViewportSize(viewport)
+
     await page.getByTestId('config-rollout-advance').click()
     const dialog = page.getByTestId('confirm-dialog')
     await expect(dialog.getByRole('heading', { name: 'Advance to the next wave' })).toBeVisible()

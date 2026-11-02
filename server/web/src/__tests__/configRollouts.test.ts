@@ -48,6 +48,7 @@ describe('configuration rollout helpers', () => {
     expect(validUrgent({ urgent: true, reason: '' })).toBe(false)
     expect(validUrgent({ urgent: true, reason: ' x ' })).toBe(false)
     expect(validUrgent({ urgent: true, reason: 'hotfix' })).toBe(true)
+    expect(validUrgent({ urgent: true, reason: 'hot\x07fix' })).toBe(false)
     expect(validUrgent({ urgent: true, reason: 'x'.repeat(501) })).toBe(false)
   })
 
@@ -256,6 +257,10 @@ describe('ConfigRolloutDetail', () => {
     const accept = document.querySelector('[data-testid="confirm-accept"]') as HTMLButtonElement
     expect(accept.disabled).toBe(true)
     const reason = document.querySelector('[data-testid="confirm-reason"] textarea') as HTMLTextAreaElement
+    reason.value = 'x'
+    reason.dispatchEvent(new Event('input'))
+    await flushPromises()
+    expect(accept.disabled).toBe(true)
     reason.value = 'too many failures'
     reason.dispatchEvent(new Event('input'))
     await flushPromises()

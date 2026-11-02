@@ -71,6 +71,8 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .list-footer .page-size { flex: 0 0 9rem; }
 .list-footer .v-pagination { margin-left: auto; }
 .row-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+/* Page-header actions wrap: four buttons (German at 375 px) are wider than a phone. */
+.wrap-actions { flex-wrap: wrap; }
 
 .link-button {
   display: inline-flex; align-items: center; justify-content: center;
