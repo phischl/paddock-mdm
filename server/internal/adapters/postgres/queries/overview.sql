@@ -87,7 +87,7 @@ SELECT version::text AS version, wave::int AS wave, waves::int AS waves, percent
 FROM paddock_running_agent_rollout();
 
 -- name: OverviewOSReleases :many
-SELECT coalesce(d.os_release ->> 'VERSION_ID', 'unknown')::text AS release, count(*)::int AS devices
+SELECT coalesce(d.os_release ->> 'version_id', 'unknown')::text AS release, count(*)::int AS devices
 FROM device d
 WHERE d.state = 'active'
 GROUP BY 1
