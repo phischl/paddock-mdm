@@ -46,6 +46,14 @@ func (h *handlers) GetOverview(ctx context.Context, _ adminapi.GetOverviewReques
 			RootGrants: o.SecurityReview.RootGrants, SensitiveFiles: o.SecurityReview.SensitiveFiles,
 			DeniedFiles: o.SecurityReview.DeniedFiles,
 		},
+		Configuration: adminapi.OverviewConfiguration{
+			FailedResources: int(o.Configuration.FailedResources), FailedDevices: int(o.Configuration.FailedDevices),
+			ReportOnlyDevices: int(o.Configuration.ReportOnlyDevices),
+		},
+	}
+	if r := o.Configuration.Rollout; r != nil {
+		rollout := toConfigRollout(r.ConfigRollout, r.Counts)
+		out.Configuration.Rollout = &rollout
 	}
 	for i, c := range o.Vulnerabilities.Top {
 		out.Vulnerabilities.Top[i] = adminapi.OverviewTopCVE{Cve: c.CVE, Severity: adminapi.Severity(c.Severity), Devices: c.Devices, Packages: c.Packages}

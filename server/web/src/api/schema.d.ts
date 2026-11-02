@@ -5949,6 +5949,18 @@ export interface components {
             updates: components["schemas"]["OverviewUpdates"];
             attention: components["schemas"]["OverviewAttention"];
             security_review: components["schemas"]["OverviewSecurityReview"];
+            configuration: components["schemas"]["OverviewConfiguration"];
+        };
+        /** @description The configuration card. Failures do not count the plan errors of report-only reports, like GET /api/v1/config-status. */
+        OverviewConfiguration: {
+            /** @description The open (running or halted) configuration rollout with its counts; null while none is open. */
+            rollout: components["schemas"]["ConfigRollout"] | null;
+            /** @description Distinct resources with a failed apply on at least one active device. */
+            failed_resources: number;
+            /** @description Distinct active devices with at least one failed apply. */
+            failed_devices: number;
+            /** @description Active devices in report-only mode. */
+            report_only_devices: number;
         };
         /** @description The totals of GET /api/v1/security-review. */
         OverviewSecurityReview: {

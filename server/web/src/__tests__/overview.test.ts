@@ -31,6 +31,7 @@ function overviewOf(over: Partial<Overview> = {}): Overview {
     },
     attention: { conditions: 5, devices: 3 },
     security_review: { root_grants: 0, sensitive_files: 0, denied_files: 0 },
+    configuration: { rollout: null, failed_resources: 0, failed_devices: 0, report_only_devices: 0 },
     ...over,
   }
 }
@@ -90,6 +91,8 @@ async function mountOverview(role = 'org_admin'): Promise<VueWrapper> {
       { path: '/vulnerabilities', name: 'vulnerabilities', component: stub },
       { path: '/vulnerabilities/:cve', name: 'vulnerability', component: stub },
       { path: '/security-review', name: 'security-review', component: stub },
+      { path: '/config-status', name: 'config-status', component: stub },
+      { path: '/config-rollouts/:id', component: stub },
     ],
   })
   await router.push('/')
@@ -286,6 +289,34 @@ describe('overview page (plan M7c decision 28)', () => {
       region!.focus()
       expect(document.activeElement).toBe(region)
     }
+  })
+
+  it('shows the configuration card with its three KPIs and their links (PDK-164)', async () => {
+    overview = overviewOf({
+      configuration: {
+        rollout: {
+          id: 'r1', status: 'halted', waves: [10, 50, 100], current_wave_index: 1, counts: { eligible: 5, applied: 2, failed: 3, pending: 0 },
+        } as never,
+        failed_resources: 2, failed_devices: 4, report_only_devices: 1,
+      },
+    })
+    const w = await mountOverview()
+    const card = w.find('[data-testid="overview-configuration"]')
+    expect(card.find('h2').text()).toBe('Configuration')
+    const rollout = card.find('[data-testid="overview-configuration-rollout"]')
+    expect(rollout.text()).toContain('wave 2 of 3, failed 3')
+    expect(rollout.text()).toContain('Halted')
+    expect(rollout.find('a').attributes('href')).toBe('/config-rollouts/r1')
+    const links = card.findAll('a').map((a) => [a.text(), a.attributes('href')])
+    expect(links).toContainEqual(['2 resources on 4 devices', '/config-status?status=failed'])
+    expect(links).toContainEqual(['1', '/devices?config_mode=report_only'])
+  })
+
+  it('shows that no rollout is open and zero counts without links to a rollout (PDK-164)', async () => {
+    const w = await mountOverview()
+    const card = w.find('[data-testid="overview-configuration"]')
+    expect(card.find('[data-testid="overview-configuration-rollout"]').text()).toContain('None open')
+    expect(card.findAll('a').map((a) => a.attributes('href')).some((h) => h?.startsWith('/config-rollouts'))).toBe(false)
   })
 
   it('shows the problem when the overview cannot be read', async () => {

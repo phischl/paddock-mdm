@@ -71,6 +71,8 @@ const latestPublished = computed(() => {
   const a = overview.value?.updates.agent
   return a?.latest_published && a.latest_published !== a.current_version ? a.latest_published : null
 })
+const configuration = computed(() => overview.value?.configuration ?? null)
+const rollout = computed(() => configuration.value?.rollout ?? null)
 </script>
 
 <template>
@@ -335,6 +337,66 @@ const latestPublished = computed(() => {
                   v-if="overview.updates.os_releases.length === 0"
                   class="pd-muted"
                 >–</span>
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section
+          class="pd-panel"
+          data-testid="overview-configuration"
+          aria-labelledby="overview-configuration-title"
+        >
+          <header class="pd-panel-header">
+            <h2
+              id="overview-configuration-title"
+              class="pd-type-section"
+            >
+              {{ t('overview.configuration.title') }}
+            </h2>
+          </header>
+          <dl
+            v-if="configuration"
+            class="pd-panel-body pd-facts"
+          >
+            <div data-testid="overview-configuration-rollout">
+              <dt>{{ t('overview.configuration.rollout') }}</dt>
+              <dd
+                v-if="rollout"
+                class="pd-tabular"
+              >
+                <RouterLink
+                  :to="'/config-rollouts/' + rollout.id"
+                  class="mono"
+                >
+                  {{ t('overview.configuration.rolloutLine', { wave: rollout.current_wave_index + 1, waves: rollout.waves.length, failed: rollout.counts.failed }) }}
+                </RouterLink>
+                <StatusChip
+                  :status="rollout.status === 'running' ? 'info' : 'warn'"
+                  :label="t('overview.configuration.status.' + rollout.status)"
+                />
+              </dd>
+              <dd
+                v-else
+                class="pd-muted"
+              >
+                {{ t('overview.configuration.noRollout') }}
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t('overview.configuration.failedResources') }}</dt>
+              <dd class="mono pd-tabular">
+                <RouterLink :to="{ name: 'config-status', query: { status: 'failed' } }">
+                  {{ t('overview.configuration.failedResourcesValue', { resources: configuration.failed_resources, devices: configuration.failed_devices }) }}
+                </RouterLink>
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t('overview.configuration.reportOnly') }}</dt>
+              <dd class="mono pd-tabular">
+                <RouterLink :to="{ name: 'devices', query: { config_mode: 'report_only' } }">
+                  {{ configuration.report_only_devices }}
+                </RouterLink>
               </dd>
             </div>
           </dl>

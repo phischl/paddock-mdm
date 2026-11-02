@@ -2513,6 +2513,19 @@
       "osRelease": "{release}: {count}",
       "unknownRelease": "unknown"
     },
+    "configuration": {
+      "title": "Configuration",
+      "rollout": "Open rollout",
+      "rolloutLine": "wave {wave} of {waves}, failed {failed}",
+      "noRollout": "None open",
+      "status": {
+        "running": "Running",
+        "halted": "Halted"
+      },
+      "failedResources": "Failed resources",
+      "failedResourcesValue": "{resources, plural, one {# resource} other {# resources}} on {devices, plural, one {# device} other {# devices}}",
+      "reportOnly": "Devices in report-only mode"
+    },
     "audit": {
       "title": "Recent audit activity",
       "open": "Audit log",

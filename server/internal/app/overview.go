@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -37,6 +39,14 @@ type OverviewResult struct {
 	Updates         OverviewUpdates
 	Attention       pgstore.OverviewAttentionRow
 	SecurityReview  SecurityReviewCounts
+	Configuration   OverviewConfiguration
+}
+
+// OverviewConfiguration: the open configuration rollout and the devices and resources that need a look.
+type OverviewConfiguration struct {
+	// Rollout is nil while no rollout is open.
+	Rollout *ConfigRolloutRecord
+	pgstore.OverviewConfigurationRow
 }
 
 // OverviewVulnerabilities: devices by their worst finding, the critical and high CVEs, and the top CVEs.
@@ -174,7 +184,37 @@ func (o *Overview) Get(ctx context.Context) (OverviewResult, error) {
 			return err
 		}
 		out.SecurityReview = review.Counts()
+		if out.Configuration, err = overviewConfiguration(ctx, q); err != nil {
+			return err
+		}
 		return nil
 	})
 	return out, err
+}
+
+// overviewConfiguration reads the configuration card; the rollout's counts are the API's own (classify, plan M11
+// amendment R6.14).
+func overviewConfiguration(ctx context.Context, q *pgstore.Queries) (OverviewConfiguration, error) {
+	var out OverviewConfiguration
+	var err error
+	if out.OverviewConfigurationRow, err = q.OverviewConfiguration(ctx); err != nil {
+		return out, fmt.Errorf("overview configuration: %w", err)
+	}
+	open, err := q.GetOpenConfigRolloutWithPlan(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return out, fmt.Errorf("overview open rollout: %w", err)
+	}
+	staged, err := stagedResourceIDs(open.Plan)
+	if err != nil {
+		return out, err
+	}
+	w, err := loadRolloutWorld(ctx, q, []pgstore.ConfigRollout{open.ConfigRollout}, nil)
+	if err != nil {
+		return out, err
+	}
+	out.Rollout = &ConfigRolloutRecord{ConfigRollout: open.ConfigRollout, Counts: w.counts(open.ConfigRollout, staged)}
+	return out, nil
 }

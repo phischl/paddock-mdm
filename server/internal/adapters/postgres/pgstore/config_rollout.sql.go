@@ -257,6 +257,45 @@ func (q *Queries) GetOpenConfigRolloutOverlay(ctx context.Context) (GetOpenConfi
 	return i, err
 }
 
+const getOpenConfigRolloutWithPlan = `-- name: GetOpenConfigRolloutWithPlan :one
+SELECT r.id, r.organization_id, r.change_set_id, r.waves, r.current_wave_index, r.wave_started_at, r.min_wave_minutes, r.failure_threshold_percent, r.failure_threshold_min, r.canary_device_group_id, r.status, r.halted_reason, r.evaluation_since, r.started_by, r.started_at, r.ended_at, r.ended_reason, r.updated_at, c.plan
+FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
+WHERE r.status IN ('running', 'halted')
+`
+
+type GetOpenConfigRolloutWithPlanRow struct {
+	ConfigRollout ConfigRollout
+	Plan          json.RawMessage
+}
+
+// The open rollout for the overview, with the plan of its change set, whose keys are staged.
+func (q *Queries) GetOpenConfigRolloutWithPlan(ctx context.Context) (GetOpenConfigRolloutWithPlanRow, error) {
+	row := q.db.QueryRow(ctx, getOpenConfigRolloutWithPlan)
+	var i GetOpenConfigRolloutWithPlanRow
+	err := row.Scan(
+		&i.ConfigRollout.ID,
+		&i.ConfigRollout.OrganizationID,
+		&i.ConfigRollout.ChangeSetID,
+		&i.ConfigRollout.Waves,
+		&i.ConfigRollout.CurrentWaveIndex,
+		&i.ConfigRollout.WaveStartedAt,
+		&i.ConfigRollout.MinWaveMinutes,
+		&i.ConfigRollout.FailureThresholdPercent,
+		&i.ConfigRollout.FailureThresholdMin,
+		&i.ConfigRollout.CanaryDeviceGroupID,
+		&i.ConfigRollout.Status,
+		&i.ConfigRollout.HaltedReason,
+		&i.ConfigRollout.EvaluationSince,
+		&i.ConfigRollout.StartedBy,
+		&i.ConfigRollout.StartedAt,
+		&i.ConfigRollout.EndedAt,
+		&i.ConfigRollout.EndedReason,
+		&i.ConfigRollout.UpdatedAt,
+		&i.Plan,
+	)
+	return i, err
+}
+
 const haltConfigRollout = `-- name: HaltConfigRollout :one
 UPDATE config_rollout SET status = 'halted', halted_reason = $1, updated_at = now()
 WHERE id = $2 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at

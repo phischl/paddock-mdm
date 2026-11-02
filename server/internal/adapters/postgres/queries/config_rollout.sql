@@ -53,6 +53,12 @@ WHERE id = @id RETURNING *;
 UPDATE config_rollout SET status = 'completed', ended_at = now(), ended_reason = @ended_reason, updated_at = now()
 WHERE id = @id RETURNING *;
 
+-- name: GetOpenConfigRolloutWithPlan :one
+-- The open rollout for the overview, with the plan of its change set, whose keys are staged.
+SELECT sqlc.embed(r), c.plan
+FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
+WHERE r.status IN ('running', 'halted');
+
 -- name: ListRunningConfigRollouts :many
 -- The rollouts the worker evaluates, with the plan of their change set, whose keys are staged.
 SELECT sqlc.embed(r), c.plan
