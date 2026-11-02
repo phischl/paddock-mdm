@@ -8,15 +8,18 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/preflight"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
@@ -323,5 +326,93 @@ func TestFailedAndOutput(t *testing.T) {
 	var back []preflight.Check
 	if err := json.Unmarshal(out.Bytes(), &back); err != nil || len(back) != 2 || back[1].Status != preflight.OK {
 		t.Errorf("json %s: %v", out.String(), err)
+	}
+}
+
+// realOSRelease reads os-release through the real reconcile.OS (Lstat, no symlinks, no FIFO opens); the fake ignores
+// file modes and would pass these tests for the wrong reason. Every other file comes from the healthy fake.
+type realOSRelease struct {
+	*fakesys.System
+	real reconcile.OS
+}
+
+func (r realOSRelease) ReadFile(path string) ([]byte, fs.FileInfo, error) {
+	if path == "/etc/os-release" || path == "/usr/lib/os-release" {
+		return r.real.ReadFile(path)
+	}
+	return r.System.ReadFile(path)
+}
+
+func osOnRealFS(t *testing.T, setup func(root, outside string)) preflight.Check {
+	t.Helper()
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside-os-release")
+	if err := os.WriteFile(outside, osRelease("24.04"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"etc", "usr/lib"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setup(root, outside)
+	s := realOSRelease{System: healthy(), real: reconcile.OS{Root: root}}
+	got := preflight.Run(context.Background(), preflight.Options{Sys: s, LUKS: luksTools{lsblk: plain}, Root: t.TempDir(), EUID: 0})
+	return got[0]
+}
+
+func TestOSOnRealFilesystem(t *testing.T) {
+	t.Run("Ubuntu layout", func(t *testing.T) {
+		c := osOnRealFS(t, func(root, _ string) {
+			must(t, os.WriteFile(filepath.Join(root, "usr/lib/os-release"), osRelease("24.04"), 0o644))
+			must(t, os.Symlink("../usr/lib/os-release", filepath.Join(root, "etc/os-release")))
+		})
+		if c.Status != preflight.OK || c.Detail != "Ubuntu 24.04 LTS" {
+			t.Fatalf("os = %+v", c)
+		}
+	})
+	t.Run("etc symlink to a foreign path", func(t *testing.T) {
+		c := osOnRealFS(t, func(root, outside string) {
+			must(t, os.Symlink(outside, filepath.Join(root, "etc/os-release")))
+		})
+		if c.Status != preflight.Fail {
+			t.Fatalf("os = %+v", c)
+		}
+	})
+	t.Run("usr/lib symlink to a foreign path", func(t *testing.T) {
+		c := osOnRealFS(t, func(root, outside string) {
+			must(t, os.Symlink(outside, filepath.Join(root, "usr/lib/os-release")))
+		})
+		if c.Status != preflight.Fail {
+			t.Fatalf("os = %+v", c)
+		}
+	})
+	t.Run("FIFO at both paths", func(t *testing.T) {
+		c := osOnRealFS(t, func(root, _ string) {
+			must(t, syscall.Mkfifo(filepath.Join(root, "etc/os-release"), 0o644))
+			must(t, syscall.Mkfifo(filepath.Join(root, "usr/lib/os-release"), 0o644))
+		})
+		if c.Status != preflight.Fail {
+			t.Fatalf("os = %+v", c)
+		}
+	})
+	t.Run("read error does not fall back", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads files regardless of mode")
+		}
+		c := osOnRealFS(t, func(root, _ string) {
+			must(t, os.WriteFile(filepath.Join(root, "etc/os-release"), []byte("ID=debian\n"), 0o000))
+			must(t, os.WriteFile(filepath.Join(root, "usr/lib/os-release"), osRelease("24.04"), 0o644))
+		})
+		if c.Status != preflight.Fail || !strings.Contains(c.Detail, "permission denied") {
+			t.Fatalf("os = %+v", c)
+		}
+	})
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -95,12 +96,16 @@ func WriteJSON(w io.Writer, checks []Check) error {
 func osCheck(sys reconcile.System) Check {
 	c := Check{Name: "os"}
 	data, _, err := sys.ReadFile("/etc/os-release")
-	if err != nil || data == nil {
-		// Ubuntu links /etc/os-release to /usr/lib/os-release, and ReadFile returns no data for a symlink.
+	// os-release(5) names the fallback only for a missing file; Ubuntu links /etc/os-release to /usr/lib/os-release,
+	// and ReadFile returns no data for a symlink.
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && data == nil) {
 		data, _, err = sys.ReadFile("/usr/lib/os-release")
 	}
 	if err != nil || data == nil {
 		c.Status, c.Detail = Fail, "/etc/os-release and /usr/lib/os-release are not readable"
+		if err != nil {
+			c.Detail += ": " + err.Error()
+		}
 		return c
 	}
 	fields := osRelease(string(data))
