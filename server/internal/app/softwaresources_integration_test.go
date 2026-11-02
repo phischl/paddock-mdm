@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
@@ -160,10 +161,99 @@ func TestSoftwareSources(t *testing.T) {
 	if err := sources.Delete(ctx(steppedUp), created.ID); err != nil {
 		t.Fatal(err)
 	}
-	if ev = h.lastEvent(t); ev.Params["fingerprint"] != sourceRSA2048FP || ev.Params["slug"] != "vendor" {
+	if ev = h.lastEvent(t); ev.Params["fingerprint"] != sourceRSA2048FP || ev.Params["slug"] != "vendor" || ev.Params["weak_key"] != true {
 		t.Fatalf("deleted event %+v", ev)
 	}
 	if _, err := sources.Get(ctx(auditor), created.ID); !errors.Is(err, problem.NotFound) {
 		t.Fatalf("get after delete = %v", err)
 	}
+	if err := sources.Delete(ctx(steppedUp), created.ID); !errors.Is(err, problem.NotFound) {
+		t.Fatalf("second delete = %v", err)
+	}
+
+	// External Review 1 L2: armor header values are not stored or served.
+	header := with(func(in *software.SourceInput) {
+		in.Slug, in.Name = "headers", "Headers"
+		in.SigningKey = strings.Replace(in.SigningKey, "-----\n", "-----\nComment: \u202Eevil\x1b[31m\n", 1)
+	})
+	stored, err := sources.Create(ctx(steppedUp), header)
+	if err != nil || strings.Contains(stored.SigningKey, "Comment") || strings.ContainsRune(stored.SigningKey, 0x1b) {
+		t.Fatalf("stored key %q, %v", stored.SigningKey, err)
+	}
+	unchanged, err := sources.Update(ctx(steppedUp), stored.ID, app.SourceUpdate{SigningKey: &header.SigningKey, Fingerprint: new(sourceEd25519FP)})
+	if err != nil || unchanged.SigningKey != stored.SigningKey || len(anyStrings(h.lastEvent(t).Params["fields"])) != 0 {
+		t.Fatalf("same key with other armor = %v, fields %v", err, h.lastEvent(t).Params["fields"])
+	}
+}
+
+// TestSoftwareSourceAuditParamsBounded (External Review 1 M1): a refused attempt records exactly one event whose
+// request-derived params are cut to the documented limits and carry no invisible runes, whatever the body held.
+func TestSoftwareSourceAuditParamsBounded(t *testing.T) {
+	h := newPrivilegesHarness(t)
+	pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	sources := app.NewSoftwareSources(h.runner, pool)
+	auditor := h.account(t, principal.RoleOrgAuditor, false)
+	steppedUp := h.account(t, principal.RoleOrgAdmin, true)
+	ctx := func(p principal.Principal) context.Context { return principal.With(context.Background(), p) }
+	huge := strings.Repeat("\u202Ea", 100_000)
+	many := make([]string, 1000)
+	for i := range many {
+		many[i] = "https://a.example/" + strings.Repeat("p", 2000)
+	}
+	in := software.SourceInput{
+		Slug: huge, Name: huge, URIs: many, Suites: many, Components: many, SigningKey: huge, Fingerprint: huge,
+	}
+	check := func(name string) {
+		t.Helper()
+		ev := h.lastEvent(t)
+		for k, v := range ev.Params {
+			switch v := v.(type) {
+			case string:
+				if utf8.RuneCountInString(v) > 101 || strings.ContainsRune(v, 0x202E) {
+					t.Errorf("%s: param %s of %d runes", name, k, utf8.RuneCountInString(v))
+				}
+			case []any:
+				if len(v) > 9 {
+					t.Errorf("%s: param %s of %d items", name, k, len(v))
+				}
+				for _, item := range anyStrings(v) {
+					if utf8.RuneCountInString(item) > 513 || strings.ContainsRune(item, 0x202E) {
+						t.Errorf("%s: item of %s of %d runes", name, k, utf8.RuneCountInString(item))
+					}
+				}
+			}
+		}
+		if _, ok := ev.Params["signing_key"]; ok {
+			t.Errorf("%s: the signing key is in the params", name)
+		}
+	}
+	got := h.during(t, func() {
+		if _, err := sources.Create(ctx(auditor), in); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("denied create = %v", err)
+		}
+	})
+	if len(got) != 1 || got[0] != "software_source.created:denied:forbidden" {
+		t.Fatalf("actions %v", got)
+	}
+	check("denied create")
+	if _, err := sources.Create(ctx(steppedUp), in); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("failed create = %v", err)
+	}
+	check("failed create")
+
+	created, err := sources.Create(ctx(steppedUp), software.SourceInput{
+		Slug: "bounded", Name: "Bounded", URIs: []string{"https://a.example/"}, Suites: []string{"stable"},
+		Components: []string{"main"}, SigningKey: sourceKey(t, "ed25519.asc"), Fingerprint: sourceEd25519FP,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sources.Update(ctx(steppedUp), created.ID, app.SourceUpdate{Name: &huge, Fingerprint: &huge, SigningKey: &huge}); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("failed update = %v", err)
+	}
+	check("failed update")
 }

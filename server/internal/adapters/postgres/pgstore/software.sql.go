@@ -70,6 +70,34 @@ func (q *Queries) GetSoftwareSource(ctx context.Context, id uuid.UUID) (Software
 	return i, err
 }
 
+const getSoftwareSourceForUpdate = `-- name: GetSoftwareSourceForUpdate :one
+SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at FROM software_source WHERE id = $1 FOR UPDATE
+`
+
+// The source locked for the rest of the transaction: an update writes every column back, so a concurrent update must
+// not interleave between its read and its write.
+func (q *Queries) GetSoftwareSourceForUpdate(ctx context.Context, id uuid.UUID) (SoftwareSource, error) {
+	row := q.db.QueryRow(ctx, getSoftwareSourceForUpdate, id)
+	var i SoftwareSource
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Slug,
+		&i.Name,
+		&i.Uris,
+		&i.Suites,
+		&i.Components,
+		&i.Architectures,
+		&i.SigningKey,
+		&i.Fingerprint,
+		&i.WeakKey,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertSoftwareSource = `-- name: InsertSoftwareSource :one
 INSERT INTO software_source (id, organization_id, slug, name, uris, suites, components, architectures, signing_key,
   fingerprint, weak_key, created_by)

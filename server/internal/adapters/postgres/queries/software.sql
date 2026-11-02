@@ -43,3 +43,8 @@ SELECT count(*) FROM (
 -- name: ListAllSoftwareSources :many
 -- Every source of the organization (compiler), in a stable order.
 SELECT * FROM software_source ORDER BY slug, id;
+
+-- name: GetSoftwareSourceForUpdate :one
+-- The source locked for the rest of the transaction: an update writes every column back, so a concurrent update must
+-- not interleave between its read and its write.
+SELECT * FROM software_source WHERE id = @id FOR UPDATE;

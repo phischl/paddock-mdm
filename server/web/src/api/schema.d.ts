@@ -5658,7 +5658,7 @@ export interface components {
             updated_at: string;
         };
         SoftwareSource: components["schemas"]["SoftwareSourceSummary"] & {
-            /** @description The ASCII-armored OpenPGP public key. */
+            /** @description The ASCII-armored OpenPGP public key as stored, re-armored without armor headers. */
             signing_key: string;
         };
         SoftwareSourceCreate: {

@@ -198,6 +198,26 @@ func dearmor(data []byte) ([]byte, error) {
 	return raw, nil
 }
 
+// Armor encodes binary key material as a public key block without armor headers, in lines of 64 base64 characters
+// with the CRC-24 checksum (RFC 4880 §6.2): the canonical text of a key whose submitted armor may carry arbitrary
+// header values.
+func Armor(keyring []byte) []byte {
+	var b strings.Builder
+	b.WriteString(armorBegin + "\n\n")
+	enc := base64.StdEncoding.EncodeToString(keyring)
+	for len(enc) > 64 {
+		b.WriteString(enc[:64] + "\n")
+		enc = enc[64:]
+	}
+	if enc != "" {
+		b.WriteString(enc + "\n")
+	}
+	sum := crc24(keyring)
+	b.WriteString("=" + base64.StdEncoding.EncodeToString([]byte{byte(sum >> 16), byte(sum >> 8), byte(sum)}) + "\n")
+	b.WriteString(armorEnd + "\n")
+	return []byte(b.String())
+}
+
 // crc24 is the armor checksum of RFC 4880 §6.1.
 func crc24(data []byte) uint32 {
 	const (

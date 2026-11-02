@@ -1612,7 +1612,7 @@ var registry = map[Code]Definition{
 	CodeSoftwareSourceDeleted: {
 		Code: CodeSoftwareSourceDeleted, Emitted: true,
 		Description: "An organization administrator removed an APT package source; devices remove its source file and keyring at their next check-in.",
-		Params:      []string{"name", "slug", "fingerprint"},
+		Params:      []string{"name", "slug", "fingerprint", "weak_key"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role.",
 	},

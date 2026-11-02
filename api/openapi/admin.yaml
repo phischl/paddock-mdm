@@ -8321,7 +8321,7 @@ components:
         - type: object
           required: [signing_key]
           properties:
-            signing_key: { type: string, description: The ASCII-armored OpenPGP public key. }
+            signing_key: { type: string, description: "The ASCII-armored OpenPGP public key as stored, re-armored without armor headers." }
     SoftwareSourceCreate:
       type: object
       required: [slug, name, uris, suites, signing_key, fingerprint]

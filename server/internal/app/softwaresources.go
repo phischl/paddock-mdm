@@ -80,8 +80,10 @@ func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (
 	in.URIs, in.Suites, in.Components, in.Architectures = nonNil(in.URIs), nonNil(in.Suites), nonNil(in.Components), nonNil(in.Architectures)
 	spec := SpecSoftwareSourceCreate
 	spec.Params = map[string]any{
-		"name": in.Name, "slug": in.Slug, "uris": in.URIs, "suites": in.Suites, "components": in.Components,
-		"fingerprint": software.NormalizeFingerprint(in.Fingerprint),
+		"name": software.DisplayParam(in.Name, software.MaxNameLength), "slug": software.DisplayParam(in.Slug, maxSlugParam),
+		"uris": displayParams(in.URIs, software.MaxURIs, software.MaxURILength), "suites": displayParams(in.Suites, software.MaxSuites, maxSuiteParam),
+		"components":  displayParams(in.Components, software.MaxComponents, maxComponentParam),
+		"fingerprint": software.DisplayParam(software.NormalizeFingerprint(in.Fingerprint), maxFingerprintParam),
 	}
 	err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		key, err := software.ValidateSource(in)
@@ -97,7 +99,7 @@ func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (
 		p, _ := principal.From(ctx)
 		out, err = q.InsertSoftwareSource(ctx, pgstore.InsertSoftwareSourceParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Slug: in.Slug, Name: in.Name, Uris: in.URIs,
-			Suites: in.Suites, Components: in.Components, Architectures: in.Architectures, SigningKey: in.SigningKey,
+			Suites: in.Suites, Components: in.Components, Architectures: in.Architectures, SigningKey: key.SigningKey,
 			Fingerprint: key.Fingerprint, WeakKey: key.WeakKey, CreatedBy: uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
 		})
 		if db.IsUniqueViolation(err, "") {
@@ -129,16 +131,16 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 	spec := SpecSoftwareSourceUpdate
 	spec.Target = &audit.Target{Type: "software_source", ID: id.String()}
 	err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		old, err := q.GetSoftwareSource(ctx, id)
+		old, err := q.GetSoftwareSourceForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
 		rec.SetTarget(sourceTarget(old))
 		merged, fields := mergeSource(old, in)
-		rec.SetParam("name", merged.Name)
+		rec.SetParam("name", software.DisplayParam(merged.Name, software.MaxNameLength))
 		rec.SetParam("slug", old.Slug)
 		rec.SetParam("fields", fields)
-		rec.SetParam("fingerprint", software.NormalizeFingerprint(merged.Fingerprint))
+		rec.SetParam("fingerprint", software.DisplayParam(software.NormalizeFingerprint(merged.Fingerprint), maxFingerprintParam))
 		rec.SetParam("old_fingerprint", old.Fingerprint)
 		switch {
 		case in.Slug != nil:
@@ -150,11 +152,14 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 		if err != nil {
 			return softwareSourceProblem(err)
 		}
+		if key.SigningKey != old.SigningKey {
+			rec.SetParam("fields", append(fields, "signing_key"))
+		}
 		rec.SetParam("fingerprint", key.Fingerprint)
 		rec.SetParam("weak_key", key.WeakKey)
 		out, err = q.UpdateSoftwareSource(ctx, pgstore.UpdateSoftwareSourceParams{
 			ID: id, Name: merged.Name, Uris: merged.URIs, Suites: merged.Suites, Components: merged.Components,
-			Architectures: merged.Architectures, SigningKey: merged.SigningKey, Fingerprint: key.Fingerprint,
+			Architectures: merged.Architectures, SigningKey: key.SigningKey, Fingerprint: key.Fingerprint,
 			WeakKey: key.WeakKey,
 		})
 		if db.IsUniqueViolation(err, "") {
@@ -175,7 +180,7 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 	spec := SpecSoftwareSourceDelete
 	spec.Target = &audit.Target{Type: "software_source", ID: id.String()}
 	return s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		old, err := q.GetSoftwareSource(ctx, id)
+		old, err := q.GetSoftwareSourceForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
@@ -183,8 +188,13 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 		rec.SetParam("name", old.Name)
 		rec.SetParam("slug", old.Slug)
 		rec.SetParam("fingerprint", old.Fingerprint)
-		if _, err := q.DeleteSoftwareSource(ctx, id); err != nil {
+		rec.SetParam("weak_key", old.WeakKey)
+		n, err := q.DeleteSoftwareSource(ctx, id)
+		if err != nil {
 			return err
+		}
+		if n == 0 {
+			return problem.NotFound
 		}
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		return nil
@@ -192,7 +202,8 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 // mergeSource applies a change to a stored source and returns the result with the names of the fields whose value
-// changed. The stored fingerprint stands for the typed one when the key stays.
+// changed, except the signing key, which counts as changed only when its canonical form differs after validation.
+// The stored fingerprint stands for the typed one when the key stays.
 func mergeSource(old pgstore.SoftwareSource, in SourceUpdate) (software.SourceInput, []string) {
 	m := software.SourceInput{
 		Slug: old.Slug, Name: old.Name, URIs: old.Uris, Suites: old.Suites, Components: old.Components,
@@ -218,11 +229,30 @@ func mergeSource(old pgstore.SoftwareSource, in SourceUpdate) (software.SourceIn
 		if in.Fingerprint != nil {
 			m.Fingerprint = *in.Fingerprint
 		}
-		if *in.SigningKey != old.SigningKey {
-			fields = append(fields, "signing_key")
-		}
 	}
 	return m, fields
+}
+
+// Bounds of request text in the audit params beyond the domain's limits: the slug and suite patterns' maximum, a
+// component's, and a typed fingerprint with its group separators.
+const (
+	maxSlugParam        = 41
+	maxSuiteParam       = 64
+	maxComponentParam   = 32
+	maxFingerprintParam = 64
+)
+
+// displayParams bounds a list of request values for the audit params (software.DisplayParam per value); a longer list
+// is cut to maxItems and ends in "…".
+func displayParams(values []string, maxItems, maxRunes int) []string {
+	out := make([]string, 0, min(len(values), maxItems+1))
+	for i, v := range values {
+		if i == maxItems {
+			return append(out, "…")
+		}
+		out = append(out, software.DisplayParam(v, maxRunes))
+	}
+	return out
 }
 
 // softwareSourceProblem maps a validation error of the domain to its problem; the detail is the rule without the sentinel.

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -60,6 +61,9 @@ type SourceKey struct {
 	Fingerprint string
 	// Keyring is the binary (dearmored) key the agent writes.
 	Keyring []byte
+	// SigningKey is Keyring re-armored without armor headers, the form a source's key is stored and shown in: header
+	// values of the submitted text are free text that would otherwise reach terminals and the portal verbatim.
+	SigningKey string
 	// WeakKey is true when the primary key or a subkey is RSA of MinRSABits up to below StrongRSABits. Such a key is
 	// accepted; the use case records weak_key: true in the source view and in the audit params of the source events,
 	// and the portal shows it as a warning.
@@ -124,6 +128,22 @@ func invisibleInName(r rune) bool {
 		unicode.Variation_Selector) || (r >= 0xE0000 && r <= 0xE007F)
 }
 
+// DisplayParam bounds request text for the audit log before it is validated: invalid UTF-8 and the runes a name must
+// not contain become U+FFFD, and text longer than maxRunes is cut and ends in "…". A refused request must not put
+// arbitrary amounts or kinds of text into an immutable audit event.
+func DisplayParam(s string, maxRunes int) string {
+	s = strings.Map(func(r rune) rune {
+		if invisibleInName(r) {
+			return utf8.RuneError
+		}
+		return r
+	}, strings.ToValidUTF8(s, string(utf8.RuneError)))
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	return string([]rune(s)[:maxRunes]) + "…"
+}
+
 // NormalizeFingerprint removes all white space from a typed fingerprint and upper-cases it, the form fingerprints
 // are stored and compared in.
 func NormalizeFingerprint(s string) string {
@@ -139,7 +159,7 @@ func validateURIs(uris []string) error {
 	if len(uris) < 1 || len(uris) > MaxURIs {
 		return fmt.Errorf("%w: uris must have 1 to %d entries", ErrSource, MaxURIs)
 	}
-	for _, raw := range uris {
+	for i, raw := range uris {
 		if !strings.HasPrefix(raw, "https://") {
 			return fmt.Errorf("%w: uris must use https", ErrSource)
 		}
@@ -149,9 +169,22 @@ func validateURIs(uris []string) error {
 		if strings.ContainsFunc(raw, unicode.IsSpace) || strings.ContainsAny(raw, "?#") {
 			return fmt.Errorf("%w: uris must not contain white space, a query or a fragment", ErrSource)
 		}
+		// The same runes as in names: URIs are shown next to the trust decision and in the audit log.
+		if !utf8.ValidString(raw) || strings.ContainsFunc(raw, invisibleInName) {
+			return fmt.Errorf("%w: uris must not contain control, format, invisible or line separator characters",
+				ErrSource)
+		}
 		u, err := url.Parse(raw)
 		if err != nil || u.Hostname() == "" || u.User != nil {
 			return fmt.Errorf("%w: uris must be https://host[/path] without user info", ErrSource)
+		}
+		if p := u.Port(); p != "" {
+			if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+				return fmt.Errorf("%w: uris must use a port from 1 to 65535", ErrSource)
+			}
+		}
+		if slices.Contains(uris[:i], raw) {
+			return fmt.Errorf("%w: uris must not repeat %q", ErrSource, raw)
 		}
 	}
 	return nil
@@ -168,6 +201,9 @@ func validateDistribution(suites, components, archs []string) error {
 		}
 		if slices.Contains(suites[:i], s) {
 			return fmt.Errorf("%w: suites must not repeat %q", ErrSource, s)
+		}
+		if slices.Contains(strings.Split(s, "/"), "..") {
+			return fmt.Errorf("%w: suites must not contain a .. path segment", ErrSource)
 		}
 		if strings.HasSuffix(s, "/") {
 			flat++
@@ -197,9 +233,12 @@ func validateDistribution(suites, components, archs []string) error {
 	if len(archs) > MaxArchitectures {
 		return fmt.Errorf("%w: architectures must have at most %d entries", ErrSource, MaxArchitectures)
 	}
-	for _, a := range archs {
+	for i, a := range archs {
 		if !slices.Contains(architectures, a) {
 			return fmt.Errorf("%w: architectures must be amd64 or arm64", ErrSource)
+		}
+		if slices.Contains(archs[:i], a) {
+			return fmt.Errorf("%w: architectures must not repeat %q", ErrSource, a)
 		}
 	}
 	return nil
@@ -226,7 +265,8 @@ func validateSigningKey(signingKey, typed string) (SourceKey, error) {
 		return SourceKey{}, fmt.Errorf("%w: the key's fingerprint is %s, the entered one is %s", ErrFingerprint,
 			key.Fingerprint, want)
 	}
-	return SourceKey{Fingerprint: key.Fingerprint, Keyring: key.Keyring, WeakKey: weak}, nil
+	return SourceKey{Fingerprint: key.Fingerprint, Keyring: key.Keyring, SigningKey: string(openpgpkey.Armor(key.Keyring)),
+		WeakKey: weak}, nil
 }
 
 // Curves the upload accepts (ticket PDK-408, architect decision 2026-10-31). Brainpool and secp256k1 are refused;

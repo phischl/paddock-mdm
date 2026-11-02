@@ -60,6 +60,8 @@ func TestValidateSourceAccepts(t *testing.T) {
 		"name with umlauts and emoji": func(in *software.SourceInput) { in.Name = "Hersteller Ä 📦" },
 		"eight components":            func(in *software.SourceInput) { in.Components = strings.Fields("a b c d e f g h") },
 		"both architectures":          func(in *software.SourceInput) { in.Architectures = []string{"amd64", "arm64"} },
+		"idn host":                    func(in *software.SourceInput) { in.URIs = []string{"https://bücher.example/apt/"} },
+		"highest port":                func(in *software.SourceInput) { in.URIs = []string{"https://a.example:65535/"} },
 		"ed25519 key":                 func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "ed25519.asc"), ed25519FP },
 		"nist p-256 key":              func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "nistp256.asc"), nistp256FP },
 	}
@@ -129,6 +131,17 @@ func TestValidateSourceRefuses(t *testing.T) {
 		{"white space", func(in *software.SourceInput) { in.URIs = []string{"https://apt.vendor.example/a b"} }, "white space"},
 		{"user info", func(in *software.SourceInput) { in.URIs = []string{"https://user:pw@apt.vendor.example/"} }, "user info"},
 		{"no host", func(in *software.SourceInput) { in.URIs = []string{"https:///path"} }, "host"},
+		{"uri with a bidi override", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\u202Eevil"} }, "control"},
+		{"uri host with a zero-width space", func(in *software.SourceInput) { in.URIs = []string{"https://a\u200B.example/"} }, "control"},
+		{"uri with a control character", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\x1b[31m"} }, "control"},
+		{"uri with invalid UTF-8", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\xff"} }, "control"},
+		{"port out of range", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:99999/"} }, "port"},
+		{"port zero", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:0/"} }, "port"},
+		{"duplicate uri", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/", "https://a.example/"} }, "must not repeat"},
+		{"suite of ..", func(in *software.SourceInput) { in.Suites = []string{".."} }, ".. path segment"},
+		{"suite climbing up", func(in *software.SourceInput) { in.Suites = []string{"../../x"} }, ".. path segment"},
+		{"flat suite climbing up", func(in *software.SourceInput) { in.Suites, in.Components = []string{"../"}, nil }, ".. path segment"},
+		{"duplicate architecture", func(in *software.SourceInput) { in.Architectures = []string{"amd64", "amd64"} }, "must not repeat"},
 		{"no suites", func(in *software.SourceInput) { in.Suites = nil }, "suites must have"},
 		{"nine suites", func(in *software.SourceInput) { in.Suites = strings.Fields("a b c d e f g h i") }, "suites must have"},
 		{"suite with a space", func(in *software.SourceInput) { in.Suites = []string{"a b"} }, "suites must match"},
@@ -186,6 +199,37 @@ func TestValidateSourceKeyringIsTheDearmoredKey(t *testing.T) {
 	fp, err := openpgpkey.FingerprintBinary(got.Keyring)
 	if err != nil || fp != rsa3072FP {
 		t.Errorf("FingerprintBinary(keyring) = %s, %v", fp, err)
+	}
+}
+
+// TestValidateSourceSigningKeyIsCanonical (External Review 1 L2): the stored key text is the keyring re-armored, so
+// armor header values of the submitted text are dropped.
+func TestValidateSourceSigningKeyIsCanonical(t *testing.T) {
+	in := valid(t)
+	in.SigningKey = strings.Replace(in.SigningKey, "-----\n", "-----\nComment: \u202Eevil\x1b[31m\n", 1)
+	got, err := software.ValidateSource(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.SigningKey, "Comment") || strings.ContainsRune(got.SigningKey, 0x1b) {
+		t.Fatalf("signing key keeps the header: %q", got.SigningKey)
+	}
+	k, err := openpgpkey.ParseArmored([]byte(got.SigningKey))
+	if err != nil || k.Fingerprint != rsa3072FP {
+		t.Fatalf("canonical key = %v, %v", k, err)
+	}
+}
+
+func TestDisplayParam(t *testing.T) {
+	for in, want := range map[string]string{
+		"Vendor":               "Vendor",
+		"a\u202Eb\x1bc":        "a\uFFFDb\uFFFDc",
+		"x\xffy":               "x\uFFFDy",
+		strings.Repeat("ä", 7): "ääääää…",
+	} {
+		if got := software.DisplayParam(in, 6); got != want {
+			t.Errorf("DisplayParam(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

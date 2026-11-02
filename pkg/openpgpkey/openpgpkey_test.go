@@ -147,6 +147,32 @@ func TestArmoredAndBinaryAgree(t *testing.T) {
 	}
 }
 
+// TestArmorRoundTrip: Armor re-encodes the keyring without the submitted armor headers, and the result parses to the
+// same key; for the GnuPG fixture it is byte for byte the fixture minus its blank-line layout.
+func TestArmorRoundTrip(t *testing.T) {
+	for _, name := range []string{"rsa.gpg", "himmelblau.gpg"} {
+		raw := fixture(t, name)
+		armored := openpgpkey.Armor(raw)
+		k, err := openpgpkey.ParseArmored(armored)
+		if err != nil || !bytes.Equal(k.Keyring, raw) {
+			t.Fatalf("%s: re-armored key: %v", name, err)
+		}
+		for _, line := range strings.Split(string(armored), "\n") {
+			if len(line) > 64 || strings.Contains(line, ": ") {
+				t.Fatalf("%s: line %q", name, line)
+			}
+		}
+	}
+	withHeader := strings.Replace(string(fixture(t, "rsa.asc")), "-----\n", "-----\nComment: \u202eevil\x1b[31m\n", 1)
+	k, err := openpgpkey.ParseArmored([]byte(withHeader))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(openpgpkey.Armor(k.Keyring)); strings.Contains(got, "Comment") || strings.ContainsRune(got, 0x1b) {
+		t.Fatalf("armor keeps the header: %q", got)
+	}
+}
+
 func TestEntryPointsRefuseTheOtherEncoding(t *testing.T) {
 	if _, _, err := openpgpkey.Fingerprint(fixture(t, "rsa.gpg")); !errors.Is(err, openpgpkey.ErrNotPublicKey) {
 		t.Errorf("Fingerprint(binary) err = %v", err)
