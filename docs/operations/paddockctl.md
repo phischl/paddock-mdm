@@ -136,6 +136,9 @@ roots, assignments that grant no root — stays fully automated.
 
 ## Staged rollouts and the urgent opt-out
 
+The complete guide, with the settings, the counts, the halt, resume, advance and complete actions and the revert, is
+[configuration rollouts](configuration-rollouts.md).
+
 With staged rollouts enabled in the portal (*Rollout settings*), an apply that changes managed files, managed units,
 package holds or the update settings does not reach every device at once: it starts a rollout that moves wave by wave,
 and `paddockctl apply` prints `Rollout: staged (rollout <id>)` after the change set. Follow it, and halt, resume,
