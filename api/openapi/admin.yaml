@@ -7719,14 +7719,15 @@ components:
     DeviceConfigStatusCounts:
       type: object
       description: >-
-        The device's resources per apply status; zeros until the agent reported. failed counts failed applies only, not
-        the plan errors of a report-only report (plan M11 amendment R6.15).
-      required: [applied, failed, pending, drift_corrected]
+        The device's resources per apply status; zeros until the agent reported. failed counts failed applies only,
+        plan_errors the failed resources of report-only reports (plan M11 amendment R6.15).
+      required: [applied, failed, pending, drift_corrected, plan_errors]
       properties:
         applied: { type: integer }
         failed: { type: integer }
         pending: { type: integer }
         drift_corrected: { type: integer }
+        plan_errors: { type: integer }
     DeviceLoginStatus:
       type: object
       description: The latest login.* and sudo.* report of the device's agent (plan M3b decision 17).

@@ -72,7 +72,8 @@ const countDeviceResourceStatus = `-- name: CountDeviceResourceStatus :one
 SELECT count(*) FILTER (WHERE s.status = 'applied')::int AS applied,
        count(*) FILTER (WHERE s.status = 'failed' AND r.mode IS DISTINCT FROM 'report_only')::int AS failed,
        count(*) FILTER (WHERE s.status = 'pending')::int AS pending,
-       count(*) FILTER (WHERE s.status = 'drift_corrected')::int AS drift_corrected
+       count(*) FILTER (WHERE s.status = 'drift_corrected')::int AS drift_corrected,
+       count(*) FILTER (WHERE s.status = 'failed' AND r.mode = 'report_only')::int AS plan_errors
 FROM device_resource_status s
 LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
 WHERE s.device_id = $1
@@ -83,10 +84,11 @@ type CountDeviceResourceStatusRow struct {
 	Failed         int32
 	Pending        int32
 	DriftCorrected int32
+	PlanErrors     int32
 }
 
-// failed counts failed applies only: a plan error (a failed row of a report-only report) is none (plan M11 amendments
-// R6.6, R6.15); the device's list shows it with its report_mode.
+// failed counts failed applies only; plan_errors counts the failed rows of report-only reports (plan M11 amendments
+// R6.6, R6.15), which the device's list shows with their report_mode.
 func (q *Queries) CountDeviceResourceStatus(ctx context.Context, deviceID uuid.UUID) (CountDeviceResourceStatusRow, error) {
 	row := q.db.QueryRow(ctx, countDeviceResourceStatus, deviceID)
 	var i CountDeviceResourceStatusRow
@@ -95,6 +97,7 @@ func (q *Queries) CountDeviceResourceStatus(ctx context.Context, deviceID uuid.U
 		&i.Failed,
 		&i.Pending,
 		&i.DriftCorrected,
+		&i.PlanErrors,
 	)
 	return i, err
 }

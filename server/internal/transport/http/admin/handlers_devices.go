@@ -240,7 +240,7 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		Groups:             make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		ConfigStatus: adminapi.DeviceConfigStatusCounts{
 			Applied: int(d.ConfigStatus.Applied), Failed: int(d.ConfigStatus.Failed), Pending: int(d.ConfigStatus.Pending),
-			DriftCorrected: int(d.ConfigStatus.DriftCorrected),
+			DriftCorrected: int(d.ConfigStatus.DriftCorrected), PlanErrors: int(d.ConfigStatus.PlanErrors),
 		},
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
 		LoginAssignment: adminapi.DeviceLoginAssignment{

@@ -5194,12 +5194,13 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
-        /** @description The device's resources per apply status; zeros until the agent reported. failed counts failed applies only, not the plan errors of a report-only report (plan M11 amendment R6.15). */
+        /** @description The device's resources per apply status; zeros until the agent reported. failed counts failed applies only, plan_errors the failed resources of report-only reports (plan M11 amendment R6.15). */
         DeviceConfigStatusCounts: {
             applied: number;
             failed: number;
             pending: number;
             drift_corrected: number;
+            plan_errors: number;
         };
         /** @description The latest login.* and sudo.* report of the device's agent (plan M3b decision 17). */
         DeviceLoginStatus: {

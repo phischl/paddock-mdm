@@ -622,7 +622,7 @@ func TestConfigStatusReportOnlyPlanErrors(t *testing.T) {
 		if err != nil || res.Count != 1 || res.Items[0].ReportMode != "report_only" {
 			t.Fatalf("%s: device plan errors %+v, %v", when, res, err)
 		}
-		if d, err := devices.Get(auditor, device); err != nil || d.ConfigStatus.Failed != 0 || d.ConfigStatus.Pending != 1 {
+		if d, err := devices.Get(auditor, device); err != nil || d.ConfigStatus.Failed != 0 || d.ConfigStatus.PlanErrors != 1 || d.ConfigStatus.Pending != 1 {
 			t.Fatalf("%s: device counts %+v, %v", when, d.ConfigStatus, err)
 		}
 	}
@@ -646,7 +646,7 @@ func TestConfigStatusReportOnlyPlanErrors(t *testing.T) {
 	if err != nil || res.Count != 1 || res.Items[0].ReportMode != "enforce" {
 		t.Fatalf("device failure after an enforced report %+v, %v", res, err)
 	}
-	if d, err := devices.Get(auditor, device); err != nil || d.ConfigStatus.Failed != 1 {
+	if d, err := devices.Get(auditor, device); err != nil || d.ConfigStatus.Failed != 1 || d.ConfigStatus.PlanErrors != 0 {
 		t.Fatalf("device counts after an enforced report %+v, %v", d.ConfigStatus, err)
 	}
 }

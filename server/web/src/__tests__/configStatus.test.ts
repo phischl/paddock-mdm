@@ -95,7 +95,7 @@ describe('DeviceApplyStatus', () => {
     setActivePinia(pinia)
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/devices/:id/apply-status', name: 'device-apply-status', component: DeviceApplyStatus }] })
     await router.push('/devices/d1/apply-status')
-    const page = { device: ref({ id: 'd1', config_status: { applied: 3, failed: 1, pending: 1, drift_corrected: 0 }, ...device }) } as unknown as DevicePage
+    const page = { device: ref({ id: 'd1', config_status: { applied: 3, failed: 1, pending: 1, drift_corrected: 0, plan_errors: 0 }, ...device }) } as unknown as DevicePage
     const Frame = defineComponent({
       setup() {
         provide(deviceDetailKey, page)
@@ -128,6 +128,15 @@ describe('DeviceApplyStatus', () => {
   it('shows the report-only banner for a device in report-only mode', async () => {
     await mountTab({ config_mode: 'report_only' })
     expect(document.querySelector('[data-testid="apply-report-only"]')).not.toBeNull()
+  })
+
+  it('names the plan errors in the summary line only when there are some (plan M11 amendment R6.15)', async () => {
+    await mountTab({})
+    expect(document.querySelector('[data-testid="apply-plan-errors"]')).toBeNull()
+    wrapper?.unmount()
+    await mountTab({ config_status: { applied: 3, failed: 1, pending: 1, drift_corrected: 0, plan_errors: 2 } })
+    expect(document.querySelector('[data-testid="apply-counts"]')?.textContent).toContain('1 failed')
+    expect(document.querySelector('[data-testid="apply-plan-errors"]')?.textContent).toContain('2 plan errors')
   })
 
   it('labels a failed row by the mode of its report, not the device mode (plan M11 amendment R6.15)', async () => {

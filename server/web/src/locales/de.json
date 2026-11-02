@@ -1581,7 +1581,8 @@
       "applied": "{count, plural, one {# angewendet} other {# angewendet}}",
       "failed": "{count, plural, one {# fehlgeschlagen} other {# fehlgeschlagen}}",
       "pending": "{count, plural, one {# ausstehend} other {# ausstehend}}",
-      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}"
+      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}",
+      "plan_error": "{count, plural, one {# Planungsfehler} other {# Planungsfehler}}"
     },
     "changes": "Geplante Änderungen",
     "noDetails": "Keine weiteren Details.",
