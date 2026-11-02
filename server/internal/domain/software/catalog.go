@@ -100,6 +100,9 @@ func ValidateEntry(name, description, category string, packages []PackageRef) er
 		if !bundle.ValidPackage(p.Package) {
 			return fmt.Errorf("%w: package must match ^[a-z0-9][a-z0-9+.-]+$ (at most 128 characters)", ErrEntry)
 		}
+		if bundle.IsProtectedPackage(p.Package) {
+			return fmt.Errorf("%w: package %s is part of Paddock or its dependencies and cannot be managed", ErrEntry, p.Package)
+		}
 		key := [3]string{p.Distribution, p.Release, p.Architecture}
 		if seen[key] {
 			return fmt.Errorf("%w: distribution, release and architecture must be unique within packages", ErrEntry)
@@ -181,6 +184,18 @@ func ValidateAssignment(intent, updateRule string, version *string, reason strin
 		}
 	default:
 		return fmt.Errorf("%w: intent must be required, uninstall, hold or forbid", ErrAssignment)
+	}
+	return nil
+}
+
+// ValidateAssignmentTarget refuses an assignment, whatever its intent, of an entry that names a protected package
+// (bundle.ProtectedPackages): such an entry cannot be created any more, but one stored earlier must not reach a
+// device. Violations wrap ErrAssignment.
+func ValidateAssignmentTarget(packages []PackageRef) error {
+	for _, p := range packages {
+		if bundle.IsProtectedPackage(p.Package) {
+			return fmt.Errorf("%w: package %s is part of Paddock or its dependencies and cannot be assigned", ErrAssignment, p.Package)
+		}
 	}
 	return nil
 }

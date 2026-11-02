@@ -1203,3 +1203,30 @@ together with M11's `TestPreflight|TestAdoptionGates|TestConfigRolloutGates` (al
    ElGamal, Brainpool and secp256k1 are refused. `pkg/openpgpkey` stays a permissive structural reader; the policy
    lives in `server/internal/domain/software`. Source URIs may point to internal or IDN hosts: devices fetch from
    them, the server never does; the documentation says so.
+
+## Amendment 2026-11-02 (architect)
+
+Decisions on gaps M2, M3, M4, L1 and L2 found while reviewing PDK-409. Where this amendment and §2–§13 or the amendment
+of 2026-10-31 differ, this amendment wins.
+
+- **M3. Protected packages.** `pkg/bundle` owns a closed list (`bundle.ProtectedPackages`, `bundle.IsProtectedPackage`):
+  `cryptsetup`, `fleet-osquery` (fleetd, `reconcile.FleetdPackage`), `himmelblau`, `himmelblau-qr-greeter`,
+  `himmelblau-sshd-config`, `libpam-modules`, `nss-himmelblau`, `paddock-agent`, `paddock-revoke`, `paddock-supervisor`,
+  `pam-himmelblau`, `sudo`, `tpm2-tools` (sources: `packaging/nfpm/*.yaml`, `agent/internal/uninstall/steps.go`,
+  `agent/internal/reconcile/login.go`). The plan allowed every intent for any package; for these packages no intent is
+  allowed, because even `required` or `hold` with a version would move or pin the agent outside the signed A/B update
+  path. Refusal is `400 invalid_request` with one failure audit event: at entry validation (`ValidateEntry`: an entry
+  names no protected package, as entries carry no intents), at assignment validation (`ValidateAssignmentTarget`, for
+  an entry stored earlier), in `bundle.ValidateSoftware` (PDK-410) and in the agent's guard (PDK-412), as defence in
+  depth.
+- **M2. Device OS release.** New ticket PDK-695: the agent reports `os_release` with the check-in; the server updates
+  `device.os_release` with one audit event `device.os_release_changed` and a recompile. Agents that do not report it
+  keep the enrollment value.
+- **M4. Forbid and uninstall win over a hold.** A `forbid` or `uninstall` result for a package wins over a
+  `package_hold` of the same package for that device; the hold is dropped from that device's bundle. The bundle gains
+  the additive field `superseded_hold` on `SoftwarePackage`, reported by the agent (PDK-412); the portal view is
+  PDK-692.
+- **L1. Versionless holds.** Accepted as is: a versionless `package_hold` unpins a `required` pinned package
+  (`updates.Merge` ranks nil first), a versionless software hold does not (`MergeIntents` counts named versions only).
+  `TestSoftwareVersionlessHolds` (PDK-410) pins it; neither merge changes.
+- **L2.** Stub PDK-696.

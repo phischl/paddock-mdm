@@ -70,6 +70,8 @@ func TestValidateEntry(t *testing.T) {
 		{"release", "Editor", "", "", []PackageRef{{"ubuntu", "24 04", "*", "nano"}}, "release"},
 		{"empty release", "Editor", "", "", []PackageRef{{"ubuntu", "", "*", "nano"}}, "release"},
 		{"architecture", "Editor", "", "", []PackageRef{{"ubuntu", "*", "i386", "nano"}}, "architecture"},
+		{"protected agent", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "paddock-agent"}}, "paddock-agent"},
+		{"protected on one release", "Editor", "", "", append(ok, PackageRef{"debian", "12", "amd64", "himmelblau"}), "himmelblau"},
 		{"duplicate tuple", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "nano"}, {"ubuntu", "*", "*", "vim"}}, "unique"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -138,5 +140,15 @@ func TestDefaultUpdateRule(t *testing.T) {
 		if got := DefaultUpdateRule(tc.intent, tc.version); got != tc.want {
 			t.Errorf("DefaultUpdateRule(%s, %v) = %s, want %s", tc.intent, tc.version, got, tc.want)
 		}
+	}
+}
+
+func TestValidateAssignmentTarget(t *testing.T) {
+	if err := ValidateAssignmentTarget([]PackageRef{{"ubuntu", "*", "*", "nano"}}); err != nil {
+		t.Fatal(err)
+	}
+	err := ValidateAssignmentTarget([]PackageRef{{"ubuntu", "*", "*", "nano"}, {"debian", "*", "*", "sudo"}})
+	if !errors.Is(err, ErrAssignment) || !strings.Contains(err.Error(), "sudo") {
+		t.Fatalf("got %v", err)
 	}
 }

@@ -296,3 +296,61 @@ func TestSoftwareCatalogConstraints(t *testing.T) {
 		t.Fatal("a second organization-wide assignment of the entry was stored")
 	}
 }
+
+// TestSoftwareCatalogProtectedPackages (architect decision 2026-11-02, plan M13a amendment M3): an entry that names a
+// package of Paddock is refused at creation and, if one was stored earlier, at every assignment, each refusal with
+// exactly one failure event.
+func TestSoftwareCatalogProtectedPackages(t *testing.T) {
+	h := newPrivilegesHarness(t)
+	pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	catalog := app.NewSoftwareCatalog(h.runner, pool)
+	operator := h.account(t, principal.RoleOrgOperator, false)
+	ctx := principal.With(context.Background(), operator)
+
+	for _, name := range []string{"paddock-agent", "paddock-supervisor", "paddock-revoke", "fleet-osquery", "himmelblau", "pam-himmelblau", "nss-himmelblau"} {
+		got := h.during(t, func() {
+			_, err := catalog.Create(ctx, app.EntryInput{Name: "Protected " + name, Packages: []software.PackageRef{
+				{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: name}}})
+			if !errors.Is(err, problem.InvalidRequest) {
+				t.Errorf("%s = %v", name, err)
+			}
+		})
+		if !slices.Equal(got, []string{"software_catalog_entry.created:failure:invalid_request"}) {
+			t.Fatalf("%s: actions %v", name, got)
+		}
+	}
+
+	entry := uuid.Must(uuid.NewV7())
+	if _, err := h.super.Exec(context.Background(), `INSERT INTO software_catalog_entry (id, organization_id, name, packages)
+		VALUES ($1, $2, 'Stored earlier', '[{"distribution":"ubuntu","release":"*","architecture":"*","package":"paddock-agent"}]')`, entry, h.org); err != nil {
+		t.Fatal(err)
+	}
+	for _, intent := range []string{software.IntentForbid, software.IntentUninstall, software.IntentHold, software.IntentRequired} {
+		got := h.during(t, func() {
+			if _, err := catalog.CreateAssignment(ctx, app.AssignmentInput{CatalogEntryID: &entry, Intent: intent}); !errors.Is(err, problem.InvalidRequest) {
+				t.Errorf("%s = %v", intent, err)
+			}
+		})
+		if !slices.Equal(got, []string{"software_assignment.created:failure:invalid_request"}) {
+			t.Fatalf("%s: actions %v", intent, got)
+		}
+	}
+
+	assignment := uuid.Must(uuid.NewV7())
+	if _, err := h.super.Exec(context.Background(), `INSERT INTO software_assignment (id, organization_id, catalog_entry_id, intent) VALUES ($1, $2, $3, 'hold')`,
+		assignment, h.org, entry); err != nil {
+		t.Fatal(err)
+	}
+	got := h.during(t, func() {
+		if _, err := catalog.UpdateAssignment(ctx, assignment, app.AssignmentInput{Intent: software.IntentForbid}); !errors.Is(err, problem.InvalidRequest) {
+			t.Errorf("update = %v", err)
+		}
+	})
+	if !slices.Equal(got, []string{"software_assignment.updated:failure:invalid_request"}) {
+		t.Fatalf("update actions %v", got)
+	}
+}
