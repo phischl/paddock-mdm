@@ -436,10 +436,18 @@ func TestValidateSoftware(t *testing.T) {
 		"uninstall superseding hold": {func(s *SoftwareSpec) {
 			s.Packages[1].Intent, s.Packages[1].SupersededHold = SoftwareUninstall, true
 		}, true},
-		"required superseding hold": {func(s *SoftwareSpec) { s.Packages[1].SupersededHold = true }, false},
-		"slug A":                   {func(s *SoftwareSpec) { s.Sources[0].Slug, s.Packages[0].Source = "A", "A" }, false},
-		"unknown source":           {func(s *SoftwareSpec) { s.Packages[0].Source = "other" }, false},
-		"duplicate package":        {func(s *SoftwareSpec) { s.Packages[1].Package = "nano" }, false},
+		"required superseding hold":  {func(s *SoftwareSpec) { s.Packages[1].SupersededHold = true }, false},
+		"fully protected required":   {func(s *SoftwareSpec) { s.Packages[1].Package = "paddock-agent" }, false},
+		"fully protected hold":       {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "pam-himmelblau", SoftwareHold }, false},
+		"removal protected forbid":   {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "sudo", SoftwareForbid }, false},
+		"removal protected removal":  {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "dracut", SoftwareUninstall }, false},
+		"removal protected required": {func(s *SoftwareSpec) { s.Packages[1].Package = "sudo" }, true},
+		"conflicting required":       {func(s *SoftwareSpec) { s.Packages[1].Package = "initramfs-tools" }, false},
+		"conflicting hold":           {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "initramfs-tools", SoftwareHold }, false},
+		"conflicting forbid":         {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "initramfs-tools", SoftwareForbid }, true},
+		"slug A":                     {func(s *SoftwareSpec) { s.Sources[0].Slug, s.Packages[0].Source = "A", "A" }, false},
+		"unknown source":             {func(s *SoftwareSpec) { s.Packages[0].Source = "other" }, false},
+		"duplicate package":          {func(s *SoftwareSpec) { s.Packages[1].Package = "nano" }, false},
 		"duplicate source": {func(s *SoftwareSpec) {
 			s.Sources = append(s.Sources, s.Sources[0])
 		}, false},

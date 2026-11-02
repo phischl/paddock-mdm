@@ -3,6 +3,7 @@ package compiler
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -23,18 +24,27 @@ type orgSoftware struct {
 	bySlug      map[string]bundle.SoftwareSource
 	entries     map[uuid.UUID]softwareEntry
 	assignments []pgstore.SoftwareAssignment
+	// invalidAssignments are the assignments that fail the assignment rules, with the reason.
+	invalidAssignments map[uuid.UUID]error
 }
 
-// softwareEntry is a catalog entry as the compiler needs it: its source and its package references.
+// softwareEntry is a catalog entry as the compiler needs it: its name, source and package references, and invalid,
+// the reason it fails the catalog rules (nil when it passes). decoded is false when the references cannot be read.
 type softwareEntry struct {
+	name     string
 	source   uuid.NullUUID
 	packages []software.PackageRef
+	decoded  bool
+	invalid  error
 }
 
 // loadSoftware returns the software catalog of the context's organization. Every row is checked again — sources with
-// software.ValidateSource and the bundle contract, entries' package references, assignments' intent and version — and
-// a failing row is left out and logged: a rule tightened after the write, or a row changed outside the API, must never
-// put a refused trust anchor or an unchecked package name into a signed bundle, nor stop the organization's round.
+// software.ValidateSource and the bundle contract, entries' package references, assignments' intent and version —
+// because a rule tightened after the write, or a row changed outside the API, must never put a refused trust anchor or
+// an unchecked package name into a signed bundle, nor stop the organization's round. A failing source is left out (a
+// required package from it is then not installed, which is safe); a failing entry or assignment is kept with its
+// reason, and section fails every device it applies to (architect decision 2026-11-02, PDK-697): skipping it could
+// lift a forbid or let a competing intent win.
 func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error) {
 	sources, err := q.ListAllSoftwareSources(ctx)
 	if err != nil {
@@ -49,7 +59,8 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 		return nil, err
 	}
 	s := &orgSoftware{sources: map[uuid.UUID]bundle.SoftwareSource{}, bySlug: map[string]bundle.SoftwareSource{},
-		entries: make(map[uuid.UUID]softwareEntry, len(entries))}
+		entries: make(map[uuid.UUID]softwareEntry, len(entries)), assignments: assignments,
+		invalidAssignments: map[uuid.UUID]error{}}
 	for _, src := range sources {
 		key, err := software.ValidateSource(software.SourceInput{Slug: src.Slug, Name: src.Name, URIs: src.Uris,
 			Suites: src.Suites, Components: src.Components, Architectures: src.Architectures,
@@ -71,23 +82,23 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	}
 	for _, e := range entries {
 		refs, err := software.DecodePackages(e.Packages)
+		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: refs, decoded: err == nil}
 		if err == nil {
 			err = software.ValidatePackageRefs(refs)
 		}
 		if err != nil {
-			slog.ErrorContext(ctx, "catalog entry left out of bundles: its package references fail the catalog rules",
+			slog.ErrorContext(ctx, "catalog entry fails the catalog rules; the devices it applies to keep their previous bundle",
 				"catalog_entry_id", e.ID, "error", err)
-			continue
+			entry.invalid = err
 		}
-		s.entries[e.ID] = softwareEntry{source: e.SourceID, packages: refs}
+		s.entries[e.ID] = entry
 	}
 	for _, a := range assignments {
 		if err := software.ValidateAssignment(a.Intent, a.UpdateRule, a.Version, ""); err != nil {
-			slog.ErrorContext(ctx, "software assignment left out of bundles: it fails the assignment rules",
+			slog.ErrorContext(ctx, "software assignment fails the assignment rules; the devices it applies to keep their previous bundle",
 				"assignment_id", a.ID, "error", err)
-			continue
+			s.invalidAssignments[a.ID] = err
 		}
-		s.assignments = append(s.assignments, a)
 	}
 	return s, nil
 }
@@ -96,8 +107,10 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 // architecture, the package holds its assignments add to the updates section, and the packages whose assignments
 // name different versions. Assignments of the organization and of the device's groups apply; each resolves through
 // its entry to the device's package and the results merge per package (software.MergeIntents). Only required packages
-// name their source, and Sources lists exactly those. The section is nil when no package resolves.
-func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict) {
+// name their source, and Sources lists exactly those. The section is nil when no package resolves. err names an entry
+// or assignment that fails the current rules and applies to the device (its entry resolves on the device, or its
+// references cannot be read); the device's bundle must then not be published.
+func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict, error) {
 	var effective []software.Effective
 	for _, a := range s.assignments {
 		if a.DeviceGroupID.Valid && !slices.Contains(groups, a.DeviceGroupID.UUID) {
@@ -108,8 +121,16 @@ func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) 
 			continue
 		}
 		pkg, ok := software.Resolve(e.packages, osID, versionID, arch)
-		if !ok {
+		if e.decoded && !ok {
 			continue
+		}
+		if e.invalid != nil {
+			return nil, nil, nil, fmt.Errorf("catalog entry %s (%s) fails the catalog rules: %w", a.CatalogEntryID,
+				software.DisplayParam(e.name, 100), e.invalid)
+		}
+		if err := s.invalidAssignments[a.ID]; err != nil {
+			return nil, nil, nil, fmt.Errorf("software assignment %s of catalog entry %s (%s) fails the assignment rules: %w",
+				a.ID, a.CatalogEntryID, software.DisplayParam(e.name, 100), err)
 		}
 		slug := ""
 		if e.source.Valid {
@@ -124,7 +145,7 @@ func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) 
 	}
 	resolved, mergeHolds, conflicts := software.MergeIntents(effective)
 	if len(resolved) == 0 {
-		return nil, nil, conflicts
+		return nil, nil, conflicts, nil
 	}
 	spec := &bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{}, Packages: make([]bundle.SoftwarePackage, 0, len(resolved))}
 	var holds []bundle.Hold
@@ -147,7 +168,7 @@ func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) 
 		}
 	}
 	slices.SortFunc(spec.Sources, func(a, b bundle.SoftwareSource) int { return strings.Compare(a.Slug, b.Slug) })
-	return spec, holds, conflicts
+	return spec, holds, conflicts, nil
 }
 
 // alignWithHolds makes the software section and the device's merged holds (updates section) agree, as ADR 0042

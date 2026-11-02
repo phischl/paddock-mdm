@@ -411,7 +411,11 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		if keys.Software != nil {
 			// Conflicts are dropped as UpdatesSection drops those of the holds (plan M13a decision 10): the smallest
 			// version wins either way. The software holds stay outside the rollout overlay until M13c (plan M11 R2.10).
-			softwareSection, softwareHolds, _ = keys.Software.section(groups, t.osID, t.versionID, t.arch)
+			var err error
+			if softwareSection, softwareHolds, _, err = keys.Software.section(groups, t.osID, t.versionID, t.arch); err != nil {
+				return rendered{}, false, &renderFailure{device: t.id, reason: err.Error() +
+					"; the device keeps its previous bundle until the catalog is fixed"}, nil
+			}
 		}
 		if keys.Updates != nil {
 			updatesSection = keys.Updates.section(groups, softwareHolds)

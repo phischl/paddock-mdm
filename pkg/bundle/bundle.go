@@ -473,8 +473,8 @@ var (
 )
 
 // ValidateSoftware checks every field of a software section: the source rules the server applies on upload (plan
-// M13a decision 2), the package and intent rules (decisions 8 and 9), unique slugs and packages, and that every source
-// a package names is in Sources. It does not compare a keyring with its fingerprint; the agent does that per source.
+// M13a decision 2), the package and intent rules (decisions 8 and 9), the protected packages (RefusedIntent), unique
+// slugs and packages, and that every source a package names is in Sources. It does not compare a keyring with its fingerprint; the agent does that per source.
 func ValidateSoftware(s SoftwareSpec) error {
 	slugs := make([]string, 0, len(s.Sources))
 	for _, src := range s.Sources {
@@ -506,6 +506,9 @@ func ValidateSoftware(s SoftwareSpec) error {
 			}
 		default:
 			return fmt.Errorf("bundle: invalid intent %q of software package %q", p.Intent, p.Package)
+		}
+		if RefusedIntent(p.Package, p.Intent) {
+			return fmt.Errorf("bundle: software package %q is protected against intent %s", p.Package, p.Intent)
 		}
 		if p.SupersededHold && p.Intent != SoftwareForbid && p.Intent != SoftwareUninstall {
 			return fmt.Errorf("bundle: software package %q with intent %s cannot supersede a hold", p.Package, p.Intent)

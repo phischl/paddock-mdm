@@ -1,6 +1,7 @@
 package compiler_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -353,21 +354,90 @@ func TestSoftwareVersionlessHolds(t *testing.T) {
 	}
 }
 
-// TestSoftwareStoredRowsRechecked (Fix Round 1, review M1/minor 2): rows that fail the current rules — a source URI
-// with U+FFFD, accepted by the upload before the rules were aligned, and an entry whose package references were
-// changed outside the API — are left out; the device still gets the valid rest.
-func TestSoftwareStoredRowsRechecked(t *testing.T) {
+// TestSoftwareStoredSourceRechecked (Fix Round 1, review M1): a stored source that fails the current URI rule (U+FFFD,
+// accepted by the upload before the rules were aligned) is left out together with the required package from it; the
+// device still gets the valid rest.
+func TestSoftwareStoredSourceRechecked(t *testing.T) {
 	w := newWorld(t)
 	key := loadSoftwareKey(t, "ed25519.asc")
 	src := w.source("vendor", key, key.fingerprint)
-	w.exec("UPDATE software_source SET uris = '{https://repo.example.com/�apt}' WHERE id = $1", src)
+	w.exec("UPDATE software_source SET uris = '{https://repo.example.com/\uFFFDapt}' WHERE id = $1", src)
 	w.assign(w.entry("Vendor", src, [4]string{"ubuntu", "*", "*", "vendor-tool"}), nil, "required", "latest", nil)
-	w.assign(w.entry("Option", nil, [4]string{"ubuntu", "*", "*", "-o"}), nil, "required", "latest", nil)
 	w.assign(w.entry("Good", nil, [4]string{"ubuntu", "*", "*", "good"}), nil, "required", "latest", nil)
 	d := w.v2Device("{1,2}")
 	w.ubuntu(d, "amd64")
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	if s := w.fetch(d).Software; s == nil || len(s.Sources) != 0 || len(s.Packages) != 1 || s.Packages[0].Package != "good" {
 		t.Fatalf("software section %+v", s)
+	}
+}
+
+// renderFailures counts the device.bundle_render_failed events of dev whose reason contains what.
+func (w *world) renderFailures(dev uuid.UUID, what string) int {
+	w.t.Helper()
+	var n int
+	if err := w.super.QueryRow(context.Background(), `SELECT count(*) FROM action WHERE organization_id = $1
+		AND code = 'device.bundle_render_failed' AND outcome = 'failure' AND target->>'id' = $2
+		AND strpos(params->>'reason', $3) > 0`, w.org, dev.String(), what).Scan(&n); err != nil {
+		w.t.Fatal(err)
+	}
+	return n
+}
+
+// TestSoftwareInvalidEntryFailsClosed (architect decision 2026-11-02, PDK-697): a forbid entry whose package
+// references were corrupted outside the API is not skipped — a competing required assignment would lift the forbid.
+// Every device the entry applies to keeps its previous bundle and the render failure names the entry; a device the
+// entry does not apply to (another distribution) and the rest of the organization are compiled normally.
+func TestSoftwareInvalidEntryFailsClosed(t *testing.T) {
+	w := newWorld(t)
+	forbidden := w.entry("Nano forbidden", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.assign(forbidden, nil, "forbid", "latest", nil)
+	d, fedora := w.v2Device("{1,2}"), w.v2Device("{1,2}")
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if s := w.fetch(d).Software; s == nil || s.Packages[0].Intent != bundle.SoftwareForbid {
+		t.Fatalf("before: %+v", s)
+	}
+	before := w.version(d)
+
+	w.exec(`UPDATE software_catalog_entry SET packages = '[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano"},
+		{"distribution":"Debian!","release":"*","architecture":"*","package":"nano"}]' WHERE id = $1`, forbidden)
+	w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	w.exec(`UPDATE device SET os_release = '{"ID":"fedora","VERSION_ID":"40"}' WHERE id = $1`, fedora)
+	w.assign(w.entry("Fedora tool", nil, [4]string{"fedora", "*", "*", "tool"}), nil, "required", "latest", nil)
+	fedoraBefore := w.version(fedora)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if w.version(d) != before {
+		t.Fatal("a bundle was published although an entry that applies to the device fails the catalog rules")
+	}
+	if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Intent != bundle.SoftwareForbid {
+		t.Fatalf("the forbid was lifted: %+v", s)
+	}
+	if n := w.renderFailures(d, forbidden.String()); n != 1 {
+		t.Fatalf("%d render failures naming the entry, want 1", n)
+	}
+	if w.version(fedora) != fedoraBefore+1 || w.fetch(fedora).Software == nil || w.renderFailures(fedora, forbidden.String()) != 0 {
+		t.Fatal("a device the entry does not apply to was blocked")
+	}
+
+	w.exec(`UPDATE software_catalog_entry SET packages = '"not a list"' WHERE id = $1`, forbidden)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if w.version(d) != before || w.renderFailures(fedora, forbidden.String()) != 1 {
+		t.Fatal("unreadable references must block every device in the assignment's scope")
+	}
+}
+
+// TestSoftwareProtectedResultFailsClosed: an assignment stored before the protected-package rules (forbid sudo, which
+// paddock-agent depends on) yields a result the bundle contract refuses; the device keeps its previous bundle.
+func TestSoftwareProtectedResultFailsClosed(t *testing.T) {
+	w := newWorld(t)
+	d := w.v2Device("{1,2}")
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	before := w.version(d)
+	w.assign(w.entry("Sudo", nil, [4]string{"ubuntu", "*", "*", "sudo"}), nil, "forbid", "latest", nil)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if w.version(d) != before || w.renderFailures(d, "protected") != 1 {
+		t.Fatal("a forbid of a removal-protected package was published")
 	}
 }

@@ -117,16 +117,10 @@ func validateName(name string, kind error) error {
 	return nil
 }
 
-// invisibleInName reports runes a name must not contain. U+2800 (braille blank) and the Hangul fillers render as
-// blanks without being white space; the tag block is listed whole because its unassigned code points have no
-// property.
+// invisibleInName reports runes a name must not contain: the runes a source URI must not contain
+// (bundle.InvisibleInURI), except U+FFFD, which a name may show and which DisplayParam uses as its replacement mark.
 func invisibleInName(r rune) bool {
-	switch r {
-	case '\u115F', '\u1160', '\u3164', '\uFFA0', '\u2800':
-		return true
-	}
-	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Other_Default_Ignorable_Code_Point,
-		unicode.Variation_Selector) || (r >= 0xE0000 && r <= 0xE007F)
+	return r != utf8.RuneError && bundle.InvisibleInURI(r)
 }
 
 // DisplayParam bounds request text for the audit log before it is validated: invalid UTF-8 and the runes a name must
