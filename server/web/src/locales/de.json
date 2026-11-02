@@ -395,6 +395,7 @@
       "retired": "{actor} hat das Gerät {hostname} außer Betrieb genommen",
       "groups_changed": "{actor} hat die Gerätegruppen von {hostname} geändert",
       "name_changed": "Gerätename geändert",
+      "enforcement_enabled": "{actor} hat die Durchsetzung auf dem Gerät {hostname} aktiviert",
       "clone_suspected": "Das Gerät {hostname} wurde unter Quarantäne gestellt, weil seine Identität geklont zu sein scheint",
       "bundle_applied": "Das Gerät {target} hat Bundle {bundle_version, number} angewendet",
       "bundle_rejected": "Das Gerät {target} hat ein Bundle abgelehnt",
@@ -1306,7 +1307,29 @@
     },
     "componentFilter": "Komponente veraltet",
     "reportOnly": {
-      "banner": "Dieses Gerät ist im Berichtsmodus: Es meldet, was es ändern würde, und ändert nichts. Ausstehende Zeilen nennen die geplanten Änderungen."
+      "banner": "Dieses Gerät ist im Berichtsmodus: Es meldet, was es ändern würde, und ändert nichts. Ausstehende Zeilen nennen die geplanten Änderungen.",
+      "chip": "Berichtsmodus",
+      "enforce": {
+        "title": "Durchsetzung aktivieren",
+        "explanation": "Dieses Gerät wurde übernommen und meldet nur, was es ändern würde. Mit der Durchsetzung wendet es die Konfiguration beim nächsten Check-in an.",
+        "label": "Durchsetzung aktivieren",
+        "confirmTitle": "Durchsetzung auf {hostname} aktivieren?",
+        "confirm": "Bei der nächsten Anwendung stellt der Agent fremde sudoers-Dateien unter Quarantäne, entfernt unerwartete Mitglieder privilegierter Gruppen (nie den letzten Administrator), installiert die Anmeldekomponente und wendet jede verwaltete Ressource an. Zur Bestätigung den Hostnamen eingeben.",
+        "done": "Die Durchsetzung ist aktiviert; das Gerät wendet seine Konfiguration beim nächsten Check-in an."
+      }
+    },
+    "adoption": {
+      "method": "Registrierungsart",
+      "mode": "Konfigurationsmodus",
+      "methods": {
+        "autoinstall": "Autoinstall",
+        "adopted": "Übernommen",
+        "unknown": "Unbekannt"
+      },
+      "modes": {
+        "enforce": "Durchgesetzt",
+        "report_only": "Berichtsmodus"
+      }
     }
   },
   "tokens": {
@@ -1551,13 +1574,15 @@
       "applied": "Angewendet",
       "failed": "Fehlgeschlagen",
       "pending": "Ausstehend",
-      "drift_corrected": "Abweichung korrigiert"
+      "drift_corrected": "Abweichung korrigiert",
+      "plan_error": "Planungsfehler"
     },
     "count": {
       "applied": "{count, plural, one {# angewendet} other {# angewendet}}",
       "failed": "{count, plural, one {# fehlgeschlagen} other {# fehlgeschlagen}}",
       "pending": "{count, plural, one {# ausstehend} other {# ausstehend}}",
-      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}"
+      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}",
+      "plan_error": "{count, plural, one {# Planungsfehler} other {# Planungsfehler}}"
     },
     "changes": "Geplante Änderungen",
     "noDetails": "Keine weiteren Details.",
@@ -2134,7 +2159,8 @@
       "config_behind": "Konfiguration im Rückstand",
       "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen",
       "clock_drift": "Zeitabweichung",
-      "event_gap": "Ereignislücke"
+      "event_gap": "Ereignislücke",
+      "report_only": "Berichtsmodus, wartet auf Durchsetzung"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -2153,7 +2179,8 @@
       "config_behind": "Gerät öffnen",
       "disk_conversion_failed": "Gerät öffnen",
       "clock_drift": "Gerät öffnen",
-      "event_gap": "Gerät öffnen"
+      "event_gap": "Gerät öffnen",
+      "report_only": "Durchsetzung aktivieren"
     },
     "more": "+{count}",
     "empty": {

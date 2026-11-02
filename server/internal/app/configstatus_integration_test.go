@@ -575,3 +575,53 @@ func TestConfigStatusRejectionModeByVersion(t *testing.T) {
 		t.Fatalf("rejection mode %s, want enforce from version 2 (%v)", mode, err)
 	}
 }
+
+// TestConfigStatusReportOnlyPlanErrors (plan M11 amendment R6.6): a failed resource of a report-only device is a plan
+// error, not a failed apply: the fleet view counts it in no status and the failed filter does not select it, while the
+// device keeps listing it; once the device is enforced, a failure counts again.
+func TestConfigStatusReportOnlyPlanErrors(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	pool, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	reads := app.NewConfigStatus(pool)
+	org, device := h.device(t)
+	if _, err := h.super.Exec(ctx, "UPDATE device SET enrollment_method = 'adopted', config_mode = 'report_only' WHERE id = $1", device); err != nil {
+		t.Fatal(err)
+	}
+	addBundles(t, h, org, device, 1)
+	record(t, h, org, device, 1, protocol.EventBundleApplied, time.Now().UTC(), map[string]any{
+		"version": 1, "mode": "report_only", "resources": []map[string]any{
+			{"id": "unit:b.service", "status": "failed", "message": "plan failed"}, {"id": "file:/etc/a.conf", "status": "pending"},
+		},
+	})
+	auditor := principal.With(ctx, principal.Principal{Kind: principal.KindAdmin, Role: principal.RoleOrgAuditor, OrganizationID: org, ID: uuid.New(), Display: "t"})
+	page := app.ListPage{Sort: "resource_id", Limit: 10}
+
+	fleet, err := reads.Fleet(auditor, app.ConfigStatusQuery{Page: page})
+	if err != nil || fleet.Count != 2 {
+		t.Fatalf("fleet %+v, %v", fleet, err)
+	}
+	for _, r := range fleet.Items {
+		if r.Failed != 0 || r.LastFailureAt != nil {
+			t.Fatalf("a plan error counts as failed: %+v", r)
+		}
+	}
+	if failed, err := reads.Fleet(auditor, app.ConfigStatusQuery{Page: page, Statuses: []string{"failed"}}); err != nil || failed.Count != 0 || len(failed.Items) != 0 {
+		t.Fatalf("failed filter %+v, %v", failed, err)
+	}
+	if res, err := reads.DeviceResources(auditor, device, app.ConfigStatusQuery{Page: page, Statuses: []string{"failed"}}); err != nil || res.Count != 1 {
+		t.Fatalf("device plan errors %+v, %v", res, err)
+	}
+
+	if _, err := h.super.Exec(ctx, "UPDATE device SET config_mode = 'enforce' WHERE id = $1", device); err != nil {
+		t.Fatal(err)
+	}
+	if failed, err := reads.Fleet(auditor, app.ConfigStatusQuery{Page: page, Statuses: []string{"failed"}}); err != nil || failed.Count != 1 || failed.Items[0].Failed != 1 {
+		t.Fatalf("failed filter after enforcement %+v, %v", failed, err)
+	}
+}

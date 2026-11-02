@@ -179,3 +179,20 @@ describe('device header band (plan M7c decision 29)', () => {
     expect(w.find('[role="status"]').text()).toBe('The device already runs the offered release.')
   })
 })
+
+describe('adoption chips (plan M11 decision 43)', () => {
+  it('shows adopted and report-only for an adopted device before enforcement', async () => {
+    const { w } = await mountHeader(deviceOf({ enrollment_method: 'adopted', config_mode: 'report_only' }))
+    expect(w.find('[data-testid="device-enrollment-method"]').text()).toBe('Adopted')
+    expect(w.find('[data-testid="device-report-only"]').text()).toBe('Report-only')
+  })
+
+  it('shows autoinstall without report-only, and no method chip for an unknown method', async () => {
+    const { w } = await mountHeader(deviceOf({ enrollment_method: 'autoinstall', config_mode: 'enforce' }))
+    expect(w.find('[data-testid="device-enrollment-method"]').text()).toBe('Autoinstall')
+    expect(w.find('[data-testid="device-report-only"]').exists()).toBe(false)
+    wrapper?.unmount()
+    const unknown = await mountHeader(deviceOf({ enrollment_method: 'unknown', config_mode: 'enforce' }))
+    expect(unknown.w.find('[data-testid="device-enrollment-method"]').exists()).toBe(false)
+  })
+})

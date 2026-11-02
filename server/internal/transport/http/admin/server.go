@@ -142,6 +142,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/devices/{id}/reject":                                     {app.ScopeOrg, app.SpecDeviceReject},
 	"POST /api/v1/devices/{id}/release-quarantine":                         {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},
 	"POST /api/v1/devices/{id}/retire":                                     {app.ScopeOrg, app.SpecDeviceRetire},
+	"POST /api/v1/devices/{id}/enforce":                                    {app.ScopeOrg, app.SpecDeviceEnforce},
 	"POST /api/v1/enrollment-tokens/{id}/revoke":                           {app.ScopeOrg, app.SpecEnrollmentTokenRevoke},
 	"POST /api/v1/api-tokens":                                              {app.ScopeOrg, app.SpecAPITokenCreate},
 	"POST /api/v1/api-tokens/{id}/revoke":                                  {app.ScopeOrg, app.SpecAPITokenRevoke},

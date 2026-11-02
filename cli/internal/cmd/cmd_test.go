@@ -283,6 +283,11 @@ func TestDevicesList(t *testing.T) {
 	if q := page["q"].(string); q != "page_size=10&q=h&sort=-hostname&state=active&state=pending" {
 		t.Fatalf("query %s", q)
 	}
+	r = pc("", "devices", "list", "--enrollment-method", "adopted", "--config-mode", "report_only", "--config-mode", "enforce", "-o", "json")
+	if err := json.Unmarshal([]byte(r.stdout), &page); err != nil || r.code != 0 ||
+		page["q"].(string) != "config_mode=report_only&config_mode=enforce&enrollment_method=adopted" {
+		t.Fatalf("adoption filters: %+v", r)
+	}
 	r = pc("", "devices", "list")
 	if r.code != 0 || !strings.Contains(r.stdout, "h1") || !strings.HasSuffix(r.stdout, "page 1 of 1 (total 1)\n") {
 		t.Fatalf("devices table: %+v", r)

@@ -120,9 +120,17 @@ func (h *handlers) ListDevices(ctx context.Context, req adminapi.ListDevicesRequ
 	if err != nil {
 		return nil, err
 	}
+	methods, err := listing.Enum("enrollment_method", req.Params.EnrollmentMethod)
+	if err != nil {
+		return nil, err
+	}
+	modes, err := listing.Enum("config_mode", req.Params.ConfigMode)
+	if err != nil {
+		return nil, err
+	}
 	res, err := h.devices.List(ctx, app.DeviceQuery{Page: params.ListPage(), States: states, GroupID: req.Params.DeviceGroupId,
 		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0, OwnerID: req.Params.OwnerId,
-		ComponentOutdated: req.Params.ComponentOutdated})
+		ComponentOutdated: req.Params.ComponentOutdated, EnrollmentMethods: methods, ConfigModes: modes})
 	if err != nil {
 		return nil, err
 	}
@@ -180,6 +188,8 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 		Owners: []adminapi.UserRef{}, Components: []adminapi.DeviceComponent{}, ComponentsOutdated: []string{},
 		AgentUpdateRequestedVersion: d.AgentUpdateRequestedVersion,
 		AgentUpdateRequestedAt:      utcPtr(d.AgentUpdateRequestedAt), RetiredReason: d.RetiredReason,
+		EnrollmentMethod: adminapi.EnrollmentMethod(d.EnrollmentMethod), ConfigMode: adminapi.ConfigMode(d.ConfigMode),
+		ConfigModeChangedAt: utcPtr(d.ConfigModeChangedAt),
 	}
 	_ = json.Unmarshal(d.OsRelease, &out.OsRelease) // written by the worker from a map[string]string
 	if status != nil {
@@ -223,6 +233,7 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
 		Hardware: base.Hardware, AgentUpdateRequestedVersion: base.AgentUpdateRequestedVersion,
 		AgentUpdateRequestedAt: base.AgentUpdateRequestedAt, RetiredReason: base.RetiredReason,
+		EnrollmentMethod: base.EnrollmentMethod, ConfigMode: base.ConfigMode, ConfigModeChangedAt: base.ConfigModeChangedAt,
 		Uninstall: toDeviceUninstall(d.Uninstall, d.UninstallReportOverdue), DiskConversion: toDeviceDiskConversion(d.DiskConversion),
 		Components:         toDeviceComponents(d.Status, d.ComponentTargets),
 		ComponentsOutdated: base.ComponentsOutdated,
@@ -321,6 +332,16 @@ func (h *handlers) RetireDevice(ctx context.Context, req adminapi.RetireDeviceRe
 		return nil, err
 	}
 	return adminapi.RetireDevice200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) EnforceDevice(ctx context.Context, req adminapi.EnforceDeviceRequestObject) (adminapi.EnforceDeviceResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, func(ctx context.Context, id uuid.UUID) (pgstore.Device, error) {
+		return h.devices.Enforce(ctx, id, req.Body.Hostname)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.EnforceDevice200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
 }
 
 // transition runs a lifecycle use case and returns the device as it is afterwards.

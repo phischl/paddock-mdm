@@ -62,7 +62,7 @@ func (g *gateway) enroll(w http.ResponseWriter, r *http.Request) {
 	msg := ingest.Enroll{
 		EnrollmentID: id, OrganizationID: tok.OrganizationID, TokenSHA256: hash, KeyID: s.headers.KeyID, PublicKey: spki,
 		KeyProtection: req.KeyProtection, Hostname: req.Hostname, HardwareUUID: req.HardwareUUID, MachineID: req.MachineID,
-		OSRelease: req.OSRelease, AgentVersion: req.AgentVersion, ReceivedAt: g.d.Now().UTC(),
+		OSRelease: req.OSRelease, AgentVersion: req.AgentVersion, EnrollmentMethod: req.EnrollmentMethod, ReceivedAt: g.d.Now().UTC(),
 	}
 	body, err := json.Marshal(msg)
 	if err != nil {
@@ -88,6 +88,9 @@ func validateEnroll(req protocol.EnrollRequest) error {
 		return errInvalidRequest.with("key_protection must be tpm or file")
 	}
 	if err := domaindevice.ValidateReported(req.Hostname, req.HardwareUUID, req.MachineID, req.AgentVersion); err != nil {
+		return errInvalidRequest.with(err.Error())
+	}
+	if _, _, err := domaindevice.Adoption(req.EnrollmentMethod); err != nil {
 		return errInvalidRequest.with(err.Error())
 	}
 	return nil

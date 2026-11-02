@@ -100,7 +100,7 @@ const listCompileTargets = `-- name: ListCompileTargets :many
 SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions,
        coalesce(s.agent_version, '')::text AS agent_version,
        coalesce(d.agent_update_requested_version, '')::text AS agent_update_requested_version, d.agent_update_requested_at,
-       d.name
+       d.name, d.config_mode
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = ANY($1::uuid[]) ORDER BY d.id
 `
@@ -115,6 +115,7 @@ type ListCompileTargetsRow struct {
 	AgentUpdateRequestedVersion string
 	AgentUpdateRequestedAt      *time.Time
 	Name                        *string
+	ConfigMode                  string
 }
 
 func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]ListCompileTargetsRow, error) {
@@ -136,6 +137,7 @@ func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]Li
 			&i.AgentUpdateRequestedVersion,
 			&i.AgentUpdateRequestedAt,
 			&i.Name,
+			&i.ConfigMode,
 		); err != nil {
 			return nil, err
 		}

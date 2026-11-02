@@ -104,6 +104,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'sudo_apply_failed':
       return { status: 'warn', label }
     case 'revocation_pending':
+    case 'report_only':
       return { status: 'info', label }
   }
 }

@@ -353,7 +353,7 @@ func (q *Queries) InsertConfigRollout(ctx context.Context, arg InsertConfigRollo
 }
 
 const listConfigRolloutDevices = `-- name: ListConfigRolloutDevices :many
-SELECT d.id, d.hostname,
+SELECT d.id, d.hostname, d.config_mode,
   COALESCE(nb.version, 0)::bigint AS bundle_version,
   COALESCE(nb.config_rollout_id, '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS bundle_rollout_id
 FROM device d
@@ -366,6 +366,7 @@ ORDER BY d.hostname, d.id
 type ListConfigRolloutDevicesRow struct {
 	ID              uuid.UUID
 	Hostname        string
+	ConfigMode      string
 	BundleVersion   int64
 	BundleRolloutID uuid.UUID
 }
@@ -384,6 +385,7 @@ func (q *Queries) ListConfigRolloutDevices(ctx context.Context, qPattern *string
 		if err := rows.Scan(
 			&i.ID,
 			&i.Hostname,
+			&i.ConfigMode,
 			&i.BundleVersion,
 			&i.BundleRolloutID,
 		); err != nil {

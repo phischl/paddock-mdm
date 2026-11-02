@@ -58,6 +58,7 @@ export const auditCodes = [
   'device.disk_conversion_unlock_restore_failed',
   'device.encrypt_cancelled',
   'device.encrypt_requested',
+  'device.enforcement_enabled',
   'device.enrolled',
   'device.escrow_destroyed',
   'device.event_gap',

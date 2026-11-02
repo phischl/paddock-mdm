@@ -109,7 +109,7 @@ FROM latest l;
 -- name: ListConfigRolloutDevices :many
 -- The active devices with their newest bundle, ordered by hostname: the rollout's device list sorts the rest in memory,
 -- because whether a device is in the wave depends on its bucket in the rollout. A device without a bundle has version 0.
-SELECT d.id, d.hostname,
+SELECT d.id, d.hostname, d.config_mode,
   COALESCE(nb.version, 0)::bigint AS bundle_version,
   COALESCE(nb.config_rollout_id, '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS bundle_rollout_id
 FROM device d

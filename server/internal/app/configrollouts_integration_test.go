@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -568,5 +569,51 @@ func TestConfigRolloutDiscardedFailureNotListed(t *testing.T) {
 		if err != nil || got.Count != 0 {
 			t.Errorf("report_outcome=%s: %+v, %v", outcome, got, err)
 		}
+	}
+}
+
+// TestConfigRolloutReportOnlyNotEligible (plan M11 decision 30, PDK-685): a report-only device inside the wave's bucket
+// range or in the canary group is not eligible for the API counts, the device list or the worker, so the threshold of a
+// wave with report-only devices equals the threshold without them.
+func TestConfigRolloutReportOnlyNotEligible(t *testing.T) {
+	h := newRolloutHarness(t)
+	canary := h.group(t, h.org)
+	enableRollouts(t, h.writeHarness, []int{50, 100}, &canary)
+	r := h.stage(t, "/etc/acme/adopted.conf")
+	staged := "file:/etc/acme/adopted.conf"
+	now := time.Now()
+	enforced := []uuid.UUID{h.device(t, r.id, 50, true), h.device(t, r.id, 50, true), h.device(t, r.id, 50, true)}
+	adopted := []uuid.UUID{h.device(t, r.id, 50, true), h.device(t, r.id, 50, true), h.device(t, r.id, 50, false)}
+	h.exec(t, "INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)", h.org, canary, adopted[2])
+	for _, d := range adopted {
+		h.exec(t, "UPDATE device SET enrollment_method = 'adopted', config_mode = 'report_only' WHERE id = $1", d)
+	}
+
+	d, err := h.api.Get(h.admin, r.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (app.RolloutCounts{Eligible: 3, Pending: 3}); d.Counts != want {
+		t.Fatalf("counts %+v, want %+v", d.Counts, want)
+	}
+	devices, err := h.api.ListDevices(h.admin, r.id, app.ConfigRolloutDeviceQuery{Page: app.ListPage{Sort: "hostname", Limit: 100}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dev := range devices.Items {
+		if dev.InWave != slices.Contains(enforced, dev.DeviceID) {
+			t.Errorf("%s: in_wave %v", dev.DeviceID, dev.InWave)
+		}
+	}
+
+	// Threshold max(2, 4 % of 3) = 2 as without the report-only devices: two failures halt the wave.
+	h.report(t, enforced[0], r.id, 1, "applied", "enforce", staged, now)
+	h.report(t, enforced[1], r.id, 1, "rejected", "enforce", "", now)
+	if err := h.worker.Evaluate(h.system, now); err != nil {
+		t.Fatal(err)
+	}
+	halted := h.events(t, audit.CodeConfigRolloutHalted)
+	if len(halted) != 1 || halted[0].Params["eligible"] != 3.0 || halted[0].Params["failed"] != 2.0 || halted[0].Params["threshold"] != 2.0 {
+		t.Fatalf("halted events %+v", halted)
 	}
 }

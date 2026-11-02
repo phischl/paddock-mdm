@@ -44,7 +44,8 @@ commands:
   apply -f <file|-> [--dry-run] [--yes] [-o text|json]
                                 show the plan of a configuration and apply it; deletions need --yes
   devices list [--page N] [--page-size 10|25|50|100] [--sort <field>] [-q <text>] [--state <s>]...
-               [--device-group-id <uuid>] [--disk-state <s>]... [-o table|json]
+               [--device-group-id <uuid>] [--disk-state <s>]... [--enrollment-method <m>]...
+               [--config-mode <m>]... [-o table|json]
   audit feed [--after N] [--limit L] [--follow]
                                 print audit events as JSON lines and the cursor (next_after=N) on stderr
   audit verify-export <file> [--fingerprint <hex>] [-o text|json]

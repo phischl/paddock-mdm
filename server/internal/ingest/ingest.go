@@ -25,7 +25,10 @@ type Enroll struct {
 	MachineID      string            `json:"machine_id,omitempty"`
 	OSRelease      map[string]string `json:"os_release,omitempty"`
 	AgentVersion   string            `json:"agent_version"`
-	ReceivedAt     time.Time         `json:"received_at"`
+	// EnrollmentMethod is "", autoinstall or adopted, as the device asserts it (plan M11 decision 40): it only selects
+	// enforce or report-only, never more trust.
+	EnrollmentMethod string    `json:"enrollment_method,omitempty"`
+	ReceivedAt       time.Time `json:"received_at"`
 }
 
 // Heartbeat is one check-in (routing key ingest.heartbeat.<org>, message_id random). Seq is the sequence number the

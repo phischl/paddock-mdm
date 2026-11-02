@@ -233,9 +233,11 @@ func runDevicesList(ctx context.Context, e Env, args []string) error {
 	sort := fs.String("sort", "", "")
 	q := fs.String("q", "", "")
 	group := fs.String("device-group-id", "", "")
-	var states, disks repeated
+	var states, disks, methods, modes repeated
 	fs.Var(&states, "state", "")
 	fs.Var(&disks, "disk-state", "")
+	fs.Var(&methods, "enrollment-method", "")
+	fs.Var(&modes, "config-mode", "")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -254,12 +256,10 @@ func runDevicesList(ctx context.Context, e Env, args []string) error {
 			query.Set(k, v)
 		}
 	}
-	query["state"], query["disk_state"] = states, disks
-	if len(states) == 0 {
-		delete(query, "state")
-	}
-	if len(disks) == 0 {
-		delete(query, "disk_state")
+	for k, v := range map[string]repeated{"state": states, "disk_state": disks, "enrollment_method": methods, "config_mode": modes} {
+		if len(v) > 0 {
+			query[k] = v
+		}
 	}
 	c, err := g.connect(e)
 	if err != nil {

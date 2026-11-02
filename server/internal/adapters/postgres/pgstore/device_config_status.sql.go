@@ -19,7 +19,8 @@ SELECT count(*) FROM (
   FROM device_resource_status s JOIN device d ON d.id = s.device_id AND d.state = 'active'
   WHERE ($1::text IS NULL OR s.resource_id ILIKE $1::text ESCAPE '\')
   GROUP BY s.resource_id
-  HAVING $2::text[] IS NULL OR count(*) FILTER (WHERE s.status = ANY($2::text[])) > 0
+  HAVING $2::text[] IS NULL OR count(*) FILTER (WHERE s.status = ANY($2::text[])
+    AND (s.status <> 'failed' OR d.config_mode = 'enforce')) > 0
   LIMIT $3
 ) matching
 `
@@ -239,14 +240,15 @@ const listConfigStatus = `-- name: ListConfigStatus :many
 SELECT resource_id, applied, failed, pending, drift_corrected, last_failure_at FROM (
   SELECT s.resource_id,
          count(*) FILTER (WHERE s.status = 'applied')::int AS applied,
-         count(*) FILTER (WHERE s.status = 'failed')::int AS failed,
+         count(*) FILTER (WHERE s.status = 'failed' AND d.config_mode = 'enforce')::int AS failed,
          count(*) FILTER (WHERE s.status = 'pending')::int AS pending,
          count(*) FILTER (WHERE s.status = 'drift_corrected')::int AS drift_corrected,
-         max(s.occurred_at) FILTER (WHERE s.status = 'failed') AS last_failure_at
+         max(s.occurred_at) FILTER (WHERE s.status = 'failed' AND d.config_mode = 'enforce') AS last_failure_at
   FROM device_resource_status s JOIN device d ON d.id = s.device_id AND d.state = 'active'
   WHERE ($1::text IS NULL OR s.resource_id ILIKE $1::text ESCAPE '\')
   GROUP BY s.resource_id
-  HAVING $2::text[] IS NULL OR count(*) FILTER (WHERE s.status = ANY($2::text[])) > 0
+  HAVING $2::text[] IS NULL OR count(*) FILTER (WHERE s.status = ANY($2::text[])
+    AND (s.status <> 'failed' OR d.config_mode = 'enforce')) > 0
 ) resources
 ORDER BY
   CASE WHEN $3::text = 'resource_id' THEN resource_id END ASC,
@@ -279,6 +281,8 @@ type ListConfigStatusRow struct {
 }
 
 // One row per resource ID with the number of active devices per status; a resource of retired devices only is absent.
+// A failed resource of a report-only device is a plan error, not a failed apply (plan M11 amendment R6.6): it is
+// counted in no status here and shown on the device.
 func (q *Queries) ListConfigStatus(ctx context.Context, arg ListConfigStatusParams) ([]ListConfigStatusRow, error) {
 	rows, err := q.db.Query(ctx, listConfigStatus,
 		arg.QPattern,

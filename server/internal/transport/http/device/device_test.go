@@ -286,7 +286,9 @@ func TestEnrollFlow(t *testing.T) {
 	e := newEnv(t, 0, 0)
 	c := newClient(t)
 	secret := e.token(false, e.now.Add(time.Hour))
-	res := e.send(c, request{method: "POST", path: "/v1/enroll", device: "enroll", body: e.enrollBody(c, secret)})
+	body := e.enrollBody(c, secret)
+	body.EnrollmentMethod = protocol.EnrollmentAdopted
+	res := e.send(c, request{method: "POST", path: "/v1/enroll", device: "enroll", body: body})
 	if res.status != http.StatusAccepted {
 		t.Fatalf("enroll: %d %s", res.status, res.body)
 	}
@@ -298,7 +300,8 @@ func TestEnrollFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if msg.MessageID != acc.EnrollmentID || msg.RoutingKey != "ingest.enroll."+e.org.String() || in.KeyID != c.keyID ||
-		in.OrganizationID != e.org || !bytes.Equal(in.TokenSHA256, enrollment.HashSecret(secret)) || in.Hostname != "lt-test" {
+		in.OrganizationID != e.org || !bytes.Equal(in.TokenSHA256, enrollment.HashSecret(secret)) || in.Hostname != "lt-test" ||
+		in.EnrollmentMethod != protocol.EnrollmentAdopted {
 		t.Fatalf("published %s %s %+v", msg.MessageID, msg.RoutingKey, in)
 	}
 
@@ -359,6 +362,11 @@ func TestEnrollRejections(t *testing.T) {
 		"invalid json":   {secret: valid, status: 400, code: "invalid_request", mutate: func(r *http.Request, b *[]byte) { *b = []byte("{"); resign(t, r, c, *b) }},
 		"bad hostname": {secret: valid, status: 400, code: "invalid_request", mutate: func(r *http.Request, b *[]byte) {
 			*b = bytes.Replace(*b, []byte(`"lt-test"`), []byte(`"a\nb"`), 1)
+			resign(t, r, c, *b)
+		}},
+		// The method is asserted by the device (plan M11 decision 40): only the two known values pass.
+		"unknown enrollment method": {secret: valid, status: 400, code: "invalid_request", mutate: func(r *http.Request, b *[]byte) {
+			*b = bytes.Replace(*b, []byte(`"lt-test"`), []byte(`"lt-test","enrollment_method":"manual"`), 1)
 			resign(t, r, c, *b)
 		}},
 	}

@@ -1,6 +1,6 @@
 // Command devicesim enrolls a simulated device for the portal end-to-end tests (plan M2a E2, plan M4a):
 //
-//	devicesim enroll --hostname <name> < enrollment-config.json
+//	devicesim enroll --hostname <name> [--enrollment-method autoinstall|adopted] < enrollment-config.json
 //	devicesim local-admin --hostname <name> < enrollment-config.json
 //	devicesim inventory --hostname <name> --package <name>=<version> ... < enrollment-config.json
 //	devicesim disk --hostname <name> --health <json> < enrollment-config.json
@@ -44,8 +44,8 @@ func main() {
 	}
 }
 
-const usage = "usage: devicesim enroll|local-admin|inventory|disk|config-report --hostname <name> [--package <name>=<version> ...] " +
-	"[--health <json>] [--resource <id>=<status>[:<message>] ...] < enrollment-config.json"
+const usage = "usage: devicesim enroll|local-admin|inventory|disk|config-report --hostname <name> [--enrollment-method autoinstall|adopted] " +
+	"[--package <name>=<version> ...] [--health <json>] [--resource <id>=<status>[:<message>] ...] < enrollment-config.json"
 
 func run(args []string) error {
 	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory" && args[0] != "disk" && args[0] != "config-report") {
@@ -54,6 +54,7 @@ func run(args []string) error {
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	hostname := fs.String("hostname", "", "hostname to report")
 	health := fs.String("health", "", "check-in health to report (disk)")
+	method := fs.String("enrollment-method", "", "enrollment method to send: autoinstall or adopted (none by default)")
 	var packages [][2]string
 	fs.Func("package", "deb package <name>=<version> to report to Fleet (inventory)", func(v string) error {
 		name, version, ok := strings.Cut(v, "=")
@@ -88,6 +89,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	dev.EnrollmentMethod = *method
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	res, err := dev.Enroll(ctx, *hostname)

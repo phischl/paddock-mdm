@@ -1107,6 +1107,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/enforce": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Ends the report-only mode of an adopted device (plan M11 decision 42): its next
+         *     bundle quarantines foreign sudoers files, removes unexpected members of privileged groups (never the last
+         *     administrator), installs the login component and applies every managed resource. The body repeats the device's
+         *     hostname as the typed confirmation (400 invalid_request when it differs); a device that is not active and
+         *     report-only: 409 invalid_state. Not offered to the assistant: the typed confirmation is the administrator's.
+         */
+        post: operations["enforceDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/update-agent": {
         parameters: {
             query?: never;
@@ -4792,6 +4817,29 @@ export interface components {
             components: components["schemas"]["DeviceComponent"][];
             /** @description The components older than their target at the last heartbeat (the list column and filter). */
             components_outdated: string[];
+            enrollment_method: components["schemas"]["EnrollmentMethod"];
+            config_mode: components["schemas"]["ConfigMode"];
+            /**
+             * Format: date-time
+             * @description When enforcement was enabled; null while the mode is the one the device enrolled with.
+             */
+            config_mode_changed_at: string | null;
+        };
+        /**
+         * @description How the device was enrolled, as the agent asserted it (plan M11 decision 40): autoinstall by the Paddock
+         *     autoinstall, adopted by enrolling an installed system, unknown when the agent sent none.
+         * @enum {string}
+         */
+        EnrollmentMethod: "autoinstall" | "adopted" | "unknown";
+        /**
+         * @description enforce applies the configuration; report_only (an adopted device until an administrator enables enforcement)
+         *     only reports what it would change.
+         * @enum {string}
+         */
+        ConfigMode: "enforce" | "report_only";
+        DeviceEnforce: {
+            /** @description The device's hostname, typed by the administrator as confirmation. */
+            hostname: string;
         };
         DeviceComponent: {
             /** @enum {string} */
@@ -5114,7 +5162,11 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
-        /** @description One resource ID with the number of active devices per status. */
+        /**
+         * @description One resource ID with the number of active devices per status. A failed resource of a report-only device is a
+         *     plan error, not a failed apply (plan M11 amendment R6.6): it is counted in no status here, the status filter
+         *     failed does not select it, and the device's apply status shows it.
+         */
         ResourceStatus: {
             resource_id: string;
             type: string;
@@ -5548,7 +5600,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap" | "report_only";
         Attention: {
             /** @description The live finding of the condition (plan M9 decision 34); null until the findings round created it. */
             finding: components["schemas"]["AttentionFinding"] | null;
@@ -5560,10 +5612,10 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; otherwise empty. */
             detail: string;
         };
         /** @enum {string} */
@@ -8486,6 +8538,10 @@ export interface operations {
                 owner_id?: string;
                 /** @description true lists the devices with a component older than its target at their last heartbeat, false the others (plan M8d decision 55). */
                 component_outdated?: boolean;
+                /** @description Repeatable. How the device was enrolled (plan M11 decision 43). */
+                enrollment_method?: components["schemas"]["EnrollmentMethod"][];
+                /** @description Repeatable. Whether the device's configuration is enforced or only reported (plan M11 decision 43). */
+                config_mode?: components["schemas"]["ConfigMode"][];
             };
             header?: never;
             path?: never;
@@ -8664,6 +8720,31 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    enforceDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceEnforce"];
+            };
+        };
         responses: {
             200: components["responses"]["Device"];
             400: components["responses"]["Problem"];

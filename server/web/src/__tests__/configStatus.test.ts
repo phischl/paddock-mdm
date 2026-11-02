@@ -4,7 +4,7 @@ import { defineComponent, h, provide, ref } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { VApp } from 'vuetify/components'
 import { createPinia, setActivePinia } from 'pinia'
-import type { DeviceBundle, DeviceDetail, DeviceResourceStatus } from '../api/client'
+import type { DeviceBundle, DeviceResourceStatus } from '../api/client'
 import { createPortalI18n } from '../i18n'
 import { isReportOnly, listConfigStatus, listDeviceBundles, listDeviceConfigStatus, resourceStateView } from '../lib/configStatus'
 import { deviceDetailKey, type DevicePage } from '../lib/deviceDetailPage'
@@ -56,13 +56,17 @@ describe('resourceStateView', () => {
     expect(resourceStateView('pending').status).toBe('warn')
     expect(resourceStateView('failed')).toEqual({ status: 'critical', label: 'configStatus.states.failed' })
   })
+
+  it('shows a failed resource of a report-only device as a plan error, never as a failure (plan M11 amendment R6.6)', () => {
+    expect(resourceStateView('failed', true)).toEqual({ status: 'warn', label: 'configStatus.states.plan_error' })
+    expect(resourceStateView('pending', true).status).toBe('warn')
+  })
 })
 
 describe('isReportOnly', () => {
-  it('is false while the device carries no mode and true for report_only', () => {
-    expect(isReportOnly({} as DeviceDetail)).toBe(false)
-    expect(isReportOnly({ config_mode: 'enforce' } as unknown as DeviceDetail)).toBe(false)
-    expect(isReportOnly({ config_mode: 'report_only' } as unknown as DeviceDetail)).toBe(true)
+  it('is true only for report_only', () => {
+    expect(isReportOnly({ config_mode: 'enforce' })).toBe(false)
+    expect(isReportOnly({ config_mode: 'report_only' })).toBe(true)
   })
 })
 
@@ -120,9 +124,12 @@ describe('DeviceApplyStatus', () => {
     expect(document.querySelector('[data-testid="apply-status-list"]')?.textContent).toContain('write /etc/foo.conf')
   })
 
-  it('shows the report-only banner for a device in report-only mode', async () => {
+  it('shows the report-only banner and plan errors instead of failures for a device in report-only mode', async () => {
     await mountTab({ config_mode: 'report_only' })
     expect(document.querySelector('[data-testid="apply-report-only"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="apply-counts"]')?.textContent).toContain('1 plan error')
+    const rows = [...document.querySelectorAll('[data-testid="apply-status-list"] tbody tr')].map((r) => r.textContent)
+    expect(rows.some((r) => r?.includes('unit:foo.service') && r.includes('Plan error') && !r.includes('Failed'))).toBe(true)
   })
 })
 

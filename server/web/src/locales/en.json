@@ -395,6 +395,7 @@
       "retired": "{actor} retired the device {hostname}",
       "groups_changed": "{actor} changed the device groups of {hostname}",
       "name_changed": "Device name changed",
+      "enforcement_enabled": "{actor} enabled enforcement on the device {hostname}",
       "clone_suspected": "The device {hostname} was quarantined because its identity seems to be cloned",
       "bundle_applied": "The device {target} applied bundle {bundle_version, number}",
       "bundle_rejected": "The device {target} rejected a bundle",
@@ -1306,7 +1307,29 @@
     },
     "componentFilter": "Component outdated",
     "reportOnly": {
-      "banner": "This device is in report-only mode: it reports what it would change and changes nothing. Pending rows list the planned changes."
+      "banner": "This device is in report-only mode: it reports what it would change and changes nothing. Pending rows list the planned changes.",
+      "chip": "Report-only",
+      "enforce": {
+        "title": "Enable enforcement",
+        "explanation": "This device was adopted and only reports what it would change. Enabling enforcement applies the configuration at its next check-in.",
+        "label": "Enable enforcement",
+        "confirmTitle": "Enable enforcement on {hostname}?",
+        "confirm": "At its next apply the agent will quarantine foreign sudoers files, remove unexpected members of privileged groups (never the last administrator), install the login component and apply every managed resource. Type the hostname to confirm.",
+        "done": "Enforcement is enabled; the device applies its configuration at its next check-in."
+      }
+    },
+    "adoption": {
+      "method": "Enrollment method",
+      "mode": "Configuration mode",
+      "methods": {
+        "autoinstall": "Autoinstall",
+        "adopted": "Adopted",
+        "unknown": "Unknown"
+      },
+      "modes": {
+        "enforce": "Enforced",
+        "report_only": "Report-only"
+      }
     }
   },
   "tokens": {
@@ -1551,13 +1574,15 @@
       "applied": "Applied",
       "failed": "Failed",
       "pending": "Pending",
-      "drift_corrected": "Drift corrected"
+      "drift_corrected": "Drift corrected",
+      "plan_error": "Plan error"
     },
     "count": {
       "applied": "{count, plural, one {# applied} other {# applied}}",
       "failed": "{count, plural, one {# failed} other {# failed}}",
       "pending": "{count, plural, one {# pending} other {# pending}}",
-      "drift_corrected": "{count, plural, one {# drift corrected} other {# drifts corrected}}"
+      "drift_corrected": "{count, plural, one {# drift corrected} other {# drifts corrected}}",
+      "plan_error": "{count, plural, one {# plan error} other {# plan errors}}"
     },
     "changes": "Planned changes",
     "noDetails": "No further details.",
@@ -2134,7 +2159,8 @@
       "config_behind": "Configuration behind",
       "disk_conversion_failed": "In-place encryption failed",
       "clock_drift": "Clock drift",
-      "event_gap": "Event gap"
+      "event_gap": "Event gap",
+      "report_only": "Report-only, waiting for enforcement"
     },
     "action": {
       "stale_warning": "Open device",
@@ -2153,7 +2179,8 @@
       "config_behind": "Open device",
       "disk_conversion_failed": "Open device",
       "clock_drift": "Open device",
-      "event_gap": "Open device"
+      "event_gap": "Open device",
+      "report_only": "Enable enforcement"
     },
     "more": "+{count}",
     "empty": {
