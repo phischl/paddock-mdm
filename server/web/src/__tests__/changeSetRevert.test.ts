@@ -40,6 +40,7 @@ const revertChangeSet = vi.fn<(id: string, hash: string) => Promise<ConfigApplyR
 vi.mock('../lib/changeSets', async (original) => ({
   ...(await original<typeof import('../lib/changeSets')>()),
   listChangeSets: () => Promise.resolve({ items: [revertable, reverted, legacy], page: 1, page_size: 25, total: 3, total_capped: false, sort: '-applied_at' }),
+  getChangeSet: (id: string) => Promise.resolve(id === 'cs-1' ? revertable : 'not_found'),
   revertDryRun: (id: string) => revertDryRun(id),
   revertChangeSet: (id: string, hash: string) => revertChangeSet(id, hash),
 }))
@@ -56,12 +57,12 @@ afterEach(() => {
   wrapper = null
 })
 
-async function mountList(): Promise<VueWrapper> {
+async function mountList(path = '/change-sets'): Promise<VueWrapper> {
   const pinia = createPinia()
   setActivePinia(pinia)
   useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', organization: null } as never
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/change-sets', component: ChangeSets }] })
-  await router.push('/change-sets')
+  await router.push(path)
   await router.isReady()
   wrapper = mount(() => h(VApp, null, { default: () => h(RouterView) }), {
     global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body,
@@ -181,6 +182,14 @@ describe('revert a change set (plan M11 decision 22)', () => {
     await flushPromises()
     expect(assign).toHaveBeenCalledWith('/api/auth/stepup?return_to=%2Fchange-sets')
     expect(document.querySelector('.form-error')).toBeNull()
+  })
+
+  it('opens the revert dialog of the change set the rollout page links to', async () => {
+    revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
+    await mountList('/change-sets?revert=cs-1')
+    await vi.waitFor(() => expect(revertDryRun).toHaveBeenCalledWith('cs-1'))
+    await flushPromises()
+    expect(dialog()?.textContent).toContain('Revert change set')
   })
 
   it('cancels without reverting', async () => {

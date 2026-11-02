@@ -36,6 +36,8 @@ type fakeAPI struct {
 	feedQueries   []string
 	feedForbidden bool
 	feedFailAt    int
+	// rollout and rolloutID are the staging fields of ConfigApplyResult an apply answers with (raw JSON values).
+	rollout, rolloutID string
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,8 +73,15 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if dry || strings.Contains(f.plan, `"changes":[]`) {
 			id = "null"
 		}
+		staging := ""
+		if !dry && id != "null" && f.rollout != "" {
+			staging = `,"rollout":` + f.rollout
+			if f.rolloutID != "" {
+				staging += `,"rollout_id":` + f.rolloutID
+			}
+		}
 		_, _ = io.WriteString(w, `{"dry_run":`+map[bool]string{true: "true", false: "false"}[dry]+`,"change_set_id":`+id+`,"plan":`+f.plan+
-			`,"plan_sha256":"`+planSHA+`"}`)
+			`,"plan_sha256":"`+planSHA+`"`+staging+`}`)
 	case "GET /api/v1/devices":
 		_, _ = io.WriteString(w, `{"items":[{"hostname":"h1","state":"active","last_contact_at":null,"agent_version":"1.0.0",`+
 			`"applied_bundle_version":3}],"page":1,"page_size":10,"total":1,"total_capped":false,"sort":"hostname","q":"`+r.URL.RawQuery+`"}`)
@@ -236,6 +245,44 @@ func TestApply(t *testing.T) {
 	}
 	if r = pc("a: [unclosed", "apply", "-f", "-"); r.code != cmd.ExitUsage {
 		t.Fatalf("bad YAML: %+v", r)
+	}
+}
+
+// TestApplyRolloutLine is PDK-159 (plan M11 decision 38, amendment R6.1): the apply prints how the change set reaches
+// the devices; there are no --urgent and --reason flags, because a token never satisfies the step-up they need.
+func TestApplyRolloutLine(t *testing.T) {
+	doc := "api_version: paddock/v1\nkind: OrganizationConfig\n"
+	const rolloutID = "0193f7a2-6c1e-7cc1-9d1e-6a4f0f6e8b22"
+	for _, tc := range []struct{ name, rollout, rolloutID, want string }{
+		{"staged", `"staged"`, `"` + rolloutID + `"`, "Rollout: staged (rollout " + rolloutID + ")\n"},
+		{"urgent", `"urgent"`, "", "Rollout: urgent\n"},
+		{"immediate", `"immediate"`, "", ""},
+		{"an older server", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api, pc := setup(t, createPlan)
+			api.rollout, api.rolloutID = tc.rollout, tc.rolloutID
+			r := pc(doc, "apply", "-f", "-")
+			want := "Applied change set 0193f7a2-6c1e-7cc1-9d1e-6a4f0f6e8a10\n" + tc.want
+			if r.code != 0 || !strings.HasSuffix(r.stdout, want) || strings.Count(r.stdout, "Rollout:") != strings.Count(tc.want, "Rollout:") {
+				t.Fatalf("apply: %+v want suffix %q", r, want)
+			}
+		})
+	}
+
+	_, pc := setup(t, createPlan)
+	for _, flag := range []string{"--urgent", "--reason"} {
+		if r := pc(doc, "apply", "-f", "-", flag, "hotfix"); r.code != cmd.ExitUsage {
+			t.Errorf("%s: %+v", flag, r)
+		}
+	}
+
+	api, pc := setup(t, createPlan)
+	api.rollout, api.rolloutID = `"staged"`, `"`+rolloutID+`"`
+	r := pc(doc, "apply", "-f", "-", "-o", "json")
+	var out map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &out); r.code != 0 || err != nil || out["rollout"] != "staged" || out["rollout_id"] != rolloutID {
+		t.Fatalf("json: %+v %v", r, err)
 	}
 }
 

@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
+import UrgentOptOut from '../components/UrgentOptOut.vue'
 import type { UpdateSettings, UpdateSettingsUpdate } from '../api/client'
+import { noUrgent, useRolloutsEnabled, validUrgent, type UrgentInput } from '../lib/configRollouts'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import { getUpdateSettings, maxCriticalH, maxWarningH, saveUpdateSettings, validateSettings } from '../lib/updates'
+import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { hasErrors } from '../lib/validation'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
@@ -17,6 +21,11 @@ const { t, locale } = useI18n()
 const { pending, run } = usePending()
 const problemText = useProblemText()
 const session = useSessionStore()
+const router = useRouter()
+const rolloutsEnabled = useRolloutsEnabled()
+const urgent = ref(noUrgent())
+/** The step-up returns to this page, so the settings and the opt-out the administrator confirmed travel with it. */
+interface PendingSave { settings: UpdateSettingsUpdate; urgent: UrgentInput }
 
 const form = ref<UpdateSettingsUpdate | null>(null)
 const updatedAt = ref('')
@@ -40,13 +49,22 @@ async function save(): Promise<void> {
   touched.value = true
   problem.value = ''
   saved.value = false
-  if (!form.value || hasErrors(errors.value)) return
-  const res = await saveUpdateSettings(form.value)
+  if (!form.value || hasErrors(errors.value) || !validUrgent(urgent.value)) return
+  await store({ settings: form.value, urgent: urgent.value })
+}
+
+async function store(p: PendingSave): Promise<void> {
+  const res = await saveUpdateSettings(p.settings, p.urgent)
+  if (res === stepUpRequired) {
+    startStepUp('update-settings', 'update-settings', p)
+    return
+  }
   if (typeof res === 'string') {
     problem.value = res
     return
   }
   apply(res)
+  urgent.value = noUrgent()
   saved.value = true
 }
 
@@ -54,6 +72,11 @@ onMounted(async () => {
   const s = await getUpdateSettings()
   if (typeof s === 'string') problem.value = s
   else apply(s)
+  const pending = resumeStepUp<PendingSave>('update-settings', 'update-settings')
+  if (!pending) return
+  await router.replace(withoutStepUpParam())
+  if (pending.failed) problem.value = 'step_up_failed'
+  else await store(pending.payload)
 })
 </script>
 
@@ -165,6 +188,12 @@ onMounted(async () => {
           {{ t('updateSettings.agentUpdates.hint') }}
         </p>
       </fieldset>
+      <UrgentOptOut
+        v-if="session.canDelete"
+        v-model="urgent"
+        :enabled="rolloutsEnabled"
+        :show-errors="touched"
+      />
       <p
         v-if="problem"
         class="form-error"

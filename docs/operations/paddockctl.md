@@ -42,7 +42,7 @@ cannot be allow-listed. A refused request is `403 ip_not_allowed`.
 | `paddockctl whoami [-o text\|json]` | Organization, role, token name and expiry of the token. |
 | `paddockctl schema` | Prints the JSON Schema of `paddock.yml` (`api/schema/paddock.v1.json`), for editors and validators. |
 | `paddockctl get config [-o yaml\|json]` | Exports the configuration with every section, in the order of the schema. |
-| `paddockctl apply -f <file\|-> [--dry-run] [--yes] [-o text\|json]` | Reads YAML or JSON and prints the plan. With `--dry-run` it stops there. Without `--yes` a plan that deletes something is refused (exit code 3; paddockctl never asks). Otherwise it applies exactly the plan it showed: the apply carries the plan's SHA-256 (`expected_plan`), and if the configuration changed in between, the server applies nothing and paddockctl exits with code 3; run it again to review the new plan. On success it prints `Applied change set <id>`, or `No changes`. |
+| `paddockctl apply -f <file\|-> [--dry-run] [--yes] [-o text\|json]` | Reads YAML or JSON and prints the plan. With `--dry-run` it stops there. Without `--yes` a plan that deletes something is refused (exit code 3; paddockctl never asks). Otherwise it applies exactly the plan it showed: the apply carries the plan's SHA-256 (`expected_plan`), and if the configuration changed in between, the server applies nothing and paddockctl exits with code 3; run it again to review the new plan. On success it prints `Applied change set <id>`, then `Rollout: staged (rollout <id>)` when the change set started a staged rollout or `Rollout: urgent` when it skipped staging, or `No changes`. There is no flag for the urgent opt-out: it is portal-only ([Staged rollouts](#staged-rollouts-and-the-urgent-opt-out)). |
 | `paddockctl mcp login [--no-browser] [--platform]` | Signs an administrator in to the MCP through Authentik (device authorization grant, password and second factor in the browser) and writes the session file `$XDG_STATE_HOME/paddockctl/mcp-session.json` (0600). No token file: [mcp.md](mcp.md). |
 | `paddockctl mcp` | The stdio MCP server for an MCP client such as Claude Code: the admin API operations the session may call as tools, with the administrator's role ([mcp.md](mcp.md)). |
 | `paddockctl mcp tools [-o table\|json]` | Lists the tools the MCP session is offered now. |
@@ -133,6 +133,25 @@ Split the change:
 
 Everything that needs no step-up — device groups, ordinary managed files, units, holds, settings without operator
 roots, assignments that grant no root — stays fully automated.
+
+## Staged rollouts and the urgent opt-out
+
+With staged rollouts enabled in the portal (*Rollout settings*), an apply that changes managed files, managed units,
+package holds or the update settings does not reach every device at once: it starts a rollout that moves wave by wave,
+and `paddockctl apply` prints `Rollout: staged (rollout <id>)` after the change set. Follow it, and halt, resume,
+advance or complete it, on the *Configuration rollouts* page of the portal. While the rollout is open, a further apply
+that touches the same items is refused with 409 `rollout_conflict`, and one that touches other items of the same
+sections with 409 `rollout_running`; the whole apply is refused and nothing is applied. A change set that reaches every
+device at once prints no `Rollout:` line.
+
+`paddockctl apply` has no `--urgent` and no `--reason`. The urgent opt-out (apply immediately to every device, with a
+reason) needs a step-up, which a token never satisfies, so an apply cannot opt out of staging and an urgent change is
+made in the portal. A pipeline that must not wait for a rollout applies the change in the portal, or completes the
+running rollout there first.
+
+A revert of the open rollout's change set that created a device group which has since gained member devices is
+refused with 409 `in_use`; the rollout stays open until the members are moved to other groups or the rollout is
+completed.
 
 ## Restore commands
 
