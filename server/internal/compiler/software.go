@@ -31,9 +31,10 @@ type softwareEntry struct {
 	packages []software.PackageRef
 }
 
-// loadSoftware returns the software catalog of the context's organization. Every source is checked again with
-// software.ValidateSource: the stored key must still pass the key policy and match the stored fingerprint, so a policy
-// tightened after the upload, or a row changed outside the API, never puts a refused trust anchor into a bundle.
+// loadSoftware returns the software catalog of the context's organization. Every row is checked again — sources with
+// software.ValidateSource and the bundle contract, entries' package references, assignments' intent and version — and
+// a failing row is left out and logged: a rule tightened after the write, or a row changed outside the API, must never
+// put a refused trust anchor or an unchecked package name into a signed bundle, nor stop the organization's round.
 func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error) {
 	sources, err := q.ListAllSoftwareSources(ctx)
 	if err != nil {
@@ -48,7 +49,7 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 		return nil, err
 	}
 	s := &orgSoftware{sources: map[uuid.UUID]bundle.SoftwareSource{}, bySlug: map[string]bundle.SoftwareSource{},
-		entries: make(map[uuid.UUID]softwareEntry, len(entries)), assignments: assignments}
+		entries: make(map[uuid.UUID]softwareEntry, len(entries))}
 	for _, src := range sources {
 		key, err := software.ValidateSource(software.SourceInput{Slug: src.Slug, Name: src.Name, URIs: src.Uris,
 			Suites: src.Suites, Components: src.Components, Architectures: src.Architectures,
@@ -61,16 +62,32 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 		b := bundle.SoftwareSource{Slug: src.Slug, URIs: src.Uris, Suites: src.Suites,
 			Components: src.Components, Architectures: src.Architectures,
 			Keyring: base64.StdEncoding.EncodeToString(key.Keyring), Fingerprint: key.Fingerprint}
+		if err := bundle.ValidateSoftware(bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{b}}); err != nil {
+			slog.ErrorContext(ctx, "software source left out of bundles: it fails the bundle contract",
+				"source_id", src.ID, "slug", src.Slug, "error", err)
+			continue
+		}
 		s.sources[src.ID], s.bySlug[src.Slug] = b, b
 	}
 	for _, e := range entries {
 		refs, err := software.DecodePackages(e.Packages)
+		if err == nil {
+			err = software.ValidatePackageRefs(refs)
+		}
 		if err != nil {
-			slog.ErrorContext(ctx, "catalog entry left out of bundles: its packages cannot be read",
+			slog.ErrorContext(ctx, "catalog entry left out of bundles: its package references fail the catalog rules",
 				"catalog_entry_id", e.ID, "error", err)
 			continue
 		}
 		s.entries[e.ID] = softwareEntry{source: e.SourceID, packages: refs}
+	}
+	for _, a := range assignments {
+		if err := software.ValidateAssignment(a.Intent, a.UpdateRule, a.Version, ""); err != nil {
+			slog.ErrorContext(ctx, "software assignment left out of bundles: it fails the assignment rules",
+				"assignment_id", a.ID, "error", err)
+			continue
+		}
+		s.assignments = append(s.assignments, a)
 	}
 	return s, nil
 }
@@ -133,20 +150,51 @@ func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) 
 	return spec, holds, conflicts
 }
 
-// pinToHolds sets the version of every required or held package of spec to the version the device's merged holds
-// keep it at: a package_hold or another assignment may name a smaller version (or none, which holds the installed one),
-// and the software reconciler must not install a version the updates reconciler's pin then refuses.
-func pinToHolds(spec *bundle.SoftwareSpec, holds []bundle.Hold) {
+// alignWithHolds makes the software section and the device's merged holds (updates section) agree, as ADR 0042
+// decision 3 leaves holds to the updates reconciler alone:
+//   - a forbid or uninstall result wins over a package hold of the same package (architect decision 2026-11-02): the
+//     hold leaves the updates section, since apt refuses to remove a held package, and the package is marked
+//     SupersededHold so the agent reports the overlap;
+//   - a required or held package takes the version its merged hold keeps it at. updates.Merge ranks a hold without a
+//     version first, so a versionless package_hold next to a required pinned assignment leaves the package required at
+//     the installed version, while a versionless software hold does not unpin it (software.MergeIntents counts named
+//     versions only); the software reconciler must not install a version the pin then refuses.
+//
+// It returns the holds to put into the updates section.
+func alignWithHolds(spec *bundle.SoftwareSpec, holds []bundle.Hold) []bundle.Hold {
 	if spec == nil {
-		return
+		return holds
 	}
-	for i := range spec.Packages {
-		p := &spec.Packages[i]
-		if p.Intent != software.IntentRequired && p.Intent != software.IntentHold {
+	kept := holds[:0:0]
+	for _, h := range holds {
+		i := slices.IndexFunc(spec.Packages, func(p bundle.SoftwarePackage) bool { return p.Package == h.Package })
+		if i < 0 {
+			kept = append(kept, h)
 			continue
 		}
-		if j := slices.IndexFunc(holds, func(h bundle.Hold) bool { return h.Package == p.Package }); j >= 0 {
-			p.Version = holds[j].Version
+		p := &spec.Packages[i]
+		switch p.Intent {
+		case software.IntentForbid, software.IntentUninstall:
+			p.SupersededHold = true
+			continue
+		default:
+			p.Version = h.Version
 		}
+		kept = append(kept, h)
 	}
+	return kept
+}
+
+// softwareFailure checks a device's software section against the bundle contract the agent enforces. A section that
+// fails it blocks the device's bundle (render failure: the device keeps its previous bundle and the failure is
+// audited) instead of shipping a section the agent would refuse as a whole; other devices are unaffected.
+func softwareFailure(device uuid.UUID, spec *bundle.SoftwareSpec) *renderFailure {
+	if spec == nil {
+		return nil
+	}
+	if err := bundle.ValidateSoftware(*spec); err != nil {
+		return &renderFailure{device: device, reason: "the software section fails the bundle contract (" + err.Error() +
+			"); the device keeps its previous bundle until the catalog is fixed"}
+	}
+	return nil
 }

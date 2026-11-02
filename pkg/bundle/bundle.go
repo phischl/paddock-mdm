@@ -16,9 +16,11 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
 	"github.com/phischl/paddock-mdm/pkg/dsse"
@@ -443,6 +445,10 @@ type SoftwarePackage struct {
 	// Source is the slug of a Sources entry, "" for the distribution's own repositories.
 	Source         string `json:"source"`
 	CatalogEntryID string `json:"catalog_entry_id"`
+	// SupersededHold marks a forbid or uninstall result that superseded a package hold of the same package on this
+	// device: the hold is left out of the updates section so the removal is not refused by apt-mark, and the agent
+	// reports the overlap in the software resource's status (architect decision 2026-11-02). Absent otherwise.
+	SupersededHold bool `json:"superseded_hold,omitempty"`
 }
 
 // Limits of the software section (plan M13a decisions 2 and 8).
@@ -501,6 +507,9 @@ func ValidateSoftware(s SoftwareSpec) error {
 		default:
 			return fmt.Errorf("bundle: invalid intent %q of software package %q", p.Intent, p.Package)
 		}
+		if p.SupersededHold && p.Intent != SoftwareForbid && p.Intent != SoftwareUninstall {
+			return fmt.Errorf("bundle: software package %q with intent %s cannot supersede a hold", p.Package, p.Intent)
+		}
 		if p.Source != "" && !slices.Contains(slugs, p.Source) {
 			return fmt.Errorf("bundle: software package %q names the unknown source %q", p.Package, p.Source)
 		}
@@ -519,8 +528,8 @@ func validateSoftwareSource(src SoftwareSource) error {
 		return fmt.Errorf("bundle: software source %q must have 1 to %d uris", src.Slug, maxSourceURIs)
 	}
 	for _, raw := range src.URIs {
-		if !validSourceURI(raw) {
-			return fmt.Errorf("bundle: software source %q has an invalid uri", src.Slug)
+		if err := CheckSourceURI(raw); err != nil {
+			return fmt.Errorf("bundle: software source %q: %w", src.Slug, err)
 		}
 	}
 	if len(src.Suites) < 1 || len(src.Suites) > maxSourceSuites {
@@ -566,17 +575,49 @@ func validateSoftwareSource(src SoftwareSource) error {
 	return nil
 }
 
-// validSourceURI reports whether raw is an https URI without user info, query or fragment. The URI becomes a field
-// of a deb822 file on the device, so white space, control characters and quotes are refused.
-func validSourceURI(raw string) bool {
-	if !strings.HasPrefix(raw, sourceSchemeHTTPS) || len(raw) > maxSourceURI ||
-		strings.ContainsAny(raw, "?#\"<>") || strings.ContainsFunc(raw, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == unicode.ReplacementChar
-	}) {
-		return false
+// CheckSourceURI checks one URI of a software source: https, at most 512 bytes, a host, no user info, query or
+// fragment, a port from 1 to 65535 when one is given, and none of white space, quotes, angle brackets, invalid UTF-8,
+// U+FFFD or the runes InvisibleInURI names. It is the one rule for the upload (server/internal/domain/software) and
+// for the bundle: the URI becomes a field of a deb822 file on the device and is shown next to the trust decision.
+func CheckSourceURI(raw string) error {
+	if !strings.HasPrefix(raw, sourceSchemeHTTPS) {
+		return errors.New("uris must use https")
+	}
+	if len(raw) > maxSourceURI {
+		return fmt.Errorf("uris must be at most %d characters", maxSourceURI)
+	}
+	if strings.ContainsFunc(raw, unicode.IsSpace) || strings.ContainsAny(raw, "?#") {
+		return errors.New("uris must not contain white space, a query or a fragment")
+	}
+	if strings.ContainsAny(raw, `"<>`) {
+		return errors.New(`uris must not contain ", < or >`)
+	}
+	if !utf8.ValidString(raw) || strings.ContainsFunc(raw, InvisibleInURI) {
+		return errors.New("uris must not contain control, format, invisible, replacement or line separator characters")
 	}
 	u, err := url.Parse(raw)
-	return err == nil && u.Hostname() != "" && u.User == nil
+	if err != nil || u.Hostname() == "" || u.User != nil {
+		return errors.New("uris must be https://host[/path] without user info")
+	}
+	if p := u.Port(); p != "" || strings.HasSuffix(u.Host, ":") {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return errors.New("uris must use a port from 1 to 65535")
+		}
+	}
+	return nil
+}
+
+// InvisibleInURI reports runes a source URI must not contain: controls, format and line or paragraph separators,
+// default-ignorable and variation-selector runes, the tag block (listed whole because its unassigned code points have
+// no property), runes that render as blanks without being white space (U+2800, the Hangul fillers), and U+FFFD, the
+// mark of text that was not valid UTF-8 somewhere on its way.
+func InvisibleInURI(r rune) bool {
+	switch r {
+	case '\u115F', '\u1160', '\u3164', '\uFFA0', '\u2800', unicode.ReplacementChar:
+		return true
+	}
+	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Other_Default_Ignorable_Code_Point,
+		unicode.Variation_Selector) || (r >= 0xE0000 && r <= 0xE007F)
 }
 
 // SoftwareResource turns the software section into the resource the agent plans and applies. Nil lists are encoded

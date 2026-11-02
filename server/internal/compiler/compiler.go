@@ -416,7 +416,10 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		if keys.Updates != nil {
 			updatesSection = keys.Updates.section(groups, softwareHolds)
 			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
-			pinToHolds(softwareSection, updatesSection.Holds)
+			updatesSection.Holds = alignWithHolds(softwareSection, updatesSection.Holds)
+		}
+		if failure := softwareFailure(t.id, softwareSection); failure != nil {
+			return rendered{}, false, failure, nil
 		}
 		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.id, t.agent, t.request, c.now())
 		if keys.Disk != nil {

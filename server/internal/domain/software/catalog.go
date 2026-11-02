@@ -83,6 +83,13 @@ func ValidateEntry(name, description, category string, packages []PackageRef) er
 				ErrEntry, MaxCategoryLength)
 		}
 	}
+	return ValidatePackageRefs(packages)
+}
+
+// ValidatePackageRefs checks the package references of a catalog entry against plan M13a decision 8: 1 to
+// MaxPackages references, each with a valid distribution, release, architecture and package name, unique per
+// distribution, release and architecture. Violations wrap ErrEntry.
+func ValidatePackageRefs(packages []PackageRef) error {
 	if len(packages) < 1 || len(packages) > MaxPackages {
 		return fmt.Errorf("%w: packages must hold 1 to %d entries", ErrEntry, MaxPackages)
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -276,5 +277,97 @@ func TestSoftwareHoldsOutsideTheRolloutOverlay(t *testing.T) {
 	}
 	if h := holdsOf(w.fetch(w.out)); len(h) != 1 || h["nano"] != "1.0" {
 		t.Fatalf("holds outside the wave %v", h)
+	}
+}
+
+// TestSoftwareRemovalSupersedesPackageHold (architect decision 2026-11-02): a forbid or uninstall result drops a
+// package_hold of the same package from the device's updates section and marks the package superseded_hold; a
+// required package keeps the hold; recompiling the same state publishes nothing new.
+func TestSoftwareRemovalSupersedesPackageHold(t *testing.T) {
+	w := newWorld(t)
+	e := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	a := w.assign(e, nil, "forbid", "latest", nil)
+	w.exec("INSERT INTO package_hold (id, organization_id, package) VALUES ($1, $2, 'nano'), ($3, $2, 'openssl')",
+		uuid.Must(uuid.NewV7()), w.org, uuid.Must(uuid.NewV7()))
+	d := w.v2Device("{1,2}")
+	w.ubuntu(d, "amd64")
+	for _, intent := range []string{"forbid", "uninstall"} {
+		w.exec("UPDATE software_assignment SET intent = $2 WHERE id = $1", a, intent)
+		w.mustCompile(statechange.ScopeOrg, w.org)
+		b := w.fetch(d)
+		if s := b.Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Intent != intent || !s.Packages[0].SupersededHold {
+			t.Fatalf("%s: software section %+v", intent, b.Software)
+		}
+		if h := holdsOf(b); len(h) != 1 || h["openssl"] != "<nil>" {
+			t.Fatalf("%s: holds %v", intent, h)
+		}
+		before := w.version(d)
+		w.mustCompile(statechange.ScopeOrg, w.org)
+		if w.version(d) != before {
+			t.Fatalf("%s: an unchanged state published a new bundle", intent)
+		}
+	}
+	w.exec("UPDATE software_assignment SET intent = 'required' WHERE id = $1", a)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	b := w.fetch(d)
+	if s := b.Software; s == nil || s.Packages[0].SupersededHold || s.Packages[0].Version != nil {
+		t.Fatalf("required: software section %+v", b.Software)
+	}
+	if h := holdsOf(b); len(h) != 2 || h["nano"] != "<nil>" {
+		t.Fatalf("required: holds %v", h)
+	}
+	enc, err := bundle.Encode(*b)
+	if err != nil || strings.Contains(string(enc), "superseded_hold") {
+		t.Fatalf("superseded_hold present without a superseded hold: %s (%v)", enc, err)
+	}
+}
+
+// TestSoftwareVersionlessHolds documents how a hold without a version meets a required pinned assignment (Fix Round 1,
+// review L1): a versionless package_hold wins in updates.Merge (nil first), so the package is required at the
+// installed version and held; a versionless software hold does not unpin it (MergeIntents counts named versions only).
+func TestSoftwareVersionlessHolds(t *testing.T) {
+	w := newWorld(t)
+	pinned := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.assign(pinned, nil, "required", "pinned", "1.0")
+	held := w.entry("Nano hold", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	softwareHold := w.assign(held, nil, "hold", "latest", nil)
+	d := w.v2Device("{1,2}")
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	b := w.fetch(d)
+	if s := b.Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Intent != bundle.SoftwareRequired || str(s.Packages[0].Version) != "1.0" {
+		t.Fatalf("software hold: section %+v", b.Software)
+	}
+	if h := holdsOf(b); len(h) != 1 || h["nano"] != "1.0" {
+		t.Fatalf("software hold: holds %v", h)
+	}
+	w.exec("DELETE FROM software_assignment WHERE id = $1", softwareHold)
+	w.exec("INSERT INTO package_hold (id, organization_id, package) VALUES ($1, $2, 'nano')", uuid.Must(uuid.NewV7()), w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	b = w.fetch(d)
+	if s := b.Software; s == nil || s.Packages[0].Intent != bundle.SoftwareRequired || s.Packages[0].Version != nil {
+		t.Fatalf("package hold: section %+v", b.Software)
+	}
+	if h := holdsOf(b); len(h) != 1 || h["nano"] != "<nil>" {
+		t.Fatalf("package hold: holds %v", h)
+	}
+}
+
+// TestSoftwareStoredRowsRechecked (Fix Round 1, review M1/minor 2): rows that fail the current rules — a source URI
+// with U+FFFD, accepted by the upload before the rules were aligned, and an entry whose package references were
+// changed outside the API — are left out; the device still gets the valid rest.
+func TestSoftwareStoredRowsRechecked(t *testing.T) {
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	src := w.source("vendor", key, key.fingerprint)
+	w.exec("UPDATE software_source SET uris = '{https://repo.example.com/�apt}' WHERE id = $1", src)
+	w.assign(w.entry("Vendor", src, [4]string{"ubuntu", "*", "*", "vendor-tool"}), nil, "required", "latest", nil)
+	w.assign(w.entry("Option", nil, [4]string{"ubuntu", "*", "*", "-o"}), nil, "required", "latest", nil)
+	w.assign(w.entry("Good", nil, [4]string{"ubuntu", "*", "*", "good"}), nil, "required", "latest", nil)
+	d := w.v2Device("{1,2}")
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if s := w.fetch(d).Software; s == nil || len(s.Sources) != 0 || len(s.Packages) != 1 || s.Packages[0].Package != "good" {
+		t.Fatalf("software section %+v", s)
 	}
 }

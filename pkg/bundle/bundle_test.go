@@ -425,6 +425,18 @@ func TestValidateSoftware(t *testing.T) {
 		"http uri":                 {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"http://repo.example.com/apt"} }, false},
 		"uri with newline":         {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://repo.example.com/\nSigned-By: x"} }, false},
 		"uri with user info":       {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://u@repo.example.com/"} }, false},
+		"uri with U+FFFD":          {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://example.com/\uFFFDrepo"} }, false},
+		"uri with braille blank":   {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://example.com/\u2800"} }, false},
+		"uri with a quote":         {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{`https://example.com/a"b`} }, false},
+		"uri with port 99999":      {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://example.com:99999/"} }, false},
+		"uri with port and idn":    {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://bücher.example:8443/apt"} }, true},
+		"forbid superseding hold": {func(s *SoftwareSpec) {
+			s.Packages[1].Intent, s.Packages[1].SupersededHold = SoftwareForbid, true
+		}, true},
+		"uninstall superseding hold": {func(s *SoftwareSpec) {
+			s.Packages[1].Intent, s.Packages[1].SupersededHold = SoftwareUninstall, true
+		}, true},
+		"required superseding hold": {func(s *SoftwareSpec) { s.Packages[1].SupersededHold = true }, false},
 		"slug A":                   {func(s *SoftwareSpec) { s.Sources[0].Slug, s.Packages[0].Source = "A", "A" }, false},
 		"unknown source":           {func(s *SoftwareSpec) { s.Packages[0].Source = "other" }, false},
 		"duplicate package":        {func(s *SoftwareSpec) { s.Packages[1].Package = "nano" }, false},
@@ -477,7 +489,15 @@ func TestSoftwareResource(t *testing.T) {
 	if ha == hb {
 		t.Error("the software section is not part of the content hash")
 	}
-	enc, err := Encode(a)
+	enc, err := Encode(b)
+	if err != nil || strings.Contains(string(enc), `superseded_hold`) {
+		t.Errorf("superseded_hold must be absent unless set: %s (%v)", enc, err)
+	}
+	s.Packages[1].Intent, s.Packages[1].SupersededHold = SoftwareForbid, true
+	if enc, err = Encode(b); err != nil || !strings.Contains(string(enc), `"superseded_hold":true`) {
+		t.Errorf("superseded_hold not encoded: %s (%v)", enc, err)
+	}
+	enc, err = Encode(a)
 	if err != nil || strings.Contains(string(enc), `"software"`) {
 		t.Errorf("a bundle without software must carry no software section: %s (%v)", enc, err)
 	}
