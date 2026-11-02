@@ -44,15 +44,40 @@ func TestAdoption(t *testing.T) {
 	if first.Mode != bundle.ModeReportOnly {
 		t.Fatalf("first bundle mode %q, want report_only", first.Mode)
 	}
-	pendingID := "file:/etc/paddock-gates/adopt-" + uniqueSuffix() + ".conf"
+	suffix := uniqueSuffix()
+	pendingID, planErrorID := "file:/etc/paddock-gates/adopt-"+suffix+".conf", "unit:adopt-"+suffix+".service"
 	sendBundleEvent(t, d, 1, protocol.EventBundleApplied, map[string]any{
 		"version": first.BundleVersion, "changed": 0, "mode": "report_only", "errors": []any{},
-		"resources": []map[string]any{{"id": pendingID, "status": "pending", "changes": []string{"create " + pendingID}}},
+		"resources": []map[string]any{
+			{"id": pendingID, "status": "pending", "changes": []string{"create " + pendingID}},
+			{"id": planErrorID, "status": "failed", "message": "plan failed"},
+		},
 	})
 	items := waitDeviceResources(t, alice, d.DeviceID, "status=pending", func(i []resourceStatusItem) bool { return len(i) == 1 })
 	if items[0].ResourceID != pendingID || len(items[0].Changes) != 1 {
 		t.Fatalf("pending resources %+v", items)
 	}
+	// A failed resource of a report-only report is a plan error (plan M11 amendments R6.6, R6.15): marked with its
+	// report's mode on the device and counted as no failure in the fleet view, before and after enforcement, until an
+	// enforced report replaces it.
+	planError := func(when, wantMode string, wantFailed int) {
+		t.Helper()
+		rows := waitDeviceResources(t, alice, d.DeviceID, "status=failed", func(i []resourceStatusItem) bool { return len(i) == 1 && i[0].ReportMode == wantMode })
+		if rows[0].ResourceID != planErrorID {
+			t.Fatalf("%s: failed rows %+v", when, rows)
+		}
+		res := call(t, alice, http.MethodGet, "/api/v1/config-status?"+url.Values{"q": {planErrorID}}.Encode(), nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var fleet struct {
+			Items []struct {
+				Failed int `json:"failed"`
+			} `json:"items"`
+		}
+		if err := res.JSON(&fleet); err != nil || len(fleet.Items) != 1 || fleet.Items[0].Failed != wantFailed {
+			t.Fatalf("%s: fleet %s", when, res.Body)
+		}
+	}
+	planError("report-only", "report_only", 0)
 	attention := func() string {
 		res := call(t, alice, http.MethodGet, "/api/v1/attention?"+url.Values{"q": {hostname}, "kind": {"report_only"}}.Encode(), nil)
 		expectStatus(t, res, http.StatusOK, "")
@@ -78,10 +103,16 @@ func TestAdoption(t *testing.T) {
 		t.Fatalf("event params %v", ev.Params)
 	}
 	expectStatus(t, call(t, alice, http.MethodPost, enforce, map[string]any{"hostname": hostname}), http.StatusConflict, "invalid_state")
+	planError("enforced, before an enforced report", "report_only", 0)
 	next := latestBundle(t, d, time.Minute, func(b *bundle.Bundle) bool { return b.BundleVersion > first.BundleVersion })
 	if next.Mode != bundle.ModeEnforce {
 		t.Fatalf("bundle after enforcement has mode %q", next.Mode)
 	}
+	sendBundleEvent(t, d, 2, protocol.EventBundleApplied, map[string]any{
+		"version": next.BundleVersion, "changed": 1, "mode": "enforce", "errors": []map[string]string{{"id": planErrorID, "message": "unit not found"}},
+		"resources": []map[string]any{{"id": pendingID, "status": "applied"}, {"id": planErrorID, "status": "failed", "message": "unit not found"}},
+	})
+	planError("enforced report", "enforce", 1)
 	if body := attention(); strings.Contains(body, d.DeviceID) {
 		t.Fatalf("attention after enforcement: %s", body)
 	}

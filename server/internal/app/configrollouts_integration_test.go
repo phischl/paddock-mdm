@@ -580,9 +580,12 @@ func TestConfigRolloutReportOnlyNotEligible(t *testing.T) {
 	canary := h.group(t, h.org)
 	enableRollouts(t, h.writeHarness, []int{50, 100}, &canary)
 	r := h.stage(t, "/etc/acme/adopted.conf")
+	// 50 % with no minimum: one failure of the two enforced devices reaches the threshold of 1; counting the three
+	// report-only devices too, it would be ceil(5 × 50 %) = 3 and the wave would keep running.
+	h.exec(t, "UPDATE config_rollout SET failure_threshold_percent = 50, failure_threshold_min = 0 WHERE id = $1", r.id)
 	staged := "file:/etc/acme/adopted.conf"
 	now := time.Now()
-	enforced := []uuid.UUID{h.device(t, r.id, 50, true), h.device(t, r.id, 50, true), h.device(t, r.id, 50, true)}
+	enforced := []uuid.UUID{h.device(t, r.id, 50, true), h.device(t, r.id, 50, true)}
 	adopted := []uuid.UUID{h.device(t, r.id, 50, true), h.device(t, r.id, 50, true), h.device(t, r.id, 50, false)}
 	h.exec(t, "INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)", h.org, canary, adopted[2])
 	for _, d := range adopted {
@@ -593,7 +596,7 @@ func TestConfigRolloutReportOnlyNotEligible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (app.RolloutCounts{Eligible: 3, Pending: 3}); d.Counts != want {
+	if want := (app.RolloutCounts{Eligible: 2, Pending: 2}); d.Counts != want {
 		t.Fatalf("counts %+v, want %+v", d.Counts, want)
 	}
 	devices, err := h.api.ListDevices(h.admin, r.id, app.ConfigRolloutDeviceQuery{Page: app.ListPage{Sort: "hostname", Limit: 100}})
@@ -606,14 +609,12 @@ func TestConfigRolloutReportOnlyNotEligible(t *testing.T) {
 		}
 	}
 
-	// Threshold max(2, 4 % of 3) = 2 as without the report-only devices: two failures halt the wave.
 	h.report(t, enforced[0], r.id, 1, "applied", "enforce", staged, now)
-	h.report(t, enforced[1], r.id, 1, "rejected", "enforce", "", now)
 	if err := h.worker.Evaluate(h.system, now); err != nil {
 		t.Fatal(err)
 	}
 	halted := h.events(t, audit.CodeConfigRolloutHalted)
-	if len(halted) != 1 || halted[0].Params["eligible"] != 3.0 || halted[0].Params["failed"] != 2.0 || halted[0].Params["threshold"] != 2.0 {
+	if len(halted) != 1 || halted[0].Params["eligible"] != 2.0 || halted[0].Params["failed"] != 1.0 || halted[0].Params["threshold"] != 1.0 {
 		t.Fatalf("halted events %+v", halted)
 	}
 }

@@ -49,6 +49,7 @@ func toDeviceResourceStatus(r pgstore.ListDeviceResourceStatusRow) adminapi.Devi
 	return adminapi.DeviceResourceStatus{
 		ResourceId: r.ResourceID, Type: app.ResourceType(r.ResourceID), Status: adminapi.ResourceState(r.Status),
 		Message: r.Message, Changes: changes, BundleVersion: r.BundleVersion, OccurredAt: r.OccurredAt.UTC(),
+		ReportMode: adminapi.ConfigMode(r.ReportMode),
 	}
 }
 

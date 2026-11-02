@@ -5108,6 +5108,12 @@ export interface components {
              * @description When the agent reported it.
              */
             occurred_at: string;
+            /**
+             * @description The mode of the report that wrote the row (plan M11 amendment R6.15); enforce when no report of that version
+             *     is stored. A failed row of a report_only report is a plan error, never a failed apply (R6.6), also after
+             *     enforcement until an enforced report replaces it.
+             */
+            report_mode: components["schemas"]["ConfigMode"];
         };
         DeviceResourceStatusPage: {
             items: components["schemas"]["DeviceResourceStatus"][];
@@ -5163,9 +5169,9 @@ export interface components {
             sort: string;
         };
         /**
-         * @description One resource ID with the number of active devices per status. A failed resource of a report-only device is a
-         *     plan error, not a failed apply (plan M11 amendment R6.6): it is counted in no status here, the status filter
-         *     failed does not select it, and the device's apply status shows it.
+         * @description One resource ID with the number of active devices per status. A failed resource written by a report-only
+         *     report is a plan error, not a failed apply (plan M11 amendments R6.6, R6.15): it is counted in no status here,
+         *     the status filter failed does not select it, and the device's apply status shows it (report_mode).
          */
         ResourceStatus: {
             resource_id: string;
@@ -5188,7 +5194,7 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
-        /** @description The device's resources per apply status; zeros until the agent reported. */
+        /** @description The device's resources per apply status; zeros until the agent reported. failed counts failed applies only, not the plan errors of a report-only report (plan M11 amendment R6.15). */
         DeviceConfigStatusCounts: {
             applied: number;
             failed: number;

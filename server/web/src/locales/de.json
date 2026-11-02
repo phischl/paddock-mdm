@@ -1581,8 +1581,7 @@
       "applied": "{count, plural, one {# angewendet} other {# angewendet}}",
       "failed": "{count, plural, one {# fehlgeschlagen} other {# fehlgeschlagen}}",
       "pending": "{count, plural, one {# ausstehend} other {# ausstehend}}",
-      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}",
-      "plan_error": "{count, plural, one {# Planungsfehler} other {# Planungsfehler}}"
+      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}"
     },
     "changes": "Geplante Änderungen",
     "noDetails": "Keine weiteren Details.",
@@ -2180,7 +2179,7 @@
       "disk_conversion_failed": "Gerät öffnen",
       "clock_drift": "Gerät öffnen",
       "event_gap": "Gerät öffnen",
-      "report_only": "Durchsetzung aktivieren"
+      "report_only": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

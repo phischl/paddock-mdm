@@ -57,4 +57,21 @@ func TestEnforceDeviceRoute(t *testing.T) {
 	if page := e.list(bob, "/api/v1/devices", url.Values{"config_mode": {"report_only"}}); page.Total != 0 {
 		t.Fatalf("report-only after enforce: %d", page.Total)
 	}
+
+	// The plan error of the report-only report keeps its report's mode after enforcement (plan M11 amendment R6.15).
+	for _, q := range []string{
+		`INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key) VALUES ($1, 1, $2, '\x01', '\x02', 'k')`,
+		`INSERT INTO device_bundle_report (device_id, organization_id, version, outcome, mode, occurred_at) VALUES ($1, $2, 1, 'applied', 'report_only', now())`,
+		`INSERT INTO device_resource_status (device_id, organization_id, resource_id, status, bundle_version, occurred_at) VALUES ($1, $2, 'unit:x.service', 'failed', 1, now())`,
+	} {
+		if _, err := e.super.Exec(context.Background(), q, dev, e.acme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := e.do(call{method: "GET", path: "/api/v1/devices/" + dev.String() + "/config-status", cookie: dave})
+	var rows adminapi.DeviceResourceStatusPage
+	status.decode(t, &rows)
+	if status.status != http.StatusOK || len(rows.Items) != 1 || rows.Items[0].ReportMode != adminapi.ConfigModeReportOnly {
+		t.Fatalf("config status %d %s", status.status, status.body)
+	}
 }

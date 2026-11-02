@@ -78,8 +78,9 @@ describe('DeviceApplyStatus', () => {
   })
 
   const resources: DeviceResourceStatus[] = [
-    { resource_id: 'unit:foo.service', type: 'unit', status: 'failed', message: 'unit not found', changes: [], bundle_version: 4, occurred_at: '2026-10-10T12:00:00Z' },
-    { resource_id: 'file:/etc/foo.conf', type: 'file', status: 'pending', message: '', changes: ['write /etc/foo.conf'], bundle_version: 4, occurred_at: '2026-10-10T12:00:00Z' },
+    { resource_id: 'unit:foo.service', type: 'unit', status: 'failed', message: 'unit not found', changes: [], bundle_version: 4, occurred_at: '2026-10-10T12:00:00Z', report_mode: 'enforce' },
+    { resource_id: 'file:/etc/foo.conf', type: 'file', status: 'pending', message: '', changes: ['write /etc/foo.conf'], bundle_version: 4, occurred_at: '2026-10-10T12:00:00Z', report_mode: 'enforce' },
+    { resource_id: 'unit:plan.service', type: 'unit', status: 'failed', message: 'plan failed', changes: [], bundle_version: 3, occurred_at: '2026-10-09T12:00:00Z', report_mode: 'report_only' },
   ]
   const bundles: DeviceBundle[] = [
     { version: 4, created_at: '2026-10-10T11:00:00Z', schema_version: 3, config_rollout_id: null, report: { outcome: 'applied', mode: 'enforce', changed: 1, error_count: 1, reason: null, occurred_at: '2026-10-10T12:00:00Z' } },
@@ -124,12 +125,21 @@ describe('DeviceApplyStatus', () => {
     expect(document.querySelector('[data-testid="apply-status-list"]')?.textContent).toContain('write /etc/foo.conf')
   })
 
-  it('shows the report-only banner and plan errors instead of failures for a device in report-only mode', async () => {
+  it('shows the report-only banner for a device in report-only mode', async () => {
     await mountTab({ config_mode: 'report_only' })
     expect(document.querySelector('[data-testid="apply-report-only"]')).not.toBeNull()
-    expect(document.querySelector('[data-testid="apply-counts"]')?.textContent).toContain('1 plan error')
-    const rows = [...document.querySelectorAll('[data-testid="apply-status-list"] tbody tr')].map((r) => r.textContent)
-    expect(rows.some((r) => r?.includes('unit:foo.service') && r.includes('Plan error') && !r.includes('Failed'))).toBe(true)
+  })
+
+  it('labels a failed row by the mode of its report, not the device mode (plan M11 amendment R6.15)', async () => {
+    for (const mode of ['enforce', 'report_only']) {
+      await mountTab({ config_mode: mode })
+      const rows = [...document.querySelectorAll('[data-testid="apply-status-list"] tbody tr')].map((r) => r.textContent ?? '')
+      expect(rows.find((r) => r.includes('unit:plan.service'))).toContain('Plan error')
+      expect(rows.find((r) => r.includes('unit:plan.service'))).not.toContain('Failed')
+      expect(rows.find((r) => r.includes('unit:foo.service'))).toContain('Failed')
+      wrapper?.unmount()
+      wrapper = null
+    }
   })
 })
 

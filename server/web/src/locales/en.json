@@ -1581,8 +1581,7 @@
       "applied": "{count, plural, one {# applied} other {# applied}}",
       "failed": "{count, plural, one {# failed} other {# failed}}",
       "pending": "{count, plural, one {# pending} other {# pending}}",
-      "drift_corrected": "{count, plural, one {# drift corrected} other {# drifts corrected}}",
-      "plan_error": "{count, plural, one {# plan error} other {# plan errors}}"
+      "drift_corrected": "{count, plural, one {# drift corrected} other {# drifts corrected}}"
     },
     "changes": "Planned changes",
     "noDetails": "No further details.",
@@ -2180,7 +2179,7 @@
       "disk_conversion_failed": "Open device",
       "clock_drift": "Open device",
       "event_gap": "Open device",
-      "report_only": "Enable enforcement"
+      "report_only": "Open device"
     },
     "more": "+{count}",
     "empty": {

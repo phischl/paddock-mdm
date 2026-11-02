@@ -14,8 +14,8 @@ export const resourceStateFilter: ListFilter = {
 }
 
 /**
- * The chip of a resource's apply status (plan M11 decision 15). A failed resource of a report-only device is a plan
- * error, its own state and never a failed apply (plan M11 amendment R6.6).
+ * The chip of a resource's apply status (plan M11 decision 15). A failed resource of a report-only report is a plan
+ * error, its own state and never a failed apply (plan M11 amendments R6.6, R6.15).
  */
 export function resourceStateView(state: ResourceState, reportOnly = false): StatusView {
   if (reportOnly && state === 'failed') return { status: 'warn', label: 'configStatus.states.plan_error' }

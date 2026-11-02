@@ -7619,7 +7619,7 @@ components:
         apply would change it, changes lists what); drift_corrected (the agent corrected a local change).
     DeviceResourceStatus:
       type: object
-      required: [resource_id, type, status, message, changes, bundle_version, occurred_at]
+      required: [resource_id, type, status, message, changes, bundle_version, occurred_at, report_mode]
       properties:
         resource_id: { type: string, description: "Resource ID such as file:/etc/foo.conf, unit:foo.service or time." }
         type: { type: string, description: "The part of the ID before the colon (file, unit), else the whole ID." }
@@ -7631,6 +7631,12 @@ components:
           items: { type: string }
         bundle_version: { type: integer, format: int64 }
         occurred_at: { type: string, format: date-time, description: When the agent reported it. }
+        report_mode:
+          allOf: [ { $ref: "#/components/schemas/ConfigMode" } ]
+          description: |
+            The mode of the report that wrote the row (plan M11 amendment R6.15); enforce when no report of that version
+            is stored. A failed row of a report_only report is a plan error, never a failed apply (R6.6), also after
+            enforcement until an enforced report replaces it.
     DeviceResourceStatusPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -7687,9 +7693,9 @@ components:
       type: object
       required: [resource_id, type, applied, failed, pending, drift_corrected, last_failure_at]
       description: |
-        One resource ID with the number of active devices per status. A failed resource of a report-only device is a
-        plan error, not a failed apply (plan M11 amendment R6.6): it is counted in no status here, the status filter
-        failed does not select it, and the device's apply status shows it.
+        One resource ID with the number of active devices per status. A failed resource written by a report-only
+        report is a plan error, not a failed apply (plan M11 amendments R6.6, R6.15): it is counted in no status here,
+        the status filter failed does not select it, and the device's apply status shows it (report_mode).
       properties:
         resource_id: { type: string }
         type: { type: string }
@@ -7712,7 +7718,9 @@ components:
         sort: { type: string, description: Applied sort. }
     DeviceConfigStatusCounts:
       type: object
-      description: The device's resources per apply status; zeros until the agent reported.
+      description: >-
+        The device's resources per apply status; zeros until the agent reported. failed counts failed applies only, not
+        the plan errors of a report-only report (plan M11 amendment R6.15).
       required: [applied, failed, pending, drift_corrected]
       properties:
         applied: { type: integer }

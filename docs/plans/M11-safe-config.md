@@ -1295,3 +1295,13 @@ without a migration merge as soon as their dependencies are on the branch. The V
         (`advanceConfigRollout` is generated with `Destructive: true`): it widens a staged change like `complete`.
     (f) Devices that never report never count (decision 27): accepted; PDK-163 documents it in
         `configuration-rollouts.md`.
+15. **Plan errors are classified by the report's mode (PDK-160; architect, 2026-11-01).** Whether a `failed` resource
+    row is a plan error (item 6) or a failed apply is decided by the mode of the report that wrote it
+    (`device_bundle_report.mode` of the row's `(device_id, bundle_version)`), never by the device's current
+    `config_mode`. A plan error therefore stays one after enforcement until an enforced report replaces the row. The
+    fleet view (`GET /config-status`) counts such a row in no status and its `failed` filter does not select it; a row
+    without a stored report of its version counts as enforced. Additive contract change: `DeviceResourceStatus` gains
+    `report_mode` (`ConfigMode`: `enforce | report_only`, required), the same classification per row of
+    `GET /devices/{id}/config-status`; the device's *Apply status* tab shows a failed row with `report_mode
+    report_only` as a plan error. Eligibility for a rollout's waves stays with the device's stored `config_mode`
+    (decision 30, PDK-685), and the counting of an eligible device's report with the reported mode (item 14 (b)).
