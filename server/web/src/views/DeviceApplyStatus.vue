@@ -159,7 +159,13 @@ function outcomeView(b: DeviceBundle): { status: 'ok' | 'critical' | 'neutral'; 
         />
       </template>
       <template #[`item.rollout`]="{ item }: { item: DeviceBundle }">
-        {{ item.config_rollout_id }}
+        <RouterLink
+          v-if="item.config_rollout_id"
+          :to="{ name: 'config-rollout', params: { id: item.config_rollout_id } }"
+          data-testid="bundle-rollout-link"
+        >
+          {{ item.config_rollout_id }}
+        </RouterLink>
       </template>
     </DataList>
   </div>

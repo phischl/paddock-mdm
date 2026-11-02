@@ -2,13 +2,15 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PackageHold } from '../api/client'
+import UrgentOptOut from './UrgentOptOut.vue'
+import { noUrgent, validUrgent } from '../lib/configRollouts'
 import { useProblemText } from '../lib/problems'
 import { validateHold, type HoldInput } from '../lib/updates'
 import { hasErrors } from '../lib/validation'
 
 const props = withDefaults(
-  defineProps<{ groups: { id: string; name: string }[]; initial?: PackageHold | null; problem?: string; pending?: boolean }>(),
-  { initial: null, problem: '', pending: false },
+  defineProps<{ groups: { id: string; name: string }[]; rolloutsEnabled?: boolean; initial?: PackageHold | null; problem?: string; pending?: boolean }>(),
+  { rolloutsEnabled: false, initial: null, problem: '', pending: false },
 )
 const emit = defineEmits<{ submit: [input: HoldInput]; cancel: [] }>()
 
@@ -21,12 +23,13 @@ const form = ref<HoldInput>({
   reason: props.initial?.reason ?? '',
 })
 const touched = ref(false)
+const urgent = ref(noUrgent())
 const errors = computed(() => validateHold(form.value))
 
 function submit(): void {
   touched.value = true
-  if (hasErrors(errors.value)) return
-  emit('submit', { ...form.value, package: form.value.package.trim(), version: form.value.version.trim() })
+  if (hasErrors(errors.value) || !validUrgent(urgent.value)) return
+  emit('submit', { ...form.value, package: form.value.package.trim(), version: form.value.version.trim(), urgent: urgent.value })
 }
 </script>
 
@@ -74,6 +77,11 @@ function submit(): void {
       counter="500"
       :error-messages="touched && errors.reason ? [t(errors.reason)] : []"
       data-testid="hold-reason"
+    />
+    <UrgentOptOut
+      v-model="urgent"
+      :enabled="rolloutsEnabled"
+      :show-errors="touched"
     />
     <p
       v-if="problem"

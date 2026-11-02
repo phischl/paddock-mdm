@@ -3,12 +3,14 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ManagedFile } from '../api/client'
 import { validateFile, type FileInput } from '../lib/managedConfig'
+import UrgentOptOut from './UrgentOptOut.vue'
+import { noUrgent, validUrgent } from '../lib/configRollouts'
 import { useProblemText } from '../lib/problems'
 import { hasErrors } from '../lib/validation'
 
 const props = withDefaults(
-  defineProps<{ groups: { id: string; name: string }[]; initial?: ManagedFile | null; problem?: string; pending?: boolean }>(),
-  { initial: null, problem: '', pending: false },
+  defineProps<{ groups: { id: string; name: string }[]; rolloutsEnabled?: boolean; initial?: ManagedFile | null; problem?: string; pending?: boolean }>(),
+  { rolloutsEnabled: false, initial: null, problem: '', pending: false },
 )
 const emit = defineEmits<{ submit: [input: FileInput]; cancel: [] }>()
 
@@ -23,6 +25,7 @@ const form = ref<FileInput>({
   content: props.initial?.content ?? '',
 })
 const touched = ref(false)
+const urgent = ref(noUrgent())
 const errors = computed(() => validateFile(form.value))
 function message(key: string | undefined): string[] {
   return touched.value && key ? [t(key)] : []
@@ -30,8 +33,8 @@ function message(key: string | undefined): string[] {
 
 function submit(): void {
   touched.value = true
-  if (hasErrors(errors.value)) return
-  emit('submit', { ...form.value })
+  if (hasErrors(errors.value) || !validUrgent(urgent.value)) return
+  emit('submit', { ...form.value, urgent: urgent.value })
 }
 </script>
 
@@ -94,6 +97,11 @@ function submit(): void {
       spellcheck="false"
       class="config-text"
       :error-messages="message(errors.content)"
+    />
+    <UrgentOptOut
+      v-model="urgent"
+      :enabled="rolloutsEnabled"
+      :show-errors="touched"
     />
     <p
       v-if="problem"

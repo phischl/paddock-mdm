@@ -2,6 +2,7 @@ import {
   api, listPage, problemCode, type Attention, type AttentionDevice, type AttentionDeviceSort, type AttentionKind,
   type AttentionSort, type DeviceCommand, type DeviceUpdates, type PackageHold, type PackageHoldSort, type UpdateSettings, type UpdateSettingsUpdate,
 } from '../api/client'
+import { urgentQuery, type UrgentInput } from './configRollouts'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
 const csrf = { 'X-Paddock-CSRF': '1' } as const
@@ -13,8 +14,8 @@ export async function getUpdateSettings(): Promise<UpdateSettings | string> {
 }
 
 /** Replaces the update settings; the saved settings or the problem code. */
-export async function saveUpdateSettings(s: UpdateSettingsUpdate): Promise<UpdateSettings | string> {
-  const { data, error } = await api.PUT('/api/v1/settings/updates', { params: { header: csrf }, body: s })
+export async function saveUpdateSettings(s: UpdateSettingsUpdate, urgent?: UrgentInput): Promise<UpdateSettings | string> {
+  const { data, error } = await api.PUT('/api/v1/settings/updates', { params: { header: csrf, query: urgentQuery(urgent) }, body: s })
   return data ?? problemCode(error)
 }
 
@@ -108,6 +109,7 @@ export interface HoldInput {
   package: string
   version: string
   reason: string
+  urgent?: UrgentInput
 }
 
 /** Message keys of an invalid hold. */
@@ -123,17 +125,19 @@ export function validateHold(h: HoldInput): { package?: string; version?: string
 export async function savePackageHold(id: string | null, h: HoldInput): Promise<string | null> {
   const version = h.version === '' ? null : h.version
   const { error } = id
-    ? await api.PATCH('/api/v1/package-holds/{id}', { params: { path: { id }, header: csrf }, body: { version, reason: h.reason } })
+    ? await api.PATCH('/api/v1/package-holds/{id}', {
+      params: { path: { id }, header: csrf, query: urgentQuery(h.urgent) }, body: { version, reason: h.reason },
+    })
     : await api.POST('/api/v1/package-holds', {
-      params: { header: csrf },
+      params: { header: csrf, query: urgentQuery(h.urgent) },
       body: { package: h.package, version, reason: h.reason, ...(h.groupID ? { device_group_id: h.groupID } : {}) },
     })
   return error ? problemCode(error) : null
 }
 
 /** Removes a hold; null or the problem code. */
-export async function deletePackageHold(id: string): Promise<string | null> {
-  const { error } = await api.DELETE('/api/v1/package-holds/{id}', { params: { path: { id }, header: csrf } })
+export async function deletePackageHold(id: string, urgent?: UrgentInput): Promise<string | null> {
+  const { error } = await api.DELETE('/api/v1/package-holds/{id}', { params: { path: { id }, header: csrf, query: urgentQuery(urgent) } })
   return error ? problemCode(error) : null
 }
 
