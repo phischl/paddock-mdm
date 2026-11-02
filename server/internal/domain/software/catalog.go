@@ -107,6 +107,9 @@ func ValidatePackageRefs(packages []PackageRef) error {
 		if !bundle.ValidPackage(p.Package) {
 			return fmt.Errorf("%w: package must match ^[a-z0-9][a-z0-9+.-]+$ (at most 128 characters)", ErrEntry)
 		}
+		if bundle.EntryRefused(p.Package) {
+			return fmt.Errorf("%w: package %s is part of Paddock or its login stack and cannot be managed", ErrEntry, p.Package)
+		}
 		key := [3]string{p.Distribution, p.Release, p.Architecture}
 		if seen[key] {
 			return fmt.Errorf("%w: distribution, release and architecture must be unique within packages", ErrEntry)
@@ -188,6 +191,20 @@ func ValidateAssignment(intent, updateRule string, version *string, reason strin
 		}
 	default:
 		return fmt.Errorf("%w: intent must be required, uninstall, hold or forbid", ErrAssignment)
+	}
+	return nil
+}
+
+// ValidateAssignmentTarget refuses an assignment with intent of an entry whose packages the intent must not touch
+// (bundle.RefusedIntent): forbid or uninstall of a package that Paddock depends on, required or hold of one that
+// conflicts with it, and any intent of an entry stored before ValidateEntry refused it. Violations wrap
+// ErrAssignment.
+func ValidateAssignmentTarget(intent string, packages []PackageRef) error {
+	for _, p := range packages {
+		if bundle.RefusedIntent(p.Package, intent) {
+			return fmt.Errorf("%w: intent %s is not allowed for the package %s, which Paddock depends on or conflicts with",
+				ErrAssignment, intent, p.Package)
+		}
 	}
 	return nil
 }

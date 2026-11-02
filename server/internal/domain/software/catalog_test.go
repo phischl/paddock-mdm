@@ -70,6 +70,10 @@ func TestValidateEntry(t *testing.T) {
 		{"release", "Editor", "", "", []PackageRef{{"ubuntu", "24 04", "*", "nano"}}, "release"},
 		{"empty release", "Editor", "", "", []PackageRef{{"ubuntu", "", "*", "nano"}}, "release"},
 		{"architecture", "Editor", "", "", []PackageRef{{"ubuntu", "*", "i386", "nano"}}, "architecture"},
+		{"protected agent", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "paddock-agent"}}, "paddock-agent"},
+		{"himmelblau addon", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "himmelblau-apparmor"}}, "himmelblau-apparmor"},
+		{"removal-protected is an entry", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "sudo"}}, ""},
+		{"protected on one release", "Editor", "", "", append(ok, PackageRef{"debian", "12", "amd64", "himmelblau"}), "himmelblau"},
 		{"duplicate tuple", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "nano"}, {"ubuntu", "*", "*", "vim"}}, "unique"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -138,5 +142,27 @@ func TestDefaultUpdateRule(t *testing.T) {
 		if got := DefaultUpdateRule(tc.intent, tc.version); got != tc.want {
 			t.Errorf("DefaultUpdateRule(%s, %v) = %s, want %s", tc.intent, tc.version, got, tc.want)
 		}
+	}
+}
+
+func TestValidateAssignmentTarget(t *testing.T) {
+	one := func(pkg string) []PackageRef { return []PackageRef{{"ubuntu", "*", "*", pkg}} }
+	for _, tc := range []struct {
+		pkg, intent string
+		refused     bool
+	}{
+		{"nano", IntentForbid, false}, {"sudo", IntentRequired, false}, {"sudo", IntentHold, false},
+		{"sudo", IntentForbid, true}, {"sudo", IntentUninstall, true}, {"dracut", IntentUninstall, true},
+		{"initramfs-tools", IntentRequired, true}, {"initramfs-tools", IntentHold, true},
+		{"initramfs-tools", IntentForbid, false}, {"initramfs-tools", IntentUninstall, false},
+		{"paddock-agent", IntentRequired, true}, {"himmelblau-apparmor", IntentHold, true},
+	} {
+		err := ValidateAssignmentTarget(tc.intent, one(tc.pkg))
+		if (err != nil) != tc.refused || err != nil && (!errors.Is(err, ErrAssignment) || !strings.Contains(err.Error(), tc.pkg)) {
+			t.Errorf("%s %s: %v, refused %v", tc.intent, tc.pkg, err, tc.refused)
+		}
+	}
+	if err := ValidateAssignmentTarget(IntentForbid, []PackageRef{{"ubuntu", "*", "*", "nano"}, {"debian", "*", "*", "sudo"}}); err == nil {
+		t.Error("a protected package on one distribution was accepted")
 	}
 }

@@ -366,6 +366,9 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 			return notFound(err)
 		}
 		rec.SetParam("app", entry.Name)
+		if err := entryAssignable(in.Intent, entry.Packages); err != nil {
+			return err
+		}
 		group, err := assignmentGroup(ctx, q, in.DeviceGroupID)
 		if err != nil {
 			return err
@@ -433,6 +436,13 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 		if err := software.ValidateAssignment(in.Intent, in.UpdateRule, in.Version, in.Reason); err != nil {
 			return softwareAssignmentProblem(err)
 		}
+		entry, err := q.GetSoftwareCatalogEntry(ctx, old.CatalogEntryID)
+		if err != nil {
+			return notFound(err)
+		}
+		if err := entryAssignable(in.Intent, entry.Packages); err != nil {
+			return err
+		}
 		n, err := q.UpdateSoftwareAssignment(ctx, pgstore.UpdateSoftwareAssignmentParams{
 			ID: id, Intent: in.Intent, UpdateRule: in.UpdateRule, Version: in.Version, Reason: in.Reason,
 		})
@@ -494,6 +504,15 @@ func entrySourceSlug(ctx context.Context, q *pgstore.Queries, source *uuid.UUID)
 		return "", notFound(err)
 	}
 	return s.Slug, nil
+}
+
+// entryAssignable refuses an intent for an entry whose packages it must not touch (software.ValidateAssignmentTarget).
+func entryAssignable(intent string, raw []byte) error {
+	packages, err := software.DecodePackages(raw)
+	if err != nil {
+		return err
+	}
+	return softwareAssignmentProblem(software.ValidateAssignmentTarget(intent, packages))
 }
 
 // assignmentGroup returns the name of an assignment's device group ("" for the whole organization); a group of
