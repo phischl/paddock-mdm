@@ -376,7 +376,7 @@ const rollout = computed(() => configuration.value?.rollout ?? null)
                 class="pd-tabular"
               >
                 <RouterLink
-                  :to="'/config-rollouts/' + rollout.id"
+                  :to="{ name: 'config-rollout', params: { id: rollout.id } }"
                   class="mono"
                 >
                   {{ t('overview.configuration.rolloutLine', { wave: rollout.current_wave_index + 1, waves: rollout.waves.length }) }}

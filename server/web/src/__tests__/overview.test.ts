@@ -99,7 +99,7 @@ async function mountOverview(role = 'org_admin'): Promise<VueWrapper> {
       { path: '/vulnerabilities/:cve', name: 'vulnerability', component: stub },
       { path: '/security-review', name: 'security-review', component: stub },
       { path: '/config-status', name: 'config-status', component: stub },
-      { path: '/config-rollouts/:id', component: stub },
+      { path: '/config-rollouts/:id', name: 'config-rollout', component: stub },
     ],
   })
   await router.push('/')
