@@ -49,7 +49,7 @@ func (u *orgUpdates) updatePolicy(groups []uuid.UUID) string {
 	return updates.BundleUpdatePolicy(u.settings.AgentUpdatePolicy, overrides)
 }
 
-// section returns the updates section of a device in groups.
-func (u *orgUpdates) section(groups []uuid.UUID) *bundle.UpdatesSpec {
-	return app.UpdatesSection(u.settings, u.holds, groups)
+// section returns the updates section of a device in groups with the holds of its software assignments.
+func (u *orgUpdates) section(groups []uuid.UUID, softwareHolds []bundle.Hold) *bundle.UpdatesSpec {
+	return app.UpdatesSection(u.settings, u.holds, softwareHolds, groups)
 }

@@ -33,10 +33,10 @@ const (
 // The intents of an assignment (plan M13a decision 9) and its update rules. The intent values are part of the bundle
 // format.
 const (
-	IntentRequired  = "required"
-	IntentUninstall = "uninstall"
-	IntentHold      = "hold"
-	IntentForbid    = "forbid"
+	IntentRequired  = bundle.SoftwareRequired
+	IntentUninstall = bundle.SoftwareUninstall
+	IntentHold      = bundle.SoftwareHold
+	IntentForbid    = bundle.SoftwareForbid
 
 	UpdateLatest = "latest"
 	UpdatePinned = "pinned"
