@@ -157,7 +157,8 @@
     "watchedUnits": "Überwachte Dienste",
     "mcpSettings": "MCP",
     "notifications": "Benachrichtigungen",
-    "platformNotifications": "Plattform-Benachrichtigungen"
+    "platformNotifications": "Plattform-Benachrichtigungen",
+    "configRollouts": "Konfigurations-Rollouts"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -311,7 +312,9 @@
     "email_not_configured": "Diese Installation hat kein E-Mail-Relay, daher können E-Mail-Ziele nicht aktiviert werden.",
     "unknown_code": "Einer der Audit-Codes ist nicht registriert.",
     "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
-    "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal."
+    "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
+    "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
+    "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend."
   },
   "audit": {
     "vulnerability": {
@@ -1558,7 +1561,11 @@
     "empty": {
       "title": "Noch keine Änderungssätze",
       "description": "Änderungssätze werden aufgezeichnet, wenn paddockctl oder die API eine Konfiguration anwendet."
-    }
+    },
+    "rollout": "Rollout",
+    "rolloutLabel": "Rollout:",
+    "rolloutLink": "Rollout öffnen",
+    "urgentReason": "Dringend, sofort auf alle Geräte angewendet. Grund: {reason}"
   },
   "configStatus": {
     "title": "Konfigurationsstatus",
@@ -2746,5 +2753,107 @@
     },
     "urlRejected": "Der Server hat die URL abgelehnt: Sie muss eine https-Adresse auf Port 443 oder 1024 bis 65535 mit öffentlichem Host sein.",
     "nameTaken": "Ein Ziel mit diesem Namen existiert bereits."
+  },
+  "rollout": {
+    "urgent": {
+      "label": "Sofort auf alle Geräte anwenden (dringend)",
+      "hint": "Überspringt den gestaffelten Rollout und braucht eine aktuelle Step-up-Anmeldung. Nur das Portal bietet das an; paddockctl und API-Tokens können es nicht.",
+      "reason": "Grund für die dringende Änderung",
+      "reasonInvalid": "Geben Sie einen Grund mit 2 bis 500 Zeichen ein."
+    }
+  },
+  "configRollouts": {
+    "title": "Konfigurations-Rollouts",
+    "summary": "Gestaffelte Rollouts von Konfigurationsänderungen: Welle für Welle, mit automatischem Stopp, wenn zu viele Geräte fehlschlagen.",
+    "settingsLink": "Rollout-Einstellungen",
+    "status": "Status",
+    "statuses": {
+      "running": "Läuft",
+      "halted": "Angehalten",
+      "completed": "Abgeschlossen",
+      "reverted": "Rückgängig gemacht"
+    },
+    "modes": {
+      "immediate": "Sofort",
+      "staged": "Gestaffelt",
+      "urgent": "Dringend"
+    },
+    "wave": "Welle",
+    "waveShort": "Welle {wave, number} von {waves, number} ({percent, number} %)",
+    "counts": "Geräte",
+    "countFacts": "{eligible, number} in den bisherigen Wellen, {applied, number} angewendet, {failed, number} fehlgeschlagen, {pending, number} ausstehend",
+    "startedBy": "Gestartet von",
+    "startedAt": "Gestartet",
+    "startedFacts": "{by} am {at}",
+    "endedAt": "Beendet",
+    "haltedReason": "Grund des Anhaltens",
+    "open": "Öffnen",
+    "openLabel": "Rollout vom {at} öffnen",
+    "back": "Zurück zu den Konfigurations-Rollouts",
+    "heading": "Konfigurations-Rollout",
+    "thresholds": "Stoppregel",
+    "thresholdFacts": "Jede Welle dauert mindestens {minutes, number} Minuten; der Rollout hält an, wenn {min, number} Geräte oder {percent, number} % der Geräte in den bisherigen Wellen fehlschlagen, je nachdem, was mehr ist.",
+    "changeSet": "Änderungssatz",
+    "changeSetLink": "Änderungssatz vom {at}",
+    "waves": "Wellen",
+    "waveStates": {
+      "done": "Erreicht",
+      "current": "Aktuell",
+      "upcoming": "Folgt"
+    },
+    "canary": "Die Geräte der Gruppe {group} erhalten die Änderung immer zuerst.",
+    "plan": "Geplante Änderungen",
+    "actions": {
+      "halt": {
+        "label": "Anhalten",
+        "title": "Rollout anhalten",
+        "confirm": "Die Geräte behalten den Stand der erreichten Welle. Der Rollout bleibt offen und sperrt seine Einträge, bis er fortgesetzt und abgeschlossen, abgeschlossen oder sein Änderungssatz rückgängig gemacht wird.",
+        "reason": "Grund"
+      },
+      "resume": {
+        "label": "Fortsetzen",
+        "title": "Rollout fortsetzen",
+        "confirm": "Der Rollout läuft in der Welle weiter, in der er angehalten wurde; bis jetzt gemeldete Fehler zählen nicht mehr, und die Welle beginnt ihre Beobachtungszeit von vorn."
+      },
+      "advance": {
+        "label": "Nächste Welle",
+        "title": "Zur nächsten Welle wechseln",
+        "confirm": "Die Geräte der nächsten Welle erhalten die Änderung bei ihrem nächsten Check-in, ohne die Beobachtungszeit abzuwarten."
+      },
+      "complete": {
+        "label": "Abschließen",
+        "title": "Rollout abschließen",
+        "confirm": "Jedes Gerät erhält diese Änderung bei seinem nächsten Check-in, auch alle Geräte außerhalb der bisher erreichten Wellen."
+      },
+      "revert": {
+        "label": "Änderungssatz rückgängig machen"
+      }
+    },
+    "devices": {
+      "title": "Geräte",
+      "hostname": "Hostname",
+      "inWave": "In der Welle",
+      "inWaveYes": "Ja",
+      "inWaveNo": "Nein",
+      "bundle": "Bundle",
+      "carries": "(enthält die Änderung)",
+      "outcome": "Neuester Bericht",
+      "failed": "Fehlgeschlagene Ressourcen",
+      "outcomes": {
+        "applied": "Angewendet",
+        "rejected": "Abgelehnt",
+        "report_only": "Nur Bericht",
+        "none": "Kein Bericht"
+      },
+      "empty": {
+        "title": "Keine Geräte",
+        "description": "Kein aktives Gerät passt."
+      }
+    },
+    "empty": {
+      "title": "Noch keine Rollouts",
+      "description": "Ein Rollout startet, wenn eine Änderung eines rollout-fähigen Abschnitts angewendet wird, während gestaffelte Rollouts aktiviert sind."
+    },
+    "wavePercent": "{percent, number} %"
   }
 }

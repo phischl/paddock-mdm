@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import TimeCell from '../components/TimeCell.vue'
+import ManagedDeleteDialog from '../components/ManagedDeleteDialog.vue'
 import PackageHoldForm from '../components/PackageHoldForm.vue'
 import type { PackageHold } from '../api/client'
 import { groupFilter } from '../lib/devices'
@@ -20,11 +21,14 @@ const problemText = useProblemText()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
 const page = useManagedPage<PackageHold, HoldInput>({
-  save: savePackageHold, remove: deletePackageHold, label: (h) => h.package,
+  save: savePackageHold, remove: deletePackageHold, label: (h) => h.package, stepUpAction: 'package-hold',
   messages: { deleteTitle: 'updates.holds.deleteTitle', deleteConfirm: 'updates.holds.deleteConfirm' },
   reload: () => void list.value?.reload(),
 })
-const { groups, open, target, problem, pageProblem, openDialog, submit, remove, groupName } = page
+const {
+  groups, open, target, problem, pageProblem, openDialog, submit, remove, groupName, rolloutsEnabled, deleting, deletePending, deleteMessage,
+  confirmDelete,
+} = page
 
 const filters = computed(() => [{ ...groupFilter(groups.value), label: 'managed.scope' }])
 const columns = computed<ListColumn[]>(() => [
@@ -112,8 +116,8 @@ const columns = computed<ListColumn[]>(() => [
             :aria-label="t('managed.deleteLabel', { name: item.package })"
             color="error"
             size="small"
-            :loading="pending"
-            :disabled="pending"
+            :loading="pending || deletePending"
+            :disabled="pending || deletePending"
             @click="run(() => remove(item))"
           >
             {{ t('common.delete') }}
@@ -132,6 +136,7 @@ const columns = computed<ListColumn[]>(() => [
           <PackageHoldForm
             :key="target?.id ?? 'new'"
             :groups="groups"
+            :rollouts-enabled="rolloutsEnabled"
             :initial="target"
             :problem="problem"
             :pending="pending"
@@ -141,5 +146,14 @@ const columns = computed<ListColumn[]>(() => [
         </v-card-text>
       </v-card>
     </v-dialog>
+
+    <ManagedDeleteDialog
+      v-if="deleting"
+      :title="t('updates.holds.deleteTitle')"
+      :message="deleteMessage"
+      :rollouts-enabled="rolloutsEnabled"
+      @confirm="confirmDelete"
+      @cancel="deleting = null"
+    />
   </section>
 </template>

@@ -157,7 +157,8 @@
     "watchedUnits": "Watched units",
     "mcpSettings": "MCP",
     "notifications": "Notifications",
-    "platformNotifications": "Platform notifications"
+    "platformNotifications": "Platform notifications",
+    "configRollouts": "Configuration rollouts"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -311,7 +312,9 @@
     "email_not_configured": "This installation has no e-mail relay, so e-mail destinations cannot be enabled.",
     "unknown_code": "One of the audit codes is not registered.",
     "notification_test_pending": "An earlier test of this destination is still waiting for its result. Try again in a moment.",
-    "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment."
+    "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
+    "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
+    "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent."
   },
   "audit": {
     "vulnerability": {
@@ -1558,7 +1561,11 @@
     "empty": {
       "title": "No change sets yet",
       "description": "Change sets are recorded when paddockctl or the API applies a configuration."
-    }
+    },
+    "rollout": "Rollout",
+    "rolloutLabel": "Rollout:",
+    "rolloutLink": "Open the rollout",
+    "urgentReason": "Urgent, applied to every device at once. Reason: {reason}"
   },
   "configStatus": {
     "title": "Configuration status",
@@ -2746,5 +2753,107 @@
     },
     "urlRejected": "The server refused the URL: it must be an https address on port 443 or 1024 to 65535 whose host is public.",
     "nameTaken": "A destination with this name already exists."
+  },
+  "rollout": {
+    "urgent": {
+      "label": "Apply immediately to every device (urgent)",
+      "hint": "Skips the staged rollout and needs a recent step-up. Only the portal offers this; paddockctl and API tokens cannot.",
+      "reason": "Reason for the urgent change",
+      "reasonInvalid": "Enter a reason of 2 to 500 characters."
+    }
+  },
+  "configRollouts": {
+    "title": "Configuration rollouts",
+    "summary": "Staged rollouts of configuration changes: wave by wave, with an automatic stop when too many devices fail.",
+    "settingsLink": "Rollout settings",
+    "status": "Status",
+    "statuses": {
+      "running": "Running",
+      "halted": "Halted",
+      "completed": "Completed",
+      "reverted": "Reverted"
+    },
+    "modes": {
+      "immediate": "Immediate",
+      "staged": "Staged",
+      "urgent": "Urgent"
+    },
+    "wave": "Wave",
+    "waveShort": "Wave {wave, number} of {waves, number} ({percent, number} %)",
+    "counts": "Devices",
+    "countFacts": "{eligible, number} in the waves so far, {applied, number} applied, {failed, number} failed, {pending, number} pending",
+    "startedBy": "Started by",
+    "startedAt": "Started",
+    "startedFacts": "{by} on {at}",
+    "endedAt": "Ended",
+    "haltedReason": "Halt reason",
+    "open": "Open",
+    "openLabel": "Open the rollout started on {at}",
+    "back": "Back to configuration rollouts",
+    "heading": "Configuration rollout",
+    "thresholds": "Stop rule",
+    "thresholdFacts": "Each wave lasts at least {minutes, number} minutes; the rollout halts when {min, number} devices or {percent, number} % of the devices in the waves so far fail, whichever is more.",
+    "changeSet": "Change set",
+    "changeSetLink": "Change set of {at}",
+    "waves": "Waves",
+    "waveStates": {
+      "done": "Reached",
+      "current": "Current",
+      "upcoming": "Upcoming"
+    },
+    "canary": "The devices of the group {group} always receive the change first.",
+    "plan": "Planned changes",
+    "actions": {
+      "halt": {
+        "label": "Halt",
+        "title": "Halt rollout",
+        "confirm": "The devices keep the state of the wave reached. The rollout stays open and blocks its items until it is resumed and completed, completed, or its change set is reverted.",
+        "reason": "Reason"
+      },
+      "resume": {
+        "label": "Resume",
+        "title": "Resume rollout",
+        "confirm": "The rollout continues in the wave where it stopped; failures reported before now no longer count, and the wave starts its observation period again."
+      },
+      "advance": {
+        "label": "Advance wave",
+        "title": "Advance to the next wave",
+        "confirm": "The devices of the next wave receive the change at their next check-in, without waiting for the observation period."
+      },
+      "complete": {
+        "label": "Complete",
+        "title": "Complete rollout",
+        "confirm": "Every device receives this change at its next check-in, including all devices outside the waves reached so far."
+      },
+      "revert": {
+        "label": "Revert change set"
+      }
+    },
+    "devices": {
+      "title": "Devices",
+      "hostname": "Hostname",
+      "inWave": "In the wave",
+      "inWaveYes": "Yes",
+      "inWaveNo": "No",
+      "bundle": "Bundle",
+      "carries": "(carries the change)",
+      "outcome": "Newest report",
+      "failed": "Failed resources",
+      "outcomes": {
+        "applied": "Applied",
+        "rejected": "Rejected",
+        "report_only": "Report-only",
+        "none": "No report"
+      },
+      "empty": {
+        "title": "No devices",
+        "description": "No active device matches."
+      }
+    },
+    "empty": {
+      "title": "No rollouts yet",
+      "description": "A rollout starts when a change of a rollout-able section is applied while staged rollouts are enabled."
+    },
+    "wavePercent": "{percent, number} %"
   }
 }

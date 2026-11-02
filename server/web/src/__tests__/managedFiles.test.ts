@@ -8,6 +8,7 @@ import ManagedFiles from '../views/ManagedFiles.vue'
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import type { ManagedFile } from '../api/client'
+import type { UrgentInput } from '../lib/configRollouts'
 import type { FileInput } from '../lib/managedConfig'
 import { useSessionStore } from '../stores/session'
 
@@ -16,11 +17,13 @@ const cron: ManagedFile = {
   tier: 'sensitive', sensitive_confirmed_at: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
 }
 const saveManagedFile = vi.fn<(id: string | null, input: FileInput) => Promise<string | null>>()
+const deleteManagedFile = vi.fn<(id: string, urgent?: UrgentInput) => Promise<string | null>>()
 
 vi.mock('../lib/managedConfig', async (original) => ({
   ...(await original<typeof import('../lib/managedConfig')>()),
   listManagedFiles: () => Promise.resolve({ items: [cron], page: 1, page_size: 25, total: 1, total_capped: false, sort: 'path' }),
   saveManagedFile: (id: string | null, input: FileInput) => saveManagedFile(id, input),
+  deleteManagedFile: (id: string, urgent?: UrgentInput) => deleteManagedFile(id, urgent),
 }))
 vi.mock('../lib/devices', async (original) => ({ ...(await original<typeof import('../lib/devices')>()), allGroups: () => Promise.resolve([]) }))
 
@@ -30,6 +33,7 @@ const assign = vi.fn()
 beforeEach(() => {
   sessionStorage.clear()
   saveManagedFile.mockReset()
+  deleteManagedFile.mockReset()
   assign.mockReset()
   Object.defineProperty(window, 'location', {
     value: { ...window.location, assign, href: 'https://admin.test/managed-files', search: '' }, writable: true,
@@ -130,6 +134,32 @@ describe('ManagedFiles', () => {
     expect(saveManagedFile).toHaveBeenCalledTimes(2)
     expect(saveManagedFile.mock.calls[1][0]).toBeNull()
     expect(saveManagedFile.mock.calls[1][1]).toMatchObject({ path: '/etc/cron.d/x' })
+  })
+
+  it('repeats a delete once after its step-up, with the same urgent opt-out', async () => {
+    sessionStorage.setItem('paddock.stepup', JSON.stringify({
+      action: 'managed-file-delete', target: 'list', at: Date.now(),
+      payload: { id: 'f1', urgent: { urgent: true, reason: 'hotfix' } },
+    }))
+    deleteManagedFile.mockResolvedValueOnce(null)
+    await mountList()
+    expect(deleteManagedFile).toHaveBeenCalledTimes(1)
+    expect(deleteManagedFile).toHaveBeenCalledWith('f1', { urgent: true, reason: 'hotfix' })
+    expect(assign).not.toHaveBeenCalled()
+  })
+
+  it('starts the step-up for a delete the server refuses with step_up_required, carrying the opt-out', async () => {
+    deleteManagedFile.mockResolvedValueOnce('step_up_required')
+    const w = await mountList()
+    await w.get('button[aria-label^="Delete"]').trigger('click')
+    await flushPromises()
+    ;(document.querySelector('[data-testid="confirm-accept"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(deleteManagedFile).toHaveBeenCalledTimes(1)
+    expect(assign).toHaveBeenCalledWith('/api/auth/stepup?return_to=%2Fmanaged-files')
+    expect(JSON.parse(sessionStorage.getItem('paddock.stepup') ?? '{}')).toMatchObject({
+      action: 'managed-file-delete', payload: { id: 'f1', urgent: { urgent: false, reason: '' } },
+    })
   })
 
   it('explains a refusal for a role other than organization administrator inline', async () => {
