@@ -27,6 +27,10 @@ type File struct {
 type Unit struct {
 	State  string // enabled, disabled, static, masked
 	Active bool
+	// Failed makes `systemctl is-active` answer failed while the unit is not active.
+	Failed bool
+	// Restarting is a crash loop: systemd waits to restart the unit (ActiveState activating, SubState auto-restart).
+	Restarting bool
 }
 
 // System is the fake. Fields may be changed between calls (not concurrently).
@@ -171,6 +175,25 @@ func (s *System) Owner(fi fs.FileInfo) (int, int) {
 	return f.UID, f.GID
 }
 
+// unitShow is the answer of `systemctl show -p LoadState -p ActiveState -p SubState` for u; nil is an unknown unit.
+func unitShow(u *Unit) string {
+	load, active, sub := "loaded", "inactive", "dead"
+	switch {
+	case u == nil:
+		load = "not-found"
+	case u.Active:
+		active, sub = "active", "running"
+	case u.Restarting:
+		active, sub = "activating", "auto-restart"
+	case u.Failed:
+		active, sub = "failed", "failed"
+	}
+	if u != nil && u.State == "masked" {
+		load = "masked"
+	}
+	return "LoadState=" + load + "\nActiveState=" + active + "\nSubState=" + sub + "\n"
+}
+
 // Systemctl implements reconcile.System for is-enabled, is-active, enable, disable, start and stop.
 func (s *System) Systemctl(_ context.Context, args ...string) (string, int, error) {
 	s.mu.Lock()
@@ -186,7 +209,14 @@ func (s *System) Systemctl(_ context.Context, args ...string) (string, int, erro
 		return "", 0, nil
 	}
 	if len(args) > 2 && args[0] == "show" {
-		return s.Shows[args[len(args)-1]], 0, nil
+		name := args[len(args)-1]
+		if "systemctl "+strings.Join(args, " ") == s.FailCmd {
+			return "Failed to connect to bus: Connection refused\n", 1, nil
+		}
+		if out, ok := s.Shows[name]; ok || !slices.Contains(args, "LoadState") {
+			return out, 0, nil
+		}
+		return unitShow(s.Units[name]), 0, nil
 	}
 	if len(args) != 2 {
 		return "", 1, fmt.Errorf("fake systemctl: unsupported %v", args)
@@ -205,6 +235,9 @@ func (s *System) Systemctl(_ context.Context, args ...string) (string, int, erro
 	case "is-active":
 		if ok && u.Active {
 			return "active\n", 0, nil
+		}
+		if ok && u.Failed {
+			return "failed\n", 3, nil
 		}
 		return "inactive\n", 3, nil
 	}

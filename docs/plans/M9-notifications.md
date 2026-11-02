@@ -1037,3 +1037,485 @@ PDK-120; PDK-131 needs PDK-130 merged. PDK-127 needs PDK-126; PDK-128 needs PDK-
   organization's destinations. Stated in `notifications.md`.
 - **`notification.delivered` volume** with `filter_mode = all`: one event per batch of up to 100 events (≤ 1 %
   of the index); acceptable; stated in the ADR.
+
+## Amendment 2026-10-31 (refresh)
+
+Author: architect. Basis: `main` at `dca9b2d9` (2026-10-31) and the M10 cluster branch `origin/cluster/evidence-privacy`
+at `2d0e9f0f`. The plan above was written on 2026-10-15; since then 232 commits landed on `main` (M8b, M8d, M8e, M8h,
+M8s, M8u, ADR 0043 release import, ADR 0044 MCP, ADR 0045 role switch, the PDK-518 changelog fragments, the upstream
+majors of M6d: Go 1.27, pgx 5.11, goose 3.29, PostgreSQL 18, RabbitMQ 4.4, Valkey 9, Vue 3.5.44, Vuetify 4.3.0).
+This amendment corrects the plan where the code moved and binds the cluster's order. Where it contradicts a section
+above, the amendment wins. Every statement below was checked against the code on the stated commits.
+
+### A. Migration numbers
+
+- `main` holds paddock migrations up to `00077_agent_upload_lease.sql` and audit migrations up to
+  `00006_sealed_day_guard_search_path.sql`. The M10 cluster (`origin/cluster/evidence-privacy`) adds paddock
+  `00074_privacy_settings`, `00075_retention_grants`, `00076_fleet_host_in_use`, `00078_retention_inventory_hold`
+  and audit `00007_index_purge`, `00008_audit_exports`, `00009_ensure_partition_search_path`; M10 reserves paddock
+  00074–00080.
+- `server/internal/platform/migrate/migrate.go` runs `goose.NewProvider(...).Up(ctx)` **without**
+  `goose.WithAllowMissing()`: a database that has applied version N refuses a file with a version < N that it has
+  not applied. Numbers are therefore taken in **merge order**, never reused, and a lower number MUST NOT merge after a
+  higher one. Gaps between numbers are allowed (fresh databases apply what exists).
+- M9 numbering (corrected by the lead the same day, see section E): paddock from **00085**, audit from **00010**.
+  Reserved for M9: paddock 00085–00090, audit 00010–00011.
+  M11 and M13a renumber behind these (their plans say so).
+
+| Ticket | File (binding) | Content |
+| --- | --- | --- |
+| PDK-120 | `server/migrations/audit/00010_commit_seq.sql` | decision 1 |
+| PDK-122 | `server/migrations/paddock/00085_notifications.sql` | §6.2 notification tables, `paddock_notifier` policies on `action` and `outbox` |
+| PDK-126 | `server/migrations/paddock/00086_findings.sql` | §6.2 `finding` |
+| PDK-129 | `server/migrations/paddock/00087_vulnerability_summary.sql` | §6.2 `vulnerability_summary` |
+| PDK-130 | `server/migrations/paddock/00088_watched_units.sql` | §6.2 `watched_unit` |
+
+The other M9 tickets ship no migration. If the tickets merge in a different order than §7 (refreshed in section C),
+the ticket that merges takes the **next free number at merge time** within the reserved range and states the final
+number in its result; the table above is then corrected by the cluster lead. If a ticket needs a second migration,
+it takes the next free number of the range. An installation that already applied an M9 number before an M10 number
+(M9 merged first) cannot be upgraded in place; this is the accepted alpha rule (no upgrade path before the first
+release with users): the development stacks are rebuilt, the lab database is re-created.
+
+### B. Interface corrections (checked against `main`)
+
+Corrections are listed per ticket; a statement "unchanged" means the plan's reference still holds.
+
+**Every ticket**
+
+- B0.1 `CHANGELOG.md` is no longer edited by tickets. Every ticket with an operator-, user- or integrator-visible
+  change writes a fragment `changelog.d/<ticket-id>.<section>.md` (`added | changed | fixed | security | …`, PDK-518,
+  format in `changelog.d/README.md`); `make changelog-check` runs in `make lint`. Wherever this plan or a ticket says
+  "`CHANGELOG.md` entry", read "fragment under `changelog.d/`".
+- B0.2 New admin API operations and the MCP (ADR 0044, merged). `server/internal/mcpgen` generates
+  `pkg/mcpcatalog/catalog.gen.go` from `api/openapi/admin.yaml` (`make gen`). An operation **without**
+  `x-paddock-mcp` is catalogued and **exposed** to MCP clients as a tool (GET = read tool, everything else = write
+  tool). `x-paddock-mcp: { expose: false }` hides it. `x-paddock-step-up: true` marks operations that always need a
+  step-up; they are catalogued but never exposed. `server/internal/transport/http/admin/spec_test.go::TestOpenAPISpec`
+  enforces, in both directions: every `x-paddock-audit` operation has an entry in the route table `privileged`
+  (`server/internal/transport/http/admin/server.go`, `var privileged = map[string]struct{ scope app.Scope; spec app.ActionSpec }`),
+  every `privileged` route with `RequiresStepUp: true` carries `x-paddock-step-up: true` and vice versa, and every
+  exposed MCP write tool is a `privileged` route. Binding for M9:
+  - Every state-changing M9 operation MUST have a `privileged` entry with its `app.Spec…` and `x-paddock-audit`.
+  - Every step-up operation of M9 (destination create, update, delete, rotate-secret, test, resolve-pseudonym; watched
+    units PUT) MUST carry `x-paddock-step-up: true`.
+  - `feedAuditEvents` and `GET …/resolve-pseudonym/{lookup_id}` MUST carry `x-paddock-mcp: { expose: false }` (the
+    SIEM feed is not an assistant tool; a re-identification result never reaches an assistant).
+    `pkg/mcpcatalog/catalog_test.go::TestExposedExcludesStepUpAndHidden` names both.
+  - All other M9 GETs (destinations list and get, capabilities, findings list and get, accounts, watched units,
+    attention with `finding`) stay exposed as read tools; the findings verbs `acknowledge`, `assign`, `close`,
+    `reopen` stay exposed as write tools (reversible, no step-up; the per-organization MCP policy and the write
+    opt-in of ADR 0044 govern them). Section D question 4 records this as an architect decision open to veto.
+- B0.3 Role switch (ADR 0045, merged). Nothing in M9 changes: a request carries exactly one `principal.Principal`
+  with one `Kind` (`principal.KindAdmin | KindPlatformAdmin | KindSystem`, package `server/internal/principal`, not
+  `domain/principal`), one `Role` and one `OrganizationID`. Scope selection in `app.Notifications` (decision 14) is
+  by `principal.Kind` through `app.RequireOrg` / `app.RequirePlatform` (`server/internal/app/app.go`). The portal
+  shows the organization page in an organization session and the platform page in a platform session; a two-role
+  identity switches through the user menu. `admin.login` gained the params `previous_role` and `fallback` (ADR
+  0045); neither names a user, so `outbound.Pseudonymize` (decision 9) is unchanged.
+- B0.4 M10 retention (ADR 0032, M10 cluster). `docs/compliance/retention.md` (the retention matrix, exists only on
+  the M10 branch until it merges) has no rows for M9's tables; `app.Retention` (M10) purges by named stores through
+  `purgeBatches(ctx, runner, org, store, cutoff, …)`. M9 adds **no purge job** (§4 non-goals unchanged) but MUST
+  document the classes: PDK-133 adds rows for `finding`, `notification_destination` and `_state`,
+  `notification_delivery` and `notification_delivery_event`, `notification_pseudonym_key`,
+  `notification_pseudonym_lookup`, `vulnerability_summary`, `watched_unit` (section D question 3 fixes the wording
+  and the follow-up). `rlslint_test.go` (`TestRLSLint`, a table lint on the paddock database) passes for every M9
+  table without an allow-list entry because every one has `organization_id` with ENABLE + FORCE RLS and a policy.
+- B0.5 Development: two independent development stacks can run on one host (PDK-519); the acceptance sinks of
+  decisions 26 and 41 MUST bind an ephemeral port chosen by the test and put it into the destination URL
+  (`http://acceptance-host:<port>`); `host-gateway` reaches the host from both stacks.
+
+**PDK-120 — audit commit sequence**
+
+- B1.1 `auditwriter.Writer.writeGroup` is now a retry loop (`sealedDayAttempts`, SQLSTATE `PA422` from the sealed-day
+  trigger of audit migrations 00005/00006); the transaction body is `writeGroupOnce` (`writer.go:154`). Decision 2
+  applies to `writeGroupOnce`: `LockOrgSeq` after `ensurePartitions` and before `withoutExisting`; the retry
+  re-takes the lock and re-assigns the numbers (the rollback undid the previous assignment). `sortEvents` and
+  `dedupe` run once in `writeGroup` before the loop; the assignment order is the order of `fresh`.
+- B1.2 The silent-skip path of decision 2 is the branch `if db.IsNoRows(err) { continue }` at `writer.go:184–186`;
+  it becomes `return fmt.Errorf("auditwriter: event %s already indexed by a concurrent writer: %w", ev.EventID, err)`.
+- B1.3 The index on `main` has `audit_verification_run` (00004) and the sealed-day trigger (00005/00006); M10 adds
+  `00007_index_purge` (drops `audit_event` partitions older than `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`),
+  `00008_audit_exports`, `00009_ensure_partition_search_path`. Consequences, binding: `audit_org_seq.last_seq` is the
+  only source of the next number after the one-time backfill and is never recomputed from `audit_event`;
+  `LatestCommitSeq` stays `coalesce(max(commit_seq), 0)` (valid after a purge); a feed `after` below the oldest
+  retained `commit_seq` returns the oldest retained events (PDK-133 documents "catch-up is bounded by the index
+  retention"). `ALTER TABLE audit_event ADD COLUMN` on the partitioned parent propagates to every partition, and
+  partitions created later by `EnsureAuditPartition` inherit the column; the migration of decision 1 is unchanged.
+- B1.4 `auditstore.AuditEvent` (`server/internal/adapters/auditpg/auditstore/models.go`) gains `CommitSeq int64`
+  through the regenerated `SELECT *` queries. `handlers.go::toAuditEvent` maps fields explicitly, so `commit_seq`
+  never enters `adminapi.AuditEvent`; `auditwriter.encodeObject` (WORM objects) and M10's exporter
+  (`auditwriter/exporter.go`, builds packages from WORM objects) never see it. PDK-120 adds a unit test asserting
+  that `encodeObject` output contains no `commit_seq` (M10 plan stop condition of 2026-10-16 satisfied by test).
+- B1.5 Decision 5's lint: `rlslint_test.go` is a database lint and cannot scan sources. The assertion "no file under
+  `server/internal/transport/` references `InPlatformScope`" is a new test
+  `server/internal/platform/db/platformscope_lint_test.go` (walks `../../transport` with `go/parser`, fails on the
+  identifier `InPlatformScope`). The ticket text "`rlslint_test.go` fails when …" reads accordingly.
+- B1.6 `docs/operations/capacity.md` exists; the backfill figure goes there (decision 12 risk 1, unchanged).
+
+**PDK-121 — audit cursor feed**
+
+- B2.1 The operation id is `feedAuditEvents` (plan §6.5); the ticket's absorbed PDK-464 line, which said
+  `getAuditEventFeed`, is corrected to `feedAuditEvents`. It carries `x-paddock-mcp: { expose: false }` (B0.2) and
+  no `x-paddock-audit` (a read).
+- B2.2 `app.AuditLog` (`server/internal/app/auditlog.go`) has `List` and `resolveDevices`; `Feed` is added next to
+  them and MUST NOT call `resolveDevices`. Handler in `handlers.go` next to `ListAuditEvents`. Tag `audit` exists.
+- B2.3 Unchanged: `RolesAudit`, `tokenPortal` (`test/acceptance/api_token_helpers.go:24`),
+  `list_contract_test.go::collectionGETs` (line 30).
+
+**PDK-122 — outbound domain, tables, roles, Transit key**
+
+- B3.1 `bao.Client` (`server/internal/platform/bao/bao.go`) has `Sign`, `SignBatch`, `PublicKeys`,
+  `LatestPublicKeyPEM`, `Decrypt(ctx, key, version, ciphertext)`, `KV`, `Sealed`, `SealStatus`, `Unseal`,
+  `ResetUnseal`, `RaftSnapshot`; no `Encrypt`. Decision 12 adds `Encrypt` unchanged.
+- B3.2 `deploy/compose/scripts/openbao-configure.sh` writes the policies `paddock-api`, `paddock-compiler`,
+  `paddock-escrow-reader`, `paddock-worker`, `paddock-revocation-issuer`, `paddock-audit-writer` (heredocs) and the
+  Transit keys `audit-chain`, the Ed25519 key loop, `escrow-wrap`; the AppRole loop lives in
+  `gen-dev-secrets.sh:182` (`for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker
+  paddock-escrow-reader …`) and in `gen-prod-secrets.sh`. `10-roles.sh:23–39` creates the roles and the
+  `GRANT CONNECT` / `GRANT USAGE` lists; `gen-dev-secrets.sh:77` loops the database roles. The unsealer role is
+  created by the separate `postgres-unsealer-role.sh` (pattern for the one-time `CREATE ROLE paddock_notifier` of an
+  existing installation in `upgrade.md`). All three files get `paddock_notifier` / `paddock-notifier`.
+- B3.3 **Security preset refresh (decision 9, ADR 0031 decision 7).** The preset is "versioned with the registry";
+  the registry changed. `outbound.SecurityCodes()` MUST be built as: every registered code matching the ADR 0031
+  decision 7 patterns (`device.tamper_*`, `permission_profile.*`, `profile_assignment.*`, `api_token.*`,
+  `revocation.*`, `organization.*`, `settings.*`, `notification.destination_*`, `finding.*`) plus the explicit list
+  of decision 7, plus these codes registered since 2026-10-15: `admin.mcp_write_enabled`, `admin.mcp_write_disabled`,
+  `platform.mcp_policy_changed`, `admin.sessions_revoked`, `platform.sessions_ended`, `platform.auto_unseal_enabled`,
+  `platform.auto_unseal_disabled`, `device.retired`, `device.uninstall_requested`, `device.escrow_destroyed`,
+  `managed_file.sensitive_confirmed`, and, once registered, M10's `audit.export_requested` and
+  `audit.export_downloaded`. **Not** in the preset: `audit.chain_verified`, `retention.purged`,
+  `device.inventory_purged`, `device.inventory_host_kept`, `action.finalized_unknown` (outcome `unknown` matches in
+  every mode anyway), `device.uninstalled`, `device.uninstall_cancelled`, the `device.disk_conversion_*` and
+  `device.encrypt_*` codes, `enrollment_token.*`, `agent_rollout.*` other than `halted`, `agent_release.*` other
+  than `published`. `config_rollout.halted` (M11) is **not registered on `main`**; it is removed from M9's list and
+  the M11 ticket that registers it adds it to the preset (the registration test forces the pairing). PDK-122
+  includes exactly the codes registered on `main` at implementation and lists omitted ones in its result; PDK-133
+  re-checks the list against the registry at its time and adds what has been registered meanwhile.
+- B3.4 Unchanged: `audit.Code.Registered()`, `audit.Definitions()`, `deviceEventParams`, `PlatformOrganizationID`;
+  `db.IsUniqueViolation(err, constraint)` for 409 `already_exists`.
+
+**PDK-123 — destinations use cases and API**
+
+- B4.1 `server/internal/app/accounts.go` **exists** (`app.Accounts`, the login use case of ADR 0045) and
+  `adminaccounts.go` exists (account reconciliation). The account list of decision 34 (`GET /api/v1/accounts`) lives
+  in `server/internal/app/accountlist.go` (`type AccountList`, `NewAccountList(org *db.OrgPool)`,
+  `List(ctx, AccountQuery) (Listed[AccountItem], error)`); its queries go into the existing
+  `server/internal/adapters/postgres/queries/accounts.sql`. This moves from PDK-123's file list to PDK-126, which
+  owns the endpoint (decision 34).
+- B4.2 Platform-scope patterns: `app/ipallowlist.go` (`systemPlatform(ctx)`, `RequirePlatform`),
+  `handlers_ipallowlist.go`; organization/platform pairs with step-up and a settings form: `app/mcpsettings`
+  (`handlers_mcp.go`, portal `McpSettings.vue` / `PlatformMcp.vue`) are the newest and closest pattern.
+- B4.3 B0.2 applies: `privileged` entries, `x-paddock-step-up: true` on the six step-up operations,
+  `x-paddock-mcp: { expose: false }` on the lookup GET.
+- B4.4 The api reads `PADDOCK_SMTP_ENABLED` with `config.Loader.Bool` (`server/internal/config/config.go`); the
+  loader offers `String`, `Required`, `SecretFile`, `Int`, `Bool`, `Duration`, `Invalid`, `Err`; `Common.Development()`.
+
+**PDK-124 — notifier role and webhook delivery**
+
+- B5.1 `server/cmd/paddock-server/main.go`: the `usage` constant lists
+  `serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer|unsealer`; the
+  dispatch is a `switch` (`main.go:141–157`). Both get `notifier`. The minimal-credential role pattern is
+  `escrowreader.go`; the round wiring pattern is `worker.go`.
+- B5.2 Environment names follow the role convention of `compose.yaml`: roles with several pools name them
+  (`PADDOCK_DB_WORKER_URL_FILE`, `PADDOCK_DB_PLATFORM_URL_FILE`, `PADDOCK_DB_COMPILER_URL_FILE`), so
+  `PADDOCK_DB_NOTIFIER_URL_FILE` (decision 20) stands. `PADDOCK_OPS_ADDR` is in the shared `x-paddock-env` anchor
+  (`:9090`); `PADDOCK_AUDIT_DB_READER_URL_FILE` and `PADDOCK_PUBLIC_ADMIN_URL` exist.
+- B5.3 **Single active engine.** The role may run with replicas; a destination MUST never be served by two engines
+  at once. The round of decision 21 MUST run under `PlatformPool.WithLeaderLock(ctx, notifierLockKey, fn)`
+  (`db.go:205`, the pattern of `worker/staleness.go` and `worker/inventory.go`) with
+  `const notifierLockKey = 0x70616464206e7466` ("padd ntf"); a replica that does not hold the lock sleeps one poll
+  interval. `OrgPool.OrganizationIDs(ctx)` requires a system principal in `ctx`
+  (`principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "notifier"})`, pattern
+  `worker/cachesync.go:109`).
+- B5.4 `prodcheck.devOnly` is at `server/internal/prodcheck/prodcheck.go:133`; alerts in
+  `deploy/compose/prometheus/alerts.yml` with cases in `alerts_test.yml`; scrape targets are static per role in
+  `prometheus/scrape/controlplane.yml`. Unchanged.
+- B5.5 `compose.dev.yaml` overrides services by name (`paddock-api`, `paddock-worker`, …); `extra_hosts` with an
+  anchor exists in `compose.lab.yaml` (`*lab-hosts`) as the syntax pattern. B0.5 applies to the sink port.
+- B5.6 Audit `source`: events of MCP sessions carry the MCP channel in `audit.Event.Source` (`SourceOf`); the
+  envelope forwards `source` as stored. No change.
+
+**PDK-125 — e-mail transport**
+
+- B6.1 Standard library only, as decided (ADR 0031 "SMTP library"). `net/smtp` is frozen but complete for
+  STARTTLS, implicit TLS (`tls.Dial` + `smtp.NewClient`), `PLAIN` and `CRAM-MD5`. Relays that advertise only
+  `AUTH LOGIN` (Microsoft 365 SMTP AUTH, some appliances) need the `LOGIN` mechanism, which `net/smtp` lacks:
+  PDK-125 MUST implement `loginAuth` as a private `smtp.Auth` in `server/internal/notifier/email.go` (two-step
+  `Username:` / `Password:` challenge, refused when the connection is not TLS, exactly like `smtp.PlainAuth`), used
+  when the server advertises `LOGIN` and not `PLAIN`. No new module (section D question 1).
+- B6.2 Config through `config.Loader` (B4.4); `PADDOCK_SMTP_TLS=none` is refused unless `Common.Development()`.
+
+**PDK-126 — findings model, materialization, use cases, API**
+
+- B7.1 Line references moved: `device.clone_suspected` is recorded in `devicereports.go::QuarantineClone`
+  (`devicereports.go:267–290`, `audit.CodeDeviceCloneSuspected` at :280); `device.tamper_agent_not_running` in
+  `inventory.go::ReportAgentNotRunning` (`inventory.go:144–170`, code at :166); `eventCodes` at
+  `devicereports.go:316`, `eventEntry` at :400. `OnceEntry{Spec, Claim}` at `action.go:410`; `Recorder` interface at
+  :59; the once paths are `RecordOnce`, `RecordOnceWith`, `RecordOnceBatch`, `RecordOnceRefusal` — `After` MUST run
+  in every one of them after a fresh claim.
+- B7.2 The attention view was last replaced by `00069_event_gaps.sql` (adds the kinds `event_gap` and `clock_drift`
+  with `id = kind || ':' || <row id>`); the M10 branch does not touch it. M9 does **not** replace the view; PDK-126
+  reads it (`ListAttentionConditionKeys`) and joins `finding` by key in the four queries of `attention.sql`
+  (`ListAttention`, `CountAttention`, `ListAttentionDevices`, `CountAttentionDevices`).
+- B7.3 Worker round: `worker.NewFindings(…)` runs under `platform.WithLeaderLock` with
+  `const findingsLockKey = 0x7061646420666e64` ("padd fnd"), wired in `server/cmd/paddock-server/worker.go` next to
+  `staleness` (`worker.go:112`).
+- B7.4 `GET /api/v1/accounts` moves here (B4.1): `app/accountlist.go`, `handlers_accounts.go`, queries in the
+  existing `accounts.sql`. Assignee rule unchanged; a two-role identity's organization account is an ordinary
+  `admin_account` row (ADR 0045 decision 4).
+- B7.5 B0.2 applies: the four verbs are `privileged` routes with `x-paddock-audit`, no step-up, exposed to MCP.
+- B7.6 Pattern references: `app/staleness.go::transition` at :107 (claim pattern) unchanged; the
+  `Attention / AttentionCondition` schemas and `/api/v1/attention`, `/api/v1/attention/devices` exist
+  (`admin.yaml:2470, 2509`).
+
+**PDK-127 — findings portal**
+
+- B8.1 The navigation is `server/web/src/lib/navigation.ts` (`navigationGroups: NavigationGroup[]`, items
+  `{to, label, icon, shortcut, visible}`) with `__tests__/navigation.test.ts`; there is no navigation component to
+  edit. `StatusChip.vue`, `AttentionChips.vue`, `DeviceOverview.vue`, `ConfirmDialog.vue` (`requireTypedText`,
+  `reason`), `composables/useConfirm.ts` exist. Icons come from `components/PdIconSet.ts`.
+- B8.2 E2E tests are Playwright specs in `server/web/e2e/*.spec.ts` (`make e2e SPEC=…`), not `test/acceptance/portal/`
+  (that package is a Go helper). Component tests stay in `server/web/src/__tests__/`. Vuetify is 4.3.0: new
+  components follow the existing views' Vuetify 4 API, not Vuetify 3 examples.
+
+**PDK-128 — notifications portal**
+
+- B9.1 The closest pattern for an organization/platform pair with step-up is `McpSettings.vue` / `PlatformMcp.vue`
+  (routes `/settings/mcp`, `/platform/mcp`); secret-once dialog: `ApiTokens.vue`; step-up resume: `DMSSettings.vue`.
+  Platform routes are prefixed `/platform/` (`PlatformMcp.vue`, `PlatformOpenBao.vue`, `PlatformSessions.vue`).
+- B9.2 B8.1 and B8.2 apply (navigation file, e2e location, Vuetify 4).
+
+**PDK-129 — critical CVE daily summary**
+
+- B10.1 `worker/inventory.go::RunSync` runs `Round` under `WithLeaderLock(inventorySyncLockKey)`; the summary is
+  recorded at the end of `Round` per organization (unchanged). `vulnerability_finding` has the software index of
+  `00067`; M10 purges the rows of retired devices (`device.inventory_purged`), which only lowers the counts.
+- B10.2 Migration number: `00087` (section A). Retention row: B0.4.
+
+**PDK-130 — presence policy, server**
+
+- B11.1 `pkg/bundle/bundle.go` sections are now `Keys`, `Revocation`, `DMS`, `Inventory`, `Updates`, `Disk`,
+  `Hostname`; the newest section-as-resource pattern is `HostnameSpec` / `HostnameResource` (`bundle.go:96`), which
+  `WatchSpec` / `WatchResource` (decision 39, §6.6) follow. The compiler assembles sections at `compiler.go:388`
+  (`Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection, Disk: diskSection, …`);
+  `v2Trust` at :416, `keys()` at :435; the per-organization loaders of `updatesSection` and `diskSection` in
+  `compiler.go:343–390` are the pattern for `loadWatchedUnits`.
+- B11.2 `api/schema/paddock.v1.json` `settings` has `login`, `updates`, `managed_files` (M10 adds `privacy`);
+  `watched_units` is added as `{ "type": "array", "items": { "type": "string" }, "maxItems": 32 }`. Use cases
+  `declarative.go` / `declarative_exec.go`.
+- B11.3 `policy.reservedUnitPrefixes` is `{"paddock", "himmelblau", "fleet", "orbit", "ssh", "gdm", "systemd-"}`
+  (`pkg/policy/policy.go:229`), `ValidateUnit` at :248. Unchanged.
+- B11.4 Migration number `00088`. B0.2: `PUT /api/v1/settings/watched-units` is `privileged` with
+  `x-paddock-step-up: true`; the GET is exposed to MCP.
+
+**PDK-131 — presence policy, agent**
+
+- B12.1 `agent/internal/reconcile/inventory.go`: `stopped bool` at :67, the emit at :167
+  (`TamperServiceStopped{Unit: FleetdUnit}`); `apply.go`: `WithInventory` at :63, `sorted` at :88, `reconciler()` at
+  :125 → add `WithWatch(w *reconcile.Watch) *Applier` and the `watch` type after the inventory resource.
+  `agent/internal/reconcile/fakesys/` exists. `protocol.TamperServiceStopped` at `types.go:255`, closed `EventTypes`
+  at :259. `audit.deviceEventParams` already contains `"unit"`; `"state"` is added.
+- B12.2 System gate helpers: `test/system/inventory_test.go::gateF2` uses `d.Must(...)` and
+  `d.WaitEvent(t, code, timeout, func(p map[string]any) bool)`; `make system-test VM=all` runs both VMs in parallel.
+
+**PDK-132 — production wiring**
+
+- B13.1 `prodcheck.labRoles` (`prodcheck.go:936`) names "the roles that call the public names (Authentik, the OIDC
+  issuers, the certificate probe)". The notifier calls none of them (it uses `PADDOCK_PUBLIC_ADMIN_URL` only as text
+  in links); decision 41's "`prodcheck.labRoles` gains `paddock-notifier`" and the lab `extra_hosts` for the
+  notifier are **withdrawn**. `compose.lab.yaml` adds the notifier only if it needs the audit reader like the api
+  (it does: `db_paddock_audit_reader_url`), without `extra_hosts`.
+- B13.2 `deploy/bundle/ci/` has `assert-hardening.sh` (every role must pass the container hardening assertions; the
+  `<<: *paddock` anchor provides them), `compose.ci.yaml`, `compose.ci-lab.yaml`, `smoke.sh`, `smoke-lab.sh`,
+  `prune-edge.sh`. The role appears in the CI compose files too.
+- B13.3 PostgreSQL 18, RabbitMQ 4.4, Valkey 9 (M6d, merged): nothing in M9 depends on a version; the backfill and
+  the partition DDL of decision 1 run on PostgreSQL 18.
+
+**PDK-133 — documentation**
+
+- B14.1 Section numbers in `docs/architecture.md` verified: §3.2 (building blocks, roles table), §4.1 (Compose
+  topology), §11.5 (events and detection), §14.1 (audit flow; the mermaid nodes read "Optional SIEM (planned: M12;
+  cursor feed M9)" at :166 and "SIEM forward planned: M12; cursor feed M9" at :1676), §16.1 (core entities), §17.1
+  (admin API), §24 (milestones). The roles table has `escrow-reader` and `api` rows as the pattern.
+- B14.2 `README.md` has a guide table (lines 57–61) → rows for `notifications.md` and `siem.md`.
+  `docs/operations/monitoring.md`, `upgrade.md`, `openbao.md`, `capacity.md`, `paddockctl.md`, `install.md`,
+  `lab-install.md` exist. `docs/compliance/retention.md` exists only after M10 merges: PDK-133 adds the rows of
+  B0.4 there; if the file does not exist at implementation time, PDK-133 stops and reports (M10 not merged).
+- B14.3 B0.1: fragments instead of `CHANGELOG.md`.
+
+**PDK-134 — paddockctl**
+
+- B15.1 `cli/internal/cmd/cmd.go` dispatches `schema | whoami | get | apply | devices | mcp` (`cmd.go:144–169`);
+  `commands.go::runDevicesList` at :227; packages `cli/internal/{cfg, client, mcp, render, schema}`. Add the cases
+  `audit` and `findings`. `docs/operations/paddockctl.md` exists.
+
+### C. Order, dependencies and parallelism of cluster G
+
+PDK-200 is independent of M9 (section D question 5 decides its design); it MAY run from day one in parallel with
+PDK-120.
+
+```
+Wave 1 (start):  PDK-120 (commit_seq)   PDK-126 (findings model/API)   PDK-130 (presence policy, server)   PDK-200a (guide)
+Wave 2:          PDK-121 (feed)         PDK-122 (outbound domain)      PDK-127 (findings portal)           PDK-131 (agent, after 130)
+Wave 3:          PDK-123 (destinations API, after 122)                 PDK-129 (CVE summary, after 122)
+Wave 4:          PDK-124 (notifier + webhook, after 120, 122, 123)
+Wave 5:          PDK-125 (e-mail, after 124)                           PDK-128 (notifications portal, after 123, 124)   PDK-200b (wizard, after question 5)
+Wave 6:          PDK-132 (production wiring, after 124, 125)
+Wave 7:          PDK-133 (documentation, after everything incl. the preset re-check of B3.3)   PDK-134 (paddockctl, after 121, 126)
+```
+
+Binding dependencies: PDK-121 and PDK-122 need PDK-120 merged (commit_seq, `InPlatformScope`). PDK-126 needs only
+`action.go` as on `main` and MAY start immediately; it merges after PDK-122 only because both add migrations
+(section A order: 00081 then 00082) — if PDK-126 is ready first it takes 00081 and PDK-122 takes 00082 (the lead
+corrects the table). PDK-129 needs PDK-122 (preset membership) and merges after PDK-126 (00083). PDK-130 is
+independent (00084; same renumbering rule). PDK-131 needs PDK-130 merged. PDK-123 needs PDK-122. PDK-124 needs
+PDK-120, PDK-122, PDK-123. PDK-125 needs PDK-124. PDK-127 needs PDK-126. PDK-128 needs PDK-123 and PDK-124 (test
+delivery, state). PDK-132 needs PDK-124 and PDK-125. PDK-133 and PDK-134 are last. Up to four tickets run in
+parallel without touching the same files: {PDK-120, PDK-126, PDK-130, PDK-200a} in wave 1; {PDK-121, PDK-122,
+PDK-127, PDK-131} in wave 2; the cluster's heavy gate (full acceptance, e2e, `VM=all` for PDK-131's gate N12) runs
+once at the end.
+
+### D. Open architect questions (options, recommendation, default)
+
+1. **E-mail transport dependency (PDK-125).** Options: (a) standard library `net/smtp` + `crypto/tls` + an in-house
+   `LOGIN` mechanism (B6.1); (b) `github.com/wneessen/go-mail` (MIT): SMTP AUTH LOGIN/XOAUTH2, DKIM, HTML, attachments
+   — a new Go module that needs approval and widens the surface for features M9 excludes. Recommendation and
+   default: **(a)**; no new dependency. Stop condition for the implementer unchanged (§11): if `net/smtp` cannot
+   speak to the acceptance sink or a `LOGIN` relay, report instead of adding a module. Blocks nothing.
+2. **Preset refresh and ADR 0031.** The preset list changed (B3.3). Options: (a) the plan amendment binds; ADR 0031
+   decision 7 says the preset is "versioned with the registry" and keeps its patterns (no ADR edit); (b) a dated
+   `## Amendment 2026-10-31` in ADR 0031 repeating the list. Recommendation and default: **(a)**. Blocks nothing.
+3. **Retention of M9 tables (M10 matrix).** `notification_delivery_event` grows by one row per forwarded event per
+   destination; `notification_delivery`, closed `finding` rows and `vulnerability_summary` grow slowly;
+   `notification_pseudonym_lookup` is purged by the notifier after 10 minutes (decision 18). Options: (a) a follow-up
+   ticket after M10 merges: worker retention round purges `notification_delivery` and `notification_delivery_event`
+   with `delivered_at` older than `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` (store `notification_delivery`), closed or
+   cleared `finding` rows older than the same window (store `finding`), `vulnerability_summary` older than the same
+   window (store `vulnerability_summary`), each with `retention.purged`; PDK-133 writes the matrix rows with "Worker
+   retention round (follow-up ticket)"; (b) the notifier purges its own delivery tables in PDK-124 (no new role
+   grant, but a second purge mechanism outside M10's round and matrix); (c) unbounded. Recommendation and default:
+   **(a)**; the lead creates the follow-up ticket stub (M9 cluster, after M10 merge). Blocks nothing in M9.
+4. **MCP exposure of the findings verbs** (B0.2, B7.5). Options: (a) expose `acknowledge`, `assign`, `close`,
+   `reopen` as write tools (reversible, no step-up, governed by the MCP policy and write opt-in); (b) hide them
+   (`expose: false`), findings handled in the portal only. Recommendation and default: **(a)**. Blocks nothing.
+5. **PDK-200 scope and design.** The ticket is architect-owned and has no plan. Recommendation: split it.
+   **PDK-200a** — `docs/operations/getting-started.md` (one end-to-end path from the first platform administrator to
+   the first configured device, each step with where it runs and why, linking `install.md` §9–10,
+   `agent-releases.md`, `autoinstall.md`, `identity-sources.md`, `device-login.md`; plus the route for an already
+   installed device) and a `README.md` guide-table row: documentation only, no architect decision, MAY start
+   immediately. **PDK-200b** — setup checklist in the portal **without a new API**: a component
+   `server/web/src/components/SetupChecklist.vue` rendered at the top of `Overview.vue` (organization session) and
+   `Organizations.vue` (platform session), computing each step's state from existing endpoints —
+   platform: `GET /api/platform/v1/organizations` (one exists), `GET /api/platform/v1/agent-releases` (one
+   `published`), `GET /api/platform/v1/ip-allowlist` (one entry); organization: `GET /api/v1/settings/login`
+   (break-glass accounts set), `GET /api/v1/users` (identity source delivers users), `GET /api/v1/enrollment-tokens`
+   (one active), `GET /api/v1/devices?status=active` (first device) — each open step linking to its page, steps that
+   need the host shell shown as text with a link to `getting-started.md`; dismiss state stored per account in the
+   browser (`localStorage` key `paddock.setup.dismissed.<account id>`), re-openable from the user menu. Options for
+   the dismiss state: (a) `localStorage` as above (no API, per browser); (b) a preference on `PATCH /api/v1/me`
+   (persistent, needs a contract change and a migration). Recommendation and default: **(a)** for alpha.7; (b) as a
+   follow-up if operators ask. **Blocks PDK-200b** until the lead confirms the split and (a); PDK-200a is unblocked.
+6. **Merge order against M10.** Section A assumes M10 (00074–00080, audit 00007–00009) merges before M9's first
+   migration. If M9 merges first, the numbers still hold (gaps are legal) and the only long-lived database, the lab,
+   is re-created (alpha rule). Confirmation wanted; default: proceed with 00081 / 00010 regardless of order.
+
+### E. Decisions taken in this amendment (binding, no question open)
+
+- E1 `feedAuditEvents` is the operation id of the feed; `x-paddock-mcp: { expose: false }` on it and on the
+  pseudonym lookup GET (B0.2, B2.1).
+- E2 `config_rollout.halted` leaves M9's preset until M11 registers it (B3.3).
+- E3 The notifier engine and the findings round run under platform leader locks with the keys of B5.3 and B7.3.
+- E4 The account list endpoint moves to PDK-126 with the file `app/accountlist.go` (B4.1, B7.4).
+- E5 `labRoles` does not gain `paddock-notifier`; the lab overlay adds no `extra_hosts` for it (B13.1).
+- E6 `InPlatformScope` is guarded by a source-scan test, not by `rlslint_test.go` (B1.5).
+- E7 Migration files are numbered per section A; tickets state their final number in their result.
+- E8 Changelog fragments replace `CHANGELOG.md` entries in every M9 ticket (B0.1).
+
+### E. Decisions and corrections of 2026-10-31 (lead and orchestrator)
+
+- **Migration numbers.** M10 uses paddock migrations up to 00083 (PDK-180 takes 00081). M9 starts at paddock
+  **00085**; the numbers in section A (00085 PDK-122, 00086 PDK-126, 00087 PDK-129, 00088 PDK-130) are fixed per
+  ticket. The cluster reaches `main` in one merge, after M10 is on `main`; inside the cluster branch the merge order
+  of the tickets therefore does not matter, and the cluster's development database is re-created before the final
+  gate run. Section C's renumbering rule and question 6 are superseded.
+- **Questions 1–5 answered** as recommended, with conditions:
+  1. E-mail via the standard library only. TLS is mandatory (STARTTLS required, or implicit TLS on 465); AUTH is
+     never sent over an unencrypted connection; certificates are verified (an optional custom CA is allowed, no
+     skip-verify in production); tests prove that plaintext AUTH is refused.
+  3. Follow-up ticket for the retention of the M9 tables (ADR 0032, after PDK-180).
+  4. The findings verbs are exposed as MCP write tools only through `app.ActionRunner` (one audit event each), with
+     the role checks of the REST endpoints and the existing MCP write-tool rules; feed and resolve-pseudonym stay
+     hidden.
+  5. PDK-200 is split into the guide (200a) and a portal checklist (200b) without a new API; the dismiss state lives
+     in `localStorage`, every storage access is guarded, and the page works without storage.
+- **Decision 1 (PDK-120).** Migrations run as `audit_owner`, which has no policy on the forced-RLS `audit_event`;
+  the backfill therefore runs between `ALTER TABLE audit_event NO FORCE ROW LEVEL SECURITY` and `… FORCE ROW LEVEL
+  SECURITY` in the same migration transaction. No other session can observe the intermediate state.
+- **Decision 30 (PDK-126).** The attention view is `security_invoker`; the findings round in the worker therefore
+  needs `SELECT` on `attention_condition`, a column grant `SELECT (device_id, organization_id, version, created_at)`
+  on `bundle`, `paddock_worker` in the `tenant` policy of `bundle`, and `EXECUTE` on
+  `paddock_current_agent_version()`. No write access on `bundle`.
+- **Decision 38 / §6.5 (PDK-130).** A refused unit returns the existing problem `unit_not_allowed` with status
+  **422** (since M1, managed units), not 400; duplicates and more than 32 units return 400 `invalid_request`.
+
+- **§6.5 feed item (PDK-121).** `AuditEventStored` carries `organization_id` (decision 6 wins over the shorthand
+  "AuditEvent without device" of §6.5); every item's `organization_id` equals the organization of the token. The
+  feed format `paddock.audit.feed.v1` is frozen with it.
+- **Decision 40 (PDK-131), accepted behaviours.** A watched unit that changes from stopped to missing produces no
+  second event. The agent holds the reported state in memory only, so a unit that is still stopped is reported once
+  more after an agent restart.
+- **Decision 40 (PDK-131), amended 2026-10-31.** The agent reads a watched unit's state with
+  `systemctl show -p LoadState,ActiveState,SubState -- <unit>`. Only `LoadState=not-found` counts as missing; a
+  failed query keeps the previous state, is logged per unit and produces no event, and one failing unit does not
+  stop the others. `deactivating` and a plain `activating` start are transitional (previous state kept, no event).
+  `activating` with `SubState=auto-restart` counts as failed only when it is still seen on the next pass, so a crash
+  loop is reported and a single restart is not. The meaning of decision 40 is unchanged.
+- **Decisions 9, 10, 12, 13, 15, 16, 21 and §6.2 (PDK-122 external review, architect, 2026-10-31).** Binding for
+  PDK-123 and PDK-124:
+  - Two **derived** Transit keys (`derived=true`, aes256-gcm96): `notification-wrap` for the webhook URL and signing
+    secret (api: `transit/encrypt`; notifier: `transit/decrypt`) and `notification-pseudonym` for the pseudonym keys
+    (api: `transit/datakey/wrapped` only, never encrypt or a plaintext data key; notifier: `transit/decrypt`). The
+    context of every operation is `<organization_id>:<field>` with the lowercase canonical organization ID (the nil
+    UUID for the platform scope) and the field `url`, `secret` or `pseudonym`, base64-encoded as Transit requires;
+    `bao.OrganizationContext(org, field)` is the only place that forms it. A ciphertext therefore decrypts for its own
+    organization and field only. `bao.Client.Encrypt(ctx, key, org, field, plaintext)`,
+    `WrappedDataKey(ctx, key, org, field)` and `DecryptContext(ctx, key, org, field, ciphertext)`; every key-wrapping
+    interface of the use cases and the notifier takes the organization. `openbao-configure.sh` stops on an existing
+    non-derived key.
+  - **Cursor (replaces "insert … with `cursor_commit_seq = LatestCommitSeq`" of decision 15 and "`skip` sets
+    `cursor_commit_seq = LatestCommitSeq`" of decision 16).** The latest commit sequence lives in the audit database,
+    which the paddock database cannot read, so neither the api nor `paddock_platform` writes the cursor. `Create`
+    inserts the state row with its key only; `start_at_latest` defaults to `true`. Enabling with `cursor: skip` calls
+    `paddock_destination_start_at_latest(id)` (platform: `paddock_platform_destination_start_at_latest(id)`;
+    SECURITY DEFINER, organization from the context; NULL = not found). The notifier, before step (a) of decision 21,
+    sets `cursor_commit_seq` to the scope's latest commit sequence and `start_at_latest = false` in one transaction
+    and delivers nothing for that destination while the flag is set. Events committed between the request and that
+    round are skipped as well (at most one poll interval). A trigger refuses any decrease of `cursor_commit_seq` for
+    every role.
+  - §6.2 corrections in migration 00085: `notification_destination` and `notification_delivery` carry
+    `UNIQUE (id, organization_id)`; every child references `(…_id, organization_id)`; the keys a caller names include
+    the organization (`notification_destination_state` PK `(destination_id, organization_id)`,
+    `notification_delivery_event` PK `(destination_id, organization_id, forward_seq)`), so an ID of another
+    organization fails like an unknown one (PDK-123 answers 404 `not_found`). Row IDs are server-generated (UUIDv7),
+    never caller input, so their single-column primary keys stay. The api and `paddock_platform` insert state rows with
+    the key columns only, write no state column afterwards and delete none; every result column is written by
+    `paddock_notifier`. Their delivery inserts are fresh test deliveries (`id, destination_id, organization_id, kind,
+    requested_by`; every result column and `created_at` at the default). The api inserts pseudonym lookups unresolved
+    (`id, organization_id, pseudonym, requested_by`). `paddock_platform` has no rights on `notification_delivery_event`,
+    `notification_pseudonym_key` and `notification_pseudonym_lookup`; the notifier serves the platform scope (nil
+    organization) under its own role.
+  - The webhook deny list gains `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`, `100::/64` and the
+    documentation ranges (ADR 0031 amendment 2026-10-31).
+- **Decision 17 (PDK-123).** The test route is a privileged, audited operation: the api records
+  `notification.test_requested` (one event per attempt through `app.ActionRunner`), and the notifier records
+  `notification.test_sent` with the delivery result. `notification.test_requested` is not in the security preset.
+- **Decision 37 (PDK-129), known limitation.** The daily summary windows on `first_seen_at`; a vulnerability re-rated
+  to critical later is not summarized in alpha.7 (follow-up ticket).
+- **Decision 22 (PDK-124), dated 2026-10-31.** The notifier records `notification.delivered`, `destination_stalled`
+  and `destination_resumed` through `app.ActionRunner.RecordAllOnce`: system principals only, all events of one state
+  change or none, each state update guarded (`delivered_at IS NULL`, the pending delivery the engine sent). A guard
+  mismatch rolls back without an event because another replica already made and recorded the change; the audit
+  invariant (one event per state change) still holds, since a no-event rollback happens only when the state change
+  did not happen. Each destination gets a 60 s budget per round: no new delivery starts after 60 s, so the worst case
+  is about 120 s per destination and round.

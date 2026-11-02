@@ -16,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/configrollout"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/domain/managedconfig"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
@@ -45,6 +46,7 @@ var (
 	SpecDeviceSetGroups         = ActionSpec{Code: audit.CodeDeviceGroupsChanged, AllowedRoles: RolesWrite}
 	SpecDeviceSetOwners         = ActionSpec{Code: audit.CodeDeviceOwnersChanged, AllowedRoles: RolesWrite}
 	SpecDeviceSetName           = ActionSpec{Code: audit.CodeDeviceNameChanged, AllowedRoles: RolesWrite}
+	SpecDeviceEnforce           = ActionSpec{Code: audit.CodeDeviceEnforcementEnabled, AllowedRoles: RolesWrite}
 )
 
 // MaxDeviceOwners is the most owners a device can have (plan M8d decision 2).
@@ -62,6 +64,10 @@ type DeviceQuery struct {
 	ComponentOutdated *bool
 	// SecurityOverdue selects devices without a successful security run within SecurityOverdueWindow.
 	SecurityOverdue bool
+	// EnrollmentMethods and ConfigModes select by how a device was enrolled and its configuration mode (plan M11
+	// decision 43).
+	EnrollmentMethods []string
+	ConfigModes       []string
 }
 
 // List returns one page of devices with their status.
@@ -101,6 +107,7 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 	n, err := q.CountDevices(ctx, pgstore.CountDevicesParams{
 		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
 		SecurityOverdueWindow: overdue, OwnerID: nullID(query.OwnerID), ComponentOutdated: query.ComponentOutdated, CountLimit: countLimit,
+		EnrollmentMethods: query.EnrollmentMethods, ConfigModes: query.ConfigModes,
 	})
 	if err != nil {
 		return fmt.Errorf("count devices: %w", err)
@@ -109,7 +116,7 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 	out.Items, err = q.ListDevices(ctx, pgstore.ListDevicesParams{
 		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
 		SecurityOverdueWindow: overdue, OwnerID: nullID(query.OwnerID), ComponentOutdated: query.ComponentOutdated, Sort: query.Page.Sort, SkipRows: query.Page.Offset,
-		MaxRows: query.Page.Limit,
+		MaxRows: query.Page.Limit, EnrollmentMethods: query.EnrollmentMethods, ConfigModes: query.ConfigModes,
 	})
 	if err != nil {
 		return fmt.Errorf("list devices: %w", err)
@@ -140,6 +147,8 @@ type DeviceDetail struct {
 	DiskConversion *DiskConversion
 	// ComponentTargets are the platform's component targets (plan M8d decision 55).
 	ComponentTargets map[string]string
+	// ConfigStatus counts the device's resources per apply status (plan M11 decision 14); zeros without rows.
+	ConfigStatus pgstore.CountDeviceResourceStatusRow
 }
 
 // LoginManagement reports whether the device's agent supports bundle schema v2 (login and sudo, plan M3a decision
@@ -218,6 +227,9 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 		health = diskHealth(out.Status.Health)
 	}
 	if out.DiskConversion, err = loadDiskConversion(ctx, q, id, health); err != nil {
+		return out, err
+	}
+	if out.ConfigStatus, err = q.CountDeviceResourceStatus(ctx, id); err != nil {
 		return out, err
 	}
 	out.Login, err = loadLoginAssignment(ctx, q, id)
@@ -323,6 +335,41 @@ func TransitionDevice(ctx context.Context, q *pgstore.Queries, rec Recorder, act
 	}
 	rec.StateChanged(statechange.ScopeDevice, id)
 	return out, nil
+}
+
+// Enforce ends the report-only mode of an adopted device (audited: device.enforcement_enabled, plan M11 decision 42).
+// hostname is the typed confirmation of ADR 0018 and must equal the device's hostname; only an active report-only
+// device can be enforced. Its next bundle applies every managed resource.
+func (d *Devices) Enforce(ctx context.Context, id uuid.UUID, hostname string) (pgstore.Device, error) {
+	var out pgstore.Device
+	spec := SpecDeviceEnforce
+	spec.Target = &audit.Target{Type: "device", ID: id.String()}
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		dev, err := q.LockDevice(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		rec.SetTarget(audit.Target{Type: "device", ID: id.String(), Display: dev.Hostname})
+		rec.SetParam("hostname", dev.Hostname)
+		rec.SetParam("enrollment_method", dev.EnrollmentMethod)
+		if hostname != dev.Hostname {
+			return problem.InvalidRequest.WithDetail("hostname does not match the device's hostname")
+		}
+		if dev.State != device.StateActive || dev.ConfigMode != device.ConfigModeReportOnly {
+			return problem.InvalidState.WithDetail(fmt.Sprintf("only an active report-only device can be enforced; this device is %s and %s", dev.State, dev.ConfigMode))
+		}
+		since := dev.EnrolledAt
+		if dev.ConfigModeChangedAt != nil {
+			since = *dev.ConfigModeChangedAt
+		}
+		rec.SetParam("report_only_since", since.UTC().Format(time.RFC3339))
+		if out, err = q.EnforceDevice(ctx, id); err != nil {
+			return err
+		}
+		rec.StateChanged(statechange.ScopeDevice, id)
+		return nil
+	})
+	return out, err
 }
 
 // SetGroups replaces the device group memberships of a device (audited: device.groups_changed).
@@ -525,6 +572,7 @@ type EffectiveConfig struct {
 	Units     []pgstore.ManagedUnit
 	Conflicts []managedconfig.Conflict
 	Resources []bundle.Resource
+	Rollout   *DeviceRollout // the open configuration rollout; nil without one
 }
 
 // EffectiveConfig resolves the managed files and units of a device (plan M2a decision 7).
@@ -553,10 +601,38 @@ func (d *Devices) EffectiveConfig(ctx context.Context, id uuid.UUID) (EffectiveC
 			out.Units = append(out.Units, defs.unitRows[u.ID])
 		}
 		out.Conflicts = eff.Conflicts
-		out.Resources, err = managedconfig.Resources(eff)
+		if out.Resources, err = managedconfig.Resources(eff); err != nil {
+			return err
+		}
+		out.Rollout, err = deviceRollout(ctx, q, id, groups)
 		return err
 	})
 	return out, err
+}
+
+// DeviceRollout is the organization's open configuration rollout as one device sees it (plan M11 decision 30).
+type DeviceRollout struct {
+	ID uuid.UUID
+	// InWave: the device receives the staged change set; outside the wave it keeps the before-state of the staged keys.
+	InWave bool
+}
+
+// deviceRollout returns the open rollout for device, a member of groups; nil without one.
+func deviceRollout(ctx context.Context, q *pgstore.Queries, device uuid.UUID, groups []uuid.UUID) (*DeviceRollout, error) {
+	open, err := q.GetOpenConfigRollout(ctx)
+	if db.IsNoRows(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	waves := make([]int, len(open.Waves))
+	for i, w := range open.Waves {
+		waves[i] = int(w)
+	}
+	canary := open.CanaryDeviceGroupID.Valid && slices.Contains(groups, open.CanaryDeviceGroupID.UUID)
+	percent := configrollout.Percent(open.Status, waves, int(open.CurrentWaveIndex))
+	return &DeviceRollout{ID: open.ID, InWave: configrollout.Eligible(configrollout.Bucket(device, open.ID), percent, canary)}, nil
 }
 
 // ManagedDefinitions are all managed files and units of an organization. Files on denied paths are never shipped or

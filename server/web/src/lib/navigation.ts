@@ -39,6 +39,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     items: [
       { to: '/', label: 'nav.overview', icon: 'layout-dashboard', shortcut: 'g o', visible: () => true },
       { to: '/attention', label: 'nav.attention', icon: 'bell', shortcut: 'g a', visible: orgReader, testid: 'nav-attention' },
+      { to: '/findings', label: 'nav.findings', icon: 'search', visible: orgReader, testid: 'nav-findings' },
     ],
   },
   {
@@ -60,6 +61,8 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/settings/managed-files', label: 'nav.operatorRoots', icon: 'folder', visible: orgReader },
       { to: '/package-holds', label: 'nav.packageHolds', icon: 'package', visible: orgReader },
       { to: '/change-sets', label: 'nav.changeSets', icon: 'diff', visible: orgReader },
+      { to: '/config-rollouts', label: 'nav.configRollouts', icon: 'rocket', visible: orgReader },
+      { to: '/config-status', label: 'nav.configStatus', icon: 'file-check', visible: orgReader },
     ],
   },
   {
@@ -69,6 +72,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/security-review', label: 'nav.securityReview', icon: 'triangle-alert', visible: orgReader },
       { to: '/revocations', label: 'nav.revocations', icon: 'lock', visible: (a) => a.canDelete },
       { to: '/settings/dms', label: 'nav.dms', icon: 'timer', visible: orgReader },
+      { to: '/settings/watched-units', label: 'nav.watchedUnits', icon: 'shield-check', visible: orgReader },
       { to: '/settings/login', label: 'nav.loginSettings', icon: 'log-in', visible: orgReader },
     ],
   },
@@ -87,8 +91,10 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/users', label: 'nav.users', icon: 'user', visible: orgReader },
       { to: '/user-groups', label: 'nav.userGroups', icon: 'users', visible: orgReader },
       { to: '/api-tokens', label: 'nav.apiTokens', icon: 'key', visible: orgReader },
+      { to: '/settings/notifications', label: 'nav.notifications', icon: 'bell', visible: (a) => a.canReadAudit, testid: 'nav-notifications' },
       { to: '/settings/mcp', label: 'nav.mcpSettings', icon: 'cog', visible: orgReader },
       { to: '/settings/updates', label: 'nav.updateSettings', icon: 'refresh-cw', visible: orgReader },
+      { to: '/settings/rollout', label: 'nav.rolloutSettings', icon: 'rocket', visible: orgReader },
       { to: '/settings/privacy', label: 'nav.privacySettings', icon: 'shield', visible: orgReader },
       { to: '/audit', label: 'nav.audit', icon: 'scroll-text', shortcut: 'g l', visible: (a) => a.canReadAudit },
       { to: '/audit/integrity', label: 'nav.auditIntegrity', icon: 'shield-check', visible: (a) => a.canReadAudit, testid: 'nav-audit-integrity' },
@@ -104,6 +110,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/platform/ip-allowlist', label: 'nav.ipAllowlist', icon: 'globe-lock', visible: (a) => a.isPlatform },
       { to: '/platform/sessions', label: 'nav.sessions', icon: 'log-in', visible: (a) => a.isPlatform },
       { to: '/platform/openbao', label: 'nav.openbao', icon: 'shield-check', visible: (a) => a.isPlatform },
+      { to: '/platform/notifications', label: 'nav.platformNotifications', icon: 'bell', visible: (a) => a.isPlatform, testid: 'nav-platform-notifications' },
       { to: '/platform/mcp', label: 'nav.platformMcp', icon: 'cog', visible: (a) => a.isPlatform },
     ],
   },

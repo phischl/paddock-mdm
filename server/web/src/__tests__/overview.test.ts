@@ -39,8 +39,8 @@ const twoConditions: AttentionDevice = {
   device_id: 'd1', hostname: 'acme-lt-0142', state: 'active', os_release: { VERSION_ID: '24.04' }, last_contact_at: null,
   severity: 'critical', since: '2026-10-09T10:00:00Z',
   conditions: [
-    { kind: 'presumed_lost', since: '2026-10-09T10:00:00Z', detail: '' },
-    { kind: 'stale_critical', since: '2026-10-08T10:00:00Z', detail: '' },
+    { kind: 'presumed_lost', since: '2026-10-09T10:00:00Z', detail: '', finding: null },
+    { kind: 'stale_critical', since: '2026-10-08T10:00:00Z', detail: '', finding: null },
   ],
 }
 const event: AuditEvent = {
@@ -181,8 +181,8 @@ describe('overview page (plan M7c decision 28)', () => {
   it('collapses more than three conditions into a +n chip', async () => {
     attentionItems = [{
       ...twoConditions, conditions: [
-        ...twoConditions.conditions, { kind: 'disk_not_compliant', since: '2026-10-08T10:00:00Z', detail: '' },
-        { kind: 'agent_outdated', since: '2026-10-08T10:00:00Z', detail: '' },
+        ...twoConditions.conditions, { kind: 'disk_not_compliant', since: '2026-10-08T10:00:00Z', detail: '', finding: null },
+        { kind: 'agent_outdated', since: '2026-10-08T10:00:00Z', detail: '', finding: null },
       ],
     }]
     const w = await mountOverview()

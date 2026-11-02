@@ -148,6 +148,8 @@ type rendered struct {
 	// forced: the content equals the latest bundle and a forced state change publishes it anyway (plan M6c
 	// decision 19).
 	forced bool
+	// rollout is the open configuration rollout whose wave the device is in (plan M11 decision 30).
+	rollout uuid.NullUUID
 }
 
 // compileTarget is a device to compile with what decides its schema.
@@ -161,6 +163,8 @@ type compileTarget struct {
 	forced    bool   // a forced state change targets the device (plan M6c decision 19)
 	request   updateRequest
 	name      *string // the device's managed name (ADR 0041); nil when not managed
+	// reportOnly marks an adopted device before enforcement (plan M11 decision 41): its bundle only reports.
+	reportOnly bool
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -185,7 +189,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	if err != nil {
 		return err
 	}
-	err = c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	// One snapshot for every read of the round: a change set and its rollout commit together, so the definitions, the
+	// update settings and the overlay never come from different sides of a staged apply or of a rollout's revert.
+	err = c.pool.InOrgSnapshot(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		identity := &identityLoader{q: q}
 		ids, forced, err := expand(ctx, q, events, identity)
 		if err != nil || len(ids) == 0 {
@@ -206,6 +212,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Disk, err = loadDisk(ctx, q); err != nil {
 			return err
 		}
+		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
+			return err
+		}
 		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err
@@ -214,12 +223,16 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if err != nil {
 			return err
 		}
+		overlay, err := loadOverlay(ctx, q)
+		if err != nil {
+			return err
+		}
 		for _, row := range rows {
 			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
 				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
 				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
-			t.name = row.Name
-			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity, keys)
+			t.name, t.reportOnly = row.Name, row.ConfigMode == device.ConfigModeReportOnly
+			r, changed, failure, err := c.render(ctx, q, org, t, defs, overlay, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
 			}
@@ -249,7 +262,7 @@ var specRenderFailed = app.ActionSpec{Code: audit.CodeDeviceBundleRenderFailed}
 func (c *Compiler) recordFailures(ctx context.Context, failures []renderFailure) {
 	for _, f := range failures {
 		metricBundles.WithLabelValues("render_failed").Inc()
-		slog.ErrorContext(ctx, "bundle blocked: a sudo entry failed the sudoers check", "device_id", f.device, "reason", f.reason)
+		slog.ErrorContext(ctx, "bundle blocked; the device keeps its previous bundle", "device_id", f.device, "reason", f.reason)
 		spec := specRenderFailed
 		spec.Target = &audit.Target{Type: "device", ID: f.device.String()}
 		spec.Params = map[string]any{"username": f.username, "reason": truncateReason(f.reason)}
@@ -338,11 +351,26 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event,
 // render builds the next bundle of an active device and reports whether its content differs from the last one.
 // Agents that report schema 2 get v2 with the login and sudo resources; all others get v1 exactly as before (plan
 // M3a decision 14a). A sudo entry that fails the server-side check blocks the device's bundle (failure); one with an
-// invalid command is omitted and recorded once the bundle is published.
+// invalid command is omitted and recorded once the bundle is published. A device outside the wave of the open
+// rollout (overlay, nil without one) renders the before-state of the staged keys; a report-only device is never inside a
+// wave (plan M11 decision 30), so it never carries a rollout and never counts.
 func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID, t compileTarget,
-	defs app.ManagedDefinitions, identity *identityLoader, keys v2Trust) (rendered, bool, *renderFailure, error) {
+	defs app.ManagedDefinitions, overlay *rolloutOverlay, identity *identityLoader, keys v2Trust) (rendered, bool, *renderFailure, error) {
 	if !device.Compiled(t.state) {
 		return rendered{}, false, nil, nil
+	}
+	var rollout uuid.NullUUID
+	if overlay != nil {
+		switch {
+		case !t.reportOnly && overlay.eligible(t.id):
+			rollout = uuid.NullUUID{UUID: overlay.id, Valid: true}
+		case overlay.beforeMissing:
+			// Fail closed: without the before-state the device would get the staged change early or lose items.
+			return rendered{}, false, &renderFailure{device: t.id,
+				reason: "the before-state of configuration rollout " + overlay.id.String() + " is missing; the device keeps its previous bundle until the rollout is completed"}, nil
+		default:
+			defs, keys.Updates = overlay.apply(defs, keys.Updates)
+		}
 	}
 	groups, err := q.ListDeviceGroupIDsOfDevice(ctx, t.id)
 	if err != nil {
@@ -387,8 +415,12 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		Agent: agent, Resources: resources, Keys: v2.Keys,
 		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection, Disk: diskSection,
 	}
+	if t.reportOnly {
+		b.Mode = bundle.ModeReportOnly
+	}
 	if t.v2 {
 		b.Hostname = hostnameSection(ctx, t)
+		b.Watch = v2.Watch
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -408,7 +440,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		return rendered{}, false, nil, err
 	}
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted,
-		forced: unchanged}, true, nil, nil
+		forced: unchanged, rollout: rollout}, true, nil, nil
 }
 
 // v2Trust are the key material, the revocation section, the organization's dead man's switch, the inventory section
@@ -427,6 +459,9 @@ type v2Trust struct {
 	// Disk is the organization's disk unlock mode and its groups' overrides (plan M8d decision 46), not part of the
 	// digest.
 	Disk *orgDisk `json:"-"`
+	// Watch is the organization's presence policy (plan M9 decision 39), nil without watched units; not part of the
+	// digest.
+	Watch *bundle.WatchSpec `json:"-"`
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap
@@ -511,6 +546,7 @@ func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelo
 		if err := q.InsertBundle(ctx, pgstore.InsertBundleParams{
 			DeviceID: r.device, Version: version, OrganizationID: org, ContentSha256: r.content[:],
 			EnvelopeSha256: sum[:], ObjectKey: key, SchemaVersion: int32(r.schema), //nolint:gosec // 1 or 2
+			ConfigRolloutID: r.rollout,
 		}); err != nil {
 			return err
 		}

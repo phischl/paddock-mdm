@@ -82,7 +82,7 @@ func TestObservability(t *testing.T) {
 			t.Fatalf("targets not up: %v", down)
 		}
 		for _, role := range []string{"paddock-api", "paddock-gateway", "paddock-worker", "paddock-compiler",
-			"paddock-outbox-relay", "paddock-escrow-reader", "paddock-revocation-issuer", "paddock-audit-writer", "rabbitmq"} {
+			"paddock-outbox-relay", "paddock-escrow-reader", "paddock-revocation-issuer", "paddock-notifier", "paddock-audit-writer", "rabbitmq"} {
 			if !roles[role] {
 				t.Errorf("no scrape target for %s", role)
 			}

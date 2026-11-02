@@ -75,3 +75,38 @@ WHERE id = @id RETURNING *;
 UPDATE platform_admin
 SET mcp_write_enabled_at = CASE WHEN @enabled::boolean THEN coalesce(mcp_write_enabled_at, now()) END
 WHERE id = @id RETURNING *;
+
+-- name: ListOrgAccounts :many
+-- The organization's accounts that are not disabled, for the assignee picker of findings (plan M9 decision 34).
+SELECT id, username, display_name, role FROM admin_account
+WHERE disabled_at IS NULL
+  AND (sqlc.narg(q_pattern)::text IS NULL
+       OR username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR display_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+  AND (sqlc.narg(roles)::text[] IS NULL OR role = ANY(sqlc.narg(roles)::text[]))
+ORDER BY
+  CASE WHEN @sort::text = 'username' THEN username END ASC,
+  CASE WHEN @sort::text = '-username' THEN username END DESC,
+  CASE WHEN @sort::text = 'display_name' THEN display_name END ASC,
+  CASE WHEN @sort::text = '-display_name' THEN display_name END DESC,
+  CASE WHEN @sort::text = 'role' THEN role END ASC,
+  CASE WHEN @sort::text = '-role' THEN role END DESC,
+  id
+LIMIT @max_rows OFFSET @skip_rows;
+
+-- name: CountOrgAccounts :one
+SELECT count(*) FROM (
+  SELECT 1 FROM admin_account
+  WHERE disabled_at IS NULL
+    AND (sqlc.narg(q_pattern)::text IS NULL
+         OR username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR display_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+    AND (sqlc.narg(roles)::text[] IS NULL OR role = ANY(sqlc.narg(roles)::text[]))
+  LIMIT @count_limit
+) matching;
+
+-- name: GetAssignableAccount :one
+-- An account a finding can be assigned to: of the organization, not disabled, administrator or operator (plan M9
+-- decision 33).
+SELECT id, username, display_name FROM admin_account
+WHERE id = @id AND disabled_at IS NULL AND role IN ('org_admin', 'org_operator');

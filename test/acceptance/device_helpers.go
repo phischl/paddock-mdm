@@ -128,6 +128,10 @@ func removeCreated(t *testing.T, p *env.Portal, collection string, res env.Respo
 		}
 		deleteOnCleanup(t, p, collection+"/"+out.User.ID)
 		return
+	case "/api/v1/notification-destinations": // the deletion needs a step-up of the session's own user
+		renew := func(t *testing.T) { stepUp(t, p, p.User, true) }
+		deleteDestinationOnCleanup(t, p, renew, collection+"/"+responseID(t, res).String())
+		return
 	}
 	createdID(t, p, collection, res)
 }

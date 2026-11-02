@@ -1,6 +1,6 @@
 import type {
-  AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceComponent, DeviceContact, DeviceState,
-  DiskState, OrganizationStatus, RevocationStatus,
+  AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, ChangeSetRollout, ConfigRolloutStatus,
+  DeviceCommandStatus, DeviceComponent, DeviceContact, DeviceState, DiskState, FindingStatus, OrganizationStatus, RevocationStatus,
 } from '../api/client'
 
 /**
@@ -104,7 +104,25 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'sudo_apply_failed':
       return { status: 'warn', label }
     case 'revocation_pending':
+    case 'report_only':
       return { status: 'info', label }
+  }
+}
+
+/** The chip of a finding's status: waiting is a warning, taken is info, closed findings are neutral. */
+export function findingStatus(status: FindingStatus): StatusView {
+  const label = 'findings.status.' + status
+  switch (status) {
+    case 'open':
+      return { status: 'warn', label }
+    case 'acknowledged':
+    case 'in_progress':
+      return { status: 'info', label }
+    case 'resolved':
+      return { status: 'ok', label }
+    case 'accepted_risk':
+    case 'false_positive':
+      return { status: 'neutral', label }
   }
 }
 
@@ -182,6 +200,34 @@ export function rolloutStatus(s: AgentRolloutStatus): StatusView {
       return { status: 'critical', label }
     case 'completed':
       return { status: 'ok', label }
+  }
+}
+
+/** The status of a configuration rollout (plan M11 decision 36). */
+export function configRolloutStatus(s: ConfigRolloutStatus): StatusView {
+  const label = 'configRollouts.statuses.' + s
+  switch (s) {
+    case 'running':
+      return { status: 'info', label }
+    case 'halted':
+      return { status: 'critical', label }
+    case 'completed':
+      return { status: 'ok', label }
+    case 'reverted':
+      return { status: 'neutral', label }
+  }
+}
+
+/** How a change set reached the devices: staged is under way, urgent skipped the stages, immediate is the default. */
+export function changeSetRollout(r: ChangeSetRollout): StatusView {
+  const label = 'configRollouts.modes.' + r
+  switch (r) {
+    case 'staged':
+      return { status: 'info', label }
+    case 'urgent':
+      return { status: 'warn', label }
+    case 'immediate':
+      return { status: 'neutral', label }
   }
 }
 

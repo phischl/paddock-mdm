@@ -24,9 +24,9 @@ type AttentionQuery struct {
 	Kinds []string
 }
 
-// List returns one page of open conditions.
-func (a *Attention) List(ctx context.Context, query AttentionQuery) (Listed[pgstore.AttentionCondition], error) {
-	var out Listed[pgstore.AttentionCondition]
+// List returns one page of open conditions, each with its live finding.
+func (a *Attention) List(ctx context.Context, query AttentionQuery) (Listed[pgstore.ListAttentionRow], error) {
+	var out Listed[pgstore.ListAttentionRow]
 	if _, err := RequireOrg(ctx, RolesRead); err != nil {
 		return out, err
 	}

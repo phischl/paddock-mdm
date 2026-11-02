@@ -43,6 +43,14 @@ const StoreDeviceEventGap = "device_event_gap"
 // (ADR 0032 amendments 2026-10-18 and 2026-10-31, PDK-180).
 const StoreAction = "action"
 
+// StoreChangeSetBefore is the store name of the before-states of change sets in retention.purged (plan M11 amendment
+// 2026-10-29, PDK-154).
+const StoreChangeSetBefore = "change_set_before"
+
+// ChangeSetBeforeDays is how long a change set keeps its before-state after it was applied (ADR 0032 §1): managed
+// file contents may hold personal data. The change set itself stays.
+const ChangeSetBeforeDays = 90
+
 // ReadWindowRetention is how long the coalescing keys of read-access events are kept (plan M10 decision 21).
 const ReadWindowRetention = 48 * time.Hour
 
@@ -171,6 +179,28 @@ func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (int64, er
 	}
 	return purgeBatches(ctx, r.runner, r.org, StoreDeviceUserSeen, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
 		return q.DeleteExpiredDeviceUserSeen(ctx, cutoff)
+	})
+}
+
+// PurgeChangeSetBefore clears the before-states of the context's organization's change sets applied more than
+// ChangeSetBeforeDays before now (system principal); the change sets stay, with before_purged_at set. Without expired
+// before-states it records nothing. It returns the number of cleared rows (purgeBatches).
+func (r *Retention) PurgeChangeSetBefore(ctx context.Context, now time.Time) (int64, error) {
+	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
+		return 0, problem.Unauthenticated
+	}
+	cutoff := now.Add(-ChangeSetBeforeDays * r.unit)
+	var expired bool
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		expired, err = q.HasExpiredChangeSetBefore(ctx, cutoff)
+		return err
+	})
+	if err != nil || !expired {
+		return 0, err
+	}
+	return purgeBatches(ctx, r.runner, r.org, StoreChangeSetBefore, cutoff, r.budget, r.lockTimeout, func(ctx context.Context, q *pgstore.Queries) (int64, error) {
+		return q.PurgeExpiredChangeSetBefore(ctx, cutoff)
 	})
 }
 

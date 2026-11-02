@@ -127,6 +127,26 @@ Copy the production release public keys (`docs/operations/agent-releases.md`, "P
 plane and make them readable by the services (they run as uid 65532; `./paddock check` names a file they cannot
 read): `chmod 644 .secrets/release-production/*.pub`. Their secret keys never come to a server.
 
+### E-mail relay
+
+Security notifications (`paddock-notifier`) go to webhooks and, with an SMTP relay of yours, to e-mail. Without a relay
+leave `PADDOCK_SMTP_ENABLED=false` and `PADDOCK_SMTP_HOST` unset: organizations then create webhook destinations only.
+With a relay, set on the control plane in `.env`:
+
+| Setting | Meaning |
+| --- | --- |
+| `PADDOCK_SMTP_ENABLED=true` | tells the api that e-mail destinations can be created |
+| `PADDOCK_SMTP_HOST` | the relay's host name |
+| `PADDOCK_SMTP_PORT` | default 587 (465 with `implicit`) |
+| `PADDOCK_SMTP_TLS` | `starttls` (default; refused if the relay does not offer it) or `implicit`; certificates are always verified |
+| `PADDOCK_SMTP_FROM` | the sender address, required with a host |
+| `PADDOCK_SMTP_USERNAME` | only for a relay with authentication; the password goes into `.secrets/smtp_password` (`chmod 644`, like every secret file) |
+
+`./paddock secrets` creates `.secrets/smtp_password` empty; it stays empty without a username. A relay whose
+certificate comes from a private CA needs a Compose override that mounts the CA file on `paddock-notifier` and sets
+`PADDOCK_SMTP_CA_FILE` to its path there. Restart the notifier and the api after a change:
+`./paddock up`.
+
 Pull the images: `./paddock pull`.
 
 ## 5. Audit host
@@ -197,9 +217,13 @@ tunnel.
 configuration. It prints one PASS/FAIL line per item and exits 1 on any FAIL. It refuses: `compose.dev.yaml` in the
 configuration; `PADDOCK_ENV` other than `production`; development-only variables (`PADDOCK_STEPUP_WINDOW`,
 `PADDOCK_STEPUP_MAX_AUTH_AGE`, `PADDOCK_STALENESS_UNIT`, `PADDOCK_RETENTION_UNIT`, `PADDOCK_REAPER_THRESHOLD`, `PADDOCK_OSV_SYNC_INTERVAL`,
-`PADDOCK_TEST_*`); a retention round interval (`PADDOCK_RETENTION_INTERVAL`) below 1 minute, above 24 hours, or
-unparsable; `PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
-missing, empty or readable by every user of the host (symbolic links resolved; `.secrets/` must stay 0700); a path
+`PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE`, `PADDOCK_TEST_*`) and `PADDOCK_SMTP_TLS=none`; `PADDOCK_SMTP_ENABLED` that does
+not match whether `PADDOCK_SMTP_HOST` is set, an unknown `PADDOCK_SMTP_TLS` or a relay without `PADDOCK_SMTP_FROM`
+(item `notifications: SMTP presence flag matches the relay`); a retention round interval (`PADDOCK_RETENTION_INTERVAL`)
+below 1 minute, above 24 hours, or unparsable;
+`PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
+missing, empty (except `smtp_password` without `PADDOCK_SMTP_USERNAME`) or readable by every user of the host
+(symbolic links resolved; `.secrets/` must stay 0700); a path
 below `/run/secrets/` that a service names (in a variable or as the `sslrootcert` of a DSN) without mounting that
 secret; 80/443 published by any service but Caddy, or another published port that is not bound to
 `PADDOCK_INTERCONNECT_ADDR`; a link between the hosts without TLS; `tls internal` in the Caddyfile or no ACME e-mail;

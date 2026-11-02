@@ -41,3 +41,22 @@ func TestValidateReported(t *testing.T) {
 		}
 	}
 }
+
+func TestAdoption(t *testing.T) {
+	cases := []struct{ asserted, method, mode string }{
+		{"", EnrollmentUnknown, ConfigModeEnforce},
+		{"autoinstall", EnrollmentAutoinstall, ConfigModeEnforce},
+		{"adopted", EnrollmentAdopted, ConfigModeReportOnly},
+	}
+	for _, tc := range cases {
+		method, mode, err := Adoption(tc.asserted)
+		if err != nil || method != tc.method || mode != tc.mode {
+			t.Errorf("Adoption(%q) = %q, %q, %v", tc.asserted, method, mode, err)
+		}
+	}
+	for _, bad := range []string{"unknown", "manual", "Adopted"} {
+		if _, _, err := Adoption(bad); !errors.Is(err, ErrInvalidEnrollmentMethod) {
+			t.Errorf("Adoption(%q) = %v", bad, err)
+		}
+	}
+}

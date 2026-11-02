@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/phischl/paddock-mdm/cli/internal/cmd"
 )
@@ -30,7 +32,12 @@ type fakeAPI struct {
 	lastBody []byte
 	headers  http.Header
 	// changed makes an apply with expected_plan fail as if the configuration changed after the dry run.
-	changed bool
+	changed       bool
+	feedQueries   []string
+	feedForbidden bool
+	feedFailAt    int
+	// rollout and rolloutID are the staging fields of ConfigApplyResult an apply answers with (raw JSON values).
+	rollout, rolloutID string
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -66,11 +73,42 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if dry || strings.Contains(f.plan, `"changes":[]`) {
 			id = "null"
 		}
+		staging := ""
+		if !dry && id != "null" && f.rollout != "" {
+			staging = `,"rollout":` + f.rollout
+			if f.rolloutID != "" {
+				staging += `,"rollout_id":` + f.rolloutID
+			}
+		}
 		_, _ = io.WriteString(w, `{"dry_run":`+map[bool]string{true: "true", false: "false"}[dry]+`,"change_set_id":`+id+`,"plan":`+f.plan+
-			`,"plan_sha256":"`+planSHA+`"}`)
+			`,"plan_sha256":"`+planSHA+`"`+staging+`}`)
 	case "GET /api/v1/devices":
 		_, _ = io.WriteString(w, `{"items":[{"hostname":"h1","state":"active","last_contact_at":null,"agent_version":"1.0.0",`+
 			`"applied_bundle_version":3}],"page":1,"page_size":10,"total":1,"total_capped":false,"sort":"hostname","q":"`+r.URL.RawQuery+`"}`)
+	case "GET /api/v1/audit-events/feed":
+		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+		f.feedQueries = append(f.feedQueries, r.URL.RawQuery)
+		if f.feedFailAt > 0 && after == f.feedFailAt {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"status":500,"code":"internal"}`)
+			return
+		}
+		if f.feedForbidden {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"status":403,"code":"forbidden"}`)
+			return
+		}
+		events := []string{}
+		for i := after + 1; i <= min(after+2, 4); i++ {
+			events = append(events, `{"commit_seq":`+strconv.Itoa(i)+`}`)
+		}
+		next := after + len(events)
+		_, _ = io.WriteString(w, `{"schema":"paddock.audit.feed.v1","events":[`+strings.Join(events, ",")+`],"next_after":`+
+			strconv.Itoa(next)+`,"latest":4}`)
+	case "GET /api/v1/findings":
+		_, _ = io.WriteString(w, `{"items":[{"hostname":"h1","kind":"tamper","code":"device.tamper.file","subject":"/etc/sudoers",`+
+			`"status":"open","assignee":null,"last_seen_at":"2026-10-31T10:00:00Z"}],"page":1,"page_size":25,"total":1,`+
+			`"total_capped":false,"sort":"-last_seen_at","q":"`+r.URL.RawQuery+`"}`)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"status":404,"code":"not_found"}`)
@@ -210,6 +248,44 @@ func TestApply(t *testing.T) {
 	}
 }
 
+// TestApplyRolloutLine is PDK-159 (plan M11 decision 38, amendment R6.1): the apply prints how the change set reaches
+// the devices; there are no --urgent and --reason flags, because a token never satisfies the step-up they need.
+func TestApplyRolloutLine(t *testing.T) {
+	doc := "api_version: paddock/v1\nkind: OrganizationConfig\n"
+	const rolloutID = "0193f7a2-6c1e-7cc1-9d1e-6a4f0f6e8b22"
+	for _, tc := range []struct{ name, rollout, rolloutID, want string }{
+		{"staged", `"staged"`, `"` + rolloutID + `"`, "Rollout: staged (rollout " + rolloutID + ")\n"},
+		{"urgent", `"urgent"`, "", "Rollout: urgent\n"},
+		{"immediate", `"immediate"`, "", ""},
+		{"an older server", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api, pc := setup(t, createPlan)
+			api.rollout, api.rolloutID = tc.rollout, tc.rolloutID
+			r := pc(doc, "apply", "-f", "-")
+			want := "Applied change set 0193f7a2-6c1e-7cc1-9d1e-6a4f0f6e8a10\n" + tc.want
+			if r.code != 0 || !strings.HasSuffix(r.stdout, want) || strings.Count(r.stdout, "Rollout:") != strings.Count(tc.want, "Rollout:") {
+				t.Fatalf("apply: %+v want suffix %q", r, want)
+			}
+		})
+	}
+
+	_, pc := setup(t, createPlan)
+	for _, flag := range []string{"--urgent", "--reason"} {
+		if r := pc(doc, "apply", "-f", "-", flag, "hotfix"); r.code != cmd.ExitUsage {
+			t.Errorf("%s: %+v", flag, r)
+		}
+	}
+
+	api, pc := setup(t, createPlan)
+	api.rollout, api.rolloutID = `"staged"`, `"`+rolloutID+`"`
+	r := pc(doc, "apply", "-f", "-", "-o", "json")
+	var out map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &out); r.code != 0 || err != nil || out["rollout"] != "staged" || out["rollout_id"] != rolloutID {
+		t.Fatalf("json: %+v %v", r, err)
+	}
+}
+
 func TestErrorsAndExitCodes(t *testing.T) {
 	_, pc := setup(t, emptyPlan)
 	dir := t.TempDir()
@@ -254,8 +330,85 @@ func TestDevicesList(t *testing.T) {
 	if q := page["q"].(string); q != "page_size=10&q=h&sort=-hostname&state=active&state=pending" {
 		t.Fatalf("query %s", q)
 	}
+	r = pc("", "devices", "list", "--enrollment-method", "adopted", "--config-mode", "report_only", "--config-mode", "enforce", "-o", "json")
+	if err := json.Unmarshal([]byte(r.stdout), &page); err != nil || r.code != 0 ||
+		page["q"].(string) != "config_mode=report_only&config_mode=enforce&enrollment_method=adopted" {
+		t.Fatalf("adoption filters: %+v", r)
+	}
 	r = pc("", "devices", "list")
 	if r.code != 0 || !strings.Contains(r.stdout, "h1") || !strings.HasSuffix(r.stdout, "page 1 of 1 (total 1)\n") {
 		t.Fatalf("devices table: %+v", r)
+	}
+}
+
+func TestAuditFeed(t *testing.T) {
+	api, pc := setup(t, emptyPlan)
+	r := pc("", "audit", "feed", "--after", "0", "--limit", "2")
+	if r.code != 0 || r.stdout != "{\"commit_seq\":1}\n{\"commit_seq\":2}\n" || r.stderr != "next_after=2\n" {
+		t.Fatalf("feed: %+v", r)
+	}
+	if api.feedQueries[0] != "after=0&limit=2" {
+		t.Fatalf("query %v", api.feedQueries)
+	}
+	api.feedForbidden = true
+	if r := pc("", "audit", "feed"); r.code != cmd.ExitError || !strings.Contains(r.stderr, "forbidden") || r.stdout != "" {
+		t.Fatalf("forbidden: %+v", r)
+	}
+	for _, args := range [][]string{{"audit"}, {"audit", "list"}, {"audit", "feed", "--limit", "1001"}, {"audit", "feed", "--after", "-1"}, {"audit", "feed", "-o", "table"},
+		{"audit", "feed", "--limit", "0"}} {
+		if r := pc("", args...); r.code != cmd.ExitUsage {
+			t.Fatalf("%v: %+v", args, r)
+		}
+	}
+}
+
+func TestAuditFeedFollow(t *testing.T) {
+	api, _ := setup(t, emptyPlan)
+	srv := httptest.NewTLSServer(api)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(token, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"PADDOCK_URL": srv.URL, "PADDOCK_TOKEN_FILE": token, "PADDOCK_CA_FILE": ca, "HOME": dir}
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	code := cmd.Main(ctx, cmd.Env{Args: []string{"audit", "feed", "--follow", "--limit", "2"}, Stdin: strings.NewReader(""),
+		Stdout: &out, Stderr: &errOut, Getenv: func(k string) string { return env[k] }, Version: "1", PollInterval: 50 * time.Millisecond})
+	if code != 0 || out.String() != "{\"commit_seq\":1}\n{\"commit_seq\":2}\n{\"commit_seq\":3}\n{\"commit_seq\":4}\n" ||
+		errOut.String() != "next_after=4\n" {
+		t.Fatalf("follow: %d %q %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestAuditFeedFollowError(t *testing.T) {
+	api, pc := setup(t, emptyPlan)
+	api.feedFailAt = 2
+	r := pc("", "audit", "feed", "--follow", "--limit", "2")
+	if r.code != cmd.ExitError || r.stdout != "{\"commit_seq\":1}\n{\"commit_seq\":2}\n" || !strings.Contains(r.stderr, "next_after=2\n") {
+		t.Fatalf("follow error: %+v", r)
+	}
+}
+
+func TestFindingsList(t *testing.T) {
+	_, pc := setup(t, emptyPlan)
+	r := pc("", "findings", "list", "--status", "open", "--status", "acknowledged", "--kind", "tamper", "--cleared", "-o", "json")
+	var page map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &page); err != nil || r.code != 0 ||
+		page["q"] != "cleared=true&kind=tamper&status=open&status=acknowledged" {
+		t.Fatalf("findings json: %+v", r)
+	}
+	r = pc("", "findings", "list", "--status", "open")
+	if r.code != 0 || !strings.Contains(r.stdout, "/etc/sudoers") || !strings.HasSuffix(r.stdout, "page 1 of 1 (total 1)\n") {
+		t.Fatalf("findings table: %+v", r)
+	}
+	if r := pc("", "findings"); r.code != cmd.ExitUsage {
+		t.Fatalf("findings: %+v", r)
 	}
 }

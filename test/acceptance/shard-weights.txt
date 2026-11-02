@@ -22,11 +22,15 @@
 184 TestStalenessGroups
 167 TestUpdateNow
 166 TestOSVO1Severity
+# Estimate, not yet measured (PDK-158): gate organization, three devicesims, one worker round (up to 60 s), bundle waits.
+150 TestConfigRolloutAutoStop
 148 TestCurrentReleaseAutoStop
 144 TestManagedFileTiers
 144 TestObservability
 134 TestComponentTargets
 130 TestCombinedRootGrant
+# Estimate, not yet measured (PDK-157): gate organization, three devicesims, two step-ups, five bundle waits.
+120 TestConfigRolloutStaging
 119 TestEffectiveStepUp
 115 TestRevocationLockAndDestroy
 113 TestLoginGate
@@ -35,6 +39,8 @@
 104 TestDiskConversion
 103 TestEventGap
 103 TestIPAllowlist
+# Estimate, not yet measured (PDK-158): gate organization, two devicesims, a temporary auditor.
+90 TestConfigRolloutActions
 90 TestDeclarativeConfig
 88 TestRevocationDisabled
 87 TestStepUp
@@ -43,6 +49,8 @@
 79 TestListContractM8e
 77 TestAutoUnsealAcknowledgement
 75 TestUnlockMode
+# Estimate, not yet measured (PDK-155): gate organization, two step-ups and eight audit lookups.
+75 TestChangeSetRevert
 74 TestAgentRolloutFromHost
 72 TestAgentReleaseImport
 71 TestEffectiveProfileGate

@@ -15,6 +15,32 @@
     "readOnly": "Only organization administrators can change the privacy settings.",
     "saved": "The privacy settings were saved."
   },
+  "rolloutSettings": {
+    "title": "Rollout settings",
+    "intro": "Staged rollouts apply a configuration change to a share of the devices first, wave by wave, and stop automatically when too many devices fail. They are off by default. A running rollout keeps the values it started with.",
+    "general": "Staged rollouts",
+    "enabled": "Roll configuration changes out in waves",
+    "waves": "Waves",
+    "wavesHint": "Percentages of the devices, strictly increasing and ending with 100, at most 10 waves, separated by commas, for example 1, 10, 50, 100.",
+    "wavesInvalid": "Enter 1 to 10 strictly increasing whole numbers from 1 to 100, separated by commas, ending with 100.",
+    "minWaveMinutes": "Minimum duration of a wave",
+    "minWaveMinutesHint": "A wave lasts at least this many minutes before the next one starts. At least {min} minutes ({devMin} in a development stack).",
+    "minWaveInvalid": "Enter a whole number of minutes, at least {min} ({devMin} in a development stack).",
+    "minWaveRefused": "The minimum duration of a wave is too short: at least {min} minutes ({devMin} in a development stack).",
+    "thresholds": "Failure threshold",
+    "thresholdPercent": "Failure rate that stops a rollout",
+    "thresholdPercentHint": "Percent of the devices of a wave that failed (0–100).",
+    "thresholdPercentInvalid": "Enter a whole number from 0 to 100.",
+    "thresholdMin": "Minimum number of failed devices",
+    "thresholdMinHint": "A rollout stops only when at least this many devices failed.",
+    "thresholdMinInvalid": "Enter a whole number, at least 0.",
+    "canary": "Canary group",
+    "canaryGroup": "Canary device group",
+    "canaryHint": "The devices of this group always receive a change first, whatever the waves say.",
+    "canaryNone": "None",
+    "readOnly": "Only organization administrators can change the rollout settings.",
+    "saved": "The rollout settings were saved."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent updates",
@@ -67,6 +93,7 @@
       "comfortable": "Comfortable"
     },
     "shortcuts": "Keyboard shortcuts",
+    "reopenSetup": "Show the setup checklist",
     "collapseNavigation": "Collapse the navigation",
     "expandNavigation": "Expand the navigation",
     "switchRole": "{scope, select, organization {Switch to {role} ({organization})} other {Switch to {role}}}",
@@ -103,12 +130,15 @@
     "software": "Software",
     "vulnerabilities": "Vulnerabilities",
     "attention": "Attention",
+    "findings": "Findings",
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
     "privacySettings": "Privacy",
+    "rolloutSettings": "Rollouts",
     "apiTokens": "API tokens",
     "changeSets": "Change sets",
+    "configStatus": "Configuration status",
     "start": "Start",
     "groups": {
       "overview": "Overview",
@@ -124,7 +154,11 @@
     "shortcut": "Shortcut: {keys}",
     "securityReview": "Security review",
     "operatorRoots": "Operator roots",
-    "mcpSettings": "MCP"
+    "watchedUnits": "Watched units",
+    "mcpSettings": "MCP",
+    "notifications": "Notifications",
+    "platformNotifications": "Platform notifications",
+    "configRollouts": "Configuration rollouts"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -274,9 +308,19 @@
     "mcp_tool_not_allowed": "This operation is not allowed through the MCP.",
     "mcp_write_not_enabled": "Changes through the MCP are not enabled.",
     "mcp_login_required": "Sign in again with paddockctl mcp login.",
-    "rate_limited": "Too many requests. Try again shortly."
+    "rate_limited": "Too many requests. Try again shortly.",
+    "email_not_configured": "This installation has no e-mail relay, so e-mail destinations cannot be enabled.",
+    "unknown_code": "One of the audit codes is not registered.",
+    "notification_test_pending": "An earlier test of this destination is still waiting for its result. Try again in a moment.",
+    "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
+    "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
+    "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent."
   },
   "audit": {
+    "vulnerability": {
+      "critical_summary": "{new_critical, plural, one {# new critical vulnerability} other {# new critical vulnerabilities}} on {devices, plural, one {# device} other {# devices}}",
+      "devices_viewed": "{actor} viewed the devices affected by {cve} ({device_count, plural, one {# device} other {# devices}})"
+    },
     "retention": {
       "purged": "{deleted, plural, one {# expired entry} other {# expired entries}} of {store} were deleted"
     },
@@ -336,7 +380,8 @@
       "revoked": "{actor} revoked the enrollment token {name}"
     },
     "config": {
-      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)"
+      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)",
+      "reverted": "{actor} reverted a change set ({created} created, {updated} updated, {deleted} deleted)"
     },
     "api_token": {
       "created": "{actor} created the API token {name} ({role})",
@@ -353,6 +398,7 @@
       "retired": "{actor} retired the device {hostname}",
       "groups_changed": "{actor} changed the device groups of {hostname}",
       "name_changed": "Device name changed",
+      "enforcement_enabled": "{actor} enabled enforcement on the device {hostname}",
       "clone_suspected": "The device {hostname} was quarantined because its identity seems to be cloned",
       "bundle_applied": "The device {target} applied bundle {bundle_version, number}",
       "bundle_rejected": "The device {target} rejected a bundle",
@@ -418,9 +464,6 @@
       "clock_drift": "The clock of the device {target} differs from the server's by {offset_s, number} seconds (threshold {threshold_s, number} seconds)",
       "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's"
     },
-    "vulnerability": {
-      "devices_viewed": "{actor} viewed the devices affected by {cve} ({device_count, plural, one {# device} other {# devices}})"
-    },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
       "approved": "{actor} approved destroying {hostname}",
@@ -464,6 +507,12 @@
       "resumed": "{actor} resumed the rollout of agent {version}",
       "completed": "The rollout of agent {version} was completed"
     },
+    "config_rollout": {
+      "advanced": "The configuration rollout moved to {percent, number} % of the devices",
+      "halted": "The configuration rollout was halted: {reason}",
+      "resumed": "{actor} resumed the configuration rollout",
+      "completed": "The configuration rollout was completed"
+    },
     "managed_file": {
       "created": "{actor} defined the managed file {path}",
       "updated": "{actor} changed the managed file {path}",
@@ -496,7 +545,9 @@
       "dms_changed": "{actor} {enabled, select, true {turned on the dead man's switch with a period of {period_days, number} days} other {turned off the dead man's switch}}",
       "updates_changed": "{actor} changed the update settings",
       "managed_files_changed": "{actor} changed the operator roots of the managed files",
-      "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}"
+      "watched_units_changed": "{actor} changed the watched units of the presence policy",
+      "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}",
+      "rollout_changed": "{actor} changed the rollout settings: staged rollouts {enabled, select, true {on} other {off}}"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",
@@ -535,7 +586,25 @@
       "step_up": "Step-up",
       "error_code": "Error code"
     },
-    "sourceMcp": "MCP"
+    "sourceMcp": "MCP",
+    "finding": {
+      "acknowledged": "{actor} acknowledged the finding {code} on {hostname}",
+      "assigned": "{actor} assigned the finding {code} on {hostname}",
+      "closed": "{actor} closed the finding {code} on {hostname} as {resolution, select, resolved {resolved} accepted_risk {accepted risk} false_positive {false positive} other {{resolution}}}",
+      "reopened": "{actor} reopened the finding {code} on {hostname}"
+    },
+    "notification": {
+      "destination_created": "{actor} created the notification destination {name} ({type, select, webhook {webhook} other {e-mail}})",
+      "destination_updated": "{actor} changed the notification destination {name}",
+      "destination_deleted": "{actor} deleted the notification destination {name}",
+      "destination_secret_rotated": "{actor} replaced the signing secret of the notification destination {name}",
+      "test_requested": "{actor} requested a test notification to {name}",
+      "test_sent": "Test notification to {name}, requested by {requested_by}",
+      "pseudonym_resolved": "{actor} resolved the pseudonym {pseudonym}",
+      "delivered": "{count} events delivered to {destination}",
+      "destination_stalled": "Deliveries to {destination} are stalled ({last_error})",
+      "destination_resumed": "Deliveries to {destination} resumed after {stalled_for_s} s"
+    }
   },
   "organizations": {
     "title": "Organizations",
@@ -1128,6 +1197,7 @@
       "overview": "Overview",
       "access": "Login & sudo",
       "configuration": "Configuration",
+      "applyStatus": "Apply status",
       "commands": "Commands",
       "audit": "Audit"
     },
@@ -1238,7 +1308,32 @@
       "hint": "Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update.",
       "targetHint": "Target = last completed release. A running rollout does not move it; a component newer than its target counts as up to date."
     },
-    "componentFilter": "Component outdated"
+    "componentFilter": "Component outdated",
+    "reportOnly": {
+      "banner": "This device is in report-only mode: it reports what it would change and changes nothing. Pending rows list the planned changes.",
+      "chip": "Report-only",
+      "enforce": {
+        "title": "Enable enforcement",
+        "explanation": "This device was adopted and only reports what it would change. Enabling enforcement applies the configuration at its next check-in.",
+        "label": "Enable enforcement",
+        "confirmTitle": "Enable enforcement on {hostname}?",
+        "confirm": "At its next apply the agent will quarantine foreign sudoers files, remove unexpected members of privileged groups (never the last administrator), install the login component and apply every managed resource. Type the hostname to confirm.",
+        "done": "Enforcement is enabled; the device applies its configuration at its next check-in."
+      }
+    },
+    "adoption": {
+      "method": "Enrollment method",
+      "mode": "Configuration mode",
+      "methods": {
+        "autoinstall": "Autoinstall",
+        "adopted": "Adopted",
+        "unknown": "Unknown"
+      },
+      "modes": {
+        "enforce": "Enforced",
+        "report_only": "Report-only"
+      }
+    }
   },
   "tokens": {
     "title": "Enrollment tokens",
@@ -1447,10 +1542,89 @@
     "before": "Before",
     "after": "After",
     "close": "Close",
+    "planRegion": "Plan of the change set, scrollable",
+    "revertsLabel": "Reverts the change set",
+    "revertedByLabel": "Reverted by the change set",
+    "revert": {
+      "action": "Revert",
+      "label": "Revert the change set of {at}",
+      "title": "Revert change set",
+      "message": "These changes undo the change set of {at} and are applied at once. Items created since then stay.",
+      "emptyPlan": "The configuration already matches the state before this change set; there is nothing to revert.",
+      "planChanged": "The configuration changed since the plan was shown. Review the new plan and confirm again.",
+      "done": "The change set of {at} was reverted.",
+      "blocked": {
+        "reverted": "This change set was already reverted.",
+        "noBefore": "The previous state of this change set is not stored (recorded before it was kept, or removed after 90 days)."
+      }
+    },
     "empty": {
       "title": "No change sets yet",
       "description": "Change sets are recorded when paddockctl or the API applies a configuration."
-    }
+    },
+    "rollout": "Rollout",
+    "rolloutLabel": "Rollout:",
+    "rolloutLink": "Open the rollout",
+    "urgentReason": "Urgent, applied to every device at once. Reason: {reason}"
+  },
+  "configStatus": {
+    "title": "Configuration status",
+    "summary": "Per resource, on how many active devices it applied, failed, is pending in a report-only apply or was corrected after a local change.",
+    "resource": "Resource",
+    "type": "Type",
+    "status": "Status",
+    "message": "Message",
+    "version": "Bundle version",
+    "time": "Reported",
+    "lastFailure": "Last failure",
+    "states": {
+      "applied": "Applied",
+      "failed": "Failed",
+      "pending": "Pending",
+      "drift_corrected": "Drift corrected",
+      "plan_error": "Plan error"
+    },
+    "count": {
+      "applied": "{count, plural, one {# applied} other {# applied}}",
+      "failed": "{count, plural, one {# failed} other {# failed}}",
+      "pending": "{count, plural, one {# pending} other {# pending}}",
+      "drift_corrected": "{count, plural, one {# drift corrected} other {# drifts corrected}}",
+      "plan_error": "{count, plural, one {# plan error} other {# plan errors}}"
+    },
+    "changes": "Planned changes",
+    "noDetails": "No further details.",
+    "bundles": "Bundle history",
+    "compiled": "Compiled",
+    "outcome": "Outcome",
+    "mode": "Mode",
+    "changed": "Changed",
+    "errors": "Errors",
+    "reportedAt": "Reported",
+    "rollout": "Rollout",
+    "outcomes": {
+      "applied": "Applied",
+      "rejected": "Rejected",
+      "none": "Not reported"
+    },
+    "modes": {
+      "enforce": "Enforce",
+      "report_only": "Report only"
+    },
+    "empty": {
+      "device": {
+        "title": "No apply status yet",
+        "description": "The device has not reported what it applied."
+      },
+      "bundles": {
+        "title": "No configuration versions",
+        "description": "No configuration was compiled for this device yet."
+      },
+      "fleet": {
+        "title": "No apply status yet",
+        "description": "No device has reported what it applied."
+      }
+    },
+    "schema": "Schema"
   },
   "managed": {
     "scope": "Applies to",
@@ -1812,6 +1986,23 @@
       "description": "Lock and Destroy requests of this organization appear here with their progress."
     }
   },
+  "watchedUnits": {
+    "title": "Watched units",
+    "intro": "Third-party agents such as an EDR or SIEM agent run as systemd services that Paddock does not deploy. List them here and every device reports it when one of them stops or is missing, the same way it does for Paddock's own agent.",
+    "info": "Paddock only reports. It never installs, starts or restarts a watched unit.",
+    "label": "Services",
+    "hint": "Names ending in .service, for example wazuh-agent.service. Press Enter after each name. At most {max}.",
+    "placeholder": "wazuh-agent.service",
+    "saved": "The watched units were saved. Every device receives them with its next configuration.",
+    "updatedAt": "Last saved {at}",
+    "confirmTitle": "Save the watched units?",
+    "confirm": "{count, plural, =0 {No unit will be watched on any device.} one {# unit will be watched on every device.} other {# units will be watched on every device.}}",
+    "errors": {
+      "notService": "{unit} is not a service name. Use a name ending in .service.",
+      "duplicate": "{unit} is listed twice.",
+      "tooMany": "At most {max} units can be watched."
+    }
+  },
   "dms": {
     "title": "Dead man's switch",
     "warning": "If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself. This includes a device whose connection to Paddock is blocked on purpose: an attacker who keeps the device from reaching Paddock can trigger the lock.",
@@ -1975,7 +2166,8 @@
       "config_behind": "Configuration behind",
       "disk_conversion_failed": "In-place encryption failed",
       "clock_drift": "Clock drift",
-      "event_gap": "Event gap"
+      "event_gap": "Event gap",
+      "report_only": "Report-only, waiting for enforcement"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1994,7 +2186,8 @@
       "config_behind": "Open device",
       "disk_conversion_failed": "Open device",
       "clock_drift": "Open device",
-      "event_gap": "Open device"
+      "event_gap": "Open device",
+      "report_only": "Open device"
     },
     "more": "+{count}",
     "empty": {
@@ -2003,6 +2196,91 @@
     },
     "device": "Device",
     "conditions": "Conditions"
+  },
+  "findings": {
+    "title": "Findings",
+    "summary": "Tamper events and attention conditions of your devices. Take a finding, assign it and close it with a reason; every step is recorded in the audit log.",
+    "code": "Finding",
+    "statusColumn": "Status",
+    "device": "Device",
+    "occurrences": "Occurrences",
+    "assignee": "Assignee",
+    "lastSeen": "Last seen",
+    "cleared": "Cleared",
+    "clearedHint": "The condition is gone; the finding stays until someone closes it.",
+    "done": "{finding} is now {status}.",
+    "deviceTitle": "Findings",
+    "openList": "Open the findings",
+    "status": {
+      "open": "Open",
+      "acknowledged": "Acknowledged",
+      "in_progress": "In progress",
+      "resolved": "Resolved",
+      "accepted_risk": "Accepted risk",
+      "false_positive": "False positive"
+    },
+    "kinds": {
+      "tamper": "Tamper event",
+      "attention": "Attention condition"
+    },
+    "resolutions": {
+      "resolved": "Resolved",
+      "accepted_risk": "Accepted risk",
+      "false_positive": "False positive"
+    },
+    "filters": {
+      "status": "Status",
+      "statusHint": "Without a selection: open, acknowledged and in progress.",
+      "kind": "Kind",
+      "cleared": "Cleared",
+      "clearedHint": "Without a selection, cleared findings are hidden.",
+      "clearedOnly": "Only cleared findings"
+    },
+    "acknowledge": {
+      "action": "Acknowledge",
+      "label": "Acknowledge: {finding}",
+      "title": "Acknowledge finding",
+      "message": "Mark this finding as seen: {finding}. It stays open until it is closed.",
+      "confirm": "Acknowledge"
+    },
+    "assign": {
+      "action": "Assign",
+      "label": "Assign: {finding}",
+      "title": "Assign finding",
+      "message": "Who takes care of this finding? {finding}",
+      "assignee": "Assignee",
+      "hint": "Administrators and operators of your organization. Clear the field to remove the assignee.",
+      "submit": "Assign",
+      "unassign": "Remove assignee"
+    },
+    "close": {
+      "action": "Close",
+      "label": "Close: {finding}",
+      "title": "Close finding",
+      "message": "Close this finding with a resolution and a reason: {finding}. The audit log keeps both.",
+      "resolution": "Resolution",
+      "acceptedRiskHint": "Accepted risk needs an organization administrator.",
+      "reason": "Reason",
+      "reasonHint": "Facts and ticket references, no personal judgements.",
+      "reasonRequired": "Enter a reason.",
+      "reasonTooLong": "The reason is too long.",
+      "externalRef": "External reference (optional)",
+      "externalRefHint": "A ticket or change number in another system.",
+      "externalRefTooLong": "The reference is too long.",
+      "submit": "Close finding"
+    },
+    "reopen": {
+      "action": "Reopen",
+      "label": "Reopen: {finding}",
+      "title": "Reopen finding",
+      "message": "Reopen this finding: {finding}. A reason is required and recorded in the audit log.",
+      "reason": "Reason",
+      "confirm": "Reopen"
+    },
+    "empty": {
+      "title": "No findings",
+      "description": "Nothing needs a decision. Tamper events and attention conditions appear here as soon as they happen."
+    }
   },
   "palette": {
     "title": "Command palette",
@@ -2332,5 +2610,250 @@
         "platform": "platform"
       }
     }
+  },
+  "setup": {
+    "title": "Set up Paddock",
+    "progress": "{done} of {total} steps done",
+    "dismiss": "Dismiss",
+    "guide": "Read the guide",
+    "states": {
+      "done": "Done",
+      "open": "To do",
+      "unknown": "Unknown",
+      "manual": "On the host"
+    },
+    "steps": {
+      "organization": "Create the first organization",
+      "orgAdmin": "Assign the first organization administrator in the identity provider",
+      "release": "Publish an agent release",
+      "allowlist": "Restrict the platform to an IP allow list (optional)",
+      "breakGlass": "Name the break-glass accounts",
+      "users": "Connect an identity source that delivers users",
+      "token": "Create an enrollment token",
+      "agent": "Install and enroll the agent on a device",
+      "device": "Approve the first device"
+    }
+  },
+  "notifications": {
+    "title": "Notifications",
+    "platformTitle": "Platform notifications",
+    "summary": "Send security events of this organization to a signed webhook or an e-mail list. Deliveries are at least once; the secret of a webhook is shown only when it is created or replaced.",
+    "platformSummary": "Send platform events (rollouts, releases, vulnerability data, IP allow list) to a signed webhook or an e-mail list.",
+    "create": "Add destination",
+    "createTitle": "New notification destination",
+    "editTitle": "Edit notification destination",
+    "editLabel": "Edit: {name}",
+    "testLabel": "Send test: {name}",
+    "rotateLabel": "Replace secret: {name}",
+    "deleteLabel": "Delete: {name}",
+    "type": "Type",
+    "types": {
+      "webhook": "Webhook",
+      "email": "E-mail"
+    },
+    "enabled": "Enabled",
+    "on": "On",
+    "off": "Off",
+    "state": "State",
+    "states": {
+      "active": "Active",
+      "stalled": "Stalled",
+      "disabled": "Disabled"
+    },
+    "lastSuccess": "Last delivery",
+    "never": "Never",
+    "lag": "Lag",
+    "lagValue": {
+      "s": "{value} s",
+      "min": "{value} min",
+      "h": "{value} h",
+      "d": "{value} d"
+    },
+    "filterMode": "Events",
+    "modes": {
+      "security": "Security events",
+      "all": "All events",
+      "custom": "Selected events"
+    },
+    "modeHints": {
+      "security": "The security preset: tamper events, findings, revocations, logins and changes of protected settings.",
+      "all": "Every audit event, including routine changes.",
+      "custom": "Only the audit codes you list."
+    },
+    "codes": "Audit codes",
+    "codesHint": "Type or pick registered audit codes, for example finding.closed.",
+    "codesCount": "Select 1 to 200 audit codes.",
+    "codesUnknown": "One of the codes is not a registered audit code.",
+    "nameHint": "Letters, digits, spaces, dots, underscores and hyphens; at most 64 characters.",
+    "nameInvalid": "The name must start with a letter or digit and have at most 64 characters of letters, digits, spaces, '.', '_' and '-'.",
+    "url": "Webhook URL",
+    "urlHint": "An https address that is reachable from the Paddock server. Paddock stores it encrypted and never shows it again.",
+    "urlCurrent": "Current address: {url}. Leave empty to keep it.",
+    "urlUnchanged": "unchanged",
+    "urlRequired": "Enter the webhook URL.",
+    "urlHttps": "The URL must start with https://.",
+    "reenterUrl": "Your identity is confirmed. The webhook URL is never kept while you confirm, so enter it again and save.",
+    "recipients": "Recipients",
+    "recipientsHint": "One e-mail address per line, at most 20.",
+    "recipientsCount": "Enter 1 to 20 e-mail addresses.",
+    "recipientsInvalid": "One of the addresses is not a plain e-mail address.",
+    "pseudonymize": "Replace user names with pseudonyms",
+    "includeParams": "Include event parameters",
+    "heartbeat": "Heartbeat interval (seconds)",
+    "heartbeatHint": "0 switches the heartbeat off; otherwise 60 to 3600.",
+    "heartbeatInvalid": "Enter 0 or a number from 60 to 3600.",
+    "minInterval": "Minimum interval between e-mails (seconds)",
+    "minIntervalHint": "Events inside the interval are summarized in one message; 60 to 3600.",
+    "intervalInvalid": "Enter a number from 60 to 3600.",
+    "saved": "Notification destination saved.",
+    "deleted": "Notification destination {name} deleted.",
+    "close": "Close",
+    "secretTitle": "Signing secret",
+    "secret": "Signing secret",
+    "shownOnce": "This is the only time the signing secret of {name} is shown. Copy it now and store it like a password; Paddock cannot show it again.",
+    "deleteTitle": "Delete notification destination",
+    "deleteConfirm": "Delete {name} with its delivery state? Events are no longer sent there.",
+    "rotateTitle": "Replace the signing secret",
+    "rotate": "Replace secret",
+    "rotateConfirm": "Replace the signing secret of {name}? Deliveries are signed with the new secret from the next round; the receiver must be updated.",
+    "testTitle": "Send a test notification",
+    "test": "Send test",
+    "testConfirm": "Send one test delivery to {name}?",
+    "testWaiting": "Test to {name} requested. Waiting for the result (up to 30 seconds)…",
+    "testOk": "The test delivery to {name} succeeded.",
+    "testError": "The test delivery to {name} failed: {error}",
+    "testUnknown": "unknown error",
+    "testTimeout": "No result for the test to {name} yet. Check the state of the destination in a moment.",
+    "cursor": {
+      "title": "Enable destination",
+      "message": "{name} has been disabled. Where should delivery resume?",
+      "continue": "{count, plural, one {Deliver the # event since it was disabled} other {Deliver the # events since it was disabled}}",
+      "continueUnknown": "Deliver the events since it was disabled",
+      "skip": "Skip them and continue with the newest event",
+      "enable": "Enable"
+    },
+    "pseudonym": {
+      "open": "Resolve pseudonym",
+      "title": "Resolve a pseudonym",
+      "summary": "Notifications can carry pseudonyms instead of user names. Enter a pseudonym to see which user it stands for; the result is shown once.",
+      "none": "No destination replaces user names with pseudonyms, so there is nothing to resolve.",
+      "destination": "Destination",
+      "label": "Pseudonym",
+      "hint": "u_ followed by 24 hexadecimal characters.",
+      "invalid": "Enter u_ followed by 24 lowercase hexadecimal characters.",
+      "resolve": "Resolve",
+      "waiting": "Waiting for the result (up to 30 seconds)…",
+      "match": "The pseudonym stands for {username}.",
+      "noMatch": "No user matches this pseudonym.",
+      "timeout": "No result yet. Try again in a moment."
+    },
+    "empty": {
+      "title": "No notification destinations",
+      "description": "Add a webhook or an e-mail list to receive security events outside the portal."
+    },
+    "urlRejected": "The server refused the URL: it must be an https address on port 443 or 1024 to 65535 whose host is public.",
+    "nameTaken": "A destination with this name already exists."
+  },
+  "rollout": {
+    "urgent": {
+      "label": "Apply immediately to every device (urgent)",
+      "hint": "Skips the staged rollout and needs a recent step-up. Only the portal offers this; paddockctl and API tokens cannot.",
+      "reason": "Reason for the urgent change",
+      "reasonInvalid": "Enter a reason of 2 to 500 characters."
+    }
+  },
+  "configRollouts": {
+    "title": "Configuration rollouts",
+    "summary": "Staged rollouts of configuration changes: wave by wave, with an automatic stop when too many devices fail.",
+    "settingsLink": "Rollout settings",
+    "status": "Status",
+    "statuses": {
+      "running": "Running",
+      "halted": "Halted",
+      "completed": "Completed",
+      "reverted": "Reverted"
+    },
+    "modes": {
+      "immediate": "Immediate",
+      "staged": "Staged",
+      "urgent": "Urgent"
+    },
+    "wave": "Wave",
+    "waveShort": "Wave {wave, number} of {waves, number} ({percent, number} %)",
+    "counts": "Devices",
+    "countFacts": "{eligible, number} in the waves so far, {applied, number} applied, {failed, number} failed, {pending, number} pending",
+    "startedBy": "Started by",
+    "startedAt": "Started",
+    "startedFacts": "{by} on {at}",
+    "endedAt": "Ended",
+    "haltedReason": "Halt reason",
+    "open": "Open",
+    "openLabel": "Open the rollout started on {at}",
+    "back": "Back to configuration rollouts",
+    "heading": "Configuration rollout",
+    "thresholds": "Stop rule",
+    "thresholdFacts": "Each wave lasts at least {minutes, number} minutes; the rollout halts when {min, number} devices or {percent, number} % of the devices in the waves so far fail, whichever is more.",
+    "changeSet": "Change set",
+    "changeSetLink": "Change set of {at}",
+    "waves": "Waves",
+    "waveStates": {
+      "done": "Reached",
+      "current": "Current",
+      "upcoming": "Upcoming"
+    },
+    "canary": "The devices of the group {group} always receive the change first.",
+    "plan": "Planned changes",
+    "actions": {
+      "halt": {
+        "label": "Halt",
+        "title": "Halt rollout",
+        "confirm": "The devices keep the state of the wave reached. The rollout stays open and blocks its items until it is resumed and completed, completed, or its change set is reverted.",
+        "reason": "Reason"
+      },
+      "resume": {
+        "label": "Resume",
+        "title": "Resume rollout",
+        "confirm": "The rollout continues in the wave where it stopped; failures reported before now no longer count, and the wave starts its observation period again."
+      },
+      "advance": {
+        "label": "Advance wave",
+        "title": "Advance to the next wave",
+        "confirm": "The devices of the next wave receive the change at their next check-in, without waiting for the observation period."
+      },
+      "complete": {
+        "label": "Complete",
+        "title": "Complete rollout",
+        "confirm": "Every device receives this change at its next check-in, including all devices outside the waves reached so far."
+      },
+      "revert": {
+        "label": "Revert change set"
+      }
+    },
+    "devices": {
+      "title": "Devices",
+      "hostname": "Hostname",
+      "inWave": "In the wave",
+      "inWaveYes": "Yes",
+      "inWaveNo": "No",
+      "bundle": "Bundle",
+      "carries": "(carries the change)",
+      "outcome": "Newest report",
+      "failed": "Failed resources",
+      "outcomes": {
+        "applied": "Applied",
+        "rejected": "Rejected",
+        "report_only": "Report-only",
+        "none": "No report"
+      },
+      "empty": {
+        "title": "No devices",
+        "description": "No active device matches."
+      }
+    },
+    "empty": {
+      "title": "No rollouts yet",
+      "description": "A rollout starts when a change of a rollout-able section is applied while staged rollouts are enabled."
+    },
+    "wavePercent": "{percent, number} %"
   }
 }

@@ -753,3 +753,78 @@ func TestAuthentikWebWorkers(t *testing.T) {
 		}
 	}
 }
+
+// TestNotifierCompose renders the control plane and the lab with their templates (plan M9 decision 41, amendment
+// B13.1): paddock-notifier runs in production on networks cp and audit-index, talks TLS to OpenBao, holds exactly its
+// secrets, gets no lab extra_hosts, and the notifier items pass.
+func TestNotifierCompose(t *testing.T) {
+	cases := map[string]struct {
+		host    string
+		envFile string
+	}{
+		"production control plane": {prodcheck.HostControlPlane, "prod.env.example"},
+		"lab":                      {prodcheck.HostLab, "lab.env.example"},
+	}
+	wantSecrets := []string{"approle_notifier_role_id", "approle_notifier_secret_id", "db_paddock_audit_reader_url",
+		"db_paddock_notifier_url", "db_paddock_platform_url", "internal_ca_bundle", "smtp_password"}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := renderConfig(t, prodFiles(t, tc.host), tc.envFile)
+			n, ok := cfg.Services["paddock-notifier"]
+			if !ok {
+				t.Fatal("no paddock-notifier")
+			}
+			env := func(k string) string {
+				if v := n.Environment[k]; v != nil {
+					return *v
+				}
+				return ""
+			}
+			for k, want := range map[string]string{
+				"PADDOCK_ENV": "production", "PADDOCK_OPENBAO_ADDR": "https://openbao:8200",
+				"BAO_CACERT": "/run/secrets/internal_ca_bundle", "PADDOCK_SMTP_PASSWORD_FILE": "/run/secrets/smtp_password",
+				"PADDOCK_PUBLIC_ADMIN_URL": "https://admin.paddock.example.org", "PADDOCK_SMTP_HOST": "",
+			} {
+				if got := env(k); got != want {
+					t.Errorf("%s = %q, want %q", k, got, want)
+				}
+			}
+			var secrets []string
+			for _, s := range n.Secrets {
+				secrets = append(secrets, s.Source)
+			}
+			slices.Sort(secrets)
+			if !slices.Equal(secrets, wantSecrets) {
+				t.Errorf("secrets %v, want %v", secrets, wantSecrets)
+			}
+			var networks []string
+			for nw := range n.Networks {
+				networks = append(networks, nw)
+			}
+			slices.Sort(networks)
+			if !slices.Equal(networks, []string{"audit-index", "cp"}) {
+				t.Errorf("networks %v, want [audit-index cp]", networks)
+			}
+			if len(n.ExtraHosts) != 0 {
+				t.Errorf("extra_hosts %v, want none", n.ExtraHosts)
+			}
+			want := map[string]bool{"notifications: SMTP presence flag matches the relay": false,
+				"no development-only variables": false, "PADDOCK_ENV=production in every service": false,
+				mountedItem: false}
+			for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: tc.host}) {
+				if _, ok := want[r.Item]; !ok {
+					continue
+				}
+				want[r.Item] = true
+				if !r.OK {
+					t.Errorf("%s:\n%s", r.Item, r.Detail)
+				}
+			}
+			for item, seen := range want {
+				if !seen {
+					t.Errorf("no item %q", item)
+				}
+			}
+		})
+	}
+}

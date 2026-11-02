@@ -2,6 +2,7 @@
 import { computed, inject, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useConfirm } from '../composables/useConfirm'
+import { isReportOnly } from '../lib/configStatus'
 import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { lockedByRevocation } from '../lib/deviceHealth'
 import { agentUpdateProblemKey, requestAgentUpdate } from '../lib/devices'
@@ -144,6 +145,18 @@ async function rotate(): Promise<void> {
             v-if="locked"
             status="info"
             :label="t('status.locked')"
+          />
+          <StatusChip
+            v-if="d.enrollment_method === 'adopted' || d.enrollment_method === 'autoinstall'"
+            status="neutral"
+            :label="t('devices.adoption.methods.' + d.enrollment_method)"
+            data-testid="device-enrollment-method"
+          />
+          <StatusChip
+            v-if="isReportOnly(d)"
+            status="info"
+            :label="t('devices.reportOnly.chip')"
+            data-testid="device-report-only"
           />
         </span>
       </div>

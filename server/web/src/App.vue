@@ -19,11 +19,13 @@ import { currentDevice } from './lib/pageContext'
 import type { ThemePreference } from './lib/theme'
 import { mobileBreakpoint, navigationBreakpoint } from './plugins/vuetify'
 import { portalLocales, type PortalLocale } from './i18n'
+import { useSetupStore } from './stores/setup'
 
 const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
+const setup = useSetupStore()
 const showChrome = computed(() => !route.meta.public && session.me !== null)
 const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : ''))
 const initial = computed(() => (session.me?.display_name ?? '').charAt(0).toUpperCase())
@@ -178,6 +180,12 @@ const switchRoleLabel = computed(() => {
     organization: alternate.organization_slug ?? '',
   })
 })
+watch(() => session.me?.id, (id) => { if (id) setup.load(id) }, { immediate: true })
+async function reopenSetup(): Promise<void> {
+  setup.reopen()
+  userMenuOpen.value = false
+  await router.push(session.isPlatform ? { name: 'organizations' } : { name: 'home' })
+}
 async function startRoleSwitch(): Promise<void> {
   const alternate = session.alternateRole
   if (!alternate) return
@@ -576,6 +584,14 @@ onBeforeUnmount(() => observer.disconnect())
                 @click="helpOpen = true"
               >
                 <v-list-item-title>{{ t('app.shortcuts') }}</v-list-item-title>
+              </v-list-item>
+              <v-list-item
+                v-if="setup.dismissed"
+                prepend-icon="pd:circle-check"
+                data-testid="reopen-setup"
+                @click="reopenSetup"
+              >
+                <v-list-item-title>{{ t('app.reopenSetup') }}</v-list-item-title>
               </v-list-item>
               <v-list-item
                 v-if="session.alternateRole"

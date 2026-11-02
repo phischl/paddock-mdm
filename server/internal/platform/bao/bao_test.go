@@ -3,8 +3,13 @@ package bao_test
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+	openbao "github.com/openbao/openbao/api/v2"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
@@ -94,5 +99,113 @@ func TestEscrowWrap(t *testing.T) {
 	}
 	if _, _, err := reader.LatestPublicKeyPEM(ctx, escrow.KeyName); err == nil {
 		t.Fatal("the escrow reader may read the key")
+	}
+}
+
+// TestNotificationWrap checks ADR 0031 decision 11 and its amendment of 2026-10-31: the api AppRole encrypts webhook
+// URL and secret with the derived key notification-wrap and obtains pseudonym keys only as wrapped data keys of the
+// separate derived key notification-pseudonym; it never decrypts nor sees a plaintext data key. The notifier AppRole
+// decrypts both and creates nothing. A ciphertext decrypts only under the organization and field it was made for; no
+// other role decrypts.
+func TestNotificationWrap(t *testing.T) {
+	b := baotest.Start(t)
+	ctx := context.Background()
+	client := func(name string) *bao.Client {
+		role := b.AppRole(t, name)
+		c, err := bao.New(b.Addr, role.RoleID, role.SecretID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	api, notifier, worker := client("paddock-api"), client("paddock-notifier"), client("paddock-worker")
+	orgA := uuid.MustParse("7d0a3c1e-0000-4000-8000-00000000000a")
+	orgB := uuid.MustParse("7d0a3c1e-0000-4000-8000-00000000000b")
+	const wrap, pseud = "notification-wrap", "notification-pseudonym"
+	url := []byte("https://hooks.slack.com/services/T0/B0/secret")
+	ct, err := api.Encrypt(ctx, wrap, orgA, bao.FieldURL, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ct, "vault:v1:") || strings.Contains(ct, string(url)) {
+		t.Fatalf("ciphertext %q", ct)
+	}
+	plain, err := notifier.DecryptContext(ctx, wrap, orgA, bao.FieldURL, ct)
+	if err != nil || string(plain) != string(url) {
+		t.Fatalf("decrypt: %q %v", plain, err)
+	}
+	refuse := func(what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s succeeded", what)
+		}
+	}
+	_, err = notifier.DecryptContext(ctx, wrap, orgB, bao.FieldURL, ct)
+	refuse("a URL of organization A decrypting under organization B", err)
+	_, err = notifier.DecryptContext(ctx, wrap, orgA, bao.FieldSecret, ct)
+	refuse("a URL decrypting as the signing secret", err)
+	_, err = api.DecryptContext(ctx, wrap, orgA, bao.FieldURL, ct)
+	refuse("the api decrypting destination secrets", err)
+	_, err = worker.DecryptContext(ctx, wrap, orgA, bao.FieldURL, ct)
+	refuse("the worker decrypting destination secrets", err)
+	_, err = notifier.Encrypt(ctx, wrap, orgA, bao.FieldURL, url)
+	refuse("the notifier encrypting", err)
+
+	wrapped, err := api.WrappedDataKey(ctx, pseud, orgA, bao.FieldPseudonym)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := notifier.DecryptContext(ctx, pseud, orgA, bao.FieldPseudonym, wrapped)
+	if err != nil || len(key) != 32 {
+		t.Fatalf("unwrap pseudonym key: %d bytes, %v", len(key), err)
+	}
+	_, err = notifier.DecryptContext(ctx, pseud, orgB, bao.FieldPseudonym, wrapped)
+	refuse("a pseudonym key of organization A unwrapping under organization B", err)
+	_, err = notifier.DecryptContext(ctx, pseud, orgA, bao.FieldURL, wrapped)
+	refuse("a pseudonym key decrypting as a URL", err)
+	_, err = api.DecryptContext(ctx, pseud, orgA, bao.FieldPseudonym, wrapped)
+	refuse("the api unwrapping a pseudonym key", err)
+	_, err = api.Encrypt(ctx, pseud, orgA, bao.FieldPseudonym, key)
+	refuse("the api choosing a pseudonym key (encrypt on notification-pseudonym)", err)
+	_, err = api.WrappedDataKey(ctx, wrap, orgA, bao.FieldPseudonym)
+	refuse("the api creating data keys with notification-wrap", err)
+	_, err = notifier.WrappedDataKey(ctx, pseud, orgA, bao.FieldPseudonym)
+	refuse("the notifier creating data keys", err)
+
+	apiRole := b.AppRole(t, "paddock-api")
+	raw, err := openbao.NewClient(&openbao.Config{Address: b.Addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, err := raw.Logical().Write("auth/approle/login", map[string]any{
+		"role_id": apiRole.RoleID, "secret_id": apiRole.SecretID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetToken(login.Auth.ClientToken)
+	_, err = raw.Logical().Write("transit/datakey/plaintext/"+pseud, map[string]any{
+		"context": bao.OrganizationContext(orgA, bao.FieldPseudonym),
+	})
+	refuse("the api obtaining a plaintext data key", err)
+}
+
+// TestOrganizationContext: the context is the lowercase canonical organization ID, ":" and the field, base64-encoded,
+// whatever form the ID was parsed from.
+func TestOrganizationContext(t *testing.T) {
+	org := uuid.MustParse("{7D0A3C1E-ABCD-4000-8000-00000000000A}")
+	for field, want := range map[bao.ContextField]string{
+		bao.FieldURL:       "7d0a3c1e-abcd-4000-8000-00000000000a:url",
+		bao.FieldSecret:    "7d0a3c1e-abcd-4000-8000-00000000000a:secret",
+		bao.FieldPseudonym: "7d0a3c1e-abcd-4000-8000-00000000000a:pseudonym",
+	} {
+		raw, err := base64.StdEncoding.DecodeString(bao.OrganizationContext(org, field))
+		if err != nil || string(raw) != want {
+			t.Errorf("context %q (%v), want %q", raw, err, want)
+		}
+	}
+	raw, _ := base64.StdEncoding.DecodeString(bao.OrganizationContext(uuid.Nil, bao.FieldURL))
+	if string(raw) != "00000000-0000-0000-0000-000000000000:url" {
+		t.Errorf("platform context %q", raw)
 	}
 }

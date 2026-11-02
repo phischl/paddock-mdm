@@ -61,7 +61,7 @@ func (s *LoginSettings) Get(ctx context.Context) (pgstore.OrganizationLoginSetti
 func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (pgstore.OrganizationLoginSetting, error) {
 	var out pgstore.OrganizationLoginSetting
 	in = loginsettings.Normalize(in)
-	err := s.runner.RunTx(ctx, ScopeOrg, SpecLoginSettingsUpdate, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := s.runner.RunTx(ctx, ScopeOrg, SpecLoginSettingsUpdate, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if err := q.LockLoginHistory(ctx); err != nil {
 			return err
 		}
@@ -141,6 +141,6 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil
-	})
+	}))
 	return out, err
 }

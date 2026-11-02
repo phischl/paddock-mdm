@@ -51,7 +51,7 @@ func (m *ManagedConfig) GetManagedFileSettings(ctx context.Context) (ManagedFile
 // their rows; the security review lists those whose tier rose (plan M8s decision 7d).
 func (m *ManagedConfig) SetOperatorRoots(ctx context.Context, roots []string) (ManagedFileSettings, error) {
 	var out ManagedFileSettings
-	err := m.runner.RunTx(ctx, ScopeOrg, SpecManagedFileSettingsChange, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, SpecManagedFileSettingsChange, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := operatorRoots(ctx, q)
 		if err != nil {
 			return err
@@ -73,7 +73,7 @@ func (m *ManagedConfig) SetOperatorRoots(ctx context.Context, roots []string) (M
 		})
 		out = ManagedFileSettings{OperatorRoots: s.ManagedFileOperatorRoots, UpdatedAt: &s.UpdatedAt}
 		return err
-	})
+	}))
 	return out, err
 }
 

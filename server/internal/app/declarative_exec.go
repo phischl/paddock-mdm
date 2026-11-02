@@ -155,6 +155,8 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 		return ex.loginSettings(ctx)
 	case declarative.SectionSettingsManaged:
 		return ex.managedFileSettings(ctx)
+	case declarative.SectionSettingsWatched:
+		return ex.watchedUnits(ctx)
 	case declarative.SectionSettingsPrivacy:
 		return ex.privacySettings(ctx)
 	}
@@ -479,6 +481,20 @@ func (ex *configExec) managedFileSettings(ctx context.Context) error {
 		OrganizationID: ex.p.OrganizationID, ManagedFileOperatorRoots: roots,
 		UpdatedBy: uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.Kind == principal.KindAdmin && ex.p.ID != uuid.Nil},
 	})
+	return err
+}
+
+// watchedUnits replaces the presence policy with the rule of WatchedUnits.Set: an organization administrator with a
+// step-up.
+func (ex *configExec) watchedUnits(ctx context.Context) error {
+	if err := ex.requireAdminStepUp("may change the watched units"); err != nil {
+		return err
+	}
+	next := sortedUnits(*ex.desired.Settings.WatchedUnits)
+	if err := validateWatchedUnits(next); err != nil {
+		return err
+	}
+	_, err := storeWatchedUnits(ctx, ex.q, ex.p.OrganizationID, next)
 	return err
 }
 

@@ -71,6 +71,8 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .list-footer .page-size { flex: 0 0 9rem; }
 .list-footer .v-pagination { margin-left: auto; }
 .row-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+/* Page-header actions wrap: four buttons (German at 375 px) are wider than a phone. */
+.wrap-actions { flex-wrap: wrap; }
 
 .link-button {
   display: inline-flex; align-items: center; justify-content: center;
@@ -86,6 +88,16 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .config-text textarea { font-family: var(--pd-font-mono); }
 .conflict { margin-bottom: 1rem; }
 .timeline { margin: 0; padding-left: 1.25rem; }
+.rollout-link { margin-inline-start: 0.5rem; }
+/* The waves of a configuration rollout (plan M11 decision 36): the state is also written out, never colour alone. */
+.wave-strip { display: flex; flex-wrap: wrap; gap: 0.5rem; list-style: none; margin: 0 0 0.75rem; padding: 0; }
+.wave-step {
+  display: flex; flex-direction: column; min-width: 5.5rem; padding: 0.5rem 0.75rem;
+  border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md); background: var(--pd-surface-1);
+}
+.wave-step--current { border-width: 2px; border-color: rgb(var(--v-theme-primary)); font-weight: 600; }
+.wave-step--upcoming { color: var(--pd-text-secondary); }
+.wave-state { font-size: 12px; }
 
 /* Identity and privileges (plan M3a step 5). */
 .chip-link { margin-right: 0.75rem; }

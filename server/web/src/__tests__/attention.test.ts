@@ -15,10 +15,10 @@ const item: AttentionDevice = {
   device_id: 'd1', hostname: 'acme-lt-0142', state: 'active', os_release: { VERSION_ID: '24.04' }, last_contact_at: null,
   severity: 'critical', since: '2026-10-09T10:00:00Z',
   conditions: [
-    { kind: 'presumed_lost', since: '2026-10-09T10:00:00Z', detail: '' },
-    { kind: 'stale_critical', since: '2026-10-08T10:00:00Z', detail: '' },
-    { kind: 'disk_not_compliant', since: '2026-10-08T10:00:00Z', detail: 'not_encrypted' },
-    { kind: 'agent_outdated', since: '2026-10-08T10:00:00Z', detail: '' },
+    { kind: 'presumed_lost', since: '2026-10-09T10:00:00Z', detail: '', finding: null },
+    { kind: 'stale_critical', since: '2026-10-08T10:00:00Z', detail: '', finding: null },
+    { kind: 'disk_not_compliant', since: '2026-10-08T10:00:00Z', detail: 'not_encrypted', finding: null },
+    { kind: 'agent_outdated', since: '2026-10-08T10:00:00Z', detail: '', finding: null },
   ],
 }
 let items: AttentionDevice[] = [item]
@@ -67,7 +67,7 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
   })
 
   it('labels a failed in-place encryption with its stage and reason (plan M8e decision 25)', async () => {
-    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'disk_conversion_failed', since: '2026-10-21T10:00:00Z', detail: 'init:on_battery' }] }]
+    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'disk_conversion_failed', since: '2026-10-21T10:00:00Z', detail: 'init:on_battery', finding: null }] }]
     const w = await mountAttention()
     const chip = w.find('[data-testid="attention-list"] tbody tr .pd-chip')
     expect(chip.text()).toBe('In-place encryption failed')
@@ -75,7 +75,7 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
   })
 
   it('labels a clock drift with its offset and opens the device (plan M8b decision 15)', async () => {
-    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'clock_drift', since: '2026-10-21T10:00:00Z', detail: '120 s' }] }]
+    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'clock_drift', since: '2026-10-21T10:00:00Z', detail: '120 s', finding: null }] }]
     const w = await mountAttention()
     const row = w.find('[data-testid="attention-list"] tbody tr')
     const chip = row.find('.pd-chip')
@@ -85,7 +85,7 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
   })
 
   it('labels an event gap with its range and opens the device (plan M8b decision 23)', async () => {
-    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'event_gap', since: '2026-10-24T10:00:00Z', detail: '3-3' }] }]
+    items = [{ ...item, severity: 'warn', conditions: [{ kind: 'event_gap', since: '2026-10-24T10:00:00Z', detail: '3-3', finding: null }] }]
     const w = await mountAttention()
     const row = w.find('[data-testid="attention-list"] tbody tr')
     const chip = row.find('.pd-chip')
@@ -99,6 +99,20 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
     const action = w.find('[data-testid="attention-list"] tbody tr a.v-btn')
     expect(action.attributes('aria-label')).toBe('Retire, lock or keep — acme-lt-0142')
     expect(nameContainsVisibleText(action.element)).toBe(true)
+  })
+
+  it('shows the finding status chip after the condition that has a finding (plan M9 decision 35)', async () => {
+    items = [{
+      ...item, conditions: [
+        { kind: 'stale_critical', since: '2026-10-08T10:00:00Z', detail: '', finding: { id: 'f1', status: 'in_progress', assignee_display: 'Bob Builder' } },
+        { kind: 'agent_outdated', since: '2026-10-08T10:00:00Z', detail: '', finding: null },
+      ],
+    }]
+    const w = await mountAttention()
+    const chips = w.findAll('[data-testid="attention-list"] tbody tr .pd-chip')
+    expect(chips.map((c) => c.text())).toEqual(['Silent (critical)', 'In progress', 'Agent outdated'])
+    expect(chips[1].attributes('title')).toBe('Bob Builder')
+    expect(w.findAll('[data-testid="condition-finding"]')).toHaveLength(1)
   })
 
   it('explains the empty list', async () => {

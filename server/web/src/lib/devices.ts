@@ -1,6 +1,6 @@
 import {
-  api, listPage, problemCode, type Device, type DeviceContact, type DeviceDetail, type DeviceReport, type DeviceSort, type DeviceState, type DiskState,
-  type EffectiveConfig,
+  api, listPage, problemCode, type ConfigMode, type Device, type DeviceContact, type DeviceDetail, type DeviceReport, type DeviceSort, type DeviceState, type DiskState,
+  type EffectiveConfig, type EnrollmentMethod,
 } from '../api/client'
 import { maxListDepth, type ListFilter, type ListParams, type Page } from './listQuery'
 
@@ -25,6 +25,18 @@ export const contactFilter: ListFilter = {
 export const componentFilter: ListFilter = {
   kind: 'enum', key: 'component_outdated', label: 'devices.componentFilter', hint: 'devices.components.targetHint',
   options: [{ value: 'true', title: 'devices.components.status.outdated' }],
+}
+
+/** The adoption filters of the device list (plan M11 decision 43): how a device enrolled and its configuration mode. */
+export const enrollmentMethods: EnrollmentMethod[] = ['autoinstall', 'adopted', 'unknown']
+export const enrollmentMethodFilter: ListFilter = {
+  kind: 'enum', key: 'enrollment_method', label: 'devices.adoption.method',
+  options: enrollmentMethods.map((value) => ({ value, title: 'devices.adoption.methods.' + value })),
+}
+export const configModes: ConfigMode[] = ['enforce', 'report_only']
+export const configModeFilter: ListFilter = {
+  kind: 'enum', key: 'config_mode', label: 'devices.adoption.mode',
+  options: configModes.map((value) => ({ value, title: 'devices.adoption.modes.' + value })),
 }
 
 export const securityFilter: ListFilter = {
@@ -58,6 +70,7 @@ export async function listDevices(p: ListParams): Promise<Page<Device>> {
           security_updates: ((p.security_updates as string[] | undefined) ?? [])[0] as 'overdue' | undefined,
           owner_id: ((p.owner_id as string[] | undefined) ?? [])[0],
           component_outdated: ((p.component_outdated as string[] | undefined) ?? [])[0] === 'true' ? true : undefined,
+          enrollment_method: p.enrollment_method as EnrollmentMethod[], config_mode: p.config_mode as ConfigMode[],
         },
       },
     }),
@@ -149,6 +162,14 @@ export function agentUpdateProblemKey(res: { problem: string; detail?: string })
   if (res.detail === 'no agent release is being offered') return 'devices.updateAgent.noRelease'
   if (res.detail?.startsWith('the device already runs')) return 'devices.updateAgent.upToDate'
   return null
+}
+
+/** Enables enforcement on a report-only device (plan M11 decision 42); hostname is the typed confirmation. */
+export async function enforceDevice(id: string, hostname: string): Promise<{ problem: string } | null> {
+  const { error } = await api.POST('/api/v1/devices/{id}/enforce', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } }, body: { hostname },
+  })
+  return error ? { problem: problemCode(error) } : null
 }
 
 /** Sets or clears (null) the managed name of a device (ADR 0041); the device on success, otherwise the problem code. */

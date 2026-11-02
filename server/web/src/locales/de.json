@@ -15,6 +15,32 @@
     "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",
     "saved": "Die Datenschutzeinstellungen wurden gespeichert."
   },
+  "rolloutSettings": {
+    "title": "Rollout-Einstellungen",
+    "intro": "Gestufte Rollouts wenden eine Konfigurationsänderung zuerst auf einen Teil der Geräte an, Welle für Welle, und halten automatisch an, wenn zu viele Geräte fehlschlagen. Sie sind standardmäßig aus. Ein laufender Rollout behält die Werte, mit denen er gestartet wurde.",
+    "general": "Gestufte Rollouts",
+    "enabled": "Konfigurationsänderungen in Wellen ausrollen",
+    "waves": "Wellen",
+    "wavesHint": "Prozentanteile der Geräte, streng aufsteigend und mit 100 endend, höchstens 10 Wellen, durch Kommas getrennt, zum Beispiel 1, 10, 50, 100.",
+    "wavesInvalid": "Geben Sie 1 bis 10 streng aufsteigende ganze Zahlen von 1 bis 100 ein, durch Kommas getrennt und mit 100 endend.",
+    "minWaveMinutes": "Mindestdauer einer Welle",
+    "minWaveMinutesHint": "Eine Welle dauert mindestens so viele Minuten, bevor die nächste beginnt. Mindestens {min} Minuten ({devMin} in einer Entwicklungsumgebung).",
+    "minWaveInvalid": "Geben Sie eine ganze Zahl von Minuten ein, mindestens {min} ({devMin} in einer Entwicklungsumgebung).",
+    "minWaveRefused": "Die Mindestdauer einer Welle ist zu kurz: mindestens {min} Minuten ({devMin} in einer Entwicklungsumgebung).",
+    "thresholds": "Fehlerschwelle",
+    "thresholdPercent": "Fehlerrate, die einen Rollout anhält",
+    "thresholdPercentHint": "Prozent der Geräte einer Welle, die fehlgeschlagen sind (0–100).",
+    "thresholdPercentInvalid": "Geben Sie eine ganze Zahl von 0 bis 100 ein.",
+    "thresholdMin": "Mindestanzahl fehlgeschlagener Geräte",
+    "thresholdMinHint": "Ein Rollout hält nur an, wenn mindestens so viele Geräte fehlgeschlagen sind.",
+    "thresholdMinInvalid": "Geben Sie eine ganze Zahl ein, mindestens 0.",
+    "canary": "Canary-Gruppe",
+    "canaryGroup": "Canary-Gerätegruppe",
+    "canaryHint": "Die Geräte dieser Gruppe erhalten eine Änderung immer zuerst, unabhängig von den Wellen.",
+    "canaryNone": "Keine",
+    "readOnly": "Nur Organisationsadministratoren können die Rollout-Einstellungen ändern.",
+    "saved": "Die Rollout-Einstellungen wurden gespeichert."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent-Updates",
@@ -67,6 +93,7 @@
       "comfortable": "Komfortabel"
     },
     "shortcuts": "Tastenkürzel",
+    "reopenSetup": "Einrichtungsliste anzeigen",
     "collapseNavigation": "Navigation einklappen",
     "expandNavigation": "Navigation ausklappen",
     "switchRole": "{scope, select, organization {Zu {role} ({organization}) wechseln} other {Zu {role} wechseln}}",
@@ -103,12 +130,15 @@
     "software": "Software",
     "vulnerabilities": "Schwachstellen",
     "attention": "Handlungsbedarf",
+    "findings": "Feststellungen",
     "attentionCount": "{count, plural, one {# offener Befund} other {# offene Befunde}}",
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
     "privacySettings": "Datenschutz",
+    "rolloutSettings": "Rollouts",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
+    "configStatus": "Konfigurationsstatus",
     "start": "Start",
     "groups": {
       "overview": "Übersicht",
@@ -124,7 +154,11 @@
     "shortcut": "Tastenkürzel: {keys}",
     "securityReview": "Sicherheitsprüfung",
     "operatorRoots": "Freigegebene Verzeichnisse",
-    "mcpSettings": "MCP"
+    "watchedUnits": "Überwachte Dienste",
+    "mcpSettings": "MCP",
+    "notifications": "Benachrichtigungen",
+    "platformNotifications": "Plattform-Benachrichtigungen",
+    "configRollouts": "Konfigurations-Rollouts"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -274,9 +308,19 @@
     "mcp_tool_not_allowed": "Diese Operation ist über den MCP nicht erlaubt.",
     "mcp_write_not_enabled": "Änderungen über den MCP sind nicht freigegeben.",
     "mcp_login_required": "Melde dich erneut mit paddockctl mcp login an.",
-    "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal."
+    "rate_limited": "Zu viele Anfragen. Versuche es gleich noch einmal.",
+    "email_not_configured": "Diese Installation hat kein E-Mail-Relay, daher können E-Mail-Ziele nicht aktiviert werden.",
+    "unknown_code": "Einer der Audit-Codes ist nicht registriert.",
+    "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
+    "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
+    "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
+    "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend."
   },
   "audit": {
+    "vulnerability": {
+      "critical_summary": "{new_critical, plural, one {# neue kritische Schwachstelle} other {# neue kritische Schwachstellen}} auf {devices, plural, one {# Gerät} other {# Geräten}}",
+      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})"
+    },
     "retention": {
       "purged": "{deleted, plural, one {# abgelaufener Eintrag} other {# abgelaufene Einträge}} von {store} gelöscht"
     },
@@ -336,7 +380,8 @@
       "revoked": "{actor} hat das Registrierungstoken {name} widerrufen"
     },
     "config": {
-      "applied": "{actor} hat eine Konfiguration angewendet ({created} erstellt, {updated} geändert, {deleted} gelöscht)"
+      "applied": "{actor} hat eine Konfiguration angewendet ({created} erstellt, {updated} geändert, {deleted} gelöscht)",
+      "reverted": "{actor} hat einen Änderungssatz rückgängig gemacht ({created} erstellt, {updated} geändert, {deleted} gelöscht)"
     },
     "api_token": {
       "created": "{actor} hat das API-Token {name} ({role}) angelegt",
@@ -353,6 +398,7 @@
       "retired": "{actor} hat das Gerät {hostname} außer Betrieb genommen",
       "groups_changed": "{actor} hat die Gerätegruppen von {hostname} geändert",
       "name_changed": "Gerätename geändert",
+      "enforcement_enabled": "{actor} hat die Durchsetzung auf dem Gerät {hostname} aktiviert",
       "clone_suspected": "Das Gerät {hostname} wurde unter Quarantäne gestellt, weil seine Identität geklont zu sein scheint",
       "bundle_applied": "Das Gerät {target} hat Bundle {bundle_version, number} angewendet",
       "bundle_rejected": "Das Gerät {target} hat ein Bundle abgelehnt",
@@ -418,9 +464,6 @@
       "clock_drift": "Die Uhr des Geräts {target} weicht um {offset_s, number} Sekunden von der des Servers ab (Schwelle {threshold_s, number} Sekunden)",
       "clock_drift_cleared": "Die Uhr des Geräts {target} weicht wieder um höchstens {threshold_s, number} Sekunden von der des Servers ab"
     },
-    "vulnerability": {
-      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})"
-    },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
       "approved": "{actor} hat die Vernichtung von {hostname} freigegeben",
@@ -464,6 +507,12 @@
       "resumed": "{actor} hat das Rollout von Agent {version} fortgesetzt",
       "completed": "Das Rollout von Agent {version} wurde abgeschlossen"
     },
+    "config_rollout": {
+      "advanced": "Das Konfigurations-Rollout hat {percent, number} % der Geräte erreicht",
+      "halted": "Das Konfigurations-Rollout wurde angehalten: {reason}",
+      "resumed": "{actor} hat das Konfigurations-Rollout fortgesetzt",
+      "completed": "Das Konfigurations-Rollout wurde abgeschlossen"
+    },
     "managed_file": {
       "created": "{actor} hat die verwaltete Datei {path} definiert",
       "updated": "{actor} hat die verwaltete Datei {path} geändert",
@@ -496,7 +545,9 @@
       "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
       "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
-      "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}"
+      "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert",
+      "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}",
+      "rollout_changed": "{actor} hat die Rollout-Einstellungen geändert: gestufte Rollouts {enabled, select, true {ein} other {aus}}"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
@@ -535,7 +586,25 @@
       "step_up": "Identitätsbestätigung",
       "error_code": "Fehlercode"
     },
-    "sourceMcp": "MCP"
+    "sourceMcp": "MCP",
+    "finding": {
+      "acknowledged": "{actor} hat den Befund {code} auf {hostname} zur Kenntnis genommen",
+      "assigned": "{actor} hat den Befund {code} auf {hostname} zugewiesen",
+      "closed": "{actor} hat den Befund {code} auf {hostname} geschlossen: {resolution, select, resolved {behoben} accepted_risk {Risiko akzeptiert} false_positive {Fehlalarm} other {{resolution}}}",
+      "reopened": "{actor} hat den Befund {code} auf {hostname} wieder geöffnet"
+    },
+    "notification": {
+      "destination_created": "{actor} hat das Benachrichtigungsziel {name} angelegt ({type, select, webhook {Webhook} other {E-Mail}})",
+      "destination_updated": "{actor} hat das Benachrichtigungsziel {name} geändert",
+      "destination_deleted": "{actor} hat das Benachrichtigungsziel {name} gelöscht",
+      "destination_secret_rotated": "{actor} hat das Signaturgeheimnis des Benachrichtigungsziels {name} ersetzt",
+      "test_requested": "{actor} hat eine Testbenachrichtigung an {name} angefordert",
+      "test_sent": "Testbenachrichtigung an {name}, angefordert von {requested_by}",
+      "pseudonym_resolved": "{actor} hat das Pseudonym {pseudonym} aufgelöst",
+      "delivered": "{count} Ereignisse an {destination} zugestellt",
+      "destination_stalled": "Zustellungen an {destination} stocken ({last_error})",
+      "destination_resumed": "Zustellungen an {destination} laufen nach {stalled_for_s} s wieder"
+    }
   },
   "organizations": {
     "title": "Organisationen",
@@ -1128,6 +1197,7 @@
       "overview": "Übersicht",
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
+      "applyStatus": "Anwendungsstatus",
       "commands": "Befehle",
       "audit": "Audit"
     },
@@ -1238,7 +1308,32 @@
       "hint": "Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach.",
       "targetHint": "Ziel = letztes abgeschlossenes Release. Ein laufender Rollout verschiebt es nicht; eine Komponente, die neuer als ihr Ziel ist, gilt als aktuell."
     },
-    "componentFilter": "Komponente veraltet"
+    "componentFilter": "Komponente veraltet",
+    "reportOnly": {
+      "banner": "Dieses Gerät ist im Berichtsmodus: Es meldet, was es ändern würde, und ändert nichts. Ausstehende Zeilen nennen die geplanten Änderungen.",
+      "chip": "Berichtsmodus",
+      "enforce": {
+        "title": "Durchsetzung aktivieren",
+        "explanation": "Dieses Gerät wurde übernommen und meldet nur, was es ändern würde. Mit der Durchsetzung wendet es die Konfiguration beim nächsten Check-in an.",
+        "label": "Durchsetzung aktivieren",
+        "confirmTitle": "Durchsetzung auf {hostname} aktivieren?",
+        "confirm": "Bei der nächsten Anwendung stellt der Agent fremde sudoers-Dateien unter Quarantäne, entfernt unerwartete Mitglieder privilegierter Gruppen (nie den letzten Administrator), installiert die Anmeldekomponente und wendet jede verwaltete Ressource an. Zur Bestätigung den Hostnamen eingeben.",
+        "done": "Die Durchsetzung ist aktiviert; das Gerät wendet seine Konfiguration beim nächsten Check-in an."
+      }
+    },
+    "adoption": {
+      "method": "Registrierungsart",
+      "mode": "Konfigurationsmodus",
+      "methods": {
+        "autoinstall": "Autoinstall",
+        "adopted": "Übernommen",
+        "unknown": "Unbekannt"
+      },
+      "modes": {
+        "enforce": "Durchgesetzt",
+        "report_only": "Berichtsmodus"
+      }
+    }
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -1447,10 +1542,89 @@
     "before": "Vorher",
     "after": "Nachher",
     "close": "Schließen",
+    "planRegion": "Plan des Änderungssatzes, scrollbar",
+    "revertsLabel": "Macht den Änderungssatz rückgängig",
+    "revertedByLabel": "Rückgängig gemacht durch den Änderungssatz",
+    "revert": {
+      "action": "Rückgängig machen",
+      "label": "Änderungssatz vom {at} rückgängig machen",
+      "title": "Änderungssatz rückgängig machen",
+      "message": "Diese Änderungen machen den Änderungssatz vom {at} rückgängig und werden sofort angewendet. Seitdem angelegte Einträge bleiben erhalten.",
+      "emptyPlan": "Die Konfiguration entspricht bereits dem Stand vor diesem Änderungssatz; es gibt nichts rückgängig zu machen.",
+      "planChanged": "Die Konfiguration hat sich geändert, seit der Plan angezeigt wurde. Prüfen Sie den neuen Plan und bestätigen Sie erneut.",
+      "done": "Der Änderungssatz vom {at} wurde rückgängig gemacht.",
+      "blocked": {
+        "reverted": "Dieser Änderungssatz wurde bereits rückgängig gemacht.",
+        "noBefore": "Der vorherige Stand dieses Änderungssatzes ist nicht gespeichert (vor dessen Speicherung erfasst oder nach 90 Tagen entfernt)."
+      }
+    },
     "empty": {
       "title": "Noch keine Änderungssätze",
       "description": "Änderungssätze werden aufgezeichnet, wenn paddockctl oder die API eine Konfiguration anwendet."
-    }
+    },
+    "rollout": "Rollout",
+    "rolloutLabel": "Rollout:",
+    "rolloutLink": "Rollout öffnen",
+    "urgentReason": "Dringend, sofort auf alle Geräte angewendet. Grund: {reason}"
+  },
+  "configStatus": {
+    "title": "Konfigurationsstatus",
+    "summary": "Pro Ressource: auf wie vielen aktiven Geräten sie angewendet wurde, fehlschlug, in einer reinen Berichtsanwendung aussteht oder nach einer lokalen Änderung korrigiert wurde.",
+    "resource": "Ressource",
+    "type": "Typ",
+    "status": "Status",
+    "message": "Meldung",
+    "version": "Bundle-Version",
+    "time": "Gemeldet",
+    "lastFailure": "Letzter Fehler",
+    "states": {
+      "applied": "Angewendet",
+      "failed": "Fehlgeschlagen",
+      "pending": "Ausstehend",
+      "drift_corrected": "Abweichung korrigiert",
+      "plan_error": "Planungsfehler"
+    },
+    "count": {
+      "applied": "{count, plural, one {# angewendet} other {# angewendet}}",
+      "failed": "{count, plural, one {# fehlgeschlagen} other {# fehlgeschlagen}}",
+      "pending": "{count, plural, one {# ausstehend} other {# ausstehend}}",
+      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}",
+      "plan_error": "{count, plural, one {# Planungsfehler} other {# Planungsfehler}}"
+    },
+    "changes": "Geplante Änderungen",
+    "noDetails": "Keine weiteren Details.",
+    "bundles": "Bundle-Verlauf",
+    "compiled": "Erzeugt",
+    "outcome": "Ergebnis",
+    "mode": "Modus",
+    "changed": "Geändert",
+    "errors": "Fehler",
+    "reportedAt": "Gemeldet",
+    "rollout": "Rollout",
+    "outcomes": {
+      "applied": "Angewendet",
+      "rejected": "Abgelehnt",
+      "none": "Nicht gemeldet"
+    },
+    "modes": {
+      "enforce": "Erzwingen",
+      "report_only": "Nur berichten"
+    },
+    "empty": {
+      "device": {
+        "title": "Noch kein Anwendungsstatus",
+        "description": "Das Gerät hat noch nicht gemeldet, was es angewendet hat."
+      },
+      "bundles": {
+        "title": "Keine Konfigurationsversionen",
+        "description": "Für dieses Gerät wurde noch keine Konfiguration erzeugt."
+      },
+      "fleet": {
+        "title": "Noch kein Anwendungsstatus",
+        "description": "Kein Gerät hat bisher gemeldet, was es angewendet hat."
+      }
+    },
+    "schema": "Schema"
   },
   "managed": {
     "scope": "Gilt für",
@@ -1812,6 +1986,23 @@
       "description": "Sperr- und Vernichtungsanfragen dieser Organisation erscheinen hier mit ihrem Fortschritt."
     }
   },
+  "watchedUnits": {
+    "title": "Überwachte Dienste",
+    "intro": "Fremde Agenten wie ein EDR- oder SIEM-Agent laufen als systemd-Dienste, die Paddock nicht ausliefert. Tragen Sie sie hier ein: Jedes Gerät meldet, wenn einer davon stoppt oder fehlt, genau wie beim eigenen Agenten von Paddock.",
+    "info": "Paddock meldet nur. Es installiert, startet oder startet einen überwachten Dienst nie neu.",
+    "label": "Dienste",
+    "hint": "Namen mit der Endung .service, zum Beispiel wazuh-agent.service. Nach jedem Namen die Eingabetaste drücken. Höchstens {max}.",
+    "placeholder": "wazuh-agent.service",
+    "saved": "Die überwachten Dienste wurden gespeichert. Jedes Gerät erhält sie mit seiner nächsten Konfiguration.",
+    "updatedAt": "Zuletzt gespeichert {at}",
+    "confirmTitle": "Überwachte Dienste speichern?",
+    "confirm": "{count, plural, =0 {Auf keinem Gerät wird ein Dienst überwacht.} one {# Dienst wird auf jedem Gerät überwacht.} other {# Dienste werden auf jedem Gerät überwacht.}}",
+    "errors": {
+      "notService": "{unit} ist kein Dienstname. Verwenden Sie einen Namen mit der Endung .service.",
+      "duplicate": "{unit} ist doppelt aufgeführt.",
+      "tooMany": "Höchstens {max} Dienste können überwacht werden."
+    }
+  },
   "dms": {
     "title": "Totmannschalter",
     "warning": "Ist Paddock länger als diese Frist nicht erreichbar, sperrt sich jedes Gerät mit eingeschaltetem Schalter selbst. Das gilt auch für ein Gerät, dessen Verbindung zu Paddock absichtlich blockiert wird: Ein Angreifer, der das Gerät von Paddock fernhält, kann die Sperre auslösen.",
@@ -1975,7 +2166,8 @@
       "config_behind": "Konfiguration im Rückstand",
       "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen",
       "clock_drift": "Zeitabweichung",
-      "event_gap": "Ereignislücke"
+      "event_gap": "Ereignislücke",
+      "report_only": "Berichtsmodus, wartet auf Durchsetzung"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1994,7 +2186,8 @@
       "config_behind": "Gerät öffnen",
       "disk_conversion_failed": "Gerät öffnen",
       "clock_drift": "Gerät öffnen",
-      "event_gap": "Gerät öffnen"
+      "event_gap": "Gerät öffnen",
+      "report_only": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {
@@ -2003,6 +2196,91 @@
     },
     "device": "Gerät",
     "conditions": "Befunde"
+  },
+  "findings": {
+    "title": "Feststellungen",
+    "summary": "Manipulationsereignisse und Handlungsbedarf Ihrer Geräte. Übernehmen Sie eine Feststellung, weisen Sie sie zu und schließen Sie sie mit einer Begründung; jeder Schritt steht im Audit-Log.",
+    "code": "Feststellung",
+    "statusColumn": "Status",
+    "device": "Gerät",
+    "occurrences": "Vorkommen",
+    "assignee": "Zuständig",
+    "lastSeen": "Zuletzt gesehen",
+    "cleared": "Erledigt",
+    "clearedHint": "Der Befund ist verschwunden; die Feststellung bleibt, bis jemand sie schließt.",
+    "done": "{finding} ist jetzt {status}.",
+    "deviceTitle": "Feststellungen",
+    "openList": "Feststellungen öffnen",
+    "status": {
+      "open": "Offen",
+      "acknowledged": "Zur Kenntnis genommen",
+      "in_progress": "In Bearbeitung",
+      "resolved": "Behoben",
+      "accepted_risk": "Risiko akzeptiert",
+      "false_positive": "Fehlalarm"
+    },
+    "kinds": {
+      "tamper": "Manipulationsereignis",
+      "attention": "Handlungsbedarf"
+    },
+    "resolutions": {
+      "resolved": "Behoben",
+      "accepted_risk": "Risiko akzeptiert",
+      "false_positive": "Fehlalarm"
+    },
+    "filters": {
+      "status": "Status",
+      "statusHint": "Ohne Auswahl: offen, zur Kenntnis genommen und in Bearbeitung.",
+      "kind": "Art",
+      "cleared": "Erledigt",
+      "clearedHint": "Ohne Auswahl sind erledigte Feststellungen ausgeblendet.",
+      "clearedOnly": "Nur erledigte Feststellungen"
+    },
+    "acknowledge": {
+      "action": "Zur Kenntnis nehmen",
+      "label": "Zur Kenntnis nehmen: {finding}",
+      "title": "Feststellung zur Kenntnis nehmen",
+      "message": "Diese Feststellung als gesehen markieren: {finding}. Sie bleibt offen, bis sie geschlossen wird.",
+      "confirm": "Zur Kenntnis nehmen"
+    },
+    "assign": {
+      "action": "Zuweisen",
+      "label": "Zuweisen: {finding}",
+      "title": "Feststellung zuweisen",
+      "message": "Wer kümmert sich um diese Feststellung? {finding}",
+      "assignee": "Zuständig",
+      "hint": "Administratoren und Operatoren Ihrer Organisation. Leeren Sie das Feld, um die Zuweisung zu entfernen.",
+      "submit": "Zuweisen",
+      "unassign": "Zuweisung entfernen"
+    },
+    "close": {
+      "action": "Schließen",
+      "label": "Schließen: {finding}",
+      "title": "Feststellung schließen",
+      "message": "Diese Feststellung mit einem Ergebnis und einer Begründung schließen: {finding}. Das Audit-Log behält beides.",
+      "resolution": "Ergebnis",
+      "acceptedRiskHint": "Risiko akzeptiert erfordert einen Organisations-Administrator.",
+      "reason": "Begründung",
+      "reasonHint": "Fakten und Ticket-Verweise, keine persönlichen Wertungen.",
+      "reasonRequired": "Geben Sie eine Begründung ein.",
+      "reasonTooLong": "Die Begründung ist zu lang.",
+      "externalRef": "Externer Verweis (optional)",
+      "externalRefHint": "Eine Ticket- oder Änderungsnummer in einem anderen System.",
+      "externalRefTooLong": "Der Verweis ist zu lang.",
+      "submit": "Feststellung schließen"
+    },
+    "reopen": {
+      "action": "Wieder öffnen",
+      "label": "Wieder öffnen: {finding}",
+      "title": "Feststellung wieder öffnen",
+      "message": "Diese Feststellung wieder öffnen: {finding}. Eine Begründung ist nötig und steht im Audit-Log.",
+      "reason": "Begründung",
+      "confirm": "Wieder öffnen"
+    },
+    "empty": {
+      "title": "Keine Feststellungen",
+      "description": "Nichts erfordert eine Entscheidung. Manipulationsereignisse und Handlungsbedarf erscheinen hier, sobald sie auftreten."
+    }
   },
   "palette": {
     "title": "Befehlspalette",
@@ -2332,5 +2610,250 @@
         "platform": "Plattform"
       }
     }
+  },
+  "setup": {
+    "title": "Paddock einrichten",
+    "progress": "{done} von {total} Schritten erledigt",
+    "dismiss": "Ausblenden",
+    "guide": "Anleitung lesen",
+    "states": {
+      "done": "Erledigt",
+      "open": "Offen",
+      "unknown": "Unbekannt",
+      "manual": "Auf dem Host"
+    },
+    "steps": {
+      "organization": "Erste Organisation anlegen",
+      "orgAdmin": "Ersten Organisationsadministrator im Identity Provider zuweisen",
+      "release": "Agent-Release veröffentlichen",
+      "allowlist": "Plattform auf eine IP-Allowlist beschränken (optional)",
+      "breakGlass": "Break-Glass-Konten benennen",
+      "users": "Identitätsquelle anbinden, die Benutzer liefert",
+      "token": "Enrollment-Token erstellen",
+      "agent": "Agent auf einem Gerät installieren und registrieren",
+      "device": "Erstes Gerät freigeben"
+    }
+  },
+  "notifications": {
+    "title": "Benachrichtigungen",
+    "platformTitle": "Plattform-Benachrichtigungen",
+    "summary": "Sendet Sicherheitsereignisse dieser Organisation an einen signierten Webhook oder eine E-Mail-Liste. Zustellung mindestens einmal; das Geheimnis eines Webhooks wird nur beim Anlegen oder Ersetzen angezeigt.",
+    "platformSummary": "Sendet Plattformereignisse (Rollouts, Releases, Schwachstellendaten, IP-Zulassungsliste) an einen signierten Webhook oder eine E-Mail-Liste.",
+    "create": "Ziel hinzufügen",
+    "createTitle": "Neues Benachrichtigungsziel",
+    "editTitle": "Benachrichtigungsziel bearbeiten",
+    "editLabel": "Bearbeiten: {name}",
+    "testLabel": "Test senden: {name}",
+    "rotateLabel": "Geheimnis ersetzen: {name}",
+    "deleteLabel": "Löschen: {name}",
+    "type": "Typ",
+    "types": {
+      "webhook": "Webhook",
+      "email": "E-Mail"
+    },
+    "enabled": "Aktiv",
+    "on": "An",
+    "off": "Aus",
+    "state": "Zustand",
+    "states": {
+      "active": "Aktiv",
+      "stalled": "Blockiert",
+      "disabled": "Deaktiviert"
+    },
+    "lastSuccess": "Letzte Zustellung",
+    "never": "Nie",
+    "lag": "Verzug",
+    "lagValue": {
+      "s": "{value} s",
+      "min": "{value} min",
+      "h": "{value} Std.",
+      "d": "{value} T."
+    },
+    "filterMode": "Ereignisse",
+    "modes": {
+      "security": "Sicherheitsereignisse",
+      "all": "Alle Ereignisse",
+      "custom": "Ausgewählte Ereignisse"
+    },
+    "modeHints": {
+      "security": "Das Sicherheitsprofil: Manipulationen, Befunde, Widerrufe, Anmeldungen und Änderungen geschützter Einstellungen.",
+      "all": "Jedes Audit-Ereignis, auch routinemäßige Änderungen.",
+      "custom": "Nur die aufgeführten Audit-Codes."
+    },
+    "codes": "Audit-Codes",
+    "codesHint": "Registrierte Audit-Codes eingeben oder auswählen, zum Beispiel finding.closed.",
+    "codesCount": "Wählen Sie 1 bis 200 Audit-Codes.",
+    "codesUnknown": "Einer der Codes ist kein registrierter Audit-Code.",
+    "nameHint": "Buchstaben, Ziffern, Leerzeichen, Punkte, Unterstriche und Bindestriche; höchstens 64 Zeichen.",
+    "nameInvalid": "Der Name muss mit einem Buchstaben oder einer Ziffer beginnen und höchstens 64 Zeichen aus Buchstaben, Ziffern, Leerzeichen, '.', '_' und '-' haben.",
+    "url": "Webhook-URL",
+    "urlHint": "Eine https-Adresse, die der Paddock-Server erreicht. Paddock speichert sie verschlüsselt und zeigt sie nie wieder an.",
+    "urlCurrent": "Aktuelle Adresse: {url}. Leer lassen, um sie zu behalten.",
+    "urlUnchanged": "unverändert",
+    "urlRequired": "Geben Sie die Webhook-URL ein.",
+    "urlHttps": "Die URL muss mit https:// beginnen.",
+    "reenterUrl": "Ihre Identität ist bestätigt. Die Webhook-URL wird während der Bestätigung nie aufbewahrt: Geben Sie sie erneut ein und speichern Sie.",
+    "recipients": "Empfänger",
+    "recipientsHint": "Eine E-Mail-Adresse pro Zeile, höchstens 20.",
+    "recipientsCount": "Geben Sie 1 bis 20 E-Mail-Adressen ein.",
+    "recipientsInvalid": "Eine der Adressen ist keine einfache E-Mail-Adresse.",
+    "pseudonymize": "Benutzernamen durch Pseudonyme ersetzen",
+    "includeParams": "Ereignisparameter mitsenden",
+    "heartbeat": "Heartbeat-Intervall (Sekunden)",
+    "heartbeatHint": "0 schaltet den Heartbeat aus; sonst 60 bis 3600.",
+    "heartbeatInvalid": "Geben Sie 0 oder eine Zahl von 60 bis 3600 ein.",
+    "minInterval": "Mindestabstand zwischen E-Mails (Sekunden)",
+    "minIntervalHint": "Ereignisse innerhalb des Abstands werden in einer Nachricht zusammengefasst; 60 bis 3600.",
+    "intervalInvalid": "Geben Sie eine Zahl von 60 bis 3600 ein.",
+    "saved": "Benachrichtigungsziel gespeichert.",
+    "deleted": "Benachrichtigungsziel {name} gelöscht.",
+    "close": "Schließen",
+    "secretTitle": "Signaturgeheimnis",
+    "secret": "Signaturgeheimnis",
+    "shownOnce": "Das Signaturgeheimnis von {name} wird nur jetzt angezeigt. Kopieren Sie es und bewahren Sie es wie ein Passwort auf; Paddock kann es nicht erneut anzeigen.",
+    "deleteTitle": "Benachrichtigungsziel löschen",
+    "deleteConfirm": "{name} mit seinem Zustellzustand löschen? Ereignisse werden dann nicht mehr dorthin gesendet.",
+    "rotateTitle": "Signaturgeheimnis ersetzen",
+    "rotate": "Geheimnis ersetzen",
+    "rotateConfirm": "Das Signaturgeheimnis von {name} ersetzen? Zustellungen werden ab der nächsten Runde mit dem neuen Geheimnis signiert; der Empfänger muss angepasst werden.",
+    "testTitle": "Testbenachrichtigung senden",
+    "test": "Test senden",
+    "testConfirm": "Eine Testzustellung an {name} senden?",
+    "testWaiting": "Test an {name} angefordert. Warte auf das Ergebnis (bis zu 30 Sekunden) …",
+    "testOk": "Die Testzustellung an {name} war erfolgreich.",
+    "testError": "Die Testzustellung an {name} ist fehlgeschlagen: {error}",
+    "testUnknown": "unbekannter Fehler",
+    "testTimeout": "Noch kein Ergebnis für den Test an {name}. Prüfen Sie den Zustand des Ziels gleich noch einmal.",
+    "cursor": {
+      "title": "Ziel aktivieren",
+      "message": "{name} war deaktiviert. Wo soll die Zustellung fortgesetzt werden?",
+      "continue": "{count, plural, one {Das # Ereignis seit der Deaktivierung zustellen} other {Die # Ereignisse seit der Deaktivierung zustellen}}",
+      "continueUnknown": "Die Ereignisse seit der Deaktivierung zustellen",
+      "skip": "Überspringen und mit dem neuesten Ereignis fortfahren",
+      "enable": "Aktivieren"
+    },
+    "pseudonym": {
+      "open": "Pseudonym auflösen",
+      "title": "Pseudonym auflösen",
+      "summary": "Benachrichtigungen können Pseudonyme statt Benutzernamen enthalten. Geben Sie ein Pseudonym ein, um den Benutzer zu sehen; das Ergebnis wird nur einmal angezeigt.",
+      "none": "Kein Ziel ersetzt Benutzernamen durch Pseudonyme, daher gibt es nichts aufzulösen.",
+      "destination": "Ziel",
+      "label": "Pseudonym",
+      "hint": "u_ gefolgt von 24 hexadezimalen Zeichen.",
+      "invalid": "Geben Sie u_ gefolgt von 24 hexadezimalen Kleinbuchstaben ein.",
+      "resolve": "Auflösen",
+      "waiting": "Warte auf das Ergebnis (bis zu 30 Sekunden) …",
+      "match": "Das Pseudonym steht für {username}.",
+      "noMatch": "Kein Benutzer passt zu diesem Pseudonym.",
+      "timeout": "Noch kein Ergebnis. Versuchen Sie es gleich noch einmal."
+    },
+    "empty": {
+      "title": "Keine Benachrichtigungsziele",
+      "description": "Fügen Sie einen Webhook oder eine E-Mail-Liste hinzu, um Sicherheitsereignisse außerhalb des Portals zu erhalten."
+    },
+    "urlRejected": "Der Server hat die URL abgelehnt: Sie muss eine https-Adresse auf Port 443 oder 1024 bis 65535 mit öffentlichem Host sein.",
+    "nameTaken": "Ein Ziel mit diesem Namen existiert bereits."
+  },
+  "rollout": {
+    "urgent": {
+      "label": "Sofort auf alle Geräte anwenden (dringend)",
+      "hint": "Überspringt den gestaffelten Rollout und braucht eine aktuelle Step-up-Anmeldung. Nur das Portal bietet das an; paddockctl und API-Tokens können es nicht.",
+      "reason": "Grund für die dringende Änderung",
+      "reasonInvalid": "Geben Sie einen Grund mit 2 bis 500 Zeichen ein."
+    }
+  },
+  "configRollouts": {
+    "title": "Konfigurations-Rollouts",
+    "summary": "Gestaffelte Rollouts von Konfigurationsänderungen: Welle für Welle, mit automatischem Stopp, wenn zu viele Geräte fehlschlagen.",
+    "settingsLink": "Rollout-Einstellungen",
+    "status": "Status",
+    "statuses": {
+      "running": "Läuft",
+      "halted": "Angehalten",
+      "completed": "Abgeschlossen",
+      "reverted": "Rückgängig gemacht"
+    },
+    "modes": {
+      "immediate": "Sofort",
+      "staged": "Gestaffelt",
+      "urgent": "Dringend"
+    },
+    "wave": "Welle",
+    "waveShort": "Welle {wave, number} von {waves, number} ({percent, number} %)",
+    "counts": "Geräte",
+    "countFacts": "{eligible, number} in den bisherigen Wellen, {applied, number} angewendet, {failed, number} fehlgeschlagen, {pending, number} ausstehend",
+    "startedBy": "Gestartet von",
+    "startedAt": "Gestartet",
+    "startedFacts": "{by} am {at}",
+    "endedAt": "Beendet",
+    "haltedReason": "Grund des Anhaltens",
+    "open": "Öffnen",
+    "openLabel": "Rollout vom {at} öffnen",
+    "back": "Zurück zu den Konfigurations-Rollouts",
+    "heading": "Konfigurations-Rollout",
+    "thresholds": "Stoppregel",
+    "thresholdFacts": "Jede Welle dauert mindestens {minutes, number} Minuten; der Rollout hält an, wenn {min, number} Geräte oder {percent, number} % der Geräte in den bisherigen Wellen fehlschlagen, je nachdem, was mehr ist.",
+    "changeSet": "Änderungssatz",
+    "changeSetLink": "Änderungssatz vom {at}",
+    "waves": "Wellen",
+    "waveStates": {
+      "done": "Erreicht",
+      "current": "Aktuell",
+      "upcoming": "Folgt"
+    },
+    "canary": "Die Geräte der Gruppe {group} erhalten die Änderung immer zuerst.",
+    "plan": "Geplante Änderungen",
+    "actions": {
+      "halt": {
+        "label": "Anhalten",
+        "title": "Rollout anhalten",
+        "confirm": "Die Geräte behalten den Stand der erreichten Welle. Der Rollout bleibt offen und sperrt seine Einträge, bis er fortgesetzt und abgeschlossen, abgeschlossen oder sein Änderungssatz rückgängig gemacht wird.",
+        "reason": "Grund"
+      },
+      "resume": {
+        "label": "Fortsetzen",
+        "title": "Rollout fortsetzen",
+        "confirm": "Der Rollout läuft in der Welle weiter, in der er angehalten wurde; bis jetzt gemeldete Fehler zählen nicht mehr, und die Welle beginnt ihre Beobachtungszeit von vorn."
+      },
+      "advance": {
+        "label": "Nächste Welle",
+        "title": "Zur nächsten Welle wechseln",
+        "confirm": "Die Geräte der nächsten Welle erhalten die Änderung bei ihrem nächsten Check-in, ohne die Beobachtungszeit abzuwarten."
+      },
+      "complete": {
+        "label": "Abschließen",
+        "title": "Rollout abschließen",
+        "confirm": "Jedes Gerät erhält diese Änderung bei seinem nächsten Check-in, auch alle Geräte außerhalb der bisher erreichten Wellen."
+      },
+      "revert": {
+        "label": "Änderungssatz rückgängig machen"
+      }
+    },
+    "devices": {
+      "title": "Geräte",
+      "hostname": "Hostname",
+      "inWave": "In der Welle",
+      "inWaveYes": "Ja",
+      "inWaveNo": "Nein",
+      "bundle": "Bundle",
+      "carries": "(enthält die Änderung)",
+      "outcome": "Neuester Bericht",
+      "failed": "Fehlgeschlagene Ressourcen",
+      "outcomes": {
+        "applied": "Angewendet",
+        "rejected": "Abgelehnt",
+        "report_only": "Nur Bericht",
+        "none": "Kein Bericht"
+      },
+      "empty": {
+        "title": "Keine Geräte",
+        "description": "Kein aktives Gerät passt."
+      }
+    },
+    "empty": {
+      "title": "Noch keine Rollouts",
+      "description": "Ein Rollout startet, wenn eine Änderung eines rollout-fähigen Abschnitts angewendet wird, während gestaffelte Rollouts aktiviert sind."
+    },
+    "wavePercent": "{percent, number} %"
   }
 }

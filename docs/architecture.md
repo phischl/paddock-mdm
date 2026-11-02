@@ -198,6 +198,7 @@ flowchart TB
     rev[revocation-issuer<br/>approves + signs revocation tokens]
     aud[audit-writer<br/>index + WORM + hash chain]
     outbox[outbox-relay]
+    ntf[notifier<br/>webhooks, e-mail]
   end
 
   subgraph data[Data plane]
@@ -242,6 +243,9 @@ flowchart TB
   aud --> pga
   aud --> s3a
   aud --> bao
+  ntf --> pg
+  ntf --> pga
+  ntf --> bao
 ```
 
 | Role | Responsibility | Scales by | Keys it may use |
@@ -254,6 +258,7 @@ flowchart TB
 | `escrow-reader` | Decrypts escrowed secrets only for requests that carry a fresh, verified step-up ID token of an org admin of the owning organization; reachable only from `api` on an internal network *(added 2026-10-06, plan M4b.1)* | replicas | `escrow-wrap` (decrypt) |
 | `audit-writer` | Writes audit index and WORM objects; daily signed hash chain | consumer replicas; chain sealing by leader | `audit-chain` |
 | `outbox-relay` | Moves outbox rows from PostgreSQL to RabbitMQ (publisher confirms) | 1–2 replicas (row locking) | none |
+| `notifier` | Delivers audit events to the destinations organizations and the platform configure: signed HTTPS webhooks and e-mail through the operator's SMTP relay, with retry, a stalled state and heartbeats; reads the audit index through the read-only `paddock_audit_reader`, holds its own database role `paddock_notifier`; the only role that decrypts a destination's URL and secret *(added 2026-10-31, plan M9, ADR 0031)* | exactly 1 active round (advisory lock); destinations are served in parallel inside it | `notification-wrap` and `notification-pseudonym` (decrypt only) |
 
 One binary with roles keeps the build, versioning and security review in one place while every role
 scales and is privileged independently. Each role gets **its own OpenBao AppRole and its own database
@@ -302,6 +307,7 @@ flowchart LR
     cp[paddock compiler ×N]
     ri[paddock revocation-issuer ×1]
     ob[paddock outbox-relay]
+    nt[paddock notifier ×1]
     mq1[rabbitmq ×3]
     vk1[valkey primary + replica]
     pg1[postgres paddock]
@@ -352,7 +358,9 @@ with separate credentials. The control-plane host holds only a RabbitMQ credenti
 to exchange `paddock.audit` and, for the portal's audit view, a **read-only** database role on the audit index
 (`paddock_audit_reader`: `SELECT` only, RLS by organization; Amendment 2026-10-30, plan M10 decision 29: the reader
 also inserts pending export requests into `audit_export`, nothing else). It holds no write or delete credential for
-the audit database and no credential at all for the audit bucket.
+the audit database and no credential at all for the audit bucket. The `notifier` role on this host reads the audit index
+through that same read-only role and is the only role that makes outbound calls to operator-chosen addresses (webhook
+receivers, the SMTP relay); it is not published and is scraped on port 9090 like every role *(plan M9)*.
 
 ### 4.2 Kubernetes later
 
@@ -1378,7 +1386,7 @@ Expired commands are marked `expired` and never executed (platform outage questi
 | LUKS keyslot inventory per volume (`cryptsetup luksDump --dump-json-metadata`) | every apply and drift round | `tamper.keyslot_changed` (`device.tamper_keyslot_changed`) |
 | Fields of the managed local administrator | every apply and drift round | `tamper.local_admin_changed` (`device.tamper_local_admin_changed`) |
 | Deny-list lines of `/etc/pam.d/common-auth` and `common-account`; the files the updates and inventory reconcilers own | every apply and drift round | `tamper.protected_file_changed` (`device.tamper_protected_file_changed`) |
-| `orbit.service` active | every apply and drift round | `tamper.service_stopped` (`device.tamper_service_stopped`) |
+| `orbit.service` active; the third-party units of the organization's presence policy (watched units, **report only**: the agent never starts, stops or enables them; state `inactive`, `failed` or `missing`, reported once per stop) | every apply and drift round | `tamper.service_stopped` (`device.tamper_service_stopped`, parameters `unit` and, for a watched unit, `state`) |
 | `paddockd` running (osquery policy `paddock_agent_running` in Fleet) | Fleet policy results | `device.tamper_agent_not_running` after 15 min without check-in |
 | Local admin login (journal, `pam_unix` for `paddock-admin`) | journal follow | `local_admin.login` (`local_admin.login`) |
 | Clock offset of each check-in: server time minus the signed request timestamp, measured by the gateway; the worker opens a drift episode above 60 s and closes it at 30 s or less | each materialized check-in (at most once per 60 s) | `device.clock_drift` (> 60 s), `device.clock_drift_cleared` (≤ 30 s); attention kind `clock_drift` |
@@ -1695,10 +1703,20 @@ flowchart LR
   aw --> chain[Daily: per organization manifest<br/>sha256 of each object, prev manifest hash,<br/>signed with audit-chain]
   chain --> worm
   worm --> rep[(Replica outside<br/>primary failure domain)]
-  idx --> ui["Portal audit view, evidence integrity (M8b);<br/>notifications (planned: M9)"]
-  aw -.-> siem[("SIEM forward<br/>planned: M12; cursor feed M9")]
+  idx --> ui["Portal audit view, evidence integrity (M8b)"]
+  idx --> ntf["notifier: e-mail, webhooks (M9);<br/>syslog (M12)"]
+  idx --> feed["cursor feed<br/>/audit-events/feed (M9)"]
+  ntf --> recv[("Webhook receivers,<br/>SMTP relay")]
+  feed -->|pull| siem[("SIEM")]
   aw --> ver[Nightly chain verification<br/>audit_verification_run, audit.chain_verified]
 ```
+
+> **Amendment 2026-10-31 (M9, ADR 0031):** every indexed event carries a per-organization `commit_seq`, assigned by the
+> audit writer in commit order under a lock (audit migration 00010). The `notifier` and the cursor feed read the index
+> in that order, so an event never appears behind a cursor that already passed it; the feed is
+> `GET /api/v1/audit-events/feed` (`paddock.audit.feed.v1`, `docs/operations/siem.md`) and the notifier's deliveries are
+> described in `docs/operations/notifications.md`. Both are bounded by the index retention: an event purged from the
+> index is in neither. The push forward to syslog follows in M12 on the same engine.
 
 ### 14.2 Event schema
 
@@ -1971,6 +1989,17 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > `audit_export`, `audit_export_chunk` (evidence export requests and their packages in 8 MiB chunks) and
 > `audit_signing_key` (`audit-chain` public keys) in the database `paddock_audit`.
 
+> **Amendment 2026-10-31 (M9, ADR 0031):** new organization-scoped tables in the database `paddock` (all with RLS):
+> `finding` (one row per tamper event series or attention condition, with a status, assignee, reason and closing
+> data; supersedes the planned `tamper_finding` above), `notification_destination` and `notification_destination_state`
+> (webhook and e-mail destinations with their encrypted URL and secret, and the notifier's cursor and delivery state;
+> platform destinations use the platform pseudo-organization), `notification_delivery` and
+> `notification_delivery_event` (the forwarded batches by event ID, never the event content),
+> `notification_pseudonym_key` (the organization's wrapped pseudonym key), `notification_pseudonym_lookup`
+> (short-lived resolution requests), `vulnerability_summary` (claim rows of the daily critical summary) and
+> `watched_unit` (the presence policy's third-party units). The audit index gains the per-organization `commit_seq`
+> (audit migration 00010). Retention of each table: `docs/compliance/retention.md`.
+
 ### 16.2 Conventions
 
 - Primary keys UUIDv7 (time-ordered) generated in Go; timestamps `timestamptz` in UTC.
@@ -2030,6 +2059,18 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > (`admin.mcp_write_disabled`). `GET /api/v1/me` answers `mcp_write_enabled` and `channel` (`portal`, `api`, `mcp`).
 > New problem codes `mcp_disabled`, `mcp_tool_not_allowed`, `mcp_write_not_enabled` (403), `rate_limited` (429) and
 > `mcp_login_required` (401). Plan: `docs/plans/M14-mcp.md`.
+
+> **Amendment 2026-10-31 (M9, ADR 0031):** new endpoints `GET`/`POST /api/v1/notification-destinations` and
+> `GET`/`PUT`/`DELETE …/{id}`, `POST …/{id}/rotate-secret`, `…/test`, `…/resolve-pseudonym` and
+> `GET …/resolve-pseudonym/{lookup_id}`, the platform pair under `/api/platform/v1/notification-destinations` (no
+> pseudonym operations), `GET /api/v1/notification-capabilities`, `GET /api/v1/findings`, `GET …/findings/{id}` and
+> `POST …/findings/{id}/acknowledge|assign|close|reopen`, `GET /api/v1/accounts` (assignee picker),
+> `GET`/`PUT /api/v1/settings/watched-units`; the attention endpoints carry `finding`. Changes, tests and
+> secret replacements need a step-up and are audited (`notification.*`, `finding.*`, `settings.watched_units_changed`).
+> **`GET /api/v1/audit-events/feed` is the one non-list collection `GET`:** it follows a cursor contract instead of the
+> list contract (`after`, `limit` 1–1000, response `paddock.audit.feed.v1` with `events`, `next_after`, `latest`;
+> OpenAPI extension `x-paddock-feed`, no `x-paddock-list`), because a SIEM must read every event exactly once in commit
+> order. Plan: `docs/plans/M9-notifications.md`.
 
 ### 17.2 Device API
 
@@ -2188,6 +2229,7 @@ to the operator's private repository (concept: operator configuration never in t
 | **M6 Hardening & release** | Load tests, restore drill, German locale, documentation, compliance pack | All gates |
 | **M7 Operations, distribution, portal** | IP allow list, operator bundle, portal redesign, lab profile (plans M7a–M7c, M8a) | Edge, bundle smoke, lab smoke |
 | **M8b Evidence integrity** | Document correction, event gap and clock-drift detection, nightly chain verification with auditor-visible status, audited role-group membership (plan M8b, ADR 0030) | Event gap, clock drift, audit integrity, role membership |
+| **M9 Someone gets told** | Audit commit sequence and cursor feed, `notifier` role with signed webhooks and e-mail, findings (tamper and attention) with a triage workflow, notifications portal, daily critical-CVE summary, presence policy for third-party units (plan M9, ADR 0031) | N1–N10 (`test/acceptance/`, `test/system/`) |
 
 Implementation plans are written per milestone in `docs/plans/`, in the format of the existing plans.
 

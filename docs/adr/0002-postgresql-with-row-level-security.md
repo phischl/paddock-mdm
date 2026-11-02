@@ -32,3 +32,10 @@ default); the volume layout of the 18 image (`/var/lib/postgresql`, data directo
 on 18. Two rules follow from 18: new generated columns are written `STORED` (18 makes virtual the default), and
 password authentication stays SCRAM-SHA-256 (18 deprecates MD5). The move from 17 is a breaking release without an
 upgrade path (fresh installation; maintainer decision 2026-10-29).
+
+## Amendment 2026-11-01 (architect, 2026-11-01; plan M11 amendment R6.13, PDK-157)
+
+`db.OrgPool.InOrgSnapshot(ctx, fn)` is the only other entry point to organization data besides `InOrg`. It is
+read-only and runs at REPEATABLE READ, so every query of `fn` sees one snapshot (the compiler reads its definitions and
+the rollout overlay with it). It shares `InOrg`'s organization binding: the organization comes from the authenticated
+principal in `ctx`, never from input, and row-level security fails closed without it.

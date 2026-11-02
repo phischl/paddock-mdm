@@ -65,7 +65,12 @@ var (
 	InvalidDocument = &Error{Code: "invalid_document", Status: http.StatusUnprocessableEntity}
 	// PlanChanged: the plan of PUT /api/v1/config differs from the one the client confirmed (expected_plan); nothing
 	// is applied (plan M6c amendment 2026-10-08).
-	PlanChanged    = &Error{Code: "plan_changed", Status: http.StatusPreconditionFailed}
+	PlanChanged = &Error{Code: "plan_changed", Status: http.StatusPreconditionFailed}
+	// RolloutConflict: a configuration write touches a key the organization's open rollout stages (plan M11 decision
+	// 29); the administrator completes or reverts the rollout first.
+	RolloutConflict = &Error{Code: "rollout_conflict", Status: http.StatusConflict}
+	// RolloutRunning: a second staged change set while a rollout is open (plan M11 decision 29).
+	RolloutRunning = &Error{Code: "rollout_running", Status: http.StatusConflict}
 	TooManyDevices = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
 	// Uninstall (plan M8d decision 37): clear_tpm while a volume unlocks with the TPM; and invalid_request with 422 for
 	// a request whose values contradict the device or each other (typed hostname, reset-only options with leave).
@@ -122,6 +127,10 @@ var (
 	MCPWriteNotEnabled = &Error{Code: "mcp_write_not_enabled", Status: http.StatusForbidden}
 	RateLimited        = &Error{Code: "rate_limited", Status: http.StatusTooManyRequests}
 	MCPLoginRequired   = &Error{Code: "mcp_login_required", Status: http.StatusUnauthorized}
+	// Notification destinations (plan M9 §6.5): an e-mail destination while the api has no SMTP relay
+	// (PADDOCK_SMTP_ENABLED), and a custom filter naming a code that is not in the audit registry.
+	EmailNotConfigured = &Error{Code: "email_not_configured", Status: http.StatusConflict}
+	UnknownCode        = &Error{Code: "unknown_code", Status: http.StatusBadRequest}
 	// Evidence export (ADR 0032 §5, plan M10 decision 28): a day of the range has no manifest yet, the organization
 	// already has the maximum of pending or running exports, or the package is not ready for download.
 	DayNotSealed   = &Error{Code: "day_not_sealed", Status: http.StatusUnprocessableEntity}

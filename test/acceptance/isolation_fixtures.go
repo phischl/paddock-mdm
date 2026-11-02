@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,10 +48,44 @@ type isolationWorld struct {
 	globexHold string
 	// globexAPIToken is an API token of globex (seedGlobexDevices).
 	globexAPIToken string
+	// globexDestination is a notification destination of globex (seedGlobexNotification).
+	globexDestination string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
+	// globexRollout is a completed configuration rollout of globex (seedGlobexRollout).
+	globexRollout string
+	// globexResource is a failed resource of globexDevice's apply status (seedGlobexConfigStatus).
+	globexResource string
+	// globexBundleVersion is a bundle version of globexDevice with at least two digits (seedGlobexBundleVersion).
+	globexBundleVersion int64
+	// globexFinding is the open tamper finding of globexDevice (seedGlobexFinding).
+	globexFinding string
 	// globexExport is an evidence export of globex (seedGlobexExport).
 	globexExport string
+}
+
+// seedGlobexFinding reports an unexpected sudoers file of globexDevice as event 1 (seedGlobexConfigStatus continues with 2, seedGlobexLogin with 3) and
+// waits until carol sees the finding the worker opens from it.
+func seedGlobexFinding(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	sendSudoersEvent(t, w.globexSim, 1, "globex-iso-evil-"+uniqueSuffix())
+	f := tamperFindingOf(t, w.carol, w.globexDevice, 1)
+	w.globexFinding = f.ID
+	w.globexIDs = append(w.globexIDs, f.ID)
+}
+
+// seedGlobexConfigStatus reports, as globexSim, a failed resource of globexDevice as event 2 and waits until carol sees
+// it; the resource ID is one of the globex IDs acme must never see.
+func seedGlobexConfigStatus(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	w.globexResource = "unit:globex-iso-" + uniqueSuffix() + ".service"
+	version := waitBundleVersion(t, w.carol, w.globexDevice)
+	sendBundleEvent(t, w.globexSim, 2, protocol.EventBundleApplied, map[string]any{
+		"version": version, "changed": 0, "mode": "enforce",
+		"resources": []map[string]any{{"id": w.globexResource, "status": "failed", "message": "globex-iso failure"}},
+	})
+	waitDeviceResources(t, w.carol, w.globexDevice, "q=globex-iso", func(i []resourceStatusItem) bool { return len(i) == 1 })
+	w.globexIDs = append(w.globexIDs, w.globexResource)
 }
 
 // seedGlobexChangeSet applies, as carol, a document with only globex's update settings and a changed daily time, so
@@ -81,6 +116,64 @@ func seedGlobexChangeSet(t *testing.T, w *isolationWorld) {
 	w.globexChangeSet = out.ChangeSetID
 	w.globexIDs = append(w.globexIDs, out.ChangeSetID)
 	w.top.Cleanup(func() { _ = call(w.top, w.carol, http.MethodPut, "/api/v1/config", doc(original)) })
+}
+
+// seedGlobexRollout stages, as carol, a change of globex's update settings with rollouts switched on, completes the
+// rollout at once and restores the rollout settings, so globex has a configuration rollout whose devices carol sees.
+// It runs after seedGlobexChangeSet, whose cleanup restores the update settings. Rollouts are on in globex only for
+// these few requests.
+func seedGlobexRollout(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	original := currentRolloutSettings(t, w.carol)
+	on := map[string]any{}
+	for k, v := range original {
+		on[k] = v
+	}
+	on["enabled"], on["waves"], on["canary_device_group_id"] = true, []int{100}, nil
+	expectStatus(t, call(t, w.carol, http.MethodPut, "/api/v1/settings/rollout", on), http.StatusOK, "")
+	w.top.Cleanup(func() { _ = call(w.top, w.carol, http.MethodPut, "/api/v1/settings/rollout", original) })
+	updates := currentUpdateSettings(t, w.carol)
+	changed := map[string]any{}
+	for k, v := range updates {
+		changed[k] = v
+	}
+	changed["security_daily_at"] = "04:46"
+	if updates["security_daily_at"] == "04:46" {
+		changed["security_daily_at"] = "04:47"
+	}
+	res := call(t, w.carol, http.MethodPut, "/api/v1/config", map[string]any{"api_version": "paddock/v1", "kind": "OrganizationConfig",
+		"settings": map[string]any{"updates": changed}})
+	staged := stagedResultOf(t, res)
+	if staged.RolloutID == nil {
+		t.Fatalf("globex staged apply without a rollout: %s", res.Body)
+	}
+	w.globexRollout = *staged.RolloutID
+	w.globexIDs = append(w.globexIDs, w.globexRollout)
+	// Never leave an open rollout in globex: it would refuse globex's writes in every later run. Registered after the
+	// settings restore, so it runs before it.
+	w.top.Cleanup(func() {
+		res := call(w.top, w.carol, http.MethodPost, "/api/v1/config-rollouts/"+w.globexRollout+"/complete", nil)
+		if res.Status != http.StatusOK && res.Status != http.StatusConflict {
+			w.top.Errorf("cleanup: complete globex rollout %s: HTTP %d %s", w.globexRollout, res.Status, res.Body)
+		}
+	})
+	expectStatus(t, call(t, w.carol, http.MethodPost, "/api/v1/config-rollouts/"+w.globexRollout+"/complete", nil), http.StatusOK, "")
+	expectStatus(t, call(t, w.carol, http.MethodPut, "/api/v1/settings/rollout", original), http.StatusOK, "")
+}
+
+// seedGlobexNotification creates a notification destination of globex that pseudonymizes user names, so its
+// pseudonym lookup has a key.
+func seedGlobexNotification(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	renew := func(t *testing.T) { stepUp(t, w.carol, env.Carol, true) }
+	body := webhookBody(destinationName("globex-iso"), notificationURL)
+	body["pseudonymize_users"] = true
+	renew(t)
+	res := call(t, w.carol, http.MethodPost, "/api/v1/notification-destinations", body)
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexDestination = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexDestination)
+	deleteDestinationOnCleanup(w.top, w.carol, renew, "/api/v1/notification-destinations/"+w.globexDestination)
 }
 
 // settingsOnlyConfig is a document with acme's current update settings only: applying it changes and deletes nothing.
@@ -144,7 +237,7 @@ func seedGlobexOwnersAndLogins(t *testing.T, w *isolationWorld) {
 func seedGlobexLogin(t *testing.T, w *isolationWorld) {
 	t.Helper()
 	w.globexLogin = "globex-iso-" + uniqueSuffix() + "@globex.test"
-	sendSessionLogins(t, w.globexSim, 1, w.globexLogin, time.Now().UTC().Truncate(time.Millisecond))
+	sendSessionLogins(t, w.globexSim, 3, w.globexLogin, time.Now().UTC().Truncate(time.Millisecond))
 	query := "/api/v1/devices/" + w.globexDevice + "/logins?" + url.Values{"username": {strings.ToLower(w.globexLogin)}}.Encode()
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
 		var page struct {
@@ -351,6 +444,71 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/api-tokens/{id}":         itemFixture(func(w *isolationWorld) string { return "/api/v1/api-tokens/" + w.globexAPIToken }, nil),
 	"POST /api/v1/api-tokens/{id}/revoke": itemFixture(func(w *isolationWorld) string { return "/api/v1/api-tokens/" + w.globexAPIToken + "/revoke" }, nil),
 
+	"GET /api/v1/notification-destinations": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-destinations?page_size=100", nil
+	}},
+	"POST /api/v1/notification-destinations": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-destinations", webhookBody(destinationName("acme-iso"), notificationURL)
+	}},
+	"GET /api/v1/notification-destinations/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, nil),
+	"PUT /api/v1/notification-destinations/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, map[string]any{"name": "acme-iso", "enabled": true, "filter_mode": "all"}),
+	"DELETE /api/v1/notification-destinations/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/notification-destinations/" + w.globexDestination }, nil),
+	"POST /api/v1/notification-destinations/{id}/rotate-secret": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/rotate-secret"
+	}, nil),
+	"POST /api/v1/notification-destinations/{id}/test": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/test"
+	}, nil),
+	"POST /api/v1/notification-destinations/{id}/resolve-pseudonym": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/resolve-pseudonym"
+	},
+		map[string]any{"pseudonym": "u_0123456789abcdef01234567"}),
+	"GET /api/v1/notification-destinations/{id}/resolve-pseudonym/{lookup_id}": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/resolve-pseudonym/" + uuid.NewString()
+	}, nil),
+	"GET /api/v1/findings": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/findings?page_size=100", nil
+	}},
+	"GET /api/v1/findings/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/findings/" + w.globexFinding }, nil),
+	"POST /api/v1/findings/{id}/acknowledge": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/findings/" + w.globexFinding + "/acknowledge"
+	}, nil),
+	"POST /api/v1/findings/{id}/assign": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/findings/" + w.globexFinding + "/assign"
+	}, map[string]any{"assignee_id": nil}),
+	"POST /api/v1/findings/{id}/close": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/findings/" + w.globexFinding + "/close"
+	}, map[string]any{"resolution": "resolved", "reason": "acme-iso"}),
+	"POST /api/v1/findings/{id}/reopen": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/findings/" + w.globexFinding + "/reopen"
+	}, map[string]any{"reason": "acme-iso"}),
+	"GET /api/v1/accounts": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/accounts?page_size=100", nil
+	}},
+	"GET /api/v1/settings/watched-units": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/watched-units", nil
+	}},
+	"PUT /api/v1/settings/watched-units": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		res := call(t, w.alice, http.MethodGet, "/api/v1/settings/watched-units", nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var cur struct {
+			Units []string `json:"units"`
+		}
+		if err := res.JSON(&cur); err != nil {
+			t.Fatal(err)
+		}
+		if cur.Units == nil {
+			cur.Units = []string{}
+		}
+		return "/api/v1/settings/watched-units", map[string]any{"units": cur.Units}
+	}},
+	"GET /api/v1/audit-events/feed": {kind: isoOwn, ownAttempts: true, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/audit-events/feed?limit=1000", nil
+	}},
+	"GET /api/v1/notification-capabilities": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/notification-capabilities", nil
+	}},
+
 	"GET /api/v1/config": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/config", nil
 	}},
@@ -361,6 +519,28 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/change-sets?page_size=100", nil
 	}},
 	"GET /api/v1/change-sets/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/change-sets/" + w.globexChangeSet }, nil),
+	"GET /api/v1/config-rollouts": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/config-rollouts?page_size=100", nil
+	}},
+	"GET /api/v1/config-rollouts/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/config-rollouts/" + w.globexRollout }, nil),
+	"GET /api/v1/config-rollouts/{id}/devices": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/config-rollouts/" + w.globexRollout + "/devices"
+	}, nil),
+	"POST /api/v1/config-rollouts/{id}/halt": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/config-rollouts/" + w.globexRollout + "/halt"
+	}, map[string]any{"reason": "isolation"}),
+	"POST /api/v1/config-rollouts/{id}/resume": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/config-rollouts/" + w.globexRollout + "/resume"
+	}, nil),
+	"POST /api/v1/config-rollouts/{id}/advance": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/config-rollouts/" + w.globexRollout + "/advance"
+	}, nil),
+	"POST /api/v1/config-rollouts/{id}/complete": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/config-rollouts/" + w.globexRollout + "/complete"
+	}, nil),
+	"POST /api/v1/change-sets/{id}/revert": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/change-sets/" + w.globexChangeSet + "/revert?dry_run=true"
+	}, nil),
 
 	"GET /api/v1/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/devices?page_size=100", nil
@@ -378,6 +558,8 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/devices/{id}/encrypt/cancel": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/encrypt/cancel" },
 		map[string]any{"confirm_hostname": "x"}),
 	"POST /api/v1/devices/{id}/retire": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/retire" }, nil),
+	"POST /api/v1/devices/{id}/enforce": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/enforce" },
+		map[string]any{"hostname": "x"}),
 	"PUT /api/v1/devices/{id}/groups": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/groups" },
 		map[string]any{"device_group_ids": []string{}}),
 	"GET /api/v1/devices/{id}/logins": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/logins" }, nil),
@@ -547,6 +729,11 @@ var isolationFixtures = map[string]isolationFixture{
 
 	"GET /api/v1/devices/{id}/software":        itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/software" }, nil),
 	"GET /api/v1/devices/{id}/vulnerabilities": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/vulnerabilities" }, nil),
+	"GET /api/v1/devices/{id}/config-status":   itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/config-status" }, nil),
+	"GET /api/v1/devices/{id}/bundles":         itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/bundles" }, nil),
+	"GET /api/v1/config-status": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/config-status?page_size=100", nil
+	}},
 	"GET /api/v1/software": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/software?page_size=100", nil
 	}},
@@ -563,6 +750,12 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"PUT /api/v1/settings/updates": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/settings/updates", currentUpdateSettings(t, w.alice)
+	}},
+	"GET /api/v1/settings/rollout": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/rollout", nil
+	}},
+	"PUT /api/v1/settings/rollout": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/rollout", currentRolloutSettings(t, w.alice)
 	}},
 	"GET /api/v1/settings/privacy": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/settings/privacy", nil
@@ -629,6 +822,9 @@ var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/devices/{id}/commands":         func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/software":         func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/vulnerabilities":  func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/devices/{id}/config-status":    func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/devices/{id}/bundles":          func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/config-rollouts/{id}/devices":  func(w *isolationWorld) string { return w.globexRollout },
 	"/api/v1/vulnerabilities/{cve}/devices": func(w *isolationWorld) string { return w.globexCVE },
 	"/api/v1/users/{id}/devices":            func(w *isolationWorld) string { return w.globexUser },
 	"/api/v1/devices/{id}/logins":           func(w *isolationWorld) string { return w.globexDevice },
@@ -666,12 +862,33 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/change-sets": {
 		{"q": {"carol"}},
 		{"source": {"session"}, "sort": {"applied_at"}, "page_size": {"100"}},
+		{"rollout": {"immediate"}, "page_size": {"100"}},
+	},
+	"/api/v1/config-rollouts": {
+		{"q": {"carol"}},
+		{"status": {"completed"}, "sort": {"status"}, "page_size": {"100"}},
+	},
+	"/api/v1/config-rollouts/{id}/devices": {
+		{"q": {"globex-iso"}},
+		{"in_wave": {"true"}, "sort": {"-report_outcome"}, "page_size": {"100"}},
 	},
 	"/api/v1/api-tokens": {
 		{"q": {"globex-iso"}},
 		{"status": {"active"}, "sort": {"-created_at"}, "page_size": {"100"}},
 	},
 	"/api/v1/managed-files": {{"q": {"globex-iso"}}},
+	"/api/v1/notification-destinations": {
+		{"q": {"globex-iso"}},
+		{"type": {"webhook"}, "enabled": {"true"}, "sort": {"-created_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/findings": {
+		{"q": {"globex-iso"}},
+		{"kind": {"tamper"}, "status": {"open"}, "sort": {"-opened_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/accounts": {
+		{"q": {"carol"}},
+		{"role": {"org_admin"}, "sort": {"username"}, "page_size": {"100"}},
+	},
 	"/api/v1/managed-units": {{"q": {"globex-iso"}}},
 	"/api/v1/package-holds": {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
 	// globex's waiting Destroy (seedGlobexDevices) is a revocation_pending condition.
@@ -691,6 +908,9 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/vulnerabilities":               {{"q": {"CVE-2099"}, "page_size": {"100"}}, {"severity": {"high"}, "page_size": {"100"}}},
 	"/api/v1/devices/{id}/software":         {{"q": {"globex-iso"}}},
 	"/api/v1/devices/{id}/vulnerabilities":  {{"q": {"globex-iso"}}, {"severity": {"high"}}},
+	"/api/v1/devices/{id}/config-status":    {{"q": {"globex-iso"}}, {"status": {"failed", "pending"}}},
+	"/api/v1/devices/{id}/bundles":          {{"outcome": {"applied", "none"}}},
+	"/api/v1/config-status":                 {{"q": {"globex-iso"}, "page_size": {"100"}}, {"status": {"failed"}, "page_size": {"100"}}},
 	"/api/v1/vulnerabilities/{cve}/devices": {{"q": {"globex-iso"}}},
 	"/api/v1/revocation-requests": {
 		{"q": {"globex-iso"}},
@@ -779,9 +999,67 @@ func currentPrivacySettings(t *testing.T, p *env.Portal) map[string]any {
 // retention purges within minutes.
 var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
 	"/api/v1/devices/{id}/logins":     seedGlobexLogin,
+	"/api/v1/devices/{id}/bundles":    seedGlobexBundleVersion,
 	"/api/v1/audit/verification-runs": seedGlobexVerificationRun,
 	"/api/v1/audit/manifests":         seedGlobexManifest,
 	"/api/v1/audit/exports":           seedGlobexExport,
+}
+
+// bundleVersionJump is how far seedGlobexBundleVersion raises the bundle sequence of globexDevice.
+const bundleVersionJump = 10
+
+// seedGlobexBundleVersion gives globexDevice a bundle version with at least two digits, which the bundle history
+// search needs (its terms have 2 to 100 characters and match the version's digits): a fresh device's versions are
+// small, so the device's bundle sequence jumps by bundleVersionJump, as bump-bundle-seq does for every device, and a
+// managed file of globex's group makes the compiler publish the next version from the raised sequence. Versions
+// are assigned from the sequence, so the new version exceeds the old one by more than bundleVersionJump.
+func seedGlobexBundleVersion(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	if w.globexBundleVersion != 0 {
+		return
+	}
+	before := waitBundleVersion(t, w.carol, w.globexDevice)
+	dsn, err := stack.PaddockOwnerDSN()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t, time.Minute)
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if _, err := conn.Exec(ctx, `UPDATE device SET bundle_seq = bundle_seq + $2 WHERE id = $1`, w.globexDevice, bundleVersionJump); err != nil {
+		t.Fatalf("raise the bundle sequence of %s: %v", w.globexDevice, err)
+	}
+	res := call(t, w.carol, http.MethodPost, "/api/v1/managed-files", map[string]any{
+		"path": "/etc/paddock-gates/globex-iso-bundle-" + uniqueSuffix() + ".conf", "content": "globex", "device_group_id": w.globexDeviceGroup,
+	})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexIDs = append(w.globexIDs, createdID(t, w.carol, "/api/v1/managed-files", res))
+	// The device's bundle_version is the sequence itself, which the jump raised at once: only the history list shows
+	// whether the bundle was published.
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(time.Second) {
+		// The deadline is checked against the poll's start, as in expectOneEvent (PDK-551, PDK-561).
+		polled := time.Now()
+		res := call(t, w.carol, http.MethodGet, "/api/v1/devices/"+w.globexDevice+"/bundles?sort=-version&page_size=10", nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var page struct {
+			Items []struct {
+				Version int64 `json:"version"`
+			} `json:"items"`
+		}
+		if err := res.JSON(&page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) > 0 && page.Items[0].Version >= before+bundleVersionJump {
+			w.globexBundleVersion = page.Items[0].Version
+			return
+		}
+		if polled.After(deadline) {
+			t.Fatalf("the bundle history of globex device %s has no version of %d or more: %s", w.globexDevice, before+bundleVersionJump, res.Body)
+		}
+	}
 }
 
 // seedGlobexExport makes sure globex has an evidence export and adds its ID to the globex IDs: the one of an earlier
@@ -902,6 +1180,11 @@ func seedGlobexVerificationRun(t *testing.T, w *isolationWorld) {
 var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
 	"/api/v1/devices/{id}/logins": {
 		func(w *isolationWorld) url.Values { return url.Values{"username": {strings.ToLower(w.globexLogin)}} },
+	},
+	"/api/v1/devices/{id}/bundles": {
+		func(w *isolationWorld) url.Values {
+			return url.Values{"q": {strconv.FormatInt(w.globexBundleVersion, 10)}}
+		},
 	},
 	"/api/v1/attention/devices": {
 		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexDevice}} },

@@ -18,6 +18,8 @@ services:
 
   paddock-revocation-issuer: *lab-ca
 
+  paddock-notifier: *lab-ca
+
 networks:
   cp:
     ipam:

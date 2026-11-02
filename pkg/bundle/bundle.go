@@ -44,6 +44,8 @@ const (
 	TypeUpdates = "updates"
 	// TypeHostname is the type and ID of the resource the agent makes of the hostname section (plan M8h decision 10).
 	TypeHostname = "hostname"
+	// TypeWatch is the type and ID of the resource the agent makes of the watch section (plan M9 decision 39).
+	TypeWatch = "watch"
 )
 
 // Bundle is the desired state of one device.
@@ -77,6 +79,21 @@ type Bundle struct {
 	Hostname *HostnameSpec `json:"hostname,omitempty"`
 	// Mode is ModeEnforce (absent) or ModeReportOnly; the agent reports a report-only bundle without applying it.
 	Mode string `json:"mode,omitempty"`
+	// Watch is the organization's presence policy: third-party units the agent reports when they stop (schema v2 only,
+	// plan M9 decision 39). Agents that do not know the section ignore it; an organization without watched units has no
+	// section.
+	Watch *WatchSpec `json:"watch,omitempty"`
+}
+
+// WatchSpec is the watch section: the systemd services of third-party agents (an EDR or SIEM agent) the device only
+// observes and reports, never installs or restarts.
+type WatchSpec struct {
+	Units []string `json:"units"`
+}
+
+// WatchResource turns the watch section into the resource the agent plans and applies.
+func WatchResource(s WatchSpec) (Resource, error) {
+	return resource(TypeWatch, TypeWatch, s)
 }
 
 // Bundle modes. The enforce mode is the empty value so that bundles without the field keep their content hash.

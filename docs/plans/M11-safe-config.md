@@ -1233,3 +1233,75 @@ without a migration merge as soon as their dependencies are on the branch. The V
    the device (`POST /api/v1/devices/{id}/enforce`) unless a gate tests report-only (PDK-160/162). Recovering a failed
    first-boot enrollment with `paddockd enroll` makes an autoinstalled device `adopted` (safe direction); PDK-163
    states it in the autoinstall troubleshooting section.
+10. **Change-set recording by document diff (PDK-154, 2026-11-01).** Decision 19's per-item before documents are
+    implemented as a diff of the whole declarative document read before and after the write, inside the write's
+    transaction. This is correct only because every writer of a declarative section takes `LockConfigApply` as the
+    first lock of its transaction (including `Users.Delete`, `UserGroups.Delete` and the identity sync's rename and
+    removal); a new writer that skips the lock would be attributed to a concurrent change set. A rename of a device
+    group or a file path appears as delete plus create (natural keys), which PDK-155's revert handles like any other
+    pair of items.
+11. **Ordering of apply reports (decision 13, PDK-151, 2026-11-01).** Applied reports are ordered by bundle version
+    first, then by the event time capped at the gateway's receive time, then by processing order (no
+    event-sequence key; amended 2026-11-01). A step of the
+    device clock therefore never makes an older version's status win; drift reports carry their bundle version. A
+    rejection never replaces the applied report of the same version, in any arrival order, and a report row is
+    stored only for a bundle version that exists for the device.
+12. **Revert: MCP flag, urgent opt-out before staging, re-created keys (PDK-155; architect, 2026-11-01).**
+    (a) R2.2's check failed: the generator's segment list did not contain `revert` or `complete`. Both are added to
+    `destructive()` in `server/internal/mcpgen/mcpgen.go` (plan M14 §3.1 item 3, amendment 2026-11-01), so
+    `revertChangeSet` and `completeConfigRollout` are generated with `Destructive: true`; no new `x-paddock-mcp` key.
+    (b) Until PDK-157/158 a revert accepts `urgent` and `reason` without their staging effect: `reason` has 2–500
+    characters, `urgent=true` without `reason` is 400 `invalid_request`, the reason is stored in `change_set.reason`
+    and, only when `urgent=true`, also in `change_set.urgent_reason` (audit param `urgent_reason`); `rollout` stays
+    `immediate` and `urgent` needs no step-up yet. Decision 26's refusal "rollouts are disabled" and its step-up
+    apply from PDK-157/158 on. (c) Decision 21.2: reverting a `delete` whose key was created again since replaces the
+    current item with the before item instead of appending it (a document never holds a key twice).
+13. **Writes during an open rollout, device groups (PDK-157; architect, 2026-11-01).** The precise reading of decisions
+    25 and 29 and of ADR 0033 E1 (ADR 0033 amendment 2026-11-01). A *section* is a section key of
+    `configrollout.StagedKeys`; `package_holds` and `settings.updates` count as one section. While the organization has
+    a `running` or `halted` rollout:
+    (a) a write that touches a staged (section, key) is refused with 409 `rollout_conflict`, urgent or not;
+    (b) otherwise a non-urgent write that touches another key of a section the rollout stages is refused with 409
+        `rollout_running`; a change set that also touches other sections is refused as a whole, never split;
+    (c) otherwise (only sections the rollout does not stage, or no rollout-able section) the write is `immediate`: it
+        reaches every device and starts no rollout; an urgent write that overlaps no staged key is `urgent`;
+    (d) a rename or deletion of a device group that scopes a staged item or is the rollout's canary group is refused
+        with 409 `rollout_conflict`.
+    Item changes cascaded from a device group the change set deletes or renames (by identity) are never staged: they
+    are immediate for every device, so deleting an unrelated group creates no rollout. Items of a group the change set
+    creates follow the rules above (staged with rollouts on, `rollout_running` while a rollout stages their section).
+    Reverts follow the same rules, except the revert of the open rollout's own change set (decision 21.3). Every
+    refusal is decided inside the audited action. The format of `change_set.before` is unchanged. While a rollout is
+    open, its rules apply even after rollouts are switched off (`rollout_running` and `rollout_conflict` apply; urgent →
+    400); the way out is complete or revert.
+    2026-11-01 (architect): the compiler reads its definitions and the overlay in one read-only REPEATABLE READ
+    transaction, `db.OrgPool.InOrgSnapshot`, recorded in ADR 0002 (amendment 2026-11-01).
+14. **Rollout evaluation and counting (PDK-158; architect, 2026-11-01).** Decisions from the reviews of PDK-158:
+    (a) The worker counts with the API's Go rule (`app.ConfigRollouts`: the active devices, the canary members and the
+        newest report per device on a bundle of the rollout, a fixed number of queries per organization, never one per
+        device), so the rollout page shows what the worker evaluates. `paddock_config_rollout_stats` (`00093`) stays in
+        place unused; PDK-160's migration `00094` drops it.
+    (b) The rule for a device inside the wave: the newest report on a bundle of the rollout is picked first, then the
+        time filter applies. Failed: recorded (received by the server, `device_bundle_report.recorded_at`) at or after
+        `evaluation_since`, a rejection, or an apply with a failed staged resource. Report-only exempts only failed resources (plan errors, R6.6); a rejection of a report-only
+        device counts. The report's `mode` is taken as the device reports it. Applied: an enforced apply without a
+        failed staged resource. Pending: everything else.
+    (c) `GET /config-rollouts/{id}/devices` shows that same report (`report_outcome`, `failed_resource_ids`); failures
+        received before the last resume no longer count and are not listed (`report_outcome: none`, the device is
+        pending), and the `report_outcome` filter agrees with the counts.
+    (d) Resume restarts both `evaluation_since` and `wave_started_at`: the current wave gets its full observation period
+        again.
+    (e) `advance` joins the destructive path segments of `destructive()` in `server/internal/mcpgen/mcpgen.go`
+        (`advanceConfigRollout` is generated with `Destructive: true`): it widens a staged change like `complete`.
+    (f) Devices that never report never count (decision 27): accepted; PDK-163 documents it in
+        `configuration-rollouts.md`.
+15. **Plan errors are classified by the report's mode (PDK-160; architect, 2026-11-01).** Whether a `failed` resource
+    row is a plan error (item 6) or a failed apply is decided by the mode of the report that wrote it
+    (`device_bundle_report.mode` of the row's `(device_id, bundle_version)`), never by the device's current
+    `config_mode`. A plan error therefore stays one after enforcement until an enforced report replaces the row. The
+    fleet view (`GET /config-status`) counts such a row in no status and its `failed` filter does not select it; a row
+    without a stored report of its version counts as enforced. Additive contract change: `DeviceResourceStatus` gains
+    `report_mode` (`ConfigMode`: `enforce | report_only`, required), the same classification per row of
+    `GET /devices/{id}/config-status`; the device's *Apply status* tab shows a failed row with `report_mode
+    report_only` as a plan error. Eligibility for a rollout's waves stays with the device's stored `config_mode`
+    (decision 30, PDK-685), and the counting of an eligible device's report with the reported mode (item 14 (b)).

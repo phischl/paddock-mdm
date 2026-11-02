@@ -57,6 +57,9 @@ and German, and one identity can switch between the platform administrator role 
 | Read | For |
 | --- | --- |
 | [Production installation](docs/operations/install.md) | operators: two hosts, TLS, secrets, backups, monitoring, `./paddock check` |
+| [Getting started](docs/operations/getting-started.md) | operators after the install: first administrator, organization, agent release, first device, first configuration |
+| [Notifications](docs/operations/notifications.md) | operators and responders: signed webhooks and e-mail for security events, verification snippets, troubleshooting |
+| [SIEM feed](docs/operations/siem.md), [third-party agents](docs/operations/third-party-agents.md) | security teams: pull every audit event once with a cursor; report a stopped EDR agent; keep it privacy-minimal |
 | [Lab installation](docs/operations/lab-install.md) | one host behind your own TLS proxy; not for production |
 | [Enroll an existing device](docs/operations/enroll-existing.md) | operators: adopt an installed Ubuntu laptop: `paddockd preflight`, packages, enrollment |
 | [Operations runbooks](docs/operations/) | day-to-day operation: agent releases, disk recovery, revocation, restore, capacity |

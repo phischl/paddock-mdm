@@ -166,10 +166,17 @@ func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time
 			Code: audit.CodeDeviceTamperAgentNotRunning, Target: &audit.Target{Type: "device", ID: r.DeviceID.String()},
 			Params: params,
 		}
-		err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
-			return q.MarkAgentNotRunningReported(ctx, pgstore.MarkAgentNotRunningReportedParams{
+		err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+			if err := q.MarkAgentNotRunningReported(ctx, pgstore.MarkAgentNotRunningReportedParams{
 				DeviceID: r.DeviceID, PolicyKey: inventory.PolicyAgentRunning,
-			})
+			}); err != nil {
+				return err
+			}
+			org, err := orgOf(ctx)
+			if err != nil {
+				return err
+			}
+			return UpsertTamperFinding(ctx, q, org, r.DeviceID, audit.CodeDeviceTamperAgentNotRunning, "", rec.ActionID(), now)
 		})
 		if err != nil {
 			return reported, err

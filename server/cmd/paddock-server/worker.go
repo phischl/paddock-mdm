@@ -117,9 +117,10 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	cacheSync := worker.NewCacheSync(pool, cache)
 	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
 	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
-		min(worker.StalenessInterval, stalenessUnit/4))
+		min(worker.StalenessInterval, stalenessUnit/4)).Then(worker.NewFindings(app.NewFindings(runner, pool), pool, platformPool).Round)
 	eventGaps := worker.NewEventGaps(app.NewEventGaps(runner, pool), pool, platformPool, min(worker.StalenessInterval, stalenessUnit/4))
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
+	configRollouts := worker.NewConfigRollouts(app.NewConfigRollouts(runner, pool), pool, platformPool)
 	ak := authentik.New(authentikURL, authentikToken)
 	reconcileAK := authentik.New(authentikURL, authentikToken).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, reconcileAK, ak, ak),
@@ -128,8 +129,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
 	retention := worker.NewRetention(app.NewRetention(runner, pool, platformPool, fleetClient, retentionDay, indexRetention),
 		app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, retentionEvery)
-	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
-		platformPool, inventoryEvery)
+	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool),
+		app.NewVulnerabilitySummary(runner), pool, platformPool, inventoryEvery)
 	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
 	slog.InfoContext(ctx, "worker starting")
 
@@ -166,6 +167,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		eventGaps.Run,
 		retention.Run,
 		rollouts.Run,
+		configRollouts.Run,
 		identity.RunSync,
 		identity.RunReconcile,
 		identity.RunAdminAccounts,

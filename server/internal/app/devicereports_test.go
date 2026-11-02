@@ -34,6 +34,7 @@ func TestEventParams(t *testing.T) {
 		{"sudo group member", `{"group":"sudo","username":"eve","removed":true}`, map[string]any{"group": "sudo", "username": "eve", "removed": true}},
 		{"sudoers.d file", `{"file":"evil","quarantined_as":"/var/lib/paddock/quarantine/sudoers.d/evil.1759600000"}`,
 			map[string]any{"file": "evil", "quarantined_as": "/var/lib/paddock/quarantine/sudoers.d/evil.1759600000"}},
+		{"watched unit stopped", `{"unit":"wazuh-agent.service","state":"missing"}`, map[string]any{"unit": "wazuh-agent.service", "state": "missing"}},
 		{"sudoers changed", `{"sha256_before":"aa","sha256_after":"bb"}`, map[string]any{"sha256_before": "aa", "sha256_after": "bb"}},
 		{"keyslot changed", `{"before":["recovery","tpm2+pin"],"after":["password","recovery","tpm2+pin",1]}`,
 			map[string]any{"before": []string{"recovery", "tpm2+pin"}, "after": []string{"password", "recovery", "tpm2+pin"}}},

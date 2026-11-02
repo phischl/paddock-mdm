@@ -158,6 +158,8 @@ func TestDeclarativeConfig(t *testing.T) {
 		t.Fatal("the dry run created the managed file")
 	}
 
+	// The package hold above and the operator roots of gateOrg are single-resource writes with change sets of their own.
+	writes := listTotal(t, admin.Portal, "/api/v1/change-sets?source=session")
 	res = putConfig(t, admin.Portal, changed, false)
 	applied := configResultOf(t, res)
 	if applied.DryRun || applied.ChangeSetID == nil || applied.Plan.Created != 1 {
@@ -167,7 +169,7 @@ func TestDeclarativeConfig(t *testing.T) {
 	if ev.Params["change_set_id"] != *applied.ChangeSetID || ev.Target == nil || ev.Target.Type != "change_set" {
 		t.Fatalf("config.applied event %+v", ev)
 	}
-	if listTotal(t, admin.Portal, "/api/v1/change-sets?source=session") != 1 {
+	if listTotal(t, admin.Portal, "/api/v1/change-sets?source=session") != writes+1 {
 		t.Fatal("the change set is not listed")
 	}
 	expectStatus(t, call(t, admin.Portal, http.MethodGet, "/api/v1/change-sets/"+*applied.ChangeSetID, nil), http.StatusOK, "")

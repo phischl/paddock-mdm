@@ -7,11 +7,30 @@ SELECT transaction_timestamp()::timestamptz AS recorded_at;
 
 -- name: InsertAuditEvent :one
 INSERT INTO audit_event (event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target,
-                         params, correlation_id, object_key)
+                         params, correlation_id, object_key, commit_seq)
 VALUES (@event_id, @organization_id, @occurred_at, @recorded_at, @code, @outcome, @source, @actor, sqlc.narg(target),
-        @params, @correlation_id, @object_key)
+        @params, @correlation_id, @object_key, @commit_seq)
 ON CONFLICT DO NOTHING
 RETURNING event_id;
+
+-- name: LockOrgSeq :one
+-- Locks the organization's sequence row for the rest of the writer transaction (plan M9 decision 2) and returns the
+-- last assigned commit_seq; the no-op update takes the row lock also when the row exists.
+INSERT INTO audit_org_seq (organization_id, last_seq) VALUES (@organization_id, 0)
+ON CONFLICT (organization_id) DO UPDATE SET last_seq = audit_org_seq.last_seq
+RETURNING last_seq;
+
+-- name: SetOrgSeq :exec
+UPDATE audit_org_seq SET last_seq = @last_seq WHERE organization_id = @organization_id;
+
+-- name: ListAuditEventsAfter :many
+-- Commit-order read of the index (plan M9 decision 4); RLS supplies the organization.
+SELECT * FROM audit_event WHERE commit_seq > @after ORDER BY commit_seq LIMIT @max_rows;
+
+-- name: LatestCommitSeq :one
+-- max(commit_seq), not audit_org_seq: the reader has no grant on it, and the maximum stays valid after the index
+-- retention dropped old partitions (amendment B1.3).
+SELECT coalesce(max(commit_seq), 0)::bigint AS latest FROM audit_event;
 
 -- name: InsertAuditObject :exec
 INSERT INTO audit_object (object_key, organization_id, day, event_count, sha256)

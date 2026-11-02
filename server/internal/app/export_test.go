@@ -50,3 +50,6 @@ var KeptByIndex = keptByIndex
 func (a *AgentReleases) SetStoreTimeouts(store, verify time.Duration) {
 	a.storeTimeout, a.verifyTimeout = store, verify
 }
+
+// ForeignNotFound exposes the mapping of a destination foreign key violation to not_found.
+var ForeignNotFound = foreignNotFound

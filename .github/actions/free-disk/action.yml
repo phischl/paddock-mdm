@@ -1,0 +1,15 @@
+name: Free runner disk space
+description: Removes preinstalled toolchains that no job here uses, to leave room for the image builds.
+runs:
+  using: composite
+  steps:
+    # The hosted runner has only about 14 GB free on its root disk, which ran full during the image builds
+    # (PDK-629). These preinstalled toolchains are unused: Go comes from setup-go, and Node, the images and the
+    # release and scan tools run in Docker.
+    - name: Remove unused toolchains
+      shell: bash
+      run: |
+        df -h /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+          /usr/local/share/powershell /usr/local/share/chromium /usr/lib/jvm /usr/share/swift
+        df -h /

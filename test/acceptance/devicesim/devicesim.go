@@ -51,6 +51,9 @@ type Device struct {
 	// EventSeqHigh is the highest event sequence number the device reports in check-ins (event gap tests). SendEvents
 	// raises it to the highest number it sent, as the agent does; a test lowers it to simulate a reset.
 	EventSeqHigh int64
+	// EnrollmentMethod is sent with the enrollment (autoinstall or adopted); empty sends none, as agents before
+	// plan M11 did, so the device enrolls unknown and enforced.
+	EnrollmentMethod string
 }
 
 func (d *Device) schemaVersions() []int {
@@ -152,6 +155,7 @@ func (d *Device) Enroll(ctx context.Context, hostname string) (Response, error) 
 		Token: d.Config.Token, PublicKey: base64.StdEncoding.EncodeToString(d.SPKI), KeyProtection: protocol.KeyProtectionFile,
 		Hostname: hostname, HardwareUUID: d.HardwareUUID(), MachineID: d.KeyID[:32],
 		OSRelease: map[string]string{"id": "ubuntu", "version_id": "26.04"}, AgentVersion: "0.0.0-devicesim",
+		EnrollmentMethod: d.EnrollmentMethod,
 	}})
 	if err != nil || res.Status != http.StatusAccepted {
 		return res, err

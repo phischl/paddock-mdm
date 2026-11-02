@@ -341,6 +341,41 @@ else
   fail "dev: the audit writer's temp space: $out"
 fi
 
+# The notifier (plan M9 decision 41, amendment B13.1): production on cp and audit-index, TLS to OpenBao, exactly its
+# secrets, hardened by the anchor, no lab extra_hosts, scraped.
+for host in controlplane lab; do
+  settings=.env.example
+  [[ "$host" != lab ]] || settings=.env.lab.example
+  args=()
+  for f in $(host_files "$bundle" "$host"); do args+=(-f "$bundle/$f"); done
+  if docker compose --project-directory "$bundle" -p paddock-bundle-test --env-file "$bundle/versions.env" \
+    --env-file "$bundle/$settings" "${args[@]}" --profile '*' config --format json | python3 -I -c '
+import json, sys
+d = json.load(sys.stdin); n = d["services"]["paddock-notifier"]; env = n["environment"]
+problems = []
+if n.get("cap_drop") != ["ALL"] or "no-new-privileges:true" not in n.get("security_opt", []) or not n.get("read_only") or n.get("pids_limit") != 256: problems.append("hardening")
+if n.get("command") != ["serve", "notifier"]: problems.append("command %s" % n.get("command"))
+secrets = sorted(s["source"] for s in n["secrets"])
+if secrets != ["approle_notifier_role_id", "approle_notifier_secret_id", "db_paddock_audit_reader_url", "db_paddock_notifier_url", "db_paddock_platform_url", "internal_ca_bundle", "smtp_password"]: problems.append("secrets %s" % secrets)
+if sorted(n["networks"]) != ["audit-index", "cp"]: problems.append("networks %s" % sorted(n["networks"]))
+if n.get("extra_hosts"): problems.append("extra_hosts")
+if env.get("PADDOCK_ENV") != "production": problems.append("PADDOCK_ENV")
+if env.get("PADDOCK_OPENBAO_ADDR") != "https://openbao:8200" or env.get("BAO_CACERT") != "/run/secrets/internal_ca_bundle": problems.append("openbao tls")
+for v in ("PADDOCK_DB_NOTIFIER_URL_FILE", "PADDOCK_DB_PLATFORM_URL_FILE", "PADDOCK_AUDIT_DB_READER_URL_FILE", "PADDOCK_OPENBAO_ROLE_ID_FILE", "PADDOCK_OPENBAO_SECRET_ID_FILE", "PADDOCK_PUBLIC_ADMIN_URL", "PADDOCK_SMTP_PASSWORD_FILE"):
+    if not env.get(v): problems.append(v)
+if env.get("PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE") or env.get("PADDOCK_SMTP_TLS") == "none": problems.append("development settings")
+if d["services"]["paddock-api"]["environment"].get("PADDOCK_SMTP_ENABLED") != "false": problems.append("api PADDOCK_SMTP_ENABLED")
+print(", ".join(problems)); sys.exit(1 if problems else 0)
+' >"$work/notifier.out"; then
+    pass "$host: the notifier is hardened, holds its seven secrets, sits on cp and audit-index and talks TLS to OpenBao"
+  else
+    fail "$host: the notifier: $(cat "$work/notifier.out")"
+  fi
+done
+if grep -q '"paddock-notifier:9090"' "$bundle/prometheus/scrape/controlplane.yml"; then pass "Prometheus scrapes paddock-notifier"; else
+  fail "prometheus/scrape/controlplane.yml has no target paddock-notifier:9090"
+fi
+
 cp "$work/u/.env.example" "$work/u/.env"
 sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/u/.env"
 expect 2 "auto-unseal enable on the audit host" "$work/u" auto-unseal enable

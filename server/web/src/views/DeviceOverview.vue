@@ -6,16 +6,18 @@ import DangerZone from '../components/DangerZone.vue'
 import DeviceOwners from '../components/DeviceOwners.vue'
 import DeviceNameCard from '../components/DeviceNameCard.vue'
 import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
+import EnforceCard from '../components/EnforceCard.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
 import SeverityChip from '../components/SeverityChip.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import UpdatesCard from '../components/UpdatesCard.vue'
+import { isReportOnly } from '../lib/configStatus'
 import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { healthRows } from '../lib/deviceHealth'
 import { formatDateTime, formatGB, formatGiB } from '../lib/format'
 import { listDeviceVulnerabilities } from '../lib/inventory'
-import { componentStatus } from '../lib/status'
+import { attentionStatus, componentStatus, findingStatus } from '../lib/status'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
 
@@ -25,7 +27,7 @@ import { usePending } from '../composables/usePending'
  */
 const page = inject(deviceDetailKey)
 if (!page) throw new Error('DeviceOverview outside the device frame')
-const { device, groups, selectedGroups, saved, diskState, updates, conditions, refresh, saveGroups } = page
+const { device, groups, selectedGroups, saved, diskState, updates, conditions, findingConditions, refresh, saveGroups } = page
 const { t, locale } = useI18n()
 const { pending, run } = usePending()
 const session = useSessionStore()
@@ -95,6 +97,42 @@ async function copyId(): Promise<void> {
             <StatusChip
               :status="row.view.status"
               :label="t(row.view.label)"
+            />
+          </li>
+        </ul>
+      </section>
+      <section
+        v-if="findingConditions.length > 0"
+        class="pd-panel"
+        data-testid="device-attention-findings"
+        aria-labelledby="device-attention-findings-title"
+      >
+        <header class="pd-panel-header">
+          <h2
+            id="device-attention-findings-title"
+            class="pd-type-section"
+          >
+            {{ t('findings.deviceTitle') }}
+          </h2>
+          <RouterLink
+            :to="{ name: 'findings', query: { q: d.hostname } }"
+            class="pd-panel-link"
+          >
+            {{ t('findings.openList') }}
+          </RouterLink>
+        </header>
+        <ul class="pd-health">
+          <li
+            v-for="c in findingConditions"
+            :key="c.kind"
+            :data-testid="'device-finding-' + c.kind"
+          >
+            <span class="pd-health-label">{{ t(attentionStatus(c.kind).label) }}</span>
+            <StatusChip
+              v-if="c.finding"
+              :status="findingStatus(c.finding.status).status"
+              :label="t(findingStatus(c.finding.status).label)"
+              :title="c.finding.assignee_display || undefined"
             />
           </li>
         </ul>
@@ -421,6 +459,13 @@ async function copyId(): Promise<void> {
       </ul>
     </section>
 
+    <EnforceCard
+      v-if="session.canWrite && d.state === 'active'"
+      :device-id="d.id"
+      :hostname="d.hostname"
+      :report-only="isReportOnly(d)"
+      @changed="page.changed()"
+    />
     <DangerZone
       class="pd-device-wide"
       :device-id="d.id"
