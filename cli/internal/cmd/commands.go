@@ -119,6 +119,8 @@ type applyResult struct {
 	ChangeSetID *string     `json:"change_set_id"`
 	Plan        render.Plan `json:"plan"`
 	PlanSHA256  string      `json:"plan_sha256"`
+	Rollout     *string     `json:"rollout"`
+	RolloutID   *string     `json:"rollout_id"`
 }
 
 func runApply(ctx context.Context, e Env, args []string) error {
@@ -182,8 +184,26 @@ func runApply(ctx context.Context, e Env, args []string) error {
 		_, err = fmt.Fprintln(e.Stdout, "No changes")
 		return err
 	}
-	_, err = fmt.Fprintf(e.Stdout, "Applied change set %s\n", *applied.ChangeSetID)
+	if _, err = fmt.Fprintf(e.Stdout, "Applied change set %s\n", *applied.ChangeSetID); err != nil {
+		return err
+	}
+	_, err = io.WriteString(e.Stdout, rolloutLine(applied))
 	return err
+}
+
+// rolloutLine is the "Rollout:" line of an apply: nothing for a change that reached every device at once. A token
+// cannot opt out of a staged rollout (it never satisfies the step-up), so an urgent change set only comes from the portal.
+func rolloutLine(r applyResult) string {
+	switch {
+	case r.Rollout == nil:
+		return ""
+	case *r.Rollout == "staged" && r.RolloutID != nil:
+		return fmt.Sprintf("Rollout: staged (rollout %s)\n", *r.RolloutID)
+	case *r.Rollout == "staged" || *r.Rollout == "urgent":
+		return "Rollout: " + *r.Rollout + "\n"
+	default:
+		return ""
+	}
 }
 
 func writePlan(e Env, output string, plan applyResult) error {

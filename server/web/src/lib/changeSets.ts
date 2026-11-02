@@ -1,6 +1,7 @@
 import {
   api, listPage, problemCode, type ChangeSet, type ChangeSetSort, type ChangeSetSource, type ConfigApplyResult, type ConfigPlan,
 } from '../api/client'
+import { urgentQuery, type UrgentInput } from './configRollouts'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
 const sources: ChangeSetSource[] = ['session', 'api_token']
@@ -69,10 +70,13 @@ export async function revertDryRun(id: string): Promise<ConfigApplyResult | stri
   return data ?? problemCode(error)
 }
 
-/** Reverts a change set with the plan the administrator confirmed; plan_changed when the plan differs by now. */
-export async function revertChangeSet(id: string, expectedPlan: string): Promise<ConfigApplyResult | string> {
+/**
+ * Reverts a change set with the plan the administrator confirmed; plan_changed when the plan differs by now. The urgent
+ * opt-out skips the staging a revert would otherwise follow (plan M11 decision 37).
+ */
+export async function revertChangeSet(id: string, expectedPlan: string, urgent?: UrgentInput): Promise<ConfigApplyResult | string> {
   const { data, error } = await api.POST('/api/v1/change-sets/{id}/revert', {
-    params: { path: { id }, query: { expected_plan: expectedPlan }, header: { 'X-Paddock-CSRF': '1' } },
+    params: { path: { id }, query: { expected_plan: expectedPlan, ...urgentQuery(urgent) }, header: { 'X-Paddock-CSRF': '1' } },
   })
   return data ?? problemCode(error)
 }

@@ -7,6 +7,8 @@ export interface ConfirmReason {
   hint?: string
   required: boolean
   maxLength: number
+  /** Fewest characters of the trimmed reason; 1 when only required. */
+  minLength?: number
 }
 
 /** What a confirmation asks; texts are already translated. */

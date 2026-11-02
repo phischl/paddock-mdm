@@ -10,6 +10,7 @@ import { vuetify } from '../plugins/vuetify'
 import { useSessionStore } from '../stores/session'
 import { revertBlocked } from '../lib/changeSets'
 import type { ChangeSet, ConfigApplyResult } from '../api/client'
+import type { UrgentInput } from '../lib/configRollouts'
 
 function changeSet(id: string, extra: Partial<ChangeSet> = {}): ChangeSet {
   return {
@@ -36,12 +37,17 @@ const revertable = changeSet('cs-1')
 const reverted = changeSet('cs-2', { reverted_by: 'cs-9' })
 const legacy = changeSet('cs-3', { before_available: false })
 const revertDryRun = vi.fn<(id: string) => Promise<ConfigApplyResult | string>>()
-const revertChangeSet = vi.fn<(id: string, hash: string) => Promise<ConfigApplyResult | string>>()
+const revertChangeSet = vi.fn<(id: string, hash: string, urgent?: UrgentInput) => Promise<ConfigApplyResult | string>>()
+vi.mock('../lib/rolloutSettings', async (original) => ({
+  ...(await original<typeof import('../lib/rolloutSettings')>()),
+  getRolloutSettings: () => Promise.resolve({ enabled: true }),
+}))
 vi.mock('../lib/changeSets', async (original) => ({
   ...(await original<typeof import('../lib/changeSets')>()),
   listChangeSets: () => Promise.resolve({ items: [revertable, reverted, legacy], page: 1, page_size: 25, total: 3, total_capped: false, sort: '-applied_at' }),
+  getChangeSet: (id: string) => Promise.resolve(id === 'cs-1' ? revertable : 'not_found'),
   revertDryRun: (id: string) => revertDryRun(id),
-  revertChangeSet: (id: string, hash: string) => revertChangeSet(id, hash),
+  revertChangeSet: (id: string, hash: string, urgent?: UrgentInput) => revertChangeSet(id, hash, urgent),
 }))
 
 let wrapper: VueWrapper | null = null
@@ -56,12 +62,12 @@ afterEach(() => {
   wrapper = null
 })
 
-async function mountList(): Promise<VueWrapper> {
+async function mountList(path = '/change-sets'): Promise<VueWrapper> {
   const pinia = createPinia()
   setActivePinia(pinia)
   useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', organization: null } as never
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/change-sets', component: ChangeSets }] })
-  await router.push('/change-sets')
+  await router.push(path)
   await router.isReady()
   wrapper = mount(() => h(VApp, null, { default: () => h(RouterView) }), {
     global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body,
@@ -116,7 +122,7 @@ describe('revert a change set (plan M11 decision 22)', () => {
     expect(dialog()?.querySelectorAll('[data-testid="change-set-plan"] tbody tr')).toHaveLength(2)
     ;(document.querySelector('[data-testid="confirm-accept"]') as HTMLButtonElement).click()
     await flushPromises()
-    expect(revertChangeSet).toHaveBeenCalledWith('cs-1', 'h1')
+    expect(revertChangeSet).toHaveBeenCalledWith('cs-1', 'h1', { urgent: false, reason: '' })
     expect(dialog()).toBeNull()
     expect(w.find('[data-testid="change-set-reverted"]').exists()).toBe(true)
     expect(nativeConfirm).not.toHaveBeenCalled()
@@ -135,7 +141,7 @@ describe('revert a change set (plan M11 decision 22)', () => {
     expect(dialog()?.textContent).toContain('sha256:c')
     ;(document.querySelector('[data-testid="confirm-accept"]') as HTMLButtonElement).click()
     await flushPromises()
-    expect(revertChangeSet).toHaveBeenLastCalledWith('cs-1', 'h2')
+    expect(revertChangeSet).toHaveBeenLastCalledWith('cs-1', 'h2', { urgent: false, reason: '' })
     expect(dialog()).toBeNull()
   })
 
@@ -181,6 +187,43 @@ describe('revert a change set (plan M11 decision 22)', () => {
     await flushPromises()
     expect(assign).toHaveBeenCalledWith('/api/auth/stepup?return_to=%2Fchange-sets')
     expect(document.querySelector('.form-error')).toBeNull()
+  })
+
+  it('opens the revert dialog of the change set the rollout page links to', async () => {
+    revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
+    await mountList('/change-sets?revert=cs-1')
+    await vi.waitFor(() => expect(revertDryRun).toHaveBeenCalledWith('cs-1'))
+    await flushPromises()
+    expect(dialog()?.textContent).toContain('Revert change set')
+  })
+
+  it('sends the urgent opt-out with the confirmed plan, and holds back a missing reason', async () => {
+    revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
+    revertChangeSet.mockResolvedValueOnce({ ...result('sha256:a', 'h1'), dry_run: false, change_set_id: 'cs-10' })
+    const w = await mountList()
+    await w.find('[data-testid="change-set-revert"]').trigger('click')
+    await flushPromises()
+    ;(document.querySelector('[data-testid="urgent-checkbox"] input') as HTMLInputElement).click()
+    await flushPromises()
+    ;(document.querySelector('[data-testid="confirm-accept"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(revertChangeSet).not.toHaveBeenCalled()
+    const text = document.querySelector('[data-testid="urgent-reason"] textarea') as HTMLTextAreaElement
+    text.value = 'hotfix'
+    text.dispatchEvent(new Event('input'))
+    await flushPromises()
+    ;(document.querySelector('[data-testid="confirm-accept"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(revertChangeSet).toHaveBeenCalledWith('cs-1', 'h1', { urgent: true, reason: 'hotfix' })
+  })
+
+  it('offers no opt-out when it reverts the open rollout\'s own change set', async () => {
+    revertDryRun.mockResolvedValueOnce(result('sha256:a', 'h1'))
+    await mountList('/change-sets?revert=cs-1')
+    await vi.waitFor(() => expect(revertDryRun).toHaveBeenCalledWith('cs-1'))
+    await flushPromises()
+    expect(dialog()).not.toBeNull()
+    expect(document.querySelector('[data-testid="urgent-opt-out"]')).toBeNull()
   })
 
   it('cancels without reverting', async () => {

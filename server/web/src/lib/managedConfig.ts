@@ -1,6 +1,7 @@
 import {
   api, listPage, problemCode, type ManagedFile, type ManagedFileSort, type ManagedUnit, type ManagedUnitSort,
 } from '../api/client'
+import { urgentQuery, type UrgentInput } from './configRollouts'
 import type { ListParams, Page } from './listQuery'
 
 function groupParam(p: ListParams): string | undefined {
@@ -32,6 +33,7 @@ export interface FileInput {
   owner: string
   group: string
   content: string
+  urgent?: UrgentInput
 }
 
 /** Creates (no id) or updates a managed file; null on success, otherwise the problem code. */
@@ -39,13 +41,17 @@ export async function saveManagedFile(id: string | null, f: FileInput): Promise<
   const fields = { path: f.path.trim(), mode: f.mode.trim(), owner: f.owner.trim(), group: f.group.trim(), content: f.content }
   const header = { 'X-Paddock-CSRF': '1' as const }
   const { error } = id
-    ? await api.PATCH('/api/v1/managed-files/{id}', { params: { path: { id }, header }, body: fields })
-    : await api.POST('/api/v1/managed-files', { params: { header }, body: { ...fields, ...(f.groupID ? { device_group_id: f.groupID } : {}) } })
+    ? await api.PATCH('/api/v1/managed-files/{id}', { params: { path: { id }, header, query: urgentQuery(f.urgent) }, body: fields })
+    : await api.POST('/api/v1/managed-files', {
+      params: { header, query: urgentQuery(f.urgent) }, body: { ...fields, ...(f.groupID ? { device_group_id: f.groupID } : {}) },
+    })
   return error ? problemCode(error) : null
 }
 
-export async function deleteManagedFile(id: string): Promise<string | null> {
-  const { error } = await api.DELETE('/api/v1/managed-files/{id}', { params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } } })
+export async function deleteManagedFile(id: string, urgent?: UrgentInput): Promise<string | null> {
+  const { error } = await api.DELETE('/api/v1/managed-files/{id}', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' }, query: urgentQuery(urgent) },
+  })
   return error ? problemCode(error) : null
 }
 
@@ -54,6 +60,7 @@ export interface UnitInput {
   unit: string
   enabled: boolean
   active: boolean
+  urgent?: UrgentInput
 }
 
 /** Creates (no id) or updates a managed unit; null on success, otherwise the problem code. */
@@ -61,13 +68,17 @@ export async function saveManagedUnit(id: string | null, u: UnitInput): Promise<
   const fields = { unit: u.unit.trim(), enabled: u.enabled, active: u.active }
   const header = { 'X-Paddock-CSRF': '1' as const }
   const { error } = id
-    ? await api.PATCH('/api/v1/managed-units/{id}', { params: { path: { id }, header }, body: fields })
-    : await api.POST('/api/v1/managed-units', { params: { header }, body: { ...fields, ...(u.groupID ? { device_group_id: u.groupID } : {}) } })
+    ? await api.PATCH('/api/v1/managed-units/{id}', { params: { path: { id }, header, query: urgentQuery(u.urgent) }, body: fields })
+    : await api.POST('/api/v1/managed-units', {
+      params: { header, query: urgentQuery(u.urgent) }, body: { ...fields, ...(u.groupID ? { device_group_id: u.groupID } : {}) },
+    })
   return error ? problemCode(error) : null
 }
 
-export async function deleteManagedUnit(id: string): Promise<string | null> {
-  const { error } = await api.DELETE('/api/v1/managed-units/{id}', { params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } } })
+export async function deleteManagedUnit(id: string, urgent?: UrgentInput): Promise<string | null> {
+  const { error } = await api.DELETE('/api/v1/managed-units/{id}', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' }, query: urgentQuery(urgent) },
+  })
   return error ? problemCode(error) : null
 }
 
