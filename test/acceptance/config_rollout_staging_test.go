@@ -20,23 +20,6 @@ func configRolloutBucket(device, rollout string) int {
 	return int(h.Sum32() % 100)
 }
 
-// stagedResult is the part of ConfigApplyResult the staging gate reads.
-type stagedResult struct {
-	ChangeSetID *string `json:"change_set_id"`
-	Rollout     *string `json:"rollout"`
-	RolloutID   *string `json:"rollout_id"`
-}
-
-func stagedResultOf(t *testing.T, res env.Response) stagedResult {
-	t.Helper()
-	expectStatus(t, res, http.StatusOK, "")
-	var out stagedResult
-	if err := res.JSON(&out); err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
 // withFile returns doc with one more managed file for every device.
 func withFile(doc configDoc, path, content string) configDoc {
 	files, _ := doc["managed_files"].([]any)

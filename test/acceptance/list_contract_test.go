@@ -99,6 +99,11 @@ func TestListContract(t *testing.T) {
 		"/api/v1/devices/{id}/commands": member.DeviceID, "/api/v1/devices/{id}/software": member.DeviceID,
 		"/api/v1/devices/{id}/vulnerabilities": member.DeviceID,
 		"/api/v1/devices/{id}/config-status":   member.DeviceID, "/api/v1/devices/{id}/bundles": member.DeviceID, "/api/v1/vulnerabilities/{cve}/devices": cve}
+	// A rollout stages a section for its whole organization: it runs in a gate organization of its own, listed by its
+	// administrator.
+	rolloutAdmin, rollout := listContractRollout(t)
+	parents["/api/v1/config-rollouts/{id}/devices"] = rollout
+	parentSessions := map[string]*env.Portal{"/api/v1/config-rollouts/{id}/devices": rolloutAdmin}
 	order := newCollation(t)
 	paths := make([]string, 0, len(lists))
 	for p := range lists {
@@ -146,6 +151,9 @@ func TestListContract(t *testing.T) {
 
 			item := op.Responses.Status(http.StatusOK).Value.Content.Get("application/json").Schema.Value.Properties["items"].Value.Items.Value
 			session := sessions[strings.HasPrefix(path, "/api/platform/")]
+			if s, ok := parentSessions[path]; ok {
+				session = s
+			}
 			for _, s := range want {
 				q := url.Values{"sort": {s}, "page_size": {"100"}}
 				res := call(t, session, http.MethodGet, target+"?"+q.Encode(), nil)
@@ -187,6 +195,20 @@ func TestListContract(t *testing.T) {
 			expectStatus(t, call(t, session, http.MethodGet, target+"?page=401&page_size=25", nil), http.StatusBadRequest, "page_out_of_range")
 		})
 	}
+}
+
+// listContractRollout is a gate organization with three devices and an open configuration rollout of their first
+// wave; it returns the organization's administrator and the rollout.
+func listContractRollout(t *testing.T) (*env.Portal, string) {
+	t.Helper()
+	admin, _ := gateOrg(t, "list-rollout")
+	suffix := uniqueSuffix()
+	for _, host := range []string{"lr-b-", "lr-a-", "lr-c-"} {
+		waitBundleVersion(t, admin.Portal, activeDevice(t, admin.Portal, "", host+suffix).DeviceID)
+	}
+	id, _ := startConfigRollout(t, admin.Portal, map[string]any{"waves": []int{50, 100}, "min_wave_minutes": 60,
+		"failure_threshold_percent": 2, "failure_threshold_min": 3}, "/etc/paddock-gates/list-rollout-"+suffix+".conf")
+	return admin.Portal, id
 }
 
 // seedListData creates device groups whose name, creation and update orders differ (mixed case, so byte order and

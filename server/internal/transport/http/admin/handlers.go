@@ -63,6 +63,7 @@ type handlers struct {
 	configStatus    *app.ConfigStatus
 	updates         *app.Updates
 	rolloutSettings *app.RolloutSettings
+	configRollouts  *app.ConfigRollouts
 	privacy         *app.Privacy
 	readAudit       *app.ReadAudit
 	attention       *app.Attention

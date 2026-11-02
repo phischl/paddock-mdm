@@ -213,6 +213,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Revocations:     app.NewRevocations(runner, orgPool, stepUpTokens, devicecache.New(vk), revocationEnabled),
 		DMS:             app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
 		RolloutSettings: app.NewRolloutSettings(runner, orgPool, common.Development()),
+		ConfigRollouts:  app.NewConfigRollouts(runner, orgPool),
 		Updates:         app.NewUpdates(runner, orgPool),
 		Privacy:         app.NewPrivacy(runner, orgPool),
 		ReadAudit:       app.NewReadAudit(runner),

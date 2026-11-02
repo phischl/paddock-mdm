@@ -8,9 +8,128 @@ package pgstore
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const advanceConfigRollout = `-- name: AdvanceConfigRollout :one
+UPDATE config_rollout SET current_wave_index = current_wave_index + 1, wave_started_at = now(), updated_at = now()
+WHERE id = $1 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+`
+
+func (q *Queries) AdvanceConfigRollout(ctx context.Context, id uuid.UUID) (ConfigRollout, error) {
+	row := q.db.QueryRow(ctx, advanceConfigRollout, id)
+	var i ConfigRollout
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.ChangeSetID,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.CanaryDeviceGroupID,
+		&i.Status,
+		&i.HaltedReason,
+		&i.EvaluationSince,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.EndedReason,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const completeConfigRollout = `-- name: CompleteConfigRollout :one
+UPDATE config_rollout SET status = 'completed', ended_at = now(), ended_reason = $1, updated_at = now()
+WHERE id = $2 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+`
+
+type CompleteConfigRolloutParams struct {
+	EndedReason *string
+	ID          uuid.UUID
+}
+
+func (q *Queries) CompleteConfigRollout(ctx context.Context, arg CompleteConfigRolloutParams) (ConfigRollout, error) {
+	row := q.db.QueryRow(ctx, completeConfigRollout, arg.EndedReason, arg.ID)
+	var i ConfigRollout
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.ChangeSetID,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.CanaryDeviceGroupID,
+		&i.Status,
+		&i.HaltedReason,
+		&i.EvaluationSince,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.EndedReason,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const countConfigRollouts = `-- name: CountConfigRollouts :one
+SELECT count(*) FROM (
+  SELECT 1 FROM config_rollout
+  WHERE ($1::text IS NULL OR started_by ILIKE $1::text ESCAPE '\')
+    AND ($2::text[] IS NULL OR status = ANY($2::text[]))
+  LIMIT $3
+) matching
+`
+
+type CountConfigRolloutsParams struct {
+	QPattern   *string
+	Statuses   []string
+	CountLimit int32
+}
+
+func (q *Queries) CountConfigRollouts(ctx context.Context, arg CountConfigRolloutsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countConfigRollouts, arg.QPattern, arg.Statuses, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countConfigRolloutsByStatus = `-- name: CountConfigRolloutsByStatus :many
+SELECT status, count(*) AS n FROM config_rollout GROUP BY status ORDER BY status
+`
+
+type CountConfigRolloutsByStatusRow struct {
+	Status string
+	N      int64
+}
+
+func (q *Queries) CountConfigRolloutsByStatus(ctx context.Context) ([]CountConfigRolloutsByStatusRow, error) {
+	rows, err := q.db.Query(ctx, countConfigRolloutsByStatus)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountConfigRolloutsByStatusRow{}
+	for rows.Next() {
+		var i CountConfigRolloutsByStatusRow
+		if err := rows.Scan(&i.Status, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 const endConfigRolloutReverted = `-- name: EndConfigRolloutReverted :execrows
 UPDATE config_rollout SET status = 'reverted', ended_at = now(), ended_reason = $1, updated_at = now()
@@ -28,6 +147,49 @@ func (q *Queries) EndConfigRolloutReverted(ctx context.Context, arg EndConfigRol
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getConfigRollout = `-- name: GetConfigRollout :one
+
+SELECT id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at FROM config_rollout WHERE id = $1
+`
+
+// Evaluation and wave actions (plan M11 decisions 32-34, PDK-158).
+func (q *Queries) GetConfigRollout(ctx context.Context, id uuid.UUID) (ConfigRollout, error) {
+	row := q.db.QueryRow(ctx, getConfigRollout, id)
+	var i ConfigRollout
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.ChangeSetID,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.CanaryDeviceGroupID,
+		&i.Status,
+		&i.HaltedReason,
+		&i.EvaluationSince,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.EndedReason,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getConfigRolloutPlan = `-- name: GetConfigRolloutPlan :one
+SELECT c.plan FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id WHERE r.id = $1
+`
+
+func (q *Queries) GetConfigRolloutPlan(ctx context.Context, id uuid.UUID) (json.RawMessage, error) {
+	row := q.db.QueryRow(ctx, getConfigRolloutPlan, id)
+	var plan json.RawMessage
+	err := row.Scan(&plan)
+	return plan, err
 }
 
 const getOpenConfigRollout = `-- name: GetOpenConfigRollout :one
@@ -95,6 +257,42 @@ func (q *Queries) GetOpenConfigRolloutOverlay(ctx context.Context) (GetOpenConfi
 	return i, err
 }
 
+const haltConfigRollout = `-- name: HaltConfigRollout :one
+UPDATE config_rollout SET status = 'halted', halted_reason = $1, updated_at = now()
+WHERE id = $2 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+`
+
+type HaltConfigRolloutParams struct {
+	HaltedReason *string
+	ID           uuid.UUID
+}
+
+func (q *Queries) HaltConfigRollout(ctx context.Context, arg HaltConfigRolloutParams) (ConfigRollout, error) {
+	row := q.db.QueryRow(ctx, haltConfigRollout, arg.HaltedReason, arg.ID)
+	var i ConfigRollout
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.ChangeSetID,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.CanaryDeviceGroupID,
+		&i.Status,
+		&i.HaltedReason,
+		&i.EvaluationSince,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.EndedReason,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertConfigRollout = `-- name: InsertConfigRollout :one
 
 INSERT INTO config_rollout (id, organization_id, change_set_id, waves, min_wave_minutes, failure_threshold_percent,
@@ -130,6 +328,302 @@ func (q *Queries) InsertConfigRollout(ctx context.Context, arg InsertConfigRollo
 		arg.CanaryDeviceGroupID,
 		arg.StartedBy,
 	)
+	var i ConfigRollout
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.ChangeSetID,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.CanaryDeviceGroupID,
+		&i.Status,
+		&i.HaltedReason,
+		&i.EvaluationSince,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.EndedReason,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listConfigRolloutDevices = `-- name: ListConfigRolloutDevices :many
+SELECT d.id, d.hostname,
+  COALESCE(nb.version, 0)::bigint AS bundle_version,
+  COALESCE(nb.config_rollout_id, '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS bundle_rollout_id
+FROM device d
+LEFT JOIN LATERAL (SELECT b.version, b.config_rollout_id FROM bundle b WHERE b.device_id = d.id ORDER BY b.version DESC LIMIT 1) nb ON true
+WHERE d.state = 'active'
+  AND ($1::text IS NULL OR d.hostname ILIKE $1::text ESCAPE '\')
+ORDER BY d.hostname, d.id
+`
+
+type ListConfigRolloutDevicesRow struct {
+	ID              uuid.UUID
+	Hostname        string
+	BundleVersion   int64
+	BundleRolloutID uuid.UUID
+}
+
+// The active devices with their newest bundle, ordered by hostname: the rollout's device list sorts the rest in memory,
+// because whether a device is in the wave depends on its bucket in the rollout. A device without a bundle has version 0.
+func (q *Queries) ListConfigRolloutDevices(ctx context.Context, qPattern *string) ([]ListConfigRolloutDevicesRow, error) {
+	rows, err := q.db.Query(ctx, listConfigRolloutDevices, qPattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConfigRolloutDevicesRow{}
+	for rows.Next() {
+		var i ListConfigRolloutDevicesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Hostname,
+			&i.BundleVersion,
+			&i.BundleRolloutID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConfigRolloutReports = `-- name: ListConfigRolloutReports :many
+WITH latest AS (
+  SELECT DISTINCT ON (b.config_rollout_id, r.device_id) b.config_rollout_id AS rollout_id, r.device_id, r.version,
+    r.outcome, r.mode, r.occurred_at, r.recorded_at
+  FROM device_bundle_report r JOIN bundle b ON b.device_id = r.device_id AND b.version = r.version
+  WHERE b.config_rollout_id = ANY($1::uuid[])
+  ORDER BY b.config_rollout_id, r.device_id, r.version DESC
+)
+SELECT l.rollout_id::uuid AS rollout_id, l.device_id, l.version, l.outcome, l.mode, l.occurred_at, l.recorded_at,
+  ARRAY(SELECT s.resource_id FROM device_resource_status s
+        WHERE s.device_id = l.device_id AND s.bundle_version = l.version AND s.status = 'failed'
+        ORDER BY s.resource_id)::text[] AS failed_resource_ids
+FROM latest l
+`
+
+type ListConfigRolloutReportsRow struct {
+	RolloutID         uuid.UUID
+	DeviceID          uuid.UUID
+	Version           int64
+	Outcome           string
+	Mode              string
+	OccurredAt        time.Time
+	RecordedAt        time.Time
+	FailedResourceIds []string
+}
+
+// The newest report of every device on a bundle that carries one of the rollouts, with the resources that failed in
+// that version: what the counts of a rollout and its device list read (plan M11 amendment R6.14). recorded_at is when
+// the server received the report. The newest report is picked first, so the failed resources are read once per device.
+func (q *Queries) ListConfigRolloutReports(ctx context.Context, rolloutIds []uuid.UUID) ([]ListConfigRolloutReportsRow, error) {
+	rows, err := q.db.Query(ctx, listConfigRolloutReports, rolloutIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConfigRolloutReportsRow{}
+	for rows.Next() {
+		var i ListConfigRolloutReportsRow
+		if err := rows.Scan(
+			&i.RolloutID,
+			&i.DeviceID,
+			&i.Version,
+			&i.Outcome,
+			&i.Mode,
+			&i.OccurredAt,
+			&i.RecordedAt,
+			&i.FailedResourceIds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConfigRollouts = `-- name: ListConfigRollouts :many
+
+SELECT r.id, r.organization_id, r.change_set_id, r.waves, r.current_wave_index, r.wave_started_at, r.min_wave_minutes, r.failure_threshold_percent, r.failure_threshold_min, r.canary_device_group_id, r.status, r.halted_reason, r.evaluation_since, r.started_by, r.started_at, r.ended_at, r.ended_reason, r.updated_at, c.plan FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
+WHERE ($1::text IS NULL OR started_by ILIKE $1::text ESCAPE '\')
+  AND ($2::text[] IS NULL OR status = ANY($2::text[]))
+ORDER BY
+  CASE WHEN $3::text = 'started_at' THEN started_at END ASC,
+  CASE WHEN $3::text = '-started_at' THEN started_at END DESC,
+  CASE WHEN $3::text = 'status' THEN status END ASC,
+  CASE WHEN $3::text = '-status' THEN status END DESC,
+  r.id
+LIMIT $5 OFFSET $4
+`
+
+type ListConfigRolloutsParams struct {
+	QPattern *string
+	Statuses []string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListConfigRolloutsRow struct {
+	ConfigRollout ConfigRollout
+	Plan          json.RawMessage
+}
+
+// List queries of the admin API (ADR 0018); see device_group.sql.
+// With the plan of the change set, whose staged resources the counts need.
+func (q *Queries) ListConfigRollouts(ctx context.Context, arg ListConfigRolloutsParams) ([]ListConfigRolloutsRow, error) {
+	rows, err := q.db.Query(ctx, listConfigRollouts,
+		arg.QPattern,
+		arg.Statuses,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConfigRolloutsRow{}
+	for rows.Next() {
+		var i ListConfigRolloutsRow
+		if err := rows.Scan(
+			&i.ConfigRollout.ID,
+			&i.ConfigRollout.OrganizationID,
+			&i.ConfigRollout.ChangeSetID,
+			&i.ConfigRollout.Waves,
+			&i.ConfigRollout.CurrentWaveIndex,
+			&i.ConfigRollout.WaveStartedAt,
+			&i.ConfigRollout.MinWaveMinutes,
+			&i.ConfigRollout.FailureThresholdPercent,
+			&i.ConfigRollout.FailureThresholdMin,
+			&i.ConfigRollout.CanaryDeviceGroupID,
+			&i.ConfigRollout.Status,
+			&i.ConfigRollout.HaltedReason,
+			&i.ConfigRollout.EvaluationSince,
+			&i.ConfigRollout.StartedBy,
+			&i.ConfigRollout.StartedAt,
+			&i.ConfigRollout.EndedAt,
+			&i.ConfigRollout.EndedReason,
+			&i.ConfigRollout.UpdatedAt,
+			&i.Plan,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunningConfigRollouts = `-- name: ListRunningConfigRollouts :many
+SELECT r.id, r.organization_id, r.change_set_id, r.waves, r.current_wave_index, r.wave_started_at, r.min_wave_minutes, r.failure_threshold_percent, r.failure_threshold_min, r.canary_device_group_id, r.status, r.halted_reason, r.evaluation_since, r.started_by, r.started_at, r.ended_at, r.ended_reason, r.updated_at, c.plan
+FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
+WHERE r.status = 'running'
+ORDER BY r.id
+`
+
+type ListRunningConfigRolloutsRow struct {
+	ConfigRollout ConfigRollout
+	Plan          json.RawMessage
+}
+
+// The rollouts the worker evaluates, with the plan of their change set, whose keys are staged.
+func (q *Queries) ListRunningConfigRollouts(ctx context.Context) ([]ListRunningConfigRolloutsRow, error) {
+	rows, err := q.db.Query(ctx, listRunningConfigRollouts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRunningConfigRolloutsRow{}
+	for rows.Next() {
+		var i ListRunningConfigRolloutsRow
+		if err := rows.Scan(
+			&i.ConfigRollout.ID,
+			&i.ConfigRollout.OrganizationID,
+			&i.ConfigRollout.ChangeSetID,
+			&i.ConfigRollout.Waves,
+			&i.ConfigRollout.CurrentWaveIndex,
+			&i.ConfigRollout.WaveStartedAt,
+			&i.ConfigRollout.MinWaveMinutes,
+			&i.ConfigRollout.FailureThresholdPercent,
+			&i.ConfigRollout.FailureThresholdMin,
+			&i.ConfigRollout.CanaryDeviceGroupID,
+			&i.ConfigRollout.Status,
+			&i.ConfigRollout.HaltedReason,
+			&i.ConfigRollout.EvaluationSince,
+			&i.ConfigRollout.StartedBy,
+			&i.ConfigRollout.StartedAt,
+			&i.ConfigRollout.EndedAt,
+			&i.ConfigRollout.EndedReason,
+			&i.ConfigRollout.UpdatedAt,
+			&i.Plan,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockConfigRollout = `-- name: LockConfigRollout :one
+SELECT id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at FROM config_rollout WHERE id = $1 FOR UPDATE
+`
+
+// A rollout under its row lock, so that the worker's round and the administrator's actions see each other's change.
+func (q *Queries) LockConfigRollout(ctx context.Context, id uuid.UUID) (ConfigRollout, error) {
+	row := q.db.QueryRow(ctx, lockConfigRollout, id)
+	var i ConfigRollout
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.ChangeSetID,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.CanaryDeviceGroupID,
+		&i.Status,
+		&i.HaltedReason,
+		&i.EvaluationSince,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.EndedReason,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const resumeConfigRollout = `-- name: ResumeConfigRollout :one
+UPDATE config_rollout SET status = 'running', halted_reason = NULL, evaluation_since = now(), wave_started_at = now(),
+  updated_at = now()
+WHERE id = $1 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+`
+
+// Failures reported before the resume no longer count, and the wave gets its full duration again (plan M11 decision
+// 32, amendment R6.14).
+func (q *Queries) ResumeConfigRollout(ctx context.Context, id uuid.UUID) (ConfigRollout, error) {
+	row := q.db.QueryRow(ctx, resumeConfigRollout, id)
 	var i ConfigRollout
 	err := row.Scan(
 		&i.ID,
