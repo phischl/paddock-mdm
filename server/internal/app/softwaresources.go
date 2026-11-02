@@ -196,6 +196,14 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 		rec.SetParam("slug", old.Slug)
 		rec.SetParam("fingerprint", old.Fingerprint)
 		rec.SetParam("weak_key", old.WeakKey)
+		// The source is locked, so no entry can start using it between the count and the delete.
+		used, err := q.CountSoftwareCatalogEntriesBySource(ctx, uuid.NullUUID{UUID: id, Valid: true})
+		if err != nil {
+			return err
+		}
+		if used > 0 {
+			return problem.InUse.WithDetail("a catalog entry uses this source")
+		}
 		n, err := q.DeleteSoftwareSource(ctx, id)
 		if err != nil {
 			return err

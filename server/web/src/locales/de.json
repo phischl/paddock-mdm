@@ -560,6 +560,16 @@
       "updated": "{actor} hat die Paketquelle {name} geändert",
       "deleted": "{actor} hat die Paketquelle {name} entfernt"
     },
+    "software_catalog_entry": {
+      "created": "{actor} hat {name} zum Software-Katalog hinzugefügt",
+      "updated": "{actor} hat {name} im Software-Katalog geändert",
+      "deleted": "{actor} hat {name} mit {assignment_count, plural, one {# Zuweisung} other {# Zuweisungen}} aus dem Software-Katalog entfernt"
+    },
+    "software_assignment": {
+      "created": "{actor} hat {app} mit der Absicht {intent} zugewiesen",
+      "updated": "{actor} hat die Zuweisung von {app} von {old_intent} auf {intent} geändert",
+      "deleted": "{actor} hat die Zuweisung {intent} von {app} entfernt"
+    },
     "permission_profile": {
       "created": "{actor} hat das Berechtigungsprofil {name} angelegt",
       "updated": "{actor} hat das Berechtigungsprofil {name} geändert",

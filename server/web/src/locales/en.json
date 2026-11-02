@@ -560,6 +560,16 @@
       "updated": "{actor} changed the package source {name}",
       "deleted": "{actor} removed the package source {name}"
     },
+    "software_catalog_entry": {
+      "created": "{actor} added {name} to the software catalog",
+      "updated": "{actor} changed {name} in the software catalog",
+      "deleted": "{actor} removed {name} from the software catalog with {assignment_count, plural, one {# assignment} other {# assignments}}"
+    },
+    "software_assignment": {
+      "created": "{actor} assigned {app} with the intent {intent}",
+      "updated": "{actor} changed the assignment of {app} from {old_intent} to {intent}",
+      "deleted": "{actor} removed the {intent} assignment of {app}"
+    },
     "permission_profile": {
       "created": "{actor} created the permission profile {name}",
       "updated": "{actor} changed the permission profile {name}",

@@ -221,6 +221,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Findings:        app.NewFindings(runner, orgPool),
 		Notifications:   app.NewNotifications(runner, orgPool, platformPool, baoClient, outboundPolicy, smtpEnabled),
 		SoftwareSources: app.NewSoftwareSources(runner, orgPool),
+		SoftwareCatalog: app.NewSoftwareCatalog(runner, orgPool),
 		AccountList:     app.NewAccountList(orgPool),
 		Overview:        app.NewOverview(orgPool),
 		SecurityReview:  app.NewSecurityReview(orgPool),

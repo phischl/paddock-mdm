@@ -1,13 +1,20 @@
 package acceptance
 
 import (
+	"bytes"
+	"image"
+	"image/png"
 	"net/http"
 	"testing"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
-const softwareSources = "/api/v1/software-sources"
+const (
+	softwareSources     = "/api/v1/software-sources"
+	softwareCatalog     = "/api/v1/software-catalog"
+	softwareAssignments = "/api/v1/software-assignments"
+)
 
 // gateSourceKey is a public Ed25519 test key (with a Curve25519 subkey) of the server's domain fixtures
 // (server/internal/domain/software/testdata/ed25519.asc); gateSourceFP is its fingerprint as gpg prints it.
@@ -56,4 +63,24 @@ func deleteSourceOnCleanup(t *testing.T, p *env.Portal, renew func(t *testing.T)
 			t.Errorf("cleanup: DELETE %s: HTTP %d %s", path, res.Status, res.Body)
 		}
 	})
+}
+
+// entryBody is a valid catalog entry with a unique name that starts with prefix.
+func entryBody(prefix string) map[string]any {
+	return map[string]any{
+		"name": prefix + "-" + uniqueSuffix(),
+		"packages": []map[string]any{
+			{"distribution": "ubuntu", "release": "*", "architecture": "*", "package": "nano"},
+		},
+	}
+}
+
+// gatePNG is a valid 16 by 16 PNG for the icon operations.
+func gatePNG(t *testing.T) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewGray(image.Rect(0, 0, 16, 16))); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
 }

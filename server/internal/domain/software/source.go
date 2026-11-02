@@ -77,7 +77,7 @@ func ValidateSource(in SourceInput) (SourceKey, error) {
 	if !slugPattern.MatchString(in.Slug) {
 		return SourceKey{}, fmt.Errorf("%w: slug must match ^[a-z0-9][a-z0-9-]{1,40}$", ErrSource)
 	}
-	if err := validateName(in.Name); err != nil {
+	if err := validateName(in.Name, ErrSource); err != nil {
 		return SourceKey{}, err
 	}
 	if err := validateURIs(in.URIs); err != nil {
@@ -95,23 +95,24 @@ func NormalizeName(name string) string {
 	return strings.TrimSpace(name)
 }
 
-// validateName checks the trimmed name. Control, format, invisible and blank-looking characters and line or
-// paragraph separators are refused because the name is shown in the portal and the audit log, where bidi controls,
-// line breaks or invisible runes could make one source look like another.
-func validateName(name string) error {
+// validateName checks the trimmed name of a source or a catalog entry; kind is the error the violations wrap.
+// Control, format, invisible and blank-looking characters and line or paragraph separators are refused because the
+// name is shown in the portal and the audit log, where bidi controls, line breaks or invisible runes could make one
+// source look like another.
+func validateName(name string, kind error) error {
 	name = NormalizeName(name)
 	if !utf8.ValidString(name) {
-		return fmt.Errorf("%w: name must be valid UTF-8", ErrSource)
+		return fmt.Errorf("%w: name must be valid UTF-8", kind)
 	}
 	if n := utf8.RuneCountInString(name); n < 1 || n > MaxNameLength {
-		return fmt.Errorf("%w: name must be 1 to %d characters", ErrSource, MaxNameLength)
+		return fmt.Errorf("%w: name must be 1 to %d characters", kind, MaxNameLength)
 	}
 	if strings.ContainsFunc(name, invisibleInName) {
 		return fmt.Errorf("%w: name must not contain control, format, invisible or line separator characters",
-			ErrSource)
+			kind)
 	}
 	if !strings.ContainsFunc(name, func(r rune) bool { return unicode.In(r, unicode.L, unicode.N, unicode.P, unicode.S) }) {
-		return fmt.Errorf("%w: name must contain at least one letter, digit, punctuation or symbol", ErrSource)
+		return fmt.Errorf("%w: name must contain at least one letter, digit, punctuation or symbol", kind)
 	}
 	return nil
 }

@@ -602,6 +602,9 @@ func TestAuditExactlyOnce(t *testing.T) {
 		if !ok {
 			cases, ok = softwareAuditCases[op]
 		}
+		if !ok {
+			cases, ok = softwareCatalogAuditCases[op]
+		}
 		// The operator roots are one value per organization that other gates rely on: its cases run one after
 		// another and write under operatorRootsMu (see ensureOperatorRoots).
 		if op == "PUT /api/v1/settings/managed-files" {

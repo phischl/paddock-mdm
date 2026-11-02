@@ -7,9 +7,84 @@ package pgstore
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const countSoftwareAssignments = `-- name: CountSoftwareAssignments :one
+SELECT count(*) FROM (
+  SELECT 1 FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+  WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\')
+    AND ($2::uuid IS NULL OR a.catalog_entry_id = $2::uuid)
+    AND ($3::uuid IS NULL OR a.device_group_id = $3::uuid)
+    AND ($4::text IS NULL OR a.intent = $4::text)
+  LIMIT $5
+) matching
+`
+
+type CountSoftwareAssignmentsParams struct {
+	QPattern       *string
+	CatalogEntryID uuid.NullUUID
+	DeviceGroupID  uuid.NullUUID
+	Intent         *string
+	CountLimit     int32
+}
+
+func (q *Queries) CountSoftwareAssignments(ctx context.Context, arg CountSoftwareAssignmentsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSoftwareAssignments,
+		arg.QPattern,
+		arg.CatalogEntryID,
+		arg.DeviceGroupID,
+		arg.Intent,
+		arg.CountLimit,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSoftwareCatalogEntries = `-- name: CountSoftwareCatalogEntries :one
+SELECT count(*) FROM (
+  SELECT 1 FROM software_catalog_entry e
+  WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\'
+    OR e.description ILIKE $1::text ESCAPE '\')
+    AND ($2::text IS NULL OR e.category = $2::text)
+    AND ($3::uuid IS NULL OR e.source_id = $3::uuid)
+  LIMIT $4
+) matching
+`
+
+type CountSoftwareCatalogEntriesParams struct {
+	QPattern   *string
+	Category   *string
+	SourceID   uuid.NullUUID
+	CountLimit int32
+}
+
+func (q *Queries) CountSoftwareCatalogEntries(ctx context.Context, arg CountSoftwareCatalogEntriesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSoftwareCatalogEntries,
+		arg.QPattern,
+		arg.Category,
+		arg.SourceID,
+		arg.CountLimit,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSoftwareCatalogEntriesBySource = `-- name: CountSoftwareCatalogEntriesBySource :one
+SELECT count(*) FROM software_catalog_entry WHERE source_id = $1
+`
+
+func (q *Queries) CountSoftwareCatalogEntriesBySource(ctx context.Context, sourceID uuid.NullUUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSoftwareCatalogEntriesBySource, sourceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
 
 const countSoftwareSources = `-- name: CountSoftwareSources :one
 SELECT count(*) FROM (
@@ -32,6 +107,30 @@ func (q *Queries) CountSoftwareSources(ctx context.Context, arg CountSoftwareSou
 	return count, err
 }
 
+const deleteSoftwareAssignment = `-- name: DeleteSoftwareAssignment :execrows
+DELETE FROM software_assignment WHERE id = $1
+`
+
+func (q *Queries) DeleteSoftwareAssignment(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSoftwareAssignment, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteSoftwareCatalogEntry = `-- name: DeleteSoftwareCatalogEntry :execrows
+DELETE FROM software_catalog_entry WHERE id = $1
+`
+
+func (q *Queries) DeleteSoftwareCatalogEntry(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSoftwareCatalogEntry, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSoftwareSource = `-- name: DeleteSoftwareSource :execrows
 DELETE FROM software_source WHERE id = $1
 `
@@ -42,6 +141,165 @@ func (q *Queries) DeleteSoftwareSource(ctx context.Context, id uuid.UUID) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getSoftwareAssignment = `-- name: GetSoftwareAssignment :one
+SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+WHERE a.id = $1
+`
+
+type GetSoftwareAssignmentRow struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Intent         string
+	UpdateRule     string
+	Version        *string
+	Reason         string
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	AppName        string
+}
+
+func (q *Queries) GetSoftwareAssignment(ctx context.Context, id uuid.UUID) (GetSoftwareAssignmentRow, error) {
+	row := q.db.QueryRow(ctx, getSoftwareAssignment, id)
+	var i GetSoftwareAssignmentRow
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.CatalogEntryID,
+		&i.DeviceGroupID,
+		&i.Intent,
+		&i.UpdateRule,
+		&i.Version,
+		&i.Reason,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AppName,
+	)
+	return i, err
+}
+
+const getSoftwareAssignmentForUpdate = `-- name: GetSoftwareAssignmentForUpdate :one
+SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at FROM software_assignment WHERE id = $1 FOR UPDATE
+`
+
+// The assignment locked for the rest of the transaction: an update writes the intent columns back.
+func (q *Queries) GetSoftwareAssignmentForUpdate(ctx context.Context, id uuid.UUID) (SoftwareAssignment, error) {
+	row := q.db.QueryRow(ctx, getSoftwareAssignmentForUpdate, id)
+	var i SoftwareAssignment
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.CatalogEntryID,
+		&i.DeviceGroupID,
+		&i.Intent,
+		&i.UpdateRule,
+		&i.Version,
+		&i.Reason,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSoftwareCatalogEntry = `-- name: GetSoftwareCatalogEntry :one
+SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.created_by,
+  e.created_at, e.updated_at, (e.icon IS NOT NULL)::boolean AS has_icon, coalesce(s.slug, '')::text AS source_slug,
+  (SELECT count(*) FROM software_assignment a WHERE a.catalog_entry_id = e.id)::bigint AS assignment_count
+FROM software_catalog_entry e LEFT JOIN software_source s ON s.id = e.source_id
+WHERE e.id = $1
+`
+
+type GetSoftwareCatalogEntryRow struct {
+	ID              uuid.UUID
+	OrganizationID  uuid.UUID
+	Name            string
+	Description     string
+	Category        string
+	SourceID        uuid.NullUUID
+	Packages        json.RawMessage
+	CreatedBy       uuid.NullUUID
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	HasIcon         bool
+	SourceSlug      string
+	AssignmentCount int64
+}
+
+// An entry as the API shows it: the icon itself stays out, has_icon says whether there is one.
+func (q *Queries) GetSoftwareCatalogEntry(ctx context.Context, id uuid.UUID) (GetSoftwareCatalogEntryRow, error) {
+	row := q.db.QueryRow(ctx, getSoftwareCatalogEntry, id)
+	var i GetSoftwareCatalogEntryRow
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Name,
+		&i.Description,
+		&i.Category,
+		&i.SourceID,
+		&i.Packages,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HasIcon,
+		&i.SourceSlug,
+		&i.AssignmentCount,
+	)
+	return i, err
+}
+
+const getSoftwareCatalogEntryForUpdate = `-- name: GetSoftwareCatalogEntryForUpdate :one
+SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
+FROM software_catalog_entry WHERE id = $1 FOR UPDATE
+`
+
+type GetSoftwareCatalogEntryForUpdateRow struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Description    string
+	Category       string
+	SourceID       uuid.NullUUID
+	Packages       json.RawMessage
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// The entry locked for the rest of the transaction: an update writes every column back and a delete counts the
+// assignments it removes, so a concurrent write must not interleave.
+func (q *Queries) GetSoftwareCatalogEntryForUpdate(ctx context.Context, id uuid.UUID) (GetSoftwareCatalogEntryForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getSoftwareCatalogEntryForUpdate, id)
+	var i GetSoftwareCatalogEntryForUpdateRow
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Name,
+		&i.Description,
+		&i.Category,
+		&i.SourceID,
+		&i.Packages,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSoftwareCatalogEntryIcon = `-- name: GetSoftwareCatalogEntryIcon :one
+SELECT icon FROM software_catalog_entry WHERE id = $1 AND icon IS NOT NULL
+`
+
+func (q *Queries) GetSoftwareCatalogEntryIcon(ctx context.Context, id uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getSoftwareCatalogEntryIcon, id)
+	var icon []byte
+	err := row.Scan(&icon)
+	return icon, err
 }
 
 const getSoftwareSource = `-- name: GetSoftwareSource :one
@@ -96,6 +354,70 @@ func (q *Queries) GetSoftwareSourceForUpdate(ctx context.Context, id uuid.UUID) 
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const insertSoftwareAssignment = `-- name: InsertSoftwareAssignment :exec
+INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version,
+  reason, created_by)
+VALUES ($1, $2, $3, $4, $5, $6,
+  $7, $8, $9)
+`
+
+type InsertSoftwareAssignmentParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Intent         string
+	UpdateRule     string
+	Version        *string
+	Reason         string
+	CreatedBy      uuid.NullUUID
+}
+
+func (q *Queries) InsertSoftwareAssignment(ctx context.Context, arg InsertSoftwareAssignmentParams) error {
+	_, err := q.db.Exec(ctx, insertSoftwareAssignment,
+		arg.ID,
+		arg.OrganizationID,
+		arg.CatalogEntryID,
+		arg.DeviceGroupID,
+		arg.Intent,
+		arg.UpdateRule,
+		arg.Version,
+		arg.Reason,
+		arg.CreatedBy,
+	)
+	return err
+}
+
+const insertSoftwareCatalogEntry = `-- name: InsertSoftwareCatalogEntry :exec
+INSERT INTO software_catalog_entry (id, organization_id, name, description, category, source_id, packages, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type InsertSoftwareCatalogEntryParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Description    string
+	Category       string
+	SourceID       uuid.NullUUID
+	Packages       json.RawMessage
+	CreatedBy      uuid.NullUUID
+}
+
+func (q *Queries) InsertSoftwareCatalogEntry(ctx context.Context, arg InsertSoftwareCatalogEntryParams) error {
+	_, err := q.db.Exec(ctx, insertSoftwareCatalogEntry,
+		arg.ID,
+		arg.OrganizationID,
+		arg.Name,
+		arg.Description,
+		arg.Category,
+		arg.SourceID,
+		arg.Packages,
+		arg.CreatedBy,
+	)
+	return err
 }
 
 const insertSoftwareSource = `-- name: InsertSoftwareSource :one
@@ -156,6 +478,93 @@ func (q *Queries) InsertSoftwareSource(ctx context.Context, arg InsertSoftwareSo
 	return i, err
 }
 
+const listAllSoftwareAssignments = `-- name: ListAllSoftwareAssignments :many
+SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at FROM software_assignment ORDER BY catalog_entry_id, device_group_id NULLS FIRST, id
+`
+
+// Every assignment of the organization (compiler), in a stable order.
+func (q *Queries) ListAllSoftwareAssignments(ctx context.Context) ([]SoftwareAssignment, error) {
+	rows, err := q.db.Query(ctx, listAllSoftwareAssignments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SoftwareAssignment{}
+	for rows.Next() {
+		var i SoftwareAssignment
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.CatalogEntryID,
+			&i.DeviceGroupID,
+			&i.Intent,
+			&i.UpdateRule,
+			&i.Version,
+			&i.Reason,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllSoftwareCatalogEntries = `-- name: ListAllSoftwareCatalogEntries :many
+SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
+FROM software_catalog_entry ORDER BY name, id
+`
+
+type ListAllSoftwareCatalogEntriesRow struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Description    string
+	Category       string
+	SourceID       uuid.NullUUID
+	Packages       json.RawMessage
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// Every entry of the organization (compiler), in a stable order, without the icons the bundles do not carry.
+func (q *Queries) ListAllSoftwareCatalogEntries(ctx context.Context) ([]ListAllSoftwareCatalogEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listAllSoftwareCatalogEntries)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllSoftwareCatalogEntriesRow{}
+	for rows.Next() {
+		var i ListAllSoftwareCatalogEntriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Name,
+			&i.Description,
+			&i.Category,
+			&i.SourceID,
+			&i.Packages,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAllSoftwareSources = `-- name: ListAllSoftwareSources :many
 SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at FROM software_source ORDER BY slug, id
 `
@@ -185,6 +594,177 @@ func (q *Queries) ListAllSoftwareSources(ctx context.Context) ([]SoftwareSource,
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSoftwareAssignments = `-- name: ListSoftwareAssignments :many
+SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\')
+  AND ($2::uuid IS NULL OR a.catalog_entry_id = $2::uuid)
+  AND ($3::uuid IS NULL OR a.device_group_id = $3::uuid)
+  AND ($4::text IS NULL OR a.intent = $4::text)
+ORDER BY
+  CASE WHEN $5::text = 'created_at' THEN a.created_at END ASC,
+  CASE WHEN $5::text = '-created_at' THEN a.created_at END DESC,
+  CASE WHEN $5::text = 'updated_at' THEN a.updated_at END ASC,
+  CASE WHEN $5::text = '-updated_at' THEN a.updated_at END DESC,
+  CASE WHEN $5::text = 'intent' THEN a.intent END ASC,
+  CASE WHEN $5::text = '-intent' THEN a.intent END DESC,
+  a.id
+LIMIT $7 OFFSET $6
+`
+
+type ListSoftwareAssignmentsParams struct {
+	QPattern       *string
+	CatalogEntryID uuid.NullUUID
+	DeviceGroupID  uuid.NullUUID
+	Intent         *string
+	Sort           string
+	SkipRows       int32
+	MaxRows        int32
+}
+
+type ListSoftwareAssignmentsRow struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Intent         string
+	UpdateRule     string
+	Version        *string
+	Reason         string
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	AppName        string
+}
+
+func (q *Queries) ListSoftwareAssignments(ctx context.Context, arg ListSoftwareAssignmentsParams) ([]ListSoftwareAssignmentsRow, error) {
+	rows, err := q.db.Query(ctx, listSoftwareAssignments,
+		arg.QPattern,
+		arg.CatalogEntryID,
+		arg.DeviceGroupID,
+		arg.Intent,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareAssignmentsRow{}
+	for rows.Next() {
+		var i ListSoftwareAssignmentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.CatalogEntryID,
+			&i.DeviceGroupID,
+			&i.Intent,
+			&i.UpdateRule,
+			&i.Version,
+			&i.Reason,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AppName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSoftwareCatalogEntries = `-- name: ListSoftwareCatalogEntries :many
+SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.created_by,
+  e.created_at, e.updated_at, (e.icon IS NOT NULL)::boolean AS has_icon, coalesce(s.slug, '')::text AS source_slug,
+  (SELECT count(*) FROM software_assignment a WHERE a.catalog_entry_id = e.id)::bigint AS assignment_count
+FROM software_catalog_entry e LEFT JOIN software_source s ON s.id = e.source_id
+WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\'
+  OR e.description ILIKE $1::text ESCAPE '\')
+  AND ($2::text IS NULL OR e.category = $2::text)
+  AND ($3::uuid IS NULL OR e.source_id = $3::uuid)
+ORDER BY
+  CASE WHEN $4::text = 'name' THEN e.name END ASC,
+  CASE WHEN $4::text = '-name' THEN e.name END DESC,
+  CASE WHEN $4::text = 'category' THEN e.category END ASC,
+  CASE WHEN $4::text = '-category' THEN e.category END DESC,
+  CASE WHEN $4::text = 'created_at' THEN e.created_at END ASC,
+  CASE WHEN $4::text = '-created_at' THEN e.created_at END DESC,
+  CASE WHEN $4::text = 'updated_at' THEN e.updated_at END ASC,
+  CASE WHEN $4::text = '-updated_at' THEN e.updated_at END DESC,
+  e.id
+LIMIT $6 OFFSET $5
+`
+
+type ListSoftwareCatalogEntriesParams struct {
+	QPattern *string
+	Category *string
+	SourceID uuid.NullUUID
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListSoftwareCatalogEntriesRow struct {
+	ID              uuid.UUID
+	OrganizationID  uuid.UUID
+	Name            string
+	Description     string
+	Category        string
+	SourceID        uuid.NullUUID
+	Packages        json.RawMessage
+	CreatedBy       uuid.NullUUID
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	HasIcon         bool
+	SourceSlug      string
+	AssignmentCount int64
+}
+
+func (q *Queries) ListSoftwareCatalogEntries(ctx context.Context, arg ListSoftwareCatalogEntriesParams) ([]ListSoftwareCatalogEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listSoftwareCatalogEntries,
+		arg.QPattern,
+		arg.Category,
+		arg.SourceID,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareCatalogEntriesRow{}
+	for rows.Next() {
+		var i ListSoftwareCatalogEntriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Name,
+			&i.Description,
+			&i.Category,
+			&i.SourceID,
+			&i.Packages,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HasIcon,
+			&i.SourceSlug,
+			&i.AssignmentCount,
 		); err != nil {
 			return nil, err
 		}
@@ -256,6 +836,81 @@ func (q *Queries) ListSoftwareSources(ctx context.Context, arg ListSoftwareSourc
 		return nil, err
 	}
 	return items, nil
+}
+
+const setSoftwareCatalogEntryIcon = `-- name: SetSoftwareCatalogEntryIcon :execrows
+UPDATE software_catalog_entry SET icon = $1, updated_at = now() WHERE id = $2
+`
+
+type SetSoftwareCatalogEntryIconParams struct {
+	Icon []byte
+	ID   uuid.UUID
+}
+
+func (q *Queries) SetSoftwareCatalogEntryIcon(ctx context.Context, arg SetSoftwareCatalogEntryIconParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSoftwareCatalogEntryIcon, arg.Icon, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateSoftwareAssignment = `-- name: UpdateSoftwareAssignment :execrows
+UPDATE software_assignment SET intent = $1, update_rule = $2, version = $3,
+  reason = $4, updated_at = now()
+WHERE id = $5
+`
+
+type UpdateSoftwareAssignmentParams struct {
+	Intent     string
+	UpdateRule string
+	Version    *string
+	Reason     string
+	ID         uuid.UUID
+}
+
+func (q *Queries) UpdateSoftwareAssignment(ctx context.Context, arg UpdateSoftwareAssignmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateSoftwareAssignment,
+		arg.Intent,
+		arg.UpdateRule,
+		arg.Version,
+		arg.Reason,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateSoftwareCatalogEntry = `-- name: UpdateSoftwareCatalogEntry :execrows
+UPDATE software_catalog_entry SET name = $1, description = $2, category = $3,
+  source_id = $4, packages = $5, updated_at = now()
+WHERE id = $6
+`
+
+type UpdateSoftwareCatalogEntryParams struct {
+	Name        string
+	Description string
+	Category    string
+	SourceID    uuid.NullUUID
+	Packages    json.RawMessage
+	ID          uuid.UUID
+}
+
+func (q *Queries) UpdateSoftwareCatalogEntry(ctx context.Context, arg UpdateSoftwareCatalogEntryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateSoftwareCatalogEntry,
+		arg.Name,
+		arg.Description,
+		arg.Category,
+		arg.SourceID,
+		arg.Packages,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateSoftwareSource = `-- name: UpdateSoftwareSource :one
