@@ -155,6 +155,10 @@ func (c *SoftwareCatalog) Create(ctx context.Context, in EntryInput) (CatalogEnt
 		if db.IsUniqueViolation(err, "") {
 			return problem.AlreadyExists.WithDetail("a catalog entry with this name exists")
 		}
+		// The source was deleted after the lookup.
+		if db.IsForeignKeyViolation(err) {
+			return problem.NotFound
+		}
 		if err != nil {
 			return err
 		}
@@ -201,6 +205,9 @@ func (c *SoftwareCatalog) Update(ctx context.Context, id uuid.UUID, in EntryInpu
 		})
 		if db.IsUniqueViolation(err, "") {
 			return problem.AlreadyExists.WithDetail("a catalog entry with this name exists")
+		}
+		if db.IsForeignKeyViolation(err) {
+			return problem.NotFound
 		}
 		if err != nil {
 			return err
@@ -376,6 +383,10 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 		})
 		if db.IsUniqueViolation(err, "") {
 			return problem.AlreadyExists.WithDetail("this application is already assigned in this scope")
+		}
+		// The entry or the group was deleted after the lookup.
+		if db.IsForeignKeyViolation(err) {
+			return problem.NotFound
 		}
 		if err != nil {
 			return err

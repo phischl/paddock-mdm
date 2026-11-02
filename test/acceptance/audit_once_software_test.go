@@ -107,30 +107,31 @@ func auditAssignment(t *testing.T, p *env.Portal) string {
 
 // catalogItemCases are the cases of a privileged operation on one catalog entry (or assignment): success on a fresh
 // resource, a rule violation (invalid), a missing resource and a role that may not write. invalid is nil where the
-// operation has no rule to violate.
-func catalogItemCases(code, collection, method string, success int, create func(t *testing.T, p *env.Portal) string,
+// operation has no rule to violate. suffix is appended to the resource's path ("/icon" for the icon operation) in
+// every case, so that all of them reach the route under test.
+func catalogItemCases(code, collection, suffix, method string, success int, create func(t *testing.T, p *env.Portal) string,
 	body, invalid func(t *testing.T) any) []auditCase {
 	cases := []auditCase{
 		{"success", func(t *testing.T, w *auditWorld) {
-			path := create(t, w.alice)
+			path := create(t, w.alice) + suffix
 			res := call(t, w.alice, method, path, body(t))
 			expectStatus(t, res, success, "")
 			expectOneEvent(t, w.alice, res.RequestID, code, "success")
 		}},
 		{"not found", func(t *testing.T, w *auditWorld) {
-			res := call(t, w.alice, method, collection+"/"+uuid.NewString(), body(t))
+			res := call(t, w.alice, method, collection+"/"+uuid.NewString()+suffix, body(t))
 			expectStatus(t, res, http.StatusNotFound, "not_found")
 			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
 		}},
 		{"wrong role", func(t *testing.T, w *auditWorld) {
-			res := call(t, mcpAuditor(t), method, collection+"/"+uuid.NewString(), body(t))
+			res := call(t, mcpAuditor(t), method, collection+"/"+uuid.NewString()+suffix, body(t))
 			expectStatus(t, res, http.StatusForbidden, "forbidden")
 			expectOneEvent(t, w.alice, res.RequestID, code, "denied")
 		}},
 	}
 	if invalid != nil {
 		cases = append(cases, auditCase{"invalid", func(t *testing.T, w *auditWorld) {
-			path := create(t, w.alice)
+			path := create(t, w.alice) + suffix
 			res := call(t, w.alice, method, path, invalid(t))
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
@@ -183,12 +184,12 @@ var softwareCatalogAuditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "software_catalog_entry.created", "denied")
 		}},
 	},
-	"PATCH /api/v1/software-catalog/{id}": catalogItemCases("software_catalog_entry.updated", softwareCatalog,
+	"PATCH /api/v1/software-catalog/{id}": catalogItemCases("software_catalog_entry.updated", softwareCatalog, "",
 		http.MethodPatch, http.StatusOK, auditEntry, entryUpdate,
 		func(*testing.T) any { return map[string]any{"name": "a3-invalid", "packages": []map[string]any{}} }),
-	"DELETE /api/v1/software-catalog/{id}": catalogItemCases("software_catalog_entry.deleted", softwareCatalog,
+	"DELETE /api/v1/software-catalog/{id}": catalogItemCases("software_catalog_entry.deleted", softwareCatalog, "",
 		http.MethodDelete, http.StatusNoContent, auditEntry, func(*testing.T) any { return noBody() }, nil),
-	"PUT /api/v1/software-catalog/{id}/icon": catalogItemCases("software_catalog_entry.updated", softwareCatalog,
+	"PUT /api/v1/software-catalog/{id}/icon": catalogItemCases("software_catalog_entry.updated", softwareCatalog, "/icon",
 		http.MethodPut, http.StatusNoContent, auditEntry, func(t *testing.T) any { return gatePNG(t) },
 		func(*testing.T) any { return []byte("not a png") }),
 	"POST /api/v1/software-assignments": {
@@ -224,9 +225,9 @@ var softwareCatalogAuditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "software_assignment.created", "denied")
 		}},
 	},
-	"PATCH /api/v1/software-assignments/{id}": catalogItemCases("software_assignment.updated", softwareAssignments,
+	"PATCH /api/v1/software-assignments/{id}": catalogItemCases("software_assignment.updated", softwareAssignments, "",
 		http.MethodPatch, http.StatusOK, auditAssignment, assignmentUpdate,
 		func(*testing.T) any { return map[string]any{"intent": "forbid", "version": "1.0"} }),
-	"DELETE /api/v1/software-assignments/{id}": catalogItemCases("software_assignment.deleted", softwareAssignments,
+	"DELETE /api/v1/software-assignments/{id}": catalogItemCases("software_assignment.deleted", softwareAssignments, "",
 		http.MethodDelete, http.StatusNoContent, auditAssignment, func(*testing.T) any { return noBody() }, nil),
 }
