@@ -46,7 +46,13 @@ func (d *Device) hold(pkg, version string) string {
 func gateU1(t *testing.T, d *Device) {
 	const free, pinned = "rsync", "nano"
 	version := d.Must("dpkg-query -W -f '${Version}' " + pinned)
+	compiled := d.bundleVersion()
 	holds := []string{d.hold(free, ""), d.hold(pinned, version)}
+	var holdsBundle float64
+	Until(t, d.Name+": bundle compiled with the holds", 2*time.Minute, 2*time.Second, nil, func() bool {
+		holdsBundle = d.bundleVersion()
+		return holdsBundle > compiled
+	})
 	pin := fmt.Sprintf("Package: %s\nPin: version %s\nPin-Priority: 1001", pinned, version)
 	Until(t, d.Name+": holds applied", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
 		return strings.Contains(d.Must("apt-mark showhold"), free) &&
@@ -71,8 +77,15 @@ func gateU1(t *testing.T, d *Device) {
 	if out := d.Must("systemctl cat apt-daily-upgrade.timer | grep -E '^(OnCalendar|RandomizedDelaySec)='"); !strings.Contains(out, "OnCalendar=*-*-* ") {
 		t.Errorf("apt-daily-upgrade.timer: %q", out)
 	}
-	if out := d.Must("systemctl is-enabled paddock-updates.timer; systemctl is-active paddock-updates.timer"); out != "enabled\nactive" {
-		t.Errorf("paddock-updates.timer: %q", out)
+	// The timer comes with the bundle that carries the holds: wait for that bundle's enforced report first.
+	Until(t, d.Name+": enforced report of the bundle with the holds", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
+		v, mode := d.BundleMode()
+		return v >= holdsBundle && mode == "enforce"
+	})
+	out, _ := d.SSH(t.Context(), nil, "systemctl is-enabled paddock-updates.timer; systemctl is-active paddock-updates.timer")
+	if strings.TrimSpace(out) != "enabled\nactive" {
+		diag, _ := d.SSH(t.Context(), nil, "systemctl status paddock-updates.timer --no-pager; sudo journalctl -u paddock-supervisor --since -10min --no-pager | tail -n 80")
+		t.Fatalf("paddock-updates.timer: %q\n%s", strings.TrimSpace(out), diag)
 	}
 
 	for _, id := range holds {
