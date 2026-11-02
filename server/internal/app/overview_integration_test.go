@@ -177,3 +177,57 @@ func TestOverviewAgentRelease(t *testing.T) {
 		t.Errorf("rollout after halt %+v", got.rollout)
 	}
 }
+
+// TestOverviewOSReleases: the release distribution groups the active devices of the asking organization by
+// version_id in the lowercase os_release shape the agent reports at enrollment; a device without it counts as unknown.
+func TestOverviewOSReleases(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := tx.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	org := uuid.Must(uuid.NewV7())
+	exec("INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'O', 'active')", org, "o"+org.String()[24:])
+	for _, d := range []struct{ state, osRelease string }{
+		{"active", `{"id":"ubuntu","version_id":"24.04","version_codename":"noble","pretty_name":"Ubuntu 24.04.5 LTS"}`},
+		{"active", `{"id":"ubuntu","version_id":"24.04"}`},
+		{"active", `{"id":"ubuntu","version_id":"26.04"}`},
+		{"active", `{}`},
+		{"retired", `{"id":"ubuntu","version_id":"22.04"}`},
+	} {
+		exec("INSERT INTO device (id, organization_id, hostname, state, os_release) VALUES ($1, $2, 'h', $3, $4::jsonb)",
+			uuid.Must(uuid.NewV7()), org, d.state, d.osRelease)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE paddock_api"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", org.String()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgstore.New(tx).OverviewOSReleases(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []pgstore.OverviewOSReleasesRow{{Release: "unknown", Devices: 1}, {Release: "26.04", Devices: 1}, {Release: "24.04", Devices: 2}}
+	if len(got) != len(want) {
+		t.Fatalf("releases %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("releases %+v, want %+v", got, want)
+		}
+	}
+}
