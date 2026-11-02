@@ -516,7 +516,7 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 				t.Fatalf("%d running rollouts after the staged file, want 1", len(open))
 			}
 			if !inWave(open[0].ID) {
-				return open[0].ID + " " + path
+				return fmt.Sprintf("%s %d %s", open[0].ID, attempt, path)
 			}
 			t.Logf("device %s is in the first wave of rollout %s; staging again", outside, open[0].ID)
 			if err := s.revertChangeSet(t, open[0].ChangeSetID); err != nil {
@@ -526,7 +526,9 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 		t.Fatal("the device outside the canary group was in the first wave in three draws")
 		return ""
 	})
-	rolloutID, path, _ := strings.Cut(staged, " ")
+	rolloutID, rest, _ := strings.Cut(staged, " ")
+	attempt, path, _ := strings.Cut(rest, " ")
+	redrawn := attempt != "0"
 	resource := "file:" + path
 	before := d.bundleVersion()
 	if isCanary {
@@ -544,9 +546,14 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 		for time.Since(start) < 2*time.Minute {
 			d.Checkin()
 			time.Sleep(40 * time.Second)
-			if v := d.bundleVersion(); v != before {
+			// A redraw's revert and second staging recompile asynchronously, so the version may move; the content
+			// checks below hold either way.
+			if v := d.bundleVersion(); v != before && !redrawn {
 				t.Fatalf("the VM outside the wave got bundle %v (had %v)", v, before)
 			}
+		}
+		if bundleCarries(t, d, rolloutID) {
+			t.Error("the bundle of the VM outside the wave carries the rollout")
 		}
 		if got := d.Must("sudo test -e " + path + " && echo present || echo absent"); got != "absent" || len(d.ConfigStatus(resource)) != 0 {
 			t.Errorf("the staged file reached the VM outside the wave (%s)", got)
