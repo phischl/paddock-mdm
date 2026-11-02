@@ -16,7 +16,7 @@ enrolls the device; it does not reinstall anything.
   gives a Paddock-managed disk.
 - **Report-only first apply:** a freshly adopted device first computes what the configuration would change and reports
   it without changing anything (section 6) until an administrator enables enforcement (section 7).
-- **Minimum agent release:** report-only mode needs the agent release **0.1.0-alpha.7** or later. An agent from an
+- **Minimum agent release:** report-only mode needs the agent release **0.1.0-alpha.8** or later. An agent from an
   older release does not send the enrollment method: its device is recorded as `unknown` and is enforced at once, as
   before. Install the packages of a release that is not older (section 4).
 - **What enforcement changes:** Paddock alone grants sudo. Files in `/etc/sudoers.d` that are not Paddock's are
@@ -120,7 +120,7 @@ Exit codes: `0` active, `2` pending (the token is not auto-approve: approve the 
 
 ## 6. Report-only phase
 
-Available from the agent release 0.1.0-alpha.7 (section 1). Until enforcement is enabled, the device is **report-only**:
+Available from the agent release 0.1.0-alpha.8 (section 1). Until enforcement is enabled, the device is **report-only**:
 at each new bundle the agent computes, for every resource of the bundle, what it would change, and reports that. It
 changes nothing.
 
