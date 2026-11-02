@@ -139,6 +139,11 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string, opts ...InstallOptio
 	if !o.reportOnly {
 		d.Enforce()
 		d.SetDriftInterval()
+		// Every gate starts from an enforced device, not from the report-only apply of the enrollment bundle.
+		d.WaitEvent(t, "device.bundle_applied", 5*time.Minute, func(p map[string]any) bool {
+			version, _ := p["bundle_version"].(float64)
+			return p["mode"] != "report_only" && version >= d.Bundle
+		})
 	}
 	t.Logf("%s enrolled as device %s (group %s, bundle %v)", vm.Name, d.ID, d.Group, d.Bundle)
 	return d

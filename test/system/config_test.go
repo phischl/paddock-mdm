@@ -3,6 +3,7 @@ package system
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
 
 // quarantineDir holds the foreign sudoers files the agent removed from /etc/sudoers.d.
@@ -27,7 +30,7 @@ func seedForeignAdmin(t *testing.T, vm *VM, run string) (file, user string) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if out, err := vm.SSH(ctx, nil, "sudo rm -f /etc/sudoers.d/"+file+" "+quarantineDir+file+".*; sudo userdel -r "+user+" >/dev/null 2>&1; true"); err != nil {
+		if out, err := vm.SSH(ctx, nil, "sudo rm -f /etc/sudoers.d/"+file+"; sudo sh -c 'rm -f "+quarantineDir+file+".*'; sudo userdel -r "+user+" >/dev/null 2>&1; true"); err != nil {
 			t.Logf("%s: removing the seeded sudoers file and user: %v: %s", vm.Name, err, out)
 		}
 	})
@@ -41,32 +44,35 @@ type preflightCheck struct {
 	Detail string `json:"detail"`
 }
 
-// runPreflight runs `paddockd preflight --json` on the guest and returns its checks by name with the exit code.
-func runPreflight(t *testing.T, vm *VM) (map[string]preflightCheck, int) {
+// runPreflight runs `paddockd preflight --json` on the guest and returns its checks by name. The supported Ubuntu
+// VMs pass every check: exit code 0 and no check that failed. Stderr goes to a file so that it cannot break the JSON.
+func runPreflight(t *testing.T, vm *VM) map[string]preflightCheck {
 	t.Helper()
-	out := vm.Must(`sudo paddockd preflight --json; echo "exit=$?"`)
+	out := vm.Must(`sudo paddockd preflight --json 2>/tmp/preflight.err; echo "exit=$?"`)
 	i := strings.LastIndex(out, "exit=")
 	if i < 0 {
 		t.Fatalf("%s: preflight output without exit code: %s", vm.Name, out)
 	}
+	logErr := func() string { return vm.Must("cat /tmp/preflight.err") }
 	exit, err := strconv.Atoi(strings.TrimSpace(out[i+len("exit="):]))
 	if err != nil {
 		t.Fatalf("%s: preflight exit code in %q: %v", vm.Name, out[i:], err)
 	}
 	var list []preflightCheck
 	if err := json.Unmarshal([]byte(out[:i]), &list); err != nil {
-		t.Fatalf("%s: preflight JSON: %v\n%s", vm.Name, err, out)
+		t.Fatalf("%s: preflight JSON: %v\n%s\nstderr: %s", vm.Name, err, out, logErr())
 	}
 	checks := map[string]preflightCheck{}
-	failed := false
 	for _, c := range list {
 		checks[c.Name] = c
-		failed = failed || c.Status == "fail"
+		if c.Status == "fail" {
+			t.Errorf("%s: preflight check failed: %+v", vm.Name, c)
+		}
 	}
-	if want := map[bool]int{false: 0, true: 1}[failed]; exit != want {
-		t.Errorf("%s: preflight exits %d with failed=%v, want %d", vm.Name, exit, failed, want)
+	if exit != 0 {
+		t.Errorf("%s: preflight exits %d, want 0; stderr: %s", vm.Name, exit, logErr())
 	}
-	return checks, exit
+	return checks
 }
 
 // TestPreflight is the VM gate of `paddockd preflight` (plan M11 decision 11, PDK-162): on a guest that has the
@@ -76,7 +82,7 @@ func TestPreflight(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
 		prepareGuest(t, s, vm, debDir(s))
-		checks, _ := runPreflight(t, vm)
+		checks := runPreflight(t, vm)
 		for _, name := range []string{"os", "systemd", "root"} {
 			if checks[name].Status != "ok" {
 				t.Errorf("preflight %s: %+v, want ok", name, checks[name])
@@ -89,7 +95,7 @@ func TestPreflight(t *testing.T) {
 
 		file, user := seedForeignAdmin(t, vm, unique())
 		before := vm.Must("sudo sha256sum /etc/sudoers.d/" + file + " && getent group sudo")
-		checks, _ = runPreflight(t, vm)
+		checks = runPreflight(t, vm)
 		if c := checks["sudoers_d"]; c.Status != "warn" || !strings.Contains(c.Detail, file) {
 			t.Errorf("preflight sudoers_d: %+v, want warn naming %s", c, file)
 		}
@@ -163,7 +169,6 @@ func gateAdoptionReportOnly(t *testing.T, d *Device, file, user, sum, members st
 		return v >= version && mode == "report_only"
 	})
 
-	// Nothing changed on the guest.
 	if got := d.Must("sudo sha256sum /etc/sudoers.d/" + file + " | cut -c1-64"); got != sum {
 		t.Errorf("%s changed during report-only: %s → %s", file, sum, got)
 	}
@@ -187,7 +192,6 @@ func gateAdoptionReportOnly(t *testing.T, d *Device, file, user, sum, members st
 		}
 	}
 
-	// What enforcement would change.
 	rows := waitConfig(t, d, "report-only status of sudo", "sudo", 2*time.Minute, func(r []ResourceStatus) bool {
 		for _, row := range r {
 			if row.ResourceID == "sudo" && row.Status == "pending" {
@@ -231,10 +235,10 @@ func gateAdoptionEnforce(t *testing.T, d *Device, file, user, sum string) {
 		return p["username"] == user && p["group"] == "sudo" && p["removed"] == true
 	})
 
-	if got := d.Must("test -e /etc/sudoers.d/" + file + " && echo present || echo gone"); got != "gone" {
+	if got := d.Must("sudo test -e /etc/sudoers.d/" + file + " && echo present || echo gone"); got != "gone" {
 		t.Errorf("%s is still in /etc/sudoers.d", file)
 	}
-	if got := d.Must("sudo sha256sum " + quarantineDir + file + ".* | cut -c1-64"); got != sum {
+	if got := d.Must("sudo sh -c 'sha256sum " + quarantineDir + file + ".*' | cut -c1-64"); got != sum {
 		t.Errorf("quarantined copy of %s: %s, want %s", file, got, sum)
 	}
 	if got := d.Must("id -nG " + user); strings.Contains(" "+got+" ", " sudo ") {
@@ -290,6 +294,7 @@ const rolloutGate = "config rollout"
 type rolloutShared struct {
 	mu       sync.Mutex
 	group    string
+	run      string
 	settings json.RawMessage
 	deletes  []string
 	cleaned  bool
@@ -324,8 +329,41 @@ func listRollouts(t *testing.T, s *Stack, status string) []configRollout {
 	return page.Items
 }
 
+// sessionDo sends a request as alice and signs in again once if the session ended, as cleanupCall does.
+func (s *Stack) sessionDo(t *testing.T, ctx context.Context, method, path string, body any) (portal.Response, error) {
+	t.Helper()
+	res, err := s.session().Do(ctx, method, path, body)
+	if err == nil && res.Status == http.StatusUnauthorized {
+		s.Login(t)
+		res, err = s.session().Do(ctx, method, path, body)
+	}
+	return res, err
+}
+
+// revertChangeSet reverts a change set with a dry run and its plan hash. The revert of the open rollout's own change
+// set ends that rollout as reverted and reaches every device at once.
+func (s *Stack) revertChangeSet(t *testing.T, id string) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	path := "/api/v1/change-sets/" + id + "/revert"
+	res, err := s.sessionDo(t, ctx, http.MethodPost, path+"?dry_run=true", nil)
+	var dry struct {
+		Hash string `json:"plan_sha256"`
+	}
+	if err != nil || res.Status != http.StatusOK || json.Unmarshal(res.Body, &dry) != nil || dry.Hash == "" {
+		return fmt.Errorf("dry run of the revert of %s: HTTP %d %v %s", id, res.Status, err, res.Body)
+	}
+	res, err = s.sessionDo(t, ctx, http.MethodPost, path+"?"+url.Values{"expected_plan": {dry.Hash}}.Encode(), nil)
+	if err != nil || res.Status != http.StatusOK {
+		return fmt.Errorf("revert of %s: HTTP %d %v %s", id, res.Status, err, res.Body)
+	}
+	return nil
+}
+
 // cleanup ends the open rollouts, puts the organization's rollout settings back and removes what the gate created.
-// Both VMs call it; the first does the work.
+// A running rollout is completed; a halted one carries a unit that fails, which must not reach the other devices, so
+// its change set is reverted. Both VMs call it; the first does the work.
 func (r *rolloutShared) cleanup(t *testing.T, s *Stack) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -333,26 +371,30 @@ func (r *rolloutShared) cleanup(t *testing.T, s *Stack) {
 		return
 	}
 	r.cleaned = true
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	for _, status := range []string{"running", "halted"} {
-		res, err := s.session().Do(ctx, http.MethodGet, "/api/v1/config-rollouts?page_size=25&status="+status, nil)
+		res, err := s.sessionDo(t, ctx, http.MethodGet, "/api/v1/config-rollouts?page_size=25&status="+status, nil)
 		var page struct {
 			Items []configRollout `json:"items"`
 		}
 		if err != nil || res.Status != http.StatusOK || json.Unmarshal(res.Body, &page) != nil {
-			t.Errorf("cleanup: listing %s rollouts: %v %s", status, err, res.Body)
+			t.Errorf("cleanup: listing %s rollouts: HTTP %d %v %s", status, res.Status, err, res.Body)
 			continue
 		}
 		for _, ro := range page.Items {
-			s.cleanupCall(t, http.MethodPost, "/api/v1/config-rollouts/"+ro.ID+"/complete", http.StatusOK)
+			if status == "running" {
+				s.cleanupCall(t, http.MethodPost, "/api/v1/config-rollouts/"+ro.ID+"/complete", http.StatusOK)
+			} else if err := s.revertChangeSet(t, ro.ChangeSetID); err != nil {
+				t.Errorf("cleanup: %v", err)
+			}
 		}
 	}
 	if r.settings != nil {
 		var orig rolloutSettings
 		if err := json.Unmarshal(r.settings, &orig); err != nil {
 			t.Errorf("cleanup: rollout settings %s: %v", r.settings, err)
-		} else if res, err := s.session().Do(ctx, http.MethodPut, "/api/v1/settings/rollout", orig); err != nil || res.Status != http.StatusOK {
+		} else if res, err := s.sessionDo(t, ctx, http.MethodPut, "/api/v1/settings/rollout", orig); err != nil || res.Status != http.StatusOK {
 			t.Errorf("cleanup: restoring the rollout settings: HTTP %d %v %s", res.Status, err, res.Body)
 		}
 	}
@@ -419,8 +461,8 @@ func TestConfigRolloutGates(t *testing.T) {
 }
 
 func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rolloutShared, canary string) {
+	vm.Gate(t, rolloutGate)
 	isCanary := vm.Name == canary
-	run := d.run
 	for _, status := range []string{"running", "halted"} {
 		if open := listRollouts(t, s, status); len(open) > 0 {
 			t.Fatalf("rollout %s of the organization is %s; complete it first", open[0].ID, status)
@@ -431,7 +473,8 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 		devices, groups := vm.Shared("device"), vm.Shared("group")
 		shared.mu.Lock()
 		defer shared.mu.Unlock()
-		shared.group = s.ID(t, s.Call(t, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": "systest rollout " + run}, http.StatusCreated))
+		shared.run = unique()
+		shared.group = s.ID(t, s.Call(t, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": "systest rollout " + shared.run}, http.StatusCreated))
 		for name, id := range devices {
 			s.Call(t, http.MethodPut, "/api/v1/devices/"+id+"/groups", map[string]any{"device_group_ids": []string{groups[name], shared.group}}, http.StatusOK)
 		}
@@ -444,27 +487,48 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 		return ""
 	})
 	shared.mu.Lock()
-	group := shared.group
+	run, group := shared.run, shared.group
 	shared.mu.Unlock()
-
-	// Staged file: the canary VM applies it, the other one gets no new bundle.
-	path := "/etc/paddock-systest/" + run + "-staged.conf"
-	content := "staged " + run + "\n"
-	before := d.bundleVersion()
-	rolloutID := vm.Together(t, rolloutGate, "stage file", func() string {
-		res := s.Call(t, http.MethodPost, "/api/v1/managed-files", map[string]any{
-			"path": path, "content": content, "mode": "0640", "owner": "root", "group": "adm", "device_group_id": group,
-		}, http.StatusCreated)
-		shared.mu.Lock()
-		shared.deletes = append(shared.deletes, "/api/v1/managed-files/"+s.ID(t, res))
-		shared.mu.Unlock()
-		open := listRollouts(t, s, "running")
-		if len(open) != 1 {
-			t.Fatalf("%d running rollouts after the staged file, want 1", len(open))
+	var outside string // the device that is no canary
+	for name, id := range vm.Shared("device") {
+		if name != canary {
+			outside = id
 		}
-		return open[0].ID
+	}
+	// With waves [1,100] the first wave holds the devices of bucket 0 besides the canary group.
+	inWave := func(rollout string) bool { return configBucket(outside, rollout) < 1 }
+
+	// The file is staged under a new path until the device outside the canary group is outside the first wave too:
+	// its bucket depends on the rollout ID, which exists only after staging. This selects the fixture, no assertion
+	// is repeated.
+	content := "staged " + run + "\n"
+	staged := vm.Together(t, rolloutGate, "stage file", func() string {
+		for attempt := range 3 {
+			path := fmt.Sprintf("/etc/paddock-systest/%s-staged%d.conf", run, attempt)
+			res := s.Call(t, http.MethodPost, "/api/v1/managed-files", map[string]any{
+				"path": path, "content": content, "mode": "0640", "owner": "root", "group": "adm", "device_group_id": group,
+			}, http.StatusCreated)
+			shared.mu.Lock()
+			shared.deletes = append(shared.deletes, "/api/v1/managed-files/"+s.ID(t, res))
+			shared.mu.Unlock()
+			open := listRollouts(t, s, "running")
+			if len(open) != 1 {
+				t.Fatalf("%d running rollouts after the staged file, want 1", len(open))
+			}
+			if !inWave(open[0].ID) {
+				return open[0].ID + " " + path
+			}
+			t.Logf("device %s is in the first wave of rollout %s; staging again", outside, open[0].ID)
+			if err := s.revertChangeSet(t, open[0].ChangeSetID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Fatal("the device outside the canary group was in the first wave in three draws")
+		return ""
 	})
+	rolloutID, path, _ := strings.Cut(staged, " ")
 	resource := "file:" + path
+	before := d.bundleVersion()
 	if isCanary {
 		waitConfig(t, d, "staged file applied", resource, 6*time.Minute, func(r []ResourceStatus) bool {
 			return len(r) == 1 && r[0].Status == "applied"
@@ -476,9 +540,6 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 			t.Error("the canary VM's bundle does not carry the rollout")
 		}
 	} else {
-		if b := configBucket(d.ID, rolloutID); b < 1 {
-			t.Fatalf("device %s has bucket %d for rollout %s, inside the 1 %% wave (1 in 100 runs); run the gate again", d.ID, b, rolloutID)
-		}
 		start := time.Now()
 		for time.Since(start) < 2*time.Minute {
 			d.Checkin()
@@ -487,7 +548,7 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 				t.Fatalf("the VM outside the wave got bundle %v (had %v)", v, before)
 			}
 		}
-		if got := d.Must("test -e " + path + " && echo present || echo absent"); got != "absent" || len(d.ConfigStatus(resource)) != 0 {
+		if got := d.Must("sudo test -e " + path + " && echo present || echo absent"); got != "absent" || len(d.ConfigStatus(resource)) != 0 {
 			t.Errorf("the staged file reached the VM outside the wave (%s)", got)
 		}
 	}
@@ -504,7 +565,8 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 		t.Errorf("staged file after the completion: %q", got)
 	}
 
-	// Staged unit that does not exist on the VMs: the canary VM reports it failed and the worker halts the rollout.
+	// The unit exists on no VM: the canary VM reports it failed and the worker halts the rollout. The other VM
+	// reports it only when its bucket puts it in the first wave.
 	unit := "systest-missing-" + run + ".service"
 	unitResource := "unit:" + unit
 	failing := vm.Together(t, rolloutGate, "stage unit", func() string {
@@ -519,7 +581,8 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 		return open[0].ID + " " + open[0].ChangeSetID
 	})
 	failingID, changeSet, _ := strings.Cut(failing, " ")
-	if isCanary {
+	reportsUnit := isCanary || inWave(failingID)
+	if reportsUnit {
 		rows := waitConfig(t, d, "staged unit failed", unitResource, 6*time.Minute, func(r []ResourceStatus) bool {
 			return len(r) == 1 && r[0].Status == "failed"
 		})
@@ -539,27 +602,21 @@ func gateConfigRollout(t *testing.T, s *Stack, vm *VM, d *Device, shared *rollou
 		}
 		return ""
 	})
-	if !isCanary && len(d.ConfigStatus(unitResource)) != 0 {
+	if !reportsUnit && len(d.ConfigStatus(unitResource)) != 0 {
 		t.Errorf("the VM outside the wave reports %s", unitResource)
 	}
 
-	// Revert of the staged change set ends the rollout; the canary VM's next apply lacks the unit.
 	vm.Together(t, rolloutGate, "revert", func() string {
 		s.StepUp(t)
-		var dry struct {
-			Hash string `json:"plan_sha256"`
+		if err := s.revertChangeSet(t, changeSet); err != nil {
+			t.Fatal(err)
 		}
-		path := "/api/v1/change-sets/" + changeSet + "/revert"
-		if err := json.Unmarshal(s.Call(t, http.MethodPost, path+"?dry_run=true", nil, http.StatusOK).Body, &dry); err != nil || dry.Hash == "" {
-			t.Fatalf("dry run of the revert: %v", err)
-		}
-		s.Call(t, http.MethodPost, path+"?"+url.Values{"expected_plan": {dry.Hash}}.Encode(), nil, http.StatusOK)
 		if ro := listRollouts(t, s, "reverted"); len(ro) == 0 || ro[0].ID != failingID {
 			t.Fatalf("reverted rollouts %+v, want %s first", ro, failingID)
 		}
 		return ""
 	})
-	if isCanary {
+	if reportsUnit {
 		waitConfig(t, d, "staged unit gone from the apply status", unitResource, 6*time.Minute, func(r []ResourceStatus) bool { return len(r) == 0 })
 	}
 	if got := len(haltEvents(t, s, failingID)); got != 1 {
