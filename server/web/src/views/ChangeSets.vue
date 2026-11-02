@@ -56,6 +56,8 @@ const columns = computed<ListColumn[]>(() => [
 
 // The rollout page links here with the change set to revert. Read before the list mounts: it rewrites the query.
 const requested = typeof route.query.revert === 'string' ? route.query.revert : ''
+// The revert of the open rollout's own change set is always immediate (plan M11 decision 21.3): no opt-out to offer.
+const ownRollout = ref(requested !== '')
 
 onMounted(async () => {
   const pending = resumeStepUp<PendingRevert>(stepUpAction, stepUpTarget)
@@ -120,6 +122,7 @@ async function startRevert(cs: ChangeSet, urgent: UrgentInput = noUrgent()): Pro
 }
 
 function closeRevert(): void {
+  ownRollout.value = false
   revertTarget.value = null
   revertResult.value = null
   planChanged.value = false
@@ -371,7 +374,7 @@ async function submitRevert(): Promise<void> {
       <ChangeSetPlan :plan="revertResult.plan" />
       <UrgentOptOut
         v-model="revertUrgent"
-        :enabled="rolloutsEnabled"
+        :enabled="rolloutsEnabled && !ownRollout"
         :show-errors="urgentTouched"
       />
     </ConfirmDialog>

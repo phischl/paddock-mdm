@@ -118,8 +118,10 @@ export const urgentReasonMax = 500
 /** Whether the opt-out is complete: unchecked, or checked with a reason of the allowed length. */
 export function validUrgent(u: UrgentInput | undefined): boolean {
   if (!u?.urgent) return true
-  const len = [...u.reason.trim()].length
-  return len >= urgentReasonMin && len <= urgentReasonMax
+  const reason = u.reason.trim()
+  const len = [...reason].length
+  // The server refuses control characters in a reason.
+  return len >= urgentReasonMin && len <= urgentReasonMax && !/[\x00-\x08\x0b-\x1f\x7f]/.test(reason)
 }
 
 /** The query parameters of a write: urgent and reason when opted out, nothing otherwise. */

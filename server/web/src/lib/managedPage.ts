@@ -23,6 +23,7 @@ export function useManagedPage<T extends { id: string }, I>(opts: {
   const router = useRouter()
   const rolloutsEnabled = useRolloutsEnabled()
   const deleting = ref<T | null>(null)
+  const deletePending = ref(false)
   const groups = ref<{ id: string; name: string }[]>([])
   const open = ref(false)
   const target = ref<T | null>(null)
@@ -73,7 +74,12 @@ export function useManagedPage<T extends { id: string }, I>(opts: {
     const item = deleting.value
     if (!item) return
     deleting.value = null
-    pageProblem.value = (await opts.remove(item.id, urgent)) ?? ''
+    deletePending.value = true
+    try {
+      pageProblem.value = (await opts.remove(item.id, urgent)) ?? ''
+    } finally {
+      deletePending.value = false
+    }
     if (pageProblem.value === stepUpRequired && opts.stepUpAction) {
       startStepUp(opts.stepUpAction + '-delete', 'list', { id: item.id, urgent } satisfies PendingDelete)
     }
@@ -86,6 +92,7 @@ export function useManagedPage<T extends { id: string }, I>(opts: {
   }
 
   return {
-    groups, open, target, problem, pageProblem, openDialog, submit, remove, groupName, rolloutsEnabled, deleting, deleteMessage, confirmDelete,
+    groups, open, target, problem, pageProblem, openDialog, submit, remove, groupName, rolloutsEnabled, deleting, deletePending, deleteMessage,
+    confirmDelete,
   }
 }

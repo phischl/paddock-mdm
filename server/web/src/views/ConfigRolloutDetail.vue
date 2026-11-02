@@ -71,7 +71,7 @@ async function act(action: RolloutAction): Promise<void> {
   let reason = ''
   if (action === 'halt') {
     const answer = await confirm({
-      ...confirmation(action), reason: { label: t('configRollouts.actions.halt.reason'), required: true, maxLength: 500 },
+      ...confirmation(action), reason: { label: t('configRollouts.actions.halt.reason'), required: true, minLength: 2, maxLength: 500 },
     })
     if (!answer) return
     reason = answer.reason

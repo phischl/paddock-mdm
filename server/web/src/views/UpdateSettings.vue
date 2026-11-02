@@ -53,9 +53,10 @@ async function save(): Promise<void> {
   await store({ settings: form.value, urgent: urgent.value })
 }
 
-async function store(p: PendingSave): Promise<void> {
+// A write repeated after the step-up never starts another one: the problem is shown instead (lib/stepUp.ts contract).
+async function store(p: PendingSave, resumed = false): Promise<void> {
   const res = await saveUpdateSettings(p.settings, p.urgent)
-  if (res === stepUpRequired) {
+  if (res === stepUpRequired && !resumed) {
     startStepUp('update-settings', 'update-settings', p)
     return
   }
@@ -76,7 +77,7 @@ onMounted(async () => {
   if (!pending) return
   await router.replace(withoutStepUpParam())
   if (pending.failed) problem.value = 'step_up_failed'
-  else await store(pending.payload)
+  else await store(pending.payload, true)
 })
 </script>
 

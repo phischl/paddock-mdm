@@ -26,7 +26,8 @@ const page = useManagedPage<PackageHold, HoldInput>({
   reload: () => void list.value?.reload(),
 })
 const {
-  groups, open, target, problem, pageProblem, openDialog, submit, remove, groupName, rolloutsEnabled, deleting, deleteMessage, confirmDelete,
+  groups, open, target, problem, pageProblem, openDialog, submit, remove, groupName, rolloutsEnabled, deleting, deletePending, deleteMessage,
+  confirmDelete,
 } = page
 
 const filters = computed(() => [{ ...groupFilter(groups.value), label: 'managed.scope' }])
@@ -115,8 +116,8 @@ const columns = computed<ListColumn[]>(() => [
             :aria-label="t('managed.deleteLabel', { name: item.package })"
             color="error"
             size="small"
-            :loading="pending"
-            :disabled="pending"
+            :loading="pending || deletePending"
+            :disabled="pending || deletePending"
             @click="run(() => remove(item))"
           >
             {{ t('common.delete') }}

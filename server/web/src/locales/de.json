@@ -314,7 +314,7 @@
     "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
     "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
     "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
-    "rollout_running": "Für diesen Abschnitt läuft ein Rollout gestaffelter Änderungen. Schließen Sie ihn zuerst ab oder halten Sie ihn an, oder machen Sie diese Änderung dringend."
+    "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend."
   },
   "audit": {
     "vulnerability": {

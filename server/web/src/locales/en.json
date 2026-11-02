@@ -314,7 +314,7 @@
     "notification_test_pending": "An earlier test of this destination is still waiting for its result. Try again in a moment.",
     "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
     "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
-    "rollout_running": "A rollout of staged changes is running for this section. Complete or halt it first, or make this change urgent."
+    "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent."
   },
   "audit": {
     "vulnerability": {

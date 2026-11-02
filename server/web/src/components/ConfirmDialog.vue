@@ -38,7 +38,7 @@ const card = ref<ComponentPublicInstance | null>(null)
 const canConfirm = computed(
   () =>
     (!props.requireTypedText || typed.value === props.requireTypedText) &&
-    (!props.reason?.required || reasonText.value.trim() !== ''),
+    (!props.reason?.required || [...reasonText.value.trim()].length >= (props.reason.minLength ?? 1)),
 )
 
 /**
