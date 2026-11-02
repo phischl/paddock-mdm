@@ -13,10 +13,15 @@ Paddock distributes signed configuration to Linux laptops and desktops, manages 
 (Authentik and Himmelblau), sudo rights from permission profiles, a managed local administrator, disk encryption
 with TPM2, boot PIN and escrowed recovery keys (also encrypting installed devices in place), updates and inventory (Fleet), and the device lifecycle up to
 removing Paddock from a device; it detects tampering and keeps a tamper-evident audit trail for ISO 27001 (WORM storage, signed daily hash chain, verified
-every night). Signed agent releases are imported from GitHub with one button and rolled out in waves. Devices only ever talk to the
+every night, exported as signed evidence packages that verify offline). Security events reach signed webhooks, e-mail
+and a SIEM feed, and findings record how each one was handled. Retention and privacy settings per organization keep
+personal data only as long as the retention schedule says. Signed agent releases are imported from GitHub with one
+button and rolled out in waves. Administrators can let an AI assistant work with Paddock through the MCP, within
+policies they set. Devices only ever talk to the
 server on their own initiative, and keep working when it is unreachable. Users keep the administrator rights their
 organization grants them; Paddock makes those rights explicit, reviewable and audited. The portal speaks English
-and German, and one identity can switch between the platform administrator role and its organization's role.
+and German, signs administrators in with a passkey, guides a new installation with a setup checklist, and one
+identity can switch between the platform administrator role and its organization's role.
 
 <p align="center">
   <picture>
@@ -47,10 +52,13 @@ and German, and one identity can switch between the platform administrator role 
 </p>
 
 > [!WARNING]
-> **Alpha.** Paddock 0.1.0-alpha.6 is the current pre-release (milestones M0–M8a, the M8s hardening, the lab fixes
+> **Alpha.** Paddock 0.1.0-alpha.7 is the current pre-release (milestones M0–M8a, the M8s hardening, the lab fixes
 > M8x and M8f, the device lifecycle M8d, the device name M8h, the optional automatic unseal M8u, the in-place
-> encryption of installed devices M8e and the evidence integrity M8b), meant for
-> evaluation, not for production fleets. There are no upgrade guarantees between alpha releases. Revocation (Lock,
+> encryption of installed devices M8e, the evidence integrity M8b, the notifications and findings M9, evidence
+> exports, privacy and retention M10 and AI assistants through the MCP M14), meant for
+> evaluation, not for production fleets. There are no upgrade guarantees between alpha releases; 0.1.0-alpha.7 moves
+> to PostgreSQL 18, Valkey 9 and RabbitMQ 4.4 and has no upgrade path from earlier releases: install it fresh
+> (`docs/operations/upgrade.md`). Revocation (Lock,
 > Destroy, dead man's switch) stays disabled behind `PADDOCK_REVOCATION_ENABLED` until its code has passed the
 > second-person review and an installation has passed its hardware acceptance (`docs/operations/revocation-acceptance.md`).
 
