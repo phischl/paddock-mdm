@@ -110,6 +110,19 @@ func TestSoftwareStatusEndpoints(t *testing.T) {
 		t.Fatalf("a group without the device lists %+v", devices)
 	}
 
+	// PDK-716 fix round 1: another organization's group id as the filter of an own entry is an empty 200, no oracle.
+	globexGroup := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'Globex group')`, globexGroup, e.globex)
+	exec(`INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)`, e.globex, globexGroup, globexDev)
+	r := e.do(call{method: "GET", path: "/api/v1/software-catalog/" + editor.String() + "/devices?device_group_id=" + globexGroup.String(), cookie: auditor})
+	if r.status != http.StatusOK {
+		t.Fatalf("foreign group filter: %d %s", r.status, r.body)
+	}
+	r.decode(t, &devices)
+	if devices.Total != 0 || len(devices.Items) != 0 {
+		t.Fatalf("foreign group filter lists %+v", devices)
+	}
+
 	// Another organization's device or entry is not found, in both directions.
 	for _, c := range []struct {
 		name   string
