@@ -44,7 +44,7 @@ const columns: ListColumn[] = [
   { key: 'suites', title: 'software.sources.suites', role: 'meta', hideBelow: 'md' },
   { key: 'fingerprint', title: 'software.sources.fingerprint', role: 'meta', hideBelow: 'sm' },
   { key: 'entry_count', title: 'software.sources.entries', role: 'meta', align: 'end' },
-  { key: 'updated_at', title: 'common.updatedAt', sortable: true, role: 'meta' },
+  { key: 'updated_at', title: 'common.updatedAt', sortable: true, role: 'meta', hideBelow: 'xl' },
   ...(session.canDelete ? [{ key: 'actions', title: 'common.actions', role: 'actions' as const }] : []),
 ]
 
@@ -281,13 +281,5 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
 .src-actions {
   flex-wrap: nowrap;
   white-space: nowrap;
-}
-</style>
-
-<style>
-/* The ListColumn hideBelow option stops at md, which still leaves the table too wide at 1280 px: the actions got
-   clipped. The Updated column (7th; the cards layout has no cells and still shows it) goes below 1440 px. */
-@media (max-width: 1439.98px) {
-  [data-testid='source-list'] .v-table tr > :nth-child(7) { display: none; }
 }
 </style>

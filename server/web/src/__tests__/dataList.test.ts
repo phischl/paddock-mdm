@@ -80,6 +80,15 @@ async function mountList(
 }
 
 describe('DataList', () => {
+  it('marks a column with hideBelow so the table hides it on narrow viewports (cards keep it)', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 1)))
+    const cols: ListColumn[] = [{ ...columns[0] }, { key: 'status', title: 'organizations.status', hideBelow: 'xl' }]
+    const { w } = await mountList('/list', fetch, undefined, { columns: cols })
+    expect(w.find('th.pd-hide-xl').exists()).toBe(true)
+    expect(w.find('td.pd-hide-xl').exists()).toBe(true)
+    expect(w.find('th.pd-hide-xl').text()).toBe('Status')
+  })
+
   it('shows the hint of a filter below it while the filter has the focus', async () => {
     const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 1)))
     const { w } = await mountList('/list', fetch, undefined, { filters: [{ ...filters[0], hint: 'devices.contactHint' }] })

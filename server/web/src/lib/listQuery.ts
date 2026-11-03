@@ -106,7 +106,7 @@ export interface ListColumn {
   role?: 'primary' | 'status' | 'meta' | 'actions'
   mono?: boolean
   align?: 'start' | 'end'
-  hideBelow?: 'sm' | 'md'
+  hideBelow?: 'sm' | 'md' | 'xl'
 }
 
 /** The query keys a list owns, prefixed when the list shares the page with another (plan M7c decision 21). */
