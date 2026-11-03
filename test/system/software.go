@@ -17,9 +17,10 @@ import (
 const (
 	// gateApp is the package of the software gate: versions 1.0 and 1.1 in the VM's local repository.
 	gateApp = "paddock-gate-app"
-	// gateAnchor is a second package of the same repository. A bundle carries a source only for required packages
-	// (plan M13a decision 14), so SW4 keeps the source in the bundle with it while gateApp is held: otherwise the
-	// regular run's apt-get update drops the repository and no newer version exists to hold back.
+	// gateAnchor is a second package of the same repository, required from SW3 on. A bundle carries a source only for
+	// required packages (plan M13a decision 14), so it keeps the source while gateApp is forbidden (SW3: apt-get install
+	// fails at the -1 pin, not at a missing source) or held (SW4: otherwise the regular run's apt-get update drops the
+	// repository and no newer version exists to hold back).
 	gateAnchor = "paddock-gate-anchor"
 	// gateRepoDir holds the repository, its keys, its TLS files and the scripts of the gate on the VM.
 	gateRepoDir = "/srv/paddock-gate"
@@ -212,6 +213,34 @@ func (d *Device) scopedUpdate(slug string) (string, error) {
 	defer cancel()
 	return d.SSH(ctx, nil, "LANG=C sudo apt-get update -q -o Dir::Etc::sourcelist=sources.list.d/paddock-"+slug+
 		".sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 2>&1")
+}
+
+// signatureMarkers are what apt prints when a repository's signature does not verify: gpgv's NO_PUBKEY, sqv's
+// "Missing key" and "No good signature" (apt 3 on Debian 13 and Ubuntu 26.04 never prints NO_PUBKEY), and the error
+// for a repository left unsigned.
+var signatureMarkers = []string{"NO_PUBKEY", "Missing key", "No good signature", "is not signed"}
+
+// signatureRefused reports whether apt-get update's output refuses a signature: a marker and a W: or E: line.
+func signatureRefused(out string) bool {
+	return slices.ContainsFunc(signatureMarkers, func(m string) bool { return strings.Contains(out, m) }) &&
+		(aptError(out) || aptLine(out, "W:"))
+}
+
+// aptError reports whether apt printed an error line.
+func aptError(out string) bool { return aptLine(out, "E:") }
+
+func aptLine(out, prefix string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// listsLocked reports whether apt-get update stopped at the package lists lock another apt run holds.
+func listsLocked(out string) bool {
+	return strings.Contains(out, "Could not get lock") && strings.Contains(out, "/var/lib/apt/lists/lock")
 }
 
 // installedVersion is the installed version of pkg ("" when it is not installed).

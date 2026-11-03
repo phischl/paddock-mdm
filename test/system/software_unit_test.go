@@ -39,3 +39,38 @@ func TestSoftwareHelpersUnit(t *testing.T) {
 		t.Errorf("gateSourceFile =\n%s\nwant\n%s", got, want)
 	}
 }
+
+// TestSoftwareAptOutputUnit pins how SW7 reads apt-get update: a refused signature in gpgv's and sqv's wording counts
+// only with a W: or E: line, a clean update never counts, and the lists lock is told apart from other errors.
+func TestSoftwareAptOutputUnit(t *testing.T) {
+	gpgv := "Get:1 https://127.0.0.1:8443 ./ InRelease [1234 B]\nErr:1 https://127.0.0.1:8443 ./ InRelease\n" +
+		"  The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 0123456789ABCDEF\n" +
+		"W: GPG error: https://127.0.0.1:8443 ./ InRelease: The following signatures couldn't be verified\n" +
+		"E: The repository 'https://127.0.0.1:8443 ./ InRelease' is not signed.\n"
+	sqv := "Err:1 https://127.0.0.1:8443 ./ InRelease\n  Sub-process /usr/bin/sqv returned an error code (1), error message is: Missing key 0123456789ABCDEF, which is needed to verify signature.\n" +
+		"W: OpenPGP signature verification failed: https://127.0.0.1:8443 ./ InRelease: Sub-process /usr/bin/sqv returned an error code (1)\n" +
+		"E: The repository 'https://127.0.0.1:8443 ./ InRelease' is not signed.\n"
+	clean := "Get:1 https://127.0.0.1:8443 ./ InRelease [1234 B]\nReading package lists...\n"
+	locked := "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (apt-get)\nE: Unable to lock directory /var/lib/apt/lists/\n"
+	for name, c := range map[string]struct {
+		out                   string
+		refused, failed, lock bool
+	}{
+		"gpgv":      {gpgv, true, true, false},
+		"sqv":       {sqv, true, true, false},
+		"clean":     {clean, false, false, false},
+		"locked":    {locked, false, true, true},
+		"no line":   {"NO_PUBKEY in a package description\n", false, false, false},
+		"dpkg lock": {"E: Could not get lock /var/lib/dpkg/lock-frontend.\n", false, true, false},
+	} {
+		if got := signatureRefused(c.out); got != c.refused {
+			t.Errorf("%s: signatureRefused = %v, want %v", name, got, c.refused)
+		}
+		if got := aptError(c.out); got != c.failed {
+			t.Errorf("%s: aptError = %v, want %v", name, got, c.failed)
+		}
+		if got := listsLocked(c.out); got != c.lock {
+			t.Errorf("%s: listsLocked = %v, want %v", name, got, c.lock)
+		}
+	}
+}

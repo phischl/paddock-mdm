@@ -152,6 +152,8 @@ func gateSW2(t *testing.T, d *Device, g *softwareGate) {
 // gateSW3: forbid removes the package with device.software_removed{intent: forbid} and pins it to -1, so apt-get
 // install fails; a dpkg -i of it is undone within the drift interval with a second event.
 func gateSW3(t *testing.T, d *Device, g *softwareGate) {
+	d.assign(d.catalogEntry(g.source, gateAnchor), "required", "")
+	waitVersion(t, d, gateAnchor, "1.0", 6*time.Minute, true)
 	g.removed = d.eventIDs("device.software_removed")
 	d.reassign(g.assignment, "forbid", "")
 	waitVersion(t, d, gateApp, "", 6*time.Minute, true)
@@ -163,10 +165,17 @@ func gateSW3(t *testing.T, d *Device, g *softwareGate) {
 	if pins := d.Must("sudo cat " + gateForbidFile); !strings.Contains(pins, gateForbidPin(gateApp)) {
 		t.Errorf("%s lacks the forbid pin:\n%s", gateForbidFile, pins)
 	}
+	if source := gateSourcePath(g.slug); d.Must("sudo test -e "+source+" && echo present || echo absent") != "present" {
+		t.Fatalf("%s is gone while %s is required: the refusal below would not prove the pin", source, gateAnchor)
+	}
+	if policy := d.Must("LANG=C apt-cache policy " + gateApp); !regexp.MustCompile(`(?m)^\s*1\.1 -1$`).MatchString(policy) {
+		t.Errorf("apt-cache policy does not pin the available 1.1 to -1:\n%s", policy)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	if out, err := d.SSH(ctx, nil, "LANG=C sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=120 "+gateApp+" 2>&1"); err == nil {
-		t.Errorf("apt-get install of a forbidden package succeeded:\n%s", out)
+	out, err := d.SSH(ctx, nil, "LANG=C sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=120 "+gateApp+" 2>&1")
+	if err == nil || !strings.Contains(out, "has no installation candidate") {
+		t.Errorf("apt-get install of a forbidden package (%v), want a refusal for no installation candidate:\n%s", err, out)
 	}
 	if v := d.installedVersion(gateApp); v != "" {
 		t.Fatalf("forbidden %s installed at %s", gateApp, v)
@@ -182,15 +191,13 @@ func gateSW3(t *testing.T, d *Device, g *softwareGate) {
 }
 
 // gateSW4: a hold keeps the installed 1.0 through the regular update run, which names it held back; the catalog
-// itself never upgrades a required latest package, the next regular run does. gateAnchor keeps the source in the
-// bundle while gateApp is held (see gateAnchor).
+// itself never upgrades a required latest package, the next regular run does. gateAnchor, required since SW3, keeps
+// the source in the bundle while gateApp is held (see gateAnchor).
 func gateSW4(t *testing.T, d *Device, g *softwareGate) {
 	g.installed = d.eventIDs("device.software_installed")
 	d.reassign(g.assignment, "required", "1.0")
 	waitVersion(t, d, gateApp, "1.0", 6*time.Minute, true)
 	d.waitNewEvent(t, "device.software_installed", g.installed, 5*time.Minute, intentIs("required"))
-	anchor := d.assign(d.catalogEntry(g.source, gateAnchor), "required", "")
-	waitVersion(t, d, gateAnchor, "1.0", 6*time.Minute, true)
 
 	d.reassign(g.assignment, "hold", "")
 	Until(t, d.Name+": "+gateApp+" held", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
@@ -222,7 +229,6 @@ func gateSW4(t *testing.T, d *Device, g *softwareGate) {
 	if v := d.installedVersion(gateApp); v != "1.1" {
 		t.Errorf("%s at %s after the second regular run, want 1.1: %v", gateApp, v, run)
 	}
-	d.s.Call(t, http.MethodDelete, "/api/v1/software-assignments/"+anchor, nil, http.StatusNoContent)
 }
 
 // regularRun starts the regular update run (paddock-updates.service) and returns the params of its device.updates_run.
@@ -297,14 +303,14 @@ func gateSW6(t *testing.T, d *Device, g *softwareGate) {
 	}
 }
 
-// gateSW7: after the repository's key changes, apt refuses the repository (NO_PUBKEY); the source's new key needs a
+// gateSW7: after the repository's key changes, apt refuses the repository's signature; the source's new key needs a
 // step-up (403 and a denied event without), the success records both fingerprints, and within one check-in the
 // device's keyring has the new key, the repository verifies again and required pinned 1.1 installs.
 func gateSW7(t *testing.T, d *Device, g *softwareGate) {
 	old := g.repo.Fingerprint
 	g.repo = d.rotateGateRepo()
-	if out, err := d.scopedUpdate(g.slug); !strings.Contains(out, "NO_PUBKEY") {
-		t.Fatalf("apt-get update after the key rotation (%v) does not report NO_PUBKEY:\n%s", err, out)
+	if out, err := d.scopedUpdate(g.slug); !signatureRefused(out) {
+		t.Fatalf("apt-get update after the key rotation (%v) does not refuse the signature:\n%s", err, out)
 	}
 
 	path := "/api/v1/software-sources/" + g.source
@@ -333,11 +339,21 @@ func gateSW7(t *testing.T, d *Device, g *softwareGate) {
 	Until(t, d.Name+": keyring with the new key", 6*time.Minute, 10*time.Second, d.Checkin, func() bool {
 		return d.keyringFingerprint(gateKeyringPath(g.slug)) == g.repo.Fingerprint
 	})
-	if out, err := d.scopedUpdate(g.slug); err != nil || strings.Contains(out, "NO_PUBKEY") || strings.Contains(out, "\nE:") {
-		t.Errorf("apt-get update with the new keyring (%v):\n%s", err, out)
-	}
 	d.reassign(g.assignment, "required", "1.1")
 	waitVersion(t, d, gateApp, "1.1", 6*time.Minute, true)
+	// After the install the agent's own update of the source is done; a lock it still holds is waited for, nothing else.
+	for attempt := 1; ; attempt++ {
+		out, err := d.scopedUpdate(g.slug)
+		if listsLocked(out) && attempt < 6 {
+			t.Logf("%s: apt lists locked (attempt %d), retrying in 10 s", d.Name, attempt)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		if err != nil || signatureRefused(out) || aptError(out) {
+			t.Errorf("apt-get update with the new keyring (%v):\n%s", err, out)
+		}
+		break
+	}
 }
 
 // gateSW8: an edited managed source file and a rogue paddock-*.sources are corrected within the drift interval, each

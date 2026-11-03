@@ -94,11 +94,11 @@ with the snapshot and the run's cleanup.
 | --- | --- |
 | SW1 | `required pinned 1.0` installs 1.0 with the rendered source file, the keyring, the 1001 pin and `device.software_installed` |
 | SW2 | a local `apt-get remove` is undone within the drift interval, `device.software_reinstalled{reason: locally_removed}` |
-| SW3 | `forbid` removes it, pins it to −1 (`apt-get install` fails) and undoes a `dpkg -i` with a second `device.software_removed` |
-| SW4 | a hold keeps 1.0 through the regular run (`updates.run` held back); `required latest` is upgraded only by the next regular run |
+| SW3 | `forbid` removes it and pins it to −1 while `paddock-gate-anchor` (required from here on) keeps the source, so `apt-get install` fails with *no installation candidate*, and a `dpkg -i` is undone with a second `device.software_removed` |
+| SW4 | a hold keeps 1.0 through the regular run (`updates.run` held back; the anchor keeps the source, which a hold alone drops); `required latest` is upgraded only by the next regular run |
 | SW5 | with the stack blocked (`iptables`) and `last-checkin` 20 minutes old, a forbidden `dpkg -i` stays `pending/deferred_offline`; removed after unblocking |
 | SW6 | a held dpkg lock (`fcntl`, transient unit `gate-lock`) gives `pending/dpkg_locked` without a failure event; installed after the lock ends |
-| SW7 | after the repository's key rotation apt reports `NO_PUBKEY`; the key change needs a step-up (denied event without), records both fingerprints, reaches the keyring, and 1.1 installs |
+| SW7 | after the repository's key rotation apt refuses the signature (`NO_PUBKEY` with gpgv, `Missing key` or `No good signature` with sqv, with a `W:`/`E:` line); the key change needs a step-up (denied event without), records both fingerprints, reaches the keyring, and 1.1 installs |
 | SW8 | an edited source file and a rogue `paddock-rogue.sources` are corrected with two `device.tamper_protected_file_changed` |
 
 SW4 runs `paddock-updates.service` twice; on a VM with many pending updates the first regular run takes as long as
