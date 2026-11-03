@@ -373,7 +373,7 @@ const rollout = computed(() => configuration.value?.rollout ?? null)
               <dt>{{ t('overview.configuration.rollout') }}</dt>
               <dd
                 v-if="rollout"
-                class="pd-tabular"
+                class="pd-tabular pd-facts-inline"
               >
                 <RouterLink
                   :to="{ name: 'config-rollout', params: { id: rollout.id } }"
