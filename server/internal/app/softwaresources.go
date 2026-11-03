@@ -33,14 +33,20 @@ type SoftwareSources struct {
 	org    *db.OrgPool
 }
 
+// SoftwareSourceView is a source with the number of catalog entries that use it.
+type SoftwareSourceView struct {
+	pgstore.SoftwareSource
+	EntryCount int64
+}
+
 // NewSoftwareSources creates the use cases.
 func NewSoftwareSources(runner *ActionRunner, org *db.OrgPool) *SoftwareSources {
 	return &SoftwareSources{runner: runner, org: org}
 }
 
 // List returns one page of sources; q matches name and slug.
-func (s *SoftwareSources) List(ctx context.Context, page ListPage) (Listed[pgstore.SoftwareSource], error) {
-	var out Listed[pgstore.SoftwareSource]
+func (s *SoftwareSources) List(ctx context.Context, page ListPage) (Listed[SoftwareSourceView], error) {
+	var out Listed[SoftwareSourceView]
 	if _, err := RequireOrg(ctx, RolesRead); err != nil {
 		return out, err
 	}
@@ -50,32 +56,42 @@ func (s *SoftwareSources) List(ctx context.Context, page ListPage) (Listed[pgsto
 			return fmt.Errorf("count software sources: %w", err)
 		}
 		out.Count = int(n)
-		out.Items, err = q.ListSoftwareSources(ctx, pgstore.ListSoftwareSourcesParams{
+		rows, err := q.ListSoftwareSources(ctx, pgstore.ListSoftwareSourcesParams{
 			QPattern: page.QPattern, Sort: page.Sort, SkipRows: page.Offset, MaxRows: page.Limit,
 		})
-		return err
+		if err != nil {
+			return fmt.Errorf("list software sources: %w", err)
+		}
+		out.Items = make([]SoftwareSourceView, len(rows))
+		for i, r := range rows {
+			out.Items[i] = SoftwareSourceView{SoftwareSource: r.SoftwareSource, EntryCount: r.EntryCount}
+		}
+		return nil
 	})
 	return out, err
 }
 
 // Get returns one source with its signing key.
-func (s *SoftwareSources) Get(ctx context.Context, id uuid.UUID) (pgstore.SoftwareSource, error) {
-	var out pgstore.SoftwareSource
+func (s *SoftwareSources) Get(ctx context.Context, id uuid.UUID) (SoftwareSourceView, error) {
+	var out SoftwareSourceView
 	if _, err := RequireOrg(ctx, RolesRead); err != nil {
 		return out, err
 	}
 	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		var err error
-		out, err = q.GetSoftwareSource(ctx, id)
-		return notFound(err)
+		row, err := q.GetSoftwareSource(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		out = SoftwareSourceView{SoftwareSource: row.SoftwareSource, EntryCount: row.EntryCount}
+		return nil
 	})
 	return out, err
 }
 
 // Create adds a source (audited: software_source.created). The typed fingerprint must equal the signing key's; the
 // key policy is checked before the comparison, so a refused key answers invalid_request whatever was typed.
-func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (pgstore.SoftwareSource, error) {
-	var out pgstore.SoftwareSource
+func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (SoftwareSourceView, error) {
+	var out SoftwareSourceView
 	in.Name = software.NormalizeName(in.Name)
 	in.URIs, in.Suites, in.Components, in.Architectures = nonNil(in.URIs), nonNil(in.Suites), nonNil(in.Components), nonNil(in.Architectures)
 	spec := SpecSoftwareSourceCreate
@@ -97,7 +113,7 @@ func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (
 			return err
 		}
 		p, _ := principal.From(ctx)
-		out, err = q.InsertSoftwareSource(ctx, pgstore.InsertSoftwareSourceParams{
+		out.SoftwareSource, err = q.InsertSoftwareSource(ctx, pgstore.InsertSoftwareSourceParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Slug: in.Slug, Name: in.Name, Uris: in.URIs,
 			Suites: in.Suites, Components: in.Components, Architectures: in.Architectures, SigningKey: key.SigningKey,
 			Fingerprint: key.Fingerprint, WeakKey: key.WeakKey, CreatedBy: uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
@@ -108,7 +124,7 @@ func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (
 		if err != nil {
 			return err
 		}
-		rec.SetTarget(sourceTarget(out))
+		rec.SetTarget(sourceTarget(out.SoftwareSource))
 		rec.StateChanged(statechange.ScopeOrg, org)
 		return nil
 	})
@@ -126,8 +142,8 @@ type SourceUpdate struct {
 // Update changes a source (audited: software_source.updated with the changed fields and the old and the new
 // fingerprint). Every rule is checked on the merged state of the stored source and the change, so a change of the
 // suites alone cannot leave a source that apt refuses.
-func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpdate) (pgstore.SoftwareSource, error) {
-	var out pgstore.SoftwareSource
+func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpdate) (SoftwareSourceView, error) {
+	var out SoftwareSourceView
 	spec := SpecSoftwareSourceUpdate
 	spec.Target = &audit.Target{Type: "software_source", ID: id.String()}
 	err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
@@ -164,7 +180,7 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 		rec.SetParam("fields", fields)
 		rec.SetParam("fingerprint", key.Fingerprint)
 		rec.SetParam("weak_key", key.WeakKey)
-		out, err = q.UpdateSoftwareSource(ctx, pgstore.UpdateSoftwareSourceParams{
+		out.SoftwareSource, err = q.UpdateSoftwareSource(ctx, pgstore.UpdateSoftwareSourceParams{
 			ID: id, Name: merged.Name, Uris: merged.URIs, Suites: merged.Suites, Components: merged.Components,
 			Architectures: merged.Architectures, SigningKey: key.SigningKey, Fingerprint: key.Fingerprint,
 			WeakKey: key.WeakKey,
@@ -175,7 +191,10 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 		if err != nil {
 			return notFound(err)
 		}
-		rec.SetTarget(sourceTarget(out))
+		if out.EntryCount, err = q.CountSoftwareCatalogEntriesBySource(ctx, uuid.NullUUID{UUID: id, Valid: true}); err != nil {
+			return fmt.Errorf("count the catalog entries of software source %s: %w", id, err)
+		}
+		rec.SetTarget(sourceTarget(out.SoftwareSource))
 		rec.StateChanged(statechange.ScopeOrg, out.OrganizationID)
 		return nil
 	})

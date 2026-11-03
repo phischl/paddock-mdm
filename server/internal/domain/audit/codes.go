@@ -1701,7 +1701,7 @@ var registry = map[Code]Definition{
 		Description: "A device could not apply a software assignment or source: the key fingerprint did not match, the operation would have removed other packages, the package has no candidate, or apt failed (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "reason is fingerprint_mismatch, would_remove_dependents, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
+		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

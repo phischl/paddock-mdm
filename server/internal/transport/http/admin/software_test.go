@@ -1,12 +1,15 @@
 package admin_test
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -99,10 +102,26 @@ func TestSoftwareSourcesAPI(t *testing.T) {
 	}
 	var page adminapi.SoftwareSourcePage
 	r.decode(t, &page)
-	if page.Total != 1 || page.Items[0].Id != created.Id {
+	if page.Total != 1 || page.Items[0].Id != created.Id || page.Items[0].EntryCount != 0 || created.EntryCount != 0 {
 		t.Fatalf("page %+v", page)
 	}
 	item := path + "/" + created.Id.String()
+	// PDK-716: entry_count follows the entries that use the source, in the list and in the single read.
+	if _, err := e.super.Exec(context.Background(), `INSERT INTO software_catalog_entry (id, organization_id, name, source_id, packages)
+		VALUES ($1, $2, 'Counted', $3, '[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano"}]'::jsonb)`,
+		uuid.Must(uuid.NewV7()), e.acme, created.Id); err != nil {
+		t.Fatal(err)
+	}
+	r = e.do(call{method: "GET", path: path + "?q=vend", cookie: bob})
+	r.decode(t, &page)
+	var single adminapi.SoftwareSource
+	e.do(call{method: "GET", path: item, cookie: bob}).decode(t, &single)
+	if page.Items[0].EntryCount != 1 || single.EntryCount != 1 {
+		t.Fatalf("entry_count %d in the list, %d in the read, want 1", page.Items[0].EntryCount, single.EntryCount)
+	}
+	if _, err := e.super.Exec(context.Background(), `DELETE FROM software_catalog_entry WHERE name = 'Counted'`); err != nil {
+		t.Fatal(err)
+	}
 	if r := e.do(call{method: "PATCH", path: item, cookie: e.steppedUp(alice, time.Now()), body: map[string]any{"slug": "other"}}); r.status != http.StatusBadRequest {
 		t.Fatalf("patch slug: %d %s", r.status, r.body)
 	}

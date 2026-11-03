@@ -116,15 +116,17 @@ type SoftwareCatalogDeviceQuery struct {
 
 // SoftwareCatalogDevice is one device an entry is assigned to, with what it reported or the derived state.
 type SoftwareCatalogDevice struct {
-	DeviceID   uuid.UUID
-	Hostname   string
-	Package    string
-	Intent     string
-	State      string
-	Version    string
-	Reason     string
-	Error      string
-	ReportedAt *time.Time
+	DeviceID       uuid.UUID
+	Hostname       string
+	Name           string
+	DeviceGroupIDs []uuid.UUID
+	Package        string
+	Intent         string
+	State          string
+	Version        string
+	Reason         string
+	Error          string
+	ReportedAt     *time.Time
 }
 
 // CatalogDevices returns one page of the active devices the catalog entry is assigned to. A missing or foreign entry is
@@ -148,7 +150,8 @@ func (s *SoftwareStatus) CatalogDevices(ctx context.Context, entryID uuid.UUID, 
 		}
 		refs, decodeErr := software.DecodePackages(entry.Packages)
 		for _, r := range rows {
-			item := SoftwareCatalogDevice{DeviceID: r.DeviceID, Hostname: r.Hostname, Package: r.Package, Intent: r.Intent,
+			item := SoftwareCatalogDevice{DeviceID: r.DeviceID, Hostname: r.Hostname, Name: r.Name,
+				DeviceGroupIDs: groupIDsOrEmpty(r.DeviceGroupIds), Package: r.Package, Intent: r.Intent,
 				State: r.State, Version: r.Version, Reason: r.Reason, Error: r.Error, ReportedAt: r.ReportedAt}
 			if r.State == "" {
 				item.State, item.Package = derivedFromRefs(refs, decodeErr, r.OsID, r.OsVersionID, r.Arch)
@@ -168,6 +171,14 @@ func (s *SoftwareStatus) CatalogDevices(ctx context.Context, entryID uuid.UUID, 
 	from := min(int(query.Page.Offset), len(all))
 	out.Items = all[from:min(from+int(query.Page.Limit), len(all))]
 	return out, nil
+}
+
+// groupIDsOrEmpty keeps the JSON of a device without groups an empty array instead of null.
+func groupIDsOrEmpty(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
 }
 
 // derivedSoftwareState is the state of a targeted entry without a reported row: not_applicable when it names no package

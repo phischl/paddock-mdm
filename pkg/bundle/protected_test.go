@@ -46,6 +46,21 @@ func TestRefusedIntent(t *testing.T) {
 	}
 }
 
+// TestFullyProtected: the exact-name predicate for names apt printed covers only the fully protected tier and never
+// reads a name as a pattern (plan M13a amendment 2026-11-03).
+func TestFullyProtected(t *testing.T) {
+	for _, name := range slices.Concat(fullyProtected, []string{"himmelblau-future-addon", "future-himmelblau"}) {
+		if !FullyProtected(name) {
+			t.Errorf("FullyProtected(%q) = false", name)
+		}
+	}
+	for _, name := range slices.Concat(removalProtected, conflictingResult, []string{"nano", "", "himmelblau.", "sud.", "libstdc++6"}) {
+		if FullyProtected(name) {
+			t.Errorf("FullyProtected(%q) = true", name)
+		}
+	}
+}
+
 // TestAptPatternExemptions: every exemption is an exact name that the pattern emulation would refuse without its
 // entry; an entry that is not needed must not be on the list (architect decision 2026-11-03).
 func TestAptPatternExemptions(t *testing.T) {

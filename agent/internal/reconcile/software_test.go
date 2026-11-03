@@ -131,7 +131,7 @@ func TestSoftwareFreshInstall(t *testing.T) {
 			"-o", "APT::Get::List-Cleanup=0", "-o", "DPkg::Lock::Timeout=60"},
 		{"-s", "install", "-y", "-q", "-o", "DPkg::Lock::Timeout=60", "-o", "Dpkg::Options::=--force-confdef", "-o",
 			"Dpkg::Options::=--force-confold", "--allow-downgrades", "nano"},
-		{"install", "-y", "-q", "-o", "DPkg::Lock::Timeout=60", "-o", "Dpkg::Options::=--force-confdef", "-o",
+		{"install", "--no-remove", "-y", "-q", "-o", "DPkg::Lock::Timeout=60", "-o", "Dpkg::Options::=--force-confdef", "-o",
 			"Dpkg::Options::=--force-confold", "--allow-downgrades", "nano"},
 	}
 	if !slices.EqualFunc(sys.AptArgs, wantArgs, slices.Equal) {
@@ -661,16 +661,20 @@ func TestSoftwareLockDuringRemoval(t *testing.T) {
 	}
 }
 
-// TestSoftwareExactRemoval: a removal whose simulation removes another package is refused (review 1 B5).
+// TestSoftwareExactRemoval: a removal whose simulation removes another package is refused (review 1 B5); one that
+// touches a fully protected package, or whose changes cannot be told, has its own reason (PDK-712).
 func TestSoftwareExactRemoval(t *testing.T) {
-	for name, out := range map[string]string{
-		"classic": "The following packages will be REMOVED:\n  libpam-modules-bin paddock-agent\n" +
-			"Remv paddock-agent [1.0]\nRemv libpam-modules-bin [1.5]\n0 upgraded, 0 newly installed, 2 to remove and 0 not upgraded.\n",
-		"apt 3": "REMOVING:\n  libpam-modules-bin  paddock-agent\n\nSummary:\n  Upgrading: 0, Installing: 0, Removing: 2, Not Upgrading: 0\n" +
-			"Remv paddock-agent:amd64 [1.0]\nRemv libpam-modules-bin:amd64 [1.5]\n",
-		"no Remv lines": "REMOVING:\n  libpam-modules-bin  paddock-agent\n\nSummary:\n  Upgrading: 0, Installing: 0, Removing: 2, Not Upgrading: 0\n",
-		"no summary":    "Remv libpam-modules-bin [1.5]\n",
+	for name, tc := range map[string]struct{ out, reason string }{
+		"classic": {"The following packages will be REMOVED:\n  libpam-modules-bin pamtester\n" +
+			"Remv pamtester [1.0]\nRemv libpam-modules-bin [1.5]\n0 upgraded, 0 newly installed, 2 to remove and 0 not upgraded.\n",
+			protocol.SoftwareWouldRemoveDependents},
+		"apt 3": {"REMOVING:\n  libpam-modules-bin  pamtester\n\nSummary:\n  Upgrading: 0, Installing: 0, Removing: 2, Not Upgrading: 0\n" +
+			"Remv pamtester:amd64 [1.0]\nRemv libpam-modules-bin:amd64 [1.5]\n", protocol.SoftwareWouldRemoveDependents},
+		"no Remv lines": {"REMOVING:\n  libpam-modules-bin  pamtester\n\nSummary:\n  Upgrading: 0, Installing: 0, Removing: 2, Not Upgrading: 0\n",
+			protocol.SoftwareProtectedAffected},
+		"no summary": {"Remv libpam-modules-bin [1.5]\n", protocol.SoftwareProtectedAffected},
 	} {
+		out := tc.out
 		t.Run(name, func(t *testing.T) {
 			sys, s, events, _ := softwareFixture(t)
 			sys.Packages["libpam-modules-bin"] = true
@@ -680,7 +684,7 @@ func TestSoftwareExactRemoval(t *testing.T) {
 			if slices.Contains(sys.Calls, "apt-get remove libpam-modules-bin") || !sys.Packages["libpam-modules-bin"] {
 				t.Fatalf("removed: %q", sys.Calls)
 			}
-			if it := status(t, s, "libpam-modules-bin"); it.State != protocol.SoftwareStateFailed || it.Reason != protocol.SoftwareWouldRemoveDependents {
+			if it := status(t, s, "libpam-modules-bin"); it.State != protocol.SoftwareStateFailed || it.Reason != tc.reason {
 				t.Fatalf("status %+v", it)
 			}
 			if !slices.Equal(typesOf(*events), []string{protocol.EventSoftwareApplyFailed}) {
@@ -690,14 +694,24 @@ func TestSoftwareExactRemoval(t *testing.T) {
 	}
 }
 
-// TestSoftwareInstallFailsClosed: an install simulation in apt 3's format that removes a package, or whose removals
-// cannot be told, is refused.
+// TestSoftwareInstallFailsClosed: an install simulation in apt 3's format that removes a package is refused; one whose
+// changes cannot be told (no summary, or a summary counting more than the Inst and Remv lines name, in either format)
+// is refused as possibly touching a protected package (PDK-712).
 func TestSoftwareInstallFailsClosed(t *testing.T) {
-	for name, out := range map[string]string{
-		"apt 3": "REMOVING:\n  dracut\n\nSummary:\n  Upgrading: 0, Installing: 1, Removing: 1, Not Upgrading: 0\n" +
-			"Remv dracut:amd64 [106]\nInst initramfs-tools (0.142 Ubuntu:26.04/resolute [all])\n",
-		"unreadable": "Inst nano (7.2 Ubuntu:26.04/resolute [amd64])\n",
+	for name, tc := range map[string]struct{ out, reason string }{
+		"apt 3": {"REMOVING:\n  dracut\n\nSummary:\n  Upgrading: 0, Installing: 1, Removing: 1, Not Upgrading: 0\n" +
+			"Remv dracut:amd64 [106]\nInst initramfs-tools (0.142 Ubuntu:26.04/resolute [all])\n", protocol.SoftwareWouldRemoveDependents},
+		"unreadable": {"Inst nano (7.2 Ubuntu:26.04/resolute [amd64])\n", protocol.SoftwareProtectedAffected},
+		"classic, upgrade without Inst line": {"Inst nano (7.2 Ubuntu:26.04/resolute [amd64])\n" +
+			"1 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\n", protocol.SoftwareProtectedAffected},
+		"classic, downgrade without Inst line": {"Inst nano (7.2 Ubuntu:26.04/resolute [amd64])\n" +
+			"0 upgraded, 1 newly installed, 1 downgraded, 0 to remove and 0 not upgraded.\n", protocol.SoftwareProtectedAffected},
+		"apt 3, upgrade without Inst line": {"Summary:\n  Upgrading: 1, Installing: 1, Removing: 0, Not Upgrading: 0\n" +
+			"Inst nano:amd64 (7.2 Ubuntu:26.04/resolute [amd64])\n", protocol.SoftwareProtectedAffected},
+		"apt 3, removal without Remv line": {"Summary:\n  Upgrading: 0, Installing: 1, Removing: 1, Not Upgrading: 0\n" +
+			"Inst nano:amd64 (7.2 Ubuntu:26.04/resolute [amd64])\n", protocol.SoftwareProtectedAffected},
 	} {
+		out := tc.out
 		t.Run(name, func(t *testing.T) {
 			sys, s, _, _ := softwareFixture(t)
 			sys.AptScript = map[string]fakesys.AptReply{"apt-get -s install nano": {Output: out}}
@@ -705,29 +719,147 @@ func TestSoftwareInstallFailsClosed(t *testing.T) {
 			if slices.Contains(sys.Calls, "apt-get install nano") {
 				t.Fatalf("installed: %q", sys.Calls)
 			}
-			if it := status(t, s, "nano"); it.Reason != protocol.SoftwareWouldRemoveDependents {
+			if it := status(t, s, "nano"); it.Reason != tc.reason {
 				t.Fatalf("status %+v", it)
 			}
 		})
 	}
 }
 
-// TestSoftwareInstallRemovesAPlannedRemoval: while the server is reachable an installation may remove a package that
-// is to be removed anyway; its removal event carries the version it had before the pass (review 1 L1).
+// TestSoftwareCompleteSummaryInstalls: a summary whose counts the Inst lines match, in either format and with
+// reinstall or downgrade counters, lets the installation run (PDK-712).
+func TestSoftwareCompleteSummaryInstalls(t *testing.T) {
+	for name, out := range map[string]string{
+		"classic": "Inst libfoo [1.0] (1.1 Ubuntu:26.04/resolute [amd64])\nInst bar [2.0] (1.9 Ubuntu:26.04/resolute [amd64])\n" +
+			"Inst nano (7.2 Ubuntu:26.04/resolute [amd64])\n1 upgraded, 1 newly installed, 1 downgraded, 0 to remove and 3 not upgraded.\n",
+		"apt 3": "Summary:\n  Upgrading: 1, Installing: 1, Reinstalling: 1, Removing: 0, Not Upgrading: 3\n" +
+			"Inst libfoo:amd64 [1.0] (1.1 Ubuntu:26.04/resolute [amd64])\nInst baz [3.0] (3.0 Ubuntu:26.04/resolute [amd64])\n" +
+			"Inst nano:amd64 (7.2 Ubuntu:26.04/resolute [amd64])\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			sys, s, _, _ := softwareFixture(t)
+			sys.AptScript = map[string]fakesys.AptReply{"apt-get -s install nano": {Output: out}}
+			if res := s.Apply(context.Background(), softwareResource(t, nil, required("nano", ""))); res.Status != reconcile.Changed || !sys.Packages["nano"] {
+				t.Fatalf("apply %+v, calls %q", res, sys.Calls)
+			}
+		})
+	}
+}
+
+// TestSoftwareInstallRemovesAPlannedRemoval: while the server is reachable an installation may need the removal of a
+// package that is to be removed anyway; the real install never removes (--no-remove, PDK-712), so it runs after the
+// removal step in the same pass. The removal event carries the version vim had before the pass (review 1 L1).
 func TestSoftwareInstallRemovesAPlannedRemoval(t *testing.T) {
 	sys, s, events, _ := softwareFixture(t)
 	sys.Packages["vim"], sys.Versions["vim"] = true, "9.1"
-	sys.AptScript = map[string]fakesys.AptReply{
-		"apt-get -s install nano": {Output: "Remv vim [9.1]\nInst nano (7.2)\n0 upgraded, 1 newly installed, 1 to remove and 0 not upgraded.\n"},
-		"apt-get install nano":    {Apply: true},
-	}
+	sys.Conflicts = map[string]string{"nano": "vim"}
 	r := softwareResource(t, nil, required("nano", ""), bundle.SoftwarePackage{Package: "vim", Intent: bundle.SoftwareForbid, CatalogEntryID: otherEntry})
-	s.Apply(context.Background(), r)
-	if !sys.Packages["nano"] || sys.Packages["vim"] {
+	if res := s.Apply(context.Background(), r); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v", res)
+	}
+	if !sys.Packages["nano"] || sys.Packages["vim"] || !slices.Equal(aptCalls(sys),
+		[]string{"apt-get -s install nano", "apt-get -s remove vim", "apt-get remove vim", "apt-get -s install nano", "apt-get install nano"}) {
 		t.Fatalf("calls %q", sys.Calls)
 	}
-	if len(*events) != 2 || (*events)[1].typ != protocol.EventSoftwareRemoved || !strings.Contains((*events)[1].data, `"version":"9.1"`) {
+	if !slices.Equal(typesOf(*events), []string{protocol.EventSoftwareRemoved, protocol.EventSoftwareInstalled}) ||
+		!strings.Contains((*events)[0].data, `"version":"9.1"`) {
 		t.Fatalf("events %+v", *events)
+	}
+}
+
+// TestSoftwareDeferredInstallAfterFailedRemoval: an installation deferred behind a planned removal that did not happen
+// is refused, never run with the removal (PDK-712).
+func TestSoftwareDeferredInstallAfterFailedRemoval(t *testing.T) {
+	sys, s, _, _ := softwareFixture(t)
+	sys.Packages["vim"] = true
+	sys.Conflicts = map[string]string{"nano": "vim"}
+	sys.AptScript = map[string]fakesys.AptReply{"apt-get remove vim": {Output: "E: Sub-process /usr/bin/dpkg returned an error code (1)\n", Exit: 100}}
+	r := softwareResource(t, nil, required("nano", ""), bundle.SoftwarePackage{Package: "vim", Intent: bundle.SoftwareForbid, CatalogEntryID: otherEntry})
+	s.Apply(context.Background(), r)
+	if slices.Contains(sys.Calls, "apt-get install nano") || sys.Packages["nano"] || !sys.Packages["vim"] {
+		t.Fatalf("calls %q", sys.Calls)
+	}
+	if it := status(t, s, "nano"); it.Reason != protocol.SoftwareWouldRemoveDependents || !strings.Contains(it.Error, "vim") {
+		t.Fatalf("status %+v", it)
+	}
+}
+
+// TestSoftwareProtectedPackageAffected: a simulation that installs, upgrades or removes a fully protected package is
+// refused before the real run, whatever apt's output format and with or without an architecture qualifier (plan M13a
+// amendment 2026-11-03, PDK-712).
+func TestSoftwareProtectedPackageAffected(t *testing.T) {
+	for name, tc := range map[string]struct{ out, pkg string }{
+		"himmelblau upgrade": {"The following packages will be upgraded:\n  himmelblau\n1 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\n" +
+			"Inst himmelblau [0.9.1] (0.9.2 Ubuntu:26.04/resolute [amd64])\nInst nano (7.2 Ubuntu:26.04/resolute [amd64])\n", "himmelblau"},
+		"paddock-agent apt 3": {"Upgrading:\n  paddock-agent\nInstalling:\n  nano\n\nSummary:\n  Upgrading: 1, Installing: 1, Removing: 0, Not Upgrading: 0\n" +
+			"Inst paddock-agent:amd64 [0.1.0] (0.2.0 Paddock:stable [amd64])\nInst nano:amd64 (7.2 Ubuntu:26.04/resolute [amd64])\n", "paddock-agent"},
+		"fleet-osquery qualified": {"Inst fleet-osquery:amd64 [1.0] (1.1 Fleet:stable [amd64])\nInst nano (7.2 Ubuntu:26.04/resolute [amd64])\n" +
+			"1 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\n", "fleet-osquery"},
+		"pam-himmelblau removed": {"Remv pam-himmelblau:amd64 [0.9]\nInst nano (7.2 Ubuntu:26.04/resolute [amd64])\n" +
+			"0 upgraded, 1 newly installed, 1 to remove and 0 not upgraded.\n", "pam-himmelblau"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sys, s, events, _ := softwareFixture(t)
+			sys.AptScript = map[string]fakesys.AptReply{"apt-get -s install nano": {Output: tc.out}}
+			r := softwareResource(t, nil, required("nano", ""))
+			for range 2 {
+				if res := s.Apply(context.Background(), r); res.Status != reconcile.Error || !strings.Contains(res.Message, protocol.SoftwareProtectedAffected) {
+					t.Fatalf("apply %+v", res)
+				}
+			}
+			if slices.Contains(sys.Calls, "apt-get install nano") || sys.Packages["nano"] {
+				t.Fatalf("installed despite the simulation: %q", sys.Calls)
+			}
+			if it := status(t, s, "nano"); it.State != protocol.SoftwareStateFailed || it.Reason != protocol.SoftwareProtectedAffected ||
+				!strings.HasSuffix(it.Error, " "+tc.pkg) {
+				t.Fatalf("status %+v", it)
+			}
+			if !slices.Equal(typesOf(*events), []string{protocol.EventSoftwareApplyFailed}) ||
+				!strings.Contains((*events)[0].data, `"stage":"simulate","reason":"protected_package_affected"`) {
+				t.Fatalf("events over two passes %+v", *events)
+			}
+		})
+	}
+}
+
+// TestSoftwareRemovalProtectedUpgrade: a removal-protected package may be upgraded by an installation, never removed
+// (plan M13a amendment 2026-11-03, PDK-712).
+func TestSoftwareRemovalProtectedUpgrade(t *testing.T) {
+	sys, s, _, _ := softwareFixture(t)
+	sys.AptScript = map[string]fakesys.AptReply{"apt-get -s install nano": {Output: "Inst sudo:amd64 [1.9.15] (1.9.16 Ubuntu:26.04/resolute [amd64])\n" +
+		"Inst nano (7.2 Ubuntu:26.04/resolute [amd64])\n1 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\n"}}
+	if res := s.Apply(context.Background(), softwareResource(t, nil, required("nano", ""))); res.Status != reconcile.Changed || !sys.Packages["nano"] {
+		t.Fatalf("apply %+v, calls %q", res, sys.Calls)
+	}
+	if real := sys.AptArgs[len(sys.AptArgs)-1]; real[0] != "install" || !slices.Contains(real, "--no-remove") {
+		t.Fatalf("real install %q", real)
+	}
+
+	sys, s, _, _ = softwareFixture(t)
+	sys.AptScript = map[string]fakesys.AptReply{"apt-get -s install nano": {Output: "Remv sudo:amd64 [1.9.15]\nInst nano (7.2 Ubuntu:26.04/resolute [amd64])\n" +
+		"0 upgraded, 1 newly installed, 1 to remove and 0 not upgraded.\n"}}
+	s.Apply(context.Background(), softwareResource(t, nil, required("nano", "")))
+	if slices.Contains(sys.Calls, "apt-get install nano") {
+		t.Fatalf("installed: %q", sys.Calls)
+	}
+	if it := status(t, s, "nano"); it.Reason != protocol.SoftwareWouldRemoveDependents || !strings.Contains(it.Error, "sudo") {
+		t.Fatalf("status %+v", it)
+	}
+}
+
+// TestSoftwareRemovalTouchesProtected: a removal whose simulation touches a fully protected package is refused with
+// that reason (PDK-712).
+func TestSoftwareRemovalTouchesProtected(t *testing.T) {
+	sys, s, _, _ := softwareFixture(t)
+	sys.Packages["libpam-modules-bin"] = true
+	sys.AptScript = map[string]fakesys.AptReply{"apt-get -s remove libpam-modules-bin": {Output: "Remv paddock-agent:amd64 [1.0]\n" +
+		"Remv libpam-modules-bin [1.5]\n0 upgraded, 0 newly installed, 2 to remove and 0 not upgraded.\n"}}
+	s.Apply(context.Background(), softwareResource(t, nil, bundle.SoftwarePackage{Package: "libpam-modules-bin", Intent: bundle.SoftwareUninstall, CatalogEntryID: otherEntry}))
+	if slices.Contains(sys.Calls, "apt-get remove libpam-modules-bin") || !sys.Packages["libpam-modules-bin"] {
+		t.Fatalf("removed: %q", sys.Calls)
+	}
+	if it := status(t, s, "libpam-modules-bin"); it.Reason != protocol.SoftwareProtectedAffected || !strings.Contains(it.Error, "paddock-agent") {
+		t.Fatalf("status %+v", it)
 	}
 }
 

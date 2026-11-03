@@ -5834,6 +5834,8 @@ export interface components {
             fingerprint: string;
             /** @description The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030. */
             weak_key: boolean;
+            /** @description The number of catalog entries that use this source. */
+            entry_count: number;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -6057,6 +6059,10 @@ export interface components {
             /** Format: uuid */
             device_id: string;
             hostname: string;
+            /** @description The device's display name; empty when none is set. */
+            name: string;
+            /** @description The device groups the device belongs to; empty when none. */
+            device_group_ids: string[];
             /** @description The package on the device; empty for not_applicable. */
             package: string;
             intent: components["schemas"]["SoftwareIntent"];
@@ -6456,6 +6462,27 @@ export interface components {
             updates: components["schemas"]["OverviewUpdates"];
             attention: components["schemas"]["OverviewAttention"];
             security_review: components["schemas"]["OverviewSecurityReview"];
+            configuration: components["schemas"]["OverviewConfiguration"];
+        };
+        /** @description The configuration card. Failures do not count the plan errors of report-only reports, like GET /api/v1/config-status. */
+        OverviewConfiguration: {
+            /** @description The open (running or halted) configuration rollout without counts; null while none is open. The counts are those of GET /api/v1/config-rollouts/{id}. */
+            rollout: components["schemas"]["OverviewConfigRollout"] | null;
+            /** @description Distinct resources with a failed apply on at least one active device. */
+            failed_resources: number;
+            /** @description Distinct active devices with at least one failed apply. */
+            failed_devices: number;
+            /** @description Active devices in report-only mode. */
+            report_only_devices: number;
+        };
+        OverviewConfigRollout: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["ConfigRolloutStatus"];
+            waves: number[];
+            current_wave_index: number;
+            /** Format: date-time */
+            started_at: string;
         };
         /** @description The totals of GET /api/v1/security-review. */
         OverviewSecurityReview: {

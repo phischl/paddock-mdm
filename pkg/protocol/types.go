@@ -302,6 +302,7 @@ const (
 	SoftwareNoCandidate           = "no_candidate"
 	SoftwareSourceUnreachable     = "source_unreachable"
 	SoftwareConflictingSource     = "conflicting_source"
+	SoftwareProtectedAffected     = "protected_package_affected"
 	SoftwareDpkgLocked            = "dpkg_locked"
 	SoftwareAptFailed             = "apt_failed"
 	SoftwareDeferredOffline       = "deferred_offline"

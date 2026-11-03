@@ -8708,7 +8708,7 @@ components:
       enum: [amd64, arm64]
     SoftwareSourceSummary:
       type: object
-      required: [id, slug, name, uris, suites, components, architectures, fingerprint, weak_key, created_at, updated_at]
+      required: [id, slug, name, uris, suites, components, architectures, fingerprint, weak_key, entry_count, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         slug: { type: string, description: Immutable; names the source file and keyring on the devices. }
@@ -8719,6 +8719,7 @@ components:
         architectures: { type: array, items: { $ref: "#/components/schemas/SoftwareArchitecture" }, description: Empty = every architecture. }
         fingerprint: { type: string, description: "The signing key's v4 fingerprint, 40 uppercase hexadecimal characters." }
         weak_key: { type: boolean, description: "The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030." }
+        entry_count: { type: integer, minimum: 0, description: The number of catalog entries that use this source. }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     SoftwareSource:
@@ -8909,10 +8910,12 @@ components:
         sort: { type: string, description: Applied sort. }
     SoftwareCatalogDevice:
       type: object
-      required: [device_id, hostname, package, intent, state, version, reason, error, reported_at]
+      required: [device_id, hostname, name, device_group_ids, package, intent, state, version, reason, error, reported_at]
       properties:
         device_id: { type: string, format: uuid }
         hostname: { type: string }
+        name: { type: string, description: "The device's display name; empty when none is set." }
+        device_group_ids: { type: array, items: { type: string, format: uuid }, description: "The device groups the device belongs to; empty when none." }
         package: { type: string, description: "The package on the device; empty for not_applicable." }
         intent: { $ref: "#/components/schemas/SoftwareIntent" }
         state: { $ref: "#/components/schemas/DeviceSoftwareState" }
@@ -9298,7 +9301,7 @@ components:
         sort: { type: string, description: Applied sort. }
     Overview:
       type: object
-      required: [generated_at, devices, encryption, vulnerabilities, updates, attention, security_review]
+      required: [generated_at, devices, encryption, vulnerabilities, updates, attention, security_review, configuration]
       properties:
         generated_at: { type: string, format: date-time }
         devices: { $ref: "#/components/schemas/OverviewDevices" }
@@ -9307,6 +9310,31 @@ components:
         updates: { $ref: "#/components/schemas/OverviewUpdates" }
         attention: { $ref: "#/components/schemas/OverviewAttention" }
         security_review: { $ref: "#/components/schemas/OverviewSecurityReview" }
+        configuration: { $ref: "#/components/schemas/OverviewConfiguration" }
+    OverviewConfiguration:
+      type: object
+      description: The configuration card. Failures do not count the plan errors of report-only reports, like GET /api/v1/config-status.
+      required: [rollout, failed_resources, failed_devices, report_only_devices]
+      properties:
+        rollout:
+          description: The open (running or halted) configuration rollout without counts; null while none is open. The counts are those of GET /api/v1/config-rollouts/{id}.
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/OverviewConfigRollout"
+        failed_resources: { type: integer, description: Distinct resources with a failed apply on at least one active device. }
+        failed_devices: { type: integer, description: Distinct active devices with at least one failed apply. }
+        report_only_devices: { type: integer, description: Active devices in report-only mode. }
+    OverviewConfigRollout:
+      type: object
+      required: [id, status, waves, current_wave_index, started_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ConfigRolloutStatus" }
+        waves:
+          type: array
+          items: { type: integer }
+        current_wave_index: { type: integer }
+        started_at: { type: string, format: date-time }
     OverviewSecurityReview:
       type: object
       description: The totals of GET /api/v1/security-review.

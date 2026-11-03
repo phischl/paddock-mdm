@@ -2544,6 +2544,23 @@
       "osRelease": "{release}: {count}",
       "unknownRelease": "unknown"
     },
+    "configuration": {
+      "title": "Configuration",
+      "rollout": "Open rollout",
+      "rolloutLine": "wave {wave} of {waves}",
+      "noRollout": "None open",
+      "status": {
+        "running": "Running",
+        "halted": "Halted"
+      },
+      "failedResources": "Failed resources",
+      "failedResourcesValue": "{resources, plural, one {# resource} other {# resources}} on {devices, plural, one {# device} other {# devices}}",
+      "reportOnly": "Devices in report-only mode",
+      "rolloutFailed": "failed {failed}",
+      "countsError": "The rollout counts could not be loaded.",
+      "retry": "Retry",
+      "loadingCounts": "Loading the rollout counts"
+    },
     "audit": {
       "title": "Recent audit activity",
       "open": "Audit log",

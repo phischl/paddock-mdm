@@ -406,11 +406,15 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 		}
 	}
 	reachable := s.ServerReachable != nil && s.ServerReachable()
+	var deferred []softwareOp
 	if err == nil {
-		err = s.install(ctx, installs, removals, reachable, pass)
+		deferred, err = s.install(ctx, installs, removals, reachable, pass)
 	}
 	if err == nil {
 		err = s.remove(ctx, removals, reachable, pass)
+	}
+	if err == nil && len(deferred) > 0 {
+		_, err = s.install(ctx, deferred, nil, reachable, pass)
 	}
 	if errors.Is(err, errDpkgLocked) {
 		for _, op := range ops {
@@ -774,11 +778,13 @@ func (s *Software) unknown(ctx context.Context, ops []softwareOp) ([]softwareOp,
 	return out, nil
 }
 
-// install simulates the installations first and runs them in one apt-get install when the simulation removes nothing
-// that is not a planned removal (plan M13a decision 23 d). Packages apt has no candidate for leave the step after one
-// full apt-get update; the others go on. A package whose real installation failed waits softwareRetryPasses passes
-// of the same spec before it runs again.
-func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reachable bool, pass *softwarePass) error {
+// install simulates the installations first and runs them in one apt-get install --no-remove when the simulation
+// removes nothing and touches no fully protected package (plan M13a decision 23 d, amendment 2026-11-03). A
+// simulation that removes only planned removals returns the operations as deferred: the caller installs them again
+// after the removal step. Packages apt has no candidate for leave the step after one full apt-get update; the others
+// go on. A package whose real installation failed waits softwareRetryPasses passes of the same spec before it runs
+// again.
+func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reachable bool, pass *softwarePass) (deferred []softwareOp, err error) {
 	var removable []string
 	if reachable {
 		for _, op := range removals {
@@ -802,7 +808,7 @@ func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reac
 			for _, op := range ops {
 				s.failPackage(pass, op.pkg, protocol.SoftwareStageSimulate, protocol.SoftwareAptFailed, lookupErr.Error())
 			}
-			return nil
+			return nil, nil
 		}
 		var simErr error
 		var args []string
@@ -812,7 +818,7 @@ func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reac
 			var out string
 			out, simErr = s.apt(ctx, append([]string{"-s"}, args...)...)
 			if errors.Is(simErr, errDpkgLocked) {
-				return simErr
+				return nil, simErr
 			}
 			if simErr != nil {
 				missing = noCandidate(out, ops)
@@ -820,8 +826,17 @@ func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reac
 					for _, op := range ops {
 						s.failPackage(pass, op.pkg, protocol.SoftwareStageSimulate, protocol.SoftwareAptFailed, simErr.Error())
 					}
-					return nil
+					return nil, nil
 				}
+			} else if touched, ok := simulatedProtected(out); !ok || len(touched) > 0 {
+				msg := "the installation would change the protected packages " + strings.Join(touched, " ")
+				if !ok {
+					msg = "the simulation does not show which packages the installation changes"
+				}
+				for _, op := range ops {
+					s.failPackage(pass, op.pkg, protocol.SoftwareStageSimulate, protocol.SoftwareProtectedAffected, msg)
+				}
+				return nil, nil
 			} else if extra, ok := simulatedRemovals(out); !ok || len(except(extra, removable)) > 0 {
 				msg := "the installation would remove " + strings.Join(except(extra, removable), " ")
 				if !ok {
@@ -830,7 +845,10 @@ func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reac
 				for _, op := range ops {
 					s.failPackage(pass, op.pkg, protocol.SoftwareStageSimulate, protocol.SoftwareWouldRemoveDependents, msg)
 				}
-				return nil
+				return nil, nil
+			} else if len(extra) > 0 {
+				// --no-remove would make the real run fail on the planned removals; after the removal step it needs none.
+				return ops, nil
 			}
 		}
 		if len(missing) > 0 {
@@ -838,7 +856,7 @@ func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reac
 				refreshed = true
 				_, err := s.apt(ctx, "update", "-q", softwareLockWait[0], softwareLockWait[1])
 				if errors.Is(err, errDpkgLocked) {
-					return err
+					return nil, err
 				}
 				if err == nil {
 					continue
@@ -850,9 +868,11 @@ func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reac
 			ops = slices.DeleteFunc(ops, func(op softwareOp) bool { return slices.Contains(missing, op) })
 			continue
 		}
-		_, err := s.apt(ctx, args...)
+		// The real run may resolve differently than the simulation a moment before (a daily update in between); it must
+		// never remove a package the simulation did not show (plan M13a amendment 2026-11-03).
+		_, err := s.apt(ctx, slices.Insert(slices.Clone(args), 1, "--no-remove")...)
 		if errors.Is(err, errDpkgLocked) {
-			return err
+			return nil, err
 		}
 		for _, op := range ops {
 			msg := ""
@@ -868,9 +888,9 @@ func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reac
 			s.retry[op.pkg.Package] = softwareRetry{passes: softwareRetryPasses - 1, err: msg}
 			s.failPackage(pass, op.pkg, protocol.SoftwareStageInstall, protocol.SoftwareAptFailed, msg)
 		}
-		return nil
+		return nil, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // reported reports whether every op already failed with key (stage/reason): a repeated refresh would not help.
@@ -935,6 +955,13 @@ func (s *Software) remove(ctx context.Context, ops []softwareOp, reachable bool,
 	}
 	if err != nil {
 		fail(protocol.SoftwareStageSimulate, protocol.SoftwareAptFailed, err.Error())
+		return nil
+	}
+	if touched, ok := simulatedProtected(out); !ok {
+		fail(protocol.SoftwareStageSimulate, protocol.SoftwareProtectedAffected, "the simulation does not show which packages the removal changes")
+		return nil
+	} else if len(touched) > 0 {
+		fail(protocol.SoftwareStageSimulate, protocol.SoftwareProtectedAffected, "the removal would change the protected packages "+strings.Join(touched, " "))
 		return nil
 	}
 	if removed, ok := simulatedRemovals(out); !ok {
@@ -1074,6 +1101,61 @@ func simulatedRemovals(out string) (pkgs []string, ok bool) {
 	n, err := strconv.Atoi(m[1] + m[2])
 	// A package removed for two architectures is two Remv lines and two removals but one name.
 	return pkgs, err == nil && n <= lines
+}
+
+// simulationCounts are the counters of apt-get -s's summary line: classic "N upgraded, N newly installed[, N reinstalled]
+// [, N downgraded], N to remove and N not upgraded." and apt 3's "Upgrading: N, Installing: N[, Reinstalling: N]
+// [, Downgrading: N], Removing: N, Not Upgrading: N". "not upgraded" and "Not Upgrading" print no Inst line, so
+// "Not " is captured (group 3) to skip it: RE2 has no lookbehind.
+var simulationCounts = regexp.MustCompile(`\b(\d+) (upgraded|newly installed|reinstalled|downgraded|to remove)\b|\b(Not )?(Upgrading|Installing|Reinstalling|Downgrading|Removing): (\d+)`)
+
+// simulatedProtected returns the fully protected packages an apt-get -s run installs, upgrades or removes: the names of
+// its "Inst <pkg>" and "Remv <pkg>" lines (every apt version prints them, LC_ALL=C), without an architecture qualifier.
+// Paddock's own packages move only through the signed A/B update path and the login stack only through its own
+// reconciler (plan M13a amendment 2026-11-03). ok is false — the caller refuses, fail closed — when the summary line is
+// missing or counts more installations, upgrades or removals than the Inst and Remv lines name.
+func simulatedProtected(out string) (pkgs []string, ok bool) {
+	inst, remv := 0, 0
+	for line := range strings.Lines(out) {
+		for _, prefix := range []string{"Inst ", "Remv "} {
+			if rest, found := strings.CutPrefix(line, prefix); found {
+				if f := strings.Fields(rest); len(f) > 0 {
+					if prefix == "Inst " {
+						inst++
+					} else {
+						remv++
+					}
+					if name, _, _ := strings.Cut(f[0], ":"); bundle.FullyProtected(name) {
+						pkgs = append(pkgs, name)
+					}
+				}
+			}
+		}
+	}
+	slices.Sort(pkgs)
+	pkgs = slices.Compact(pkgs)
+	for line := range strings.Lines(out) {
+		if !simulationRemoving.MatchString(line) {
+			continue
+		}
+		wantInst, wantRemv := 0, 0
+		for _, m := range simulationCounts.FindAllStringSubmatch(line, -1) {
+			if m[3] != "" {
+				continue
+			}
+			n, err := strconv.Atoi(m[1] + m[5])
+			if err != nil {
+				return pkgs, false
+			}
+			if kind := m[2] + m[4]; kind == "to remove" || kind == "Removing" {
+				wantRemv += n
+			} else {
+				wantInst += n
+			}
+		}
+		return pkgs, wantInst <= inst && wantRemv <= remv
+	}
+	return pkgs, false
 }
 
 // except returns the names of pkgs that are not in allowed.

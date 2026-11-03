@@ -31,6 +31,7 @@ function overviewOf(over: Partial<Overview> = {}): Overview {
     },
     attention: { conditions: 5, devices: 3 },
     security_review: { root_grants: 0, sensitive_files: 0, denied_files: 0 },
+    configuration: { rollout: null, failed_resources: 0, failed_devices: 0, report_only_devices: 0 },
     ...over,
   }
 }
@@ -50,11 +51,17 @@ const event: AuditEvent = {
 } as never
 
 let overview: Overview | string = overviewOf()
+let rolloutCounts: (() => Promise<unknown>) = () => Promise.resolve({ eligible: 5, applied: 2, failed: 3, pending: 0 })
+const rolloutCountCalls: string[] = []
 let attentionItems: AttentionDevice[] = [twoConditions]
 const auditCalls: number[] = []
 vi.mock('../lib/overview', async (original) => ({
   ...(await original<typeof import('../lib/overview')>()),
   getOverview: () => Promise.resolve(overview),
+  getRolloutCounts: (id: string) => {
+    rolloutCountCalls.push(id)
+    return rolloutCounts()
+  },
   overviewAttention: () => Promise.resolve({ items: attentionItems, page: 1, page_size: 10, total: attentionItems.length, total_capped: false, sort: '-severity' }),
   recentAuditEvents: () => {
     auditCalls.push(1)
@@ -67,6 +74,7 @@ afterEach(() => {
   wrapper?.unmount()
   wrapper = null
   overview = overviewOf()
+  rolloutCountCalls.length = 0
   attentionItems = [twoConditions]
   auditCalls.length = 0
 })
@@ -90,11 +98,13 @@ async function mountOverview(role = 'org_admin'): Promise<VueWrapper> {
       { path: '/vulnerabilities', name: 'vulnerabilities', component: stub },
       { path: '/vulnerabilities/:cve', name: 'vulnerability', component: stub },
       { path: '/security-review', name: 'security-review', component: stub },
+      { path: '/config-status', name: 'config-status', component: stub },
+      { path: '/config-rollouts/:id', name: 'config-rollout', component: stub },
     ],
   })
   await router.push('/')
   wrapper = mount(() => h(VApp, null, { default: () => h(OverviewView) }), {
-    global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body,
+    global: { plugins: [createPortalI18n(), vuetify, router, pinia], stubs: { SetupChecklist: true } }, attachTo: document.body,
   })
   await flushPromises()
   return wrapper
@@ -291,6 +301,60 @@ describe('overview page (plan M7c decision 28)', () => {
       region!.focus()
       expect(document.activeElement).toBe(region)
     }
+  })
+
+  it('shows the configuration card with its three KPIs and their links (PDK-164)', async () => {
+    rolloutCountCalls.length = 0
+    overview = overviewOf({
+      configuration: {
+        rollout: { id: 'r1', status: 'halted', waves: [10, 50, 100], current_wave_index: 1, started_at: '2026-10-10T12:00:00Z' },
+        failed_resources: 2, failed_devices: 4, report_only_devices: 1,
+      },
+    })
+    const w = await mountOverview()
+    const card = w.find('[data-testid="overview-configuration"]')
+    expect(card.find('h2').text()).toBe('Configuration')
+    const rollout = card.find('[data-testid="overview-configuration-rollout"]')
+    expect(rollout.text()).toContain('wave 2 of 3')
+    expect(rollout.text()).toContain('failed 3')
+    expect(rollout.text()).toContain('Halted')
+    expect(rollout.find('a').attributes('href')).toBe('/config-rollouts/r1')
+    expect(rolloutCountCalls).toEqual(['r1'])
+    const links = card.findAll('a').map((a) => [a.text(), a.attributes('href')])
+    expect(links).toContainEqual(['2 resources on 4 devices', '/config-status?status=failed'])
+    expect(links).toContainEqual(['1', '/devices?state=active&config_mode=report_only'])
+  })
+
+  it('shows a skeleton while the rollout counts load, then an error with a retry that loads them (PDK-164, R6.16)', async () => {
+    overview = overviewOf({
+      configuration: {
+        rollout: { id: 'r1', status: 'running', waves: [100], current_wave_index: 0, started_at: '2026-10-10T12:00:00Z' },
+        failed_resources: 0, failed_devices: 0, report_only_devices: 0,
+      },
+    })
+    let release: (v: unknown) => void = () => {}
+    rolloutCounts = () => new Promise((resolve) => { release = resolve })
+    const w = await mountOverview()
+    expect(w.find('[data-testid="overview-configuration-counts-loading"]').exists()).toBe(true)
+    release('not_found')
+    await flushPromises()
+    const alert = w.find('[data-testid="overview-configuration-counts-error"]')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.text()).toContain('The rollout counts could not be loaded.')
+    rolloutCounts = () => Promise.resolve({ eligible: 1, applied: 0, failed: 1, pending: 0 })
+    await alert.find('button').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="overview-configuration-counts-error"]').exists()).toBe(false)
+    expect(w.find('[data-testid="overview-configuration-rollout"]').text()).toContain('failed 1')
+    rolloutCounts = () => Promise.resolve({ eligible: 5, applied: 2, failed: 3, pending: 0 })
+  })
+
+  it('shows that no rollout is open and zero counts without links to a rollout (PDK-164)', async () => {
+    const w = await mountOverview()
+    const card = w.find('[data-testid="overview-configuration"]')
+    expect(card.find('[data-testid="overview-configuration-rollout"]').text()).toContain('None open')
+    expect(rolloutCountCalls).toEqual([])
+    expect(card.findAll('a').map((a) => a.attributes('href')).some((h) => h?.startsWith('/config-rollouts'))).toBe(false)
   })
 
   it('shows the problem when the overview cannot be read', async () => {
