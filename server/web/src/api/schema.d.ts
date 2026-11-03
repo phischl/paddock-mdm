@@ -5834,6 +5834,8 @@ export interface components {
             fingerprint: string;
             /** @description The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030. */
             weak_key: boolean;
+            /** @description The number of catalog entries that use this source. */
+            entry_count: number;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -6057,6 +6059,10 @@ export interface components {
             /** Format: uuid */
             device_id: string;
             hostname: string;
+            /** @description The device's display name; empty when none is set. */
+            name: string;
+            /** @description The device groups the device belongs to; empty when none. */
+            device_group_ids: string[];
             /** @description The package on the device; empty for not_applicable. */
             package: string;
             intent: components["schemas"]["SoftwareIntent"];

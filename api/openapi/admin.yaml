@@ -8708,7 +8708,7 @@ components:
       enum: [amd64, arm64]
     SoftwareSourceSummary:
       type: object
-      required: [id, slug, name, uris, suites, components, architectures, fingerprint, weak_key, created_at, updated_at]
+      required: [id, slug, name, uris, suites, components, architectures, fingerprint, weak_key, entry_count, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         slug: { type: string, description: Immutable; names the source file and keyring on the devices. }
@@ -8719,6 +8719,7 @@ components:
         architectures: { type: array, items: { $ref: "#/components/schemas/SoftwareArchitecture" }, description: Empty = every architecture. }
         fingerprint: { type: string, description: "The signing key's v4 fingerprint, 40 uppercase hexadecimal characters." }
         weak_key: { type: boolean, description: "The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030." }
+        entry_count: { type: integer, minimum: 0, description: The number of catalog entries that use this source. }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     SoftwareSource:
@@ -8909,10 +8910,12 @@ components:
         sort: { type: string, description: Applied sort. }
     SoftwareCatalogDevice:
       type: object
-      required: [device_id, hostname, package, intent, state, version, reason, error, reported_at]
+      required: [device_id, hostname, name, device_group_ids, package, intent, state, version, reason, error, reported_at]
       properties:
         device_id: { type: string, format: uuid }
         hostname: { type: string }
+        name: { type: string, description: "The device's display name; empty when none is set." }
+        device_group_ids: { type: array, items: { type: string, format: uuid }, description: "The device groups the device belongs to; empty when none." }
         package: { type: string, description: "The package on the device; empty for not_applicable." }
         intent: { $ref: "#/components/schemas/SoftwareIntent" }
         state: { $ref: "#/components/schemas/DeviceSoftwareState" }

@@ -6,7 +6,9 @@ VALUES (@id, @organization_id, @slug, @name, @uris, @suites, @components, @archi
 RETURNING *;
 
 -- name: GetSoftwareSource :one
-SELECT * FROM software_source WHERE id = @id;
+-- The source with the number of catalog entries that reference it, counted in the same statement.
+SELECT sqlc.embed(s), (SELECT count(*) FROM software_catalog_entry e WHERE e.source_id = s.id)::bigint AS entry_count
+FROM software_source s WHERE s.id = @id;
 
 -- name: UpdateSoftwareSource :one
 UPDATE software_source SET name = @name, uris = @uris, suites = @suites, components = @components,
@@ -19,7 +21,12 @@ RETURNING *;
 DELETE FROM software_source WHERE id = @id;
 
 -- name: ListSoftwareSources :many
-SELECT * FROM software_source
+-- The sources of a page with their catalog entry counts: one grouped count joined in, not one count per row.
+SELECT sqlc.embed(s), coalesce(c.entry_count, 0)::bigint AS entry_count
+FROM software_source s
+LEFT JOIN (
+  SELECT source_id, count(*) AS entry_count FROM software_catalog_entry WHERE source_id IS NOT NULL GROUP BY source_id
+) c ON c.source_id = s.id
 WHERE (sqlc.narg(q_pattern)::text IS NULL OR name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
   OR slug ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
 ORDER BY
@@ -233,7 +240,10 @@ WHERE d.id = @id;
 -- The active devices the entry is assigned to, through the organization or one of their groups, with the row they
 -- reported for it (state '': none) and the intents of the assignments. The page filters and sorts the derived
 -- states in memory (ADR 0028), so the query returns every match in hostname order.
-SELECT d.id AS device_id, d.hostname, coalesce(d.os_release ->> 'id', '')::text AS os_id,
+SELECT d.id AS device_id, d.hostname, coalesce(d.name, '')::text AS name,
+       coalesce((SELECT array_agg(g.device_group_id ORDER BY g.device_group_id) FROM device_group_member g
+                 WHERE g.device_id = d.id), '{}')::uuid[] AS device_group_ids,
+       coalesce(d.os_release ->> 'id', '')::text AS os_id,
        coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id, coalesce(ds.arch, '')::text AS arch,
        t.intents, coalesce(st.package, '')::text AS package, coalesce(st.intent, '')::text AS intent,
        coalesce(st.state, '')::text AS state, coalesce(st.version, '')::text AS version, coalesce(st.reason, '')::text AS reason,

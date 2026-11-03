@@ -519,7 +519,7 @@ func entrySourceSlug(ctx context.Context, q *pgstore.Queries, source *uuid.UUID)
 	if err != nil {
 		return "", notFound(err)
 	}
-	return s.Slug, nil
+	return s.SoftwareSource.Slug, nil
 }
 
 // entryAssignable refuses an intent for an entry whose packages it must not touch (software.ValidateAssignmentTarget).
