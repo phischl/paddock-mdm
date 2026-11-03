@@ -36,7 +36,17 @@ type overview struct {
 			Devices int    `json:"devices"`
 		} `json:"top"`
 	} `json:"vulnerabilities"`
-	Attention struct{ Conditions, Devices int } `json:"attention"`
+	Attention     struct{ Conditions, Devices int } `json:"attention"`
+	Configuration struct {
+		Rollout *struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Waves  []int  `json:"waves"`
+		} `json:"rollout"`
+		FailedResources   int `json:"failed_resources"`
+		FailedDevices     int `json:"failed_devices"`
+		ReportOnlyDevices int `json:"report_only_devices"`
+	} `json:"configuration"`
 }
 
 // overviewAgent is updates.agent (plan M7c decision 26, amendment 2026-10-12).
@@ -147,6 +157,36 @@ func TestOverviewGate(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339Nano, o.GeneratedAt); err != nil {
 		t.Fatalf("generated_at %q: %v", o.GeneratedAt, err)
+	}
+	// PDK-164: the configuration card is counted like the lists it links to.
+	if want := listCount(t, alice, "/api/v1/devices", url.Values{"state": {"active"}, "config_mode": {"report_only"}, "page_size": {"10"}}); o.Configuration.ReportOnlyDevices != want {
+		t.Fatalf("configuration.report_only_devices %d, device list %d", o.Configuration.ReportOnlyDevices, want)
+	}
+	if want := listCount(t, alice, "/api/v1/config-status", url.Values{"status": {"failed"}, "page_size": {"10"}}); o.Configuration.FailedResources != want {
+		t.Fatalf("configuration.failed_resources %d, config status list %d", o.Configuration.FailedResources, want)
+	}
+	if (o.Configuration.FailedResources == 0) != (o.Configuration.FailedDevices == 0) {
+		t.Fatalf("configuration: %d failed resources on %d failed devices", o.Configuration.FailedResources, o.Configuration.FailedDevices)
+	}
+	open := listCount(t, alice, "/api/v1/config-rollouts", url.Values{"status": {"running", "halted"}, "page_size": {"10"}})
+	if (o.Configuration.Rollout != nil) != (open == 1) {
+		t.Fatalf("configuration.rollout %+v, %d open rollouts in the list", o.Configuration.Rollout, open)
+	}
+	if r := o.Configuration.Rollout; r != nil {
+		res := call(t, alice, http.MethodGet, "/api/v1/config-rollouts/"+r.ID, nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var detail struct {
+			Rollout struct {
+				Status string `json:"status"`
+				Waves  []int  `json:"waves"`
+			} `json:"rollout"`
+		}
+		if err := res.JSON(&detail); err != nil {
+			t.Fatal(err)
+		}
+		if detail.Rollout.Status != r.Status || len(detail.Rollout.Waves) != len(r.Waves) {
+			t.Fatalf("overview rollout %+v, rollout API %+v", r, detail.Rollout)
+		}
 	}
 
 	carol := login(t, env.Carol)

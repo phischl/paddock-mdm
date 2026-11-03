@@ -86,6 +86,9 @@ type System struct {
 	AptArgs   [][]string
 	// Unknown are the package names apt-cache pkgnames does not know; every other name is known.
 	Unknown map[string]bool
+	// Conflicts are package pairs: installing the key removes the value while it is installed, which a simulation
+	// shows as a Remv line and which an install with --no-remove refuses.
+	Conflicts map[string]string
 }
 
 // AptReply is a scripted apt-get answer; with Apply the call also does what it does unscripted (e.g. after waiting
@@ -403,11 +406,20 @@ func (s *System) aptGet(words, args []string, cmd string, simulate bool) (string
 		return "", 0, nil
 	}
 	if simulate {
-		return simulation(words), 0, nil
+		return s.simulation(words), 0, nil
 	}
 	switch words[0] {
 	case "install":
 		for _, p := range words[1:] {
+			if c := s.Conflicts[p]; s.Packages[c] && slices.Contains(args, "--no-remove") {
+				return "E: Packages need to be removed but remove is disabled.\n", 100, nil
+			}
+		}
+		for _, p := range words[1:] {
+			if c := s.Conflicts[p]; s.Packages[c] {
+				delete(s.Packages, c)
+				delete(s.Versions, c)
+			}
 			name, version, pinned := strings.Cut(p, "=")
 			if !pinned {
 				version = s.AptVersion
@@ -433,8 +445,8 @@ func (s *System) aptGet(words, args []string, cmd string, simulate bool) (string
 }
 
 // simulation is apt-get -s's answer for install or remove of the packages in words[1:]: an Inst or Remv line each
-// and the summary line.
-func simulation(words []string) string {
+// (and a Remv line for an installed conflict) and the summary line.
+func (s *System) simulation(words []string) string {
 	var b strings.Builder
 	inst, remv := 0, 0
 	for _, p := range words[1:] {
@@ -445,6 +457,10 @@ func simulation(words []string) string {
 		}
 		switch words[0] {
 		case "install":
+			if c := s.Conflicts[name]; s.Packages[c] {
+				remv++
+				fmt.Fprintf(&b, "Remv %s [1.0]\n", c)
+			}
 			inst++
 			fmt.Fprintf(&b, "Inst %s (1.0 Ubuntu:26.04/resolute [amd64])\n", name)
 		case "remove":
