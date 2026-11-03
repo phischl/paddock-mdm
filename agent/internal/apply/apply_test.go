@@ -308,6 +308,62 @@ func TestUpdatesSection(t *testing.T) {
 	}
 }
 
+const softwareEntry = "0b9e2c4e-4b7a-4f43-9a51-1c2d3e4f5a6b"
+
+// TestSoftwareSection (plan M13a decision 26): the software section is applied as resource "software" right after
+// updates; a bundle without it plans nothing for it, unless the device still has files or a record of an earlier
+// section, which an empty section then removes.
+func TestSoftwareSection(t *testing.T) {
+	ctx := context.Background()
+	sys, a := fixture(t)
+	sys.AptVersion = "7.2-1"
+	sys.Packages["vim"] = true
+	a.WithSoftware(&reconcile.Software{Sys: sys, ServerReachable: func() bool { return true }})
+	b := newBundle(t, 1, nil)
+	b.SchemaVersion = bundle.SchemaVersion2
+	b.Updates = &bundle.UpdatesSpec{SecurityDailyAt: "03:00", RegularSchedule: "Sat 04:00", MaxRandomDelayMin: 60}
+	b.Software = &bundle.SoftwareSpec{Packages: []bundle.SoftwarePackage{
+		{Package: "nano", Intent: bundle.SoftwareRequired, CatalogEntryID: softwareEntry},
+		{Package: "vim", Intent: bundle.SoftwareForbid, CatalogEntryID: softwareEntry, SupersededHold: true},
+	}}
+	if err := a.CheckTypes(b); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, p := range a.Plan(ctx, b) {
+		ids = append(ids, p.ID)
+	}
+	if i := slices.Index(ids, "software"); i < 1 || ids[i-1] != "updates" {
+		t.Fatalf("plan order %v", ids)
+	}
+	rep := a.Apply(ctx, b)
+	if !slices.Contains(rep.ChangedIDs, "software") || !sys.Packages["nano"] || sys.Packages["vim"] {
+		t.Fatalf("report %+v", rep)
+	}
+	if r := outcomes(rep)["software"]; r.Status != protocol.ResourceApplied || !strings.Contains(r.Message, "superseded") {
+		t.Fatalf("software outcome %+v", r)
+	}
+	if sys.Files[reconcile.SoftwareForbidFile] == nil {
+		t.Fatal("forbid pins missing")
+	}
+	b.Software = nil
+	if drifted := apply.Drifted(a.Plan(ctx, b)); !slices.Equal(drifted, []string{"software"}) {
+		t.Fatalf("an earlier section's pins and record must be removed: %v", drifted)
+	}
+	a.Apply(ctx, b)
+	if sys.Files[reconcile.SoftwareForbidFile] != nil || !sys.Packages["nano"] {
+		t.Fatal("the empty section must remove the pins and keep the installed applications")
+	}
+	if plan := a.Plan(ctx, b); slices.ContainsFunc(plan, func(p apply.Planned) bool { return p.ID == "software" }) {
+		t.Fatalf("plan without the section and without residue %+v", plan)
+	}
+	clean, fresh := fixture(t)
+	if plan := fresh.Plan(ctx, newBundle(t, 1, nil)); slices.ContainsFunc(plan, func(p apply.Planned) bool { return p.ID == "software" }) ||
+		len(clean.Calls) != 0 {
+		t.Fatalf("plan of a bundle without the section %+v", plan)
+	}
+}
+
 // TestHostnameSection (plan M8h decision 14): the hostname section is applied as resource "hostname" before the
 // time resource, corrected as drift after a local rename, and leaves a managed /etc/hosts alone; a bundle without it
 // plans nothing for the hostname.
@@ -697,6 +753,7 @@ func TestReportOnlyCoversEveryReconciler(t *testing.T) {
 		MaxRandomDelayMin: 60, Holds: []bundle.Hold{{Package: "curl"}}}
 	b.Inventory = &bundle.Inventory{FleetURL: "https://fleet.example.org", EnrollSecret: "s", Package: bundle.InventoryPackage{
 		Version: "1.61.0", URLPath: "packages/1.2.0/fleet-osquery_1.61.0_amd64.deb", SHA256: hex.EncodeToString(sum[:])}}
+	b.Software = &bundle.SoftwareSpec{Packages: []bundle.SoftwarePackage{{Package: "nano", Intent: bundle.SoftwareRequired, CatalogEntryID: softwareEntry}}}
 
 	before := snapshot(sys)
 	rep := a.Apply(ctx, b)
@@ -721,7 +778,7 @@ func TestReportOnlyCoversEveryReconciler(t *testing.T) {
 		t.Fatalf("report-only apply emitted %v", *events)
 	}
 	got = outcomes(rep)
-	for _, id := range []string{"hostname", "updates", "login"} {
+	for _, id := range []string{"hostname", "updates", "software", "login"} {
 		if got[id].Status != protocol.ResourcePending {
 			t.Errorf("%s: %+v", id, got[id])
 		}

@@ -1256,3 +1256,21 @@ of 2026-10-31 differ, this amendment wins.
   server stores the flag (`device_status.software_truncated`, migration `00099`) and shows it as `truncated` on the
   device's managed-software list. Hard rule: the software report never causes the check-in to be refused. Server part in
   PDK-411, agent truncation in PDK-412.
+- **Software section absent, residue pass (architect, 2026-11-03, PDK-412 review M1).** Decision **26** is extended:
+  the compiler omits the section once no package is assigned, so a removed source or forbid would otherwise stay in
+  force. When a bundle has no `software` section but the device still has software state Paddock wrote (the files of a
+  source recorded in `/var/lib/paddock/state/software-sources`, a `51paddock-software` carrying Paddock's header, or the
+  install record), the applier runs the software reconciler with an empty section. That pass removes ONLY files Paddock
+  manages and can prove it wrote; it never removes packages, a user's own sources or any file it did not record. It is
+  idempotent, and every removal is logged. A device without such state plans nothing for the section.
+- **Package names as apt patterns (architect, 2026-11-03, PDK-705 folded into PDK-412).** `bundle.EntryRefused` (and so
+  `RefusedIntent`) refuses a name that, read as apt's regex, selects a protected package of any tier; the agent passes a
+  package name to apt-get only when `apt-cache pkgnames` knows exactly that name, otherwise `failed/no_candidate`.
+- **Exact package names on every apt path (architect, 2026-11-03, PDK-412 review 2, PDK-706 folded into PDK-412).**
+  (a) The agent checks the exact name (`apt-cache pkgnames` lists exactly that name) before every apt call that takes a
+  package name from a bundle or a command: the software reconciler's simulations, installs and removals, `apt-mark
+  hold`/`unhold` of the updates reconciler, `install_now` and the uninstall's `apt-mark unhold`. An unknown name is
+  skipped and reported as failed, never passed through. (b) `pkg/bundle` emulates apt's POSIX ERE reading (a run of
+  `+` as one, `.` any character, unanchored, case-insensitive) and refuses a name whose pattern matches a protected name;
+  a closed, documented exemption list holds exact Debian names the archive has (today only `g++`), each proven by a
+  test to need its entry.

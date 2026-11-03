@@ -217,3 +217,23 @@ func TestUpdatesRejectsInvalidSpec(t *testing.T) {
 		t.Fatal("plan accepted an injected schedule")
 	}
 }
+
+// TestUpdatesHoldsOnlyExactNames (architect decision 2026-11-03, PDK-706): a hold apt has no package of is never passed
+// to apt-mark, which would read it as a pattern; the resource reports it and the other holds are applied.
+func TestUpdatesHoldsOnlyExactNames(t *testing.T) {
+	sys, u, _ := updatesFixture(t)
+	sys.Unknown = map[string]bool{"paddock-agen++t": true}
+	r := updatesResource(t, func(s *bundle.UpdatesSpec) {
+		s.Holds = []bundle.Hold{{Package: "curl"}, {Package: "paddock-agen++t"}}
+	})
+	res := u.Apply(context.Background(), r)
+	if res.Status != reconcile.Error || !strings.Contains(res.Message, "paddock-agen++t") {
+		t.Fatalf("apply %+v", res)
+	}
+	if !sys.Held["curl"] || slices.ContainsFunc(sys.Calls, func(c string) bool { return strings.Contains(c, "paddock-agen") }) {
+		t.Fatalf("calls %q", sys.Calls)
+	}
+	if got := fileContent(t, sys, "/var/lib/paddock/state/held-packages"); got != "curl\n" {
+		t.Fatalf("record %q", got)
+	}
+}
