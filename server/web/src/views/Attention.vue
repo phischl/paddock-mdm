@@ -47,9 +47,9 @@ const columns: ListColumn[] = [
           {{ item.hostname }}
         </RouterLink>
         <span
-          v-if="item.os_release.VERSION_ID"
+          v-if="item.os_release.version_id"
           class="pd-type-caption pd-muted pd-block"
-        >{{ t('overview.attention.os', { release: item.os_release.VERSION_ID }) }}</span>
+        >{{ t('overview.attention.os', { release: item.os_release.version_id }) }}</span>
       </template>
       <template #[`item.severity`]="{ item }: { item: AttentionDevice }">
         <AttentionChips :conditions="item.conditions" />
