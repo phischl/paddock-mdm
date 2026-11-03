@@ -12,11 +12,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
 	"github.com/phischl/paddock-mdm/pkg/dsse"
@@ -46,6 +50,8 @@ const (
 	TypeHostname = "hostname"
 	// TypeWatch is the type and ID of the resource the agent makes of the watch section (plan M9 decision 39).
 	TypeWatch = "watch"
+	// TypeSoftware is the type and ID of the resource the agent makes of the software section (ADR 0042 decision 2).
+	TypeSoftware = "software"
 )
 
 // Bundle is the desired state of one device.
@@ -83,6 +89,10 @@ type Bundle struct {
 	// plan M9 decision 39). Agents that do not know the section ignore it; an organization without watched units has no
 	// section.
 	Watch *WatchSpec `json:"watch,omitempty"`
+	// Software is the device's desired software state: package sources and packages with their intents (schema v2
+	// only, ADR 0042 decision 2). Agents that do not know the section ignore it; a device without an applicable
+	// assignment has no section.
+	Software *SoftwareSpec `json:"software,omitempty"`
 }
 
 // WatchSpec is the watch section: the systemd services of third-party agents (an EDR or SIEM agent) the device only
@@ -398,6 +408,231 @@ func UpdatesResource(s UpdatesSpec) (Resource, error) {
 		s.Holds = []Hold{}
 	}
 	return resource(TypeUpdates, TypeUpdates, s)
+}
+
+// SoftwareSpec is the software section (ADR 0042 decision 2): the APT sources the device needs and the packages with
+// their intents. Sources and Packages are sorted by slug and package.
+type SoftwareSpec struct {
+	Sources  []SoftwareSource  `json:"sources"`
+	Packages []SoftwarePackage `json:"packages"`
+}
+
+// SoftwareSource is an APT source the device writes as a deb822 file with its keyring.
+type SoftwareSource struct {
+	Slug          string   `json:"slug"`
+	URIs          []string `json:"uris"` // https only
+	Suites        []string `json:"suites"`
+	Components    []string `json:"components"`
+	Architectures []string `json:"architectures"` // empty = apt's default
+	Keyring       string   `json:"keyring"`       // standard base64 of the binary OpenPGP public key
+	Fingerprint   string   `json:"fingerprint"`   // 40 uppercase hexadecimal characters
+}
+
+// Intents of SoftwarePackage.Intent.
+const (
+	SoftwareRequired  = "required"
+	SoftwareUninstall = "uninstall"
+	SoftwareHold      = "hold"
+	SoftwareForbid    = "forbid"
+)
+
+// SoftwarePackage is the desired state of one package.
+type SoftwarePackage struct {
+	Package string `json:"package"`
+	Intent  string `json:"intent"`
+	// Version is the version a required package is pinned to or a hold keeps; nil otherwise.
+	Version *string `json:"version"`
+	// Source is the slug of a Sources entry, "" for the distribution's own repositories.
+	Source         string `json:"source"`
+	CatalogEntryID string `json:"catalog_entry_id"`
+	// SupersededHold marks a forbid or uninstall result that superseded a package hold of the same package on this
+	// device: the hold is left out of the updates section so the removal is not refused by apt-mark, and the agent
+	// reports the overlap in the software resource's status (architect decision 2026-11-02). Absent otherwise.
+	SupersededHold bool `json:"superseded_hold,omitempty"`
+}
+
+// Limits of the software section (plan M13a decisions 2 and 8).
+const (
+	maxSourceURIs     = 4
+	maxSourceURI      = 512
+	maxSourceSuites   = 8
+	maxSourceComps    = 8
+	maxSourceArchs    = 2
+	maxSourceKeyring  = 65536
+	sourceArchAMD64   = "amd64"
+	sourceArchARM64   = "arm64"
+	sourceSchemeHTTPS = "https://"
+)
+
+var (
+	sourceSlug        = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,40}$`)
+	sourceSuite       = regexp.MustCompile(`^[A-Za-z0-9./_-]{1,64}$`)
+	sourceComponent   = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+	sourceFingerprint = regexp.MustCompile(`^[0-9A-F]{40}$`)
+	catalogEntryID    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
+
+// ValidateSoftware checks every field of a software section: the source rules the server applies on upload (plan
+// M13a decision 2), the package and intent rules (decisions 8 and 9), the protected packages (RefusedIntent), unique
+// slugs and packages, and that every source a package names is in Sources. It does not compare a keyring with its fingerprint; the agent does that per source.
+func ValidateSoftware(s SoftwareSpec) error {
+	slugs := make([]string, 0, len(s.Sources))
+	for _, src := range s.Sources {
+		if err := validateSoftwareSource(src); err != nil {
+			return err
+		}
+		if slices.Contains(slugs, src.Slug) {
+			return fmt.Errorf("bundle: duplicate software source %q", src.Slug)
+		}
+		slugs = append(slugs, src.Slug)
+	}
+	var names []string
+	for _, p := range s.Packages {
+		if !ValidPackage(p.Package) {
+			return fmt.Errorf("bundle: invalid software package %q", p.Package)
+		}
+		if slices.Contains(names, p.Package) {
+			return fmt.Errorf("bundle: duplicate software package %q", p.Package)
+		}
+		names = append(names, p.Package)
+		switch p.Intent {
+		case SoftwareRequired, SoftwareHold:
+			if p.Version != nil && !ValidPackageVersion(*p.Version) {
+				return fmt.Errorf("bundle: invalid version of software package %q", p.Package)
+			}
+		case SoftwareUninstall, SoftwareForbid:
+			if p.Version != nil {
+				return fmt.Errorf("bundle: software package %q with intent %s must not have a version", p.Package, p.Intent)
+			}
+		default:
+			return fmt.Errorf("bundle: invalid intent %q of software package %q", p.Intent, p.Package)
+		}
+		if RefusedIntent(p.Package, p.Intent) {
+			return fmt.Errorf("bundle: software package %q is protected against intent %s", p.Package, p.Intent)
+		}
+		if p.SupersededHold && p.Intent != SoftwareForbid && p.Intent != SoftwareUninstall {
+			return fmt.Errorf("bundle: software package %q with intent %s cannot supersede a hold", p.Package, p.Intent)
+		}
+		if p.Source != "" && !slices.Contains(slugs, p.Source) {
+			return fmt.Errorf("bundle: software package %q names the unknown source %q", p.Package, p.Source)
+		}
+		if !catalogEntryID.MatchString(p.CatalogEntryID) {
+			return fmt.Errorf("bundle: invalid catalog_entry_id of software package %q", p.Package)
+		}
+	}
+	return nil
+}
+
+func validateSoftwareSource(src SoftwareSource) error {
+	if !sourceSlug.MatchString(src.Slug) {
+		return fmt.Errorf("bundle: invalid software source slug %q", src.Slug)
+	}
+	if len(src.URIs) < 1 || len(src.URIs) > maxSourceURIs {
+		return fmt.Errorf("bundle: software source %q must have 1 to %d uris", src.Slug, maxSourceURIs)
+	}
+	for _, raw := range src.URIs {
+		if err := CheckSourceURI(raw); err != nil {
+			return fmt.Errorf("bundle: software source %q: %w", src.Slug, err)
+		}
+	}
+	if len(src.Suites) < 1 || len(src.Suites) > maxSourceSuites {
+		return fmt.Errorf("bundle: software source %q must have 1 to %d suites", src.Slug, maxSourceSuites)
+	}
+	flat := 0
+	for i, suite := range src.Suites {
+		if !sourceSuite.MatchString(suite) || slices.Contains(src.Suites[:i], suite) ||
+			slices.Contains(strings.Split(suite, "/"), "..") {
+			return fmt.Errorf("bundle: software source %q has an invalid suite %q", src.Slug, suite)
+		}
+		if strings.HasSuffix(suite, "/") {
+			flat++
+		}
+	}
+	if len(src.Components) > maxSourceComps {
+		return fmt.Errorf("bundle: software source %q must have at most %d components", src.Slug, maxSourceComps)
+	}
+	for i, c := range src.Components {
+		if !sourceComponent.MatchString(c) || slices.Contains(src.Components[:i], c) {
+			return fmt.Errorf("bundle: software source %q has an invalid component %q", src.Slug, c)
+		}
+	}
+	// apt refuses a flat suite next to components and a non-flat suite without them; either stops every apt run.
+	if (flat > 0 && (flat < len(src.Suites) || len(src.Components) > 0)) || (flat == 0 && len(src.Components) == 0) {
+		return fmt.Errorf("bundle: software source %q mixes flat and non-flat suites or components", src.Slug)
+	}
+	if len(src.Architectures) > maxSourceArchs {
+		return fmt.Errorf("bundle: software source %q must have at most %d architectures", src.Slug, maxSourceArchs)
+	}
+	for i, a := range src.Architectures {
+		if (a != sourceArchAMD64 && a != sourceArchARM64) || slices.Contains(src.Architectures[:i], a) {
+			return fmt.Errorf("bundle: software source %q has an invalid architecture %q", src.Slug, a)
+		}
+	}
+	keyring, err := base64.StdEncoding.Strict().DecodeString(src.Keyring)
+	if err != nil || len(keyring) == 0 || len(keyring) > maxSourceKeyring {
+		return fmt.Errorf("bundle: software source %q has an invalid keyring", src.Slug)
+	}
+	if !sourceFingerprint.MatchString(src.Fingerprint) {
+		return fmt.Errorf("bundle: software source %q has an invalid fingerprint", src.Slug)
+	}
+	return nil
+}
+
+// CheckSourceURI checks one URI of a software source: https, at most 512 bytes, a host, no user info, query or
+// fragment, a port from 1 to 65535 when one is given, and none of white space, quotes, angle brackets, invalid UTF-8,
+// U+FFFD or the runes InvisibleInURI names. It is the one rule for the upload (server/internal/domain/software) and
+// for the bundle: the URI becomes a field of a deb822 file on the device and is shown next to the trust decision.
+func CheckSourceURI(raw string) error {
+	if !strings.HasPrefix(raw, sourceSchemeHTTPS) {
+		return errors.New("uris must use https")
+	}
+	if len(raw) > maxSourceURI {
+		return fmt.Errorf("uris must be at most %d characters", maxSourceURI)
+	}
+	if strings.ContainsFunc(raw, unicode.IsSpace) || strings.ContainsAny(raw, "?#") {
+		return errors.New("uris must not contain white space, a query or a fragment")
+	}
+	if strings.ContainsAny(raw, `"<>`) {
+		return errors.New(`uris must not contain ", < or >`)
+	}
+	if !utf8.ValidString(raw) || strings.ContainsFunc(raw, InvisibleInURI) {
+		return errors.New("uris must not contain control, format, invisible, replacement or line separator characters")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.User != nil {
+		return errors.New("uris must be https://host[/path] without user info")
+	}
+	if p := u.Port(); p != "" || strings.HasSuffix(u.Host, ":") {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return errors.New("uris must use a port from 1 to 65535")
+		}
+	}
+	return nil
+}
+
+// InvisibleInURI reports runes a source URI must not contain: controls, format and line or paragraph separators,
+// default-ignorable and variation-selector runes, the tag block (listed whole because its unassigned code points have
+// no property), runes that render as blanks without being white space (U+2800, the Hangul fillers), and U+FFFD, the
+// mark of text that was not valid UTF-8 somewhere on its way.
+func InvisibleInURI(r rune) bool {
+	switch r {
+	case '\u115F', '\u1160', '\u3164', '\uFFA0', '\u2800', unicode.ReplacementChar:
+		return true
+	}
+	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Other_Default_Ignorable_Code_Point,
+		unicode.Variation_Selector) || (r >= 0xE0000 && r <= 0xE007F)
+}
+
+// SoftwareResource turns the software section into the resource the agent plans and applies. Nil lists are encoded
+// as empty lists.
+func SoftwareResource(s SoftwareSpec) (Resource, error) {
+	if s.Sources == nil {
+		s.Sources = []SoftwareSource{}
+	}
+	if s.Packages == nil {
+		s.Packages = []SoftwarePackage{}
+	}
+	return resource(TypeSoftware, TypeSoftware, s)
 }
 
 // FileResource builds a file resource; ContentSHA256 is computed from Content.

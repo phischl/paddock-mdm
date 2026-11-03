@@ -12,7 +12,9 @@ ORDER BY d.id;
 SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions,
        coalesce(s.agent_version, '')::text AS agent_version,
        coalesce(d.agent_update_requested_version, '')::text AS agent_update_requested_version, d.agent_update_requested_at,
-       d.name, d.config_mode
+       d.name, d.config_mode,
+       coalesce(d.os_release ->> 'id', '')::text AS os_id, coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id,
+       coalesce(s.arch, '')::text AS arch
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = ANY(@ids::uuid[]) ORDER BY d.id;
 

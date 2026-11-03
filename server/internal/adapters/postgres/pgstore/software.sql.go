@@ -605,6 +605,31 @@ func (q *Queries) ListAllSoftwareSources(ctx context.Context) ([]SoftwareSource,
 	return items, nil
 }
 
+const listSoftwareAssignmentIntentsOfEntry = `-- name: ListSoftwareAssignmentIntentsOfEntry :many
+SELECT DISTINCT intent FROM software_assignment WHERE catalog_entry_id = $1 ORDER BY intent
+`
+
+// The intents the entry's assignments use: changed packages must stay assignable with each of them.
+func (q *Queries) ListSoftwareAssignmentIntentsOfEntry(ctx context.Context, catalogEntryID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSoftwareAssignmentIntentsOfEntry, catalogEntryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var intent string
+		if err := rows.Scan(&intent); err != nil {
+			return nil, err
+		}
+		items = append(items, intent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSoftwareAssignments = `-- name: ListSoftwareAssignments :many
 SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
 WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\')

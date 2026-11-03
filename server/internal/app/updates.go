@@ -429,13 +429,17 @@ func RebootRequired(health json.RawMessage) bool {
 }
 
 // UpdatesSection returns the updates section of a device in groups (compiler): the organization's schedule and the
-// merged holds of the organization and the device's groups.
-func UpdatesSection(s UpdateSettings, holds []pgstore.PackageHold, groups []uuid.UUID) *bundle.UpdatesSpec {
+// merged holds of the organization, the device's groups and the device's software assignments (softwareHolds, already
+// scoped to the device; ADR 0042 decision 3). Version conflicts resolve as updates.Merge does.
+func UpdatesSection(s UpdateSettings, holds []pgstore.PackageHold, softwareHolds []bundle.Hold, groups []uuid.UUID) *bundle.UpdatesSpec {
 	var applicable []updates.Hold
 	for _, h := range toHolds(holds) {
 		if h.GroupID == nil || slices.Contains(groups, *h.GroupID) {
 			applicable = append(applicable, h)
 		}
+	}
+	for _, h := range softwareHolds {
+		applicable = append(applicable, updates.Hold{Package: h.Package, Version: h.Version})
 	}
 	merged, _ := updates.Merge(applicable)
 	return &bundle.UpdatesSpec{

@@ -70,6 +70,10 @@ WHERE e.id = @id;
 SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
 FROM software_catalog_entry WHERE id = @id FOR UPDATE;
 
+-- name: ListSoftwareAssignmentIntentsOfEntry :many
+-- The intents the entry's assignments use: changed packages must stay assignable with each of them.
+SELECT DISTINCT intent FROM software_assignment WHERE catalog_entry_id = @catalog_entry_id ORDER BY intent;
+
 -- name: UpdateSoftwareCatalogEntry :execrows
 UPDATE software_catalog_entry SET name = @name, description = @description, category = @category,
   source_id = sqlc.narg(source_id), packages = @packages, updated_at = now()

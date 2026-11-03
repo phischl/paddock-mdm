@@ -397,3 +397,60 @@ func TestSoftwareCatalogProtectedPackages(t *testing.T) {
 		t.Fatalf("update actions %v", got)
 	}
 }
+
+// TestSoftwareCatalogUpdateKeepsAssignmentsValid (PDK-410 external re-check): changing an entry's packages is checked
+// against the intents of its existing assignments, so an entry cannot be turned into a forbid of a package Paddock
+// depends on, or a required package that conflicts with it, behind an assignment's back. A refusal is audited once.
+func TestSoftwareCatalogUpdateKeepsAssignmentsValid(t *testing.T) {
+	h := newPrivilegesHarness(t)
+	pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	catalog := app.NewSoftwareCatalog(h.runner, pool)
+	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgOperator, false))
+	refs := func(pkg string) []software.PackageRef {
+		return []software.PackageRef{{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: pkg}}
+	}
+	for _, c := range []struct {
+		intent, pkg string
+		refused     bool
+	}{
+		{software.IntentForbid, "sudo", true}, {software.IntentRequired, "initramfs-tools", true},
+		{software.IntentRequired, "sudo", false},
+	} {
+		name := "Vim " + c.intent + " " + c.pkg
+		e, err := catalog.Create(ctx, app.EntryInput{Name: name, Packages: refs("vim")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.CreateAssignment(ctx, app.AssignmentInput{CatalogEntryID: &e.ID, Intent: c.intent}); err != nil {
+			t.Fatal(err)
+		}
+		want := "software_catalog_entry.updated:success:"
+		if c.refused {
+			want = "software_catalog_entry.updated:failure:invalid_request"
+		}
+		got := h.during(t, func() {
+			_, err := catalog.Update(ctx, e.ID, app.EntryInput{Name: name, Packages: refs(c.pkg)})
+			if errors.Is(err, problem.InvalidRequest) != c.refused || (!c.refused && err != nil) {
+				t.Errorf("%s, vim → %s = %v, refused %v", c.intent, c.pkg, err, c.refused)
+			}
+		})
+		if !slices.Equal(got, []string{want}) {
+			t.Fatalf("%s, vim → %s: actions %v, want %s", c.intent, c.pkg, got, want)
+		}
+		stored, err := catalog.Get(ctx, e.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packages, err := software.DecodePackages(stored.Packages)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wantPkg := map[bool]string{true: "vim", false: c.pkg}[c.refused]; packages[0].Package != wantPkg {
+			t.Fatalf("%s: stored package %s, want %s", c.intent, packages[0].Package, wantPkg)
+		}
+	}
+}

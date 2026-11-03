@@ -398,3 +398,115 @@ func TestWatchSectionDecodes(t *testing.T) {
 		t.Fatalf("a bundle with an unknown section: %+v (%v)", b, err)
 	}
 }
+
+func validSoftware() SoftwareSpec {
+	v := "1.0"
+	return SoftwareSpec{
+		Sources: []SoftwareSource{{Slug: "vendor", URIs: []string{"https://repo.example.com/apt"}, Suites: []string{"stable"},
+			Components: []string{"main"}, Architectures: []string{"amd64"}, Keyring: base64.StdEncoding.EncodeToString([]byte("key")),
+			Fingerprint: strings.Repeat("AB", 20)}},
+		Packages: []SoftwarePackage{
+			{Package: "nano", Intent: SoftwareRequired, Version: &v, Source: "vendor", CatalogEntryID: "0b6d4c8e-6c55-4a5e-9a2f-1f7f0f5b4a11"},
+			{Package: "vim", Intent: SoftwareRequired, CatalogEntryID: "5c1e6d2a-7f0e-4b0d-8f8b-0a3b9b1e2c33"},
+		},
+	}
+}
+
+func TestValidateSoftware(t *testing.T) {
+	v := "2.0"
+	cases := map[string]struct {
+		change func(*SoftwareSpec)
+		ok     bool
+	}{
+		"valid":                    {func(*SoftwareSpec) {}, true},
+		"required without version": {func(s *SoftwareSpec) { s.Packages[0].Version = nil }, true},
+		"hold with version":        {func(s *SoftwareSpec) { s.Packages[1].Intent, s.Packages[1].Version = SoftwareHold, &v }, true},
+		"flat repository":          {func(s *SoftwareSpec) { s.Sources[0].Suites, s.Sources[0].Components = []string{"./"}, nil }, true},
+		"http uri":                 {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"http://repo.example.com/apt"} }, false},
+		"uri with newline":         {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://repo.example.com/\nSigned-By: x"} }, false},
+		"uri with user info":       {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://u@repo.example.com/"} }, false},
+		"uri with U+FFFD":          {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://example.com/\uFFFDrepo"} }, false},
+		"uri with braille blank":   {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://example.com/\u2800"} }, false},
+		"uri with a quote":         {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{`https://example.com/a"b`} }, false},
+		"uri with port 99999":      {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://example.com:99999/"} }, false},
+		"uri with port and idn":    {func(s *SoftwareSpec) { s.Sources[0].URIs = []string{"https://bücher.example:8443/apt"} }, true},
+		"forbid superseding hold": {func(s *SoftwareSpec) {
+			s.Packages[1].Intent, s.Packages[1].SupersededHold = SoftwareForbid, true
+		}, true},
+		"uninstall superseding hold": {func(s *SoftwareSpec) {
+			s.Packages[1].Intent, s.Packages[1].SupersededHold = SoftwareUninstall, true
+		}, true},
+		"required superseding hold":  {func(s *SoftwareSpec) { s.Packages[1].SupersededHold = true }, false},
+		"fully protected required":   {func(s *SoftwareSpec) { s.Packages[1].Package = "paddock-agent" }, false},
+		"fully protected hold":       {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "pam-himmelblau", SoftwareHold }, false},
+		"removal protected forbid":   {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "sudo", SoftwareForbid }, false},
+		"removal protected removal":  {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "dracut", SoftwareUninstall }, false},
+		"removal protected required": {func(s *SoftwareSpec) { s.Packages[1].Package = "sudo" }, true},
+		"conflicting required":       {func(s *SoftwareSpec) { s.Packages[1].Package = "initramfs-tools" }, false},
+		"conflicting hold":           {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "initramfs-tools", SoftwareHold }, false},
+		"conflicting forbid":         {func(s *SoftwareSpec) { s.Packages[1].Package, s.Packages[1].Intent = "initramfs-tools", SoftwareForbid }, true},
+		"slug A":                     {func(s *SoftwareSpec) { s.Sources[0].Slug, s.Packages[0].Source = "A", "A" }, false},
+		"unknown source":             {func(s *SoftwareSpec) { s.Packages[0].Source = "other" }, false},
+		"duplicate package":          {func(s *SoftwareSpec) { s.Packages[1].Package = "nano" }, false},
+		"duplicate source": {func(s *SoftwareSpec) {
+			s.Sources = append(s.Sources, s.Sources[0])
+		}, false},
+		"uninstall with version":     {func(s *SoftwareSpec) { s.Packages[0].Intent = SoftwareUninstall }, false},
+		"forbid with version":        {func(s *SoftwareSpec) { s.Packages[0].Intent = SoftwareForbid }, false},
+		"unknown intent":             {func(s *SoftwareSpec) { s.Packages[1].Intent = "available" }, false},
+		"option as package":          {func(s *SoftwareSpec) { s.Packages[1].Package = "-o" }, false},
+		"invalid version":            {func(s *SoftwareSpec) { bad := "1 0"; s.Packages[0].Version = &bad }, false},
+		"fingerprint of 39":          {func(s *SoftwareSpec) { s.Sources[0].Fingerprint = s.Sources[0].Fingerprint[:39] }, false},
+		"lowercase fingerprint":      {func(s *SoftwareSpec) { s.Sources[0].Fingerprint = strings.Repeat("ab", 20) }, false},
+		"keyring not base64":         {func(s *SoftwareSpec) { s.Sources[0].Keyring = "not base64!" }, false},
+		"empty keyring":              {func(s *SoftwareSpec) { s.Sources[0].Keyring = "" }, false},
+		"no suites":                  {func(s *SoftwareSpec) { s.Sources[0].Suites = nil }, false},
+		"suite with newline":         {func(s *SoftwareSpec) { s.Sources[0].Suites = []string{"stable\nX"} }, false},
+		"no components":              {func(s *SoftwareSpec) { s.Sources[0].Components = nil }, false},
+		"flat with components":       {func(s *SoftwareSpec) { s.Sources[0].Suites = []string{"./"} }, false},
+		"unknown architecture":       {func(s *SoftwareSpec) { s.Sources[0].Architectures = []string{"i386"} }, false},
+		"invalid catalog entry id":   {func(s *SoftwareSpec) { s.Packages[1].CatalogEntryID = "x" }, false},
+		"uppercase catalog entry id": {func(s *SoftwareSpec) { s.Packages[1].CatalogEntryID = strings.ToUpper(s.Packages[1].CatalogEntryID) }, false},
+	}
+	for name, tc := range cases {
+		s := validSoftware()
+		tc.change(&s)
+		if err := ValidateSoftware(s); (err == nil) != tc.ok {
+			t.Errorf("%s: ValidateSoftware = %v, want ok %v", name, err, tc.ok)
+		}
+	}
+}
+
+func TestSoftwareResource(t *testing.T) {
+	r, err := SoftwareResource(SoftwareSpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ID != "software" || r.Type != TypeSoftware || string(r.Spec) != `{"sources":[],"packages":[]}` {
+		t.Errorf("resource %s/%s spec %s", r.ID, r.Type, r.Spec)
+	}
+	a := sample(t)
+	b := a
+	s := validSoftware()
+	b.Software = &s
+	ha, _ := ContentSHA256(a)
+	hb, err := ContentSHA256(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ha == hb {
+		t.Error("the software section is not part of the content hash")
+	}
+	enc, err := Encode(b)
+	if err != nil || strings.Contains(string(enc), `superseded_hold`) {
+		t.Errorf("superseded_hold must be absent unless set: %s (%v)", enc, err)
+	}
+	s.Packages[1].Intent, s.Packages[1].SupersededHold = SoftwareForbid, true
+	if enc, err = Encode(b); err != nil || !strings.Contains(string(enc), `"superseded_hold":true`) {
+		t.Errorf("superseded_hold not encoded: %s (%v)", enc, err)
+	}
+	enc, err = Encode(a)
+	if err != nil || strings.Contains(string(enc), `"software"`) {
+		t.Errorf("a bundle without software must carry no software section: %s (%v)", enc, err)
+	}
+}

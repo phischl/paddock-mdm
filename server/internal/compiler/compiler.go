@@ -165,6 +165,9 @@ type compileTarget struct {
 	name      *string // the device's managed name (ADR 0041); nil when not managed
 	// reportOnly marks an adopted device before enforcement (plan M11 decision 41): its bundle only reports.
 	reportOnly bool
+	// osID, versionID and arch are the device's os-release ID and VERSION_ID and its reported architecture ("" when
+	// unknown), which resolve catalog entries to packages (plan M13a decision 14).
+	osID, versionID, arch string
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -215,6 +218,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
 			return err
 		}
+		if keys.Software, err = loadSoftware(ctx, q); err != nil {
+			return err
+		}
 		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err
@@ -232,6 +238,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
 				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
 			t.name, t.reportOnly = row.Name, row.ConfigMode == device.ConfigModeReportOnly
+			t.osID, t.versionID, t.arch = row.OsID, row.OsVersionID, row.Arch
 			r, changed, failure, err := c.render(ctx, q, org, t, defs, overlay, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
@@ -385,6 +392,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	var v2 v2Trust
 	var updatesSection *bundle.UpdatesSpec
 	var diskSection *bundle.DiskSpec
+	var softwareSection *bundle.SoftwareSpec
 	agent := bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}
 	if t.v2 {
 		v2 = keys
@@ -399,9 +407,23 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		omitted = omits
 		schema = bundle.SchemaVersion2
 		resources = append(resources, extra...)
+		var softwareHolds []bundle.Hold
+		if keys.Software != nil {
+			// Conflicts are dropped as UpdatesSection drops those of the holds (plan M13a decision 10): the smallest
+			// version wins either way. The software holds stay outside the rollout overlay until M13c (plan M11 R2.10).
+			var err error
+			if softwareSection, softwareHolds, _, err = keys.Software.section(groups, t.osID, t.versionID, t.arch); err != nil {
+				return rendered{}, false, &renderFailure{device: t.id, reason: err.Error() +
+					"; the device keeps its previous bundle until the catalog is fixed"}, nil
+			}
+		}
 		if keys.Updates != nil {
-			updatesSection = keys.Updates.section(groups)
+			updatesSection = keys.Updates.section(groups, softwareHolds)
 			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
+			updatesSection.Holds = alignWithHolds(softwareSection, updatesSection.Holds)
+		}
+		if failure := softwareFailure(t.id, softwareSection); failure != nil {
+			return rendered{}, false, failure, nil
 		}
 		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.id, t.agent, t.request, c.now())
 		if keys.Disk != nil {
@@ -421,6 +443,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	if t.v2 {
 		b.Hostname = hostnameSection(ctx, t)
 		b.Watch = v2.Watch
+		b.Software = softwareSection
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -462,6 +485,8 @@ type v2Trust struct {
 	// Watch is the organization's presence policy (plan M9 decision 39), nil without watched units; not part of the
 	// digest.
 	Watch *bundle.WatchSpec `json:"-"`
+	// Software is the organization's software catalog and assignments (plan M13a decision 14), not part of the digest.
+	Software *orgSoftware `json:"-"`
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap

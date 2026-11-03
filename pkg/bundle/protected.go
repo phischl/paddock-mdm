@@ -30,14 +30,6 @@ var (
 	conflictingResult = []string{"initramfs-tools"}
 )
 
-// The intents of a software assignment (plan M13a decision 9).
-const (
-	intentRequired  = "required"
-	intentUninstall = "uninstall"
-	intentHold      = "hold"
-	intentForbid    = "forbid"
-)
-
 // EntryRefused reports whether no catalog entry may name pkg: it is fully protected, a Paddock package or any
 // himmelblau package.
 func EntryRefused(pkg string) bool {
@@ -53,9 +45,9 @@ func RefusedIntent(pkg, intent string) bool {
 	case EntryRefused(pkg):
 		return true
 	case slices.Contains(removalProtected, pkg):
-		return intent == intentForbid || intent == intentUninstall
+		return intent == SoftwareForbid || intent == SoftwareUninstall
 	case slices.Contains(conflictingResult, pkg):
-		return intent == intentRequired || intent == intentHold
+		return intent == SoftwareRequired || intent == SoftwareHold
 	}
 	return false
 }
