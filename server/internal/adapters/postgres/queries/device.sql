@@ -5,6 +5,15 @@ VALUES (@id, @organization_id, @hostname, @state, sqlc.narg(hardware_uuid), sqlc
         sqlc.narg(enrollment_token_id), @enrollment_method, @config_mode)
 RETURNING *;
 
+-- The os-release the device reported with a check-in (PDK-695): id and version_id replace the stored ones; the
+-- enrollment's pretty_name and version_codename described the old release and are dropped.
+-- name: UpdateDeviceOSRelease :execrows
+UPDATE device
+SET os_release = (CASE WHEN jsonb_typeof(os_release) = 'object' THEN os_release ELSE '{}'::jsonb END
+                  - 'pretty_name' - 'version_codename')
+                 || jsonb_build_object('id', @os_id::text, 'version_id', @version_id::text)
+WHERE id = @device_id;
+
 -- name: GetDevice :one
 SELECT * FROM device WHERE id = @id;
 

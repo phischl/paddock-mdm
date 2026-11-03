@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -81,13 +82,16 @@ func (c *Compiler) Reconcile(ctx context.Context) error {
 
 func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 	var latest []pgstore.Bundle
-	var outdated []uuid.UUID
+	var outdated, platform []uuid.UUID
 	if err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		if latest, err = q.ListLatestBundles(ctx); err != nil {
 			return err
 		}
-		outdated, err = q.ListDevicesWithOutdatedSchema(ctx)
+		if outdated, err = q.ListDevicesWithOutdatedSchema(ctx); err != nil {
+			return err
+		}
+		platform, err = q.ListDevicesWithOutdatedPlatform(ctx)
 		return err
 	}); err != nil {
 		return err
@@ -103,6 +107,7 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 			{OrganizationID: org.OrganizationID, Scope: statechange.ScopeOrg, ID: org.OrganizationID},
 		})
 	}
+	outdated = mergeIDs(outdated, platform)
 	if len(outdated) == 0 {
 		return nil
 	}
@@ -110,8 +115,18 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 	for i, d := range outdated {
 		events[i] = statechange.Event{OrganizationID: org.OrganizationID, Scope: statechange.ScopeDevice, ID: d}
 	}
-	slog.InfoContext(ctx, "recompiling devices whose agent changed its bundle schema", "devices", len(outdated))
+	slog.InfoContext(ctx, "recompiling devices whose agent schema, architecture or os-release changed", "devices", len(outdated))
 	return c.compileOrg(ctx, org.OrganizationID, events)
+}
+
+// mergeIDs is a followed by the IDs of b that a does not hold.
+func mergeIDs(a, b []uuid.UUID) []uuid.UUID {
+	for _, id := range b {
+		if !slices.Contains(a, id) {
+			a = append(a, id)
+		}
+	}
+	return a
 }
 
 func pointer(b pgstore.Bundle) devicecache.BundlePointer {

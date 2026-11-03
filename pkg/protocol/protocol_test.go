@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -242,4 +243,26 @@ func FuzzParseHeaders(f *testing.F) {
 			t.Fatalf("canonical string does not reproduce the headers: %q", lines)
 		}
 	})
+}
+
+// TestCheckinOSReleaseRoundTrip (PDK-695): the field is additive; a request without it, as an older agent sends it,
+// carries no os_release key and decodes to nil.
+func TestCheckinOSReleaseRoundTrip(t *testing.T) {
+	in := CheckinRequest{AgentVersion: "0.1.0", Arch: ArchAMD64, OSRelease: map[string]string{"id": "ubuntu", "version_id": "26.04"}}
+	raw, err := json.Marshal(in)
+	if err != nil || !strings.Contains(string(raw), `"os_release":{"id":"ubuntu","version_id":"26.04"}`) {
+		t.Fatalf("%s (%v)", raw, err)
+	}
+	var out CheckinRequest
+	if err := json.Unmarshal(raw, &out); err != nil || out.OSRelease["id"] != "ubuntu" || out.OSRelease["version_id"] != "26.04" {
+		t.Fatalf("%+v (%v)", out, err)
+	}
+	raw, err = json.Marshal(CheckinRequest{AgentVersion: "0.1.0"})
+	if err != nil || strings.Contains(string(raw), "os_release") {
+		t.Fatalf("%s (%v)", raw, err)
+	}
+	var old CheckinRequest
+	if err := json.Unmarshal([]byte(`{"agent_version":"0.1.0","schema_versions":[1]}`), &old); err != nil || old.OSRelease != nil {
+		t.Fatalf("%+v (%v)", old, err)
+	}
 }

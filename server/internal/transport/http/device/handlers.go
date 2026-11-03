@@ -198,6 +198,7 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	hb := ingest.Heartbeat{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: received,
 		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion, Arch: boundedArch(req.Arch),
+		OSRelease:      boundedOSRelease(req.OSRelease),
 		SchemaVersions: boundedSchemaVersions(req.SchemaVersions), Health: req.Health,
 		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq, ExpectedSeq: expected,
 		// Without a cached delivery (upgrade, Valkey loss) nothing is flagged: a counter restored from last_seq can
@@ -461,6 +462,16 @@ func boundedArch(arch string) string {
 		return arch
 	}
 	return ""
+}
+
+// boundedOSRelease keeps the id and version_id of a check-in when both are plain identifiers; anything else is dropped
+// so that the check-in still succeeds and the stored value stays (PDK-695).
+func boundedOSRelease(in map[string]string) map[string]string {
+	id, versionID, ok := domaindevice.ReportedOSRelease(in)
+	if !ok {
+		return nil
+	}
+	return map[string]string{"id": id, "version_id": versionID}
 }
 
 func boundedSchemaVersions(in []int) []int {

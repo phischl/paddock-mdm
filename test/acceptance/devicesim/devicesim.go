@@ -41,6 +41,8 @@ type Device struct {
 	ClockOffset time.Duration
 	// Arch is reported in check-ins; empty (the default) keeps the device out of agent rollouts.
 	Arch string
+	// OSRelease (keys id and version_id) is reported in check-ins; nil sends none, as agents before PDK-695 did.
+	OSRelease map[string]string
 	// AgentVersion is reported in check-ins; empty reports 0.0.0-devicesim.
 	AgentVersion string
 	// SchemaVersions are the bundle schemas the device reports and accepts; nil means [bundle.SchemaVersion], the
@@ -210,7 +212,7 @@ func (d *Device) Checkin(ctx context.Context) (protocol.CheckinResponse, Respons
 	}
 	res, err := d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/checkin", Body: protocol.CheckinRequest{
 		AppliedBundleVersion: d.Applied, AgentVersion: d.agentVersion(), SchemaVersions: d.schemaVersions(),
-		Health: health, Arch: d.Arch, EventSeqHigh: d.EventSeqHigh,
+		Health: health, Arch: d.Arch, EventSeqHigh: d.EventSeqHigh, OSRelease: d.OSRelease,
 	}})
 	if err != nil || res.Status != http.StatusOK {
 		return protocol.CheckinResponse{}, res, err

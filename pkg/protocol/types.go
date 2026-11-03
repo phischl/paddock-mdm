@@ -87,6 +87,9 @@ type CheckinRequest struct {
 	Health               json.RawMessage `json:"health,omitempty"`
 	EventSeqHigh         int64           `json:"event_seq_high"`
 	Arch                 string          `json:"arch,omitempty"` // runtime.GOARCH: ArchAMD64 or ArchARM64
+	// OSRelease is the os-release identification of the device (keys id and version_id, as at enrollment); an agent
+	// of an earlier release leaves it out and the server keeps the enrollment value (plan M13a decision 14, M2).
+	OSRelease map[string]string `json:"os_release,omitempty"`
 }
 
 // Agent architectures of CheckinRequest.Arch.
