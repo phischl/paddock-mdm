@@ -74,11 +74,3 @@ targetRules = ["generic-api-key"]
 paths = ['''^(b/)?test/system/autoinstall\.go$''']
 regexTarget = "secret"
 regexes = ['''^id_ed25519\.pub$''']
-
-[[allowlists]]
-description = "Software compiler tests: OpenPGP v4 fingerprints of the public test signing keys"
-condition = "AND"
-targetRules = ["generic-api-key"]
-paths = ['''^(b/)?server/internal/compiler/software_test\.go$''']
-regexTarget = "secret"
-regexes = ['''^[0-9A-F]{40}$''']

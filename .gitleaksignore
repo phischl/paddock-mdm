@@ -1,0 +1,4 @@
+# One finding, ignored by its exact fingerprint (commit:file:rule:line); never a pattern.
+# PDK-410 test: the deliberately WRONG fingerprint of a public test key ("tampered" source, mismatch case). Not a secret;
+# a later PDK-410 commit derives it at runtime, so only this historical line remains.
+a835667623f86dce03c3b57a31542ab607a895ee:server/internal/compiler/software_test.go:generic-api-key:251
