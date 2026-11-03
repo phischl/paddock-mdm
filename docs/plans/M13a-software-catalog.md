@@ -1295,3 +1295,13 @@ of 2026-10-31 differ, this amendment wins.
   naming the URI, one deduplicated event. The check is a simulation and changes nothing; Plan (report-only devices) does
   not run it. This replaces the residual-risk sentence about later conflicts in the line above; RR-81 keeps only the
   delay of up to one drift interval.
+- **Install guards at execution time (architect, 2026-11-03, PDK-412 external review 2 L1/L2, PDK-712).** Every real
+  `apt-get install` carries `--no-remove`, so it never removes a package its simulation did not show; an installation
+  whose simulation removes only planned removals runs after the removal step of the same pass. A simulation (install
+  or removal) whose `Inst` or `Remv` lines touch a FULLY protected package, an upgrade included, is refused before the
+  real run (fail closed) as `failed/protected_package_affected`, reported once per unchanged spec; so is a simulation
+  without a summary line or whose summary counts more installations, upgrades, downgrades, reinstallations or
+  removals than its `Inst` and `Remv` lines name (both output formats): Paddock's own
+  packages move only through the signed A/B update path, the login stack only through its own reconciler.
+  Removal-protected packages may be upgraded by a simulation but never removed (`would_remove_dependents`). Holding a
+  lock across simulation and real run stays out of scope.

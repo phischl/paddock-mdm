@@ -34,8 +34,15 @@ var (
 // EntryRefused reports whether no catalog entry may name pkg: it is fully protected, a Paddock package or any
 // himmelblau package, or apt would read it as a pattern that selects a protected package of any tier (aptPattern).
 func EntryRefused(pkg string) bool {
+	return FullyProtected(pkg) || aptPattern(pkg)
+}
+
+// FullyProtected reports whether pkg is a fully protected package by its exact name: Paddock's own packages and every
+// himmelblau package. Unlike EntryRefused it does not read pkg as an apt pattern, so it suits names apt printed itself
+// (the agent refuses a simulation that installs, upgrades or removes such a package, plan M13a amendment 2026-11-03).
+func FullyProtected(pkg string) bool {
 	return slices.Contains(fullyProtected, pkg) || pkg == "himmelblau" || strings.HasPrefix(pkg, "himmelblau-") ||
-		strings.HasSuffix(pkg, "-himmelblau") || aptPattern(pkg)
+		strings.HasSuffix(pkg, "-himmelblau")
 }
 
 // aptPatternExempt are exact Debian package names that the archive really has and whose pattern reading would select a
