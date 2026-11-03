@@ -84,3 +84,16 @@ func gatePNG(t *testing.T) []byte {
 	}
 	return b.Bytes()
 }
+
+// listSoftwareEntry creates a catalog entry assigned to a device group and removes it with the test: the entry the
+// list gate reads on the device's and on the entry's page (PDK-411). Only the group's devices manage it.
+func listSoftwareEntry(t *testing.T, p *env.Portal, group string) string {
+	t.Helper()
+	res := call(t, p, http.MethodPost, softwareCatalog, entryBody("list-contract"))
+	expectStatus(t, res, http.StatusCreated, "")
+	entry := createdID(t, p, softwareCatalog, res)
+	expectStatus(t, call(t, p, http.MethodPost, softwareAssignments, map[string]any{
+		"catalog_entry_id": entry, "device_group_id": group, "intent": "hold",
+	}), http.StatusCreated, "")
+	return entry
+}

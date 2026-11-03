@@ -89,7 +89,7 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 			return err
 		}
 		raise, clear = clockTransition(clock)
-		return nil
+		return recordSoftwareStatus(ctx, q, hb, health, clock.LastContactAt)
 	})
 	if err != nil {
 		return err

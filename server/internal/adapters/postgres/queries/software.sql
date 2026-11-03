@@ -175,3 +175,81 @@ SELECT count(*) FROM (
 -- name: ListAllSoftwareAssignments :many
 -- Every assignment of the organization (compiler), in a stable order.
 SELECT * FROM software_assignment ORDER BY catalog_entry_id, device_group_id NULLS FIRST, id;
+
+-- name: UpsertDeviceSoftwareStatus :exec
+-- Stores the items of a report (JSON array of {id, package, intent, state, version, reason, error}); an item whose id
+-- is not an entry of the organization is skipped, and a row of a newer report is never replaced.
+INSERT INTO device_software_status (device_id, organization_id, catalog_entry_id, package, intent, state, version, reason, error, reported_at)
+SELECT @device_id, @organization_id, r.id, r.package, r.intent, r.state, r.version, r.reason, r.error, @reported_at
+FROM jsonb_to_recordset(@rows::jsonb) AS r(id uuid, package text, intent text, state text, version text, reason text, error text)
+JOIN software_catalog_entry e ON e.id = r.id AND e.organization_id = @organization_id
+ON CONFLICT (device_id, catalog_entry_id) DO UPDATE SET
+  package = EXCLUDED.package, intent = EXCLUDED.intent, state = EXCLUDED.state, version = EXCLUDED.version,
+  reason = EXCLUDED.reason, error = EXCLUDED.error, reported_at = EXCLUDED.reported_at
+WHERE device_software_status.reported_at <= EXCLUDED.reported_at;
+
+-- name: DeleteDeviceSoftwareStatusNotIn :exec
+-- The entries the report no longer names; rows a newer report wrote stay.
+DELETE FROM device_software_status
+WHERE device_id = @device_id AND catalog_entry_id <> ALL(@entry_ids::uuid[]) AND reported_at <= @reported_at;
+
+-- name: SetDeviceSoftwareDigest :exec
+-- Only a changed digest writes: every check-in carries one, and device_status is the hottest table.
+UPDATE device_status SET software_digest = @digest WHERE device_id = @device_id AND software_digest IS DISTINCT FROM @digest;
+
+-- name: SetDeviceSoftwareTruncated :exec
+UPDATE device_status SET software_truncated = @truncated
+WHERE device_id = @device_id AND software_truncated IS DISTINCT FROM @truncated;
+
+-- name: ListDeviceManagedSoftware :many
+-- The entries a device manages: those assigned to it, through the organization or one of its groups, and those it
+-- reported a row for, with the intents of the assignments (NULL: none) and the reported row (state '': none). The page
+-- derives not_applicable and unknown from the rest and filters and sorts them in memory (ADR 0028).
+SELECT e.id AS catalog_entry_id, e.name, e.packages, t.intents, coalesce(s.package, '')::text AS package,
+       coalesce(s.intent, '')::text AS intent, coalesce(s.state, '')::text AS state, coalesce(s.version, '')::text AS version,
+       coalesce(s.reason, '')::text AS reason, coalesce(s.error, '')::text AS error, s.reported_at
+FROM software_catalog_entry e
+LEFT JOIN device_software_status s ON s.catalog_entry_id = e.id AND s.device_id = @device_id
+CROSS JOIN LATERAL (
+  SELECT array_agg(DISTINCT a.intent ORDER BY a.intent)::text[] AS intents
+  FROM software_assignment a
+  WHERE a.catalog_entry_id = e.id
+    AND (a.device_group_id IS NULL
+      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = @device_id AND m.device_group_id = a.device_group_id))
+) t
+WHERE (s.device_id IS NOT NULL OR t.intents IS NOT NULL)
+  AND (sqlc.narg(q_pattern)::text IS NULL OR e.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+ORDER BY e.name, e.id;
+
+-- name: GetDeviceSoftwareTarget :one
+-- The platform a device's packages resolve for (software.Resolve): the canonical lowercase os-release keys and the
+-- reported architecture.
+SELECT coalesce(d.os_release ->> 'id', '')::text AS os_id, coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id,
+       coalesce(s.arch, '')::text AS arch, coalesce(s.software_truncated, false)::boolean AS truncated
+FROM device d LEFT JOIN device_status s ON s.device_id = d.id
+WHERE d.id = @id;
+
+-- name: ListSoftwareCatalogDevices :many
+-- The active devices the entry is assigned to, through the organization or one of their groups, with the row they
+-- reported for it (state '': none) and the intents of the assignments. The page filters and sorts the derived
+-- states in memory (ADR 0028), so the query returns every match in hostname order.
+SELECT d.id AS device_id, d.hostname, coalesce(d.os_release ->> 'id', '')::text AS os_id,
+       coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id, coalesce(ds.arch, '')::text AS arch,
+       t.intents, coalesce(st.package, '')::text AS package, coalesce(st.intent, '')::text AS intent,
+       coalesce(st.state, '')::text AS state, coalesce(st.version, '')::text AS version, coalesce(st.reason, '')::text AS reason,
+       coalesce(st.error, '')::text AS error, st.reported_at
+FROM device d
+LEFT JOIN device_status ds ON ds.device_id = d.id
+LEFT JOIN device_software_status st ON st.device_id = d.id AND st.catalog_entry_id = @catalog_entry_id
+CROSS JOIN LATERAL (
+  SELECT array_agg(DISTINCT a.intent ORDER BY a.intent)::text[] AS intents
+  FROM software_assignment a
+  WHERE a.catalog_entry_id = @catalog_entry_id
+    AND (a.device_group_id IS NULL
+      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id))
+) t
+WHERE d.state = 'active' AND t.intents IS NOT NULL
+  AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
+        SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
+  AND (sqlc.narg(q_pattern)::text IS NULL OR d.hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+ORDER BY d.hostname, d.id;

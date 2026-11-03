@@ -145,7 +145,7 @@ func (g *gateway) enrollStatus(w http.ResponseWriter, r *http.Request) {
 // decision 11); it carries the device's pending commands (plan M4a decision 3). A quarantined device gets neither
 // a bundle URL nor commands.
 func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
-	dev, err := g.authenticateDevice(w, r, maxBody)
+	dev, err := g.authenticateDevice(w, r, maxCheckinBody)
 	if err != nil {
 		g.fail(w, r, err)
 		return

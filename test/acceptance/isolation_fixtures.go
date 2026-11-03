@@ -546,6 +546,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"PUT /api/v1/software-catalog/{id}/icon": itemFixture(func(w *isolationWorld) string {
 		return softwareCatalog + "/" + w.globexEntry + "/icon"
 	}, map[string]any{}),
+	"GET /api/v1/software-catalog/{id}/devices": itemFixture(func(w *isolationWorld) string {
+		return softwareCatalog + "/" + w.globexEntry + "/devices"
+	}, nil),
+	"GET /api/v1/devices/{id}/managed-software": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/devices/" + w.globexDevice + "/managed-software"
+	}, nil),
 	"GET /api/v1/software-assignments": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return softwareAssignments + "?page_size=100", nil
 	}},
@@ -893,6 +899,8 @@ var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/user-groups/{id}/members":      func(w *isolationWorld) string { return w.globexUserGroup },
 	"/api/v1/devices/{id}/commands":         func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/software":         func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/devices/{id}/managed-software": func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/software-catalog/{id}/devices": func(w *isolationWorld) string { return w.globexEntry },
 	"/api/v1/devices/{id}/vulnerabilities":  func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/config-status":    func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/bundles":          func(w *isolationWorld) string { return w.globexDevice },
@@ -986,6 +994,8 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/software":                      {{"q": {"globex-iso"}}, {"has_vulnerabilities": {"true"}, "page_size": {"100"}}},
 	"/api/v1/vulnerabilities":               {{"q": {"CVE-2099"}, "page_size": {"100"}}, {"severity": {"high"}, "page_size": {"100"}}},
 	"/api/v1/devices/{id}/software":         {{"q": {"globex-iso"}}},
+	"/api/v1/devices/{id}/managed-software": {{"q": {"globex-iso"}}, {"intent": {"hold"}, "sort": {"-reported_at"}, "page_size": {"100"}}},
+	"/api/v1/software-catalog/{id}/devices": {{"sort": {"-state"}, "page_size": {"100"}}, {"sort": {"reported_at"}}},
 	"/api/v1/devices/{id}/vulnerabilities":  {{"q": {"globex-iso"}}, {"severity": {"high"}}},
 	"/api/v1/devices/{id}/config-status":    {{"q": {"globex-iso"}}, {"status": {"failed", "pending"}}},
 	"/api/v1/devices/{id}/bundles":          {{"outcome": {"applied", "none"}}},

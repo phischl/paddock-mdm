@@ -1245,3 +1245,14 @@ of 2026-10-31 differ, this amendment wins.
   after each compile (also of a blocked device and of a compile that publishes no bundle), and recompiles on a
   difference, as for an outdated bundle schema. The os-release change keeps its audit event
   `device.os_release_changed` from the check-in path.
+
+- **PDK-701, software report without items (architect, 2026-11-02).** `SoftwareHealth.Items` is a pointer: absent or
+  null means "no software report" (old agents, software not enabled) and the server keeps the stored rows; an explicit
+  `[]` means "no items" and the server prunes them. PDK-412 sends `[]` when it reports software with no items. Implemented
+  in PDK-411 (protocol type and ingestion).
+- **PDK-700, size of the software report (architect, 2026-11-02).** The body limit of `POST /v1/checkin` alone is raised to
+  96 KiB (documented in `device.yaml`; the other device endpoints keep 64 KiB). The agent caps each software error at 120
+  characters, drops applied items before failed ones (never a failed item) and sets `SoftwareHealth.Truncated`; the
+  server stores the flag (`device_status.software_truncated`, migration `00099`) and shows it as `truncated` on the
+  device's managed-software list. Hard rule: the software report never causes the check-in to be refused. Server part in
+  PDK-411, agent truncation in PDK-412.

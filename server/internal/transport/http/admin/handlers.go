@@ -76,8 +76,10 @@ type handlers struct {
 	softwareSources *app.SoftwareSources
 	// softwareCatalog are the catalog entries and their assignments (plan M13a decisions 7–11).
 	softwareCatalog *app.SoftwareCatalog
-	ipAllowlist     *app.IPAllowlist
-	overview        *app.Overview
+	// softwareStatus lists what devices report about the catalog's applications (plan M13a §3.4).
+	softwareStatus *app.SoftwareStatus
+	ipAllowlist    *app.IPAllowlist
+	overview       *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).

@@ -123,6 +123,9 @@ func toSoftwareSource(s pgstore.SoftwareSource) adminapi.SoftwareSource {
 var (
 	softwareCatalogList    = listing.Spec{Sort: []string{"name", "category", "created_at", "updated_at"}, DefaultSort: "name"}
 	softwareAssignmentList = listing.Spec{Sort: []string{"created_at", "updated_at", "intent"}, DefaultSort: "-created_at"}
+	// The derived states are computed in memory (ADR 0028), so these lists sort there too.
+	deviceManagedSoftwareList = listing.Spec{Sort: []string{"name", "state", "reported_at"}, DefaultSort: "name"}
+	softwareCatalogDeviceList = listing.Spec{Sort: []string{"hostname", "state", "reported_at"}, DefaultSort: "hostname"}
 )
 
 func (h *handlers) ListSoftwareCatalog(ctx context.Context, req adminapi.ListSoftwareCatalogRequestObject) (adminapi.ListSoftwareCatalogResponseObject, error) {
@@ -328,4 +331,73 @@ func toSoftwareAssignment(a app.Assignment) adminapi.SoftwareAssignment {
 		Intent: adminapi.SoftwareIntent(a.Intent), UpdateRule: adminapi.SoftwareUpdateRule(a.UpdateRule), Version: a.Version,
 		Reason: a.Reason, CreatedAt: a.CreatedAt.UTC(), UpdatedAt: a.UpdatedAt.UTC(),
 	}
+}
+
+func (h *handlers) ListDeviceManagedSoftware(ctx context.Context, req adminapi.ListDeviceManagedSoftwareRequestObject) (adminapi.ListDeviceManagedSoftwareResponseObject, error) {
+	params, err := listing.Parse(deviceManagedSoftwareList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	query := app.DeviceManagedSoftwareQuery{Page: params.ListPage()}
+	if req.Params.State != nil {
+		if !req.Params.State.Valid() {
+			return nil, problem.InvalidRequest.WithDetail("unknown state")
+		}
+		state := string(*req.Params.State)
+		query.State = &state
+	}
+	if req.Params.Intent != nil {
+		if !req.Params.Intent.Valid() {
+			return nil, problem.InvalidRequest.WithDetail("unknown intent")
+		}
+		intent := string(*req.Params.Intent)
+		query.Intent = &intent
+	}
+	res, err := h.softwareStatus.DeviceManagedSoftware(ctx, req.Id, query)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.DeviceManagedSoftware, len(res.Items))
+	for i, m := range res.Items {
+		items[i] = adminapi.DeviceManagedSoftware{
+			CatalogEntryId: m.CatalogEntryID, Name: m.Name, Package: m.Package, Intent: adminapi.SoftwareIntent(m.Intent),
+			State: adminapi.DeviceSoftwareState(m.State), Version: m.Version, Reason: m.Reason, Error: m.Error, ReportedAt: m.ReportedAt,
+		}
+	}
+	page := listing.NewPage(items, params, res.Count)
+	return adminapi.ListDeviceManagedSoftware200JSONResponse{
+		Items: page.Items, Page: page.Page, PageSize: page.PageSize, Sort: page.Sort, Total: page.Total, TotalCapped: page.TotalCapped,
+		Truncated: res.Truncated,
+	}, nil
+}
+
+func (h *handlers) ListSoftwareCatalogDevices(ctx context.Context, req adminapi.ListSoftwareCatalogDevicesRequestObject) (adminapi.ListSoftwareCatalogDevicesResponseObject, error) {
+	params, err := listing.Parse(softwareCatalogDeviceList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	query := app.SoftwareCatalogDeviceQuery{Page: params.ListPage(), DeviceGroupID: req.Params.DeviceGroupId}
+	if req.Params.State != nil {
+		if !req.Params.State.Valid() {
+			return nil, problem.InvalidRequest.WithDetail("unknown state")
+		}
+		state := string(*req.Params.State)
+		query.State = &state
+	}
+	res, err := h.softwareStatus.CatalogDevices(ctx, req.Id, query)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.SoftwareCatalogDevice, len(res.Items))
+	for i, d := range res.Items {
+		items[i] = adminapi.SoftwareCatalogDevice{
+			DeviceId: d.DeviceID, Hostname: d.Hostname, Package: d.Package, Intent: adminapi.SoftwareIntent(d.Intent),
+			State: adminapi.DeviceSoftwareState(d.State), Version: d.Version, Reason: d.Reason, Error: d.Error, ReportedAt: d.ReportedAt,
+		}
+	}
+	return adminapi.ListSoftwareCatalogDevices200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }

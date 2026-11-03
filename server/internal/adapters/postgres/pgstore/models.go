@@ -415,6 +415,19 @@ type DeviceResourceStatus struct {
 	OccurredAt     time.Time
 }
 
+type DeviceSoftwareStatus struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	Package        string
+	Intent         string
+	State          string
+	Version        string
+	Reason         string
+	Error          string
+	ReportedAt     time.Time
+}
+
 type DeviceStatus struct {
 	DeviceID             uuid.UUID
 	OrganizationID       uuid.UUID
@@ -435,6 +448,8 @@ type DeviceStatus struct {
 	EventSeqHigh         int64
 	EventSeqContiguous   int64
 	EventSeqScanned      int64
+	SoftwareDigest       string
+	SoftwareTruncated    bool
 }
 
 type DeviceUserSeen struct {
