@@ -245,34 +245,34 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
 /* Table only: the cells break anywhere (overflow-wrap: anywhere), so these values keep their words whole to stop a
    column collapsing to one character per line, and the actions stay fully visible. The cards layout renders the same
    slots in an inline meta row and must stay as it is. */
-:global(.v-data-table__td) .src-slug,
-:global(.v-data-table__td) .src-uri,
-:global(.v-data-table__td) .src-suite,
-:global(.v-data-table__td) .src-block {
+.v-data-table__td .src-slug,
+.v-data-table__td .src-uri,
+.v-data-table__td .src-suite,
+.v-data-table__td .src-block {
   overflow-wrap: normal;
   word-break: normal;
 }
 
-:global(.v-data-table__td) .src-slug,
-:global(.v-data-table__td) .src-suite {
+.v-data-table__td .src-slug,
+.v-data-table__td .src-suite {
   white-space: nowrap;
 }
 
-:global(.v-data-table__td) .src-suite,
-:global(.v-data-table__td) .src-uri {
+.v-data-table__td .src-suite,
+.v-data-table__td .src-uri {
   display: block;
 }
 
-:global(.v-data-table__td) .src-fingerprint {
+.v-data-table__td .src-fingerprint {
   display: inline-block;
   min-width: 9rem;
 }
 
-:global(.v-data-table__td) .src-block {
+.v-data-table__td .src-block {
   display: inline-block;
 }
 
-:global(.v-data-table__td) .src-actions {
+.v-data-table__td .src-actions {
   flex-wrap: nowrap;
   white-space: nowrap;
 }
