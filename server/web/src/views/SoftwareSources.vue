@@ -32,6 +32,8 @@ const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
 const open = ref(false)
 const target = ref<SoftwareSource | null>(null)
+const draft = ref<SourceInput | null>(null)
+const draftProblem = ref('')
 const pageProblem = ref('')
 const formKey = ref(0)
 
@@ -52,27 +54,51 @@ onMounted(async () => {
   if (!save && !remove) return
   await router.replace(withoutStepUpParam())
   if (save) {
-    pageProblem.value = save.failed ? 'step_up_failed' : ((await saveSoftwareSource(save.payload.id, save.payload.input, save.payload.keyChanged)) ?? '')
+    const code = save.failed ? 'step_up_failed' : ((await saveSoftwareSource(save.payload.id, save.payload.input, save.payload.keyChanged)) ?? '')
+    if (code) await reopen(save.failed ? null : save.payload, code)
   } else if (remove) {
     pageProblem.value = remove.failed ? 'step_up_failed' : ((await deleteSoftwareSource(remove.payload.id)) ?? '')
   }
   await list.value?.reload()
 })
 
+async function loadTarget(id: string | null): Promise<boolean> {
+  target.value = null
+  if (!id) return true
+  // The list carries no key; the edit form needs it to show what is in force.
+  const full = await getSoftwareSource(id)
+  if (typeof full === 'string') {
+    pageProblem.value = full
+    return false
+  }
+  target.value = full
+  return true
+}
+
 async function openDialog(item: SoftwareSourceSummary | null): Promise<void> {
   pageProblem.value = ''
-  target.value = null
-  if (item) {
-    // The list carries no key; the edit form needs it to show what is in force.
-    const full = await getSoftwareSource(item.id)
-    if (typeof full === 'string') {
-      pageProblem.value = full
-      return
-    }
-    target.value = full
-  }
+  draft.value = null
+  draftProblem.value = ''
+  if (!(await loadTarget(item?.id ?? null))) return
   formKey.value++
   open.value = true
+}
+
+/** Reopens the dialog after a refused save that ran after the step-up, with what was typed and the refusal at its field. */
+async function reopen(payload: PendingSave | null, code: string): Promise<void> {
+  if (!payload) {
+    pageProblem.value = code
+    return
+  }
+  if (!(await loadTarget(payload.id))) return
+  draft.value = payload.input
+  draftProblem.value = code
+  formKey.value++
+  open.value = true
+}
+
+function problemMessage(code: string): string {
+  return code === 'in_use' ? t('software.sources.inUse') : problemText(code)
 }
 
 function onStepUp(input: SourceInput, keyChanged: boolean): void {
@@ -125,7 +151,7 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
       class="form-error"
       role="alert"
     >
-      {{ problemText(pageProblem) }}
+      {{ problemMessage(pageProblem) }}
     </p>
     <DataList
       ref="list"
@@ -184,6 +210,8 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
           <SoftwareSourceForm
             :key="formKey"
             :initial="target"
+            :draft="draft"
+            :initial-problem="draftProblem"
             @saved="onSaved"
             @cancel="open = false"
             @step-up="onStepUp"

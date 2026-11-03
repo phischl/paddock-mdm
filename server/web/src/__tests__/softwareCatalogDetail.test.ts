@@ -19,11 +19,13 @@ const device = (over: Partial<SoftwareCatalogDevice>): SoftwareCatalogDevice => 
   device_id: 'd1', hostname: 'lap-0421', name: '', device_group_ids: [], package: 'nano', intent: 'required', state: 'installed', version: '7.2',
   reason: '', error: '', reported_at: '2026-10-02T00:00:00Z', ...over,
 })
+const setIcon = vi.hoisted(() => vi.fn())
 const rows = [device({ name: 'Anna laptop' }), device({ device_id: 'd2', hostname: 'lap-0500' })]
 
 vi.mock('../lib/software', async (original) => ({
   ...(await original<typeof import('../lib/software')>()),
   getCatalogEntry: () => Promise.resolve(entry),
+  setCatalogIcon: setIcon,
   allSoftwareSources: () => Promise.resolve([]),
   listSoftwareAssignments: () => () => Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_capped: false, sort: '-created_at' }),
   listSoftwareCatalogDevices: () => () => Promise.resolve({ items: rows, page: 1, page_size: 25, total: 2, total_capped: false, sort: 'hostname' }),
@@ -73,5 +75,29 @@ describe('SoftwareCatalogDetail devices list', () => {
     expect(document.body.querySelector('[data-testid="create-assignment"]')).toBeNull()
     expect(document.body.querySelector('[data-testid="icon-file"]')).toBeNull()
     expect(document.body.textContent).toContain('Editor')
+  })
+
+  async function pick(file: File): Promise<void> {
+    const input = document.querySelector('[data-testid="icon-file"]') as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    input.dispatchEvent(new Event('change'))
+    await flushPromises()
+  }
+
+  it('refuses a non-PNG icon with the error text and sends nothing', async () => {
+    setIcon.mockReset()
+    await mountDetail('org_operator')
+    await pick(new File(['x'], 'icon.jpg', { type: 'image/jpeg' }))
+    expect(document.querySelector('[data-testid="icon-error"]')?.textContent).toContain('The icon must be a PNG file.')
+    expect(setIcon).not.toHaveBeenCalled()
+  })
+
+  it('shows the problem text when the server refuses the icon', async () => {
+    setIcon.mockReset()
+    setIcon.mockResolvedValue('invalid_request')
+    await mountDetail('org_operator')
+    await pick(new File(['x'], 'icon.png', { type: 'image/png' }))
+    expect(setIcon).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-testid="icon-error"]')?.textContent).toContain('The request was not valid.')
   })
 })

@@ -20,6 +20,7 @@ const vendor: SoftwareSourceSummary = {
 const mocks = vi.hoisted(() => ({
   deleteSoftwareSource: vi.fn(),
   saveSoftwareSource: vi.fn(),
+  getSoftwareSource: vi.fn(),
   startStepUp: vi.fn(),
   resumeStepUp: vi.fn(),
 }))
@@ -29,6 +30,7 @@ vi.mock('../lib/software', async (original) => ({
   listSoftwareSources: () => Promise.resolve({ items: [vendor], page: 1, page_size: 25, total: 1, total_capped: false, sort: 'name' }),
   deleteSoftwareSource: mocks.deleteSoftwareSource,
   saveSoftwareSource: mocks.saveSoftwareSource,
+  getSoftwareSource: mocks.getSoftwareSource,
 }))
 vi.mock('../lib/stepUp', async (original) => ({
   ...(await original<typeof import('../lib/stepUp')>()),
@@ -128,7 +130,7 @@ describe('SoftwareSources', () => {
     await typeName('Vendor')
     ;(el('confirm-accept') as HTMLButtonElement).click()
     await flushPromises()
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toContain('still in use')
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toContain('This source is used by a catalog entry.')
   })
 
   it('starts the step-up when the delete needs one and remembers the target', async () => {
@@ -157,5 +159,35 @@ describe('SoftwareSources', () => {
     await mountSources('org_admin')
     await vi.waitFor(() => expect(document.body.querySelector('.form-error')?.textContent).toContain('identity confirmation failed'))
     expect(mocks.saveSoftwareSource).not.toHaveBeenCalled()
+  })
+
+  it('reopens the dialog with the typed input and the refusal under the fingerprint field after a refused resumed save', async () => {
+    const input = {
+      slug: 'vendor', name: 'Vendor', uris: ['https://repo.example.com/apt'], suites: ['stable'], components: ['main'], architectures: [],
+      signingKey: 'KEY-TEXT-STAYS', fingerprint: 'ABCD'.repeat(10),
+    }
+    mocks.resumeStepUp.mockImplementation((action: string) => (action === 'software-source.save' ? { failed: false, payload: { id: null, input, keyChanged: true } } : null))
+    mocks.saveSoftwareSource.mockResolvedValue('fingerprint_mismatch')
+    await mountSources('org_admin')
+    await vi.waitFor(() => expect(document.body.querySelector('#source-fingerprint')).not.toBeNull())
+    expect((document.body.querySelector('#source-key') as HTMLTextAreaElement).value).toBe('KEY-TEXT-STAYS')
+    expect((document.body.querySelector('#source-name') as HTMLInputElement).value).toBe('Vendor')
+    expect(document.body.querySelector('.v-dialog')?.textContent).toContain("The key's fingerprint does not match the one you entered.")
+    expect(document.body.querySelector('.page > .form-error')).toBeNull()
+  })
+
+  it('loads the stored source as the base of a refused resumed edit', async () => {
+    const input = {
+      slug: 'vendor', name: 'Vendor 2', uris: ['https://repo.example.com/apt'], suites: ['stable'], components: ['main'], architectures: [],
+      signingKey: 'NEW-KEY', fingerprint: 'ABCD'.repeat(10),
+    }
+    mocks.resumeStepUp.mockImplementation((action: string) => (action === 'software-source.save' ? { failed: false, payload: { id: 's1', input, keyChanged: true } } : null))
+    mocks.saveSoftwareSource.mockResolvedValue('invalid_request')
+    mocks.getSoftwareSource.mockResolvedValue({ ...vendor, signing_key: 'OLD-KEY' })
+    await mountSources('org_admin')
+    await vi.waitFor(() => expect(document.body.querySelector('#source-key')).not.toBeNull())
+    expect(mocks.getSoftwareSource).toHaveBeenCalledWith('s1')
+    expect((document.body.querySelector('#source-key') as HTMLTextAreaElement).value).toBe('NEW-KEY')
+    expect((document.body.querySelector('#source-name') as HTMLInputElement).value).toBe('Vendor 2')
   })
 })

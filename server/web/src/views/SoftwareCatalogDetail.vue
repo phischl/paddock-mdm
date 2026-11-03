@@ -391,7 +391,8 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
               :sources="sources"
               :initial="entry"
               :problem="entryProblem"
-              @submit="submitEntry"
+              :pending="pending"
+              @submit="run(() => submitEntry($event))"
               @cancel="entryOpen = false"
             />
           </v-card-text>
@@ -410,7 +411,8 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
               :groups="groups"
               :initial="assignmentTarget"
               :problem="assignmentProblem"
-              @submit="submitAssignment"
+              :pending="pending"
+              @submit="run(() => submitAssignment($event))"
               @cancel="assignmentOpen = false"
             />
           </v-card-text>

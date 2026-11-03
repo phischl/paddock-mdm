@@ -2922,7 +2922,7 @@
       "httpsOnly": "Sources must use https.",
       "slugInvalid": "Use 2 to 41 lowercase letters, digits and hyphens, starting with a letter or digit.",
       "nameInvalid": "Enter a name of 1 to 100 characters.",
-      "urisInvalid": "Enter one to four https addresses without query, fragment or user information, at most 512 characters each.",
+      "urisInvalid": "Enter one to four https addresses with a host, a port from 1 to 65535 if any, no query, fragment, user information, quotes or angle brackets, at most 512 characters each.",
       "suitesInvalid": "Enter one to eight suites of letters, digits, ., /, _ and -.",
       "flatMixed": "Either every suite ends in / (flat repository) or none does.",
       "flatComponents": "A flat repository has no components.",
@@ -2936,7 +2936,9 @@
         "title": "No package sources yet",
         "description": "Add a trusted APT repository to offer software that your distribution does not ship."
       },
-      "entries": "Entries"
+      "entries": "Entries",
+      "repeated": "Each entry may appear only once.",
+      "inUse": "This source is used by a catalog entry."
     },
     "catalog": {
       "title": "Software catalog",

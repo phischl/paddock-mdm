@@ -14,22 +14,28 @@ import { hasErrors } from '../lib/validation'
  * error but asks the page to run the step-up and repeat the write (emit step-up with the input), because adding or
  * changing a source is a root-equivalent change (plan M13a decision 30).
  */
-const props = withDefaults(defineProps<{ initial?: SoftwareSource | null }>(), { initial: null })
+const props = withDefaults(
+  defineProps<{ initial?: SoftwareSource | null; draft?: SourceInput | null; initialProblem?: string }>(),
+  { initial: null, draft: null, initialProblem: '' },
+)
 const emit = defineEmits<{ saved: []; cancel: []; 'step-up': [input: SourceInput, keyChanged: boolean] }>()
 
 const { t } = useI18n()
 const problemText = useProblemText()
-const slug = ref(props.initial?.slug ?? '')
-const name = ref(props.initial?.name ?? '')
-const uris = ref((props.initial?.uris ?? []).join('\n'))
-const suites = ref((props.initial?.suites ?? []).join(' '))
-const components = ref((props.initial?.components ?? []).join(' '))
-const architectures = ref<SoftwareArchitecture[]>([...(props.initial?.architectures ?? [])])
-const signingKey = ref(props.initial?.signing_key ?? '')
-const fingerprint = ref(props.initial ? groupFingerprint(props.initial.fingerprint) : '')
+// A draft is what the administrator typed before a step-up round trip; it wins over the stored source so a refusal
+// after the resume does not cost the input.
+const draft = props.draft
+const slug = ref(draft?.slug ?? props.initial?.slug ?? '')
+const name = ref(draft?.name ?? props.initial?.name ?? '')
+const uris = ref((draft?.uris ?? props.initial?.uris ?? []).join('\n'))
+const suites = ref((draft?.suites ?? props.initial?.suites ?? []).join(' '))
+const components = ref((draft?.components ?? props.initial?.components ?? []).join(' '))
+const architectures = ref<SoftwareArchitecture[]>([...(draft?.architectures ?? props.initial?.architectures ?? [])])
+const signingKey = ref(draft?.signingKey ?? props.initial?.signing_key ?? '')
+const fingerprint = ref(draft ? draft.fingerprint : props.initial ? groupFingerprint(props.initial.fingerprint) : '')
 const touched = ref(false)
 const pending = ref(false)
-const problem = ref('')
+const problem = ref(props.initialProblem)
 
 const input = computed<SourceInput>(() => ({
   slug: slug.value.trim(),

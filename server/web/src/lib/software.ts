@@ -99,35 +99,55 @@ const componentPattern = /^[a-z0-9-]{1,32}$/
 const fingerprintPattern = /^[0-9A-F]{40}$/
 const maxKeyBytes = 65536
 
-/** Whether a source URI is https with a host, no user info, query or fragment (server: software.ValidateSource). */
+const invisibleInUri = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}\u{E0000}-\u{E007F}\u115F\u1160\u3164\uFFA0\u2800\uFFFD]/u
+
+/** Whether a source URI passes the rules of bundle.CheckSourceURI: case-sensitive https://, host, no user info, port 1 to 65535. */
 function validHttpsUri(uri: string): boolean {
-  if (uri.length > 512 || /\s/.test(uri)) return false
+  if (!uri.startsWith('https://') || uri.length > 512 || /[\s?#"<>]/u.test(uri) || invisibleInUri.test(uri)) return false
   let url: URL
   try {
     url = new URL(uri)
   } catch {
     return false
   }
-  return url.protocol === 'https:' && url.host !== '' && url.username === '' && url.password === '' && !uri.includes('?') && !uri.includes('#')
+  const authority = uri.slice('https://'.length).split('/')[0]
+  return url.hostname !== '' && url.username === '' && url.password === '' && !authority.endsWith(':') && url.port !== '0'
 }
 
-/** Message keys of an invalid source; the same rules as the server, so a mistake never needs a request. */
+/** The repository a URI names, as the server compares URIs: host without case, port 443 equal to none, no trailing slash. */
+function uriKey(uri: string): string {
+  const url = new URL(uri)
+  return url.hostname.toLowerCase() + ':' + url.port + url.pathname.replace(/\/$/, '')
+}
+
+function repeats(values: string[]): boolean {
+  return new Set(values).size !== values.length
+}
+
+/**
+ * Message keys of an invalid source. It mirrors the main rules of the server (software.ValidateSource and
+ * bundle.CheckSourceURI) so a plain mistake never costs a step-up round trip; the server stays authoritative for the rest
+ * (name character classes, the key itself and its policy).
+ */
 export function validateSource(s: SourceInput, creating: boolean): SourceErrors {
   const out: SourceErrors = {}
   if (creating && !slugPattern.test(s.slug)) out.slug = 'software.sources.slugInvalid'
   const nameLength = [...s.name.trim()].length
   if (nameLength < 1 || nameLength > 100) out.name = 'software.sources.nameInvalid'
   if (s.uris.length < 1 || s.uris.length > 4) out.uris = 'software.sources.urisInvalid'
-  else if (s.uris.some((u) => !/^https:\/\//i.test(u))) out.uris = 'software.sources.httpsOnly'
+  else if (s.uris.some((u) => !u.startsWith('https://'))) out.uris = 'software.sources.httpsOnly'
   else if (!s.uris.every(validHttpsUri)) out.uris = 'software.sources.urisInvalid'
+  else if (repeats(s.uris.map(uriKey))) out.uris = 'software.sources.repeated'
   const flat = s.suites.filter((x) => x.endsWith('/')).length
-  if (s.suites.length < 1 || s.suites.length > 8 || !s.suites.every((x) => suitePattern.test(x))) out.suites = 'software.sources.suitesInvalid'
+  if (s.suites.length < 1 || s.suites.length > 8 || !s.suites.every((x) => suitePattern.test(x)) || s.suites.some((x) => x.split('/').includes('..'))) {
+    out.suites = 'software.sources.suitesInvalid'
+  } else if (repeats(s.suites)) out.suites = 'software.sources.repeated'
   else if (flat !== 0 && flat !== s.suites.length) out.suites = 'software.sources.flatMixed'
   else if (flat > 0 && s.components.length > 0) out.components = 'software.sources.flatComponents'
   else if (flat === 0 && s.components.length === 0) out.components = 'software.sources.componentsRequired'
   if (!out.components && (s.components.length > 8 || !s.components.every((x) => componentPattern.test(x)))) {
     out.components = 'software.sources.componentsInvalid'
-  }
+  } else if (!out.components && repeats(s.components)) out.components = 'software.sources.repeated'
   if (s.signingKey.trim() === '' || new TextEncoder().encode(s.signingKey).length > maxKeyBytes) out.signingKey = 'software.sources.keyInvalid'
   if (!fingerprintPattern.test(normalizeFingerprint(s.fingerprint))) out.fingerprint = 'software.sources.fingerprintInvalid'
   return out

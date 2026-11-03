@@ -24,6 +24,25 @@ describe('validateSource', () => {
     expect(validateSource({ ...source, slug: 'A' }, false).slug).toBeUndefined()
   })
 
+  it('mirrors the server URI rules: case-sensitive scheme, characters, port, repeats', () => {
+    const uris = (u: string[]) => validateSource({ ...source, uris: u }, true).uris
+    expect(uris(['HTTPS://repo.example.com'])).toBe('software.sources.httpsOnly')
+    expect(uris(['https://repo.example.com/a"b'])).toBe('software.sources.urisInvalid')
+    expect(uris(['https://repo.example.com/<a>'])).toBe('software.sources.urisInvalid')
+    expect(uris(['https://repo.example.com:0/apt'])).toBe('software.sources.urisInvalid')
+    expect(uris(['https://repo.example.com:/apt'])).toBe('software.sources.urisInvalid')
+    expect(uris(['https://repo.example.com:8443/apt'])).toBeUndefined()
+    expect(uris(['https://repo.example.com\u200b/apt'])).toBe('software.sources.urisInvalid')
+    expect(uris(['https://repo.example.com/apt', 'https://REPO.example.com:443/apt/'])).toBe('software.sources.repeated')
+    expect(uris(['https://repo.example.com/apt', 'https://repo.example.com/other'])).toBeUndefined()
+  })
+
+  it('refuses repeated suites and components and a .. segment', () => {
+    expect(validateSource({ ...source, suites: ['stable', 'stable'] }, true).suites).toBe('software.sources.repeated')
+    expect(validateSource({ ...source, suites: ['../x/'], components: [] }, true).suites).toBe('software.sources.suitesInvalid')
+    expect(validateSource({ ...source, components: ['main', 'main'] }, true).components).toBe('software.sources.repeated')
+  })
+
   it('applies the flat repository rule', () => {
     expect(validateSource({ ...source, suites: ['./'], components: [] }, true)).toEqual({})
     expect(validateSource({ ...source, suites: ['./'] }, true).components).toBe('software.sources.flatComponents')

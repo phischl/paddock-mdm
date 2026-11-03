@@ -2910,7 +2910,7 @@
       "uris": "URIs",
       "urisHint": "Eine https-Adresse pro Zeile, höchstens vier.",
       "suites": "Suites",
-      "suitesHint": "Zum Beispiel noble oder stable. Die Suite eines flachen Repositorys endet auf /.",
+      "suitesHint": "Zum Beispiel noble oder stable. Bei einem flachen Repository endet die Suite auf /.",
       "components": "Komponenten",
       "componentsHint": "Zum Beispiel main. Keine bei einem flachen Repository.",
       "architectures": "Architekturen",
@@ -2922,7 +2922,7 @@
       "httpsOnly": "Quellen müssen https verwenden.",
       "slugInvalid": "Verwenden Sie 2 bis 41 Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit Buchstabe oder Ziffer.",
       "nameInvalid": "Geben Sie einen Namen mit 1 bis 100 Zeichen ein.",
-      "urisInvalid": "Geben Sie ein bis vier https-Adressen ohne Query, Fragment und Benutzerangaben ein, je höchstens 512 Zeichen.",
+      "urisInvalid": "Geben Sie ein bis vier https-Adressen mit Host, gegebenenfalls einem Port von 1 bis 65535, ohne Query, Fragment, Benutzerangaben, Anführungszeichen und spitze Klammern ein, je höchstens 512 Zeichen.",
       "suitesInvalid": "Geben Sie ein bis acht Suites aus Buchstaben, Ziffern, ., /, _ und - ein.",
       "flatMixed": "Entweder endet jede Suite auf / (flaches Repository) oder keine.",
       "flatComponents": "Ein flaches Repository hat keine Komponenten.",
@@ -2936,7 +2936,9 @@
         "title": "Noch keine Paketquellen",
         "description": "Fügen Sie ein vertrauenswürdiges APT-Repository hinzu, um Software anzubieten, die Ihre Distribution nicht mitbringt."
       },
-      "entries": "Einträge"
+      "entries": "Einträge",
+      "repeated": "Jeder Eintrag darf nur einmal vorkommen.",
+      "inUse": "Diese Quelle wird von einem Katalogeintrag verwendet."
     },
     "catalog": {
       "title": "Softwarekatalog",
