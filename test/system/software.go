@@ -80,9 +80,27 @@ install -m 0644 ca.crt /usr/local/share/ca-certificates/paddock-gate.crt
 update-ca-certificates >/dev/null
 cat >"$dir/serve.py" <<'EOF'
 import functools, http.server, ssl, sys
+
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    # apt reuses a connection; HTTP/1.1 with Content-Length (errors close) never makes it read to EOF.
+    protocol_version = "HTTP/1.1"
+    timeout = 30
+
+
+class Server(http.server.ThreadingHTTPServer):
+    def shutdown_request(self, request):
+        # OpenSSL 3.5 (apt 3.2) reports a TLS connection closed without close_notify as truncated; a peer that already
+        # left makes the unwrap fail, which is fine.
+        try:
+            request.unwrap()
+        except (ssl.SSLError, OSError):
+            pass
+        super().shutdown_request(request)
+
+
 d = sys.argv[1]
-handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=d + "/repo")
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 8443), handler)
+server = Server(("127.0.0.1", 8443), functools.partial(Handler, directory=d + "/repo"))
 tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 tls.load_cert_chain(d + "/tls/server.crt", d + "/tls/server.key")
 server.socket = tls.wrap_socket(server.socket, server_side=True)
