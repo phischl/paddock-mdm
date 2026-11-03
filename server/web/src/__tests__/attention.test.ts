@@ -12,7 +12,7 @@ import { nameContainsVisibleText } from './labelInName'
 
 const queries: unknown[] = []
 const item: AttentionDevice = {
-  device_id: 'd1', hostname: 'acme-lt-0142', state: 'active', os_release: { VERSION_ID: '24.04' }, last_contact_at: null,
+  device_id: 'd1', hostname: 'acme-lt-0142', state: 'active', os_release: { id: 'ubuntu', version_id: '24.04' }, last_contact_at: null,
   severity: 'critical', since: '2026-10-09T10:00:00Z',
   conditions: [
     { kind: 'presumed_lost', since: '2026-10-09T10:00:00Z', detail: '', finding: null },
@@ -64,6 +64,7 @@ describe('attention page grouped by device (plan M7c decision 33)', () => {
     expect(chips[3].attributes('title')).toBe('Agent outdated')
     expect(rows[0].findAll('a.v-btn').map((b) => b.text())).toEqual(['Retire, lock or keep'])
     expect(rows[0].text()).toContain('never')
+    expect(rows[0].text()).toContain('Ubuntu 24.04')
   })
 
   it('labels a failed in-place encryption with its stage and reason (plan M8e decision 25)', async () => {
