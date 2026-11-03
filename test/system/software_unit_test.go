@@ -93,6 +93,7 @@ func TestSoftwareDpkgLockUnit(t *testing.T) {
 		"frontend":      {frontend, true, "4242"},
 		"database":      {database, true, "77"},
 		"frontend 1.23": {frontend123, true, "4228"},
+		"no pid":        {"dpkg: error: dpkg frontend lock was locked by another process\n", true, ""},
 		"unrelated":     {unrelated, false, ""},
 		"old":           {old, true, ""},
 		"broken":        {broken, false, ""},
