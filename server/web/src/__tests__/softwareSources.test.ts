@@ -172,7 +172,11 @@ describe('SoftwareSources', () => {
     await vi.waitFor(() => expect(document.body.querySelector('#source-fingerprint')).not.toBeNull())
     expect((document.body.querySelector('#source-key') as HTMLTextAreaElement).value).toBe('KEY-TEXT-STAYS')
     expect((document.body.querySelector('#source-name') as HTMLInputElement).value).toBe('Vendor')
-    expect(document.body.querySelector('.v-dialog')?.textContent).toContain("The key's fingerprint does not match the one you entered.")
+    const message = "The key's fingerprint does not match the one you entered."
+    const fieldMessages = document.body.querySelector('#source-fingerprint')?.closest('.v-input')?.querySelector('.v-messages')
+    expect(fieldMessages?.textContent).toContain(message)
+    // Vuetify's own message region is a live region too; only an alert outside the field would be the wrong place.
+    expect(Array.from(document.body.querySelectorAll('.v-dialog [role="alert"]')).some((a) => !a.closest('.v-input') && a.textContent?.includes(message))).toBe(false)
     expect(document.body.querySelector('.page > .form-error')).toBeNull()
   })
 
@@ -189,5 +193,7 @@ describe('SoftwareSources', () => {
     expect(mocks.getSoftwareSource).toHaveBeenCalledWith('s1')
     expect((document.body.querySelector('#source-key') as HTMLTextAreaElement).value).toBe('NEW-KEY')
     expect((document.body.querySelector('#source-name') as HTMLInputElement).value).toBe('Vendor 2')
+    const alerts = Array.from(document.body.querySelectorAll('.v-dialog [role="alert"]')).map((a) => a.textContent ?? '')
+    expect(alerts.some((a) => a.includes('The request was not valid.'))).toBe(true)
   })
 })
