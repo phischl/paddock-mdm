@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -189,14 +190,39 @@ func (v *VM) SSH(ctx context.Context, stdin []byte, command string) (string, err
 	out, err := v.ssh(ctx, stdin, command)
 	var exit *exec.ExitError
 	// Transport resilience, not a test retry: package upgrades in a gate restart sshd and drop a connection that was
-	// open or being opened. ssh itself exits 255 then; a command's own failure never does, so it is not repeated.
-	if errors.As(err, &exit) && exit.ExitCode() == 255 && ctx.Err() == nil {
+	// being opened. Only a failure before the command started is repeated: a drop after it started (a reboot the
+	// command itself triggered) would run the command twice (PDK-720).
+	if errors.As(err, &exit) && exit.ExitCode() == 255 && ctx.Err() == nil && sshHandshakeFailed(out) {
 		if v.t != nil {
 			v.t.Logf("%s: ssh exited 255 (%s); retrying once: %s", v.Name, strings.TrimSpace(out), command)
 		}
 		out, err = v.ssh(ctx, stdin, command)
 	}
 	return out, err
+}
+
+// sshHandshakeFailed reports whether out, the combined output of an ssh that exited 255, shows only a failure to
+// establish the session, so the remote command never ran. Any other line, such as the command's own output or
+// "Connection to ... closed by remote host." or "client_loop: send disconnect", means it may have started.
+// Empty output is not retried: ssh names a handshake failure, and the empty 255s seen so far came from polling
+// callers (waitSSHDown, sshUp, the link-toggle wait) that tolerate an error and ask again on the next tick.
+func sshHandshakeFailed(out string) bool {
+	prefixes := []string{
+		"kex_exchange_identification", "ssh_exchange_identification", "ssh: connect to host ",
+		"Connection reset by ", "Connection timed out during banner exchange",
+	}
+	seen := false
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(line, p) }) {
+			return false
+		}
+		seen = true
+	}
+	return seen
 }
 
 func (v *VM) ssh(ctx context.Context, stdin []byte, command string) (string, error) {
