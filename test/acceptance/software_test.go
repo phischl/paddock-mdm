@@ -11,6 +11,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/openpgpkey"
+	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -176,6 +177,10 @@ func TestSoftwareCatalog(t *testing.T) {
 	group := namedGroup(t, alice, "software-catalog")
 	d := activeDevice(t, alice, group, "sw-cat-"+uniqueSuffix())
 	other := activeDevice(t, alice, group, "sw-cat-other-"+uniqueSuffix())
+	// The software section is schema 2 only (plan M13a decision 13); a devicesim reports schema 1 unless told otherwise.
+	for _, sim := range []*devicesim.Device{d, other} {
+		sim.SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
+	}
 
 	entry := gateEntry(t, op.Portal, source, packageRef("ubuntu", "*", gatePackage))
 	res := call(t, op.Portal, http.MethodPost, softwareAssignments, map[string]any{
@@ -208,7 +213,9 @@ func TestSoftwareCatalog(t *testing.T) {
 	t.Run("another distribution", func(t *testing.T) {
 		latestBundle(t, other, 2*time.Minute, hasSection)
 		other.OSRelease = map[string]string{"id": "debian", "version_id": "12"}
-		b := latestBundle(t, other, 3*time.Minute, func(b *bundle.Bundle) bool { return b.Software == nil })
+		b := latestBundle(t, other, 3*time.Minute, func(b *bundle.Bundle) bool {
+			return b.SchemaVersion == bundle.SchemaVersion2 && b.Software == nil
+		})
 		if held(b, "1.0") {
 			t.Fatalf("a device without the package keeps its hold: %s", asJSON(t, b.Updates))
 		}
