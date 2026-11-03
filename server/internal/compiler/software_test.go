@@ -278,7 +278,7 @@ func TestSoftwareSectionDeterministic(t *testing.T) {
 func TestSoftwareSectionRefusesFailedSource(t *testing.T) {
 	w := newWorld(t)
 	key := loadSoftwareKey(t, "ed25519.asc")
-	bad := w.source("tampered", key, "0123456789ABCDEF0123456789ABCDEF01234567")
+	bad := w.source("tampered", key, mismatchingFingerprint(key.fingerprint))
 	w.assign(w.entry("Bad", bad, [4]string{"ubuntu", "*", "*", "bad"}), nil, "required", "latest", nil)
 	w.assign(w.entry("Held", bad, [4]string{"ubuntu", "*", "*", "held"}), nil, "hold", "latest", nil)
 	w.assign(w.entry("Good", nil, [4]string{"ubuntu", "*", "*", "good"}), nil, "required", "latest", nil)
@@ -495,4 +495,13 @@ func TestSoftwareProtectedResultFailsClosed(t *testing.T) {
 	if w.version(d) != before || w.renderFailures(d, "protected") != 1 {
 		t.Fatal("a forbid of a removal-protected package was published")
 	}
+}
+
+// mismatchingFingerprint returns a well-formed fingerprint that differs from fp in its last hex digit.
+func mismatchingFingerprint(fp string) string {
+	last := byte('0')
+	if fp[len(fp)-1] == '0' {
+		last = '1'
+	}
+	return fp[:len(fp)-1] + string(last)
 }
