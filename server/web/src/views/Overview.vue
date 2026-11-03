@@ -395,10 +395,7 @@ const rollout = computed(() => configuration.value?.rollout ?? null)
                   data-testid="overview-configuration-counts-error"
                 >
                   {{ t('overview.configuration.countsError') }}
-                  <v-btn
-                    size="x-small"
-                    @click="loadRolloutCounts"
-                  >
+                  <v-btn @click="loadRolloutCounts">
                     {{ t('overview.configuration.retry') }}
                   </v-btn>
                 </span>
