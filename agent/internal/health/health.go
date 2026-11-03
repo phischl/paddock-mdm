@@ -48,6 +48,9 @@ type Report struct {
 	// Hostname is the kernel hostname at the check-in (os.Hostname(), plan M8h decision 8); the server keeps it as the
 	// device's reported hostname.
 	Hostname string `json:"hostname,omitempty"`
+	// Software is the status of the software section after the last pass that ran it (plan M13a decision 27); nil
+	// before. The check-in sends its items only when they changed or once a day (agent.checkinRequest).
+	Software *protocol.SoftwareHealth `json:"software,omitempty"`
 }
 
 // State is the current health, shared between the run loop (writer) and the socket server (reader).

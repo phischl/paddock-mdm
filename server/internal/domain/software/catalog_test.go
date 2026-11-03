@@ -73,6 +73,10 @@ func TestValidateEntry(t *testing.T) {
 		{"protected agent", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "paddock-agent"}}, "paddock-agent"},
 		{"himmelblau addon", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "himmelblau-apparmor"}}, "himmelblau-apparmor"},
 		{"removal-protected is an entry", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "sudo"}}, ""},
+		{"apt regex of himmelblau", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "himmelblau."}}, "himmelblau."},
+		{"apt regex of the agent", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "paddoc+k-agent"}}, "paddoc+k-agent"},
+		{"apt regex of sudo", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "sud."}}, "sud."},
+		{"exact name with plus", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "libstdc++6"}}, ""},
 		{"protected on one release", "Editor", "", "", append(ok, PackageRef{"debian", "12", "amd64", "himmelblau"}), "himmelblau"},
 		{"duplicate tuple", "Editor", "", "", []PackageRef{{"ubuntu", "*", "*", "nano"}, {"ubuntu", "*", "*", "vim"}}, "unique"},
 	} {
@@ -156,6 +160,7 @@ func TestValidateAssignmentTarget(t *testing.T) {
 		{"initramfs-tools", IntentRequired, true}, {"initramfs-tools", IntentHold, true},
 		{"initramfs-tools", IntentForbid, false}, {"initramfs-tools", IntentUninstall, false},
 		{"paddock-agent", IntentRequired, true}, {"himmelblau-apparmor", IntentHold, true},
+		{"paddock-agen.", IntentRequired, true}, {"sud.", IntentUninstall, true}, {"himmelblau.", IntentRequired, true},
 	} {
 		err := ValidateAssignmentTarget(tc.intent, one(tc.pkg))
 		if (err != nil) != tc.refused || err != nil && (!errors.Is(err, ErrAssignment) || !strings.Contains(err.Error(), tc.pkg)) {

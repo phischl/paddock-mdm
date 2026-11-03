@@ -1256,3 +1256,42 @@ of 2026-10-31 differ, this amendment wins.
   server stores the flag (`device_status.software_truncated`, migration `00099`) and shows it as `truncated` on the
   device's managed-software list. Hard rule: the software report never causes the check-in to be refused. Server part in
   PDK-411, agent truncation in PDK-412.
+- **Software section absent, residue pass (architect, 2026-11-03, PDK-412 review M1).** Decision **26** is extended:
+  the compiler omits the section once no package is assigned, so a removed source or forbid would otherwise stay in
+  force. When a bundle has no `software` section but the device still has software state Paddock wrote (the files of a
+  source recorded in `/var/lib/paddock/state/software-sources`, a `51paddock-software` carrying Paddock's header, or the
+  install record), the applier runs the software reconciler with an empty section. That pass removes ONLY files Paddock
+  manages and can prove it wrote; it never removes packages, a user's own sources or any file it did not record. It is
+  idempotent, and every removal is logged. A device without such state plans nothing for the section.
+- **Package names as apt patterns (architect, 2026-11-03, PDK-705 folded into PDK-412).** `bundle.EntryRefused` (and so
+  `RefusedIntent`) refuses a name that, read as apt's regex, selects a protected package of any tier; the agent passes a
+  package name to apt-get only when `apt-cache pkgnames` knows exactly that name, otherwise `failed/no_candidate`.
+- **Exact package names on every apt path (architect, 2026-11-03, PDK-412 review 2, PDK-706 folded into PDK-412).**
+  (a) The agent checks the exact name (`apt-cache pkgnames` lists exactly that name) before every apt call that takes a
+  package name from a bundle or a command: the software reconciler's simulations, installs and removals, `apt-mark
+  hold`/`unhold` of the updates reconciler, `install_now` and the uninstall's `apt-mark unhold`. An unknown name is
+  skipped and reported as failed, never passed through. (b) `pkg/bundle` emulates apt's POSIX ERE reading (a run of
+  `+` as one, `.` any character, unanchored, case-insensitive) and refuses a name whose pattern matches a protected name;
+  a closed, documented exemption list holds exact Debian names the archive has (today only `g++`), each proven by a
+  test to need its entry.
+- **A source that repeats a repository of the device (architect, 2026-11-03, PDK-412 review 2 M1, PDK-710).** apt
+  refuses its whole configuration when two entries for the same repository name different `Signed-By` keyrings (Docker's
+  documented setup, the list files of Chrome or VS Code, a user's own entry), and the scoped update of decision 23 cannot
+  see it. After writing sources the agent runs one unscoped `apt-get -s check`; a source its failure names (its file, its
+  keyring or its URI) is rolled back — ONLY Paddock's `paddock-<slug>.sources` and its keyring are removed, never the
+  device's own entry — and reported as `software.apply_failed{source, stage: source_update, reason: conflicting_source}`
+  with the duplicated URI in `error`, once per unchanged spec; its required packages are `failed/conflicting_source`. The
+  source is written and checked again after 12 passes of the same spec (about an hour). A check failure that names no
+  Paddock source rolls nothing back. A check that does not complete (killed, timed out, dpkg lock, no `E:` line) counts
+  as not done: the source gets no scoped update and is checked again at the next pass; the first pass after the agent
+  starts checks every Paddock source on disk; a rollback is followed by one more check, logged if it still fails. `KnownPackage` returns an error when `apt-cache` itself fails, reported as
+  `apt_failed` (or an error of the updates resource), never as an unknown name. Residual risk for RR-81 (PDK-414): a
+  conflicting entry that appears after Paddock's source was written is not checked until the source is written again;
+  meanwhile apt calls on the device fail and the software status shows `apt_failed`, until the administrator or the
+  user removes one of the two entries.
+- **Conflicts that appear later (architect, 2026-11-03, PDK-710).** The unscoped `apt-get -s check` runs in every drift
+  pass while Paddock sources are on disk, so a duplicate entry the user adds after Paddock's source was written is found
+  at the next pass: the same rollback of ONLY Paddock's file and keyring (the user's source wins), `failed/conflicting_source`
+  naming the URI, one deduplicated event. The check is a simulation and changes nothing; Plan (report-only devices) does
+  not run it. This replaces the residual-risk sentence about later conflicts in the line above; RR-81 keeps only the
+  delay of up to one drift interval.

@@ -180,6 +180,14 @@ func (o OS) DpkgWithin(ctx context.Context, timeout time.Duration, args ...strin
 	return packageCommand(ctx, timeout, "dpkg", args...)
 }
 
+// AptCache implements System.
+func (o OS) AptCache(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "apt-cache", args...)
+}
+
 // AptMark implements System.
 func (o OS) AptMark(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {

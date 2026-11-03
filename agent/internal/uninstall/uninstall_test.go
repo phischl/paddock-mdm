@@ -33,6 +33,8 @@ type world struct {
 	onRun func(line string)
 	// sendErr fails the next sends.
 	sendErr int
+	// unknown are the package names apt-cache pkgnames does not list; it lists every other name.
+	unknown map[string]bool
 }
 
 type fakeTPM struct {
@@ -117,6 +119,12 @@ func (w *world) helper() *Helper {
 			if w.onRun != nil {
 				w.onRun(line)
 			}
+			if name, ok := strings.CutPrefix(line, "apt-cache pkgnames "); ok {
+				if w.unknown[name] {
+					return "", 0, nil
+				}
+				return name + "\n", 0, nil
+			}
 			for prefix, out := range w.out {
 				if strings.HasPrefix(line, prefix) {
 					return out, 0, nil
@@ -164,7 +172,7 @@ func TestLeave(t *testing.T) {
 	if s.Outcome != protocol.UninstallCompleted || s.LocalAdmin != LocalAdminKept || s.TPM != TPMNotRequested || !s.Delivered {
 		t.Fatalf("summary %+v", s)
 	}
-	for step, want := range map[string]string{StepStop: "done", StepUpdates: "done", StepAccess: "done", StepQuarantine: "done",
+	for step, want := range map[string]string{StepStop: "done", StepUpdates: "done", StepSoftware: "done", StepAccess: "done", StepQuarantine: "done",
 		StepManaged: "skipped", StepHimmelblau: "skipped", StepLocalAdmin: "skipped", StepPackages: "done", StepTPM: "skipped"} {
 		if s.Steps[step] != want {
 			t.Fatalf("step %s = %q, want %q (%v)", step, s.Steps[step], want, s.Steps)
@@ -200,7 +208,7 @@ func TestLeave(t *testing.T) {
 	}
 	var data protocol.AgentUninstalled
 	if err := json.Unmarshal(w.sent[0][0].Data, &data); err != nil || data.CommandID != "c1" || data.Outcome != "completed" ||
-		len(data.Steps) != 9 {
+		len(data.Steps) != 10 {
 		t.Fatalf("event data %+v, %v", data, err)
 	}
 	var summary Summary
@@ -386,5 +394,69 @@ func TestPlanValidate(t *testing.T) {
 		if p.Validate() == nil {
 			t.Fatalf("%+v accepted", p)
 		}
+	}
+}
+
+// TestSoftwareSources (plan M13a decision 29): in both modes the software catalog's sources, keyrings and forbid pins
+// go and the package lists are refreshed; the Himmelblau source and keyring stay for the himmelblau step (reset) or
+// the device (leave), the installed applications stay, and a failing refresh is reported without stopping the rest.
+func TestSoftwareSources(t *testing.T) {
+	software := []string{"/etc/apt/sources.list.d/paddock-vendor.sources", "/etc/apt/sources.list.d/paddock-other.sources",
+		"/etc/apt/keyrings/paddock-vendor.gpg", "/etc/apt/keyrings/paddock-other.gpg", "/etc/apt/preferences.d/51paddock-software"}
+	foreign := []string{"/etc/apt/sources.list.d/ubuntu.sources", "/etc/apt/keyrings/docker.gpg"}
+	for _, mode := range []string{"leave", "reset"} {
+		t.Run(mode, func(t *testing.T) {
+			w := newWorld(t)
+			for _, f := range append(append([]string{"/etc/apt/sources.list.d/paddock-himmelblau.list", "/etc/apt/keyrings/himmelblau.gpg"},
+				software...), foreign...) {
+				w.write(f, "x")
+			}
+			s := w.helper().Execute(context.Background(), Plan{CommandID: "c6", Mode: mode, DeviceID: "d1"})
+			if s.Steps[StepSoftware] != "done" {
+				t.Fatalf("step %s = %q (%v)", StepSoftware, s.Steps[StepSoftware], s.Steps)
+			}
+			for _, gone := range software {
+				if w.exists(gone) {
+					t.Errorf("%s left", gone)
+				}
+			}
+			for _, kept := range foreign {
+				if !w.exists(kept) {
+					t.Errorf("%s removed", kept)
+				}
+			}
+			if himmelblau := w.exists("/etc/apt/keyrings/himmelblau.gpg"); himmelblau != (mode == "leave") {
+				t.Errorf("Himmelblau keyring present %v in mode %s", himmelblau, mode)
+			}
+			update := slices.Index(w.calls, "apt-get update -q")
+			if update < 0 || update < slices.Index(w.calls, "apt-mark unhold curl vim") {
+				t.Fatalf("no apt-get update after the update configuration: %v", w.calls)
+			}
+			if w.called("apt-get remove -y") {
+				t.Fatalf("installed applications removed: %v", w.calls)
+			}
+		})
+	}
+	w := newWorld(t)
+	w.write(software[0], "x")
+	w.fail["apt-get update -q"] = 100
+	s := w.helper().Execute(context.Background(), Plan{CommandID: "c7", Mode: "leave", DeviceID: "d1"})
+	if !strings.HasPrefix(s.Steps[StepSoftware], "failed:") || s.Steps[StepPackages] != "done" || w.exists(software[0]) {
+		t.Fatalf("failing refresh: %+v", s)
+	}
+}
+
+// TestUnholdOnlyExactNames (architect decision 2026-11-03, PDK-706): a recorded hold apt has no package of is never
+// passed to apt-mark, which would read it as a pattern; the step reports it and releases the others.
+func TestUnholdOnlyExactNames(t *testing.T) {
+	w := newWorld(t)
+	w.write("/var/lib/paddock/state/held-packages", "curl\npaddock-agen++t\nvim\n")
+	w.unknown = map[string]bool{"paddock-agen++t": true}
+	s := w.helper().Execute(context.Background(), Plan{CommandID: "c8", Mode: "leave", DeviceID: "d1"})
+	if !w.called("apt-mark unhold curl vim") || slices.ContainsFunc(w.calls, func(c string) bool { return strings.HasPrefix(c, "apt-mark") && strings.Contains(c, "paddock-agen") }) {
+		t.Fatalf("calls %v", w.calls)
+	}
+	if !strings.HasPrefix(s.Steps[StepUpdates], "failed:") || !strings.Contains(s.Steps[StepUpdates], "paddock-agen++t") {
+		t.Fatalf("step %q", s.Steps[StepUpdates])
 	}
 }
