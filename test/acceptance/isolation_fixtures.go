@@ -917,9 +917,9 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"carol"}},
 		{"code": {"device_group.created"}, "page_size": {"100"}},
 		{"outcome": {"success"}, "actor_type": {"admin"}, "page_size": {"100"}},
-		// Not "device_group": acme's own failed attempts on globex IDs (the item checks above) are acme events that
-		// carry the ID alice sent.
-		{"q": {"created"}, "sort": {"-code"}, "page_size": {"100"}},
+		// Not "device_group", and successes only: acme's own failed attempts on globex IDs (the item checks above, also
+		// the software assignment and catalog ones) are acme events that carry the ID alice sent.
+		{"q": {"created"}, "outcome": {"success"}, "sort": {"-code"}, "page_size": {"100"}},
 	},
 	"/api/v1/enrollment-tokens": {
 		{"q": {"globex isolation"}},
