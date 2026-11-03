@@ -41,6 +41,7 @@ const columns: ListColumn[] = [
   { key: 'uris', title: 'software.sources.uris', role: 'meta', hideBelow: 'md' },
   { key: 'suites', title: 'software.sources.suites', role: 'meta', hideBelow: 'md' },
   { key: 'fingerprint', title: 'software.sources.fingerprint', role: 'meta', mono: true, hideBelow: 'sm' },
+  { key: 'entry_count', title: 'software.sources.entries', role: 'meta', align: 'end' },
   { key: 'updated_at', title: 'common.updatedAt', sortable: true, role: 'meta' },
   ...(session.canDelete ? [{ key: 'actions', title: 'common.actions', role: 'actions' as const }] : []),
 ]

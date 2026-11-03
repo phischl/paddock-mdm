@@ -56,6 +56,7 @@ const assignmentColumns = computed<ListColumn[]>(() => [
 ])
 const deviceColumns: ListColumn[] = [
   { key: 'hostname', title: 'devices.hostname', sortable: true, role: 'primary' },
+  { key: 'name', title: 'devices.name.label', role: 'meta' },
   { key: 'state', title: 'software.state.label', sortable: true, role: 'status' },
   { key: 'intent', title: 'software.assignments.intent', role: 'meta' },
   { key: 'package', title: 'software.catalog.package', role: 'meta', mono: true },
@@ -345,6 +346,9 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
           <RouterLink :to="{ name: 'device-managed-software', params: { id: item.device_id } }">
             {{ item.hostname }}
           </RouterLink>
+        </template>
+        <template #[`item.name`]="{ item }: { item: SoftwareCatalogDevice }">
+          {{ item.name || item.hostname }}
         </template>
         <template #[`item.state`]="{ item }: { item: SoftwareCatalogDevice }">
           <SoftwareStateChip

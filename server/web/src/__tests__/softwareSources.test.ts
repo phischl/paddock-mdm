@@ -14,7 +14,7 @@ import type { SoftwareSourceSummary } from '../api/client'
 
 const vendor: SoftwareSourceSummary = {
   id: 's1', slug: 'vendor', name: 'Vendor', uris: ['https://repo.example.com/apt'], suites: ['stable'], components: ['main'], architectures: [],
-  fingerprint: 'ABCD'.repeat(10), weak_key: false, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-02T00:00:00Z',
+  fingerprint: 'ABCD'.repeat(10), weak_key: false, entry_count: 2, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-02T00:00:00Z',
 }
 
 const mocks = vi.hoisted(() => ({
@@ -92,6 +92,7 @@ describe('SoftwareSources', () => {
     await mountSources('org_admin')
     expect(document.body.textContent).toContain('Vendor')
     expect(document.body.textContent).toContain('ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD')
+    expect(document.body.textContent).toContain('Entries')
     expect(el('create-source')).not.toBeNull()
     expect(byLabel('Edit Vendor')).not.toBeNull()
   })

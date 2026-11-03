@@ -92,7 +92,7 @@ describe('SoftwareSourceForm', () => {
     save.mockResolvedValue(null)
     const initial = {
       id: 's1', slug: 'vendor', name: 'Vendor', uris: ['https://repo.example.com/apt'], suites: ['stable'], components: ['main'],
-      architectures: [], fingerprint, weak_key: false, signing_key: key, created_at: '', updated_at: '',
+      architectures: [], fingerprint, weak_key: false, entry_count: 0, signing_key: key, created_at: '', updated_at: '',
     }
     const w = mountForm({ initial })
     await w.find('#source-name').setValue('Vendor 2')

@@ -2935,7 +2935,8 @@
       "empty": {
         "title": "Noch keine Paketquellen",
         "description": "Fügen Sie ein vertrauenswürdiges APT-Repository hinzu, um Software anzubieten, die Ihre Distribution nicht mitbringt."
-      }
+      },
+      "entries": "Einträge"
     },
     "catalog": {
       "title": "Softwarekatalog",
