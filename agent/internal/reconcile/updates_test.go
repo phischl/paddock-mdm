@@ -237,3 +237,13 @@ func TestUpdatesHoldsOnlyExactNames(t *testing.T) {
 		t.Fatalf("record %q", got)
 	}
 }
+
+// TestUpdatesHoldsAptCacheFails (PDK-710): an apt-cache that fails is an error of the resource, not an unknown name.
+func TestUpdatesHoldsAptCacheFails(t *testing.T) {
+	sys, u, _ := updatesFixture(t)
+	u.Sys = aptCacheDown{sys}
+	res := u.Apply(context.Background(), updatesResource(t, func(s *bundle.UpdatesSpec) { s.Holds = []bundle.Hold{{Package: "curl"}} }))
+	if res.Status != reconcile.Error || !strings.Contains(res.Message, "apt-cache") || sys.Held["curl"] {
+		t.Fatalf("apply %+v, calls %q", res, sys.Calls)
+	}
+}

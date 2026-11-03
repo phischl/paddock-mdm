@@ -301,6 +301,7 @@ const (
 	SoftwareWouldRemoveDependents = "would_remove_dependents"
 	SoftwareNoCandidate           = "no_candidate"
 	SoftwareSourceUnreachable     = "source_unreachable"
+	SoftwareConflictingSource     = "conflicting_source"
 	SoftwareDpkgLocked            = "dpkg_locked"
 	SoftwareAptFailed             = "apt_failed"
 	SoftwareDeferredOffline       = "deferred_offline"

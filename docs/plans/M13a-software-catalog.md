@@ -1274,3 +1274,24 @@ of 2026-10-31 differ, this amendment wins.
   `+` as one, `.` any character, unanchored, case-insensitive) and refuses a name whose pattern matches a protected name;
   a closed, documented exemption list holds exact Debian names the archive has (today only `g++`), each proven by a
   test to need its entry.
+- **A source that repeats a repository of the device (architect, 2026-11-03, PDK-412 review 2 M1, PDK-710).** apt
+  refuses its whole configuration when two entries for the same repository name different `Signed-By` keyrings (Docker's
+  documented setup, the list files of Chrome or VS Code, a user's own entry), and the scoped update of decision 23 cannot
+  see it. After writing sources the agent runs one unscoped `apt-get -s check`; a source its failure names (its file, its
+  keyring or its URI) is rolled back — ONLY Paddock's `paddock-<slug>.sources` and its keyring are removed, never the
+  device's own entry — and reported as `software.apply_failed{source, stage: source_update, reason: conflicting_source}`
+  with the duplicated URI in `error`, once per unchanged spec; its required packages are `failed/conflicting_source`. The
+  source is written and checked again after 12 passes of the same spec (about an hour). A check failure that names no
+  Paddock source rolls nothing back. A check that does not complete (killed, timed out, dpkg lock, no `E:` line) counts
+  as not done: the source gets no scoped update and is checked again at the next pass; the first pass after the agent
+  starts checks every Paddock source on disk; a rollback is followed by one more check, logged if it still fails. `KnownPackage` returns an error when `apt-cache` itself fails, reported as
+  `apt_failed` (or an error of the updates resource), never as an unknown name. Residual risk for RR-81 (PDK-414): a
+  conflicting entry that appears after Paddock's source was written is not checked until the source is written again;
+  meanwhile apt calls on the device fail and the software status shows `apt_failed`, until the administrator or the
+  user removes one of the two entries.
+- **Conflicts that appear later (architect, 2026-11-03, PDK-710).** The unscoped `apt-get -s check` runs in every drift
+  pass while Paddock sources are on disk, so a duplicate entry the user adds after Paddock's source was written is found
+  at the next pass: the same rollback of ONLY Paddock's file and keyring (the user's source wins), `failed/conflicting_source`
+  naming the URI, one deduplicated event. The check is a simulation and changes nothing; Plan (report-only devices) does
+  not run it. This replaces the residual-risk sentence about later conflicts in the line above; RR-81 keeps only the
+  delay of up to one drift interval.

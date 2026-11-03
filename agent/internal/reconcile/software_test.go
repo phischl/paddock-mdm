@@ -3,6 +3,7 @@ package reconcile_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -121,10 +122,11 @@ func TestSoftwareFreshInstall(t *testing.T) {
 	if f := sys.Files[vendorList]; f.Mode != 0o644 || f.UID != 0 {
 		t.Fatalf("source file mode %v uid %d", f.Mode, f.UID)
 	}
-	if got := aptCalls(sys); !slices.Equal(got, []string{"apt-get update", "apt-get -s install nano", "apt-get install nano"}) {
+	if got := aptCalls(sys); !slices.Equal(got, []string{"apt-get -s check", "apt-get update", "apt-get -s install nano", "apt-get install nano"}) {
 		t.Fatalf("apt calls %q", got)
 	}
 	wantArgs := [][]string{
+		{"-s", "check", "-q"},
 		{"update", "-q", "-o", "Dir::Etc::sourcelist=sources.list.d/paddock-vendor.sources", "-o", "Dir::Etc::sourceparts=-",
 			"-o", "APT::Get::List-Cleanup=0", "-o", "DPkg::Lock::Timeout=60"},
 		{"-s", "install", "-y", "-q", "-o", "DPkg::Lock::Timeout=60", "-o", "Dpkg::Options::=--force-confdef", "-o",
@@ -155,7 +157,9 @@ func TestSoftwareFreshInstall(t *testing.T) {
 	if res := s.Apply(ctx, r); res.Status != reconcile.OK {
 		t.Fatalf("second apply %+v", res)
 	}
-	if len(*events) != 0 || len(sys.AptArgs) != 0 || len(sys.TakeCalls()) != 0 || s.Status().Digest != digest {
+	// The drift pass only reads the whole apt configuration again (architect decision 2026-11-03, PDK-710).
+	if len(*events) != 0 || !slices.EqualFunc(sys.AptArgs, [][]string{{"-s", "check", "-q"}}, slices.Equal) ||
+		!slices.Equal(sys.TakeCalls(), []string{"apt-get -s check"}) || s.Status().Digest != digest {
 		t.Fatalf("second apply: events %+v, apt %q", *events, sys.AptArgs)
 	}
 }
@@ -639,7 +643,7 @@ func TestSoftwareLockDuringSourceUpdate(t *testing.T) {
 	if res := s.Apply(context.Background(), r); res.Status != reconcile.Changed {
 		t.Fatalf("second apply %+v", res)
 	}
-	if got := aptCalls(sys); !slices.Equal(got, []string{"apt-get update", "apt-get -s install nano", "apt-get install nano"}) {
+	if got := aptCalls(sys); !slices.Equal(got, []string{"apt-get -s check", "apt-get update", "apt-get -s install nano", "apt-get install nano"}) {
 		t.Fatalf("calls %q", got)
 	}
 }
@@ -830,6 +834,285 @@ func TestSoftwareLockWaitThenFailure(t *testing.T) {
 		t.Fatalf("status %+v", it)
 	}
 	if !slices.Equal(typesOf(*events), []string{protocol.EventSoftwareApplyFailed}) {
+		t.Fatalf("events %+v", *events)
+	}
+}
+
+// The device's own entry for the vendor repository with Docker's documented Signed-By (PDK-710).
+const (
+	userList  = "/etc/apt/sources.list.d/vendor.list"
+	userEntry = "deb [signed-by=/etc/apt/keyrings/vendor.asc] https://repo.example.com/apt stable main\n"
+	conflict  = "E: Conflicting values set for option Signed-By regarding source https://repo.example.com/apt/ stable: " +
+		"/etc/apt/keyrings/vendor.asc != /etc/apt/keyrings/paddock-vendor.gpg\nE: The list of sources could not be read.\n"
+)
+
+// conflictSystem is apt as it behaves while Paddock's vendor source and the user's entry for the same repository exist
+// side by side: every apt-get and apt-cache call fails reading the sources. stalled are the answers of the next
+// apt-get -s check calls that end before apt judged the sources.
+type conflictSystem struct {
+	*fakesys.System
+	stalled []aptAnswer
+}
+
+type aptAnswer struct {
+	out  string
+	exit int
+	err  error
+}
+
+func (c *conflictSystem) broken() bool { return c.Files[vendorList] != nil && c.Files[userList] != nil }
+
+func (c *conflictSystem) AptGet(ctx context.Context, args ...string) (string, int, error) {
+	out, exit, err := c.System.AptGet(ctx, args...)
+	if len(c.stalled) > 0 && slices.Equal(args[:2], []string{"-s", "check"}) {
+		a := c.stalled[0]
+		c.stalled = c.stalled[1:]
+		return a.out, a.exit, a.err
+	}
+	if c.broken() {
+		return conflict, 100, nil
+	}
+	return out, exit, err
+}
+
+func (c *conflictSystem) AptCache(ctx context.Context, args ...string) (string, int, error) {
+	if c.broken() {
+		return "", 100, nil
+	}
+	return c.System.AptCache(ctx, args...)
+}
+
+// aptCacheDown is a device whose apt-cache fails.
+type aptCacheDown struct{ *fakesys.System }
+
+func (aptCacheDown) AptCache(context.Context, ...string) (string, int, error) { return "", 100, nil }
+
+// TestSoftwareConflictingSource (architect decision 2026-11-03, PDK-710): a source that repeats a repository of the
+// device with another Signed-By is rolled back after the unscoped check — Paddock's file and keyring only — and fails
+// as conflicting_source naming the URI, reported once; apt works afterwards and the source is tried again after
+// softwareRetryPasses passes.
+func TestSoftwareConflictingSource(t *testing.T) {
+	sys, s, events, _ := softwareFixture(t)
+	dev := &conflictSystem{System: sys}
+	s.Sys = dev
+	sys.Files[userList] = &fakesys.File{Data: []byte(userEntry), Mode: 0o644}
+	vim := required("vim", "")
+	vim.CatalogEntryID = otherEntry
+	r := softwareResource(t, []bundle.SoftwareSource{vendorSource(t)}, required("nano", "vendor"), vim)
+	ctx := context.Background()
+
+	res := s.Apply(ctx, r)
+	if res.Status != reconcile.Error || !strings.Contains(res.Message, "source vendor (conflicting_source)") {
+		t.Fatalf("apply %+v", res)
+	}
+	if sys.Files[vendorList] != nil || sys.Files[vendorKey] != nil {
+		t.Fatal("the conflicting source was not rolled back")
+	}
+	if f := sys.Files[userList]; f == nil || string(f.Data) != userEntry {
+		t.Fatalf("the user's entry changed: %+v", f)
+	}
+	if got := aptCalls(sys); slices.Contains(got, "apt-get update") || !slices.Contains(got, "apt-get install vim") ||
+		len(slices.DeleteFunc(got, func(c string) bool { return c != "apt-get -s check" })) != 2 {
+		t.Fatalf("apt calls %q: want the check and its confirmation after the rollback", aptCalls(sys))
+	}
+	if out, exit, _ := dev.AptGet(ctx, "-s", "check"); exit != 0 {
+		t.Fatalf("apt is broken after the pass: %s", out)
+	}
+	it := status(t, s, "nano")
+	if it.State != protocol.SoftwareStateFailed || it.Reason != protocol.SoftwareConflictingSource ||
+		!strings.Contains(it.Error, "https://repo.example.com/apt") {
+		t.Fatalf("nano %+v", it)
+	}
+	if it := status(t, s, "vim"); it.State != protocol.SoftwareStateInstalled {
+		t.Fatalf("vim %+v", it)
+	}
+	if !slices.Equal(typesOf(*events), []string{protocol.EventSoftwareApplyFailed, protocol.EventSoftwareInstalled}) ||
+		!strings.Contains((*events)[0].data, `"source":"vendor","stage":"source_update","reason":"conflicting_source"`) ||
+		!strings.Contains((*events)[0].data, "https://repo.example.com/apt") {
+		t.Fatalf("events %+v", *events)
+	}
+
+	// The same spec waits before it writes the source again; the failure is neither reported again nor a tamper.
+	*events = nil
+	for pass := 2; pass <= 12; pass++ {
+		sys.TakeCalls()
+		if res := s.Apply(ctx, r); res.Status != reconcile.Error {
+			t.Fatalf("pass %d: %+v", pass, res)
+		}
+		if sys.Files[vendorList] != nil || slices.Contains(sys.Calls, "apt-get -s check") {
+			t.Fatalf("pass %d wrote the source: %q", pass, sys.Calls)
+		}
+		if it := status(t, s, "nano"); it.Reason != protocol.SoftwareConflictingSource {
+			t.Fatalf("pass %d: nano %+v", pass, it)
+		}
+	}
+	sys.TakeCalls()
+	s.Apply(ctx, r)
+	if got := aptCalls(sys); !slices.Contains(got, "apt-get -s check") || sys.Files[vendorList] != nil {
+		t.Fatalf("pass 13: %q", got)
+	}
+	if len(*events) != 0 {
+		t.Fatalf("events while the conflict lasts %+v", *events)
+	}
+
+	// Once the user's entry is gone the next try applies the source.
+	delete(sys.Files, userList)
+	for range 11 {
+		s.Apply(ctx, r)
+	}
+	if sys.Files[vendorList] != nil {
+		t.Fatal("the source was written before its wait ended")
+	}
+	if res := s.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("apply after the conflict %+v", res)
+	}
+	if sys.Files[vendorList] == nil || sys.Files[vendorKey] == nil || !sys.Packages["nano"] {
+		t.Fatalf("source not applied: %q", sys.Calls)
+	}
+	if !slices.Equal(typesOf(*events), []string{protocol.EventSoftwareInstalled}) {
+		t.Fatalf("events %+v", *events)
+	}
+}
+
+// TestSoftwareCheckFailureElsewhere: a failing check that names no Paddock source is the device's own problem; the
+// written source stays and is updated.
+func TestSoftwareCheckFailureElsewhere(t *testing.T) {
+	sys, s, _, _ := softwareFixture(t)
+	sys.AptScript = map[string]fakesys.AptReply{"apt-get -s check": {Output: "E: Malformed entry 1 in list file /etc/apt/sources.list.d/other.list (Component)\n" +
+		"E: The list of sources could not be read.\n", Exit: 100}}
+	r := softwareResource(t, []bundle.SoftwareSource{vendorSource(t)}, required("nano", "vendor"))
+	if res := s.Apply(context.Background(), r); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v", res)
+	}
+	if sys.Files[vendorList] == nil || sys.Files[vendorKey] == nil || !sys.Packages["nano"] {
+		t.Fatalf("source rolled back: %q", sys.Calls)
+	}
+}
+
+// TestSoftwareAptCacheFails (PDK-710): apt-cache that fails is apt_failed, not an unknown name, and nothing reaches
+// apt-get.
+func TestSoftwareAptCacheFails(t *testing.T) {
+	sys, s, events, _ := softwareFixture(t)
+	s.Sys = aptCacheDown{sys}
+	if known, err := reconcile.KnownPackage(context.Background(), s.Sys, "nano"); err == nil || known {
+		t.Fatalf("KnownPackage %v, %v", known, err)
+	}
+	sys.Packages["vim"] = true
+	vim := bundle.SoftwarePackage{Package: "vim", Intent: bundle.SoftwareUninstall, CatalogEntryID: otherEntry}
+	s.Apply(context.Background(), softwareResource(t, nil, required("nano", ""), vim))
+	for _, p := range []string{"nano", "vim"} {
+		if it := status(t, s, p); it.State != protocol.SoftwareStateFailed || it.Reason != protocol.SoftwareAptFailed ||
+			!strings.Contains(it.Error, "apt-cache") {
+			t.Fatalf("%s %+v", p, it)
+		}
+	}
+	if got := aptCalls(sys); len(got) != 0 {
+		t.Fatalf("apt calls %q", got)
+	}
+	if len(*events) != 2 || strings.Contains((*events)[0].data, protocol.SoftwareNoCandidate) {
+		t.Fatalf("events %+v", *events)
+	}
+}
+
+// TestSoftwareConflictCheckIncomplete (PDK-710 review 1): a check that ends before apt judged the sources proves
+// nothing: the source gets no scoped update and is checked again at the next pass, which rolls it back.
+func TestSoftwareConflictCheckIncomplete(t *testing.T) {
+	for name, stalled := range map[string]aptAnswer{
+		"timeout":       {exit: -1, err: fmt.Errorf("apt-get: %w", context.DeadlineExceeded)},
+		"dpkg locked":   {out: "E: Could not get lock /var/lib/dpkg/lock-frontend\n", exit: 100},
+		"no error line": {out: "Reading package lists...\n", exit: 100},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sys, s, events, _ := softwareFixture(t)
+			s.Sys = &conflictSystem{System: sys, stalled: []aptAnswer{stalled}}
+			sys.Files[userList] = &fakesys.File{Data: []byte(userEntry), Mode: 0o644}
+			r := softwareResource(t, []bundle.SoftwareSource{vendorSource(t)}, required("nano", "vendor"))
+			s.Apply(context.Background(), r)
+			if got := aptCalls(sys); slices.Contains(got, "apt-get update") || sys.Files[vendorList] == nil {
+				t.Fatalf("first pass: %q", got)
+			}
+			sys.TakeCalls()
+			s.Apply(context.Background(), r)
+			if got := aptCalls(sys); !slices.Contains(got, "apt-get -s check") || slices.Contains(got, "apt-get update") {
+				t.Fatalf("second pass: %q", got)
+			}
+			if sys.Files[vendorList] != nil || sys.Files[vendorKey] != nil || string(sys.Files[userList].Data) != userEntry {
+				t.Fatal("the conflicting source was not rolled back")
+			}
+			if it := status(t, s, "nano"); it.Reason != protocol.SoftwareConflictingSource {
+				t.Fatalf("nano %+v", it)
+			}
+			if !slices.ContainsFunc(*events, func(e event) bool { return strings.Contains(e.data, `"reason":"conflicting_source"`) }) {
+				t.Fatalf("events %+v", *events)
+			}
+		})
+	}
+}
+
+// TestSoftwareConflictAfterRestart (PDK-710 review 1): the first pass after the agent started checks the sources on
+// disk, so a conflicting source the agent wrote before it stopped is rolled back.
+func TestSoftwareConflictAfterRestart(t *testing.T) {
+	sys, s, _, _ := softwareFixture(t)
+	r := softwareResource(t, []bundle.SoftwareSource{vendorSource(t)}, required("nano", "vendor"))
+	if res := s.Apply(context.Background(), r); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v", res)
+	}
+	sys.Files[userList] = &fakesys.File{Data: []byte(userEntry), Mode: 0o644}
+	_, restarted, events, _ := softwareFixture(t)
+	restarted.Sys = &conflictSystem{System: sys}
+	sys.TakeCalls()
+	restarted.Apply(context.Background(), r)
+	if sys.Files[vendorList] != nil || sys.Files[vendorKey] != nil || string(sys.Files[userList].Data) != userEntry {
+		t.Fatalf("the conflicting source was not rolled back: %q", sys.Calls)
+	}
+	if got := aptCalls(sys); slices.Contains(got, "apt-get update") {
+		t.Fatalf("calls %q", got)
+	}
+	if it := status(t, restarted, "nano"); it.Reason != protocol.SoftwareConflictingSource || len(*events) != 1 {
+		t.Fatalf("nano %+v, events %+v", it, *events)
+	}
+}
+
+// TestSoftwareRestartChecksWithoutUpdate: the start-up check of a clean source refreshes nothing.
+func TestSoftwareRestartChecksWithoutUpdate(t *testing.T) {
+	sys, s, _, _ := softwareFixture(t)
+	r := softwareResource(t, []bundle.SoftwareSource{vendorSource(t)}, required("nano", "vendor"))
+	s.Apply(context.Background(), r)
+	_, restarted, _, _ := softwareFixture(t)
+	restarted.Sys = sys
+	sys.TakeCalls()
+	if res := restarted.Apply(context.Background(), r); res.Status != reconcile.OK {
+		t.Fatalf("apply %+v", res)
+	}
+	if got := aptCalls(sys); !slices.Equal(got, []string{"apt-get -s check"}) {
+		t.Fatalf("calls %q", got)
+	}
+}
+
+// TestSoftwareConflictAddedLater (architect decision 2026-11-03, PDK-710): a user entry for the same repository added
+// after Paddock's source was written and checked is found by the next drift pass; the user's source wins.
+func TestSoftwareConflictAddedLater(t *testing.T) {
+	sys, s, events, _ := softwareFixture(t)
+	s.Sys = &conflictSystem{System: sys}
+	r := softwareResource(t, []bundle.SoftwareSource{vendorSource(t)}, required("nano", "vendor"))
+	if res := s.Apply(context.Background(), r); res.Status != reconcile.Changed || !sys.Packages["nano"] {
+		t.Fatalf("apply %+v", res)
+	}
+	sys.Files[userList] = &fakesys.File{Data: []byte(userEntry), Mode: 0o644}
+	*events = nil
+	for range 2 {
+		if res := s.Apply(context.Background(), r); res.Status != reconcile.Error {
+			t.Fatalf("drift pass %+v", res)
+		}
+	}
+	if sys.Files[vendorList] != nil || sys.Files[vendorKey] != nil || string(sys.Files[userList].Data) != userEntry {
+		t.Fatal("the user's source did not win")
+	}
+	if it := status(t, s, "nano"); it.Reason != protocol.SoftwareConflictingSource || !strings.Contains(it.Error, "https://repo.example.com/apt") {
+		t.Fatalf("nano %+v", it)
+	}
+	if !slices.Equal(typesOf(*events), []string{protocol.EventSoftwareApplyFailed}) ||
+		!strings.Contains((*events)[0].data, `"source":"vendor","stage":"source_update","reason":"conflicting_source"`) {
 		t.Fatalf("events %+v", *events)
 	}
 }
