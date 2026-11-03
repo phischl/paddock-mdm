@@ -100,7 +100,8 @@ const listCompileTargets = `-- name: ListCompileTargets :many
 SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions,
        coalesce(s.agent_version, '')::text AS agent_version,
        coalesce(d.agent_update_requested_version, '')::text AS agent_update_requested_version, d.agent_update_requested_at,
-       d.name, d.config_mode
+       d.name, d.config_mode, coalesce(s.arch, '')::text AS arch,
+       coalesce(d.os_release ->> 'id', '')::text AS os_id, coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = ANY($1::uuid[]) ORDER BY d.id
 `
@@ -116,6 +117,9 @@ type ListCompileTargetsRow struct {
 	AgentUpdateRequestedAt      *time.Time
 	Name                        *string
 	ConfigMode                  string
+	Arch                        string
+	OsID                        string
+	OsVersionID                 string
 }
 
 func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]ListCompileTargetsRow, error) {
@@ -138,10 +142,45 @@ func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]Li
 			&i.AgentUpdateRequestedAt,
 			&i.Name,
 			&i.ConfigMode,
+			&i.Arch,
+			&i.OsID,
+			&i.OsVersionID,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDevicesWithOutdatedPlatform = `-- name: ListDevicesWithOutdatedPlatform :many
+SELECT d.id FROM device d
+LEFT JOIN device_status s ON s.device_id = d.id
+WHERE d.state = 'active' AND d.bundle_seq > 0
+  AND ((coalesce(s.arch, '') <> '' AND d.compiled_arch <> s.arch)
+    OR d.compiled_os_id <> coalesce(d.os_release ->> 'id', '')
+    OR d.compiled_os_version_id <> coalesce(d.os_release ->> 'version_id', ''))
+ORDER BY d.id
+`
+
+// Active devices with a bundle whose architecture or os-release (the canonical lowercase keys) differ from what their
+// latest compile saw (PDK-695). An architecture the agent does not report ("") is no change.
+func (q *Queries) ListDevicesWithOutdatedPlatform(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listDevicesWithOutdatedPlatform)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -231,4 +270,27 @@ func (q *Queries) SetDeviceBundleSeq(ctx context.Context, arg SetDeviceBundleSeq
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setDeviceCompiledPlatform = `-- name: SetDeviceCompiledPlatform :exec
+UPDATE device SET compiled_arch = $1, compiled_os_id = $2, compiled_os_version_id = $3
+WHERE id = $4 AND (compiled_arch, compiled_os_id, compiled_os_version_id) IS DISTINCT FROM ($1::text, $2::text, $3::text)
+`
+
+type SetDeviceCompiledPlatformParams struct {
+	Arch        string
+	OsID        string
+	OsVersionID string
+	ID          uuid.UUID
+}
+
+// The platform inputs a compile of the device saw (PDK-695).
+func (q *Queries) SetDeviceCompiledPlatform(ctx context.Context, arg SetDeviceCompiledPlatformParams) error {
+	_, err := q.db.Exec(ctx, setDeviceCompiledPlatform,
+		arg.Arch,
+		arg.OsID,
+		arg.OsVersionID,
+		arg.ID,
+	)
+	return err
 }

@@ -165,6 +165,9 @@ type compileTarget struct {
 	name      *string // the device's managed name (ADR 0041); nil when not managed
 	// reportOnly marks an adopted device before enforcement (plan M11 decision 41): its bundle only reports.
 	reportOnly bool
+	// osID, versionID and arch are the device's os-release ID and VERSION_ID and its reported architecture ("" when
+	// unknown), which resolve catalog entries to packages (plan M13a decision 14).
+	osID, versionID, arch string
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -185,6 +188,7 @@ func (l *identityLoader) get(ctx context.Context) (*app.Identity, error) {
 func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []statechange.Event) error {
 	var todo []rendered
 	var failures []renderFailure
+	var seen []pgstore.SetDeviceCompiledPlatformParams
 	keys, err := c.keys(ctx)
 	if err != nil {
 		return err
@@ -215,6 +219,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
 			return err
 		}
+		if keys.Software, err = loadSoftware(ctx, q); err != nil {
+			return err
+		}
 		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err
@@ -232,6 +239,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
 				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
 			t.name, t.reportOnly = row.Name, row.ConfigMode == device.ConfigModeReportOnly
+			t.osID, t.versionID, t.arch = row.OsID, row.OsVersionID, row.Arch
 			r, changed, failure, err := c.render(ctx, q, org, t, defs, overlay, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
@@ -239,6 +247,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			if failure != nil {
 				failures = append(failures, *failure)
 			}
+			// A blocked device is recorded too: its compile was attempted with these values, and the failure is
+			// recorded once, not on every reconcile round.
+			seen = append(seen, pgstore.SetDeviceCompiledPlatformParams{ID: row.ID, Arch: row.Arch, OsID: row.OsID, OsVersionID: row.OsVersionID})
 			if changed {
 				todo = append(todo, r)
 			}
@@ -249,10 +260,33 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		return err
 	}
 	c.recordFailures(ctx, failures)
-	if len(todo) == 0 {
+	var publishErr error
+	if len(todo) > 0 {
+		var committed []uuid.UUID
+		committed, publishErr = c.publish(ctx, org, todo)
+		// A device whose bundle was not committed is retried by the reconcile loop: it keeps its old inputs.
+		seen = slices.DeleteFunc(seen, func(p pgstore.SetDeviceCompiledPlatformParams) bool {
+			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == p.ID }) && !slices.Contains(committed, p.ID)
+		})
+	}
+	return errors.Join(publishErr, c.recordPlatform(ctx, seen))
+}
+
+// recordPlatform stores the architecture and os-release the compile of each device read, after its bundle is
+// published, so that a failed publish is retried by the reconcile loop (PDK-695). They are the values of the
+// compile's snapshot, not the current ones: a change after the snapshot stays visible to the next reconcile.
+func (c *Compiler) recordPlatform(ctx context.Context, seen []pgstore.SetDeviceCompiledPlatformParams) error {
+	if len(seen) == 0 {
 		return nil
 	}
-	return c.publish(ctx, org, todo)
+	return c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		for _, p := range seen {
+			if err := q.SetDeviceCompiledPlatform(ctx, p); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // specRenderFailed is the privileged action device.bundle_render_failed (actor: system).
@@ -385,6 +419,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	var v2 v2Trust
 	var updatesSection *bundle.UpdatesSpec
 	var diskSection *bundle.DiskSpec
+	var softwareSection *bundle.SoftwareSpec
 	agent := bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}
 	if t.v2 {
 		v2 = keys
@@ -399,9 +434,23 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		omitted = omits
 		schema = bundle.SchemaVersion2
 		resources = append(resources, extra...)
+		var softwareHolds []bundle.Hold
+		if keys.Software != nil {
+			// Conflicts are dropped as UpdatesSection drops those of the holds (plan M13a decision 10): the smallest
+			// version wins either way. The software holds stay outside the rollout overlay until M13c (plan M11 R2.10).
+			var err error
+			if softwareSection, softwareHolds, _, err = keys.Software.section(groups, t.osID, t.versionID, t.arch); err != nil {
+				return rendered{}, false, &renderFailure{device: t.id, reason: err.Error() +
+					"; the device keeps its previous bundle until the catalog is fixed"}, nil
+			}
+		}
 		if keys.Updates != nil {
-			updatesSection = keys.Updates.section(groups)
+			updatesSection = keys.Updates.section(groups, softwareHolds)
 			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
+			updatesSection.Holds = alignWithHolds(softwareSection, updatesSection.Holds)
+		}
+		if failure := softwareFailure(t.id, softwareSection); failure != nil {
+			return rendered{}, false, failure, nil
 		}
 		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.id, t.agent, t.request, c.now())
 		if keys.Disk != nil {
@@ -421,6 +470,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	if t.v2 {
 		b.Hostname = hostnameSection(ctx, t)
 		b.Watch = v2.Watch
+		b.Software = softwareSection
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -462,6 +512,8 @@ type v2Trust struct {
 	// Watch is the organization's presence policy (plan M9 decision 39), nil without watched units; not part of the
 	// digest.
 	Watch *bundle.WatchSpec `json:"-"`
+	// Software is the organization's software catalog and assignments (plan M13a decision 14), not part of the digest.
+	Software *orgSoftware `json:"-"`
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap
@@ -498,16 +550,17 @@ func (c *Compiler) keys(ctx context.Context) (v2Trust, error) {
 // publish signs all bundles in one batch, then per device increments bundle_seq, records the bundle row and uploads
 // the envelope in one transaction, and finally points bp: at it. An upload failure rolls the transaction back, so
 // the version is reused on retry and bp: only ever points to uploaded bundles.
-func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) error {
+func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) ([]uuid.UUID, error) {
 	pae := make([][]byte, len(todo))
 	for i, r := range todo {
 		pae[i] = dsse.PAE(bundle.PayloadType, r.payload)
 	}
 	sigs, err := c.signer.SignBatch(ctx, bundlesign.KeyName, pae)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var errs []error
+	var committed []uuid.UUID
 	for i, r := range todo {
 		env, err := dsse.New(bundle.PayloadType, r.payload, dsse.Signature{
 			KeyID: bundlesign.KeyID(sigs[i].KeyVersion), Sig: base64.StdEncoding.EncodeToString(sigs[i].Value),
@@ -520,6 +573,7 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 			errs = append(errs, fmt.Errorf("device %s: %w", r.device, err))
 			continue
 		}
+		committed = append(committed, r.device)
 		if r.forced {
 			metricBundles.WithLabelValues("forced").Inc()
 		} else {
@@ -527,7 +581,7 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 		}
 		c.recordOmissions(ctx, r)
 	}
-	return errors.Join(errs...)
+	return committed, errors.Join(errs...)
 }
 
 // commit records and uploads one bundle and updates its pointer.

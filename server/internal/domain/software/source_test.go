@@ -1,0 +1,442 @@
+package software_test
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/phischl/paddock-mdm/pkg/openpgpkey"
+	"github.com/phischl/paddock-mdm/server/internal/domain/software"
+)
+
+// Public test keys generated with GnuPG 2.4.4 in a throw-away GNUPGHOME; fingerprints as `gpg --show-keys` prints
+// them.
+const (
+	rsa3072FP   = "5D47E8B7736A9129C4FDA19E1F2C82BB297A4093"
+	ed25519FP   = "8A367815ED9674ED9013609A8F03DFF0EB10E2E4"
+	nistp256FP  = "5EB637C18FBAE2E7B92FBCC8D41690E536015F53"
+	rsa2048FP   = "EBBD1779E3508C777B3E01D3B378F1FA6890CA25"
+	brainpoolFP = "0311F1FD19711332107186E93504EB92B130BD0C"
+	dsaFP       = "26EB16479113C792A40357F4F0FC57026622ACAD"
+	rsaSmallSub = "7149256BEC1A7DB713A95C7366280043EC88781E"
+	rsa1024FP   = "6086E1154945BD4236AF8B9DA6E1A1495CCE1C35"
+)
+
+func key(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func valid(t *testing.T) software.SourceInput {
+	return software.SourceInput{
+		Slug: "vendor", Name: "Vendor", URIs: []string{"https://apt.vendor.example/"}, Suites: []string{"stable"},
+		Components: []string{"main"}, SigningKey: key(t, "rsa3072.asc"), Fingerprint: rsa3072FP,
+	}
+}
+
+func TestValidateSourceAccepts(t *testing.T) {
+	tests := map[string]func(*software.SourceInput){
+		"as is":                             func(*software.SourceInput) {},
+		"fingerprint lowercase with spaces": func(in *software.SourceInput) { in.Fingerprint = "5d47 e8b7 736a 9129 c4fd  a19e 1f2c 82bb 297a 4093" },
+		"fingerprint with tabs and newline": func(in *software.SourceInput) { in.Fingerprint = "\t" + rsa3072FP + "\n" },
+		"shortest slug":                     func(in *software.SourceInput) { in.Slug = "ab" },
+		"longest slug":                      func(in *software.SourceInput) { in.Slug = "a" + strings.Repeat("-", 40) },
+		"name of 100 characters":            func(in *software.SourceInput) { in.Name = strings.Repeat("ä", 100) },
+		"name with surrounding spaces":      func(in *software.SourceInput) { in.Name = "  Vendor  " },
+		"four uris with port and path": func(in *software.SourceInput) {
+			in.URIs = []string{"https://a.example/", "https://b.example:8443/debian", "https://c.example", "https://[2001:db8::1]/apt/"}
+		},
+		"uri of 512 characters":       func(in *software.SourceInput) { in.URIs = []string{"https://a.example/" + strings.Repeat("p", 512-18)} },
+		"eight suites":                func(in *software.SourceInput) { in.Suites = strings.Fields("a b c d e f g h") },
+		"suite with dots and slashes": func(in *software.SourceInput) { in.Suites = []string{"noble-updates/stable_1.0"} },
+		"flat repository":             func(in *software.SourceInput) { in.Suites, in.Components = []string{"./"}, nil },
+		"two flat suites":             func(in *software.SourceInput) { in.Suites, in.Components = []string{"./", "amd64/"}, nil },
+		"name with umlauts and emoji": func(in *software.SourceInput) { in.Name = "Hersteller Ä 📦" },
+		"eight components":            func(in *software.SourceInput) { in.Components = strings.Fields("a b c d e f g h") },
+		"both architectures":          func(in *software.SourceInput) { in.Architectures = []string{"amd64", "arm64"} },
+		"idn host":                    func(in *software.SourceInput) { in.URIs = []string{"https://bücher.example/apt/"} },
+		"highest port":                func(in *software.SourceInput) { in.URIs = []string{"https://a.example:65535/"} },
+		"ed25519 key":                 func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "ed25519.asc"), ed25519FP },
+		"nist p-256 key":              func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "nistp256.asc"), nistp256FP },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			in := valid(t)
+			mutate(&in)
+			got, err := software.ValidateSource(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Fingerprint != software.NormalizeFingerprint(in.Fingerprint) || len(got.Keyring) == 0 || got.WeakKey {
+				t.Errorf("fingerprint %s, keyring of %d bytes, weak %v", got.Fingerprint, len(got.Keyring), got.WeakKey)
+			}
+		})
+	}
+}
+
+func TestValidateSourceRefuses(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*software.SourceInput)
+		detail string
+	}{
+		{"empty slug", func(in *software.SourceInput) { in.Slug = "" }, "slug"},
+		{"one-character slug", func(in *software.SourceInput) { in.Slug = "a" }, "slug"},
+		{"slug too long", func(in *software.SourceInput) { in.Slug = "a" + strings.Repeat("b", 41) }, "slug"},
+		{"uppercase slug", func(in *software.SourceInput) { in.Slug = "Vendor" }, "slug"},
+		{"slug starting with a hyphen", func(in *software.SourceInput) { in.Slug = "-vendor" }, "slug"},
+		{"slug with a slash", func(in *software.SourceInput) { in.Slug = "a/b" }, "slug"},
+		{"blank name", func(in *software.SourceInput) { in.Name = "   " }, "name"},
+		{"name too long", func(in *software.SourceInput) { in.Name = strings.Repeat("a", 101) }, "name"},
+		{"name with invalid UTF-8", func(in *software.SourceInput) { in.Name = "Vendor \xff" }, "valid UTF-8"},
+		{"name with a newline", func(in *software.SourceInput) { in.Name = "Vendor\nOther" }, "control"},
+		{"name with a bidi override", func(in *software.SourceInput) { in.Name = "Vendor\u202Erodnev" }, "control"},
+		{"name with a zero-width space", func(in *software.SourceInput) { in.Name = "Ven\u200Bdor" }, "control"},
+		{"name with a byte order mark", func(in *software.SourceInput) { in.Name = "\uFEFFVendor" }, "control"},
+		{"name with a line separator", func(in *software.SourceInput) { in.Name = "Vendor\u2028x" }, "control"},
+		{"name with a paragraph separator", func(in *software.SourceInput) { in.Name = "Vendor\u2029x" }, "control"},
+		{"non-flat suite without components", func(in *software.SourceInput) { in.Components = nil }, "at least one entry"},
+		{"flat and non-flat suites", func(in *software.SourceInput) { in.Suites, in.Components = []string{"stable", "./"}, nil }, "all flat"},
+		{"flat and non-flat suites with components", func(in *software.SourceInput) { in.Suites = []string{"stable", "./"} }, "all flat"},
+		{"duplicate suite", func(in *software.SourceInput) { in.Suites = []string{"stable", "stable"} }, "must not repeat"},
+		{"duplicate flat suite", func(in *software.SourceInput) { in.Suites, in.Components = []string{"./", "./"}, nil }, "must not repeat"},
+		{"duplicate component", func(in *software.SourceInput) { in.Components = []string{"main", "main"} }, "must not repeat"},
+		{"name of a Hangul filler", func(in *software.SourceInput) { in.Name = "ㅤ" }, "invisible"},
+		{"name of a halfwidth Hangul filler", func(in *software.SourceInput) { in.Name = "\uFFA0" }, "invisible"},
+		{"name of Hangul choseong and jungseong fillers", func(in *software.SourceInput) { in.Name = "\u115F\u1160" }, "invisible"},
+		{"name of a braille blank", func(in *software.SourceInput) { in.Name = "⠀" }, "invisible"},
+		{"name with a combining grapheme joiner", func(in *software.SourceInput) { in.Name = "a\u034Fb" }, "invisible"},
+		{"name with a variation selector", func(in *software.SourceInput) { in.Name = "a\uFE0Fb" }, "invisible"},
+		{"name with a supplementary variation selector", func(in *software.SourceInput) { in.Name = "a\U000E0100b" }, "invisible"},
+		{"name with an unassigned tag character", func(in *software.SourceInput) { in.Name = "a\U000E0002" }, "invisible"},
+		{"name with a tag character", func(in *software.SourceInput) { in.Name = "a\U000E0041" }, "invisible"},
+		{"name of marks only", func(in *software.SourceInput) { in.Name = "\u0301\u0302" }, "at least one letter"},
+		{"no uris", func(in *software.SourceInput) { in.URIs = nil }, "uris must have"},
+		{"five uris", func(in *software.SourceInput) {
+			in.URIs = strings.Fields("https://a https://b https://c https://d https://e")
+		}, "uris must have"},
+		{"http", func(in *software.SourceInput) { in.URIs = []string{"http://apt.vendor.example/"} }, "uris must use https"},
+		{"uppercase scheme", func(in *software.SourceInput) { in.URIs = []string{"HTTPS://apt.vendor.example/"} }, "uris must use https"},
+		{"file scheme", func(in *software.SourceInput) { in.URIs = []string{"file:///srv/apt"} }, "uris must use https"},
+		{"no scheme", func(in *software.SourceInput) { in.URIs = []string{"apt.vendor.example/"} }, "uris must use https"},
+		{"uri too long", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/" + strings.Repeat("p", 512-17)} }, "at most 512"},
+		{"query", func(in *software.SourceInput) { in.URIs = []string{"https://apt.vendor.example/?a=b"} }, "query"},
+		{"fragment", func(in *software.SourceInput) { in.URIs = []string{"https://apt.vendor.example/#x"} }, "fragment"},
+		{"white space", func(in *software.SourceInput) { in.URIs = []string{"https://apt.vendor.example/a b"} }, "white space"},
+		{"user info", func(in *software.SourceInput) { in.URIs = []string{"https://user:pw@apt.vendor.example/"} }, "user info"},
+		{"no host", func(in *software.SourceInput) { in.URIs = []string{"https:///path"} }, "host"},
+		{"uri with a bidi override", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\u202Eevil"} }, "control"},
+		{"uri host with a zero-width space", func(in *software.SourceInput) { in.URIs = []string{"https://a\u200B.example/"} }, "control"},
+		{"uri with a control character", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\x1b[31m"} }, "control"},
+		{"uri with invalid UTF-8", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\xff"} }, "control"},
+		{"uri with U+FFFD", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\uFFFDrepo"} }, "control"},
+		{"uri with a braille blank", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\u2800"} }, "control"},
+		{"port out of range", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:99999/"} }, "port"},
+		{"port zero", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:0/"} }, "port"},
+		{"duplicate uri", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/", "https://a.example/"} }, "must not repeat"},
+		{"duplicate uri by host case", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/apt", "https://A.Example/apt"} }, "must not repeat"},
+		{"duplicate uri by default port", func(in *software.SourceInput) {
+			in.URIs = []string{"https://a.example/apt", "https://a.example:443/apt"}
+		}, "must not repeat"},
+		{"duplicate uri by trailing slash", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/apt", "https://a.example/apt/"} }, "must not repeat"},
+		{"empty port", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:/apt"} }, "port"},
+		{"uri with a quote", func(in *software.SourceInput) { in.URIs = []string{`https://a.example/a"b`} }, `", < or >`},
+		{"uri with angle brackets", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/<b>"} }, `", < or >`},
+		{"suite of ..", func(in *software.SourceInput) { in.Suites = []string{".."} }, ".. path segment"},
+		{"suite climbing up", func(in *software.SourceInput) { in.Suites = []string{"../../x"} }, ".. path segment"},
+		{"flat suite climbing up", func(in *software.SourceInput) { in.Suites, in.Components = []string{"../"}, nil }, ".. path segment"},
+		{"duplicate architecture", func(in *software.SourceInput) { in.Architectures = []string{"amd64", "amd64"} }, "must not repeat"},
+		{"no suites", func(in *software.SourceInput) { in.Suites = nil }, "suites must have"},
+		{"nine suites", func(in *software.SourceInput) { in.Suites = strings.Fields("a b c d e f g h i") }, "suites must have"},
+		{"suite with a space", func(in *software.SourceInput) { in.Suites = []string{"a b"} }, "suites must match"},
+		{"suite too long", func(in *software.SourceInput) { in.Suites = []string{strings.Repeat("s", 65)} }, "suites must match"},
+		{"flat repository with components", func(in *software.SourceInput) { in.Suites = []string{"./"} }, "flat repository"},
+		{"nine components", func(in *software.SourceInput) { in.Components = strings.Fields("a b c d e f g h i") }, "components must have"},
+		{"uppercase component", func(in *software.SourceInput) { in.Components = []string{"Main"} }, "components must match"},
+		{"three architectures", func(in *software.SourceInput) { in.Architectures = []string{"amd64", "arm64", "amd64"} }, "architectures must have"},
+		{"unknown architecture", func(in *software.SourceInput) { in.Architectures = []string{"i386"} }, "amd64 or arm64"},
+		{"signing key too long", func(in *software.SourceInput) { in.SigningKey = strings.Repeat("a", software.MaxSigningKeyLength+1) }, "at most 65536 bytes"},
+		{"binary signing key", func(in *software.SourceInput) { in.SigningKey = "\x99\x01\x0d" }, "ASCII-armored"},
+		{"secret key block", func(in *software.SourceInput) {
+			in.SigningKey = strings.ReplaceAll(in.SigningKey, "PUBLIC KEY BLOCK", "PRIVATE KEY BLOCK")
+		}, "ASCII-armored"},
+		{"missing fingerprint", func(in *software.SourceInput) { in.Fingerprint = "" }, "40 hexadecimal"},
+		{"short fingerprint", func(in *software.SourceInput) { in.Fingerprint = rsa3072FP[:39] }, "40 hexadecimal"},
+		{"non-hex fingerprint", func(in *software.SourceInput) { in.Fingerprint = "G" + rsa3072FP[1:] }, "40 hexadecimal"},
+		{"rsa 1024", func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "rsa1024.asc"), rsa1024FP }, "RSA 1024 bits"},
+		{"brainpool", func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "brainpool.asc"), brainpoolFP }, "brainpoolP256r1"},
+		{"dsa", func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "dsa.asc"), dsaFP }, "algorithm DSA"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := valid(t)
+			tt.mutate(&in)
+			_, err := software.ValidateSource(in)
+			if !errors.Is(err, software.ErrSource) || errors.Is(err, software.ErrFingerprint) {
+				t.Fatalf("err = %v, want ErrSource", err)
+			}
+			if !strings.Contains(err.Error(), tt.detail) {
+				t.Errorf("err = %v, want it to mention %q", err, tt.detail)
+			}
+		})
+	}
+}
+
+func TestValidateSourceFingerprintMismatch(t *testing.T) {
+	in := valid(t)
+	in.Fingerprint = rsa3072FP[:39] + "0"
+	_, err := software.ValidateSource(in)
+	if !errors.Is(err, software.ErrFingerprint) || errors.Is(err, software.ErrSource) {
+		t.Fatalf("err = %v, want ErrFingerprint", err)
+	}
+	if !strings.Contains(err.Error(), rsa3072FP) || !strings.Contains(err.Error(), in.Fingerprint) {
+		t.Errorf("err = %v, want both fingerprints", err)
+	}
+}
+
+func TestValidateSourceKeyringIsTheDearmoredKey(t *testing.T) {
+	in := valid(t)
+	got, err := software.ValidateSource(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, err := openpgpkey.FingerprintBinary(got.Keyring)
+	if err != nil || fp != rsa3072FP {
+		t.Errorf("FingerprintBinary(keyring) = %s, %v", fp, err)
+	}
+}
+
+// TestValidateSourceSigningKeyIsCanonical (External Review 1 L2): the stored key text is the keyring re-armored, so
+// armor header values of the submitted text are dropped.
+func TestValidateSourceSigningKeyIsCanonical(t *testing.T) {
+	in := valid(t)
+	in.SigningKey = strings.Replace(in.SigningKey, "-----\n", "-----\nComment: \u202Eevil\x1b[31m\n", 1)
+	got, err := software.ValidateSource(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.SigningKey, "Comment") || strings.ContainsRune(got.SigningKey, 0x1b) {
+		t.Fatalf("signing key keeps the header: %q", got.SigningKey)
+	}
+	k, err := openpgpkey.ParseArmored([]byte(got.SigningKey))
+	if err != nil || k.Fingerprint != rsa3072FP {
+		t.Fatalf("canonical key = %v, %v", k, err)
+	}
+}
+
+// TestValidateSourceSigningKeyLimitIsCanonical (Review 1 / External Review 1 of Fix Round 1): the 65 536-byte limit
+// holds for the stored, re-armored key, so text that fits only in a denser layout (76-character lines, one long line,
+// no checksum) is refused with ErrSource instead of failing at the database.
+func TestValidateSourceSigningKeyLimitIsCanonical(t *testing.T) {
+	base, err := openpgpkey.ParseArmored([]byte(key(t, "rsa3072.asc")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A signature packet whose payload after the subpacket areas is never inspected pads the keyring.
+	padded := func(n int) []byte {
+		body := append([]byte{4, 0x13, 1, 8, 0, 0, 0, 0, 0, 0}, make([]byte, n)...)
+		hdr := []byte{0xC2, 0xFF, byte(len(body) >> 24), byte(len(body) >> 16), byte(len(body) >> 8), byte(len(body))}
+		return append(append(bytes.Clone(base.Keyring), hdr...), body...)
+	}
+	layouts := map[string]func([]byte) string{
+		"76-character lines, checksum": func(b []byte) string { return armorWith(b, 76, true) },
+		"one long line, no checksum":   func(b []byte) string { return armorWith(b, 0, false) },
+		"64-character lines, checksum": func(b []byte) string { return armorWith(b, 64, true) },
+	}
+	for name, layout := range layouts {
+		t.Run(name, func(t *testing.T) {
+			// The largest keyring whose canonical form fits, and the smallest one whose canonical form does not.
+			fits, over := 0, 0
+			for n := 40000; n < 50000; n += 3 {
+				if len(openpgpkey.Armor(padded(n))) > software.MaxSigningKeyLength {
+					fits, over = n-3, n
+					break
+				}
+			}
+			in := valid(t)
+			in.SigningKey = layout(padded(fits))
+			got, err := software.ValidateSource(in)
+			if err != nil || len(got.SigningKey) > software.MaxSigningKeyLength {
+				t.Fatalf("fitting key: %d bytes stored, %v", len(got.SigningKey), err)
+			}
+			in.SigningKey = layout(padded(over))
+			want := "re-armored"
+			if len(in.SigningKey) > software.MaxSigningKeyLength {
+				want = "at most 65536 bytes"
+			}
+			if _, err := software.ValidateSource(in); !errors.Is(err, software.ErrSource) || !strings.Contains(err.Error(), want) {
+				t.Fatalf("over the canonical limit with %d bytes submitted: %v", len(in.SigningKey), err)
+			}
+		})
+	}
+}
+
+// armorWith armors b with lines of width base64 characters (0 = one line) and with or without the checksum line.
+func armorWith(b []byte, width int, checksum bool) string {
+	canonical := string(openpgpkey.Armor(b))
+	lines := strings.Split(strings.TrimSpace(canonical), "\n")
+	enc := strings.Join(lines[2:len(lines)-2], "")
+	var out strings.Builder
+	out.WriteString(lines[0] + "\n\n")
+	for width > 0 && len(enc) > width {
+		out.WriteString(enc[:width] + "\n")
+		enc = enc[width:]
+	}
+	out.WriteString(enc + "\n")
+	if checksum {
+		out.WriteString(lines[len(lines)-2] + "\n")
+	}
+	out.WriteString(lines[len(lines)-1] + "\n")
+	return out.String()
+}
+
+func TestDisplayParam(t *testing.T) {
+	for in, want := range map[string]string{
+		"Vendor":               "Vendor",
+		"a\u202Eb\x1bc":        "a\uFFFDb\uFFFDc",
+		"x\xffy":               "x\uFFFDy",
+		strings.Repeat("ä", 7): "ääääää…",
+	} {
+		if got := software.DisplayParam(in, 6); got != want {
+			t.Errorf("DisplayParam(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestValidateSourceWeakKey covers the revised architect decision 2026-10-31: RSA 2048 to 3071 bits is accepted and
+// flagged.
+func TestValidateSourceWeakKey(t *testing.T) {
+	tests := []struct {
+		file, fp string
+		weak     bool
+	}{
+		{"rsa2048.asc", rsa2048FP, true},
+		{"rsa3072-sub2048.asc", rsaSmallSub, true},
+		{"rsa3072.asc", rsa3072FP, false},
+		{"ed25519.asc", ed25519FP, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			in := valid(t)
+			in.SigningKey, in.Fingerprint = key(t, tt.file), tt.fp
+			got, err := software.ValidateSource(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.WeakKey != tt.weak || got.Fingerprint != tt.fp {
+				t.Errorf("WeakKey = %v, fingerprint %s; want %v", got.WeakKey, got.Fingerprint, tt.weak)
+			}
+		})
+	}
+}
+
+func TestNormalizeFingerprint(t *testing.T) {
+	if got := software.NormalizeFingerprint(" 5d47 E8B7\t736a\n"); got != "5D47E8B7736A" {
+		t.Errorf("NormalizeFingerprint = %q", got)
+	}
+}
+
+func TestNormalizeName(t *testing.T) {
+	if got := software.NormalizeName("  Vendor Repo \t\n"); got != "Vendor Repo" {
+		t.Errorf("NormalizeName = %q", got)
+	}
+}
+
+// rsaParams is an RSA key of the given size with an odd modulus and the given exponent.
+func rsaParams(bits int, e ...byte) openpgpkey.Params {
+	n := make([]byte, bits/8)
+	n[0], n[len(n)-1] = 0x80, 0x01
+	return openpgpkey.Params{Algorithm: openpgpkey.RSA, Bits: bits, RSAModulus: n, RSAExponent: e}
+}
+
+func TestKeyPolicy(t *testing.T) {
+	rsa := func(bits int) openpgpkey.Params { return rsaParams(bits, 1, 0, 1) }
+	ec := func(alg openpgpkey.Algorithm, curve string) openpgpkey.Params {
+		p := openpgpkey.Params{Algorithm: alg, Curve: curve}
+		if alg == openpgpkey.ECDH {
+			p.KDFHash, p.KDFCipher = 8, 7
+		}
+		return p
+	}
+	kdf := func(curve string, hash, cipher byte) openpgpkey.Params {
+		return openpgpkey.Params{Algorithm: openpgpkey.ECDH, Curve: curve, KDFHash: hash, KDFCipher: cipher}
+	}
+	evenModulus := rsaParams(3072, 1, 0, 1)
+	evenModulus.RSAModulus[len(evenModulus.RSAModulus)-1] = 0x02
+	ed := ec(openpgpkey.EdDSA, "Ed25519")
+	tinyModulus := rsaParams(3072, 1, 0, 1)
+	tinyModulus.RSAModulus = []byte{1, 0, 1}
+	native := func(alg openpgpkey.Algorithm) openpgpkey.Params { return openpgpkey.Params{Algorithm: alg} }
+	tests := []struct {
+		name    string
+		primary openpgpkey.Params
+		subkeys []openpgpkey.Params
+		ok      bool
+		weak    bool
+	}{
+		{"rsa 3072", rsa(3072), nil, true, false},
+		{"rsa 4096 with rsa 3072 subkey", rsa(4096), []openpgpkey.Params{rsa(3072)}, true, false},
+		{"rsa 3071", rsa(3071), nil, true, true},
+		{"rsa 2048", rsa(2048), nil, true, true},
+		{"rsa 4096 with rsa 2048 subkey", rsa(4096), []openpgpkey.Params{rsa(2048)}, true, true},
+		{"ed25519 with rsa 2048 subkey", ed, []openpgpkey.Params{rsa(2048)}, true, true},
+		{"rsa 2047", rsa(2047), nil, false, false},
+		{"rsa 1024", rsa(1024), nil, false, false},
+		{"rsa 4096 with rsa 1024 subkey", rsa(4096), []openpgpkey.Params{rsa(1024)}, false, false},
+		{"eddsa ed25519 with ecdh curve25519", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDH, "Curve25519")}, true, false},
+		{"eddsa ed448 with ecdh x448", ec(openpgpkey.EdDSA, "Ed448"), []openpgpkey.Params{ec(openpgpkey.ECDH, "X448")}, true, false},
+		{"native ed25519 with x25519", native(openpgpkey.Ed25519), []openpgpkey.Params{native(openpgpkey.X25519)}, true, false},
+		{"native ed448 with x448", native(openpgpkey.Ed448), []openpgpkey.Params{native(openpgpkey.X448)}, true, false},
+		{"ecdsa p-256", ec(openpgpkey.ECDSA, "NIST P-256"), []openpgpkey.Params{ec(openpgpkey.ECDH, "NIST P-256")}, true, false},
+		{"ecdsa p-384", ec(openpgpkey.ECDSA, "NIST P-384"), []openpgpkey.Params{ec(openpgpkey.ECDH, "NIST P-384")}, true, false},
+		{"ecdsa p-521", ec(openpgpkey.ECDSA, "NIST P-521"), []openpgpkey.Params{ec(openpgpkey.ECDSA, "NIST P-521")}, true, false},
+		{"rsa primary with ed25519 signing subkey", rsa(3072), []openpgpkey.Params{ec(openpgpkey.EdDSA, "Ed25519")}, true, false},
+		{"ecdsa brainpool", ec(openpgpkey.ECDSA, "brainpoolP256r1"), nil, false, false},
+		{"ecdsa brainpool 512", ec(openpgpkey.ECDSA, "brainpoolP512r1"), nil, false, false},
+		{"ecdsa secp256k1", ec(openpgpkey.ECDSA, "secp256k1"), nil, false, false},
+		{"ecdh brainpool subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDH, "brainpoolP384r1")}, false, false},
+		{"ecdh curve25519 as primary", ec(openpgpkey.ECDH, "Curve25519"), nil, false, false},
+		{"native x25519 as primary", native(openpgpkey.X25519), nil, false, false},
+		{"native x448 as primary", native(openpgpkey.X448), nil, false, false},
+		{"eddsa on a nist curve", ec(openpgpkey.EdDSA, "NIST P-256"), nil, false, false},
+		{"ecdsa on ed25519", ec(openpgpkey.ECDSA, "Ed25519"), nil, false, false},
+		{"ecdsa curve25519 signing subkey", ec(openpgpkey.EdDSA, "Ed25519"), []openpgpkey.Params{ec(openpgpkey.ECDSA, "Curve25519")}, false, false},
+		{"dsa", native(openpgpkey.DSA), nil, false, false},
+		{"elgamal subkey", rsa(3072), []openpgpkey.Params{native(openpgpkey.ElGamal)}, false, false},
+		{"rsa exponent 2^31-1", rsaParams(3072, 0x7F, 0xFF, 0xFF, 0xFF), nil, true, false},
+		{"rsa exponent 2^31+1", rsaParams(3072, 0x80, 0, 0, 1), nil, false, false},
+		{"rsa exponent 2^32+1", rsaParams(3072, 1, 0, 0, 0, 1), nil, false, false},
+		{"rsa exponent 2^64+1", rsaParams(3072, 1, 0, 0, 0, 0, 0, 0, 0, 1), nil, false, false},
+		{"rsa exponent not below the modulus", tinyModulus, nil, false, false},
+		{"rsa even modulus", evenModulus, nil, false, false},
+		{"rsa even exponent", rsaParams(3072, 1, 0, 2), nil, false, false},
+		{"rsa exponent 3", rsaParams(3072, 3), nil, false, false},
+		{"rsa exponent 65535", rsaParams(3072, 0xFF, 0xFF), nil, false, false},
+		{"rsa subkey exponent 3", rsa(4096), []openpgpkey.Params{rsaParams(3072, 3)}, false, false},
+		{"ecdh sha-512 aes-256", ed, []openpgpkey.Params{kdf("Curve25519", 10, 9)}, true, false},
+		{"ecdh sha-384 aes-192", ed, []openpgpkey.Params{kdf("NIST P-384", 9, 8)}, true, false},
+		{"ecdh sha-1 kdf", ed, []openpgpkey.Params{kdf("Curve25519", 2, 7)}, false, false},
+		{"ecdh sha-224 kdf", ed, []openpgpkey.Params{kdf("Curve25519", 11, 7)}, false, false},
+		{"ecdh camellia kdf", ed, []openpgpkey.Params{kdf("Curve25519", 8, 11)}, false, false},
+		{"ecdh triple-des kdf", ed, []openpgpkey.Params{kdf("Curve25519", 8, 2)}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			k := &openpgpkey.Key{Params: tt.primary, Subkeys: tt.subkeys}
+			weak, err := software.KeyPolicy(k)
+			if tt.ok && (err != nil || weak != tt.weak) {
+				t.Errorf("weak = %v, err = %v; want accepted with weak = %v", weak, err, tt.weak)
+			}
+			if !tt.ok && !errors.Is(err, software.ErrSource) {
+				t.Errorf("err = %v, want ErrSource", err)
+			}
+		})
+	}
+}

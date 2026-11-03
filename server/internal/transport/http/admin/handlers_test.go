@@ -449,6 +449,9 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Static:         static,
 	}
 	d.ReleaseImports = app.NewReleaseImports(runner, platformPool, d.Releases, nil, config.ReleaseSource{})
+	d.SoftwareSources = app.NewSoftwareSources(runner, orgPool)
+	d.SoftwareCatalog = app.NewSoftwareCatalog(runner, orgPool)
+	d.SoftwareStatus = app.NewSoftwareStatus(orgPool)
 	if deps != nil {
 		deps(&d)
 	}

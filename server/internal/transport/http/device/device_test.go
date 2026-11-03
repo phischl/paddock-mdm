@@ -1466,3 +1466,76 @@ func TestCheckinDeliveredSeqCacheErrors(t *testing.T) {
 		t.Fatalf("sd: %q %v", v, err)
 	}
 }
+
+// TestCheckinOSRelease (PDK-695): the gateway passes the reported ID and VERSION_ID on, drops everything else, and a
+// check-in with garbage or without the field still succeeds (old agents).
+func TestCheckinOSRelease(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	seq := int64(0)
+	checkin := func(osr map[string]string) map[string]string {
+		t.Helper()
+		body := checkinBody(0)
+		body.OSRelease = osr
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: body, seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin: %d %s", r.status, r.body)
+		}
+		var out protocol.CheckinResponse
+		_ = json.Unmarshal(r.body, &out)
+		seq = out.Seq
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+		return hb.OSRelease
+	}
+	got := checkin(map[string]string{"id": "ubuntu", "version_id": "26.04", "pretty_name": "Ubuntu 26.04 LTS"})
+	if len(got) != 2 || got["id"] != "ubuntu" || got["version_id"] != "26.04" {
+		t.Fatalf("os_release %v", got)
+	}
+	for name, in := range map[string]map[string]string{
+		"absent": nil, "no version": {"id": "ubuntu"}, "garbage": {"id": "ubuntu\n", "version_id": "x y"},
+		"too long": {"id": "ubuntu", "version_id": strings.Repeat("9", 65)},
+	} {
+		if got := checkin(in); got != nil {
+			t.Errorf("%s: os_release %v passed on", name, got)
+		}
+	}
+}
+
+// TestCheckinWithFullSoftwareReport (PDK-700): the software report of 200 failing items with 120-character errors never
+// makes a check-in fail, a body above the check-in limit is refused with 413, and another route keeps its 64 KiB.
+func TestCheckinWithFullSoftwareReport(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	items := make([]protocol.SoftwareItem, protocol.MaxSoftwareItems)
+	for i := range items {
+		items[i] = protocol.SoftwareItem{CatalogEntryID: uuid.NewString(), Package: "package-" + strings.Repeat("x", 80), Intent: "required",
+			State: "failed", Version: "1.2.3-4ubuntu5.6", Reason: "apt_failed", Error: strings.Repeat("e", 120)}
+	}
+	health, err := json.Marshal(map[string]any{"reconcile": "ok", "software": protocol.SoftwareHealth{Digest: strings.Repeat("a", 64), Items: &items, Truncated: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := checkinBody(0)
+	body.Health = health
+	if size := len(health); size <= 64<<10 || size >= 96<<10 {
+		t.Fatalf("the report is %d bytes: it must lie between the old and the new limit to prove the raise", size)
+	}
+	r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: body, seq: 0})
+	if r.status != http.StatusOK {
+		t.Fatalf("check-in with a full software report: %d %s", r.status, r.body)
+	}
+	var hb ingest.Heartbeat
+	if err := json.Unmarshal(e.pub.last(t).Body, &hb); err != nil || len(hb.Health) != len(health) {
+		t.Fatalf("heartbeat health %d bytes, want %d (%v)", len(hb.Health), len(health), err)
+	}
+	body.Health = json.RawMessage(`{"pad":"` + strings.Repeat("y", 97<<10) + `"}`)
+	e.expectProblem(e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: body, seq: 1}),
+		http.StatusRequestEntityTooLarge, "payload_too_large")
+	// The raise is for the check-in alone: another route still refuses a body above 64 KiB.
+	pad := protocol.CommandResult{Status: "succeeded", Result: json.RawMessage(`{"pad":"` + strings.Repeat("y", 65<<10) + `"}`)}
+	e.expectProblem(e.send(c, request{method: "POST", path: "/v1/commands/" + uuid.NewString() + "/result", device: id.String(), body: pad}),
+		http.StatusRequestEntityTooLarge, "payload_too_large")
+}

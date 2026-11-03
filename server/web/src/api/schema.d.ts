@@ -1991,6 +1991,223 @@ export interface paths {
         patch: operations["updatePackageHold"];
         trace?: never;
     };
+    "/api/v1/software-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's APT package sources (plan M13a decision 1);
+         *     the list never contains the signing key.
+         */
+        get: operations["listSoftwareSources"];
+        put?: never;
+        /**
+         * @description Roles: org_admin. Adds an APT package source with its signing key. A source is root-equivalent: every package
+         *     it signs is installed as root. URIs must use https (400 invalid_request "uris must use https"); they may name
+         *     internal hosts, because only the devices fetch from them, never the server. Suites are either all flat
+         *     (ending in "/", then no components) or none (then at least one component). The signing key is one
+         *     ASCII-armored OpenPGP v4 public key: RSA of at least 2048 bits (2048 to 3071 bits are accepted with
+         *     weak_key true), or Ed25519, Ed448 or NIST P-256/384/521; DSA, ElGamal, Brainpool and secp256k1 are refused
+         *     (400 invalid_request). The typed fingerprint (spaces and case ignored) must equal the key's, else 422
+         *     fingerprint_mismatch naming both. A duplicate slug or name is 409 already_exists. Needs a step-up within the
+         *     last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+         */
+        post: operations["createSoftwareSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. One source with its signing key (a public key); 404 not_found for another organization's. */
+        get: operations["getSoftwareSource"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: org_admin. Removes the source; the devices remove its source file and keyring with their next bundle.
+         *     A source that a catalog entry still uses is 409 in_use. Needs a step-up within the last 5 minutes (403
+         *     step_up_required).
+         */
+        delete: operations["deleteSoftwareSource"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: org_admin. Changes the given fields; absent fields keep their value. The slug is immutable (400
+         *     invalid_request when given). signing_key and fingerprint come only together (400 otherwise). Every rule of
+         *     the creation is checked on the resulting source. Needs a step-up within the last 5 minutes (403
+         *     step_up_required).
+         */
+        patch: operations["updateSoftwareSource"];
+        trace?: never;
+    };
+    "/api/v1/software-catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The applications of the organization's software catalog
+         *     (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one.
+         */
+        get: operations["listSoftwareCatalog"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Adds an application with its package names per distribution, release and
+         *     architecture (1 to 20 references; release and architecture may be "*"; the tuple is unique within the
+         *     entry). source_id names one of the organization's package sources; without it the distribution's own
+         *     repositories are used. A name already in use is 409 already_exists; a source_id of another organization or
+         *     an unknown one is 404 not_found.
+         */
+        post: operations["createSoftwareCatalogEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-catalog/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's entry. */
+        get: operations["getSoftwareCatalogEntry"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Removes the entry together with its assignments (never 409); the devices stop
+         *     managing the application, installed software stays.
+         */
+        delete: operations["deleteSoftwareCatalogEntry"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Replaces the entry's name, description, category, source and package
+         *     references with the submitted values (an absent description or category becomes empty, an absent or null
+         *     source_id selects the distribution's own repositories); the icon is changed with its own operation. The
+         *     same rules as on creation apply.
+         */
+        patch: operations["updateSoftwareCatalogEntry"];
+        trace?: never;
+    };
+    "/api/v1/software-catalog/{id}/icon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The entry's icon as image/png (Cache-Control: private, max-age=300); 404 not_found without an icon or for another organization's entry. */
+        get: operations["getSoftwareCatalogIcon"];
+        /**
+         * @description Roles: org_admin, org_operator. Sets or replaces the entry's icon. The body is one PNG (Content-Type
+         *     image/png) of at most 65536 bytes and 512 by 512 pixels; anything else is 400 invalid_request. Not offered as
+         *     an MCP tool (the body is not JSON).
+         */
+        put: operations["setSoftwareCatalogIcon"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-catalog/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
+         *     of the organization or of one of their groups, with what they reported or the derived state not_applicable or
+         *     unknown (see the device's managed software). The search matches the hostname. 404 not_found for another
+         *     organization's entry.
+         */
+        get: operations["listSoftwareCatalogDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The assignments of catalog entries to the organization or device groups; the search matches the entry's name. */
+        get: operations["listSoftwareAssignments"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Assigns a catalog entry to every device of the organization (no
+         *     device_group_id) or to a device group with an intent. required keeps the application installed (update_rule
+         *     latest without a version, or pinned with one; omitted, the rule is pinned for a required assignment with a
+         *     version and latest otherwise); uninstall removes it; hold keeps the installed version (with a version it is
+         *     pinned); forbid removes it and blocks it for apt. uninstall and forbid take no version. Violations are 400
+         *     invalid_request. An entry or device group of another organization or an unknown one is 404 not_found; a
+         *     second assignment of the entry in the same scope is 409 already_exists.
+         */
+        post: operations["createSoftwareAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-assignments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's assignment. */
+        get: operations["getSoftwareAssignment"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin, org_operator. The devices stop enforcing the assignment with their next bundle; installed software stays. */
+        delete: operations["deleteSoftwareAssignment"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Replaces intent, update_rule, version and reason with the submitted values
+         *     (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the
+         *     same rules as on creation apply. The entry and the scope are fixed: giving a catalog_entry_id or a
+         *     device_group_id is 400 invalid_request.
+         */
+        patch: operations["updateSoftwareAssignment"];
+        trace?: never;
+    };
     "/api/v1/overview": {
         parameters: {
             query?: never;
@@ -2887,6 +3104,31 @@ export interface paths {
          *     reported them at the last sync (plan M5a decision 9).
          */
         get: operations["listDeviceSoftware"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/managed-software": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what
+         *     the device reported for each, and for an application assigned to it that it has not reported on the derived state
+         *     not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package
+         *     applies, no report yet). The state and intent filters apply to derived entries too; derived entries have no
+         *     reported_at. 404 not_found for another organization's device.
+         */
+        get: operations["listDeviceManagedSoftware"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5575,6 +5817,271 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /** @enum {string} */
+        SoftwareArchitecture: "amd64" | "arm64";
+        SoftwareSourceSummary: {
+            /** Format: uuid */
+            id: string;
+            /** @description Immutable; names the source file and keyring on the devices. */
+            slug: string;
+            name: string;
+            uris: string[];
+            suites: string[];
+            components: string[];
+            /** @description Empty = every architecture. */
+            architectures: components["schemas"]["SoftwareArchitecture"][];
+            /** @description The signing key's v4 fingerprint, 40 uppercase hexadecimal characters. */
+            fingerprint: string;
+            /** @description The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030. */
+            weak_key: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SoftwareSource: components["schemas"]["SoftwareSourceSummary"] & {
+            /** @description The ASCII-armored OpenPGP public key as stored, re-armored without armor headers. */
+            signing_key: string;
+        };
+        SoftwareSourceCreate: {
+            /** @description ^[a-z0-9][a-z0-9-]{1,40}$ */
+            slug: string;
+            /** @description 1 to 100 characters after trimming. */
+            name: string;
+            /** @description https only, no query, fragment or user information. */
+            uris: string[];
+            /** @description ^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /. */
+            suites: string[];
+            /** @description ^[a-z0-9-]{1,32}$; none for a flat repository, at least one otherwise. */
+            components?: string[];
+            architectures?: components["schemas"]["SoftwareArchitecture"][];
+            /** @description One ASCII-armored OpenPGP v4 public key. It is stored re-armored with 64-character lines and no armor headers, and that form must also fit 65536 bytes (400 invalid_request otherwise). */
+            signing_key: string;
+            /** @description The key's fingerprint as published by the vendor; spaces and case are ignored. */
+            fingerprint: string;
+        };
+        SoftwareSourceUpdate: {
+            /** @description Immutable; any value is refused with 400 invalid_request. */
+            slug?: string;
+            name?: string;
+            uris?: string[];
+            suites?: string[];
+            components?: string[];
+            architectures?: components["schemas"]["SoftwareArchitecture"][];
+            /** @description Only together with fingerprint; the same rules as on creation. */
+            signing_key?: string;
+            /** @description Only together with signing_key. */
+            fingerprint?: string;
+        };
+        SoftwareSourcePage: {
+            items: components["schemas"]["SoftwareSourceSummary"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @enum {string} */
+        SoftwareIntent: "required" | "uninstall" | "hold" | "forbid";
+        /** @enum {string} */
+        SoftwareUpdateRule: "latest" | "pinned";
+        PackageRef: {
+            /** @description The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian. */
+            distribution: string;
+            /** @description * or the VERSION_ID, ^[a-z0-9][a-z0-9.-]{0,31}$, e.g. 24.04. */
+            release: string;
+            /** @enum {string} */
+            architecture: "*" | "amd64" | "arm64";
+            /** @description ^[a-z0-9][a-z0-9+.-]+$ */
+            package: string;
+        };
+        SoftwareCatalogEntryCreate: {
+            /** @description 1 to 100 characters after trimming; unique within the organization. */
+            name: string;
+            description?: string;
+            /** @description May be empty. */
+            category?: string;
+            /**
+             * Format: uuid
+             * @description Omit or null for the distribution's own repositories.
+             */
+            source_id?: string | null;
+            /** @description Unique by distribution, release and architecture; the most specific reference wins on a device. */
+            packages: components["schemas"]["PackageRef"][];
+        };
+        SoftwareCatalogEntryUpdate: {
+            name: string;
+            description?: string;
+            category?: string;
+            /**
+             * Format: uuid
+             * @description Omit or null for the distribution's own repositories.
+             */
+            source_id?: string | null;
+            packages: components["schemas"]["PackageRef"][];
+        };
+        SoftwareCatalogEntry: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description: string;
+            category: string;
+            /** Format: uuid */
+            source_id: string | null;
+            /** @description Empty for the distribution's own repositories. */
+            source_slug: string;
+            packages: components["schemas"]["PackageRef"][];
+            has_icon: boolean;
+            assignment_count: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SoftwareCatalogEntryPage: {
+            items: components["schemas"]["SoftwareCatalogEntry"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwareAssignmentCreate: {
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /**
+             * Format: uuid
+             * @description Omit or null for every device of the organization.
+             */
+            device_group_id?: string | null;
+            intent: components["schemas"]["SoftwareIntent"];
+            update_rule?: components["schemas"]["SoftwareUpdateRule"];
+            /** @description ^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall and forbid. */
+            version?: string | null;
+            reason?: string;
+        };
+        SoftwareAssignmentUpdate: {
+            /**
+             * Format: uuid
+             * @description Fixed; any value is refused with 400 invalid_request.
+             */
+            catalog_entry_id?: string;
+            /**
+             * Format: uuid
+             * @description Fixed; any value is refused with 400 invalid_request.
+             */
+            device_group_id?: string | null;
+            intent: components["schemas"]["SoftwareIntent"];
+            update_rule?: components["schemas"]["SoftwareUpdateRule"];
+            version?: string | null;
+            reason?: string;
+        };
+        SoftwareAssignment: {
+            /** Format: uuid */
+            id: string;
+            /** @description The catalog entry's name. */
+            app_name: string;
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /**
+             * Format: uuid
+             * @description null = every device of the organization.
+             */
+            device_group_id: string | null;
+            intent: components["schemas"]["SoftwareIntent"];
+            update_rule: components["schemas"]["SoftwareUpdateRule"];
+            version: string | null;
+            reason: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SoftwareAssignmentPage: {
+            items: components["schemas"]["SoftwareAssignment"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /**
+         * @description installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the
+         *     device's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.
+         * @enum {string}
+         */
+        DeviceSoftwareState: "installed" | "held" | "absent" | "pending" | "failed" | "not_applicable" | "unknown";
+        DeviceManagedSoftware: {
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /** @description The catalog entry's name. */
+            name: string;
+            /** @description The package on the device; empty for not_applicable. */
+            package: string;
+            intent: components["schemas"]["SoftwareIntent"];
+            state: components["schemas"]["DeviceSoftwareState"];
+            version: string;
+            /** @description pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed. */
+            reason: string;
+            /** @description At most 200 characters; may name paths. */
+            error: string;
+            /**
+             * Format: date-time
+             * @description null for a derived state.
+             */
+            reported_at: string | null;
+        };
+        DeviceManagedSoftwarePage: {
+            /** @description The device's last report left items out to keep the check-in small; an entry without a reported row may be managed all the same. */
+            truncated: boolean;
+            items: components["schemas"]["DeviceManagedSoftware"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwareCatalogDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /** @description The package on the device; empty for not_applicable. */
+            package: string;
+            intent: components["schemas"]["SoftwareIntent"];
+            state: components["schemas"]["DeviceSoftwareState"];
+            version: string;
+            reason: string;
+            /** @description At most 200 characters; may name paths. */
+            error: string;
+            /**
+             * Format: date-time
+             * @description null for a derived state.
+             */
+            reported_at: string | null;
+        };
+        SoftwareCatalogDevicePage: {
+            items: components["schemas"]["SoftwareCatalogDevice"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         InstallNowRequest: {
             packages: string[];
         };
@@ -6979,6 +7486,28 @@ export interface components {
         DeviceStateFilter: components["schemas"]["DeviceState"][];
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareSourceSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareCatalogSort: "name" | "-name" | "category" | "-category" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareAssignmentSort: "created_at" | "-created_at" | "updated_at" | "-updated_at" | "intent" | "-intent";
+        /** @description Only entries of this category. */
+        SoftwareCategoryFilter: string;
+        /** @description Only entries that use this package source. */
+        SoftwareSourceFilter: string;
+        /** @description Only assignments of this catalog entry. */
+        SoftwareEntryFilter: string;
+        /** @description Only assignments with this intent. */
+        SoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
+        /** @description Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers. */
+        DeviceManagedSoftwareSort: "name" | "-name" | "state" | "-state" | "reported_at" | "-reported_at";
+        /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id, are the tie-breakers. */
+        SoftwareCatalogDeviceSort: "hostname" | "-hostname" | "state" | "-state" | "reported_at" | "-reported_at";
+        /** @description Only entries with this intent, reported or assigned. */
+        DeviceManagedSoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
+        /** @description Only entries in this state, reported or derived. */
+        DeviceSoftwareStateFilter: components["schemas"]["DeviceSoftwareState"];
         /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
         /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
@@ -10654,6 +11183,556 @@ export interface operations {
             409: components["responses"]["Problem"];
         };
     };
+    listSoftwareSources: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareSourceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of software sources. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSourcePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareSourceCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The software source. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    updateSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareSourceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareCatalog: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareCatalogSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only entries of this category. */
+                category?: components["parameters"]["SoftwareCategoryFilter"];
+                /** @description Only entries that use this package source. */
+                source_id?: components["parameters"]["SoftwareSourceFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of catalog entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogEntryPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createSoftwareCatalogEntry: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareCatalogEntryCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareCatalogEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwareCatalogEntry: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateSoftwareCatalogEntry: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareCatalogEntryUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareCatalogIcon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The icon. */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    setSoftwareCatalogIcon: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "image/png": string;
+            };
+        };
+        responses: {
+            /** @description Icon set. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareCatalogDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id, are the tie-breakers. */
+                sort?: components["parameters"]["SoftwareCatalogDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only entries in this state, reported or derived. */
+                state?: components["parameters"]["DeviceSoftwareStateFilter"];
+                /** @description Only members of this device group. */
+                device_group_id?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogDevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareAssignments: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareAssignmentSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only assignments of this catalog entry. */
+                catalog_entry_id?: components["parameters"]["SoftwareEntryFilter"];
+                /** @description Only definitions scoped to this device group. */
+                device_group_id?: components["parameters"]["DeviceGroupFilter"];
+                /** @description Only assignments with this intent. */
+                intent?: components["parameters"]["SoftwareIntentFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of software assignments. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareAssignmentPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createSoftwareAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareAssignment"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The software assignment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareAssignment"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwareAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateSoftwareAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareAssignmentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareAssignment"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
     getOverview: {
         parameters: {
             query?: never;
@@ -11938,6 +13017,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstalledSoftwarePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceManagedSoftware: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers. */
+                sort?: components["parameters"]["DeviceManagedSoftwareSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only entries in this state, reported or derived. */
+                state?: components["parameters"]["DeviceSoftwareStateFilter"];
+                /** @description Only entries with this intent, reported or assigned. */
+                intent?: components["parameters"]["DeviceManagedSoftwareIntentFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of managed software. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceManagedSoftwarePage"];
                 };
             };
             400: components["responses"]["Problem"];

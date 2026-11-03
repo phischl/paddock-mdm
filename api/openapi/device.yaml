@@ -81,6 +81,9 @@ paths:
     post:
       operationId: checkin
       summary: Heartbeat, bundle pointer and pending commands
+      description: |
+        The body is at most 96 KiB (the other device endpoints allow 64 KiB): since plan M13a the health may carry a
+        software report of up to 200 items, and a report never makes the check-in fail.
       parameters:
         - $ref: "#/components/parameters/Device"
         - $ref: "#/components/parameters/KeyId"
@@ -381,13 +384,52 @@ components:
             initrd_issue_kernel, orphan_initrd_removed, key_material_hardlinked, or key_material_shared_bootable with initrd_issue_kernel) while the initrd work cannot go on;
             enrollment_deferred (closed set) with the header marked for the reencryption and no TPM keyslot:
             reencrypt while encrypting, reencrypt_after_completed once completed (plan M8e amendment 2026-10-22,
-            item 22, stop condition S15).
+            item 22, stop condition S15). Since plan M13a: software reports the managed applications, see below.
           properties:
             components:
               type: object
               additionalProperties: { type: string }
+            software:
+              type: object
+              required: [digest]
+              description: |
+                The state of the catalog entries the agent manages (plan M13a §3.4). digest is the hex SHA-256 of the
+                canonical JSON of items; items is present when the digest changed or every 24 hours and replaces what
+                the server holds for the device. A heartbeat with a digest only keeps the stored items. The server
+                stores at most 200 items, skips an item whose id is not an entry of the organization, whose state is
+                not one of the listed values or whose package is empty, and cuts version, reason and error. Agents
+                before M13a leave the object out.
+              properties:
+                digest: { type: string }
+                truncated:
+                  type: boolean
+                  description: The agent left items out to keep the check-in small (applied items first, never a failed one).
+                items:
+                  type: array
+                  description: |
+                    Absent or null means no software report (the stored items stay); an empty list means no items and
+                    the stored items are removed.
+                  items:
+                    type: object
+                    required: [id, package, intent, state]
+                    properties:
+                      id: { type: string, description: The catalog entry (a UUID). }
+                      package: { type: string }
+                      intent: { type: string, description: "required, uninstall, hold or forbid" }
+                      state: { type: string, description: "installed, held, absent, pending or failed" }
+                      version: { type: string }
+                      reason: { type: string, description: "pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed." }
+                      error: { type: string, description: At most 200 characters. }
         event_seq_high: { type: integer, format: int64, minimum: 0 }
         arch: { type: string, enum: [amd64, arm64], description: "Agent architecture; selects the artifact of an agent_update." }
+        os_release:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            The `id` and `version_id` of the device's os-release, as at enrollment. The server updates the device
+            record when they differ from the stored values and recompiles the device; values that are not plain
+            identifiers (letters, digits, `.`, `_`, `-`, at most 64 characters) are ignored without failing the check-in.
+            Optional; agents of earlier releases leave it out and the enrollment value stays.
     BundleRef:
       type: object
       required: [version, sha256, url]

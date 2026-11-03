@@ -87,6 +87,9 @@ type CheckinRequest struct {
 	Health               json.RawMessage `json:"health,omitempty"`
 	EventSeqHigh         int64           `json:"event_seq_high"`
 	Arch                 string          `json:"arch,omitempty"` // runtime.GOARCH: ArchAMD64 or ArchARM64
+	// OSRelease is the os-release identification of the device (keys id and version_id, as at enrollment); an agent
+	// of an earlier release leaves it out and the server keeps the enrollment value (plan M13a decision 14, M2).
+	OSRelease map[string]string `json:"os_release,omitempty"`
 }
 
 // Agent architectures of CheckinRequest.Arch.
@@ -581,4 +584,41 @@ type BundleAppliedResource struct {
 	Status  string   `json:"status"`
 	Message string   `json:"message,omitempty"`
 	Changes []string `json:"changes,omitempty"`
+}
+
+// States of SoftwareItem.State (plan M13a §6.2).
+const (
+	SoftwareStateInstalled = "installed"
+	SoftwareStateHeld      = "held"
+	SoftwareStateAbsent    = "absent"
+	SoftwareStatePending   = "pending" // reason: dpkg_locked | deferred_offline | not_yet_applied
+	SoftwareStateFailed    = "failed"  // reason: the reason of software.apply_failed
+)
+
+// SoftwareStates are the states a device reports in SoftwareItem.State.
+var SoftwareStates = []string{SoftwareStateInstalled, SoftwareStateHeld, SoftwareStateAbsent, SoftwareStatePending, SoftwareStateFailed}
+
+// MaxSoftwareItems bounds SoftwareHealth.Items; the server stores at most this many items of one report.
+const MaxSoftwareItems = 200
+
+// SoftwareHealth is the software the agent manages, in the check-in health (health.software, plan M13a §6.2).
+//
+// Items distinguishes three cases (architect decision 2026-11-02, PDK-701): absent or null is "no software report" and
+// the server keeps what it holds; a pointer to an empty list is "no items" and the server prunes. Truncated says that
+// the agent left items out to keep the check-in small (PDK-700): applied items first, never a failed one.
+type SoftwareHealth struct {
+	Digest    string          `json:"digest"`          // hex SHA-256 of the canonical JSON of Items
+	Items     *[]SoftwareItem `json:"items,omitempty"` // present when the digest changed or every 24 h
+	Truncated bool            `json:"truncated,omitempty"`
+}
+
+// SoftwareItem is the state of one catalog entry on the device. Error is at most 200 characters.
+type SoftwareItem struct {
+	CatalogEntryID string `json:"id"`
+	Package        string `json:"package"`
+	Intent         string `json:"intent"`
+	State          string `json:"state"`
+	Version        string `json:"version,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	Error          string `json:"error,omitempty"`
 }

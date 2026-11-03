@@ -278,6 +278,7 @@
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
     "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
     "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
+    "fingerprint_mismatch": "Der Fingerabdruck des Schlüssels stimmt nicht mit dem eingegebenen überein.",
     "username_taken": "Dieser Benutzername ist bereits vergeben.",
     "domain_taken": "Eine dieser Domains gehört zu einer anderen Organisation.",
     "attribute_owned_upstream": "Das wird im Quellverzeichnis verwaltet und kann in Paddock nicht geändert werden.",
@@ -462,7 +463,8 @@
       "event_gap_filled": "Die fehlenden Ereignisse {from_seq} bis {to_seq} des Geräts {target} sind nachträglich angekommen",
       "event_seq_reset": "Die Ereignisnummerierung des Geräts {target} wurde zurückgesetzt: höchste Nummer {reported_high} nach {previous_high} (Zählerrücksetzung)",
       "clock_drift": "Die Uhr des Geräts {target} weicht um {offset_s, number} Sekunden von der des Servers ab (Schwelle {threshold_s, number} Sekunden)",
-      "clock_drift_cleared": "Die Uhr des Geräts {target} weicht wieder um höchstens {threshold_s, number} Sekunden von der des Servers ab"
+      "clock_drift_cleared": "Die Uhr des Geräts {target} weicht wieder um höchstens {threshold_s, number} Sekunden von der des Servers ab",
+      "os_release_changed": "Das Betriebssystem des Geräts {target} wechselte von {old_id} {old_version_id} zu {new_id} {new_version_id}"
     },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
@@ -553,6 +555,21 @@
       "created": "{actor} hält das Paket {package} zurück",
       "updated": "{actor} hat das Zurückhalten des Pakets {package} geändert",
       "deleted": "{actor} hat das Paket {package} freigegeben"
+    },
+    "software_source": {
+      "created": "{actor} hat die Paketquelle {name} mit dem Schlüssel {fingerprint} hinzugefügt",
+      "updated": "{actor} hat die Paketquelle {name} geändert",
+      "deleted": "{actor} hat die Paketquelle {name} entfernt"
+    },
+    "software_catalog_entry": {
+      "created": "{actor} hat {name} zum Software-Katalog hinzugefügt",
+      "updated": "{actor} hat {name} im Software-Katalog geändert",
+      "deleted": "{actor} hat {name} mit {assignment_count, plural, one {# Zuweisung} other {# Zuweisungen}} aus dem Software-Katalog entfernt"
+    },
+    "software_assignment": {
+      "created": "{actor} hat {app} mit der Absicht {intent} zugewiesen",
+      "updated": "{actor} hat die Zuweisung von {app} von {old_intent} auf {intent} geändert",
+      "deleted": "{actor} hat die Zuweisung {intent} von {app} entfernt"
     },
     "permission_profile": {
       "created": "{actor} hat das Berechtigungsprofil {name} angelegt",

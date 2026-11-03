@@ -203,9 +203,9 @@ const rollout = computed(() => configuration.value?.rollout ?? null)
                       {{ d.hostname }}
                     </RouterLink>
                     <span
-                      v-if="d.os_release.VERSION_ID"
+                      v-if="d.os_release.version_id"
                       class="pd-type-caption pd-muted pd-block"
-                    >{{ t('overview.attention.os', { release: d.os_release.VERSION_ID }) }}</span>
+                    >{{ t('overview.attention.os', { release: d.os_release.version_id }) }}</span>
                   </td>
                   <td>
                     <AttentionChips :conditions="d.conditions" />

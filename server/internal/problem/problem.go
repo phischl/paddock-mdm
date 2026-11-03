@@ -136,6 +136,9 @@ var (
 	DayNotSealed   = &Error{Code: "day_not_sealed", Status: http.StatusUnprocessableEntity}
 	TooManyExports = &Error{Code: "too_many_exports", Status: http.StatusConflict}
 	ExportNotReady = &Error{Code: "export_not_ready", Status: http.StatusConflict}
+	// FingerprintMismatch: the fingerprint an administrator typed for a software source's signing key differs from the
+	// key's (plan M13a decision 2); the detail names both.
+	FingerprintMismatch = &Error{Code: "fingerprint_mismatch", Status: http.StatusUnprocessableEntity}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}

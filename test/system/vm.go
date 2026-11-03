@@ -186,6 +186,20 @@ func (v *VM) sshArgs() []string {
 
 // SSH runs a shell command in the guest as user paddock (passwordless sudo) with optional stdin.
 func (v *VM) SSH(ctx context.Context, stdin []byte, command string) (string, error) {
+	out, err := v.ssh(ctx, stdin, command)
+	var exit *exec.ExitError
+	// Transport resilience, not a test retry: package upgrades in a gate restart sshd and drop a connection that was
+	// open or being opened. ssh itself exits 255 then; a command's own failure never does, so it is not repeated.
+	if errors.As(err, &exit) && exit.ExitCode() == 255 && ctx.Err() == nil {
+		if v.t != nil {
+			v.t.Logf("%s: ssh exited 255 (%s); retrying once: %s", v.Name, strings.TrimSpace(out), command)
+		}
+		out, err = v.ssh(ctx, stdin, command)
+	}
+	return out, err
+}
+
+func (v *VM) ssh(ctx context.Context, stdin []byte, command string) (string, error) {
 	args := append(v.sshArgs(), "-p", v.port, "paddock@127.0.0.1", command)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	var out bytes.Buffer

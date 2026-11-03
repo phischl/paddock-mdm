@@ -475,7 +475,25 @@ func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	return protocol.CheckinRequest{
 		AppliedBundleVersion: a.st.AppliedBundleVersion, AgentVersion: buildinfo.Version,
 		SchemaVersions: apply.SchemaVersions, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH, Health: health,
+		OSRelease: a.osRelease(ctx),
 	}
+}
+
+// osRelease reports ID and VERSION_ID of the system with each check-in, so that the server follows a distribution
+// upgrade (PDK-695). Without a readable os-release the field is left out and the server keeps its value (fail safe).
+func (a *Agent) osRelease(ctx context.Context) map[string]string {
+	if a.d.Sys == nil {
+		return nil
+	}
+	vars, err := reconcile.ReadOSRelease(a.d.Sys)
+	if err != nil {
+		slog.DebugContext(ctx, "os-release unknown", "error", err)
+		return nil
+	}
+	if vars["ID"] == "" || vars["VERSION_ID"] == "" {
+		return nil
+	}
+	return map[string]string{"id": vars["ID"], "version_id": vars["VERSION_ID"]}
 }
 
 // refreshHostname reports the kernel (transient) hostname in the health report (plan M8h decision 8): the server

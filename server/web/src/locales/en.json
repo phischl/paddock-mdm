@@ -278,6 +278,7 @@
     "in_use": "This item is still in use. Remove what uses it first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",
     "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected.",
+    "fingerprint_mismatch": "The key's fingerprint does not match the one you entered.",
     "username_taken": "This username is already taken.",
     "domain_taken": "One of these domains belongs to another organization.",
     "attribute_owned_upstream": "This is managed by the upstream directory and cannot be changed in Paddock.",
@@ -462,7 +463,8 @@
       "event_gap_filled": "The missing events {from_seq} to {to_seq} of the device {target} arrived later",
       "event_seq_reset": "The event numbering of the device {target} was reset: highest number {reported_high} after {previous_high} (counter reset)",
       "clock_drift": "The clock of the device {target} differs from the server's by {offset_s, number} seconds (threshold {threshold_s, number} seconds)",
-      "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's"
+      "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's",
+      "os_release_changed": "The operating system of the device {target} changed from {old_id} {old_version_id} to {new_id} {new_version_id}"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
@@ -553,6 +555,21 @@
       "created": "{actor} held the package {package}",
       "updated": "{actor} changed the hold of the package {package}",
       "deleted": "{actor} released the package {package}"
+    },
+    "software_source": {
+      "created": "{actor} added the package source {name} with the key {fingerprint}",
+      "updated": "{actor} changed the package source {name}",
+      "deleted": "{actor} removed the package source {name}"
+    },
+    "software_catalog_entry": {
+      "created": "{actor} added {name} to the software catalog",
+      "updated": "{actor} changed {name} in the software catalog",
+      "deleted": "{actor} removed {name} from the software catalog with {assignment_count, plural, one {# assignment} other {# assignments}}"
+    },
+    "software_assignment": {
+      "created": "{actor} assigned {app} with the intent {intent}",
+      "updated": "{actor} changed the assignment of {app} from {old_intent} to {intent}",
+      "deleted": "{actor} removed the {intent} assignment of {app}"
     },
     "permission_profile": {
       "created": "{actor} created the permission profile {name}",

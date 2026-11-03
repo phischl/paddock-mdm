@@ -213,6 +213,25 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `updateRolloutSettings` | write | no | Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first. |
 | `updateUpdateSettings` | write | no | Replaces the update settings: security_daily_at (HH:MM, local device time), regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720) and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). |
 
+## software
+
+| Tool | Class | Destructive | Summary |
+| --- | --- | --- | --- |
+| `createSoftwareAssignment` | write | no | Assigns a catalog entry to every device of the organization (no device_group_id) or to a device group with an intent. |
+| `createSoftwareCatalogEntry` | write | no | Adds an application with its package names per distribution, release and architecture (1 to 20 references; release and architecture may be "*"; the tuple is unique within the entry). |
+| `deleteSoftwareAssignment` | write | yes | The devices stop enforcing the assignment with their next bundle; installed software stays. |
+| `deleteSoftwareCatalogEntry` | write | yes | Removes the entry together with its assignments (never 409); the devices stop managing the application, installed software stays. |
+| `getSoftwareAssignment` | read | no | GET /api/v1/software-assignments/{id} |
+| `getSoftwareCatalogEntry` | read | no | GET /api/v1/software-catalog/{id} |
+| `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |
+| `listDeviceManagedSoftware` | read | no | The catalog applications the device manages (plan M13a §3.4): what the device reported for each, and for an application assigned to it that it has not reported on the derived state not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package applies, no report yet). |
+| `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization or device groups; the search matches the entry's name. |
+| `listSoftwareCatalog` | read | no | The applications of the organization's software catalog (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one. |
+| `listSoftwareCatalogDevices` | read | no | The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). |
+| `listSoftwareSources` | read | no | The organization's APT package sources (plan M13a decision 1); the list never contains the signing key. |
+| `updateSoftwareAssignment` | write | no | Replaces intent, update_rule, version and reason with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the same rules as on creation apply. |
+| `updateSoftwareCatalogEntry` | write | no | Replaces the entry's name, description, category, source and package references with the submitted values (an absent description or category becomes empty, an absent or null source_id selects the distribution's own repositories); the icon is changed with its own operation. |
+
 ## updates
 
 | Tool | Class | Destructive | Summary |
@@ -264,9 +283,11 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
+| `createSoftwareSource` | software | Adds an APT package source with its signing key. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
 | `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
+| `deleteSoftwareSource` | software | Removes the source; the devices remove its source file and keyring with their next bundle. |
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |
 | `disableAutoUnseal` | platform | Disables the setting: the unsealer stops unsealing at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable. |
 | `downloadDeviceHeader` | devices | Returns a stored LUKS header backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup luksHeaderRestore; confirm_hostname must equal the device's hostname. |
@@ -291,6 +312,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `updateNotificationDestination` | notifications | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
 | `updatePlatformMcpSettings` | mcp | Replaces the MCP policy of the platform (platform administrators' MCP sessions). |
 | `updatePlatformNotificationDestination` | platform | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
+| `updateSoftwareSource` | software | Changes the given fields; absent fields keep their value. |
 | `updateWatchedUnits` | settings | Replaces the watched units: at most 32 services (names ending in .service), a duplicate is 400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a name that is not a service is 422 unit_not_allowed naming it. |
 
 ## Other operations the MCP does not offer
@@ -310,7 +332,9 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | `getMcpSettings` | mcp | The MCP policy of the organization (ADR 0044 decision 5). |
 | `getNotificationPseudonymLookup` | notifications | The result of a pseudonym lookup: resolved false until the notifier has resolved it; once resolved, username is the matching user name ("" when none matches) and the lookup is deleted with this read, so a second read is 404 not_found. |
 | `getPlatformMcpSettings` | mcp | The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). |
+| `getSoftwareCatalogIcon` | software | The entry's icon as image/png (Cache-Control: private, max-age=300); 404 not_found without an icon or for another organization's entry. |
 | `revokeApiToken` | api-tokens | A request made with an API token cannot revoke (403 forbidden). |
+| `setSoftwareCatalogIcon` | software | Sets or replaces the entry's icon. |
 | `updateMe` | me | PATCH /api/v1/me |
 | `uploadAgentArtifact` | platform | Uploads the paddockd binary of a draft release for one architecture (at most 128 MiB). |
 | `uploadAgentPackage` | platform | Uploads a Debian package of a draft release (at most 128 MiB), signed like the binary: the server verifies the minisign signature with the configured release public key, paddock-revoke with the revocation release public key (400 otherwise). |

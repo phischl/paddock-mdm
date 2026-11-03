@@ -1062,6 +1062,9 @@ moment, renames the file before merging and records it in its result document an
 the displaced tickets shift. The stop condition "main already has `00068`, `00069` or `00070`" in §11 is replaced by
 this rule. §5 "MUST NOT be touched: `00001`–`00067`" reads "`00001`–`00094` and M9's `00085`–`00088`".
 
+2026-11-02 (architect): PDK-695 takes `00097` (`00097_device_compiled_platform.sql`, merged after PDK-410); PDK-411
+shifts to `00098`.
+
 ### R2. Interfaces and files that changed since 2026-10-24 (binding corrections)
 
 1. **Step-up markers and the skill table.** The three source specs have `RequiresStepUp: true` (**4**). Therefore
@@ -1203,3 +1206,53 @@ together with M11's `TestPreflight|TestAdoptionGates|TestConfigRolloutGates` (al
    ElGamal, Brainpool and secp256k1 are refused. `pkg/openpgpkey` stays a permissive structural reader; the policy
    lives in `server/internal/domain/software`. Source URIs may point to internal or IDN hosts: devices fetch from
    them, the server never does; the documentation says so.
+
+## Amendment 2026-11-02 (architect)
+
+Decisions on gaps M2, M3, M4, L1 and L2 found while reviewing PDK-409. Where this amendment and §2–§13 or the amendment
+of 2026-10-31 differ, this amendment wins.
+
+- **M3. Protected packages** (refined by Q1 and Q2 below). `pkg/bundle/protected.go` owns the one list for the server,
+  `bundle.ValidateSoftware` (PDK-410) and the agent's guard (PDK-412), defence in depth; the predicates are
+  `bundle.EntryRefused(pkg)` and `bundle.RefusedIntent(pkg, intent)`. Refusal is `400 invalid_request` with one failure
+  audit event, at entry validation and at assignment validation (create and update).
+- **Q1. Three tiers (architect, 2026-11-02).** (1) *Fully protected*: `paddock-agent`, `paddock-supervisor`,
+  `paddock-revoke`, `fleet-osquery` and every himmelblau package (`himmelblau`, `pam-himmelblau`, `nss-himmelblau`,
+  `himmelblau-qr-greeter`, `himmelblau-sshd-config`, `himmelblau-apparmor`; the predicate also covers `himmelblau-*` and
+  `*-himmelblau`): all four intents are refused and no entry may name them, because any intent would move, pin or
+  remove them outside the signed A/B update path or break the login. (2) *Removal protected*: the Depends of
+  `paddock-agent` (`cryptsetup`, `libpam-modules`, `sudo`, `tpm2-tools`) and `dracut` (installed by
+  `agent/internal/encrypt/prepare.go`): only `forbid` and `uninstall` are refused, entries may name them and the intent
+  decides. (3) *Conflicting*: `initramfs-tools` (installing it removes `dracut`): `required` and `hold` are refused.
+- **Q2. Drift test.** `TestAgentDependenciesAreRemovalProtected` parses the `depends:` of
+  `packaging/nfpm/paddock-agent.yaml` and fails when they differ from the removal-protected list (`dracut` is added
+  separately with its source). Sources of the tiers: `packaging/nfpm/*.yaml`, `reconcile.FleetdPackage`,
+  `reconcile.HimmelblauPackages`, `agent/internal/uninstall/steps.go`.
+- **M2. Device OS release.** Ticket PDK-695 (promoted from a stub): the agent reports `os_release` with the check-in; the server updates
+  `device.os_release` with one audit event `device.os_release_changed` and a recompile. Agents that do not report it
+  keep the enrollment value.
+- **M4. Forbid and uninstall win over a hold.** A `forbid` or `uninstall` result for a package wins over a
+  `package_hold` of the same package for that device; the hold is dropped from that device's bundle. PDK-694 is folded into PDK-410; the overlap is reported by the agent in
+  the software resource status (PDK-412); the portal view is PDK-692.
+- **L1. Versionless holds.** Accepted as is: a versionless `package_hold` unpins a `required` pinned package
+  (`updates.Merge` ranks nil first), a versionless software hold does not (`MergeIntents` counts named versions only).
+  `TestSoftwareVersionlessHolds` (PDK-410) pins it; neither merge changes.
+- **L2.** Stub PDK-696.
+- **M2, recompile trigger (architect, 2026-11-02, PDK-695).** Option (b) widened: no use case writes the outbox for an
+  architecture or os-release change. The compiler's reconcile loop compares each active device's reported architecture
+  (`device_status.arch`, "" is no change) and `device.os_release` (`id`, `version_id`; lowercase keys are canonical, no
+  data migration) with `device.compiled_arch`, `compiled_os_id` and `compiled_os_version_id`, which the compiler records
+  after each compile (also of a blocked device and of a compile that publishes no bundle), and recompiles on a
+  difference, as for an outdated bundle schema. The os-release change keeps its audit event
+  `device.os_release_changed` from the check-in path.
+
+- **PDK-701, software report without items (architect, 2026-11-02).** `SoftwareHealth.Items` is a pointer: absent or
+  null means "no software report" (old agents, software not enabled) and the server keeps the stored rows; an explicit
+  `[]` means "no items" and the server prunes them. PDK-412 sends `[]` when it reports software with no items. Implemented
+  in PDK-411 (protocol type and ingestion).
+- **PDK-700, size of the software report (architect, 2026-11-02).** The body limit of `POST /v1/checkin` alone is raised to
+  96 KiB (documented in `device.yaml`; the other device endpoints keep 64 KiB). The agent caps each software error at 120
+  characters, drops applied items before failed ones (never a failed item) and sets `SoftwareHealth.Truncated`; the
+  server stores the flag (`device_status.software_truncated`, migration `00099`) and shows it as `truncated` on the
+  device's managed-software list. Hard rule: the software report never causes the check-in to be refused. Server part in
+  PDK-411, agent truncation in PDK-412.
