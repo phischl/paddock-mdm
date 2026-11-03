@@ -36,7 +36,7 @@ function overviewOf(over: Partial<Overview> = {}): Overview {
 }
 
 const twoConditions: AttentionDevice = {
-  device_id: 'd1', hostname: 'acme-lt-0142', state: 'active', os_release: { VERSION_ID: '24.04' }, last_contact_at: null,
+  device_id: 'd1', hostname: 'acme-lt-0142', state: 'active', os_release: { id: 'ubuntu', version_id: '24.04' }, last_contact_at: null,
   severity: 'critical', since: '2026-10-09T10:00:00Z',
   conditions: [
     { kind: 'presumed_lost', since: '2026-10-09T10:00:00Z', detail: '', finding: null },
@@ -176,6 +176,11 @@ describe('overview page (plan M7c decision 28)', () => {
     const action = w.find('[data-testid="overview-attention"] tbody tr a.v-btn')
     expect(action.attributes('aria-label')).toBe('Retire, lock or keep — acme-lt-0142')
     expect(nameContainsVisibleText(action.element)).toBe(true)
+  })
+
+  it('shows the Ubuntu version of a device needing attention from the lowercase os-release keys', async () => {
+    const w = await mountOverview()
+    expect(w.find('[data-testid="overview-attention"] tbody tr').text()).toContain('Ubuntu 24.04')
   })
 
   it('collapses more than three conditions into a +n chip', async () => {

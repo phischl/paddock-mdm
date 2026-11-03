@@ -216,7 +216,7 @@ async function copyId(): Promise<void> {
           </div>
           <div>
             <dt>{{ t('devices.osRelease') }}</dt>
-            <dd>{{ d.os_release.PRETTY_NAME ?? (Object.entries(d.os_release).map(([k, v]) => k + '=' + v).join(', ') || '–') }}</dd>
+            <dd>{{ d.os_release.pretty_name ?? (Object.entries(d.os_release).map(([k, v]) => k + '=' + v).join(', ') || '–') }}</dd>
           </div>
           <div>
             <dt>{{ t('devices.agentVersion') }}</dt>
