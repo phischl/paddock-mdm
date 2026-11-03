@@ -81,6 +81,8 @@ func TestSoftwareDpkgLockUnit(t *testing.T) {
 	frontend := "dpkg: error: dpkg frontend lock was locked by another process with pid 4242\n" +
 		"Note: removing the lock file is always wrong, can damage the locked area\nand the entire system. See <https://wiki.debian.org/Teams/Dpkg/FAQ#db-lock>.\n"
 	database := "dpkg: error: dpkg database lock was locked by another process with pid 77\n"
+	frontend123 := "dpkg: error: dpkg frontend lock was locked by /usr/bin/python3.14 process with pid 4228\n"
+	unrelated := "dpkg: error: cannot open archive: the file was locked by another process with pid 9\n"
 	old := "dpkg: error: dpkg status database is locked by another process\n"
 	broken := "dpkg: error processing archive /srv/paddock-gate/repo/x.deb (--install):\n cannot access archive: No such file or directory\n"
 	for name, c := range map[string]struct {
@@ -88,11 +90,13 @@ func TestSoftwareDpkgLockUnit(t *testing.T) {
 		locked bool
 		pid    string
 	}{
-		"frontend": {frontend, true, "4242"},
-		"database": {database, true, "77"},
-		"old":      {old, true, ""},
-		"broken":   {broken, false, ""},
-		"empty":    {"", false, ""},
+		"frontend":      {frontend, true, "4242"},
+		"database":      {database, true, "77"},
+		"frontend 1.23": {frontend123, true, "4228"},
+		"unrelated":     {unrelated, false, ""},
+		"old":           {old, true, ""},
+		"broken":        {broken, false, ""},
+		"empty":         {"", false, ""},
 	} {
 		if got := dpkgLocked(c.out); got != c.locked {
 			t.Errorf("%s: dpkgLocked = %v, want %v", name, got, c.locked)

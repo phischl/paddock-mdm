@@ -282,19 +282,20 @@ func (d *Device) dpkgInstall(t *testing.T, deb string) {
 	}
 }
 
-// dpkgLocked reports whether dpkg stopped because another process holds its frontend or database lock (the wording
-// of dpkg 1.19 and later, and the older one).
-func dpkgLocked(out string) bool {
-	return strings.Contains(out, "lock was locked by another process") ||
-		strings.Contains(out, "database is locked by another process")
-}
+// dpkgLockLine matches dpkg's refusal for a lock another process holds, with that process's PID: "dpkg frontend lock
+// was locked by another process with pid N" (dpkg 1.19 to 1.22) and "… was locked by /usr/bin/python3.14 process with
+// pid N" (dpkg 1.23, Ubuntu 26.04).
+var dpkgLockLine = regexp.MustCompile(`(?m)^dpkg: error: .*\block was locked by .*?process with pid (\d+)`)
 
-// lockPID matches dpkg's report of the process that holds its lock.
-var lockPID = regexp.MustCompile(`locked by another process with pid (\d+)`)
+// dpkgLocked reports whether dpkg stopped because another process holds its frontend or database lock: the wordings
+// of dpkgLockLine, and the older one without a PID.
+func dpkgLocked(out string) bool {
+	return dpkgLockLine.MatchString(out) || strings.Contains(out, "database is locked by another process")
+}
 
 // lockHolder is the PID dpkg names as holding its lock ("" when it names none).
 func lockHolder(out string) string {
-	if m := lockPID.FindStringSubmatch(out); m != nil {
+	if m := dpkgLockLine.FindStringSubmatch(out); m != nil {
 		return m[1]
 	}
 	return ""

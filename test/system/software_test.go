@@ -285,16 +285,24 @@ func gateSW6(t *testing.T, d *Device, g *softwareGate) {
 	g.installed, g.fail = d.eventIDs("device.software_installed"), d.eventIDs("device.software_apply_failed")
 	d.Must("sudo systemd-run --quiet --unit gate-lock python3 " + gateRepoDir + "/lock.py")
 	t.Cleanup(func() { _, _ = d.SSH(context.Background(), nil, "sudo systemctl stop gate-lock") })
-	Until(t, d.Name+": dpkg lock held by gate-lock", time.Minute, 2*time.Second, nil, func() bool {
-		if d.Must("systemctl is-active gate-lock || true") != "active" {
-			return false
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		out, err := d.SSH(ctx, nil, "sudo env LC_ALL=C dpkg --configure -a 2>&1")
-		pid := d.Must("systemctl show -p MainPID --value gate-lock")
-		return err != nil && pid != "0" && lockHolder(out) == pid
-	})
+	var lastOut, lastPID string
+	func() {
+		defer func() {
+			if t.Failed() {
+				t.Logf("%s: last dpkg output (gate-lock MainPID %q):\n%s", d.Name, lastPID, lastOut)
+			}
+		}()
+		Until(t, d.Name+": dpkg lock held by gate-lock", time.Minute, 2*time.Second, nil, func() bool {
+			if d.Must("systemctl is-active gate-lock || true") != "active" {
+				return false
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			out, err := d.SSH(ctx, nil, "sudo env LC_ALL=C dpkg --configure -a 2>&1")
+			lastOut, lastPID = out, d.Must("systemctl show -p MainPID --value gate-lock")
+			return err != nil && lastPID != "0" && lockHolder(out) == lastPID
+		})
+	}()
 
 	d.reassign(g.assignment, "required", "1.0")
 	softwareState(t, d, gateApp, "pending", "dpkg_locked", 6*time.Minute, d.Checkin)
