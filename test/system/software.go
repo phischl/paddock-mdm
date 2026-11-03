@@ -69,9 +69,12 @@ apt-ftparchive release . >"$dir/Release"
 mv "$dir/Release" Release
 gpg --batch --yes --clearsign -o InRelease Release
 cd "$dir/tls"
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=Paddock gate CA' -keyout ca.key -out ca.crt 2>/dev/null
-openssl req -newkey rsa:2048 -nodes -subj '/CN=127.0.0.1' -keyout server.key -out server.csr 2>/dev/null
-printf 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' >server.ext
+# Strict X.509 verification (Python 3.13 and later, apt's GnuTLS) wants the key usages and key identifiers set.
+printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n' >ca.ext
+openssl req -new -newkey rsa:2048 -nodes -subj '/CN=Paddock gate CA' -keyout ca.key -out ca.csr 2>/dev/null
+openssl x509 -req -in ca.csr -signkey ca.key -days 2 -extfile ca.ext -out ca.crt 2>/dev/null
+printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' >server.ext
+openssl req -new -newkey rsa:2048 -nodes -subj '/CN=127.0.0.1' -keyout server.key -out server.csr 2>/dev/null
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 -extfile server.ext -out server.crt 2>/dev/null
 install -m 0644 ca.crt /usr/local/share/ca-certificates/paddock-gate.crt
 update-ca-certificates >/dev/null
@@ -93,7 +96,16 @@ with open("/var/lib/dpkg/lock-frontend", "a") as f:
     time.sleep(600)
 EOF
 systemd-run --quiet --unit paddock-gate-repo python3 "$dir/serve.py" "$dir"
-timeout 30 sh -c 'until python3 -c "import urllib.request; urllib.request.urlopen(\"` + gateRepoURI + `InRelease\")" 2>/dev/null; do sleep 1; done'
+tries=0
+until err=$(python3 -c "import urllib.request; urllib.request.urlopen(\"` + gateRepoURI + `InRelease\", timeout=5)" 2>&1); do
+	tries=$((tries + 1))
+	if [ "$tries" -ge 30 ]; then
+		echo "the gate repository is not reachable at ` + gateRepoURI + `: $err" >&2
+		systemctl status paddock-gate-repo --no-pager >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 gpg --with-colons --fingerprint
 `
 
@@ -301,7 +313,8 @@ func listsLocked(out string) bool {
 // installedVersion is the installed version of pkg ("" when it is not installed).
 func (d *Device) installedVersion(pkg string) string {
 	d.t.Helper()
-	return d.Must("dpkg-query -W -f '${Status} ${Version}' " + pkg + " 2>/dev/null | sed -n 's/^install ok installed //p'")
+	// db:Status-Status ignores the selection, so a held package ("hold ok installed") counts as installed, as for the agent.
+	return d.Must("dpkg-query -W -f '${db:Status-Status} ${Version}\\n' " + pkg + " 2>/dev/null | sed -n 's/^installed //p' | head -n 1")
 }
 
 // softwareSource creates the gate's source for repo with the run's suffix, as alice after a step-up, and deletes it
