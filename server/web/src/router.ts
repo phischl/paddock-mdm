@@ -18,6 +18,7 @@ export const router = createRouter({
       children: [
         { path: '', name: 'device', component: () => import('./views/DeviceOverview.vue') },
         { path: 'software', name: 'device-software', component: () => import('./views/DeviceSoftware.vue') },
+        { path: 'managed-software', name: 'device-managed-software', component: () => import('./views/DeviceManagedSoftware.vue') },
         { path: 'vulnerabilities', name: 'device-vulnerabilities', component: () => import('./views/DeviceVulnerabilities.vue') },
         { path: 'access', name: 'device-access', component: () => import('./views/DeviceAccess.vue') },
         { path: 'logins', name: 'device-logins', component: () => import('./views/DeviceLogins.vue') },
@@ -56,6 +57,9 @@ export const router = createRouter({
     { path: '/settings/privacy', name: 'privacy-settings', component: () => import('./views/PrivacySettings.vue') },
     { path: '/settings/mcp', name: 'mcp-settings', component: () => import('./views/McpSettings.vue') },
     { path: '/settings/notifications', name: 'notification-destinations', component: () => import('./views/NotificationDestinations.vue') },
+    { path: '/software-sources', name: 'software-sources', component: () => import('./views/SoftwareSources.vue') },
+    { path: '/software-catalog', name: 'software-catalog', component: () => import('./views/SoftwareCatalog.vue') },
+    { path: '/software-catalog/:id', name: 'software-catalog-entry', component: () => import('./views/SoftwareCatalogDetail.vue') },
     { path: '/package-holds', name: 'package-holds', component: () => import('./views/PackageHolds.vue') },
     { path: '/revocations', name: 'revocations', component: () => import('./views/RevocationRequests.vue') },
     { path: '/audit', name: 'audit', component: () => import('./views/Audit.vue') },
