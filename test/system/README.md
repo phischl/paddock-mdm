@@ -80,7 +80,8 @@ in place (switch rollouts off under *Settings* and complete or revert the rollou
 
 ## Software catalog (plan M13a)
 
-`TestSoftwareGates` (SW1–SW8) builds a signed APT repository **on each VM**, so the gate needs no outside repository:
+`TestSoftwareGates` (SW1–SW8) builds a signed APT repository **on each VM**, so the gate's own packages come from no
+outside repository:
 a throwaway Ed25519 signing key (`gpg --quick-gen-key`, private key only on the VM), the packages `paddock-gate-app`
 1.0 and 1.1 and `paddock-gate-anchor` 1.0 (`dpkg-deb --build`), `Packages` and `Release` from `apt-ftparchive`, a
 clearsigned `InRelease`, a throwaway CA in `/usr/local/share/ca-certificates/paddock-gate.crt` with a server
@@ -101,8 +102,10 @@ with the snapshot and the run's cleanup.
 | SW7 | after the repository's key rotation apt refuses the signature (`NO_PUBKEY` with gpgv, `Missing key` or `No good signature` with sqv, with a `W:`/`E:` line); the key change needs a step-up (denied event without), records both fingerprints, reaches the keyring, and 1.1 installs |
 | SW8 | an edited source file and a rogue `paddock-rogue.sources` are corrected with two `device.tamper_protected_file_changed` |
 
-SW4 runs `paddock-updates.service` twice; on a VM with many pending updates the first regular run takes as long as
-U3's.
+The VMs still need the Ubuntu archive: the setup installs `apt-utils` when `apt-ftparchive` is missing, and SW4 runs
+`paddock-updates.service` twice, two full regular runs (`apt-get update` and `dist-upgrade` against the archive). The
+first one upgrades everything the snapshot lacks and takes as long as U3's, up to an hour on an old snapshot; without
+outbound HTTPS to the archive SW4 fails.
 
 ## Throwaway VMs
 

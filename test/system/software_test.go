@@ -23,6 +23,7 @@ type softwareGate struct {
 	repo                     gateRepo
 	source, slug             string
 	entry, assignment        string
+	anchorEntry              string   // gateAnchor's entry, assigned required from SW3 on
 	installed, removed, fail []string // event IDs seen so far, by code
 }
 
@@ -37,7 +38,9 @@ func TestSoftwareGates(t *testing.T) {
 		d := Install(t, s, vm, debDir(s))
 		g := &softwareGate{repo: d.setupGateRepo()}
 		g.source, g.slug = d.softwareSource(g.repo)
+		// Both entries belong to the VM's test, not to a subtest: a subtest's cleanup would delete them when it ends.
 		g.entry = d.catalogEntry(g.source, gateApp)
+		g.anchorEntry = d.catalogEntry(g.source, gateAnchor)
 		for _, gate := range []struct {
 			name string
 			fn   func(*testing.T, *Device, *softwareGate)
@@ -53,11 +56,12 @@ func TestSoftwareGates(t *testing.T) {
 	})
 }
 
-// softwareState waits until the agent's health reports state and reason for pkg.
-func softwareState(t *testing.T, d *Device, pkg, state, reason string, timeout time.Duration) {
+// softwareState waits until the agent's health reports state and reason for pkg; tick runs before each poll (nil
+// for none).
+func softwareState(t *testing.T, d *Device, pkg, state, reason string, timeout time.Duration, tick func()) {
 	t.Helper()
 	var last softwareItem
-	Until(t, fmt.Sprintf("%s: health %s %s/%s", d.Name, pkg, state, reason), timeout, 5*time.Second, nil, func() bool {
+	Until(t, fmt.Sprintf("%s: health %s %s/%s", d.Name, pkg, state, reason), timeout, 5*time.Second, tick, func() bool {
 		it, ok, err := healthSoftwareItem(d.Health(), pkg)
 		if err != nil {
 			t.Fatal(err)
@@ -112,8 +116,9 @@ func gateSW1(t *testing.T, d *Device, g *softwareGate) {
 	if fp := d.keyringFingerprint(gateKeyringPath(g.slug)); fp != g.repo.Fingerprint {
 		t.Errorf("keyring fingerprint %q, want %s", fp, g.repo.Fingerprint)
 	}
-	policy := d.Must("LANG=C apt-cache policy " + gateApp)
-	if !regexp.MustCompile(`(?m)^\s*(\*\*\* )?1\.0 1001$`).MatchString(policy) || !strings.Contains(policy, "1.1") {
+	policy := d.Must("LC_ALL=C apt-cache policy " + gateApp)
+	if !regexp.MustCompile(`(?m)^\s*(\*\*\* )?1\.0 1001$`).MatchString(policy) ||
+		!regexp.MustCompile(`(?m)^\s*1\.1 500$`).MatchString(policy) {
 		t.Errorf("apt-cache policy without the pin 1001 for 1.0 next to 1.1:\n%s", policy)
 	}
 	ev := d.waitNewEvent(t, "device.software_installed", g.installed, 5*time.Minute, intentIs("required"))
@@ -152,7 +157,7 @@ func gateSW2(t *testing.T, d *Device, g *softwareGate) {
 // gateSW3: forbid removes the package with device.software_removed{intent: forbid} and pins it to -1, so apt-get
 // install fails; a dpkg -i of it is undone within the drift interval with a second event.
 func gateSW3(t *testing.T, d *Device, g *softwareGate) {
-	d.assign(d.catalogEntry(g.source, gateAnchor), "required", "")
+	d.assign(g.anchorEntry, "required", "")
 	waitVersion(t, d, gateAnchor, "1.0", 6*time.Minute, true)
 	g.removed = d.eventIDs("device.software_removed")
 	d.reassign(g.assignment, "forbid", "")
@@ -168,12 +173,12 @@ func gateSW3(t *testing.T, d *Device, g *softwareGate) {
 	if source := gateSourcePath(g.slug); d.Must("sudo test -e "+source+" && echo present || echo absent") != "present" {
 		t.Fatalf("%s is gone while %s is required: the refusal below would not prove the pin", source, gateAnchor)
 	}
-	if policy := d.Must("LANG=C apt-cache policy " + gateApp); !regexp.MustCompile(`(?m)^\s*1\.1 -1$`).MatchString(policy) {
+	if policy := d.Must("LC_ALL=C apt-cache policy " + gateApp); !regexp.MustCompile(`(?m)^\s*1\.1 -1$`).MatchString(policy) {
 		t.Errorf("apt-cache policy does not pin the available 1.1 to -1:\n%s", policy)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	out, err := d.SSH(ctx, nil, "LANG=C sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=120 "+gateApp+" 2>&1")
+	out, err := d.SSH(ctx, nil, "sudo env LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=120 "+gateApp+" 2>&1")
 	if err == nil || !strings.Contains(out, "has no installation candidate") {
 		t.Errorf("apt-get install of a forbidden package (%v), want a refusal for no installation candidate:\n%s", err, out)
 	}
@@ -181,7 +186,7 @@ func gateSW3(t *testing.T, d *Device, g *softwareGate) {
 		t.Fatalf("forbidden %s installed at %s", gateApp, v)
 	}
 
-	d.Must("sudo dpkg -i " + gateDeb + " >/dev/null")
+	d.dpkgInstall(t, gateDeb)
 	if v := d.installedVersion(gateApp); v != "1.0" {
 		t.Fatalf("dpkg -i: %s at %q", gateApp, v)
 	}
@@ -218,7 +223,7 @@ func gateSW4(t *testing.T, d *Device, g *softwareGate) {
 	d.reassign(g.assignment, "required", "")
 	Until(t, d.Name+": hold released and 1.1 visible", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
 		return !slices.Contains(strings.Fields(d.Must("apt-mark showhold")), gateApp) &&
-			strings.Contains(d.Must("LANG=C apt-cache policy "+gateApp+" | grep Candidate: || true"), "1.1")
+			strings.Contains(d.Must("LC_ALL=C apt-cache policy "+gateApp+" | grep Candidate: || true"), "1.1")
 	})
 	d.Checkin()
 	time.Sleep(2*driftInterval + 10*time.Second)
@@ -260,13 +265,13 @@ func gateSW5(t *testing.T, d *Device, g *softwareGate) {
 		return d.Must("stat -c %Y /run/paddock/last-checkin-failed 2>/dev/null || echo 0") != failed
 	})
 	d.Must("sudo touch -d '-20 min' /run/paddock/last-checkin")
-	d.Must("sudo dpkg -i " + gateDeb + " >/dev/null")
-	softwareState(t, d, gateApp, "pending", "deferred_offline", 3*time.Minute)
+	d.dpkgInstall(t, gateDeb)
+	softwareState(t, d, gateApp, "pending", "deferred_offline", 3*time.Minute, nil)
 	time.Sleep(2*driftInterval + 10*time.Second)
 	if v := d.installedVersion(gateApp); v != "1.0" {
 		t.Fatalf("%s removed while the server was unreachable (%q)", gateApp, v)
 	}
-	softwareState(t, d, gateApp, "pending", "deferred_offline", time.Minute)
+	softwareState(t, d, gateApp, "pending", "deferred_offline", time.Minute, nil)
 
 	blockStack(d, false)
 	waitVersion(t, d, gateApp, "", 6*time.Minute, true)
@@ -280,15 +285,19 @@ func gateSW6(t *testing.T, d *Device, g *softwareGate) {
 	g.installed, g.fail = d.eventIDs("device.software_installed"), d.eventIDs("device.software_apply_failed")
 	d.Must("sudo systemd-run --quiet --unit gate-lock python3 " + gateRepoDir + "/lock.py")
 	t.Cleanup(func() { _, _ = d.SSH(context.Background(), nil, "sudo systemctl stop gate-lock") })
-	Until(t, d.Name+": dpkg lock held", time.Minute, 2*time.Second, nil, func() bool {
+	Until(t, d.Name+": dpkg lock held by gate-lock", time.Minute, 2*time.Second, nil, func() bool {
+		if d.Must("systemctl is-active gate-lock || true") != "active" {
+			return false
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		out, err := d.SSH(ctx, nil, "LANG=C sudo dpkg --configure -a 2>&1")
-		return err != nil && strings.Contains(out, "lock")
+		out, err := d.SSH(ctx, nil, "sudo env LC_ALL=C dpkg --configure -a 2>&1")
+		pid := d.Must("systemctl show -p MainPID --value gate-lock")
+		return err != nil && pid != "0" && lockHolder(out) == pid
 	})
 
 	d.reassign(g.assignment, "required", "1.0")
-	softwareState(t, d, gateApp, "pending", "dpkg_locked", 6*time.Minute)
+	softwareState(t, d, gateApp, "pending", "dpkg_locked", 6*time.Minute, d.Checkin)
 	d.Checkin()
 	time.Sleep(70 * time.Second)
 	if failed := d.newEvents("device.software_apply_failed", g.fail, nil); len(failed) > 0 {
@@ -309,7 +318,7 @@ func gateSW6(t *testing.T, d *Device, g *softwareGate) {
 func gateSW7(t *testing.T, d *Device, g *softwareGate) {
 	old := g.repo.Fingerprint
 	g.repo = d.rotateGateRepo()
-	if out, err := d.scopedUpdate(g.slug); !signatureRefused(out) {
+	if out, err := d.scopedUpdateUnlocked(t, g.slug); !signatureRefused(out) {
 		t.Fatalf("apt-get update after the key rotation (%v) does not refuse the signature:\n%s", err, out)
 	}
 
@@ -321,6 +330,11 @@ func gateSW7(t *testing.T, d *Device, g *softwareGate) {
 	if err != nil {
 		t.Fatalf("login alice: %v", err)
 	}
+	defer func() {
+		if res, err := fresh.Do(context.Background(), http.MethodPost, "/api/auth/logout", nil); err != nil || res.Status != http.StatusOK {
+			t.Logf("logout of the session without step-up: %v HTTP %d", err, res.Status)
+		}
+	}()
 	res, err := fresh.Do(ctx, http.MethodPatch, path, change)
 	if err != nil || res.Status != http.StatusForbidden || res.ProblemCode() != "step_up_required" {
 		t.Fatalf("PATCH %s without step-up: %v HTTP %d %s", path, err, res.Status, res.Body)
@@ -341,18 +355,8 @@ func gateSW7(t *testing.T, d *Device, g *softwareGate) {
 	})
 	d.reassign(g.assignment, "required", "1.1")
 	waitVersion(t, d, gateApp, "1.1", 6*time.Minute, true)
-	// After the install the agent's own update of the source is done; a lock it still holds is waited for, nothing else.
-	for attempt := 1; ; attempt++ {
-		out, err := d.scopedUpdate(g.slug)
-		if listsLocked(out) && attempt < 6 {
-			t.Logf("%s: apt lists locked (attempt %d), retrying in 10 s", d.Name, attempt)
-			time.Sleep(10 * time.Second)
-			continue
-		}
-		if err != nil || signatureRefused(out) || aptError(out) {
-			t.Errorf("apt-get update with the new keyring (%v):\n%s", err, out)
-		}
-		break
+	if out, err := d.scopedUpdateUnlocked(t, g.slug); err != nil || signatureRefused(out) || aptError(out) {
+		t.Errorf("apt-get update with the new keyring (%v):\n%s", err, out)
 	}
 }
 

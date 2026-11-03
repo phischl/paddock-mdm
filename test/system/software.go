@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -204,15 +205,69 @@ func (d *Device) gateKey(colons string) gateRepo {
 // keyringFingerprint is the fingerprint of the keyring file at path on the VM ("" when it holds none).
 func (d *Device) keyringFingerprint(path string) string {
 	d.t.Helper()
-	return colonFingerprint(d.Must("sudo sh -c 'GNUPGHOME=$(mktemp -d) gpg --show-keys --with-colons " + path + " 2>/dev/null || true'"))
+	return colonFingerprint(d.Must("sudo sh -c 'h=$(mktemp -d); GNUPGHOME=$h gpg --show-keys --with-colons " + path +
+		" 2>/dev/null; rm -rf \"$h\"; true'"))
 }
 
 // scopedUpdate runs apt-get update for the source slug alone, as the agent does, and returns its output and error.
 func (d *Device) scopedUpdate(slug string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	return d.SSH(ctx, nil, "LANG=C sudo apt-get update -q -o Dir::Etc::sourcelist=sources.list.d/paddock-"+slug+
+	return d.SSH(ctx, nil, "sudo env LC_ALL=C apt-get update -q -o Dir::Etc::sourcelist=sources.list.d/paddock-"+slug+
 		".sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 2>&1")
+}
+
+// scopedUpdateUnlocked is scopedUpdate that waits for the package lists lock: the agent refreshes the same source on
+// its own, and a lock it holds is retried (at most 5 times, 10 s apart, logged), never any other output.
+func (d *Device) scopedUpdateUnlocked(t *testing.T, slug string) (string, error) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		out, err := d.scopedUpdate(slug)
+		if !listsLocked(out) || attempt == 6 {
+			return out, err
+		}
+		t.Logf("%s: apt lists locked (attempt %d), retrying in 10 s", d.Name, attempt)
+		time.Sleep(10 * time.Second)
+	}
+}
+
+// dpkgInstall installs a package file with dpkg -i as a local administrator would. dpkg has no lock timeout, so a
+// frontend lock another package operation holds (the agent's drift pass) is retried, at most 12 times 10 s apart and
+// logged; any other failure fails t.
+func (d *Device) dpkgInstall(t *testing.T, deb string) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		out, err := d.SSH(ctx, nil, "sudo env LC_ALL=C dpkg -i "+deb+" 2>&1")
+		cancel()
+		switch {
+		case err == nil:
+			return
+		case dpkgLocked(out) && attempt < 12:
+			t.Logf("%s: dpkg locked (attempt %d), retrying in 10 s", d.Name, attempt)
+			time.Sleep(10 * time.Second)
+		default:
+			t.Fatalf("%s: dpkg -i %s: %v\n%s", d.Name, deb, err, out)
+		}
+	}
+}
+
+// dpkgLocked reports whether dpkg stopped because another process holds its frontend or database lock (the wording
+// of dpkg 1.19 and later, and the older one).
+func dpkgLocked(out string) bool {
+	return strings.Contains(out, "lock was locked by another process") ||
+		strings.Contains(out, "database is locked by another process")
+}
+
+// lockPID matches dpkg's report of the process that holds its lock.
+var lockPID = regexp.MustCompile(`locked by another process with pid (\d+)`)
+
+// lockHolder is the PID dpkg names as holding its lock ("" when it names none).
+func lockHolder(out string) string {
+	if m := lockPID.FindStringSubmatch(out); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // signatureMarkers are what apt prints when a repository's signature does not verify: gpgv's NO_PUBKEY, sqv's
@@ -355,6 +410,11 @@ func (s *Stack) requestEvent(t *testing.T, code, requestID string) portal.AuditE
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		events, err := s.session().AuditEvents(ctx, code)
+		if err != nil && strings.Contains(err.Error(), "HTTP 401") {
+			t.Logf("audit events %s: HTTP 401, alice's session expired; signing in again once", code)
+			s.Login(t)
+			events, err = s.session().AuditEvents(ctx, code)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

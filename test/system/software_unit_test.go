@@ -74,3 +74,31 @@ func TestSoftwareAptOutputUnit(t *testing.T) {
 		}
 	}
 }
+
+// TestSoftwareDpkgLockUnit pins how SW3, SW5 and SW6 read dpkg's lock refusal: only a lock is retried, and the PID dpkg
+// names is the holder SW6 compares with gate-lock's main PID.
+func TestSoftwareDpkgLockUnit(t *testing.T) {
+	frontend := "dpkg: error: dpkg frontend lock was locked by another process with pid 4242\n" +
+		"Note: removing the lock file is always wrong, can damage the locked area\nand the entire system. See <https://wiki.debian.org/Teams/Dpkg/FAQ#db-lock>.\n"
+	database := "dpkg: error: dpkg database lock was locked by another process with pid 77\n"
+	old := "dpkg: error: dpkg status database is locked by another process\n"
+	broken := "dpkg: error processing archive /srv/paddock-gate/repo/x.deb (--install):\n cannot access archive: No such file or directory\n"
+	for name, c := range map[string]struct {
+		out    string
+		locked bool
+		pid    string
+	}{
+		"frontend": {frontend, true, "4242"},
+		"database": {database, true, "77"},
+		"old":      {old, true, ""},
+		"broken":   {broken, false, ""},
+		"empty":    {"", false, ""},
+	} {
+		if got := dpkgLocked(c.out); got != c.locked {
+			t.Errorf("%s: dpkgLocked = %v, want %v", name, got, c.locked)
+		}
+		if got := lockHolder(c.out); got != c.pid {
+			t.Errorf("%s: lockHolder = %q, want %q", name, got, c.pid)
+		}
+	}
+}
