@@ -45,7 +45,8 @@ var lists = map[string]struct {
 		"ListNotificationDestinations", `d\.id`},
 	"listPlatformNotificationDestinations": {notificationDestinationList, "postgres/queries/notifications.sql",
 		"ListNotificationDestinations", `d\.id`},
-	"listPackageHolds": {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
+	"listPackageHolds":    {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
+	"listSoftwareSources": {softwareSourceList, "postgres/queries/software.sql", "ListSoftwareSources", "id"},
 
 	"listDeviceConfigStatus": {deviceResourceStatusList, "postgres/queries/device_config_status.sql", "ListDeviceResourceStatus", "resource_id"},
 	"listDeviceBundles":      {deviceBundleList, "postgres/queries/device_config_status.sql", "ListDeviceBundles", `b\.version`},

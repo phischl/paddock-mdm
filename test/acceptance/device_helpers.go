@@ -132,6 +132,10 @@ func removeCreated(t *testing.T, p *env.Portal, collection string, res env.Respo
 		renew := func(t *testing.T) { stepUp(t, p, p.User, true) }
 		deleteDestinationOnCleanup(t, p, renew, collection+"/"+responseID(t, res).String())
 		return
+	case softwareSources: // the deletion needs a step-up of the session's own user
+		renew := func(t *testing.T) { stepUp(t, p, p.User, true) }
+		deleteSourceOnCleanup(t, p, renew, collection+"/"+responseID(t, res).String())
+		return
 	}
 	createdID(t, p, collection, res)
 }
