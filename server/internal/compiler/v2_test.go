@@ -17,6 +17,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/pkg/sudoers"
 	"github.com/phischl/paddock-mdm/pkg/timeticket"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/compiler"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
@@ -753,5 +754,107 @@ func TestWatchSection(t *testing.T) {
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	if b := w.fetch(v2); b.Watch != nil || w.version(v2) != before+2 {
 		t.Fatalf("cleared: version %d, watch %+v", w.version(v2), b.Watch)
+	}
+}
+
+// TestReconcileRecompilesOnPlatformChange (PDK-695): a device whose reported architecture or stored os-release no
+// longer match what its latest compile saw is recompiled by the reconcile loop, once; the compile records what it saw
+// (also when no bundle changed); without a change and with an architecture the agent stopped reporting the loop does
+// nothing.
+func TestReconcileRecompilesOnPlatformChange(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1}")
+	w.exec(`UPDATE device SET os_release = '{"id":"ubuntu","version_id":"24.04"}' WHERE id = $1`, dev)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	seen := func() string {
+		t.Helper()
+		var s string
+		if err := w.super.QueryRow(context.Background(), `SELECT compiled_arch || '|' || compiled_os_id || '|' || compiled_os_version_id
+			FROM device WHERE id = $1`, dev).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	// outdated is what the next reconcile round would recompile.
+	outdated := func() int {
+		t.Helper()
+		ids, err := pgstore.New(w.super).ListDevicesWithOutdatedPlatform(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(ids)
+	}
+	reconcile := func() int64 {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return w.fetch(dev).BundleVersion
+	}
+	if got := seen(); got != "|ubuntu|24.04" || outdated() != 0 {
+		t.Fatalf("after the first compile: %q, %d outdated", got, outdated())
+	}
+	version := reconcile()
+	if seen() != "|ubuntu|24.04" || outdated() != 0 {
+		t.Fatal("a reconcile without a change touched the device")
+	}
+
+	w.exec("UPDATE device_status SET arch = 'amd64' WHERE device_id = $1", dev)
+	if outdated() != 1 {
+		t.Fatal("a newly reported architecture is not outdated")
+	}
+	reconcile()
+	if got := seen(); got != "amd64|ubuntu|24.04" || outdated() != 0 {
+		t.Fatalf("after the architecture change: %q, %d outdated", got, outdated())
+	}
+
+	w.exec(`UPDATE device SET os_release = '{"id":"ubuntu","version_id":"26.04"}' WHERE id = $1`, dev)
+	if outdated() != 1 {
+		t.Fatal("a changed os-release is not outdated")
+	}
+	reconcile()
+	if got := seen(); got != "amd64|ubuntu|26.04" || outdated() != 0 {
+		t.Fatalf("after the os-release change: %q, %d outdated", got, outdated())
+	}
+
+	// An agent that stops reporting the architecture is no change; a device that is not active is not recompiled.
+	w.exec("UPDATE device_status SET arch = '' WHERE device_id = $1", dev)
+	if outdated() != 0 {
+		t.Fatal("an unreported architecture counts as a change")
+	}
+	if after := reconcile(); after < version {
+		t.Fatalf("bundle version went back from %d to %d", version, after)
+	}
+}
+
+// TestReconcileRecordsPlatformOfBlockedDevice (PDK-695): a device whose render is blocked still records the platform
+// its compile saw, so an os-release change makes one failed attempt and later reconcile rounds leave it alone.
+func TestReconcileRecordsPlatformOfBlockedDevice(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1,2}")
+	w.exec(`UPDATE device SET os_release = '{"id":"ubuntu","version_id":"24.04"}' WHERE id = $1`, dev)
+	dave := w.user("dave", false)
+	profile := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO permission_profile (id, organization_id, name, class) VALUES ($1, $2, 'root', 'full')", profile, w.org)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	before := w.version(dev)
+
+	w.validator.reject = "NOPASSWD"
+	w.exec("UPDATE permission_profile SET require_password = false WHERE id = $1", profile)
+	w.exec("INSERT INTO profile_assignment (id, organization_id, profile_id, subject_type, subject_id) VALUES ($1, $2, $3, 'user', $4)",
+		uuid.Must(uuid.NewV7()), w.org, profile, dave)
+	w.exec(`UPDATE device SET os_release = '{"id":"ubuntu","version_id":"26.04"}' WHERE id = $1`, dev)
+	for range 2 {
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var failed int
+	if err := w.super.QueryRow(context.Background(), `SELECT count(*) FROM action WHERE organization_id = $1
+		AND code = 'device.bundle_render_failed' AND target->>'id' = $2`, w.org, dev.String()).Scan(&failed); err != nil {
+		t.Fatal(err)
+	}
+	if failed != 1 || w.version(dev) != before {
+		t.Fatalf("%d device.bundle_render_failed after two rounds (want 1), version %d -> %d", failed, before, w.version(dev))
 	}
 }

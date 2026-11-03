@@ -60,6 +60,12 @@ func TestAutoinstallGate(t *testing.T) {
 	if out := vm.Must("test -e /etc/paddock/enroll.json && echo present || echo gone"); out != "gone" {
 		t.Error("the enrollment configuration is still on the device")
 	}
+	if method, mode := d.EnrollmentMode(); method != "autoinstall" || mode != "enforce" {
+		t.Errorf("the autoinstalled device enrolled as %s/%s, want autoinstall/enforce", method, mode)
+	}
+	if out := vm.Must("sudo stat -c '%a %U' /etc/paddock/autoinstall.marker"); out != "600 root" {
+		t.Errorf("autoinstall marker: %q, want 600 root", out)
+	}
 	info := d.WaitDisk(t, "compliant", 30*time.Minute, func(i diskInfo) bool { return i.state() == "compliant" })
 	if stored(info.RecoveryKeys) < 1 || stored(info.Headers) < 2 || !slices.Equal(vm.Keyslots(t), []string{"recovery", "tpm2+pin"}) {
 		t.Fatalf("compliant disk %+v, keyslots %v", info, vm.Keyslots(t))

@@ -39,11 +39,14 @@ type System struct {
 	Files    map[string]*File
 	Units    map[string]*Unit
 	Packages map[string]bool
-	NTP      bool
-	Users    map[string]int
-	Groups   map[string]int
-	FailCmd  string   // a command ("systemctl start x.service") that fails
-	Calls    []string // state-changing calls
+	// Foreign are the packages also installed for a second architecture (i386, same version as Versions): the
+	// native build of a package in Packages and Foreign is amd64, and a package only in Foreign has no native build.
+	Foreign map[string]bool
+	NTP     bool
+	Users   map[string]int
+	Groups  map[string]int
+	FailCmd string   // a command ("systemctl start x.service") that fails
+	Calls   []string // state-changing calls
 	// Versions are the versions of installed packages (PackageVersion); AptVersion is the version apt-get install
 	// installs.
 	Versions   map[string]string
@@ -77,6 +80,23 @@ type System struct {
 	Shows map[string]string
 	// Hostnames are the static, transient and pretty hostname hostnamectl reports and sets.
 	Hostnames Hostnames
+	// AptScript answers apt-get calls by their command as Calls records it ("apt-get -s install nano"): the call
+	// returns the reply and changes nothing. AptArgs records the full argument list of every apt-get call.
+	AptScript map[string]AptReply
+	AptArgs   [][]string
+	// Unknown are the package names apt-cache pkgnames does not know; every other name is known.
+	Unknown map[string]bool
+	// Conflicts are package pairs: installing the key removes the value while it is installed, which a simulation
+	// shows as a Remv line and which an install with --no-remove refuses.
+	Conflicts map[string]string
+}
+
+// AptReply is a scripted apt-get answer; with Apply the call also does what it does unscripted (e.g. after waiting
+// for a lock) and Output precedes that output.
+type AptReply struct {
+	Output string
+	Exit   int
+	Apply  bool
 }
 
 // Hostnames are the three hostnames of hostnamed.
@@ -95,7 +115,7 @@ type Session struct {
 // New returns a fake with root/root, nobody and an empty file system.
 func New() *System {
 	return &System{
-		Files: map[string]*File{}, Units: map[string]*Unit{}, Packages: map[string]bool{}, Versions: map[string]string{},
+		Files: map[string]*File{}, Units: map[string]*Unit{}, Packages: map[string]bool{}, Foreign: map[string]bool{}, Versions: map[string]string{},
 		Passwd: map[string]int{}, Members: map[string][]string{}, Held: map[string]bool{}, Shows: map[string]string{},
 		Users: map[string]int{"root": 0, "nobody": 65534}, Groups: map[string]int{"root": 0, "adm": 4},
 	}
@@ -304,21 +324,39 @@ func (s *System) Hostnamectl(_ context.Context, args ...string) (string, int, er
 func (s *System) PackageInstalled(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Packages[name]
+	return s.Packages[name] || s.Foreign[name]
+}
+
+// PackageRemovalNames implements reconcile.System: the plain name for a native build only, else one name:arch each.
+func (s *System) PackageRemovalNames(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var names []string
+	if s.Packages[name] {
+		names = append(names, name+":amd64")
+	}
+	if s.Foreign[name] {
+		names = append(names, name+":i386")
+	}
+	if len(names) == 0 || (s.Packages[name] && !s.Foreign[name]) {
+		return []string{name}
+	}
+	return names
 }
 
 // PackageVersion implements reconcile.System.
 func (s *System) PackageVersion(name string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.Packages[name] {
+	if !s.Packages[name] && !s.Foreign[name] {
 		return ""
 	}
 	return s.Versions[name]
 }
 
-// AptGet implements reconcile.System: "install" installs its package arguments with AptVersion; a call equal to
-// FailCmd fails with exit 100.
+// AptGet implements reconcile.System: "install" installs its package arguments (name or name=version) with
+// AptVersion or the named version, "remove" removes them, -s only simulates (and is recorded as "apt-get -s …"); a
+// call in AptScript returns its reply; a call equal to FailCmd fails with exit 100.
 func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -332,7 +370,21 @@ func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) 
 		}
 	}
 	cmd := "apt-get " + strings.Join(words, " ")
+	simulate := slices.Contains(args, "-s")
+	if simulate {
+		cmd = "apt-get -s " + strings.Join(words, " ")
+	}
 	s.Calls = append(s.Calls, cmd)
+	s.AptArgs = append(s.AptArgs, slices.Clone(args))
+	reply, scripted := s.AptScript[cmd]
+	if scripted && !reply.Apply {
+		return reply.Output, reply.Exit, nil
+	}
+	out, exit, err := s.aptGet(words, args, cmd, simulate)
+	return reply.Output + out, exit, err
+}
+
+func (s *System) aptGet(words, args []string, cmd string, simulate bool) (string, int, error) {
 	if len(words) > 0 && words[0] == "install" && s.AptTimeout {
 		s.DpkgInterrupted = true
 		return "Setting up himmelblau-sshd-config ...\n", -1, fmt.Errorf("apt-get: %w", context.DeadlineExceeded)
@@ -350,13 +402,87 @@ func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) 
 		return "The following packages have unmet dependencies:\n himmelblau : Depends: libtss2-esys-3.0.2-0t64 (>= 4.0.1-7.1ubuntu5.1) but 4.0.1-7.1ubuntu5 is to be installed\n" +
 			"E: Unable to correct problems, you have held broken packages.\n", 100, nil
 	}
-	if len(words) > 0 && words[0] == "install" {
+	if len(words) == 0 {
+		return "", 0, nil
+	}
+	if simulate {
+		return s.simulation(words), 0, nil
+	}
+	switch words[0] {
+	case "install":
 		for _, p := range words[1:] {
-			s.Packages[p] = true
-			s.Versions[p] = s.AptVersion
+			if c := s.Conflicts[p]; s.Packages[c] && slices.Contains(args, "--no-remove") {
+				return "E: Packages need to be removed but remove is disabled.\n", 100, nil
+			}
+		}
+		for _, p := range words[1:] {
+			if c := s.Conflicts[p]; s.Packages[c] {
+				delete(s.Packages, c)
+				delete(s.Versions, c)
+			}
+			name, version, pinned := strings.Cut(p, "=")
+			if !pinned {
+				version = s.AptVersion
+			}
+			s.Packages[name] = true
+			s.Versions[name] = version
+		}
+	case "remove":
+		for _, p := range words[1:] {
+			// A plain name removes only the native build, as apt does; a qualified name that architecture's.
+			name, arch, qualified := strings.Cut(p, ":")
+			if qualified && arch == "i386" {
+				delete(s.Foreign, name)
+			} else if !qualified || arch == "amd64" {
+				delete(s.Packages, name)
+			}
+			if !s.Packages[name] && !s.Foreign[name] {
+				delete(s.Versions, name)
+			}
 		}
 	}
 	return "", 0, nil
+}
+
+// simulation is apt-get -s's answer for install or remove of the packages in words[1:]: an Inst or Remv line each
+// (and a Remv line for an installed conflict) and the summary line.
+func (s *System) simulation(words []string) string {
+	var b strings.Builder
+	inst, remv := 0, 0
+	for _, p := range words[1:] {
+		name, _, _ := strings.Cut(p, "=")
+		var qualifier string
+		if n, a, ok := strings.Cut(name, ":"); ok {
+			name, qualifier = n, ":"+a
+		}
+		switch words[0] {
+		case "install":
+			if c := s.Conflicts[name]; s.Packages[c] {
+				remv++
+				fmt.Fprintf(&b, "Remv %s [1.0]\n", c)
+			}
+			inst++
+			fmt.Fprintf(&b, "Inst %s (1.0 Ubuntu:26.04/resolute [amd64])\n", name)
+		case "remove":
+			remv++
+			fmt.Fprintf(&b, "Remv %s%s [1.0]\n", name, qualifier)
+		}
+	}
+	fmt.Fprintf(&b, "0 upgraded, %d newly installed, %d to remove and 0 not upgraded.\n", inst, remv)
+	return b.String()
+}
+
+// AptCache implements reconcile.System for pkgnames <name>: the name itself unless it is Unknown.
+func (s *System) AptCache(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(args) != 2 || args[0] != "pkgnames" {
+		return "", 1, fmt.Errorf("fake apt-cache: unsupported %v", args)
+	}
+	if s.Unknown[args[1]] {
+		return "", 0, nil
+	}
+	return args[1] + "\n" + args[1] + "-doc\n", 0, nil
 }
 
 // AptMark implements reconcile.System for showhold, hold and unhold (Held); FailCmd makes a call fail.

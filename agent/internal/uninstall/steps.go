@@ -47,7 +47,14 @@ const heldPackages = "/var/lib/paddock/state/held-packages"
 func (h *Helper) updateConfiguration(ctx context.Context) string {
 	var errs []string
 	if data, err := os.ReadFile(h.path(heldPackages)); err == nil {
-		if held := strings.Fields(string(data)); len(held) > 0 {
+		held := slices.DeleteFunc(strings.Fields(string(data)), func(p string) bool {
+			if h.knownPackage(ctx, p) {
+				return false
+			}
+			errs = append(errs, "apt knows no package named "+p+": its hold is left")
+			return true
+		})
+		if len(held) > 0 {
 			if err := h.run(ctx, "apt-mark", append([]string{"unhold"}, held...)...); err != nil {
 				errs = append(errs, err.Error())
 			}
@@ -65,6 +72,41 @@ func (h *Helper) updateConfiguration(ctx context.Context) string {
 		return failed("%s", strings.Join(errs, "; "))
 	}
 	return stepDone
+}
+
+// softwareSources removes the APT sources, keyrings and forbid pins of the software catalog and refreshes the package
+// lists (plan M13a decision 29). The installed applications stay; the Himmelblau source and keyring are the himmelblau
+// step's.
+func (h *Helper) softwareSources(ctx context.Context) string {
+	var errs []string
+	files := []string{reconcile.SoftwareForbidFile}
+	for _, d := range []struct{ dir, suffix string }{{reconcile.SoftwareSourceDir, ".sources"}, {reconcile.SoftwareKeyringDir, ".gpg"}} {
+		entries, _ := os.ReadDir(h.path(d.dir)) // a missing directory has nothing to remove
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), reconcile.SoftwarePrefix) && strings.HasSuffix(e.Name(), d.suffix) {
+				files = append(files, d.dir+"/"+e.Name())
+			}
+		}
+	}
+	for _, f := range files {
+		if err := h.remove(f); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if err := h.run(ctx, "apt-get", "update", "-q"); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if len(errs) > 0 {
+		return failed("%s", strings.Join(errs, "; "))
+	}
+	return stepDone
+}
+
+// knownPackage reports whether apt has a real package of exactly this name: the held packages come from bundles, and
+// apt-mark reads a name it has no package of as a pattern (reconcile.KnownPackage, architect decision 2026-11-03).
+func (h *Helper) knownPackage(ctx context.Context, name string) bool {
+	out, exit, err := h.Run(ctx, packageTimeout, "apt-cache", "pkgnames", name)
+	return err == nil && exit == 0 && slices.Contains(strings.Fields(out), name)
 }
 
 // Paddock's sudoers files of directory users and the notices (plan M3b, M8x).

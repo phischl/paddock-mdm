@@ -45,7 +45,11 @@ var lists = map[string]struct {
 		"ListNotificationDestinations", `d\.id`},
 	"listPlatformNotificationDestinations": {notificationDestinationList, "postgres/queries/notifications.sql",
 		"ListNotificationDestinations", `d\.id`},
-	"listPackageHolds": {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
+	"listPackageHolds":    {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
+	"listSoftwareSources": {softwareSourceList, "postgres/queries/software.sql", "ListSoftwareSources", "id"},
+	"listSoftwareCatalog": {softwareCatalogList, "postgres/queries/software.sql", "ListSoftwareCatalogEntries", `e\.id`},
+	"listSoftwareAssignments": {softwareAssignmentList, "postgres/queries/software.sql", "ListSoftwareAssignments",
+		`a\.id`},
 
 	"listDeviceConfigStatus": {deviceResourceStatusList, "postgres/queries/device_config_status.sql", "ListDeviceResourceStatus", "resource_id"},
 	"listDeviceBundles":      {deviceBundleList, "postgres/queries/device_config_status.sql", "ListDeviceBundles", `b\.version`},
@@ -53,6 +57,9 @@ var lists = map[string]struct {
 	"listConfigRollouts":     {configRolloutList, "postgres/queries/config_rollout.sql", "ListConfigRollouts", `r\.id`},
 	// Whether a device is in the wave depends on its bucket in the rollout, computed in Go: sorted in memory.
 	"listConfigRolloutDevices": {configRolloutDeviceList, "", "", ""},
+	// The derived software states are computed in Go too (ADR 0028): sorted in memory.
+	"listDeviceManagedSoftware":  {deviceManagedSoftwareList, "", "", ""},
+	"listSoftwareCatalogDevices": {softwareCatalogDeviceList, "", "", ""},
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
 	"listIpAllowlist":   {ipAllowlistList, "postgres/queries/ip_allowlist.sql", "ListIPAllowlistEntries", "id"},
@@ -81,6 +88,10 @@ var lists = map[string]struct {
 var sortColumns = map[string]map[string]string{
 	"listAgentReleases": {"version": "version_key"},
 	"listDeviceBundles": {"version": "b.version", "created_at": "b.created_at"},
+	"listSoftwareCatalog": {
+		"name": "e.name", "category": "e.category", "created_at": "e.created_at", "updated_at": "e.updated_at",
+	},
+	"listSoftwareAssignments": {"created_at": "a.created_at", "updated_at": "a.updated_at", "intent": "a.intent"},
 	"listFindings": {
 		"last_seen_at": "f.last_seen_at", "opened_at": "f.opened_at", "status": "f.status", "hostname": "d.hostname",
 		"code": "f.code",

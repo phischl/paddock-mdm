@@ -87,6 +87,9 @@ type CheckinRequest struct {
 	Health               json.RawMessage `json:"health,omitempty"`
 	EventSeqHigh         int64           `json:"event_seq_high"`
 	Arch                 string          `json:"arch,omitempty"` // runtime.GOARCH: ArchAMD64 or ArchARM64
+	// OSRelease is the os-release identification of the device (keys id and version_id, as at enrollment); an agent
+	// of an earlier release leaves it out and the server keeps the enrollment value (plan M13a decision 14, M2).
+	OSRelease map[string]string `json:"os_release,omitempty"`
 }
 
 // Agent architectures of CheckinRequest.Arch.
@@ -206,6 +209,11 @@ const (
 	// The unlock path of a converted disk could not be reinstalled after a cleanup had removed it (plan M8e decision 18,
 	// amendment 2026-10-30): an initrd the disarm of a cancelled conversion neutralized cannot open the disk until then.
 	EventDiskConversionUnlockRestoreFailed = "disk.conversion_unlock_restore_failed" // data: {conversion_id, reason}
+	// Software catalog (plan M13a decision 24): what the software reconciler changed or could not apply.
+	EventSoftwareInstalled   = "software.installed"    // data: SoftwareChange{reason: first_install}
+	EventSoftwareReinstalled = "software.reinstalled"  // data: SoftwareChange{reason: locally_removed}
+	EventSoftwareRemoved     = "software.removed"      // data: SoftwareChange
+	EventSoftwareApplyFailed = "software.apply_failed" // data: SoftwareApplyFailed
 )
 
 // Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
@@ -266,6 +274,51 @@ type UpdatesRun struct {
 	Error          string    `json:"error,omitempty"`
 }
 
+// Reasons of SoftwareChange.
+const (
+	SoftwareReasonFirstInstall   = "first_install"
+	SoftwareReasonLocallyRemoved = "locally_removed"
+)
+
+// SoftwareChange is the data of software.installed, software.reinstalled and software.removed.
+type SoftwareChange struct {
+	Package        string `json:"package"`
+	Version        string `json:"version"`
+	Intent         string `json:"intent"`
+	CatalogEntryID string `json:"catalog_entry_id"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+// Stages and reasons of SoftwareApplyFailed; the reasons are also those of a failed SoftwareItem.
+const (
+	SoftwareStageSourceUpdate = "source_update"
+	SoftwareStageKeyring      = "keyring"
+	SoftwareStageSimulate     = "simulate"
+	SoftwareStageInstall      = "install"
+	SoftwareStageRemove       = "remove"
+
+	SoftwareFingerprintMismatch   = "fingerprint_mismatch"
+	SoftwareWouldRemoveDependents = "would_remove_dependents"
+	SoftwareNoCandidate           = "no_candidate"
+	SoftwareSourceUnreachable     = "source_unreachable"
+	SoftwareConflictingSource     = "conflicting_source"
+	SoftwareProtectedAffected     = "protected_package_affected"
+	SoftwareDpkgLocked            = "dpkg_locked"
+	SoftwareAptFailed             = "apt_failed"
+	SoftwareDeferredOffline       = "deferred_offline"
+	SoftwareNotYetApplied         = "not_yet_applied"
+)
+
+// SoftwareApplyFailed is the data of software.apply_failed: a package or a source (Source without Package) that could
+// not be applied. Error is at most 200 characters.
+type SoftwareApplyFailed struct {
+	Package string `json:"package,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Stage   string `json:"stage"`
+	Reason  string `json:"reason"`
+	Error   string `json:"error"`
+}
+
 // TamperServiceStopped is the data of tamper.service_stopped.
 type TamperServiceStopped struct {
 	Unit string `json:"unit"`
@@ -290,6 +343,7 @@ var EventTypes = []string{
 	EventAgentUninstalled,
 	EventDiskConversionPrepared, EventDiskConversionStarted, EventDiskConversionCompleted, EventDiskConversionFailed,
 	EventDiskConversionAborted, EventDiskConversionNeutralizeFailed, EventDiskConversionUnlockRestoreFailed,
+	EventSoftwareInstalled, EventSoftwareReinstalled, EventSoftwareRemoved, EventSoftwareApplyFailed,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass
@@ -581,4 +635,41 @@ type BundleAppliedResource struct {
 	Status  string   `json:"status"`
 	Message string   `json:"message,omitempty"`
 	Changes []string `json:"changes,omitempty"`
+}
+
+// States of SoftwareItem.State (plan M13a §6.2).
+const (
+	SoftwareStateInstalled = "installed"
+	SoftwareStateHeld      = "held"
+	SoftwareStateAbsent    = "absent"
+	SoftwareStatePending   = "pending" // reason: dpkg_locked | deferred_offline | not_yet_applied
+	SoftwareStateFailed    = "failed"  // reason: the reason of software.apply_failed
+)
+
+// SoftwareStates are the states a device reports in SoftwareItem.State.
+var SoftwareStates = []string{SoftwareStateInstalled, SoftwareStateHeld, SoftwareStateAbsent, SoftwareStatePending, SoftwareStateFailed}
+
+// MaxSoftwareItems bounds SoftwareHealth.Items; the server stores at most this many items of one report.
+const MaxSoftwareItems = 200
+
+// SoftwareHealth is the software the agent manages, in the check-in health (health.software, plan M13a §6.2).
+//
+// Items distinguishes three cases (architect decision 2026-11-02, PDK-701): absent or null is "no software report" and
+// the server keeps what it holds; a pointer to an empty list is "no items" and the server prunes. Truncated says that
+// the agent left items out to keep the check-in small (PDK-700): applied items first, never a failed one.
+type SoftwareHealth struct {
+	Digest    string          `json:"digest"`          // hex SHA-256 of the canonical JSON of Items
+	Items     *[]SoftwareItem `json:"items,omitempty"` // present when the digest changed or every 24 h
+	Truncated bool            `json:"truncated,omitempty"`
+}
+
+// SoftwareItem is the state of one catalog entry on the device. Error is at most 200 characters.
+type SoftwareItem struct {
+	CatalogEntryID string `json:"id"`
+	Package        string `json:"package"`
+	Intent         string `json:"intent"`
+	State          string `json:"state"`
+	Version        string `json:"version,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	Error          string `json:"error,omitempty"`
 }

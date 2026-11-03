@@ -246,6 +246,9 @@ type Device struct {
 	EnrollmentMethod            string
 	ConfigMode                  string
 	ConfigModeChangedAt         *time.Time
+	CompiledArch                string
+	CompiledOsID                string
+	CompiledOsVersionID         string
 }
 
 type DeviceAlert struct {
@@ -412,6 +415,19 @@ type DeviceResourceStatus struct {
 	OccurredAt     time.Time
 }
 
+type DeviceSoftwareStatus struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	Package        string
+	Intent         string
+	State          string
+	Version        string
+	Reason         string
+	Error          string
+	ReportedAt     time.Time
+}
+
 type DeviceStatus struct {
 	DeviceID             uuid.UUID
 	OrganizationID       uuid.UUID
@@ -432,6 +448,8 @@ type DeviceStatus struct {
 	EventSeqHigh         int64
 	EventSeqContiguous   int64
 	EventSeqScanned      int64
+	SoftwareDigest       string
+	SoftwareTruncated    bool
 }
 
 type DeviceUserSeen struct {
@@ -925,6 +943,51 @@ type RevocationRequest struct {
 	Rejection      *string
 	Result         json.RawMessage
 	Volumes        []uuid.UUID
+}
+
+type SoftwareAssignment struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Intent         string
+	UpdateRule     string
+	Version        *string
+	Reason         string
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type SoftwareCatalogEntry struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Description    string
+	Category       string
+	SourceID       uuid.NullUUID
+	Packages       json.RawMessage
+	Icon           []byte
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type SoftwareSource struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Slug           string
+	Name           string
+	Uris           []string
+	Suites         []string
+	Components     []string
+	Architectures  []string
+	SigningKey     string
+	Fingerprint    string
+	WeakKey        bool
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type UserGroup struct {

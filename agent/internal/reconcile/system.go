@@ -131,21 +131,73 @@ func (o OS) Hostnamectl(ctx context.Context, args ...string) (string, int, error
 	return command(ctx, "hostnamectl", args...)
 }
 
-// PackageInstalled implements System.
-func (o OS) PackageInstalled(name string) bool {
+// installedBuilds lists the architecture and version of every installed build of a package: one dpkg-query line per
+// architecture, because a Multi-Arch package installed for two architectures would otherwise print its status twice
+// on one line.
+func (o OS) installedBuilds(name string) []packageBuild {
 	if o.testRoot() {
-		return false
+		return nil
 	}
-	out, exit, err := command(context.Background(), "dpkg-query", "--show", "--showformat=${db:Status-Status}", name)
-	return err == nil && exit == 0 && strings.TrimSpace(out) == "installed"
+	out, exit, err := command(context.Background(), "dpkg-query", "--show", "--showformat=${db:Status-Status} ${Architecture} ${Version}\n", name)
+	if err != nil || exit != 0 {
+		return nil
+	}
+	var builds []packageBuild
+	for line := range strings.Lines(out) {
+		if f := strings.Fields(line); len(f) == 3 && f[0] == "installed" {
+			builds = append(builds, packageBuild{arch: f[1], version: f[2]})
+		}
+	}
+	return builds
 }
 
-// PackageVersion implements System.
+type packageBuild struct{ arch, version string }
+
+// PackageInstalled implements System: a package installed for any architecture counts as installed (PDK-711).
+func (o OS) PackageInstalled(name string) bool { return len(o.installedBuilds(name)) > 0 }
+
+// PackageVersion implements System: the version of the native architecture's build, else of the first installed one.
 func (o OS) PackageVersion(name string) string {
-	if !o.PackageInstalled(name) {
+	builds := o.installedBuilds(name)
+	if len(builds) == 0 {
 		return ""
 	}
-	out, exit, err := command(context.Background(), "dpkg-query", "--show", "--showformat=${Version}", name)
+	if len(builds) > 1 {
+		native := o.nativeArchitecture()
+		for _, b := range builds {
+			if b.arch == native {
+				return b.version
+			}
+		}
+	}
+	return builds[0].version
+}
+
+// PackageRemovalNames implements System: the plain name when the only installed build is the native (or an
+// architecture-independent) one, else the name qualified with every installed architecture, native first. apt resolves
+// a plain name to the native package, so it never removes a foreign build.
+func (o OS) PackageRemovalNames(name string) []string {
+	builds := o.installedBuilds(name)
+	if len(builds) == 0 {
+		return []string{name}
+	}
+	native := o.nativeArchitecture()
+	if len(builds) == 1 && (builds[0].arch == native || builds[0].arch == "all") {
+		return []string{name}
+	}
+	var names []string
+	for _, b := range builds {
+		if b.arch == native {
+			names = slices.Insert(names, 0, name+":"+b.arch)
+		} else {
+			names = append(names, name+":"+b.arch)
+		}
+	}
+	return names
+}
+
+func (o OS) nativeArchitecture() string {
+	out, exit, err := command(context.Background(), "dpkg", "--print-architecture")
 	if err != nil || exit != 0 {
 		return ""
 	}
@@ -178,6 +230,14 @@ func (o OS) DpkgWithin(ctx context.Context, timeout time.Duration, args ...strin
 		return "", -1, errTestRoot
 	}
 	return packageCommand(ctx, timeout, "dpkg", args...)
+}
+
+// AptCache implements System.
+func (o OS) AptCache(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "apt-cache", args...)
 }
 
 // AptMark implements System.

@@ -46,6 +46,19 @@ func (h *handlers) GetOverview(ctx context.Context, _ adminapi.GetOverviewReques
 			RootGrants: o.SecurityReview.RootGrants, SensitiveFiles: o.SecurityReview.SensitiveFiles,
 			DeniedFiles: o.SecurityReview.DeniedFiles,
 		},
+		Configuration: adminapi.OverviewConfiguration{
+			FailedResources: int(o.Configuration.FailedResources), FailedDevices: int(o.Configuration.FailedDevices),
+			ReportOnlyDevices: int(o.Configuration.ReportOnlyDevices),
+		},
+	}
+	if r := o.Configuration.Rollout; r != nil {
+		waves := make([]int, len(r.Waves))
+		for i, w := range r.Waves {
+			waves[i] = int(w)
+		}
+		out.Configuration.Rollout = &adminapi.OverviewConfigRollout{
+			Id: r.ID, Status: adminapi.ConfigRolloutStatus(r.Status), Waves: waves, CurrentWaveIndex: int(r.CurrentWaveIndex), StartedAt: r.StartedAt.UTC(),
+		}
 	}
 	for i, c := range o.Vulnerabilities.Top {
 		out.Vulnerabilities.Top[i] = adminapi.OverviewTopCVE{Cve: c.CVE, Severity: adminapi.Severity(c.Severity), Devices: c.Devices, Packages: c.Packages}

@@ -1062,6 +1062,9 @@ moment, renames the file before merging and records it in its result document an
 the displaced tickets shift. The stop condition "main already has `00068`, `00069` or `00070`" in §11 is replaced by
 this rule. §5 "MUST NOT be touched: `00001`–`00067`" reads "`00001`–`00094` and M9's `00085`–`00088`".
 
+2026-11-02 (architect): PDK-695 takes `00097` (`00097_device_compiled_platform.sql`, merged after PDK-410); PDK-411
+shifts to `00098`.
+
 ### R2. Interfaces and files that changed since 2026-10-24 (binding corrections)
 
 1. **Step-up markers and the skill table.** The three source specs have `RequiresStepUp: true` (**4**). Therefore
@@ -1203,3 +1206,102 @@ together with M11's `TestPreflight|TestAdoptionGates|TestConfigRolloutGates` (al
    ElGamal, Brainpool and secp256k1 are refused. `pkg/openpgpkey` stays a permissive structural reader; the policy
    lives in `server/internal/domain/software`. Source URIs may point to internal or IDN hosts: devices fetch from
    them, the server never does; the documentation says so.
+
+## Amendment 2026-11-02 (architect)
+
+Decisions on gaps M2, M3, M4, L1 and L2 found while reviewing PDK-409. Where this amendment and §2–§13 or the amendment
+of 2026-10-31 differ, this amendment wins.
+
+- **M3. Protected packages** (refined by Q1 and Q2 below). `pkg/bundle/protected.go` owns the one list for the server,
+  `bundle.ValidateSoftware` (PDK-410) and the agent's guard (PDK-412), defence in depth; the predicates are
+  `bundle.EntryRefused(pkg)` and `bundle.RefusedIntent(pkg, intent)`. Refusal is `400 invalid_request` with one failure
+  audit event, at entry validation and at assignment validation (create and update).
+- **Q1. Three tiers (architect, 2026-11-02).** (1) *Fully protected*: `paddock-agent`, `paddock-supervisor`,
+  `paddock-revoke`, `fleet-osquery` and every himmelblau package (`himmelblau`, `pam-himmelblau`, `nss-himmelblau`,
+  `himmelblau-qr-greeter`, `himmelblau-sshd-config`, `himmelblau-apparmor`; the predicate also covers `himmelblau-*` and
+  `*-himmelblau`): all four intents are refused and no entry may name them, because any intent would move, pin or
+  remove them outside the signed A/B update path or break the login. (2) *Removal protected*: the Depends of
+  `paddock-agent` (`cryptsetup`, `libpam-modules`, `sudo`, `tpm2-tools`) and `dracut` (installed by
+  `agent/internal/encrypt/prepare.go`): only `forbid` and `uninstall` are refused, entries may name them and the intent
+  decides. (3) *Conflicting*: `initramfs-tools` (installing it removes `dracut`): `required` and `hold` are refused.
+- **Q2. Drift test.** `TestAgentDependenciesAreRemovalProtected` parses the `depends:` of
+  `packaging/nfpm/paddock-agent.yaml` and fails when they differ from the removal-protected list (`dracut` is added
+  separately with its source). Sources of the tiers: `packaging/nfpm/*.yaml`, `reconcile.FleetdPackage`,
+  `reconcile.HimmelblauPackages`, `agent/internal/uninstall/steps.go`.
+- **M2. Device OS release.** Ticket PDK-695 (promoted from a stub): the agent reports `os_release` with the check-in; the server updates
+  `device.os_release` with one audit event `device.os_release_changed` and a recompile. Agents that do not report it
+  keep the enrollment value.
+- **M4. Forbid and uninstall win over a hold.** A `forbid` or `uninstall` result for a package wins over a
+  `package_hold` of the same package for that device; the hold is dropped from that device's bundle. PDK-694 is folded into PDK-410; the overlap is reported by the agent in
+  the software resource status (PDK-412); the portal view is PDK-692.
+- **L1. Versionless holds.** Accepted as is: a versionless `package_hold` unpins a `required` pinned package
+  (`updates.Merge` ranks nil first), a versionless software hold does not (`MergeIntents` counts named versions only).
+  `TestSoftwareVersionlessHolds` (PDK-410) pins it; neither merge changes.
+- **L2.** Stub PDK-696.
+- **M2, recompile trigger (architect, 2026-11-02, PDK-695).** Option (b) widened: no use case writes the outbox for an
+  architecture or os-release change. The compiler's reconcile loop compares each active device's reported architecture
+  (`device_status.arch`, "" is no change) and `device.os_release` (`id`, `version_id`; lowercase keys are canonical, no
+  data migration) with `device.compiled_arch`, `compiled_os_id` and `compiled_os_version_id`, which the compiler records
+  after each compile (also of a blocked device and of a compile that publishes no bundle), and recompiles on a
+  difference, as for an outdated bundle schema. The os-release change keeps its audit event
+  `device.os_release_changed` from the check-in path.
+
+- **PDK-701, software report without items (architect, 2026-11-02).** `SoftwareHealth.Items` is a pointer: absent or
+  null means "no software report" (old agents, software not enabled) and the server keeps the stored rows; an explicit
+  `[]` means "no items" and the server prunes them. PDK-412 sends `[]` when it reports software with no items. Implemented
+  in PDK-411 (protocol type and ingestion).
+- **PDK-700, size of the software report (architect, 2026-11-02).** The body limit of `POST /v1/checkin` alone is raised to
+  96 KiB (documented in `device.yaml`; the other device endpoints keep 64 KiB). The agent caps each software error at 120
+  characters, drops applied items before failed ones (never a failed item) and sets `SoftwareHealth.Truncated`; the
+  server stores the flag (`device_status.software_truncated`, migration `00099`) and shows it as `truncated` on the
+  device's managed-software list. Hard rule: the software report never causes the check-in to be refused. Server part in
+  PDK-411, agent truncation in PDK-412.
+- **Software section absent, residue pass (architect, 2026-11-03, PDK-412 review M1).** Decision **26** is extended:
+  the compiler omits the section once no package is assigned, so a removed source or forbid would otherwise stay in
+  force. When a bundle has no `software` section but the device still has software state Paddock wrote (the files of a
+  source recorded in `/var/lib/paddock/state/software-sources`, a `51paddock-software` carrying Paddock's header, or the
+  install record), the applier runs the software reconciler with an empty section. That pass removes ONLY files Paddock
+  manages and can prove it wrote; it never removes packages, a user's own sources or any file it did not record. It is
+  idempotent, and every removal is logged. A device without such state plans nothing for the section.
+- **Package names as apt patterns (architect, 2026-11-03, PDK-705 folded into PDK-412).** `bundle.EntryRefused` (and so
+  `RefusedIntent`) refuses a name that, read as apt's regex, selects a protected package of any tier; the agent passes a
+  package name to apt-get only when `apt-cache pkgnames` knows exactly that name, otherwise `failed/no_candidate`.
+- **Exact package names on every apt path (architect, 2026-11-03, PDK-412 review 2, PDK-706 folded into PDK-412).**
+  (a) The agent checks the exact name (`apt-cache pkgnames` lists exactly that name) before every apt call that takes a
+  package name from a bundle or a command: the software reconciler's simulations, installs and removals, `apt-mark
+  hold`/`unhold` of the updates reconciler, `install_now` and the uninstall's `apt-mark unhold`. An unknown name is
+  skipped and reported as failed, never passed through. (b) `pkg/bundle` emulates apt's POSIX ERE reading (a run of
+  `+` as one, `.` any character, unanchored, case-insensitive) and refuses a name whose pattern matches a protected name;
+  a closed, documented exemption list holds exact Debian names the archive has (today only `g++`), each proven by a
+  test to need its entry.
+- **A source that repeats a repository of the device (architect, 2026-11-03, PDK-412 review 2 M1, PDK-710).** apt
+  refuses its whole configuration when two entries for the same repository name different `Signed-By` keyrings (Docker's
+  documented setup, the list files of Chrome or VS Code, a user's own entry), and the scoped update of decision 23 cannot
+  see it. After writing sources the agent runs one unscoped `apt-get -s check`; a source its failure names (its file, its
+  keyring or its URI) is rolled back — ONLY Paddock's `paddock-<slug>.sources` and its keyring are removed, never the
+  device's own entry — and reported as `software.apply_failed{source, stage: source_update, reason: conflicting_source}`
+  with the duplicated URI in `error`, once per unchanged spec; its required packages are `failed/conflicting_source`. The
+  source is written and checked again after 12 passes of the same spec (about an hour). A check failure that names no
+  Paddock source rolls nothing back. A check that does not complete (killed, timed out, dpkg lock, no `E:` line) counts
+  as not done: the source gets no scoped update and is checked again at the next pass; the first pass after the agent
+  starts checks every Paddock source on disk; a rollback is followed by one more check, logged if it still fails. `KnownPackage` returns an error when `apt-cache` itself fails, reported as
+  `apt_failed` (or an error of the updates resource), never as an unknown name. Residual risk for RR-81 (PDK-414): a
+  conflicting entry that appears after Paddock's source was written is not checked until the source is written again;
+  meanwhile apt calls on the device fail and the software status shows `apt_failed`, until the administrator or the
+  user removes one of the two entries.
+- **Conflicts that appear later (architect, 2026-11-03, PDK-710).** The unscoped `apt-get -s check` runs in every drift
+  pass while Paddock sources are on disk, so a duplicate entry the user adds after Paddock's source was written is found
+  at the next pass: the same rollback of ONLY Paddock's file and keyring (the user's source wins), `failed/conflicting_source`
+  naming the URI, one deduplicated event. The check is a simulation and changes nothing; Plan (report-only devices) does
+  not run it. This replaces the residual-risk sentence about later conflicts in the line above; RR-81 keeps only the
+  delay of up to one drift interval.
+- **Install guards at execution time (architect, 2026-11-03, PDK-412 external review 2 L1/L2, PDK-712).** Every real
+  `apt-get install` carries `--no-remove`, so it never removes a package its simulation did not show; an installation
+  whose simulation removes only planned removals runs after the removal step of the same pass. A simulation (install
+  or removal) whose `Inst` or `Remv` lines touch a FULLY protected package, an upgrade included, is refused before the
+  real run (fail closed) as `failed/protected_package_affected`, reported once per unchanged spec; so is a simulation
+  without a summary line or whose summary counts more installations, upgrades, downgrades, reinstallations or
+  removals than its `Inst` and `Remv` lines name (both output formats): Paddock's own
+  packages move only through the signed A/B update path, the login stack only through its own reconciler.
+  Removal-protected packages may be upgraded by a simulation but never removed (`would_remove_dependents`). Holding a
+  lock across simulation and real run stays out of scope.

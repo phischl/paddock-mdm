@@ -209,6 +209,7 @@ const (
 	CodeDeviceEventSeqReset          Code = "device.event_seq_reset"
 	CodeDeviceClockDrift             Code = "device.clock_drift"
 	CodeDeviceClockDriftCleared      Code = "device.clock_drift_cleared"
+	CodeDeviceOSReleaseChanged       Code = "device.os_release_changed"
 	CodeAuditChainVerified           Code = "audit.chain_verified"
 	CodeAuditChainVerificationFailed Code = "audit.chain_verification_failed"
 	CodeAdminRoleGranted             Code = "admin.role_granted"
@@ -262,6 +263,24 @@ const (
 	CodeNotificationDelivered          Code = "notification.delivered"
 	CodeNotificationDestinationStalled Code = "notification.destination_stalled"
 	CodeNotificationDestinationResumed Code = "notification.destination_resumed"
+
+	// Software sources (plan M13a §6.3).
+	CodeSoftwareSourceCreated Code = "software_source.created"
+	CodeSoftwareSourceUpdated Code = "software_source.updated"
+	CodeSoftwareSourceDeleted Code = "software_source.deleted"
+
+	// Software catalog entries and assignments (plan M13a §6.3).
+	CodeSoftwareCatalogEntryCreated Code = "software_catalog_entry.created"
+	CodeSoftwareCatalogEntryUpdated Code = "software_catalog_entry.updated"
+	CodeSoftwareCatalogEntryDeleted Code = "software_catalog_entry.deleted"
+	CodeSoftwareAssignmentCreated   Code = "software_assignment.created"
+	CodeSoftwareAssignmentUpdated   Code = "software_assignment.updated"
+	CodeSoftwareAssignmentDeleted   Code = "software_assignment.deleted"
+	// What devices did with their software assignments (plan M13a decision 24).
+	CodeDeviceSoftwareInstalled   Code = "device.software_installed"
+	CodeDeviceSoftwareReinstalled Code = "device.software_reinstalled"
+	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
+	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -309,6 +328,7 @@ var deviceEventParams = []string{
 	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
 	"command_id", "mode", "local_admin", "tpm", "steps",
 	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by", "state",
+	"package", "intent", "catalog_entry_id", "source",
 }
 
 var registry = map[Code]Definition{
@@ -1359,6 +1379,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"offset_s", "threshold_s", "since"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 	},
+	CodeDeviceOSReleaseChanged: {
+		Code: CodeDeviceOSReleaseChanged, Emitted: true,
+		Description: "A device reported another operating system release than the one stored for it, for example after a distribution upgrade (actor: system). The device record follows and the device is recompiled.",
+		Params:      []string{"old_id", "old_version_id", "new_id", "new_version_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "The values are the ID and VERSION_ID of os-release; an old value is empty when the device enrolled without one.",
+	},
 	CodeAuditChainVerified: {
 		Code: CodeAuditChainVerified, Emitted: true,
 		Description: "The audit writer verified the organization's hash chain for from_day..to_day: every manifest exists, is signed by audit-chain, links to the previous day and lists exactly the indexed objects, and every object's SHA-256 matches (actor: system audit-writer).",
@@ -1589,6 +1616,92 @@ var registry = map[Code]Definition{
 		Params:      []string{"destination", "destination_id", "stalled_for_s", "forward_from", "forward_to"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stall. forward_from and forward_to name the batch that arrived (absent when a heartbeat ended the stall).",
+	},
+	CodeSoftwareSourceCreated: {
+		Code: CodeSoftwareSourceCreated, Emitted: true,
+		Description: "An organization administrator added an APT package source with its signing key; the key's fingerprint is recorded. Adding a source is root-equivalent: every package it signs is installed as root.",
+		Params:      []string{"name", "slug", "uris", "suites", "components", "fingerprint", "weak_key"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with fingerprint_mismatch when the typed fingerprint differs from the key's, already_exists for a duplicate slug or name. weak_key is true for an accepted RSA key of 2048 to 3071 bits.",
+	},
+	CodeSoftwareSourceUpdated: {
+		Code: CodeSoftwareSourceUpdated, Emitted: true,
+		Description: "An organization administrator changed an APT package source: its name, URIs, suites, components, architectures or its signing key; a key change records the old and the new fingerprint.",
+		Params:      []string{"name", "slug", "fields", "fingerprint", "old_fingerprint", "weak_key"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with fingerprint_mismatch when the typed fingerprint differs from the key's, already_exists for a duplicate name.",
+	},
+	CodeSoftwareSourceDeleted: {
+		Code: CodeSoftwareSourceDeleted, Emitted: true,
+		Description: "An organization administrator removed an APT package source; devices remove its source file and keyring at their next check-in.",
+		Params:      []string{"name", "slug", "fingerprint", "weak_key"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry references the source.",
+	},
+	CodeSoftwareCatalogEntryCreated: {
+		Code: CodeSoftwareCatalogEntryCreated, Emitted: true,
+		Description: "An application was added to the software catalog with its package names per distribution, release and architecture.",
+		Params:      []string{"name", "category", "source_id", "source_slug", "package_count"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request for a refused name, description, category or package reference, already_exists for a duplicate name, not_found for a source of another organization. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareCatalogEntryUpdated: {
+		Code: CodeSoftwareCatalogEntryUpdated, Emitted: true,
+		Description: "A software catalog entry changed (name, description, category, source, package names or icon).",
+		Params:      []string{"name", "fields"},
+		Outcomes:    adminOutcomes,
+		Note:        "fields lists what changed; an icon change names icon. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareCatalogEntryDeleted: {
+		Code: CodeSoftwareCatalogEntryDeleted, Emitted: true,
+		Description: "A software catalog entry was removed together with its assignments; devices stop managing the application.",
+		Params:      []string{"name", "assignment_count"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeSoftwareAssignmentCreated: {
+		Code: CodeSoftwareAssignmentCreated, Emitted: true,
+		Description: "An application was assigned to the organization or a device group with an intent: required (installed and kept installed), uninstall (removed), hold (version kept) or forbid (removed and blocked for apt).",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent", "update_rule", "version", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request when the intent and version rules are violated, already_exists for a second assignment of the entry in the same scope, not_found for an unknown entry or device group. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareAssignmentUpdated: {
+		Code: CodeSoftwareAssignmentUpdated, Emitted: true,
+		Description: "The intent, update rule, version or reason of a software assignment changed.",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent", "update_rule", "version", "old_intent", "old_version", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request when the intent and version rules are violated. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareAssignmentDeleted: {
+		Code: CodeSoftwareAssignmentDeleted, Emitted: true,
+		Description: "A software assignment was removed; devices stop enforcing it (installed software stays).",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceSoftwareInstalled: {
+		Code: CodeDeviceSoftwareInstalled, Emitted: true,
+		Description: "A device installed a required application from its software catalog assignment for the first time (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareReinstalled: {
+		Code: CodeDeviceSoftwareReinstalled, Emitted: true,
+		Description: "A device found a required application removed locally and installed it again (actor: the device); nothing blocks the local administrator.",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareRemoved: {
+		Code: CodeDeviceSoftwareRemoved, Emitted: true,
+		Description: "A device removed an application because its assignment says uninstall or forbid (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareApplyFailed: {
+		Code: CodeDeviceSoftwareApplyFailed, Emitted: true,
+		Description: "A device could not apply a software assignment or source: the key fingerprint did not match, the operation would have removed other packages, the package has no candidate, or apt failed (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

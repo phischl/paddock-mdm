@@ -50,6 +50,11 @@ type isolationWorld struct {
 	globexAPIToken string
 	// globexDestination is a notification destination of globex (seedGlobexNotification).
 	globexDestination string
+	// globexSource is a software source of globex (seedGlobexSoftwareSource).
+	globexSource string
+	// globexEntry is a catalog entry of globex and globexSoftwareAssignment its organization-wide assignment
+	// (seedGlobexSoftwareCatalog).
+	globexEntry, globexSoftwareAssignment string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
 	// globexRollout is a completed configuration rollout of globex (seedGlobexRollout).
@@ -174,6 +179,37 @@ func seedGlobexNotification(t *testing.T, w *isolationWorld) {
 	w.globexDestination = responseID(t, res).String()
 	w.globexIDs = append(w.globexIDs, w.globexDestination)
 	deleteDestinationOnCleanup(w.top, w.carol, renew, "/api/v1/notification-destinations/"+w.globexDestination)
+}
+
+// seedGlobexSoftwareSource creates a software source of globex (plan M13a decision 1).
+func seedGlobexSoftwareSource(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	renew := func(t *testing.T) { stepUp(t, w.carol, env.Carol, true) }
+	renew(t)
+	res := call(t, w.carol, http.MethodPost, softwareSources, sourceBody("globex-iso"))
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexSource = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexSource)
+	deleteSourceOnCleanup(w.top, w.carol, renew, softwareSources+"/"+w.globexSource)
+}
+
+// seedGlobexSoftwareCatalog creates a catalog entry of globex (category globex-iso, using globex's source) with an
+// assignment and an icon (plan M13a decisions 7 to
+// 11); both are deleted with the entry.
+func seedGlobexSoftwareCatalog(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	body := entryBody("globex-iso")
+	body["category"] = "globex-iso"
+	body["source_id"] = w.globexSource
+	res := call(t, w.carol, http.MethodPost, softwareCatalog, body)
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexEntry = createdID(w.top, w.carol, softwareCatalog, res)
+	w.globexIDs = append(w.globexIDs, w.globexEntry)
+	expectStatus(t, call(t, w.carol, http.MethodPut, softwareCatalog+"/"+w.globexEntry+"/icon", gatePNG(t)), http.StatusNoContent, "")
+	res = call(t, w.carol, http.MethodPost, softwareAssignments, map[string]any{"catalog_entry_id": w.globexEntry, "intent": "hold"})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexSoftwareAssignment = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexSoftwareAssignment)
 }
 
 // settingsOnlyConfig is a document with acme's current update settings only: applying it changes and deletes nothing.
@@ -485,6 +521,48 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/accounts": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/accounts?page_size=100", nil
 	}},
+	"GET /api/v1/software-sources": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareSources + "?page_size=100", nil
+	}},
+	"POST /api/v1/software-sources": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareSources, sourceBody("acme-iso")
+	}},
+	"GET /api/v1/software-sources/{id}":    itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, nil),
+	"PATCH /api/v1/software-sources/{id}":  itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, map[string]any{"name": "acme-iso"}),
+	"DELETE /api/v1/software-sources/{id}": itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, nil),
+	"GET /api/v1/software-catalog": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareCatalog + "?page_size=100", nil
+	}},
+	"POST /api/v1/software-catalog": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareCatalog, entryBody("acme-iso")
+	}},
+	"GET /api/v1/software-catalog/{id}": itemFixture(func(w *isolationWorld) string { return softwareCatalog + "/" + w.globexEntry }, nil),
+	"PATCH /api/v1/software-catalog/{id}": itemFixture(func(w *isolationWorld) string { return softwareCatalog + "/" + w.globexEntry },
+		entryBody("acme-iso")),
+	"DELETE /api/v1/software-catalog/{id}": itemFixture(func(w *isolationWorld) string { return softwareCatalog + "/" + w.globexEntry }, nil),
+	"GET /api/v1/software-catalog/{id}/icon": itemFixture(func(w *isolationWorld) string {
+		return softwareCatalog + "/" + w.globexEntry + "/icon"
+	}, nil),
+	"PUT /api/v1/software-catalog/{id}/icon": itemFixture(func(w *isolationWorld) string {
+		return softwareCatalog + "/" + w.globexEntry + "/icon"
+	}, map[string]any{}),
+	"GET /api/v1/software-catalog/{id}/devices": itemFixture(func(w *isolationWorld) string {
+		return softwareCatalog + "/" + w.globexEntry + "/devices"
+	}, nil),
+	"GET /api/v1/devices/{id}/managed-software": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/devices/" + w.globexDevice + "/managed-software"
+	}, nil),
+	"GET /api/v1/software-assignments": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareAssignments + "?page_size=100", nil
+	}},
+	// An assignment of acme's own cannot name globex's entry: the entry is not found.
+	"POST /api/v1/software-assignments": {kind: isoItem, request: func(_ *testing.T, w *isolationWorld) (string, any) {
+		return softwareAssignments, map[string]any{"catalog_entry_id": w.globexEntry, "intent": "hold"}
+	}},
+	"GET /api/v1/software-assignments/{id}": itemFixture(func(w *isolationWorld) string { return softwareAssignments + "/" + w.globexSoftwareAssignment }, nil),
+	"PATCH /api/v1/software-assignments/{id}": itemFixture(func(w *isolationWorld) string { return softwareAssignments + "/" + w.globexSoftwareAssignment },
+		map[string]any{"intent": "forbid"}),
+	"DELETE /api/v1/software-assignments/{id}": itemFixture(func(w *isolationWorld) string { return softwareAssignments + "/" + w.globexSoftwareAssignment }, nil),
 	"GET /api/v1/settings/watched-units": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/settings/watched-units", nil
 	}},
@@ -821,6 +899,8 @@ var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/user-groups/{id}/members":      func(w *isolationWorld) string { return w.globexUserGroup },
 	"/api/v1/devices/{id}/commands":         func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/software":         func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/devices/{id}/managed-software": func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/software-catalog/{id}/devices": func(w *isolationWorld) string { return w.globexEntry },
 	"/api/v1/devices/{id}/vulnerabilities":  func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/config-status":    func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/bundles":          func(w *isolationWorld) string { return w.globexDevice },
@@ -845,9 +925,9 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"carol"}},
 		{"code": {"device_group.created"}, "page_size": {"100"}},
 		{"outcome": {"success"}, "actor_type": {"admin"}, "page_size": {"100"}},
-		// Not "device_group": acme's own failed attempts on globex IDs (the item checks above) are acme events that
-		// carry the ID alice sent.
-		{"q": {"created"}, "sort": {"-code"}, "page_size": {"100"}},
+		// Not "device_group", and successes only: acme's own failed attempts on globex IDs (the item checks above, also
+		// the software assignment and catalog ones) are acme events that carry the ID alice sent.
+		{"q": {"created"}, "outcome": {"success"}, "sort": {"-code"}, "page_size": {"100"}},
 	},
 	"/api/v1/enrollment-tokens": {
 		{"q": {"globex isolation"}},
@@ -889,8 +969,15 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"carol"}},
 		{"role": {"org_admin"}, "sort": {"username"}, "page_size": {"100"}},
 	},
-	"/api/v1/managed-units": {{"q": {"globex-iso"}}},
-	"/api/v1/package-holds": {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
+	"/api/v1/managed-units":    {{"q": {"globex-iso"}}},
+	"/api/v1/package-holds":    {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
+	"/api/v1/software-sources": {{"q": {"globex-iso"}}, {"sort": {"-updated_at"}, "page_size": {"100"}}},
+	"/api/v1/software-catalog": {
+		{"q": {"globex-iso"}},
+		{"sort": {"-updated_at"}, "page_size": {"100"}},
+		{"category": {"globex-iso"}},
+	},
+	"/api/v1/software-assignments": {{"q": {"globex-iso"}}, {"intent": {"hold"}, "sort": {"intent"}, "page_size": {"100"}}},
 	// globex's waiting Destroy (seedGlobexDevices) is a revocation_pending condition.
 	"/api/v1/attention":                  {{"q": {"globex-iso"}}, {"kind": {"revocation_pending"}, "page_size": {"100"}}},
 	"/api/v1/attention/devices":          {{"q": {"globex-iso"}}, {"kind": {"revocation_pending"}, "sort": {"hostname"}, "page_size": {"100"}}},
@@ -907,6 +994,8 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/software":                      {{"q": {"globex-iso"}}, {"has_vulnerabilities": {"true"}, "page_size": {"100"}}},
 	"/api/v1/vulnerabilities":               {{"q": {"CVE-2099"}, "page_size": {"100"}}, {"severity": {"high"}, "page_size": {"100"}}},
 	"/api/v1/devices/{id}/software":         {{"q": {"globex-iso"}}},
+	"/api/v1/devices/{id}/managed-software": {{"q": {"globex-iso"}}, {"intent": {"hold"}, "sort": {"-reported_at"}, "page_size": {"100"}}},
+	"/api/v1/software-catalog/{id}/devices": {{"sort": {"-state"}, "page_size": {"100"}}, {"sort": {"reported_at"}}},
 	"/api/v1/devices/{id}/vulnerabilities":  {{"q": {"globex-iso"}}, {"severity": {"high"}}},
 	"/api/v1/devices/{id}/config-status":    {{"q": {"globex-iso"}}, {"status": {"failed", "pending"}}},
 	"/api/v1/devices/{id}/bundles":          {{"outcome": {"applied", "none"}}},
@@ -1178,6 +1267,9 @@ func seedGlobexVerificationRun(t *testing.T, w *isolationWorld) {
 // listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c
 // decision 31: the audit log's target_id); the gate runs them like listIsolationQueries.
 var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
+	"/api/v1/software-catalog": {
+		func(w *isolationWorld) url.Values { return url.Values{"source_id": {w.globexSource}} },
+	},
 	"/api/v1/devices/{id}/logins": {
 		func(w *isolationWorld) url.Values { return url.Values{"username": {strings.ToLower(w.globexLogin)}} },
 	},

@@ -38,6 +38,10 @@ func TestEventParams(t *testing.T) {
 		{"sudoers changed", `{"sha256_before":"aa","sha256_after":"bb"}`, map[string]any{"sha256_before": "aa", "sha256_after": "bb"}},
 		{"keyslot changed", `{"before":["recovery","tpm2+pin"],"after":["password","recovery","tpm2+pin",1]}`,
 			map[string]any{"before": []string{"recovery", "tpm2+pin"}, "after": []string{"password", "recovery", "tpm2+pin"}}},
+		{"software installed", `{"package":"nano","version":"7.2-1","intent":"required","catalog_entry_id":"0b9e2c4e-4b7a-4f43-9a51-1c2d3e4f5a6b","reason":"first_install"}`,
+			map[string]any{"package": "nano", "version": "7.2-1", "intent": "required", "catalog_entry_id": "0b9e2c4e-4b7a-4f43-9a51-1c2d3e4f5a6b", "reason": "first_install"}},
+		{"software apply failed", `{"source":"vendor","stage":"keyring","reason":"fingerprint_mismatch","error":"keyring of source vendor"}`,
+			map[string]any{"source": "vendor", "stage": "keyring", "reason": "fingerprint_mismatch", "error": "keyring of source vendor"}},
 		{"oversized strings", `{"reason":"` + long + `","version":"` + long + `"}`, map[string]any{}},
 		{"not an object", `[1]`, map[string]any{}},
 		{"control characters", `{"message":"a\u0000b\u001bc\td\ne\rf","resource_ids":["\u0000x"],"errors":[{"id":"i\u0007","message":"m\u0000"}]}`,
@@ -136,5 +140,18 @@ func TestDroppedRange(t *testing.T) {
 				t.Fatalf("droppedRange = %d %d %v, want %d %d %v", from, to, ok, tt.from, tt.to, tt.ok)
 			}
 		})
+	}
+}
+
+// TestSoftwareEventCodes (plan M13a decision 24): the four software events of the agent are audited under their codes.
+func TestSoftwareEventCodes(t *testing.T) {
+	for typ, code := range map[string]audit.Code{
+		protocol.EventSoftwareInstalled: audit.CodeDeviceSoftwareInstalled, protocol.EventSoftwareReinstalled: audit.CodeDeviceSoftwareReinstalled,
+		protocol.EventSoftwareRemoved: audit.CodeDeviceSoftwareRemoved, protocol.EventSoftwareApplyFailed: audit.CodeDeviceSoftwareApplyFailed,
+	} {
+		entry, ok := eventEntry(uuid.New(), protocol.Event{EventSeq: 1, Type: typ, OccurredAt: time.Now(), Data: json.RawMessage(`{}`)}, time.Now())
+		if !ok || entry.Spec.Code != code || !code.Registered() {
+			t.Errorf("%s: %v %s", typ, ok, entry.Spec.Code)
+		}
 	}
 }

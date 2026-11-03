@@ -12,7 +12,8 @@ ORDER BY d.id;
 SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions,
        coalesce(s.agent_version, '')::text AS agent_version,
        coalesce(d.agent_update_requested_version, '')::text AS agent_update_requested_version, d.agent_update_requested_at,
-       d.name, d.config_mode
+       d.name, d.config_mode, coalesce(s.arch, '')::text AS arch,
+       coalesce(d.os_release ->> 'id', '')::text AS os_id, coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = ANY(@ids::uuid[]) ORDER BY d.id;
 
@@ -25,6 +26,22 @@ JOIN LATERAL (SELECT b.schema_version FROM bundle b WHERE b.device_id = d.id ORD
 WHERE d.state = 'active'
   AND lb.schema_version <> CASE WHEN 2 = ANY(coalesce(s.schema_versions, '{}')) THEN 2 ELSE 1 END
 ORDER BY d.id;
+
+-- Active devices with a bundle whose architecture or os-release (the canonical lowercase keys) differ from what their
+-- latest compile saw (PDK-695). An architecture the agent does not report ("") is no change.
+-- name: ListDevicesWithOutdatedPlatform :many
+SELECT d.id FROM device d
+LEFT JOIN device_status s ON s.device_id = d.id
+WHERE d.state = 'active' AND d.bundle_seq > 0
+  AND ((coalesce(s.arch, '') <> '' AND d.compiled_arch <> s.arch)
+    OR d.compiled_os_id <> coalesce(d.os_release ->> 'id', '')
+    OR d.compiled_os_version_id <> coalesce(d.os_release ->> 'version_id', ''))
+ORDER BY d.id;
+
+-- The platform inputs a compile of the device saw (PDK-695).
+-- name: SetDeviceCompiledPlatform :exec
+UPDATE device SET compiled_arch = @arch, compiled_os_id = @os_id, compiled_os_version_id = @os_version_id
+WHERE id = @id AND (compiled_arch, compiled_os_id, compiled_os_version_id) IS DISTINCT FROM (@arch::text, @os_id::text, @os_version_id::text);
 
 -- Optimistic: a concurrent compile of the same device makes this update no row.
 -- name: SetDeviceBundleSeq :execrows

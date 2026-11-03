@@ -248,11 +248,23 @@ func approver(t *testing.T, u *directoryUser) func(code string) error {
 	}
 }
 
+// holdDeviceCode serializes every login that creates a device authorization, from the code's creation until its
+// approval or expiry, so the greeter's newest-pending lookup (pendingUserCode) cannot see the other VM's code. pamLogin
+// and gdmLogin take it through this one helper; the caller defers the returned unlock. A lock-screen or PIN login that
+// falls back to a device code is not covered (not observed; PDK-597).
+func (w *identityWorld) holdDeviceCode() (unlock func()) {
+	return w.group.Lock("device code")
+}
+
 // pamLogin runs the gdm-password PAM stack for u (authenticate and account management) and returns pamtester's exit
 // code; the transcript is logged.
 func (w *identityWorld) pamLogin(t *testing.T, u *directoryUser, approve bool, timeout time.Duration) int {
 	t.Helper()
 	o := pamOpts{pin: u.pin, timeout: timeout}
+	// Himmelblau may create a pending device authorization inside this run, also without approve (a suspended login
+	// falls back to the device flow); until it is approved or expired, a greeter login on the other VM must not look
+	// up "the newest pending code" of the organization (PDK-597).
+	defer w.holdDeviceCode()()
 	if approve {
 		o.approve = approver(t, u)
 	}
@@ -300,8 +312,7 @@ func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int) Ses
 	t.Helper()
 	func() {
 		// The greeter's code is read as the newest pending one of the organization: one VM at a time until approved.
-		unlock := w.group.Lock("device code")
-		defer unlock()
+		defer w.holdDeviceCode()()
 		after := lastDeviceTokenID(t)
 		w.Shot(t, "01-greeter")
 		for range listed {
@@ -558,6 +569,12 @@ func gateL2(t *testing.T, w *identityWorld) {
 		}
 	}
 	w.s.Call(t, http.MethodPost, "/api/v1/users/"+w.dave.id+"/lock", nil, http.StatusOK)
+	// A failure below must not leave dave locked and unassigned for L3, L4 and P4; the end of the gate restores the
+	// same state and waits for the device, so a second run of these calls is harmless (PDK-669).
+	t.Cleanup(func() {
+		w.s.cleanupCall(t, http.MethodPost, "/api/v1/users/"+w.dave.id+"/unlock", http.StatusOK)
+		w.assignLogins(t, w.dave, w.fred, w.nina)
+	})
 	lockedAt := time.Now()
 	if exit := w.pamLogin(t, w.dave, true, 3*time.Minute); exit == 0 {
 		t.Errorf("online login of the locked user %s succeeded", w.dave.name)
@@ -635,6 +652,32 @@ echo "rc=$?"
 
 	// The lock also reaches a device the user is no longer assigned to, through the logins the device reported
 	// (device_user_seen, M3a decision 10).
+	// The development retention purges device_user_seen rows older than 365 s (PDK-137), and the L1 login is older than
+	// that by now. Login history is on since LH1, so a new GDM session is reported as session.login and refreshes
+	// dave's row right before the relock (PDK-669). dave is still assigned here, so the greeter admits him.
+	var loginSettings map[string]any
+	res := w.s.Call(t, http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK)
+	if err := json.Unmarshal(res.Body, &loginSettings); err != nil {
+		t.Fatal(err)
+	}
+	if loginSettings["login_history_enabled"] != true {
+		t.Fatalf("login history is off: L2 needs gate LH1 to have switched it on, so the agent reports every session")
+	}
+	refreshed := time.Now().Add(-time.Minute)
+	w.Must("sudo loginctl terminate-user " + w.dave.name)
+	Until(t, "no session of "+w.dave.name, time.Minute, 2*time.Second, nil, func() bool {
+		return len(w.UserSessions(w.dave.name)) == 0
+	})
+	time.Sleep(10 * time.Second) // GDM shows the greeter again
+	w.gdmPINLogin(t, w.dave, 2)
+	seenQuery := fmt.Sprintf("SELECT count(*) FROM device_user_seen WHERE device_id = '%s' AND username = '%s' AND last_seen_at > '%s'",
+		w.ID, w.dave.name, refreshed.UTC().Format(time.RFC3339))
+	Until(t, "the new session in device_user_seen", 3*time.Minute, 5*time.Second, w.Checkin, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := paddockSQL(ctx, seenQuery)
+		return err == nil && out == "1"
+	})
 	w.assignLogins(t, w.fred, w.nina)
 	relocked := time.Now().Add(-10 * time.Second)
 	w.s.Call(t, http.MethodPost, "/api/v1/users/"+w.dave.id+"/lock", nil, http.StatusOK)

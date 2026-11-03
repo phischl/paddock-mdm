@@ -19,6 +19,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
@@ -88,12 +89,81 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 			return err
 		}
 		raise, clear = clockTransition(clock)
-		return nil
+		return recordSoftwareStatus(ctx, q, hb, health, clock.LastContactAt)
 	})
-	if err != nil || (!raise && !clear) {
+	if err != nil {
 		return err
 	}
+	if err := d.recordOSRelease(ctx, hb); err != nil {
+		return err
+	}
+	if !raise && !clear {
+		return nil
+	}
 	return d.recordClockDrift(ctx, hb.DeviceID, raise)
+}
+
+// recordOSRelease follows the device's os-release (ID, VERSION_ID) as its check-in reports it and records
+// device.os_release_changed once per change (PDK-695). Only an active device follows, and only a heartbeat that is
+// not older than the newest materialized one: a retried older heartbeat or a clone on another release would write
+// the old release back. The cheap unlocked read comes first; the claim repeats it under the lock of the device row, so
+// a redelivered or concurrent heartbeat finds the stored value current and records nothing. A check-in without the
+// field changes nothing.
+func (d *DeviceReports) recordOSRelease(ctx context.Context, hb ingest.Heartbeat) error {
+	id, versionID, ok := device.ReportedOSRelease(hb.OSRelease)
+	if !ok {
+		return nil
+	}
+	var due bool
+	if err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		dev, err := q.GetDevice(ctx, hb.DeviceID)
+		if err != nil {
+			return notFound(err)
+		}
+		due, err = osReleaseDue(ctx, q, dev, hb, id, versionID)
+		return err
+	}); err != nil || !due {
+		return err
+	}
+	spec := ActionSpec{Code: audit.CodeDeviceOSReleaseChanged, Target: &audit.Target{Type: "device", ID: hb.DeviceID.String()}}
+	_, err := d.runner.RecordOnceWith(ctx, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
+		dev, err := q.LockDevice(ctx, hb.DeviceID)
+		if err != nil {
+			return false, notFound(err)
+		}
+		if due, err := osReleaseDue(ctx, q, dev, hb, id, versionID); err != nil || !due {
+			return false, err
+		}
+		var stored map[string]string
+		_ = json.Unmarshal(dev.OsRelease, &stored) // null or a malformed value reads as unknown
+		if _, err := q.UpdateDeviceOSRelease(ctx, pgstore.UpdateDeviceOSReleaseParams{DeviceID: hb.DeviceID, OsID: id, VersionID: versionID}); err != nil {
+			return false, err
+		}
+		rec.SetParam("old_id", device.StoredOSReleaseValue(stored["id"]))
+		rec.SetParam("old_version_id", device.StoredOSReleaseValue(stored["version_id"]))
+		rec.SetParam("new_id", id)
+		rec.SetParam("new_version_id", versionID)
+		rec.StateChanged(statechange.ScopeDevice, hb.DeviceID)
+		return true, nil
+	})
+	return err
+}
+
+// osReleaseDue reports whether the heartbeat's os-release is to replace the stored one.
+func osReleaseDue(ctx context.Context, q *pgstore.Queries, dev pgstore.Device, hb ingest.Heartbeat, id, versionID string) (bool, error) {
+	if dev.State != device.StateActive {
+		return false, nil
+	}
+	var stored map[string]string
+	_ = json.Unmarshal(dev.OsRelease, &stored)
+	if stored["id"] == id && stored["version_id"] == versionID {
+		return false, nil
+	}
+	clock, err := q.GetDeviceClockState(ctx, hb.DeviceID)
+	if err != nil {
+		return false, notFound(err)
+	}
+	return clock.LastContactAt == nil || !clock.LastContactAt.After(hb.ReceivedAt), nil
 }
 
 // detectEventSeqReset records device.event_seq_reset when the heartbeat claims a highest event number below one the
@@ -364,6 +434,11 @@ var eventCodes = map[string]audit.Code{
 
 	protocol.EventDiskConversionNeutralizeFailed:    audit.CodeDeviceDiskConversionNeutralizeFailed,
 	protocol.EventDiskConversionUnlockRestoreFailed: audit.CodeDeviceDiskConversionUnlockRestoreFailed,
+
+	protocol.EventSoftwareInstalled:   audit.CodeDeviceSoftwareInstalled,
+	protocol.EventSoftwareReinstalled: audit.CodeDeviceSoftwareReinstalled,
+	protocol.EventSoftwareRemoved:     audit.CodeDeviceSoftwareRemoved,
+	protocol.EventSoftwareApplyFailed: audit.CodeDeviceSoftwareApplyFailed,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -693,7 +768,7 @@ func eventParams(ev protocol.Event) map[string]any {
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
 		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
 		"kind", "started_at", "finished_at", "result", "error", "volume", "command_id", "mode", "local_admin", "tpm",
-		"conversion_id", "layout", "init_result", "by", "state"} {
+		"conversion_id", "layout", "init_result", "by", "state", "package", "intent", "catalog_entry_id", "source"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}

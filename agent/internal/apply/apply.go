@@ -1,6 +1,7 @@
 // Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10, M3b decision 6): resources in
 // the order hostname (the bundle's hostname section, plan M8h decision 14) → time → file → systemd_unit → updates
-// (the bundle's updates section, plan M5b decision 5) → login → sudo,
+// (the bundle's updates section, plan M5b decision 5) → software (the bundle's software section, plan M13a decision
+// 26) → login → sudo,
 // then the inventory section (plan M5a decision 5) and the watch section (plan M9 decision 40), each independently (an
 // error does not stop the others), then the removal of files that left the bundle.
 package apply
@@ -23,9 +24,10 @@ import (
 var SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
 
 // order is the apply order of resource types: units may depend on files; sudo rights follow the login component
-// that resolves their users. The updates and hostname sections take the places of bundle.TypeUpdates and
-// bundle.TypeHostname; the hostname comes first so that everything after it runs under the device's name.
-var order = []string{bundle.TypeHostname, bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit, bundle.TypeUpdates, bundle.TypeLogin, bundle.TypeSudo}
+// that resolves their users. The updates, software and hostname sections take the places of their types
+// (bundle.TypeUpdates, …); the hostname comes first so that everything after it runs under the device's name.
+var order = []string{bundle.TypeHostname, bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit, bundle.TypeUpdates, bundle.TypeSoftware,
+	bundle.TypeLogin, bundle.TypeSudo}
 
 // ResourceError is one entry of Report.Errors.
 type ResourceError struct {
@@ -65,6 +67,7 @@ type Applier struct {
 	sys       reconcile.System
 	recs      map[string]reconcile.Reconciler
 	updates   *reconcile.Updates
+	software  *reconcile.Software
 	file      *reconcile.File
 	login     *reconcile.Login
 	inventory *reconcile.Inventory
@@ -75,6 +78,13 @@ type Applier struct {
 // WithInventory adds the reconciler of the bundle's inventory section; without it the section is ignored.
 func (a *Applier) WithInventory(inv *reconcile.Inventory) *Applier {
 	a.inventory = inv
+	return a
+}
+
+// WithSoftware sets the reconciler of the bundle's software section; without it the applier uses one that never
+// removes packages (its server is never reachable).
+func (a *Applier) WithSoftware(s *reconcile.Software) *Applier {
+	a.software = s
 	return a
 }
 
@@ -90,10 +100,11 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 	file := &reconcile.File{Sys: sys, Managed: managed}
 	login := &reconcile.Login{Sys: sys, Events: events}
 	return &Applier{
-		sys:     sys,
-		file:    file,
-		login:   login,
-		updates: &reconcile.Updates{Sys: sys, Events: events},
+		sys:      sys,
+		file:     file,
+		login:    login,
+		updates:  &reconcile.Updates{Sys: sys, Events: events},
+		software: &reconcile.Software{Sys: sys, Events: events},
 		recs: map[string]reconcile.Reconciler{
 			bundle.TypeFile: file, bundle.TypeSystemdUnit: &reconcile.Unit{Sys: sys}, bundle.TypeTime: &reconcile.Time{Sys: sys},
 			bundle.TypeLogin: login, bundle.TypeSudo: &reconcile.Sudo{Sys: sys, Events: events},
@@ -109,6 +120,12 @@ func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bu
 	for _, typ := range order {
 		if typ == bundle.TypeUpdates && b.Updates != nil {
 			if r, err := bundle.UpdatesResource(*b.Updates); err == nil && keep(r) {
+				out = append(out, r)
+			}
+			continue
+		}
+		if typ == bundle.TypeSoftware {
+			if r, ok := a.softwareResource(b); ok && keep(r) {
 				out = append(out, r)
 			}
 			continue
@@ -145,6 +162,21 @@ func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bu
 	return out
 }
 
+// softwareResource is the software section as a resource; without the section, an empty section while the device
+// still has files or a record of an earlier one (the compiler omits the section once no package is assigned, and a
+// removed source or forbid must not stay in force).
+func (a *Applier) softwareResource(b *bundle.Bundle) (bundle.Resource, bool) {
+	spec := b.Software
+	if spec == nil {
+		if !a.software.Residue() {
+			return bundle.Resource{}, false
+		}
+		spec = &bundle.SoftwareSpec{}
+	}
+	r, err := bundle.SoftwareResource(*spec)
+	return r, err == nil
+}
+
 // reconciler returns the reconciler of a resource type of bundle b.
 func (a *Applier) reconciler(b *bundle.Bundle, typ string) (reconcile.Reconciler, bool) {
 	if typ == bundle.TypeHostname {
@@ -158,6 +190,9 @@ func (a *Applier) reconciler(b *bundle.Bundle, typ string) (reconcile.Reconciler
 	}
 	if typ == bundle.TypeUpdates {
 		return a.updates, true
+	}
+	if typ == bundle.TypeSoftware {
+		return a.software, true
 	}
 	rec, ok := a.recs[typ]
 	return rec, ok
@@ -268,7 +303,8 @@ func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.
 			rep.fail(res.ID, "unsupported resource type "+res.Type)
 			continue
 		}
-		switch out := rec.Apply(ctx, res); out.Status {
+		out := rec.Apply(ctx, res)
+		switch out.Status {
 		case reconcile.Changed:
 			rep.Changed++
 			rep.ChangedIDs = append(rep.ChangedIDs, res.ID)
@@ -276,7 +312,8 @@ func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.
 			rep.fail(res.ID, out.Message)
 			continue
 		}
-		rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: res.ID, Status: protocol.ResourceApplied})
+		// The message of an applied resource is a note, e.g. software's superseded package holds.
+		rep.Resources = append(rep.Resources, protocol.BundleAppliedResource{ID: res.ID, Status: protocol.ResourceApplied, Message: out.Message})
 	}
 	if !hasLogin(b) && keep(bundle.Resource{ID: reconcile.DenyListID}) && a.login.DenyListManaged() {
 		switch written, err := a.login.EnsureDenyList(); {

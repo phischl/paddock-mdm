@@ -49,6 +49,34 @@ func (q *Queries) OverviewAttention(ctx context.Context) (OverviewAttentionRow, 
 	return i, err
 }
 
+const overviewConfiguration = `-- name: OverviewConfiguration :one
+SELECT (SELECT count(DISTINCT s.resource_id)
+        FROM device_resource_status s JOIN device d ON d.id = s.device_id AND d.state = 'active'
+        LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
+        WHERE s.status = 'failed' AND r.mode IS DISTINCT FROM 'report_only')::int AS failed_resources,
+       (SELECT count(DISTINCT s.device_id)
+        FROM device_resource_status s JOIN device d ON d.id = s.device_id AND d.state = 'active'
+        LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
+        WHERE s.status = 'failed' AND r.mode IS DISTINCT FROM 'report_only')::int AS failed_devices,
+       (SELECT count(*) FROM device d WHERE d.state = 'active' AND d.config_mode = 'report_only')::int AS report_only_devices
+`
+
+type OverviewConfigurationRow struct {
+	FailedResources   int32
+	FailedDevices     int32
+	ReportOnlyDevices int32
+}
+
+// The configuration card (plan M11 decision 46, PDK-164). A failed row of a report-only report is a plan error, not a
+// failure (amendments R6.6, R6.15): the same classification by the report's mode as ListConfigStatus. One scan of the
+// failed rows, one of the devices; no per-row function calls (ADR 0028).
+func (q *Queries) OverviewConfiguration(ctx context.Context) (OverviewConfigurationRow, error) {
+	row := q.db.QueryRow(ctx, overviewConfiguration)
+	var i OverviewConfigurationRow
+	err := row.Scan(&i.FailedResources, &i.FailedDevices, &i.ReportOnlyDevices)
+	return i, err
+}
+
 const overviewDevices = `-- name: OverviewDevices :one
 
 SELECT count(*) FILTER (WHERE d.state IN ('pending', 'active', 'quarantined'))::int AS total,
@@ -135,7 +163,7 @@ func (q *Queries) OverviewEncryption(ctx context.Context) (OverviewEncryptionRow
 }
 
 const overviewOSReleases = `-- name: OverviewOSReleases :many
-SELECT coalesce(d.os_release ->> 'VERSION_ID', 'unknown')::text AS release, count(*)::int AS devices
+SELECT coalesce(d.os_release ->> 'version_id', 'unknown')::text AS release, count(*)::int AS devices
 FROM device d
 WHERE d.state = 'active'
 GROUP BY 1

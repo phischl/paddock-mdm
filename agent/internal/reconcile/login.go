@@ -473,22 +473,9 @@ func dependencyFailure(out string) bool {
 // ubuntuVersion returns VERSION_ID of an Ubuntu system; the repository has one tree per release. /etc/os-release is
 // usually a symlink to /usr/lib/os-release, which os-release(5) names as the fallback.
 func (l *Login) ubuntuVersion() (string, error) {
-	data, _, err := l.Sys.ReadFile("/etc/os-release")
-	if data == nil {
-		data, _, err = l.Sys.ReadFile("/usr/lib/os-release")
-	}
+	vars, err := ReadOSRelease(l.Sys)
 	if err != nil {
-		return "", fmt.Errorf("read os-release: %w", err)
-	}
-	vars := map[string]string{}
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	for sc.Scan() {
-		if k, v, ok := strings.Cut(sc.Text(), "="); ok {
-			if u, err := strconv.Unquote(v); err == nil {
-				v = u
-			}
-			vars[k] = v
-		}
+		return "", err
 	}
 	if vars["ID"] != "ubuntu" || !plainValue(vars["VERSION_ID"]) {
 		return "", fmt.Errorf("unsupported distribution %q %q", vars["ID"], vars["VERSION_ID"])
