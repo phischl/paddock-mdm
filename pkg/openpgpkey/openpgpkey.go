@@ -212,8 +212,10 @@ func Armor(keyring []byte) []byte {
 	if enc != "" {
 		b.WriteString(enc + "\n")
 	}
-	sum := crc24(keyring)
-	b.WriteString("=" + base64.StdEncoding.EncodeToString([]byte{byte(sum >> 16), byte(sum >> 8), byte(sum)}) + "\n")
+	var sum [4]byte
+	binary.BigEndian.PutUint32(sum[:], crc24(keyring))
+	// The checksum is 24 bits: the low three bytes of the big-endian value.
+	b.WriteString("=" + base64.StdEncoding.EncodeToString(sum[1:]) + "\n")
 	b.WriteString(armorEnd + "\n")
 	return []byte(b.String())
 }
