@@ -312,8 +312,13 @@ func (u *Updates) applyHolds(ctx context.Context, s bundle.UpdatesSpec) (bool, [
 		return false, nil, err
 	}
 	var unknown []string
+	var lookupErr error
 	known := func(p string) bool {
-		if KnownPackage(ctx, u.Sys, p) {
+		ok, err := KnownPackage(ctx, u.Sys, p)
+		if err != nil {
+			lookupErr = err
+		}
+		if ok {
 			return true
 		}
 		unknown = append(unknown, p)
@@ -321,6 +326,9 @@ func (u *Updates) applyHolds(ctx context.Context, s bundle.UpdatesSpec) (bool, [
 	}
 	hold = slices.DeleteFunc(hold, func(p string) bool { return !known(p) })
 	unhold = slices.DeleteFunc(unhold, func(p string) bool { return !known(p) })
+	if lookupErr != nil {
+		return false, nil, lookupErr
+	}
 	recorded := u.recorded()
 	record = slices.DeleteFunc(record, func(p string) bool { return slices.Contains(unknown, p) && !slices.Contains(recorded, p) })
 	for _, p := range unknown {

@@ -72,9 +72,14 @@ type Software struct {
 	// unchanged failure is reported once; refresh are sources whose scoped apt-get update failed and is repeated.
 	failures map[string]string
 	refresh  map[string]bool
-	// retry counts the passes left before a failed installation runs again, with its error, by package.
-	retry  map[string]softwareRetry
-	status *protocol.SoftwareHealth
+	// retry counts the passes left before a failed installation runs again, with its error, by package; conflict
+	// counts them before a source rolled back for conflicting with a source of the device is written again, by slug.
+	retry    map[string]softwareRetry
+	conflict map[string]softwareRetry
+	// unchecked are written sources whose configuration check did not complete: their scoped update waits for the
+	// next check.
+	unchecked map[string]bool
+	status    *protocol.SoftwareHealth
 }
 
 type softwareRetry struct {
@@ -88,13 +93,17 @@ func (s *Software) Type() string { return bundle.TypeSoftware }
 // KnownPackage reports whether apt has a real package of exactly this name. apt-get and apt-mark read an argument they
 // have no package of that name for as a regular expression ("himmelblau." selects every himmelblau package), so a
 // package name from a bundle or a command reaches apt only when this holds (architect decision 2026-11-03);
-// apt-cache pkgnames lists by prefix, without a regex.
-func KnownPackage(ctx context.Context, sys System, name string) bool {
+// apt-cache pkgnames lists by prefix, without a regex. A failing apt-cache is an error, not an unknown name: apt that
+// cannot read its configuration must not show as "no candidate" (PDK-710).
+func KnownPackage(ctx context.Context, sys System, name string) (bool, error) {
 	out, exit, err := sys.AptCache(ctx, "pkgnames", name)
-	if err != nil || exit != 0 {
-		return false
+	if err != nil {
+		return false, fmt.Errorf("apt-cache pkgnames: %w", err)
 	}
-	return slices.Contains(strings.Fields(out), name)
+	if exit != 0 {
+		return false, fmt.Errorf("apt-cache pkgnames: exit %d", exit)
+	}
+	return slices.Contains(strings.Fields(out), name), nil
 }
 
 // SoftwareSourcePath is the deb822 file of a source.
@@ -364,10 +373,13 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 		return s.abort(r.ID, sp, pass, err)
 	}
 	if !pass.same || s.failures == nil {
-		s.failures, s.retry = map[string]string{}, map[string]softwareRetry{}
+		s.failures, s.retry, s.conflict = map[string]string{}, map[string]softwareRetry{}, map[string]softwareRetry{}
 	}
 	if s.refresh == nil {
 		s.refresh = map[string]bool{}
+	}
+	if s.unchecked == nil {
+		s.unchecked = map[string]bool{}
 	}
 	for _, p := range sp.Packages {
 		pass.versions[p.Package] = s.Sys.PackageVersion(p.Package)
@@ -377,6 +389,9 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 		return s.abort(r.ID, sp, pass, err)
 	}
 	s.applied = bytes.Clone(r.Spec)
+	if updated, err = s.checkSources(ctx, sp, updated, pass); err != nil {
+		return s.abort(r.ID, sp, pass, err)
+	}
 	err = s.updateSources(ctx, sp, updated, pass)
 	ops := s.ops(sp)
 	var installs, removals []softwareOp
@@ -476,6 +491,12 @@ func (s *Software) writeFiles(sp bundle.SoftwareSpec, pass *softwarePass) (updat
 		pass.changed = true
 	}
 	for _, src := range sp.Sources {
+		c, rolledBack := s.conflict[src.Slug]
+		if rolledBack && c.passes > 0 {
+			s.conflict[src.Slug] = softwareRetry{passes: c.passes - 1, err: c.err}
+			s.failSource(pass, sp, src.Slug, protocol.SoftwareStageSourceUpdate, protocol.SoftwareConflictingSource, c.err)
+			continue
+		}
 		keyring, err := sourceKeyring(src)
 		if err != nil {
 			s.failSource(pass, sp, src.Slug, protocol.SoftwareStageKeyring, protocol.SoftwareFingerprintMismatch, err.Error())
@@ -494,7 +515,9 @@ func (s *Software) writeFiles(sp bundle.SoftwareSpec, pass *softwarePass) (updat
 			if err := s.recordSource(src.Slug); err != nil {
 				return nil, err
 			}
-			s.tamper(pass, f.path)
+			if !rolledBack { // the reconciler removed the file itself
+				s.tamper(pass, f.path)
+			}
 			if err := s.Sys.WriteFileAtomic(f.path, f.data, 0o644, 0, 0); err != nil {
 				return nil, err
 			}
@@ -562,6 +585,119 @@ func (s *Software) tamper(pass *softwarePass, file string) {
 	}
 }
 
+// checkSources reads the device's whole apt configuration once per pass while Paddock sources are on disk: apt refuses
+// all of it when a Paddock source repeats a repository the device has with other options (a different Signed-By), also
+// one the user adds later, and the scoped update cannot see that. A source the failing check names is rolled back —
+// its file and keyring are removed, never the device's own entry — and fails as conflicting_source; it is written again
+// after softwareRetryPasses passes of the same spec (architect decisions 2026-11-03, PDK-710). The check is a
+// simulation and changes nothing. It returns the written sources that stay and still need their scoped update.
+func (s *Software) checkSources(ctx context.Context, sp bundle.SoftwareSpec, updated []string, pass *softwarePass) ([]string, error) {
+	var check []string
+	for _, src := range sp.Sources {
+		if slices.Contains(updated, src.Slug) || !s.absent(SoftwareSourcePath(src.Slug)) {
+			check = append(check, src.Slug)
+		}
+	}
+	for slug := range s.unchecked {
+		if !slices.Contains(check, slug) {
+			delete(s.unchecked, slug)
+		}
+	}
+	if len(check) == 0 {
+		return nil, nil
+	}
+	out, checkErr := s.apt(ctx, "-s", "check", "-q")
+	if incomplete(out, checkErr) {
+		slog.Warn("apt configuration check did not complete; the written sources are checked at the next pass", "sources", check, "error", checkErr)
+		for _, slug := range check {
+			if slices.Contains(updated, slug) {
+				s.unchecked[slug] = true
+			}
+		}
+		return nil, nil
+	}
+	var kept []string
+	rolledBack := false
+	for _, src := range sp.Sources {
+		if !slices.Contains(check, src.Slug) {
+			continue
+		}
+		written := slices.Contains(updated, src.Slug) || s.unchecked[src.Slug]
+		delete(s.unchecked, src.Slug)
+		line := ""
+		if checkErr != nil {
+			line = conflictLine(out, src)
+		}
+		if line == "" {
+			if written {
+				kept = append(kept, src.Slug)
+			}
+			delete(s.conflict, src.Slug)
+			continue
+		}
+		for _, p := range []string{SoftwareSourcePath(src.Slug), SoftwareKeyringPath(src.Slug)} {
+			if err := s.Sys.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return nil, err
+			}
+		}
+		slog.Warn("software source rolled back: the device already has its repository with other options", "source", src.Slug, "apt", line)
+		msg := "apt cannot read the source: " + strings.TrimPrefix(line, "E: ")
+		if _, rest, ok := strings.Cut(line, "regarding source "); ok {
+			repo, _, _ := strings.Cut(rest, ": ")
+			msg = "the device already has a source for " + repo + " with other options; apt: " + strings.TrimPrefix(line, "E: ")
+		}
+		s.conflict[src.Slug] = softwareRetry{passes: softwareRetryPasses - 1, err: msg}
+		delete(s.refresh, src.Slug)
+		s.failSource(pass, sp, src.Slug, protocol.SoftwareStageSourceUpdate, protocol.SoftwareConflictingSource, msg)
+		rolledBack = true
+	}
+	switch {
+	case rolledBack:
+		if _, err := s.apt(ctx, "-s", "check", "-q"); err != nil {
+			slog.Warn("apt configuration check still fails after the rollback of Paddock's sources", "error", err)
+		}
+	case checkErr != nil:
+		slog.Warn("apt configuration check failed without naming a Paddock source", "error", checkErr)
+	}
+	return kept, nil
+}
+
+// incomplete reports whether a configuration check ended before apt judged the sources: killed or timed out, stopped
+// at the dpkg lock, or failed without an error line. Such a check proves nothing either way.
+func incomplete(out string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errDpkgLocked) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	for line := range strings.Lines(out) {
+		if strings.HasPrefix(strings.TrimSpace(line), "E: ") {
+			return false
+		}
+	}
+	return true
+}
+
+// conflictLine returns apt's error line that names src: its file, its keyring (the Signed-By values of a conflict) or
+// one of its URIs as the source of conflicting options.
+func conflictLine(out string, src bundle.SoftwareSource) string {
+	for line := range strings.Lines(out) {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "E: ") {
+			continue
+		}
+		if strings.Contains(line, SoftwareSourcePath(src.Slug)) || strings.Contains(line, SoftwareKeyringPath(src.Slug)) ||
+			slices.ContainsFunc(src.URIs, func(u string) bool {
+				u = "regarding source " + strings.TrimSuffix(u, "/")
+				return strings.Contains(line, u+" ") || strings.Contains(line, u+"/ ")
+			}) {
+			return line
+		}
+	}
+	return ""
+}
+
 // updateSources refreshes the package lists of every source whose files changed or whose last refresh did not
 // complete, each on its own: a failing source fails its packages only. A source is marked for refresh before its
 // update runs, so that a lock or a crash leaves it marked.
@@ -572,7 +708,7 @@ func (s *Software) updateSources(ctx context.Context, sp bundle.SoftwareSpec, up
 		}
 	}
 	for _, src := range sp.Sources {
-		if !slices.Contains(updated, src.Slug) && !s.refresh[src.Slug] {
+		if (!slices.Contains(updated, src.Slug) && !s.refresh[src.Slug]) || s.unchecked[src.Slug] {
 			continue
 		}
 		s.refresh[src.Slug] = true
@@ -623,19 +759,19 @@ func (s *Software) clearFailure(key, stage string) {
 	}
 }
 
-func (s *Software) known(ctx context.Context, name string) bool {
-	return KnownPackage(ctx, s.Sys, name)
-}
-
 // unknown returns the operations whose package apt does not know by its exact name.
-func (s *Software) unknown(ctx context.Context, ops []softwareOp) []softwareOp {
+func (s *Software) unknown(ctx context.Context, ops []softwareOp) ([]softwareOp, error) {
 	var out []softwareOp
 	for _, op := range ops {
-		if !s.known(ctx, op.pkg.Package) {
+		known, err := KnownPackage(ctx, s.Sys, op.pkg.Package)
+		if err != nil {
+			return nil, err
+		}
+		if !known {
 			out = append(out, op)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // install simulates the installations first and runs them in one apt-get install when the simulation removes nothing
@@ -661,7 +797,13 @@ func (s *Software) install(ctx context.Context, ops, removals []softwareOp, reac
 	refreshed := false
 	noCandidateKey := protocol.SoftwareStageSimulate + "/" + protocol.SoftwareNoCandidate
 	for len(ops) > 0 {
-		missing := s.unknown(ctx, ops)
+		missing, lookupErr := s.unknown(ctx, ops)
+		if lookupErr != nil {
+			for _, op := range ops {
+				s.failPackage(pass, op.pkg, protocol.SoftwareStageSimulate, protocol.SoftwareAptFailed, lookupErr.Error())
+			}
+			return nil
+		}
 		var simErr error
 		var args []string
 		if len(missing) == 0 {
@@ -766,7 +908,14 @@ func (s *Software) remove(ctx context.Context, ops []softwareOp, reachable bool,
 		}
 		return nil
 	}
-	for _, op := range s.unknown(ctx, ops) {
+	missing, err := s.unknown(ctx, ops)
+	if err != nil {
+		for _, op := range ops {
+			s.failPackage(pass, op.pkg, protocol.SoftwareStageSimulate, protocol.SoftwareAptFailed, err.Error())
+		}
+		return nil
+	}
+	for _, op := range missing {
 		s.failPackage(pass, op.pkg, protocol.SoftwareStageSimulate, protocol.SoftwareNoCandidate, "apt knows no package named "+op.target)
 		ops = slices.DeleteFunc(ops, func(o softwareOp) bool { return o == op })
 	}

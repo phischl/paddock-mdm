@@ -156,8 +156,12 @@ func installPackages(ctx context.Context, sys reconcile.System, pkgs []string, r
 	r := command.InstallNowResult{Installed: []string{}, Failed: []string{}}
 	var upgrade, install, unknown []string
 	for _, p := range pkgs {
+		known, err := reconcile.KnownPackage(ctx, sys, p)
+		if err != nil {
+			slog.WarnContext(ctx, "install_now: apt cannot look up the package", "package", p, "error", err)
+		}
 		switch {
-		case !reconcile.KnownPackage(ctx, sys, p):
+		case !known:
 			// apt-get would read the name as a pattern (architect decision 2026-11-03): it fails without an apt run.
 			unknown = append(unknown, p)
 		case sys.PackageInstalled(p):
