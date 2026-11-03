@@ -171,7 +171,8 @@ func gateU3(t *testing.T, d *Device) {
 			t.Fatal(err)
 		}
 		delete(settings, "updated_at")
-		t.Cleanup(func() { d.s.Call(t, http.MethodPut, "/api/v1/settings/updates", settings, http.StatusOK) })
+		// The settings are the organization's: they go back only when both VMs finished the gate.
+		d.AfterAll(t, func(t *testing.T) { d.s.Call(t, http.MethodPut, "/api/v1/settings/updates", settings, http.StatusOK) })
 		next := map[string]any{}
 		for k, v := range settings {
 			next[k] = v
