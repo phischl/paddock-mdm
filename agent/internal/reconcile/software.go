@@ -923,7 +923,7 @@ func (s *Software) remove(ctx context.Context, ops []softwareOp, reachable bool,
 		return nil
 	}
 	pkgs := targets(ops)
-	args := append([]string{"remove", "-y", "-q", softwareLockWait[0], softwareLockWait[1]}, pkgs...)
+	args := append([]string{"remove", "-y", "-q", softwareLockWait[0], softwareLockWait[1]}, s.removalArgs(pkgs)...)
 	out, err := s.apt(ctx, append([]string{"-s"}, args...)...)
 	if errors.Is(err, errDpkgLocked) {
 		return err
@@ -963,6 +963,16 @@ func (s *Software) remove(ctx context.Context, ops []softwareOp, reachable bool,
 			Intent: op.pkg.Intent, CatalogEntryID: op.pkg.CatalogEntryID})
 	}
 	return nil
+}
+
+// removalArgs expands every package to the arguments that remove all its installed architectures. The qualifiers
+// come from dpkg, the names from the exact-name check.
+func (s *Software) removalArgs(pkgs []string) []string {
+	var out []string
+	for _, p := range pkgs {
+		out = append(out, s.Sys.PackageRemovalNames(p)...)
+	}
+	return out
 }
 
 func targets(ops []softwareOp) []string {
@@ -1042,14 +1052,16 @@ func noCandidate(out string, ops []softwareOp) []softwareOp {
 var simulationRemoving = regexp.MustCompile(`(?:\b(\d+) to remove\b|\bRemoving: (\d+)\b)`)
 
 // simulatedRemovals returns the packages an apt-get -s run removes: the names of its "Remv <pkg>" lines, which every
-// apt version prints in a simulation, without an architecture qualifier. ok is false — the caller refuses, fail
+// apt version prints in a simulation, without the architecture qualifier. ok is false — the caller refuses, fail
 // closed — when the summary is missing or counts more removals than the Remv lines name.
 func simulatedRemovals(out string) (pkgs []string, ok bool) {
+	lines := 0
 	for line := range strings.Lines(out) {
 		if rest, found := strings.CutPrefix(line, "Remv "); found {
 			if f := strings.Fields(rest); len(f) > 0 {
 				name, _, _ := strings.Cut(f[0], ":")
 				pkgs = append(pkgs, name)
+				lines++
 			}
 		}
 	}
@@ -1060,7 +1072,8 @@ func simulatedRemovals(out string) (pkgs []string, ok bool) {
 		return pkgs, false
 	}
 	n, err := strconv.Atoi(m[1] + m[2])
-	return pkgs, err == nil && n <= len(pkgs)
+	// A package removed for two architectures is two Remv lines and two removals but one name.
+	return pkgs, err == nil && n <= lines
 }
 
 // except returns the names of pkgs that are not in allowed.

@@ -39,11 +39,14 @@ type System struct {
 	Files    map[string]*File
 	Units    map[string]*Unit
 	Packages map[string]bool
-	NTP      bool
-	Users    map[string]int
-	Groups   map[string]int
-	FailCmd  string   // a command ("systemctl start x.service") that fails
-	Calls    []string // state-changing calls
+	// Foreign are the packages also installed for a second architecture (i386, same version as Versions): the
+	// native build of a package in Packages and Foreign is amd64, and a package only in Foreign has no native build.
+	Foreign map[string]bool
+	NTP     bool
+	Users   map[string]int
+	Groups  map[string]int
+	FailCmd string   // a command ("systemctl start x.service") that fails
+	Calls   []string // state-changing calls
 	// Versions are the versions of installed packages (PackageVersion); AptVersion is the version apt-get install
 	// installs.
 	Versions   map[string]string
@@ -109,7 +112,7 @@ type Session struct {
 // New returns a fake with root/root, nobody and an empty file system.
 func New() *System {
 	return &System{
-		Files: map[string]*File{}, Units: map[string]*Unit{}, Packages: map[string]bool{}, Versions: map[string]string{},
+		Files: map[string]*File{}, Units: map[string]*Unit{}, Packages: map[string]bool{}, Foreign: map[string]bool{}, Versions: map[string]string{},
 		Passwd: map[string]int{}, Members: map[string][]string{}, Held: map[string]bool{}, Shows: map[string]string{},
 		Users: map[string]int{"root": 0, "nobody": 65534}, Groups: map[string]int{"root": 0, "adm": 4},
 	}
@@ -318,14 +321,31 @@ func (s *System) Hostnamectl(_ context.Context, args ...string) (string, int, er
 func (s *System) PackageInstalled(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Packages[name]
+	return s.Packages[name] || s.Foreign[name]
+}
+
+// PackageRemovalNames implements reconcile.System: the plain name for a native build only, else one name:arch each.
+func (s *System) PackageRemovalNames(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var names []string
+	if s.Packages[name] {
+		names = append(names, name+":amd64")
+	}
+	if s.Foreign[name] {
+		names = append(names, name+":i386")
+	}
+	if len(names) == 0 || (s.Packages[name] && !s.Foreign[name]) {
+		return []string{name}
+	}
+	return names
 }
 
 // PackageVersion implements reconcile.System.
 func (s *System) PackageVersion(name string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.Packages[name] {
+	if !s.Packages[name] && !s.Foreign[name] {
 		return ""
 	}
 	return s.Versions[name]
@@ -397,8 +417,16 @@ func (s *System) aptGet(words, args []string, cmd string, simulate bool) (string
 		}
 	case "remove":
 		for _, p := range words[1:] {
-			delete(s.Packages, p)
-			delete(s.Versions, p)
+			// A plain name removes only the native build, as apt does; a qualified name that architecture's.
+			name, arch, qualified := strings.Cut(p, ":")
+			if qualified && arch == "i386" {
+				delete(s.Foreign, name)
+			} else if !qualified || arch == "amd64" {
+				delete(s.Packages, name)
+			}
+			if !s.Packages[name] && !s.Foreign[name] {
+				delete(s.Versions, name)
+			}
 		}
 	}
 	return "", 0, nil
@@ -411,13 +439,17 @@ func simulation(words []string) string {
 	inst, remv := 0, 0
 	for _, p := range words[1:] {
 		name, _, _ := strings.Cut(p, "=")
+		var qualifier string
+		if n, a, ok := strings.Cut(name, ":"); ok {
+			name, qualifier = n, ":"+a
+		}
 		switch words[0] {
 		case "install":
 			inst++
 			fmt.Fprintf(&b, "Inst %s (1.0 Ubuntu:26.04/resolute [amd64])\n", name)
 		case "remove":
 			remv++
-			fmt.Fprintf(&b, "Remv %s [1.0]\n", name)
+			fmt.Fprintf(&b, "Remv %s%s [1.0]\n", name, qualifier)
 		}
 	}
 	fmt.Fprintf(&b, "0 upgraded, %d newly installed, %d to remove and 0 not upgraded.\n", inst, remv)
