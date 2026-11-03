@@ -36,7 +36,7 @@ container at `/secrets`, so the symlink works there too.
 ## Both VMs in parallel
 
 The per-VM subtests of every gate (`TestAgentGates`, `TestIdentityGates`, `TestLocalAdminGates`, `TestDiskGates`,
-`TestNoticeGate`, `TestInventoryGates`, `TestWatchGate`) run in parallel, one subtest per VM (`forEachVM`, plan M4b.1 step 5), so `make system-test VM=all`
+`TestNoticeGate`, `TestInventoryGates`, `TestWatchGate`, `TestPreflight`, `TestAdoptionGates`, `TestConfigRolloutGates`) run in parallel, one subtest per VM (`forEachVM`, plan M4b.1 step 5), so `make system-test VM=all`
 takes about as long as the slower VM instead of both together. A VM is never used by two tests at a time: the test
 functions themselves still run one after another. Gate S5 (`TestRolloutAutoStop`) drives both VMs itself.
 
@@ -59,6 +59,23 @@ the whole organization shares is coordinated through the VMs' `vmGroup` (`parall
   rollout (S-UP3) starts it with the failure threshold 1, and a simulated device reports a failed update to halt it.
 
 A new gate that changes shared state uses one of them; anything else it creates gets the run's suffix.
+
+## Adoption and staged configuration (plan M11)
+
+`Install` enrolls with `paddockd enroll` from `/root/paddock-enroll.json`, which creates an adopted, report-only device
+(it asserts `adopted`/`report_only`), and then enforces it (`POST /api/v1/devices/{id}/enforce` with the hostname) so
+that every gate sees applied resources. `Install(..., ReportOnly())` skips the enforcement and the drift interval; the
+gate calls `Enforce` and `SetDriftInterval` itself. The autoinstall gate asserts `autoinstall`/`enforce` and the marker
+`/etc/paddock/autoinstall.marker`.
+
+| Gate | What it proves | Shared state |
+| --- | --- | --- |
+| `TestPreflight` | `paddockd preflight --json` on an unenrolled VM: `sudoers_d` and `privileged_groups` warn after a foreign sudoers file and a sudo member are seeded, nothing changes | none |
+| `TestAdoptionGates` | report-only apply leaves the seeded file and group untouched and lists `quarantine`/`remove` as pending; enforcement quarantines, removes the member, writes the managed files, audits both tamper events | none (per VM) |
+| `TestConfigRolloutGates` | waves `[1,100]` with VM A's group as canary: a staged file reaches A only until `complete`; a staged missing unit fails on A, the worker halts the rollout (one event), the revert ends it | the organization's rollout settings and its single open rollout (`Together`); needs `VM=all`; no other gate in parallel; the file is staged again under a new path (at most 3 draws, a revert in between) until the VM outside the canary group has a bucket of 1 or more for the rollout, so the split is always testable; the staged unit reaches the other VM only when its bucket is 0 |
+
+The rollout gate restores the rollout settings and completes any open rollout in its cleanup; a killed run leaves them
+in place (switch rollouts off under *Settings* and complete or revert the rollout).
 
 ## Throwaway VMs
 
