@@ -560,8 +560,9 @@ components:
             Since plan M13a the software reconciler: software.installed and software.reinstalled {package, version,
             intent, catalog_entry_id, reason (first_install or locally_removed)}, software.removed {package, version,
             intent, catalog_entry_id}, software.apply_failed {package or source, stage (source_update, keyring,
-            simulate, install or remove), reason (fingerprint_mismatch, would_remove_dependents, no_candidate,
-            source_unreachable, conflicting_source or apt_failed), error (at most 200 characters)}.
+            simulate, install or remove), reason (fingerprint_mismatch, would_remove_dependents,
+            protected_package_affected, no_candidate, source_unreachable, conflicting_source or apt_failed), error (at
+            most 200 characters)}.
             Since plan M8e the phases of an in-place encryption, each with data.conversion_id:
             disk.conversion_prepared {layout (lvm|plain), volume (the LUKS UUID of the header to come), data_bytes},
             disk.conversion_started {volume, init_s, init_result (ok, <stage>:<reason> or unknown), after_cancel
