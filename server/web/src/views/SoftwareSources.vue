@@ -186,13 +186,12 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
       </template>
       <template #[`item.fingerprint`]="{ item }: { item: SoftwareSourceSummary }">
         <span
-          class="src-fingerprint"
+          class="src-fingerprint mono"
           data-testid="source-fingerprint-cell"
-        ><span
+        ><template
           v-for="(block, i) in groupFingerprint(item.fingerprint).split(' ')"
           :key="i"
-          class="src-block"
-        >{{ block }}</span></span>
+        ><span class="src-block">{{ block }}</span>{{ ' ' }}</template></span>
       </template>
       <template #[`item.updated_at`]="{ item }: { item: SoftwareSourceSummary }">
         <TimeCell :iso="item.updated_at" />
@@ -243,42 +242,37 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
 </template>
 
 <style scoped>
-/* The table cells break anywhere (overflow-wrap: anywhere); these values keep their words whole so no column collapses
-   to one character per line, and the actions always stay fully visible. */
-.src-slug,
-.src-uri,
-.src-suite,
-.src-block {
+/* Table only: the cells break anywhere (overflow-wrap: anywhere), so these values keep their words whole to stop a
+   column collapsing to one character per line, and the actions stay fully visible. The cards layout renders the same
+   slots in an inline meta row and must stay as it is. */
+:global(.v-data-table__td) .src-slug,
+:global(.v-data-table__td) .src-uri,
+:global(.v-data-table__td) .src-suite,
+:global(.v-data-table__td) .src-block {
   overflow-wrap: normal;
   word-break: normal;
 }
 
-.src-slug,
-.src-suite {
+:global(.v-data-table__td) .src-slug,
+:global(.v-data-table__td) .src-suite {
   white-space: nowrap;
 }
 
-.src-suite {
+:global(.v-data-table__td) .src-suite,
+:global(.v-data-table__td) .src-uri {
   display: block;
 }
 
-.src-uri {
-  display: block;
-}
-
-.src-fingerprint {
+:global(.v-data-table__td) .src-fingerprint {
   display: inline-block;
   min-width: 9rem;
-  font-family: var(--pd-font-mono);
-  font-size: 12px;
 }
 
-.src-block {
+:global(.v-data-table__td) .src-block {
   display: inline-block;
-  margin-inline-end: 0.5ch;
 }
 
-.src-actions {
+:global(.v-data-table__td) .src-actions {
   flex-wrap: nowrap;
   white-space: nowrap;
 }

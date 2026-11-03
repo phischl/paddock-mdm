@@ -93,7 +93,7 @@ describe('SoftwareSources', () => {
   it('lists the sources with the fingerprint in blocks of four for an administrator', async () => {
     await mountSources('org_admin')
     expect(document.body.textContent).toContain('Vendor')
-    expect([...document.body.querySelectorAll('.src-block')].map((b) => b.textContent).join(' ')).toBe('ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD')
+    expect(document.body.querySelector('[data-testid="source-fingerprint-cell"]')?.textContent?.trim()).toBe('ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD ABCD')
     expect(document.body.textContent).toContain('Entries')
     expect(el('create-source')).not.toBeNull()
     expect(byLabel('Edit Vendor')).not.toBeNull()
