@@ -9,11 +9,11 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/openpgpkey"
 )
 
@@ -117,16 +117,10 @@ func validateName(name string, kind error) error {
 	return nil
 }
 
-// invisibleInName reports runes a name must not contain. U+2800 (braille blank) and the Hangul fillers render as
-// blanks without being white space; the tag block is listed whole because its unassigned code points have no
-// property.
+// invisibleInName reports runes a name must not contain: the runes a source URI must not contain
+// (bundle.InvisibleInURI), except U+FFFD, which a name may show and which DisplayParam uses as its replacement mark.
 func invisibleInName(r rune) bool {
-	switch r {
-	case '\u115F', '\u1160', '\u3164', '\uFFA0', '\u2800':
-		return true
-	}
-	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Other_Default_Ignorable_Code_Point,
-		unicode.Variation_Selector) || (r >= 0xE0000 && r <= 0xE007F)
+	return r != utf8.RuneError && bundle.InvisibleInURI(r)
 }
 
 // DisplayParam bounds request text for the audit log before it is validated: invalid UTF-8 and the runes a name must
@@ -161,34 +155,10 @@ func validateURIs(uris []string) error {
 		return fmt.Errorf("%w: uris must have 1 to %d entries", ErrSource, MaxURIs)
 	}
 	for i, raw := range uris {
-		if !strings.HasPrefix(raw, "https://") {
-			return fmt.Errorf("%w: uris must use https", ErrSource)
+		if err := bundle.CheckSourceURI(raw); err != nil {
+			return fmt.Errorf("%w: %w", ErrSource, err)
 		}
-		if len(raw) > MaxURILength {
-			return fmt.Errorf("%w: uris must be at most %d characters", ErrSource, MaxURILength)
-		}
-		if strings.ContainsFunc(raw, unicode.IsSpace) || strings.ContainsAny(raw, "?#") {
-			return fmt.Errorf("%w: uris must not contain white space, a query or a fragment", ErrSource)
-		}
-		// apt writes the URI into a deb822 field and the portal shows it; quotes and angle brackets have no place in
-		// a repository path.
-		if strings.ContainsAny(raw, `"<>`) {
-			return fmt.Errorf(`%w: uris must not contain ", < or >`, ErrSource)
-		}
-		// The same runes as in names: URIs are shown next to the trust decision and in the audit log.
-		if !utf8.ValidString(raw) || strings.ContainsFunc(raw, invisibleInName) {
-			return fmt.Errorf("%w: uris must not contain control, format, invisible or line separator characters",
-				ErrSource)
-		}
-		u, err := url.Parse(raw)
-		if err != nil || u.Hostname() == "" || u.User != nil {
-			return fmt.Errorf("%w: uris must be https://host[/path] without user info", ErrSource)
-		}
-		if p := u.Port(); p != "" || strings.HasSuffix(u.Host, ":") {
-			if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-				return fmt.Errorf("%w: uris must use a port from 1 to 65535", ErrSource)
-			}
-		}
+		u, _ := url.Parse(raw)
 		if slices.ContainsFunc(uris[:i], func(prev string) bool { return sameURI(prev, u) }) {
 			return fmt.Errorf("%w: uris must not repeat %q", ErrSource, raw)
 		}

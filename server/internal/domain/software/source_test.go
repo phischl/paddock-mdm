@@ -136,6 +136,8 @@ func TestValidateSourceRefuses(t *testing.T) {
 		{"uri host with a zero-width space", func(in *software.SourceInput) { in.URIs = []string{"https://a\u200B.example/"} }, "control"},
 		{"uri with a control character", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\x1b[31m"} }, "control"},
 		{"uri with invalid UTF-8", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\xff"} }, "control"},
+		{"uri with U+FFFD", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\uFFFDrepo"} }, "control"},
+		{"uri with a braille blank", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/\u2800"} }, "control"},
 		{"port out of range", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:99999/"} }, "port"},
 		{"port zero", func(in *software.SourceInput) { in.URIs = []string{"https://a.example:0/"} }, "port"},
 		{"duplicate uri", func(in *software.SourceInput) { in.URIs = []string{"https://a.example/", "https://a.example/"} }, "must not repeat"},
