@@ -1466,3 +1466,39 @@ func TestCheckinDeliveredSeqCacheErrors(t *testing.T) {
 		t.Fatalf("sd: %q %v", v, err)
 	}
 }
+
+// TestCheckinOSRelease (PDK-695): the gateway passes the reported ID and VERSION_ID on, drops everything else, and a
+// check-in with garbage or without the field still succeeds (old agents).
+func TestCheckinOSRelease(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	seq := int64(0)
+	checkin := func(osr map[string]string) map[string]string {
+		t.Helper()
+		body := checkinBody(0)
+		body.OSRelease = osr
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: body, seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin: %d %s", r.status, r.body)
+		}
+		var out protocol.CheckinResponse
+		_ = json.Unmarshal(r.body, &out)
+		seq = out.Seq
+		var hb ingest.Heartbeat
+		_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+		return hb.OSRelease
+	}
+	got := checkin(map[string]string{"id": "ubuntu", "version_id": "26.04", "pretty_name": "Ubuntu 26.04 LTS"})
+	if len(got) != 2 || got["id"] != "ubuntu" || got["version_id"] != "26.04" {
+		t.Fatalf("os_release %v", got)
+	}
+	for name, in := range map[string]map[string]string{
+		"absent": nil, "no version": {"id": "ubuntu"}, "garbage": {"id": "ubuntu\n", "version_id": "x y"},
+		"too long": {"id": "ubuntu", "version_id": strings.Repeat("9", 65)},
+	} {
+		if got := checkin(in); got != nil {
+			t.Errorf("%s: os_release %v passed on", name, got)
+		}
+	}
+}

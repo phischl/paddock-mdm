@@ -246,6 +246,9 @@ type Device struct {
 	EnrollmentMethod            string
 	ConfigMode                  string
 	ConfigModeChangedAt         *time.Time
+	CompiledArch                string
+	CompiledOsID                string
+	CompiledOsVersionID         string
 }
 
 type DeviceAlert struct {

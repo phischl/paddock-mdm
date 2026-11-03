@@ -1062,6 +1062,9 @@ moment, renames the file before merging and records it in its result document an
 the displaced tickets shift. The stop condition "main already has `00068`, `00069` or `00070`" in §11 is replaced by
 this rule. §5 "MUST NOT be touched: `00001`–`00067`" reads "`00001`–`00094` and M9's `00085`–`00088`".
 
+2026-11-02 (architect): PDK-695 takes `00097` (`00097_device_compiled_platform.sql`, merged after PDK-410); PDK-411
+shifts to `00098`.
+
 ### R2. Interfaces and files that changed since 2026-10-24 (binding corrections)
 
 1. **Step-up markers and the skill table.** The three source specs have `RequiresStepUp: true` (**4**). Therefore
@@ -1235,3 +1238,10 @@ of 2026-10-31 differ, this amendment wins.
   (`updates.Merge` ranks nil first), a versionless software hold does not (`MergeIntents` counts named versions only).
   `TestSoftwareVersionlessHolds` (PDK-410) pins it; neither merge changes.
 - **L2.** Stub PDK-696.
+- **M2, recompile trigger (architect, 2026-11-02, PDK-695).** Option (b) widened: no use case writes the outbox for an
+  architecture or os-release change. The compiler's reconcile loop compares each active device's reported architecture
+  (`device_status.arch`, "" is no change) and `device.os_release` (`id`, `version_id`; lowercase keys are canonical, no
+  data migration) with `device.compiled_arch`, `compiled_os_id` and `compiled_os_version_id`, which the compiler records
+  after each compile (also of a blocked device and of a compile that publishes no bundle), and recompiles on a
+  difference, as for an outdated bundle schema. The os-release change keeps its audit event
+  `device.os_release_changed` from the check-in path.

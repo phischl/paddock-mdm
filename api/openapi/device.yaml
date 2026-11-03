@@ -388,6 +388,14 @@ components:
               additionalProperties: { type: string }
         event_seq_high: { type: integer, format: int64, minimum: 0 }
         arch: { type: string, enum: [amd64, arm64], description: "Agent architecture; selects the artifact of an agent_update." }
+        os_release:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            The `id` and `version_id` of the device's os-release, as at enrollment. The server updates the device
+            record when they differ from the stored values and recompiles the device; values that are not plain
+            identifiers (letters, digits, `.`, `_`, `-`, at most 64 characters) are ignored without failing the check-in.
+            Optional; agents of earlier releases leave it out and the enrollment value stays.
     BundleRef:
       type: object
       required: [version, sha256, url]

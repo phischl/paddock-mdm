@@ -114,3 +114,32 @@ func ValidateReported(hostname string, fields ...string) error {
 func printable(s string) bool {
 	return utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
+
+// maxOSReleaseValue bounds one reported os-release value; real ID and VERSION_ID values are a few characters.
+const maxOSReleaseValue = 64
+
+// ReportedOSRelease returns the ID and VERSION_ID a check-in reports when both are plain identifiers (letters, digits,
+// dot, underscore, hyphen). The values come from the device and select the software catalog entries of its release,
+// so anything else is ignored as a whole and the stored value stays (PDK-695).
+func ReportedOSRelease(in map[string]string) (id, versionID string, ok bool) {
+	id, versionID = in["id"], in["version_id"]
+	return id, versionID, plainOSReleaseValue(id) && plainOSReleaseValue(versionID)
+}
+
+// StoredOSReleaseValue returns a stored os-release value for an audit event: the value of the enrollment is not
+// validated, so one that is not a plain identifier is recorded as "".
+func StoredOSReleaseValue(s string) string {
+	if plainOSReleaseValue(s) {
+		return s
+	}
+	return ""
+}
+
+func plainOSReleaseValue(s string) bool {
+	if s == "" || len(s) > maxOSReleaseValue {
+		return false
+	}
+	return !strings.ContainsFunc(s, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-'
+	})
+}

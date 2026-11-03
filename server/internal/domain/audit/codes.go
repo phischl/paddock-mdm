@@ -209,6 +209,7 @@ const (
 	CodeDeviceEventSeqReset          Code = "device.event_seq_reset"
 	CodeDeviceClockDrift             Code = "device.clock_drift"
 	CodeDeviceClockDriftCleared      Code = "device.clock_drift_cleared"
+	CodeDeviceOSReleaseChanged       Code = "device.os_release_changed"
 	CodeAuditChainVerified           Code = "audit.chain_verified"
 	CodeAuditChainVerificationFailed Code = "audit.chain_verification_failed"
 	CodeAdminRoleGranted             Code = "admin.role_granted"
@@ -1371,6 +1372,13 @@ var registry = map[Code]Definition{
 		Description: "The clock of a device is back within 30 s of the server's (actor: system).",
 		Params:      []string{"offset_s", "threshold_s", "since"},
 		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceOSReleaseChanged: {
+		Code: CodeDeviceOSReleaseChanged, Emitted: true,
+		Description: "A device reported another operating system release than the one stored for it, for example after a distribution upgrade (actor: system). The device record follows and the device is recompiled.",
+		Params:      []string{"old_id", "old_version_id", "new_id", "new_version_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "The values are the ID and VERSION_ID of os-release; an old value is empty when the device enrolled without one.",
 	},
 	CodeAuditChainVerified: {
 		Code: CodeAuditChainVerified, Emitted: true,

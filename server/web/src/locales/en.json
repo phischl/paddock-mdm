@@ -463,7 +463,8 @@
       "event_gap_filled": "The missing events {from_seq} to {to_seq} of the device {target} arrived later",
       "event_seq_reset": "The event numbering of the device {target} was reset: highest number {reported_high} after {previous_high} (counter reset)",
       "clock_drift": "The clock of the device {target} differs from the server's by {offset_s, number} seconds (threshold {threshold_s, number} seconds)",
-      "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's"
+      "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's",
+      "os_release_changed": "The operating system of the device {target} changed from {old_id} {old_version_id} to {new_id} {new_version_id}"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
