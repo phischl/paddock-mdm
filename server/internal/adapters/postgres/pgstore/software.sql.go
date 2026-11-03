@@ -348,27 +348,35 @@ func (q *Queries) GetSoftwareCatalogEntryIcon(ctx context.Context, id uuid.UUID)
 }
 
 const getSoftwareSource = `-- name: GetSoftwareSource :one
-SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at FROM software_source WHERE id = $1
+SELECT s.id, s.organization_id, s.slug, s.name, s.uris, s.suites, s.components, s.architectures, s.signing_key, s.fingerprint, s.weak_key, s.created_by, s.created_at, s.updated_at, (SELECT count(*) FROM software_catalog_entry e WHERE e.source_id = s.id)::bigint AS entry_count
+FROM software_source s WHERE s.id = $1
 `
 
-func (q *Queries) GetSoftwareSource(ctx context.Context, id uuid.UUID) (SoftwareSource, error) {
+type GetSoftwareSourceRow struct {
+	SoftwareSource SoftwareSource
+	EntryCount     int64
+}
+
+// The source with the number of catalog entries that reference it, counted in the same statement.
+func (q *Queries) GetSoftwareSource(ctx context.Context, id uuid.UUID) (GetSoftwareSourceRow, error) {
 	row := q.db.QueryRow(ctx, getSoftwareSource, id)
-	var i SoftwareSource
+	var i GetSoftwareSourceRow
 	err := row.Scan(
-		&i.ID,
-		&i.OrganizationID,
-		&i.Slug,
-		&i.Name,
-		&i.Uris,
-		&i.Suites,
-		&i.Components,
-		&i.Architectures,
-		&i.SigningKey,
-		&i.Fingerprint,
-		&i.WeakKey,
-		&i.CreatedBy,
-		&i.CreatedAt,
-		&i.UpdatedAt,
+		&i.SoftwareSource.ID,
+		&i.SoftwareSource.OrganizationID,
+		&i.SoftwareSource.Slug,
+		&i.SoftwareSource.Name,
+		&i.SoftwareSource.Uris,
+		&i.SoftwareSource.Suites,
+		&i.SoftwareSource.Components,
+		&i.SoftwareSource.Architectures,
+		&i.SoftwareSource.SigningKey,
+		&i.SoftwareSource.Fingerprint,
+		&i.SoftwareSource.WeakKey,
+		&i.SoftwareSource.CreatedBy,
+		&i.SoftwareSource.CreatedAt,
+		&i.SoftwareSource.UpdatedAt,
+		&i.EntryCount,
 	)
 	return i, err
 }
@@ -831,7 +839,10 @@ func (q *Queries) ListSoftwareAssignments(ctx context.Context, arg ListSoftwareA
 }
 
 const listSoftwareCatalogDevices = `-- name: ListSoftwareCatalogDevices :many
-SELECT d.id AS device_id, d.hostname, coalesce(d.os_release ->> 'id', '')::text AS os_id,
+SELECT d.id AS device_id, d.hostname, coalesce(d.name, '')::text AS name,
+       coalesce((SELECT array_agg(g.device_group_id ORDER BY g.device_group_id) FROM device_group_member g
+                 WHERE g.device_id = d.id), '{}')::uuid[] AS device_group_ids,
+       coalesce(d.os_release ->> 'id', '')::text AS os_id,
        coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id, coalesce(ds.arch, '')::text AS arch,
        t.intents, coalesce(st.package, '')::text AS package, coalesce(st.intent, '')::text AS intent,
        coalesce(st.state, '')::text AS state, coalesce(st.version, '')::text AS version, coalesce(st.reason, '')::text AS reason,
@@ -860,19 +871,21 @@ type ListSoftwareCatalogDevicesParams struct {
 }
 
 type ListSoftwareCatalogDevicesRow struct {
-	DeviceID    uuid.UUID
-	Hostname    string
-	OsID        string
-	OsVersionID string
-	Arch        string
-	Intents     []string
-	Package     string
-	Intent      string
-	State       string
-	Version     string
-	Reason      string
-	Error       string
-	ReportedAt  *time.Time
+	DeviceID       uuid.UUID
+	Hostname       string
+	Name           string
+	DeviceGroupIds []uuid.UUID
+	OsID           string
+	OsVersionID    string
+	Arch           string
+	Intents        []string
+	Package        string
+	Intent         string
+	State          string
+	Version        string
+	Reason         string
+	Error          string
+	ReportedAt     *time.Time
 }
 
 // The active devices the entry is assigned to, through the organization or one of their groups, with the row they
@@ -890,6 +903,8 @@ func (q *Queries) ListSoftwareCatalogDevices(ctx context.Context, arg ListSoftwa
 		if err := rows.Scan(
 			&i.DeviceID,
 			&i.Hostname,
+			&i.Name,
+			&i.DeviceGroupIds,
 			&i.OsID,
 			&i.OsVersionID,
 			&i.Arch,
@@ -1001,7 +1016,11 @@ func (q *Queries) ListSoftwareCatalogEntries(ctx context.Context, arg ListSoftwa
 }
 
 const listSoftwareSources = `-- name: ListSoftwareSources :many
-SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at FROM software_source
+SELECT s.id, s.organization_id, s.slug, s.name, s.uris, s.suites, s.components, s.architectures, s.signing_key, s.fingerprint, s.weak_key, s.created_by, s.created_at, s.updated_at, coalesce(c.entry_count, 0)::bigint AS entry_count
+FROM software_source s
+LEFT JOIN (
+  SELECT source_id, count(*) AS entry_count FROM software_catalog_entry WHERE source_id IS NOT NULL GROUP BY source_id
+) c ON c.source_id = s.id
 WHERE ($1::text IS NULL OR name ILIKE $1::text ESCAPE '\'
   OR slug ILIKE $1::text ESCAPE '\')
 ORDER BY
@@ -1022,7 +1041,13 @@ type ListSoftwareSourcesParams struct {
 	MaxRows  int32
 }
 
-func (q *Queries) ListSoftwareSources(ctx context.Context, arg ListSoftwareSourcesParams) ([]SoftwareSource, error) {
+type ListSoftwareSourcesRow struct {
+	SoftwareSource SoftwareSource
+	EntryCount     int64
+}
+
+// The sources of a page with their catalog entry counts: one grouped count joined in, not one count per row.
+func (q *Queries) ListSoftwareSources(ctx context.Context, arg ListSoftwareSourcesParams) ([]ListSoftwareSourcesRow, error) {
 	rows, err := q.db.Query(ctx, listSoftwareSources,
 		arg.QPattern,
 		arg.Sort,
@@ -1033,24 +1058,25 @@ func (q *Queries) ListSoftwareSources(ctx context.Context, arg ListSoftwareSourc
 		return nil, err
 	}
 	defer rows.Close()
-	items := []SoftwareSource{}
+	items := []ListSoftwareSourcesRow{}
 	for rows.Next() {
-		var i SoftwareSource
+		var i ListSoftwareSourcesRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.OrganizationID,
-			&i.Slug,
-			&i.Name,
-			&i.Uris,
-			&i.Suites,
-			&i.Components,
-			&i.Architectures,
-			&i.SigningKey,
-			&i.Fingerprint,
-			&i.WeakKey,
-			&i.CreatedBy,
-			&i.CreatedAt,
-			&i.UpdatedAt,
+			&i.SoftwareSource.ID,
+			&i.SoftwareSource.OrganizationID,
+			&i.SoftwareSource.Slug,
+			&i.SoftwareSource.Name,
+			&i.SoftwareSource.Uris,
+			&i.SoftwareSource.Suites,
+			&i.SoftwareSource.Components,
+			&i.SoftwareSource.Architectures,
+			&i.SoftwareSource.SigningKey,
+			&i.SoftwareSource.Fingerprint,
+			&i.SoftwareSource.WeakKey,
+			&i.SoftwareSource.CreatedBy,
+			&i.SoftwareSource.CreatedAt,
+			&i.SoftwareSource.UpdatedAt,
+			&i.EntryCount,
 		); err != nil {
 			return nil, err
 		}

@@ -234,6 +234,13 @@ func TestSoftwareStatusReads(t *testing.T) {
 	group := uuid.Must(uuid.NewV7())
 	exec(`INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'Laptops')`, group, org)
 	exec(`INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)`, org, group, dev)
+	// PDK-716: zeta has a display name and two groups, alpha neither a name nor a group.
+	exec(`UPDATE device SET name = 'zeta-laptop' WHERE id = $1`, dev)
+	secondGroup := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'Studio')`, secondGroup, org)
+	exec(`INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)`, org, secondGroup, dev)
+	emptyGroup := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'Nobody')`, emptyGroup, org)
 
 	installed := h.softwareEntry(t, org, "Editor", nanoEverywhere)
 	debianOnly := h.softwareEntry(t, org, "Debian tool", `[{"distribution":"debian","release":"*","architecture":"*","package":"deb-tool"}]`)
@@ -353,6 +360,23 @@ func TestSoftwareStatusReads(t *testing.T) {
 	}
 	if got := host(devices(installed, app.SoftwareCatalogDeviceQuery{DeviceGroupID: &group})); got != "zeta:installed" {
 		t.Fatalf("group filter %s", got)
+	}
+	if got := host(devices(installed, app.SoftwareCatalogDeviceQuery{DeviceGroupID: &secondGroup})); got != "zeta:installed" {
+		t.Fatalf("second group filter %s", got)
+	}
+	if got := host(devices(installed, app.SoftwareCatalogDeviceQuery{DeviceGroupID: &emptyGroup})); got != "" {
+		t.Fatalf("empty group filter %s", got)
+	}
+	both := devices(installed, app.SoftwareCatalogDeviceQuery{})
+	wantGroups := []uuid.UUID{group, secondGroup}
+	slices.SortFunc(wantGroups, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	if len(both) != 2 || both[0].Name != "" || both[0].DeviceGroupIDs == nil || len(both[0].DeviceGroupIDs) != 0 ||
+		both[1].Name != "zeta-laptop" || !slices.Equal(both[1].DeviceGroupIDs, wantGroups) {
+		t.Fatalf("names and groups %+v", both)
+	}
+	// The group filter narrows the rows but not the groups listed for a device.
+	if only := devices(installed, app.SoftwareCatalogDeviceQuery{DeviceGroupID: &group}); len(only) != 1 || !slices.Equal(only[0].DeviceGroupIDs, wantGroups) {
+		t.Fatalf("filtered device lists %+v", only)
 	}
 	state := "installed"
 	if got := host(devices(installed, app.SoftwareCatalogDeviceQuery{State: &state})); got != "zeta:installed" {

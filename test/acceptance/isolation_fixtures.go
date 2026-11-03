@@ -1267,6 +1267,10 @@ func seedGlobexVerificationRun(t *testing.T, w *isolationWorld) {
 // listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c
 // decision 31: the audit log's target_id); the gate runs them like listIsolationQueries.
 var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
+	// PDK-716: globex's group id as the device_group_id filter finds globex's device as carol and nothing of globex as alice.
+	"/api/v1/software-catalog/{id}/devices": {
+		func(w *isolationWorld) url.Values { return url.Values{"device_group_id": {w.globexDeviceGroup}} },
+	},
 	"/api/v1/software-catalog": {
 		func(w *isolationWorld) url.Values { return url.Values{"source_id": {w.globexSource}} },
 	},

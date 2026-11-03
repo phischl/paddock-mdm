@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"slices"
@@ -98,6 +99,49 @@ func TestSoftwareCatalog(t *testing.T) {
 	}
 	if _, err := catalog.Create(ctx(operator), app.EntryInput{Name: "Other", SourceID: new(uuid.New()), Packages: nano}); !errors.Is(err, problem.NotFound) {
 		t.Fatalf("unknown source = %v", err)
+	}
+
+	// PDK-716: the source reports how many entries use it, in the list, the single read and the update; a source nobody
+	// uses reports 0.
+	idle, err := sources.Create(ctx(steppedUp), software.SourceInput{
+		Slug: "idle", Name: "Idle", URIs: []string{"https://apt.idle.example/"}, Suites: []string{"stable"},
+		Components: []string{"main"}, SigningKey: key, Fingerprint: sourceEd25519FP,
+	})
+	if err != nil || idle.EntryCount != 0 {
+		t.Fatalf("created source reports %d entries, %v", idle.EntryCount, err)
+	}
+	if _, err := catalog.Create(ctx(operator), app.EntryInput{Name: "Editor two", SourceID: &source.ID, Packages: nano}); err != nil {
+		t.Fatal(err)
+	}
+	counts := func() string {
+		t.Helper()
+		page, err := sources.List(ctx(auditor), app.ListPage{Sort: "name", Limit: 25})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, v := range page.Items {
+			out = append(out, fmt.Sprintf("%s:%d", v.Slug, v.EntryCount))
+		}
+		return strings.Join(out, ",")
+	}
+	if got := counts(); got != "idle:0,vendor:2" {
+		t.Fatalf("list entry counts %s", got)
+	}
+	if one, err := sources.Get(ctx(auditor), source.ID); err != nil || one.EntryCount != 2 {
+		t.Fatalf("get reports %d entries, %v", one.EntryCount, err)
+	}
+	if one, err := sources.Update(ctx(steppedUp), source.ID, app.SourceUpdate{Name: new("Vendor renamed")}); err != nil || one.EntryCount != 2 {
+		t.Fatalf("update reports %d entries, %v", one.EntryCount, err)
+	}
+	if _, err := h.super.Exec(context.Background(), `DELETE FROM software_catalog_entry WHERE name = 'Editor two'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := sources.Delete(ctx(steppedUp), idle.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := counts(); got != "vendor:1" {
+		t.Fatalf("list entry counts after the removal %s", got)
 	}
 
 	// The source is in use until the entry stops using it.

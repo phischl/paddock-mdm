@@ -2,7 +2,10 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -72,6 +75,27 @@ func TestSoftwareStatusEndpoints(t *testing.T) {
 	e.get(t, auditor, "/api/v1/software-catalog/"+editor.String()+"/devices", &devices)
 	if devices.Total != 1 || devices.Items[0].DeviceId != dev || devices.Items[0].State != adminapi.DeviceSoftwareStateFailed || devices.Items[0].Hostname != "status-a1" {
 		t.Fatalf("catalog devices %+v", devices)
+	}
+	// PDK-716: a device without name and groups has "" and [] (never null); with a name and two groups it lists both.
+	if devices.Items[0].Name != "" || devices.Items[0].DeviceGroupIds == nil || len(devices.Items[0].DeviceGroupIds) != 0 {
+		t.Fatalf("device without name and groups %+v", devices.Items[0])
+	}
+	groups := []uuid.UUID{uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())}
+	for i, g := range groups {
+		exec(`INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, $3)`, g, e.acme, fmt.Sprintf("Group %d", i))
+		exec(`INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)`, e.acme, g, dev)
+	}
+	exec(`UPDATE device SET name = 'status-laptop' WHERE id = $1`, dev)
+	e.get(t, auditor, "/api/v1/software-catalog/"+editor.String()+"/devices", &devices)
+	gotGroups := slices.Clone(devices.Items[0].DeviceGroupIds)
+	slices.SortFunc(gotGroups, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	slices.SortFunc(groups, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	if devices.Items[0].Name != "status-laptop" || !slices.Equal(gotGroups, groups) {
+		t.Fatalf("device with name and groups %+v", devices.Items[0])
+	}
+	e.get(t, auditor, "/api/v1/software-catalog/"+editor.String()+"/devices?device_group_id="+groups[0].String(), &devices)
+	if devices.Total != 1 || devices.Items[0].DeviceId != dev {
+		t.Fatalf("group filter %+v", devices)
 	}
 	e.get(t, auditor, "/api/v1/software-catalog/"+browser.String()+"/devices?state=unknown&q=status", &devices)
 	if devices.Total != 1 || devices.Items[0].Package != "firefox" || devices.Items[0].ReportedAt != nil {

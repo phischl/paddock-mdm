@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -97,23 +96,24 @@ func fromSoftwareArchitectures(in []adminapi.SoftwareArchitecture) []string {
 	return out
 }
 
-func toSoftwareSourceSummary(s pgstore.SoftwareSource) adminapi.SoftwareSourceSummary {
+func toSoftwareSourceSummary(v app.SoftwareSourceView) adminapi.SoftwareSourceSummary {
+	s := v.SoftwareSource
 	archs := make([]adminapi.SoftwareArchitecture, len(s.Architectures))
 	for i, a := range s.Architectures {
 		archs[i] = adminapi.SoftwareArchitecture(a)
 	}
 	return adminapi.SoftwareSourceSummary{
 		Id: s.ID, Slug: s.Slug, Name: s.Name, Uris: s.Uris, Suites: s.Suites, Components: s.Components,
-		Architectures: archs, Fingerprint: s.Fingerprint, WeakKey: s.WeakKey, CreatedAt: s.CreatedAt.UTC(),
+		Architectures: archs, Fingerprint: s.Fingerprint, WeakKey: s.WeakKey, EntryCount: int(v.EntryCount), CreatedAt: s.CreatedAt.UTC(),
 		UpdatedAt: s.UpdatedAt.UTC(),
 	}
 }
 
-func toSoftwareSource(s pgstore.SoftwareSource) adminapi.SoftwareSource {
+func toSoftwareSource(s app.SoftwareSourceView) adminapi.SoftwareSource {
 	sum := toSoftwareSourceSummary(s)
 	return adminapi.SoftwareSource{
 		Id: sum.Id, Slug: sum.Slug, Name: sum.Name, Uris: sum.Uris, Suites: sum.Suites, Components: sum.Components,
-		Architectures: sum.Architectures, Fingerprint: sum.Fingerprint, WeakKey: sum.WeakKey, SigningKey: s.SigningKey,
+		Architectures: sum.Architectures, Fingerprint: sum.Fingerprint, WeakKey: sum.WeakKey, EntryCount: sum.EntryCount, SigningKey: s.SigningKey,
 		CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
 }
@@ -395,7 +395,7 @@ func (h *handlers) ListSoftwareCatalogDevices(ctx context.Context, req adminapi.
 	items := make([]adminapi.SoftwareCatalogDevice, len(res.Items))
 	for i, d := range res.Items {
 		items[i] = adminapi.SoftwareCatalogDevice{
-			DeviceId: d.DeviceID, Hostname: d.Hostname, Package: d.Package, Intent: adminapi.SoftwareIntent(d.Intent),
+			DeviceId: d.DeviceID, Hostname: d.Hostname, Name: d.Name, DeviceGroupIds: d.DeviceGroupIDs, Package: d.Package, Intent: adminapi.SoftwareIntent(d.Intent),
 			State: adminapi.DeviceSoftwareState(d.State), Version: d.Version, Reason: d.Reason, Error: d.Error, ReportedAt: d.ReportedAt,
 		}
 	}
