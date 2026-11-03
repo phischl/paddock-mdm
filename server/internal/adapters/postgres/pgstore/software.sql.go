@@ -107,6 +107,23 @@ func (q *Queries) CountSoftwareSources(ctx context.Context, arg CountSoftwareSou
 	return count, err
 }
 
+const deleteDeviceSoftwareStatusNotIn = `-- name: DeleteDeviceSoftwareStatusNotIn :exec
+DELETE FROM device_software_status
+WHERE device_id = $1 AND catalog_entry_id <> ALL($2::uuid[]) AND reported_at <= $3
+`
+
+type DeleteDeviceSoftwareStatusNotInParams struct {
+	DeviceID   uuid.UUID
+	EntryIds   []uuid.UUID
+	ReportedAt time.Time
+}
+
+// The entries the report no longer names; rows a newer report wrote stay.
+func (q *Queries) DeleteDeviceSoftwareStatusNotIn(ctx context.Context, arg DeleteDeviceSoftwareStatusNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteDeviceSoftwareStatusNotIn, arg.DeviceID, arg.EntryIds, arg.ReportedAt)
+	return err
+}
+
 const deleteSoftwareAssignment = `-- name: DeleteSoftwareAssignment :execrows
 DELETE FROM software_assignment WHERE id = $1
 `
@@ -141,6 +158,34 @@ func (q *Queries) DeleteSoftwareSource(ctx context.Context, id uuid.UUID) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getDeviceSoftwareTarget = `-- name: GetDeviceSoftwareTarget :one
+SELECT coalesce(d.os_release ->> 'id', '')::text AS os_id, coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id,
+       coalesce(s.arch, '')::text AS arch, coalesce(s.software_truncated, false)::boolean AS truncated
+FROM device d LEFT JOIN device_status s ON s.device_id = d.id
+WHERE d.id = $1
+`
+
+type GetDeviceSoftwareTargetRow struct {
+	OsID        string
+	OsVersionID string
+	Arch        string
+	Truncated   bool
+}
+
+// The platform a device's packages resolve for (software.Resolve): the canonical lowercase os-release keys and the
+// reported architecture.
+func (q *Queries) GetDeviceSoftwareTarget(ctx context.Context, id uuid.UUID) (GetDeviceSoftwareTargetRow, error) {
+	row := q.db.QueryRow(ctx, getDeviceSoftwareTarget, id)
+	var i GetDeviceSoftwareTargetRow
+	err := row.Scan(
+		&i.OsID,
+		&i.OsVersionID,
+		&i.Arch,
+		&i.Truncated,
+	)
+	return i, err
 }
 
 const getSoftwareAssignment = `-- name: GetSoftwareAssignment :one
@@ -605,6 +650,78 @@ func (q *Queries) ListAllSoftwareSources(ctx context.Context) ([]SoftwareSource,
 	return items, nil
 }
 
+const listDeviceManagedSoftware = `-- name: ListDeviceManagedSoftware :many
+SELECT e.id AS catalog_entry_id, e.name, e.packages, t.intents, coalesce(s.package, '')::text AS package,
+       coalesce(s.intent, '')::text AS intent, coalesce(s.state, '')::text AS state, coalesce(s.version, '')::text AS version,
+       coalesce(s.reason, '')::text AS reason, coalesce(s.error, '')::text AS error, s.reported_at
+FROM software_catalog_entry e
+LEFT JOIN device_software_status s ON s.catalog_entry_id = e.id AND s.device_id = $1
+CROSS JOIN LATERAL (
+  SELECT array_agg(DISTINCT a.intent ORDER BY a.intent)::text[] AS intents
+  FROM software_assignment a
+  WHERE a.catalog_entry_id = e.id
+    AND (a.device_group_id IS NULL
+      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = $1 AND m.device_group_id = a.device_group_id))
+) t
+WHERE (s.device_id IS NOT NULL OR t.intents IS NOT NULL)
+  AND ($2::text IS NULL OR e.name ILIKE $2::text ESCAPE '\')
+ORDER BY e.name, e.id
+`
+
+type ListDeviceManagedSoftwareParams struct {
+	DeviceID uuid.UUID
+	QPattern *string
+}
+
+type ListDeviceManagedSoftwareRow struct {
+	CatalogEntryID uuid.UUID
+	Name           string
+	Packages       json.RawMessage
+	Intents        []string
+	Package        string
+	Intent         string
+	State          string
+	Version        string
+	Reason         string
+	Error          string
+	ReportedAt     *time.Time
+}
+
+// The entries a device manages: those assigned to it, through the organization or one of its groups, and those it
+// reported a row for, with the intents of the assignments (NULL: none) and the reported row (state ”: none). The page
+// derives not_applicable and unknown from the rest and filters and sorts them in memory (ADR 0028).
+func (q *Queries) ListDeviceManagedSoftware(ctx context.Context, arg ListDeviceManagedSoftwareParams) ([]ListDeviceManagedSoftwareRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceManagedSoftware, arg.DeviceID, arg.QPattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceManagedSoftwareRow{}
+	for rows.Next() {
+		var i ListDeviceManagedSoftwareRow
+		if err := rows.Scan(
+			&i.CatalogEntryID,
+			&i.Name,
+			&i.Packages,
+			&i.Intents,
+			&i.Package,
+			&i.Intent,
+			&i.State,
+			&i.Version,
+			&i.Reason,
+			&i.Error,
+			&i.ReportedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSoftwareAssignmentIntentsOfEntry = `-- name: ListSoftwareAssignmentIntentsOfEntry :many
 SELECT DISTINCT intent FROM software_assignment WHERE catalog_entry_id = $1 ORDER BY intent
 `
@@ -702,6 +819,88 @@ func (q *Queries) ListSoftwareAssignments(ctx context.Context, arg ListSoftwareA
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.AppName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSoftwareCatalogDevices = `-- name: ListSoftwareCatalogDevices :many
+SELECT d.id AS device_id, d.hostname, coalesce(d.os_release ->> 'id', '')::text AS os_id,
+       coalesce(d.os_release ->> 'version_id', '')::text AS os_version_id, coalesce(ds.arch, '')::text AS arch,
+       t.intents, coalesce(st.package, '')::text AS package, coalesce(st.intent, '')::text AS intent,
+       coalesce(st.state, '')::text AS state, coalesce(st.version, '')::text AS version, coalesce(st.reason, '')::text AS reason,
+       coalesce(st.error, '')::text AS error, st.reported_at
+FROM device d
+LEFT JOIN device_status ds ON ds.device_id = d.id
+LEFT JOIN device_software_status st ON st.device_id = d.id AND st.catalog_entry_id = $1
+CROSS JOIN LATERAL (
+  SELECT array_agg(DISTINCT a.intent ORDER BY a.intent)::text[] AS intents
+  FROM software_assignment a
+  WHERE a.catalog_entry_id = $1
+    AND (a.device_group_id IS NULL
+      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id))
+) t
+WHERE d.state = 'active' AND t.intents IS NOT NULL
+  AND ($2::uuid IS NULL OR EXISTS (
+        SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = $2::uuid))
+  AND ($3::text IS NULL OR d.hostname ILIKE $3::text ESCAPE '\')
+ORDER BY d.hostname, d.id
+`
+
+type ListSoftwareCatalogDevicesParams struct {
+	CatalogEntryID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	QPattern       *string
+}
+
+type ListSoftwareCatalogDevicesRow struct {
+	DeviceID    uuid.UUID
+	Hostname    string
+	OsID        string
+	OsVersionID string
+	Arch        string
+	Intents     []string
+	Package     string
+	Intent      string
+	State       string
+	Version     string
+	Reason      string
+	Error       string
+	ReportedAt  *time.Time
+}
+
+// The active devices the entry is assigned to, through the organization or one of their groups, with the row they
+// reported for it (state ”: none) and the intents of the assignments. The page filters and sorts the derived
+// states in memory (ADR 0028), so the query returns every match in hostname order.
+func (q *Queries) ListSoftwareCatalogDevices(ctx context.Context, arg ListSoftwareCatalogDevicesParams) ([]ListSoftwareCatalogDevicesRow, error) {
+	rows, err := q.db.Query(ctx, listSoftwareCatalogDevices, arg.CatalogEntryID, arg.DeviceGroupID, arg.QPattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareCatalogDevicesRow{}
+	for rows.Next() {
+		var i ListSoftwareCatalogDevicesRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Hostname,
+			&i.OsID,
+			&i.OsVersionID,
+			&i.Arch,
+			&i.Intents,
+			&i.Package,
+			&i.Intent,
+			&i.State,
+			&i.Version,
+			&i.Reason,
+			&i.Error,
+			&i.ReportedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -863,6 +1062,36 @@ func (q *Queries) ListSoftwareSources(ctx context.Context, arg ListSoftwareSourc
 	return items, nil
 }
 
+const setDeviceSoftwareDigest = `-- name: SetDeviceSoftwareDigest :exec
+UPDATE device_status SET software_digest = $1 WHERE device_id = $2 AND software_digest IS DISTINCT FROM $1
+`
+
+type SetDeviceSoftwareDigestParams struct {
+	Digest   string
+	DeviceID uuid.UUID
+}
+
+// Only a changed digest writes: every check-in carries one, and device_status is the hottest table.
+func (q *Queries) SetDeviceSoftwareDigest(ctx context.Context, arg SetDeviceSoftwareDigestParams) error {
+	_, err := q.db.Exec(ctx, setDeviceSoftwareDigest, arg.Digest, arg.DeviceID)
+	return err
+}
+
+const setDeviceSoftwareTruncated = `-- name: SetDeviceSoftwareTruncated :exec
+UPDATE device_status SET software_truncated = $1
+WHERE device_id = $2 AND software_truncated IS DISTINCT FROM $1
+`
+
+type SetDeviceSoftwareTruncatedParams struct {
+	Truncated bool
+	DeviceID  uuid.UUID
+}
+
+func (q *Queries) SetDeviceSoftwareTruncated(ctx context.Context, arg SetDeviceSoftwareTruncatedParams) error {
+	_, err := q.db.Exec(ctx, setDeviceSoftwareTruncated, arg.Truncated, arg.DeviceID)
+	return err
+}
+
 const setSoftwareCatalogEntryIcon = `-- name: SetSoftwareCatalogEntryIcon :execrows
 UPDATE software_catalog_entry SET icon = $1, updated_at = now() WHERE id = $2
 `
@@ -988,4 +1217,34 @@ func (q *Queries) UpdateSoftwareSource(ctx context.Context, arg UpdateSoftwareSo
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const upsertDeviceSoftwareStatus = `-- name: UpsertDeviceSoftwareStatus :exec
+INSERT INTO device_software_status (device_id, organization_id, catalog_entry_id, package, intent, state, version, reason, error, reported_at)
+SELECT $1, $2, r.id, r.package, r.intent, r.state, r.version, r.reason, r.error, $3
+FROM jsonb_to_recordset($4::jsonb) AS r(id uuid, package text, intent text, state text, version text, reason text, error text)
+JOIN software_catalog_entry e ON e.id = r.id AND e.organization_id = $2
+ON CONFLICT (device_id, catalog_entry_id) DO UPDATE SET
+  package = EXCLUDED.package, intent = EXCLUDED.intent, state = EXCLUDED.state, version = EXCLUDED.version,
+  reason = EXCLUDED.reason, error = EXCLUDED.error, reported_at = EXCLUDED.reported_at
+WHERE device_software_status.reported_at <= EXCLUDED.reported_at
+`
+
+type UpsertDeviceSoftwareStatusParams struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	ReportedAt     time.Time
+	Rows           json.RawMessage
+}
+
+// Stores the items of a report (JSON array of {id, package, intent, state, version, reason, error}); an item whose id
+// is not an entry of the organization is skipped, and a row of a newer report is never replaced.
+func (q *Queries) UpsertDeviceSoftwareStatus(ctx context.Context, arg UpsertDeviceSoftwareStatusParams) error {
+	_, err := q.db.Exec(ctx, upsertDeviceSoftwareStatus,
+		arg.DeviceID,
+		arg.OrganizationID,
+		arg.ReportedAt,
+		arg.Rows,
+	)
+	return err
 }

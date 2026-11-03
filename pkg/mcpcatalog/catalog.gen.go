@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "f2d3b2af3a262b5fc5b3579a25b71099bcca938c7ac24b6dafbbaf68ba33612c"
+const Version = "08fedf5613f8d3e6399d2cfdf9f4e1357307c2f7f95abec83f3a18042dfa1238"
 
 var tools = []Tool{
 	{
@@ -2475,6 +2475,24 @@ var tools = []Tool{
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"at\",\"-at\",\"username\",\"-username\"],\"type\":\"string\"},\"username\":{\"description\":\"Only this user (exact, lower case).\",\"maxLength\":256,\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
+		Name:        "listDeviceManagedSoftware",
+		Method:      "GET",
+		Path:        "/api/v1/devices/{id}/managed-software",
+		Pattern:     "GET /api/v1/devices/{id}/managed-software",
+		Tag:         "software",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what the device reported for each, and for an application assigned to it that it has not reported on the derived state not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package applies, no report yet). The state and intent filters apply to derived entries too; derived entries have no reported_at. 404 not_found for another organization's device.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: name, state, reported_at), q (search over: name).",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"intent\":{\"description\":\"Only entries with this intent, reported or assigned.\",\"enum\":[\"required\",\"uninstall\",\"hold\",\"forbid\"],\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"name\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The name, then the entry id, are the tie-breakers.\",\"enum\":[\"name\",\"-name\",\"state\",\"-state\",\"reported_at\",\"-reported_at\"],\"type\":\"string\"},\"state\":{\"description\":\"installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the\\ndevice's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.\\n\",\"enum\":[\"installed\",\"held\",\"absent\",\"pending\",\"failed\",\"not_applicable\",\"unknown\"],\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
 		Name:        "listDeviceSoftware",
 		Method:      "GET",
 		Path:        "/api/v1/devices/{id}/software",
@@ -2797,6 +2815,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. The applications of the organization's software catalog (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: name, category, created_at, updated_at), q (search over: name, description).",
 		InputSchema: json.RawMessage("{\"properties\":{\"category\":{\"description\":\"Only entries of this category.\",\"maxLength\":64,\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"name\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"name\",\"-name\",\"category\",\"-category\",\"created_at\",\"-created_at\",\"updated_at\",\"-updated_at\"],\"type\":\"string\"},\"source_id\":{\"description\":\"Only entries that use this package source.\",\"format\":\"uuid\",\"type\":\"string\"}},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "listSoftwareCatalogDevices",
+		Method:      "GET",
+		Path:        "/api/v1/software-catalog/{id}/devices",
+		Pattern:     "GET /api/v1/software-catalog/{id}/devices",
+		Tag:         "software",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). The search matches the hostname. 404 not_found for another organization's entry.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: hostname, state, reported_at), q (search over: hostname).",
+		InputSchema: json.RawMessage("{\"properties\":{\"device_group_id\":{\"description\":\"Only members of this device group.\",\"format\":\"uuid\",\"type\":\"string\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"hostname\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The hostname, then the device id, are the tie-breakers.\",\"enum\":[\"hostname\",\"-hostname\",\"state\",\"-state\",\"reported_at\",\"-reported_at\"],\"type\":\"string\"},\"state\":{\"description\":\"installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the\\ndevice's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.\\n\",\"enum\":[\"installed\",\"held\",\"absent\",\"pending\",\"failed\",\"not_applicable\",\"unknown\"],\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listSoftwareSources",

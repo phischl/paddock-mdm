@@ -3424,6 +3424,42 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-catalog/{id}/devices:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listSoftwareCatalogDevices
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
+        of the organization or of one of their groups, with what they reported or the derived state not_applicable or
+        unknown (see the device's managed software). The search matches the hostname. 404 not_found for another
+        organization's entry.
+      x-paddock-list:
+        sort: [hostname, state, reported_at]
+        default_sort: hostname
+        search: [hostname]
+        filters: [state, device_group_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SoftwareCatalogDeviceSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DeviceSoftwareStateFilter"
+        - name: device_group_id
+          in: query
+          description: Only members of this device group.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of devices.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareCatalogDevicePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
   /api/v1/software-assignments:
     get:
       operationId: listSoftwareAssignments
@@ -4731,6 +4767,40 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/InstalledSoftwarePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/managed-software:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceManagedSoftware
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what
+        the device reported for each, and for an application assigned to it that it has not reported on the derived state
+        not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package
+        applies, no report yet). The state and intent filters apply to derived entries too; derived entries have no
+        reported_at. 404 not_found for another organization's device.
+      x-paddock-list:
+        sort: [name, state, reported_at]
+        default_sort: name
+        search: [name]
+        filters: [state, intent]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceManagedSoftwareSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DeviceSoftwareStateFilter"
+        - $ref: "#/components/parameters/DeviceManagedSoftwareIntentFilter"
+      responses:
+        "200":
+          description: One page of managed software.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceManagedSoftwarePage" }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
@@ -6499,6 +6569,32 @@ components:
       in: query
       description: Only assignments with this intent.
       schema: { $ref: "#/components/schemas/SoftwareIntent" }
+    DeviceManagedSoftwareSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers.
+      schema:
+        type: string
+        enum: [name, -name, state, -state, reported_at, -reported_at]
+        default: name
+    SoftwareCatalogDeviceSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The hostname, then the device id, are the tie-breakers.
+      schema:
+        type: string
+        enum: [hostname, -hostname, state, -state, reported_at, -reported_at]
+        default: hostname
+    DeviceManagedSoftwareIntentFilter:
+      name: intent
+      in: query
+      description: Only entries with this intent, reported or assigned.
+      schema: { $ref: "#/components/schemas/SoftwareIntent" }
+    DeviceSoftwareStateFilter:
+      name: state
+      in: query
+      description: Only entries in this state, reported or derived.
+      schema: { $ref: "#/components/schemas/DeviceSoftwareState" }
     AttentionSort:
       name: sort
       in: query
@@ -8774,6 +8870,63 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/SoftwareAssignment" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DeviceSoftwareState:
+      type: string
+      enum: [installed, held, absent, pending, failed, not_applicable, unknown]
+      description: |
+        installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the
+        device's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.
+    DeviceManagedSoftware:
+      type: object
+      required: [catalog_entry_id, name, package, intent, state, version, reason, error, reported_at]
+      properties:
+        catalog_entry_id: { type: string, format: uuid }
+        name: { type: string, description: The catalog entry's name. }
+        package: { type: string, description: "The package on the device; empty for not_applicable." }
+        intent: { $ref: "#/components/schemas/SoftwareIntent" }
+        state: { $ref: "#/components/schemas/DeviceSoftwareState" }
+        version: { type: string }
+        reason: { type: string, description: "pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed." }
+        error: { type: string, description: At most 200 characters; may name paths. }
+        reported_at: { type: string, format: date-time, nullable: true, description: null for a derived state. }
+    DeviceManagedSoftwarePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort, truncated]
+      properties:
+        truncated: { type: boolean, description: "The device's last report left items out to keep the check-in small; an entry without a reported row may be managed all the same." }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceManagedSoftware" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    SoftwareCatalogDevice:
+      type: object
+      required: [device_id, hostname, package, intent, state, version, reason, error, reported_at]
+      properties:
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        package: { type: string, description: "The package on the device; empty for not_applicable." }
+        intent: { $ref: "#/components/schemas/SoftwareIntent" }
+        state: { $ref: "#/components/schemas/DeviceSoftwareState" }
+        version: { type: string }
+        reason: { type: string }
+        error: { type: string, description: At most 200 characters; may name paths. }
+        reported_at: { type: string, format: date-time, nullable: true, description: null for a derived state. }
+    SoftwareCatalogDevicePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SoftwareCatalogDevice" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

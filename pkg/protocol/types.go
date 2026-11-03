@@ -585,3 +585,40 @@ type BundleAppliedResource struct {
 	Message string   `json:"message,omitempty"`
 	Changes []string `json:"changes,omitempty"`
 }
+
+// States of SoftwareItem.State (plan M13a §6.2).
+const (
+	SoftwareStateInstalled = "installed"
+	SoftwareStateHeld      = "held"
+	SoftwareStateAbsent    = "absent"
+	SoftwareStatePending   = "pending" // reason: dpkg_locked | deferred_offline | not_yet_applied
+	SoftwareStateFailed    = "failed"  // reason: the reason of software.apply_failed
+)
+
+// SoftwareStates are the states a device reports in SoftwareItem.State.
+var SoftwareStates = []string{SoftwareStateInstalled, SoftwareStateHeld, SoftwareStateAbsent, SoftwareStatePending, SoftwareStateFailed}
+
+// MaxSoftwareItems bounds SoftwareHealth.Items; the server stores at most this many items of one report.
+const MaxSoftwareItems = 200
+
+// SoftwareHealth is the software the agent manages, in the check-in health (health.software, plan M13a §6.2).
+//
+// Items distinguishes three cases (architect decision 2026-11-02, PDK-701): absent or null is "no software report" and
+// the server keeps what it holds; a pointer to an empty list is "no items" and the server prunes. Truncated says that
+// the agent left items out to keep the check-in small (PDK-700): applied items first, never a failed one.
+type SoftwareHealth struct {
+	Digest    string          `json:"digest"`          // hex SHA-256 of the canonical JSON of Items
+	Items     *[]SoftwareItem `json:"items,omitempty"` // present when the digest changed or every 24 h
+	Truncated bool            `json:"truncated,omitempty"`
+}
+
+// SoftwareItem is the state of one catalog entry on the device. Error is at most 200 characters.
+type SoftwareItem struct {
+	CatalogEntryID string `json:"id"`
+	Package        string `json:"package"`
+	Intent         string `json:"intent"`
+	State          string `json:"state"`
+	Version        string `json:"version,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	Error          string `json:"error,omitempty"`
+}

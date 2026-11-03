@@ -224,8 +224,10 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getSoftwareAssignment` | read | no | GET /api/v1/software-assignments/{id} |
 | `getSoftwareCatalogEntry` | read | no | GET /api/v1/software-catalog/{id} |
 | `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |
+| `listDeviceManagedSoftware` | read | no | The catalog applications the device manages (plan M13a §3.4): what the device reported for each, and for an application assigned to it that it has not reported on the derived state not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package applies, no report yet). |
 | `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization or device groups; the search matches the entry's name. |
 | `listSoftwareCatalog` | read | no | The applications of the organization's software catalog (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one. |
+| `listSoftwareCatalogDevices` | read | no | The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). |
 | `listSoftwareSources` | read | no | The organization's APT package sources (plan M13a decision 1); the list never contains the signing key. |
 | `updateSoftwareAssignment` | write | no | Replaces intent, update_rule, version and reason with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the same rules as on creation apply. |
 | `updateSoftwareCatalogEntry` | write | no | Replaces the entry's name, description, category, source and package references with the submitted values (an absent description or category becomes empty, an absent or null source_id selects the distribution's own repositories); the icon is changed with its own operation. |

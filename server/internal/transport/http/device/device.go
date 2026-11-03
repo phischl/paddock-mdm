@@ -38,8 +38,11 @@ var (
 
 // Request size limits.
 const (
-	maxBody       = 64 << 10
-	maxEventsBody = 1 << 20
+	maxBody = 64 << 10
+	// maxCheckinBody is the limit of POST /v1/checkin alone: the software report of 200 items with 120-character errors
+	// is about 60 KiB on top of the rest of the health, and a report must never make the check-in fail (PDK-700).
+	maxCheckinBody = 96 << 10
+	maxEventsBody  = 1 << 20
 )
 
 // Default rate limits per minute (plan M2a §6.2).

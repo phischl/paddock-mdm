@@ -57,6 +57,9 @@ var lists = map[string]struct {
 	"listConfigRollouts":     {configRolloutList, "postgres/queries/config_rollout.sql", "ListConfigRollouts", `r\.id`},
 	// Whether a device is in the wave depends on its bucket in the rollout, computed in Go: sorted in memory.
 	"listConfigRolloutDevices": {configRolloutDeviceList, "", "", ""},
+	// The derived software states are computed in Go too (ADR 0028): sorted in memory.
+	"listDeviceManagedSoftware":  {deviceManagedSoftwareList, "", "", ""},
+	"listSoftwareCatalogDevices": {softwareCatalogDeviceList, "", "", ""},
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
 	"listIpAllowlist":   {ipAllowlistList, "postgres/queries/ip_allowlist.sql", "ListIPAllowlistEntries", "id"},

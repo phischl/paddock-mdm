@@ -2132,6 +2132,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/software-catalog/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
+         *     of the organization or of one of their groups, with what they reported or the derived state not_applicable or
+         *     unknown (see the device's managed software). The search matches the hostname. 404 not_found for another
+         *     organization's entry.
+         */
+        get: operations["listSoftwareCatalogDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/software-assignments": {
         parameters: {
             query?: never;
@@ -3080,6 +3104,31 @@ export interface paths {
          *     reported them at the last sync (plan M5a decision 9).
          */
         get: operations["listDeviceSoftware"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/managed-software": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what
+         *     the device reported for each, and for an application assigned to it that it has not reported on the derived state
+         *     not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package
+         *     applies, no report yet). The state and intent filters apply to derived entries too; derived entries have no
+         *     reported_at. 404 not_found for another organization's device.
+         */
+        get: operations["listDeviceManagedSoftware"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5965,6 +6014,74 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /**
+         * @description installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the
+         *     device's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.
+         * @enum {string}
+         */
+        DeviceSoftwareState: "installed" | "held" | "absent" | "pending" | "failed" | "not_applicable" | "unknown";
+        DeviceManagedSoftware: {
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /** @description The catalog entry's name. */
+            name: string;
+            /** @description The package on the device; empty for not_applicable. */
+            package: string;
+            intent: components["schemas"]["SoftwareIntent"];
+            state: components["schemas"]["DeviceSoftwareState"];
+            version: string;
+            /** @description pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed. */
+            reason: string;
+            /** @description At most 200 characters; may name paths. */
+            error: string;
+            /**
+             * Format: date-time
+             * @description null for a derived state.
+             */
+            reported_at: string | null;
+        };
+        DeviceManagedSoftwarePage: {
+            /** @description The device's last report left items out to keep the check-in small; an entry without a reported row may be managed all the same. */
+            truncated: boolean;
+            items: components["schemas"]["DeviceManagedSoftware"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwareCatalogDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /** @description The package on the device; empty for not_applicable. */
+            package: string;
+            intent: components["schemas"]["SoftwareIntent"];
+            state: components["schemas"]["DeviceSoftwareState"];
+            version: string;
+            reason: string;
+            /** @description At most 200 characters; may name paths. */
+            error: string;
+            /**
+             * Format: date-time
+             * @description null for a derived state.
+             */
+            reported_at: string | null;
+        };
+        SoftwareCatalogDevicePage: {
+            items: components["schemas"]["SoftwareCatalogDevice"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         InstallNowRequest: {
             packages: string[];
         };
@@ -7362,6 +7479,14 @@ export interface components {
         SoftwareEntryFilter: string;
         /** @description Only assignments with this intent. */
         SoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
+        /** @description Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers. */
+        DeviceManagedSoftwareSort: "name" | "-name" | "state" | "-state" | "reported_at" | "-reported_at";
+        /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id, are the tie-breakers. */
+        SoftwareCatalogDeviceSort: "hostname" | "-hostname" | "state" | "-state" | "reported_at" | "-reported_at";
+        /** @description Only entries with this intent, reported or assigned. */
+        DeviceManagedSoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
+        /** @description Only entries in this state, reported or derived. */
+        DeviceSoftwareStateFilter: components["schemas"]["DeviceSoftwareState"];
         /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
         /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
@@ -11396,6 +11521,44 @@ export interface operations {
             404: components["responses"]["Problem"];
         };
     };
+    listSoftwareCatalogDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id, are the tie-breakers. */
+                sort?: components["parameters"]["SoftwareCatalogDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only entries in this state, reported or derived. */
+                state?: components["parameters"]["DeviceSoftwareStateFilter"];
+                /** @description Only members of this device group. */
+                device_group_id?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogDevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
     listSoftwareAssignments: {
         parameters: {
             query?: {
@@ -12833,6 +12996,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstalledSoftwarePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceManagedSoftware: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers. */
+                sort?: components["parameters"]["DeviceManagedSoftwareSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only entries in this state, reported or derived. */
+                state?: components["parameters"]["DeviceSoftwareStateFilter"];
+                /** @description Only entries with this intent, reported or assigned. */
+                intent?: components["parameters"]["DeviceManagedSoftwareIntentFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of managed software. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceManagedSoftwarePage"];
                 };
             };
             400: components["responses"]["Problem"];
