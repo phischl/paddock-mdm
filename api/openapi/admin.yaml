@@ -60,6 +60,7 @@ tags:
   - name: mcp
   - name: findings
   - name: notifications
+  - name: software
 paths:
   /api/auth/login:
     get:
@@ -3141,6 +3142,129 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-sources:
+    get:
+      operationId: listSoftwareSources
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The organization's APT package sources (plan M13a decision 1);
+        the list never contains the signing key.
+      x-paddock-list:
+        sort: [name, created_at, updated_at]
+        default_sort: name
+        search: [name, slug]
+        filters: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SoftwareSourceSort"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: One page of software sources.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareSourcePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createSoftwareSource
+      x-paddock-step-up: true
+      tags: [software]
+      description: |
+        Roles: org_admin. Adds an APT package source with its signing key. A source is root-equivalent: every package
+        it signs is installed as root. URIs must use https (400 invalid_request "uris must use https"); they may name
+        internal hosts, because only the devices fetch from them, never the server. Suites are either all flat
+        (ending in "/", then no components) or none (then at least one component). The signing key is one
+        ASCII-armored OpenPGP v4 public key: RSA of at least 2048 bits (2048 to 3071 bits are accepted with
+        weak_key true), or Ed25519, Ed448 or NIST P-256/384/521; DSA, ElGamal, Brainpool and secp256k1 are refused
+        (400 invalid_request). The typed fingerprint (spaces and case ignored) must equal the key's, else 422
+        fingerprint_mismatch naming both. A duplicate slug or name is 409 already_exists. Needs a step-up within the
+        last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+      x-paddock-audit: software_source.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SoftwareSourceCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareSource" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-sources/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getSoftwareSource
+      tags: [software]
+      description: "Roles: org_admin, org_operator, org_auditor. One source with its signing key (a public key); 404 not_found for another organization's."
+      responses:
+        "200":
+          description: The software source.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareSource" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateSoftwareSource
+      x-paddock-step-up: true
+      tags: [software]
+      description: |
+        Roles: org_admin. Changes the given fields; absent fields keep their value. The slug is immutable (400
+        invalid_request when given). signing_key and fingerprint come only together (400 otherwise). Every rule of
+        the creation is checked on the resulting source. Needs a step-up within the last 5 minutes (403
+        step_up_required).
+      x-paddock-audit: software_source.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SoftwareSourceUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareSource" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteSoftwareSource
+      x-paddock-step-up: true
+      tags: [software]
+      description: |
+        Roles: org_admin. Removes the source; the devices remove its source file and keyring with their next bundle.
+        Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: software_source.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
   /api/v1/overview:
     get:
       operationId: getOverview
@@ -6057,6 +6181,14 @@ components:
         type: string
         enum: [package, -package, created_at, -created_at, updated_at, -updated_at]
         default: package
+    SoftwareSourceSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, created_at, -created_at, updated_at, -updated_at]
+        default: name
     AttentionSort:
       name: sort
       in: query
@@ -8160,6 +8292,68 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/PackageHold" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    SoftwareArchitecture:
+      type: string
+      enum: [amd64, arm64]
+    SoftwareSourceSummary:
+      type: object
+      required: [id, slug, name, uris, suites, components, architectures, fingerprint, weak_key, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string, description: Immutable; names the source file and keyring on the devices. }
+        name: { type: string }
+        uris: { type: array, items: { type: string } }
+        suites: { type: array, items: { type: string } }
+        components: { type: array, items: { type: string } }
+        architectures: { type: array, items: { $ref: "#/components/schemas/SoftwareArchitecture" }, description: Empty = every architecture. }
+        fingerprint: { type: string, description: "The signing key's v4 fingerprint, 40 uppercase hexadecimal characters." }
+        weak_key: { type: boolean, description: "The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SoftwareSource:
+      allOf:
+        - $ref: "#/components/schemas/SoftwareSourceSummary"
+        - type: object
+          required: [signing_key]
+          properties:
+            signing_key: { type: string, description: "The ASCII-armored OpenPGP public key as stored, re-armored without armor headers." }
+    SoftwareSourceCreate:
+      type: object
+      required: [slug, name, uris, suites, signing_key, fingerprint]
+      additionalProperties: false
+      properties:
+        slug: { type: string, description: "^[a-z0-9][a-z0-9-]{1,40}$" }
+        name: { type: string, description: 1 to 100 characters after trimming. }
+        uris: { type: array, minItems: 1, maxItems: 4, items: { type: string, maxLength: 512 }, description: "https only, no query, fragment or user information." }
+        suites: { type: array, minItems: 1, maxItems: 8, items: { type: string }, description: "^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /." }
+        components: { type: array, maxItems: 8, items: { type: string }, description: "^[a-z0-9-]{1,32}$; none for a flat repository, at least one otherwise." }
+        architectures: { type: array, maxItems: 2, items: { $ref: "#/components/schemas/SoftwareArchitecture" } }
+        signing_key: { type: string, maxLength: 65536, description: "One ASCII-armored OpenPGP v4 public key. It is stored re-armored with 64-character lines and no armor headers, and that form must also fit 65536 bytes (400 invalid_request otherwise)." }
+        fingerprint: { type: string, description: The key's fingerprint as published by the vendor; spaces and case are ignored. }
+    SoftwareSourceUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        slug: { type: string, description: Immutable; any value is refused with 400 invalid_request. }
+        name: { type: string }
+        uris: { type: array, minItems: 1, maxItems: 4, items: { type: string, maxLength: 512 } }
+        suites: { type: array, minItems: 1, maxItems: 8, items: { type: string } }
+        components: { type: array, maxItems: 8, items: { type: string } }
+        architectures: { type: array, maxItems: 2, items: { $ref: "#/components/schemas/SoftwareArchitecture" } }
+        signing_key: { type: string, maxLength: 65536, description: "Only together with fingerprint; the same rules as on creation." }
+        fingerprint: { type: string, description: Only together with signing_key. }
+    SoftwareSourcePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SoftwareSourceSummary" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

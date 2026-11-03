@@ -50,6 +50,8 @@ type isolationWorld struct {
 	globexAPIToken string
 	// globexDestination is a notification destination of globex (seedGlobexNotification).
 	globexDestination string
+	// globexSource is a software source of globex (seedGlobexSoftwareSource).
+	globexSource string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
 	// globexRollout is a completed configuration rollout of globex (seedGlobexRollout).
@@ -174,6 +176,18 @@ func seedGlobexNotification(t *testing.T, w *isolationWorld) {
 	w.globexDestination = responseID(t, res).String()
 	w.globexIDs = append(w.globexIDs, w.globexDestination)
 	deleteDestinationOnCleanup(w.top, w.carol, renew, "/api/v1/notification-destinations/"+w.globexDestination)
+}
+
+// seedGlobexSoftwareSource creates a software source of globex (plan M13a decision 1).
+func seedGlobexSoftwareSource(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	renew := func(t *testing.T) { stepUp(t, w.carol, env.Carol, true) }
+	renew(t)
+	res := call(t, w.carol, http.MethodPost, softwareSources, sourceBody("globex-iso"))
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexSource = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexSource)
+	deleteSourceOnCleanup(w.top, w.carol, renew, softwareSources+"/"+w.globexSource)
 }
 
 // settingsOnlyConfig is a document with acme's current update settings only: applying it changes and deletes nothing.
@@ -485,6 +499,15 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/accounts": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/accounts?page_size=100", nil
 	}},
+	"GET /api/v1/software-sources": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareSources + "?page_size=100", nil
+	}},
+	"POST /api/v1/software-sources": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareSources, sourceBody("acme-iso")
+	}},
+	"GET /api/v1/software-sources/{id}":    itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, nil),
+	"PATCH /api/v1/software-sources/{id}":  itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, map[string]any{"name": "acme-iso"}),
+	"DELETE /api/v1/software-sources/{id}": itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, nil),
 	"GET /api/v1/settings/watched-units": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/settings/watched-units", nil
 	}},
@@ -889,8 +912,9 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"carol"}},
 		{"role": {"org_admin"}, "sort": {"username"}, "page_size": {"100"}},
 	},
-	"/api/v1/managed-units": {{"q": {"globex-iso"}}},
-	"/api/v1/package-holds": {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
+	"/api/v1/managed-units":    {{"q": {"globex-iso"}}},
+	"/api/v1/package-holds":    {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
+	"/api/v1/software-sources": {{"q": {"globex-iso"}}, {"sort": {"-updated_at"}, "page_size": {"100"}}},
 	// globex's waiting Destroy (seedGlobexDevices) is a revocation_pending condition.
 	"/api/v1/attention":                  {{"q": {"globex-iso"}}, {"kind": {"revocation_pending"}, "page_size": {"100"}}},
 	"/api/v1/attention/devices":          {{"q": {"globex-iso"}}, {"kind": {"revocation_pending"}, "sort": {"hostname"}, "page_size": {"100"}}},

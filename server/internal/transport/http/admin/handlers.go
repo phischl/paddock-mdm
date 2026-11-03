@@ -72,8 +72,10 @@ type handlers struct {
 	accountList *app.AccountList
 	// notifications are the notification destinations (plan M9 decisions 14–19).
 	notifications *app.Notifications
-	ipAllowlist   *app.IPAllowlist
-	overview      *app.Overview
+	// softwareSources are the APT package sources (plan M13a decisions 1–6).
+	softwareSources *app.SoftwareSources
+	ipAllowlist     *app.IPAllowlist
+	overview        *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).

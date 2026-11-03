@@ -66,8 +66,10 @@ type Deps struct {
 	Findings  *app.Findings
 	// Notifications are the notification destinations of organizations and the platform (plan M9 decisions 14–19).
 	Notifications *app.Notifications
-	AccountList   *app.AccountList
-	Overview      *app.Overview
+	// SoftwareSources are the APT package sources of organizations (plan M13a decisions 1–6).
+	SoftwareSources *app.SoftwareSources
+	AccountList     *app.AccountList
+	Overview        *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
@@ -234,6 +236,9 @@ var privileged = map[string]struct {
 	"DELETE /api/platform/v1/notification-destinations/{id}":               {app.ScopePlatform, app.SpecPlatformNotificationDelete},
 	"POST /api/platform/v1/notification-destinations/{id}/rotate-secret":   {app.ScopePlatform, app.SpecPlatformNotificationRotateSecret},
 	"POST /api/platform/v1/notification-destinations/{id}/test":            {app.ScopePlatform, app.SpecPlatformNotificationTest},
+	"POST /api/v1/software-sources":                                        {app.ScopeOrg, app.SpecSoftwareSourceCreate},
+	"PATCH /api/v1/software-sources/{id}":                                  {app.ScopeOrg, app.SpecSoftwareSourceUpdate},
+	"DELETE /api/v1/software-sources/{id}":                                 {app.ScopeOrg, app.SpecSoftwareSourceDelete},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -268,7 +273,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,

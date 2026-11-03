@@ -213,6 +213,13 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `updateRolloutSettings` | write | no | Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first. |
 | `updateUpdateSettings` | write | no | Replaces the update settings: security_daily_at (HH:MM, local device time), regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720) and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). |
 
+## software
+
+| Tool | Class | Destructive | Summary |
+| --- | --- | --- | --- |
+| `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |
+| `listSoftwareSources` | read | no | The organization's APT package sources (plan M13a decision 1); the list never contains the signing key. |
+
 ## updates
 
 | Tool | Class | Destructive | Summary |
@@ -264,9 +271,11 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
+| `createSoftwareSource` | software | Adds an APT package source with its signing key. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
 | `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
+| `deleteSoftwareSource` | software | Removes the source; the devices remove its source file and keyring with their next bundle. |
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |
 | `disableAutoUnseal` | platform | Disables the setting: the unsealer stops unsealing at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable. |
 | `downloadDeviceHeader` | devices | Returns a stored LUKS header backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup luksHeaderRestore; confirm_hostname must equal the device's hostname. |
@@ -291,6 +300,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `updateNotificationDestination` | notifications | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
 | `updatePlatformMcpSettings` | mcp | Replaces the MCP policy of the platform (platform administrators' MCP sessions). |
 | `updatePlatformNotificationDestination` | platform | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
+| `updateSoftwareSource` | software | Changes the given fields; absent fields keep their value. |
 | `updateWatchedUnits` | settings | Replaces the watched units: at most 32 services (names ending in .service), a duplicate is 400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a name that is not a service is 422 unit_not_allowed naming it. |
 
 ## Other operations the MCP does not offer
