@@ -1,4 +1,4 @@
-import { compileStyle, parse } from '@vue/compiler-sfc'
+import { compileStyle, parse } from 'vue/compiler-sfc'
 import { describe, expect, it } from 'vitest'
 import source from '../views/SoftwareSources.vue?raw'
 
