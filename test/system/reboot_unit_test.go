@@ -95,3 +95,27 @@ func TestSSHHandshakeFailedUnit(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldRetrySSHUnit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		noRetry bool
+		exit    int
+		out     string
+		want    bool
+	}{
+		"handshake":             {false, 255, "kex_exchange_identification: read: Connection reset by peer\n", true},
+		"empty drop":            {false, 255, "", true},
+		"no retry, handshake":   {true, 255, "kex_exchange_identification: read: Connection reset by peer\n", false},
+		"no retry, empty drop":  {true, 255, "", false},
+		"closed by remote host": {false, 255, "Connection to 127.0.0.1 closed by remote host.\n", false},
+		"command failed, empty": {false, 1, "", false},
+		"command succeeded":     {false, 0, "", false},
+		"ssh not started":       {false, -1, "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := shouldRetrySSH(tc.noRetry, tc.exit, tc.out); got != tc.want {
+				t.Fatalf("shouldRetrySSH(%v, %d, %q) = %v, want %v", tc.noRetry, tc.exit, tc.out, got, tc.want)
+			}
+		})
+	}
+}
