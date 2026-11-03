@@ -84,8 +84,9 @@ func TestSSHHandshakeFailedUnit(t *testing.T) {
 		"drop mid-command":   {"client_loop: send disconnect: Connection reset by peer\n", false},
 		"output then drop":   {"Removing obsolete files\nConnection to 127.0.0.1 closed by remote host.\n", false},
 		"output then reset":  {"unpacking\nkex_exchange_identification: read: Connection reset by peer\n", false},
-		"empty":              {"", false},
-		"whitespace only":    {" \n", false},
+		"empty":              {"", true},
+		"whitespace only":    {" \n", true},
+		"closed by host":     {"Connection closed by 127.0.0.1 port 2222\n", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := sshHandshakeFailed(tc.out); got != tc.want {

@@ -204,14 +204,14 @@ func (v *VM) SSH(ctx context.Context, stdin []byte, command string) (string, err
 // sshHandshakeFailed reports whether out, the combined output of an ssh that exited 255, shows only a failure to
 // establish the session, so the remote command never ran. Any other line, such as the command's own output or
 // "Connection to ... closed by remote host." or "client_loop: send disconnect", means it may have started.
-// Empty output is not retried: ssh names a handshake failure, and the empty 255s seen so far came from polling
-// callers (waitSSHDown, sshUp, the link-toggle wait) that tolerate an error and ask again on the next tick.
+// Empty output is a handshake failure too: sshArgs sets LogLevel=ERROR, which suppresses ssh's INFO-level
+// "Connection closed/reset by <host> port N", so a peer that drops after the TCP connect leaves nothing. A drop after
+// the command started prints "Connection to ... closed by remote host." and stays false.
 func sshHandshakeFailed(out string) bool {
 	prefixes := []string{
 		"kex_exchange_identification", "ssh_exchange_identification", "ssh: connect to host ",
-		"Connection reset by ", "Connection timed out during banner exchange",
+		"Connection reset by ", "Connection closed by ", "Connection timed out during banner exchange",
 	}
-	seen := false
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -220,9 +220,8 @@ func sshHandshakeFailed(out string) bool {
 		if !slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(line, p) }) {
 			return false
 		}
-		seen = true
 	}
-	return seen
+	return true
 }
 
 func (v *VM) ssh(ctx context.Context, stdin []byte, command string) (string, error) {
