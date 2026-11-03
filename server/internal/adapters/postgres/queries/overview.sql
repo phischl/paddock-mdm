@@ -95,3 +95,17 @@ ORDER BY 1 DESC;
 
 -- name: OverviewAttention :one
 SELECT count(*)::int AS conditions, count(DISTINCT device_id)::int AS devices FROM attention_condition;
+
+-- name: OverviewConfiguration :one
+-- The configuration card (plan M11 decision 46, PDK-164). A failed row of a report-only report is a plan error, not a
+-- failure (amendments R6.6, R6.15): the same classification by the report's mode as ListConfigStatus. One scan of the
+-- failed rows, one of the devices; no per-row function calls (ADR 0028).
+SELECT (SELECT count(DISTINCT s.resource_id)
+        FROM device_resource_status s JOIN device d ON d.id = s.device_id AND d.state = 'active'
+        LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
+        WHERE s.status = 'failed' AND r.mode IS DISTINCT FROM 'report_only')::int AS failed_resources,
+       (SELECT count(DISTINCT s.device_id)
+        FROM device_resource_status s JOIN device d ON d.id = s.device_id AND d.state = 'active'
+        LEFT JOIN device_bundle_report r ON r.device_id = s.device_id AND r.version = s.bundle_version
+        WHERE s.status = 'failed' AND r.mode IS DISTINCT FROM 'report_only')::int AS failed_devices,
+       (SELECT count(*) FROM device d WHERE d.state = 'active' AND d.config_mode = 'report_only')::int AS report_only_devices;

@@ -1305,3 +1305,10 @@ without a migration merge as soon as their dependencies are on the branch. The V
     `GET /devices/{id}/config-status`; the device's *Apply status* tab shows a failed row with `report_mode
     report_only` as a plan error. Eligibility for a rollout's waves stays with the device's stored `config_mode`
     (decision 30, PDK-685), and the counting of an eligible device's report with the reported mode (item 14 (b)).
+16. **The overview's rollout comes without counts (PDK-164; architect, 2026-11-02).** `GET /overview`
+    `configuration.rollout` carries only the open rollout's `id`, `status`, `waves`, `current_wave_index` and
+    `started_at`; the request does no rollout counting. Counting a rollout reads every active device and its newest
+    report (item 14), which took about 190 ms on 10 000 active devices against the 50 ms of the overview's
+    configuration object. The portal card loads the counts afterwards from `GET /config-rollouts/{id}`, the one counting
+    rule (R6.14), shows a skeleton while loading and an inline error with a retry on failure. No second counting rule in
+    SQL and no cache.

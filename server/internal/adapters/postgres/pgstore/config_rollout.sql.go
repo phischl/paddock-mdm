@@ -257,6 +257,34 @@ func (q *Queries) GetOpenConfigRolloutOverlay(ctx context.Context) (GetOpenConfi
 	return i, err
 }
 
+const getOpenConfigRolloutSummary = `-- name: GetOpenConfigRolloutSummary :one
+SELECT id, status, waves, current_wave_index, started_at
+FROM config_rollout
+WHERE status IN ('running', 'halted')
+`
+
+type GetOpenConfigRolloutSummaryRow struct {
+	ID               uuid.UUID
+	Status           string
+	Waves            []int32
+	CurrentWaveIndex int32
+	StartedAt        time.Time
+}
+
+// The open rollout without counts for the overview (plan M11 amendment R6.16): counting it is the rollout API's work.
+func (q *Queries) GetOpenConfigRolloutSummary(ctx context.Context) (GetOpenConfigRolloutSummaryRow, error) {
+	row := q.db.QueryRow(ctx, getOpenConfigRolloutSummary)
+	var i GetOpenConfigRolloutSummaryRow
+	err := row.Scan(
+		&i.ID,
+		&i.Status,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.StartedAt,
+	)
+	return i, err
+}
+
 const haltConfigRollout = `-- name: HaltConfigRollout :one
 UPDATE config_rollout SET status = 'halted', halted_reason = $1, updated_at = now()
 WHERE id = $2 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at

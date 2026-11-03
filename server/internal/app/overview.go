@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -37,6 +39,14 @@ type OverviewResult struct {
 	Updates         OverviewUpdates
 	Attention       pgstore.OverviewAttentionRow
 	SecurityReview  SecurityReviewCounts
+	Configuration   OverviewConfiguration
+}
+
+// OverviewConfiguration: the open configuration rollout and the devices and resources that need a look.
+type OverviewConfiguration struct {
+	// Rollout is nil while no rollout is open.
+	Rollout *pgstore.GetOpenConfigRolloutSummaryRow
+	pgstore.OverviewConfigurationRow
 }
 
 // OverviewVulnerabilities: devices by their worst finding, the critical and high CVEs, and the top CVEs.
@@ -174,7 +184,29 @@ func (o *Overview) Get(ctx context.Context) (OverviewResult, error) {
 			return err
 		}
 		out.SecurityReview = review.Counts()
+		if out.Configuration, err = overviewConfiguration(ctx, q); err != nil {
+			return err
+		}
 		return nil
 	})
 	return out, err
+}
+
+// overviewConfiguration reads the configuration card. The open rollout comes without counts: counting it reads every
+// active device (plan M11 amendment R6.16), so the portal asks the rollout API for them.
+func overviewConfiguration(ctx context.Context, q *pgstore.Queries) (OverviewConfiguration, error) {
+	var out OverviewConfiguration
+	var err error
+	if out.OverviewConfigurationRow, err = q.OverviewConfiguration(ctx); err != nil {
+		return out, fmt.Errorf("overview configuration: %w", err)
+	}
+	open, err := q.GetOpenConfigRolloutSummary(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return out, fmt.Errorf("overview open rollout: %w", err)
+	}
+	out.Rollout = &open
+	return out, nil
 }
