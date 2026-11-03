@@ -927,6 +927,34 @@ type RevocationRequest struct {
 	Volumes        []uuid.UUID
 }
 
+type SoftwareAssignment struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Intent         string
+	UpdateRule     string
+	Version        *string
+	Reason         string
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type SoftwareCatalogEntry struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Description    string
+	Category       string
+	SourceID       uuid.NullUUID
+	Packages       json.RawMessage
+	Icon           []byte
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type SoftwareSource struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID

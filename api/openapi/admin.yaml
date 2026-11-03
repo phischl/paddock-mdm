@@ -3255,8 +3255,282 @@ paths:
       tags: [software]
       description: |
         Roles: org_admin. Removes the source; the devices remove its source file and keyring with their next bundle.
-        Needs a step-up within the last 5 minutes (403 step_up_required).
+        A source that a catalog entry still uses is 409 in_use. Needs a step-up within the last 5 minutes (403
+        step_up_required).
       x-paddock-audit: software_source.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-catalog:
+    get:
+      operationId: listSoftwareCatalog
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The applications of the organization's software catalog
+        (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one.
+      x-paddock-list:
+        sort: [name, category, created_at, updated_at]
+        default_sort: name
+        search: [name, description]
+        filters: [category, source_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SoftwareCatalogSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/SoftwareCategoryFilter"
+        - $ref: "#/components/parameters/SoftwareSourceFilter"
+      responses:
+        "200":
+          description: One page of catalog entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareCatalogEntryPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createSoftwareCatalogEntry
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator. Adds an application with its package names per distribution, release and
+        architecture (1 to 20 references; release and architecture may be "*"; the tuple is unique within the
+        entry). source_id names one of the organization's package sources; without it the distribution's own
+        repositories are used. A name already in use is 409 already_exists; a source_id of another organization or
+        an unknown one is 404 not_found.
+      x-paddock-audit: software_catalog_entry.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SoftwareCatalogEntryCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareCatalogEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-catalog/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getSoftwareCatalogEntry
+      tags: [software]
+      description: "Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's entry."
+      responses:
+        "200":
+          description: The catalog entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareCatalogEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateSoftwareCatalogEntry
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator. Replaces the entry's name, description, category, source and package
+        references with the submitted values (an absent description or category becomes empty, an absent or null
+        source_id selects the distribution's own repositories); the icon is changed with its own operation. The
+        same rules as on creation apply.
+      x-paddock-audit: software_catalog_entry.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SoftwareCatalogEntryUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareCatalogEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteSoftwareCatalogEntry
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator. Removes the entry together with its assignments (never 409); the devices stop
+        managing the application, installed software stays.
+      x-paddock-audit: software_catalog_entry.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-catalog/{id}/icon:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getSoftwareCatalogIcon
+      tags: [software]
+      description: "Roles: org_admin, org_operator, org_auditor. The entry's icon as image/png (Cache-Control: private, max-age=300); 404 not_found without an icon or for another organization's entry."
+      responses:
+        "200":
+          description: The icon.
+          headers:
+            Cache-Control: { schema: { type: string } }
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: setSoftwareCatalogIcon
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator. Sets or replaces the entry's icon. The body is one PNG (Content-Type
+        image/png) of at most 65536 bytes and 512 by 512 pixels; anything else is 400 invalid_request. Not offered as
+        an MCP tool (the body is not JSON).
+      x-paddock-audit: software_catalog_entry.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema: { type: string, format: binary }
+      responses:
+        "204": { description: Icon set. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-assignments:
+    get:
+      operationId: listSoftwareAssignments
+      tags: [software]
+      description: "Roles: org_admin, org_operator, org_auditor. The assignments of catalog entries to the organization or device groups; the search matches the entry's name."
+      x-paddock-list:
+        sort: [created_at, updated_at, intent]
+        default_sort: -created_at
+        search: [app_name]
+        filters: [catalog_entry_id, device_group_id, intent]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SoftwareAssignmentSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/SoftwareEntryFilter"
+        - $ref: "#/components/parameters/DeviceGroupFilter"
+        - $ref: "#/components/parameters/SoftwareIntentFilter"
+      responses:
+        "200":
+          description: One page of software assignments.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareAssignmentPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createSoftwareAssignment
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator. Assigns a catalog entry to every device of the organization (no
+        device_group_id) or to a device group with an intent. required keeps the application installed (update_rule
+        latest without a version, or pinned with one; omitted, the rule is pinned for a required assignment with a
+        version and latest otherwise); uninstall removes it; hold keeps the installed version (with a version it is
+        pinned); forbid removes it and blocks it for apt. uninstall and forbid take no version. Violations are 400
+        invalid_request. An entry or device group of another organization or an unknown one is 404 not_found; a
+        second assignment of the entry in the same scope is 409 already_exists.
+      x-paddock-audit: software_assignment.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SoftwareAssignmentCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareAssignment" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-assignments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getSoftwareAssignment
+      tags: [software]
+      description: "Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's assignment."
+      responses:
+        "200":
+          description: The software assignment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareAssignment" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateSoftwareAssignment
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator. Replaces intent, update_rule, version and reason with the submitted values
+        (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the
+        same rules as on creation apply. The entry and the scope are fixed: giving a catalog_entry_id or a
+        device_group_id is 400 invalid_request.
+      x-paddock-audit: software_assignment.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SoftwareAssignmentUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareAssignment" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteSoftwareAssignment
+      tags: [software]
+      description: "Roles: org_admin, org_operator. The devices stop enforcing the assignment with their next bundle; installed software stays."
+      x-paddock-audit: software_assignment.deleted
       parameters:
         - $ref: "#/components/parameters/Csrf"
       responses:
@@ -6189,6 +6463,42 @@ components:
         type: string
         enum: [name, -name, created_at, -created_at, updated_at, -updated_at]
         default: name
+    SoftwareCatalogSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, category, -category, created_at, -created_at, updated_at, -updated_at]
+        default: name
+    SoftwareAssignmentSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [created_at, -created_at, updated_at, -updated_at, intent, -intent]
+        default: -created_at
+    SoftwareCategoryFilter:
+      name: category
+      in: query
+      description: Only entries of this category.
+      schema: { type: string, maxLength: 64 }
+    SoftwareSourceFilter:
+      name: source_id
+      in: query
+      description: Only entries that use this package source.
+      schema: { type: string, format: uuid }
+    SoftwareEntryFilter:
+      name: catalog_entry_id
+      in: query
+      description: Only assignments of this catalog entry.
+      schema: { type: string, format: uuid }
+    SoftwareIntentFilter:
+      name: intent
+      in: query
+      description: Only assignments with this intent.
+      schema: { $ref: "#/components/schemas/SoftwareIntent" }
     AttentionSort:
       name: sort
       in: query
@@ -8354,6 +8664,116 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/SoftwareSourceSummary" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    SoftwareIntent:
+      type: string
+      enum: [required, uninstall, hold, forbid]
+    SoftwareUpdateRule:
+      type: string
+      enum: [latest, pinned]
+    PackageRef:
+      type: object
+      required: [distribution, release, architecture, package]
+      additionalProperties: false
+      properties:
+        distribution: { type: string, maxLength: 32, description: "The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian." }
+        release: { type: string, maxLength: 32, description: "* or the VERSION_ID, ^[a-z0-9][a-z0-9.-]{0,31}$, e.g. 24.04." }
+        architecture: { type: string, enum: ["*", amd64, arm64] }
+        package: { type: string, maxLength: 128, description: "^[a-z0-9][a-z0-9+.-]+$" }
+    SoftwareCatalogEntryCreate:
+      type: object
+      required: [name, packages]
+      additionalProperties: false
+      properties:
+        name: { type: string, description: 1 to 100 characters after trimming; unique within the organization. }
+        description: { type: string, maxLength: 1000 }
+        category: { type: string, maxLength: 64, description: May be empty. }
+        source_id: { type: string, format: uuid, nullable: true, description: Omit or null for the distribution's own repositories. }
+        packages: { type: array, minItems: 1, maxItems: 20, items: { $ref: "#/components/schemas/PackageRef" }, description: "Unique by distribution, release and architecture; the most specific reference wins on a device." }
+    SoftwareCatalogEntryUpdate:
+      type: object
+      required: [name, packages]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        description: { type: string, maxLength: 1000 }
+        category: { type: string, maxLength: 64 }
+        source_id: { type: string, format: uuid, nullable: true, description: Omit or null for the distribution's own repositories. }
+        packages: { type: array, minItems: 1, maxItems: 20, items: { $ref: "#/components/schemas/PackageRef" } }
+    SoftwareCatalogEntry:
+      type: object
+      required: [id, name, description, category, source_id, source_slug, packages, has_icon, assignment_count, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        category: { type: string }
+        source_id: { type: string, format: uuid, nullable: true }
+        source_slug: { type: string, description: Empty for the distribution's own repositories. }
+        packages: { type: array, items: { $ref: "#/components/schemas/PackageRef" } }
+        has_icon: { type: boolean }
+        assignment_count: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SoftwareCatalogEntryPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SoftwareCatalogEntry" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    SoftwareAssignmentCreate:
+      type: object
+      required: [catalog_entry_id, intent]
+      additionalProperties: false
+      properties:
+        catalog_entry_id: { type: string, format: uuid }
+        device_group_id: { type: string, format: uuid, nullable: true, description: Omit or null for every device of the organization. }
+        intent: { $ref: "#/components/schemas/SoftwareIntent" }
+        update_rule: { $ref: "#/components/schemas/SoftwareUpdateRule" }
+        version: { type: string, maxLength: 128, nullable: true, description: "^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall and forbid." }
+        reason: { type: string, maxLength: 500 }
+    SoftwareAssignmentUpdate:
+      type: object
+      required: [intent]
+      additionalProperties: false
+      properties:
+        catalog_entry_id: { type: string, format: uuid, description: Fixed; any value is refused with 400 invalid_request. }
+        device_group_id: { type: string, format: uuid, nullable: true, description: Fixed; any value is refused with 400 invalid_request. }
+        intent: { $ref: "#/components/schemas/SoftwareIntent" }
+        update_rule: { $ref: "#/components/schemas/SoftwareUpdateRule" }
+        version: { type: string, maxLength: 128, nullable: true }
+        reason: { type: string, maxLength: 500 }
+    SoftwareAssignment:
+      type: object
+      required: [id, app_name, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        app_name: { type: string, description: The catalog entry's name. }
+        catalog_entry_id: { type: string, format: uuid }
+        device_group_id: { type: string, format: uuid, nullable: true, description: null = every device of the organization. }
+        intent: { $ref: "#/components/schemas/SoftwareIntent" }
+        update_rule: { $ref: "#/components/schemas/SoftwareUpdateRule" }
+        version: { type: string, nullable: true }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SoftwareAssignmentPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SoftwareAssignment" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

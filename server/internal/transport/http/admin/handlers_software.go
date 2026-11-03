@@ -1,11 +1,16 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"io"
+
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
@@ -110,5 +115,217 @@ func toSoftwareSource(s pgstore.SoftwareSource) adminapi.SoftwareSource {
 		Id: sum.Id, Slug: sum.Slug, Name: sum.Name, Uris: sum.Uris, Suites: sum.Suites, Components: sum.Components,
 		Architectures: sum.Architectures, Fingerprint: sum.Fingerprint, WeakKey: sum.WeakKey, SigningKey: s.SigningKey,
 		CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
+	}
+}
+
+// softwareCatalogList and softwareAssignmentList are the list definitions of GET /api/v1/software-catalog and
+// GET /api/v1/software-assignments (plan M13a §6.1).
+var (
+	softwareCatalogList    = listing.Spec{Sort: []string{"name", "category", "created_at", "updated_at"}, DefaultSort: "name"}
+	softwareAssignmentList = listing.Spec{Sort: []string{"created_at", "updated_at", "intent"}, DefaultSort: "-created_at"}
+)
+
+func (h *handlers) ListSoftwareCatalog(ctx context.Context, req adminapi.ListSoftwareCatalogRequestObject) (adminapi.ListSoftwareCatalogResponseObject, error) {
+	params, err := listing.Parse(softwareCatalogList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.softwareCatalog.List(ctx, app.CatalogQuery{Page: params.ListPage(), Category: req.Params.Category, SourceID: req.Params.SourceId})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.SoftwareCatalogEntry, len(res.Items))
+	for i, e := range res.Items {
+		if items[i], err = toSoftwareCatalogEntry(e); err != nil {
+			return nil, err
+		}
+	}
+	return adminapi.ListSoftwareCatalog200JSONResponse(listing.NewPage(items, params, res.Count)), nil
+}
+
+func (h *handlers) CreateSoftwareCatalogEntry(ctx context.Context, req adminapi.CreateSoftwareCatalogEntryRequestObject) (adminapi.CreateSoftwareCatalogEntryResponseObject, error) {
+	b := req.Body
+	e, err := h.softwareCatalog.Create(ctx, app.EntryInput{
+		Name: b.Name, Description: deref(b.Description, ""), Category: deref(b.Category, ""), SourceID: b.SourceId,
+		Packages: fromPackageRefs(b.Packages),
+	})
+	if err != nil {
+		return nil, err
+	}
+	body, err := toSoftwareCatalogEntry(e)
+	if err != nil {
+		return nil, err
+	}
+	loc := "/api/v1/software-catalog/" + e.ID.String()
+	return adminapi.CreateSoftwareCatalogEntry201JSONResponse{
+		Body: body, Headers: adminapi.CreateSoftwareCatalogEntry201ResponseHeaders{Location: &loc},
+	}, nil
+}
+
+func (h *handlers) GetSoftwareCatalogEntry(ctx context.Context, req adminapi.GetSoftwareCatalogEntryRequestObject) (adminapi.GetSoftwareCatalogEntryResponseObject, error) {
+	e, err := h.softwareCatalog.Get(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	body, err := toSoftwareCatalogEntry(e)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.GetSoftwareCatalogEntry200JSONResponse(body), nil
+}
+
+func (h *handlers) UpdateSoftwareCatalogEntry(ctx context.Context, req adminapi.UpdateSoftwareCatalogEntryRequestObject) (adminapi.UpdateSoftwareCatalogEntryResponseObject, error) {
+	b := req.Body
+	e, err := h.softwareCatalog.Update(ctx, req.Id, app.EntryInput{
+		Name: b.Name, Description: deref(b.Description, ""), Category: deref(b.Category, ""), SourceID: b.SourceId,
+		Packages: fromPackageRefs(b.Packages),
+	})
+	if err != nil {
+		return nil, err
+	}
+	body, err := toSoftwareCatalogEntry(e)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UpdateSoftwareCatalogEntry200JSONResponse(body), nil
+}
+
+func (h *handlers) DeleteSoftwareCatalogEntry(ctx context.Context, req adminapi.DeleteSoftwareCatalogEntryRequestObject) (adminapi.DeleteSoftwareCatalogEntryResponseObject, error) {
+	if err := h.softwareCatalog.Delete(ctx, req.Id); err != nil {
+		return nil, err
+	}
+	return adminapi.DeleteSoftwareCatalogEntry204Response{}, nil
+}
+
+func (h *handlers) GetSoftwareCatalogIcon(ctx context.Context, req adminapi.GetSoftwareCatalogIconRequestObject) (adminapi.GetSoftwareCatalogIconResponseObject, error) {
+	icon, err := h.softwareCatalog.Icon(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	cache := "private, max-age=300"
+	return adminapi.GetSoftwareCatalogIcon200ImagepngResponse{
+		Body: bytes.NewReader(icon), ContentLength: int64(len(icon)), Headers: adminapi.GetSoftwareCatalogIcon200ResponseHeaders{CacheControl: &cache},
+	}, nil
+}
+
+// SetSoftwareCatalogIcon reads one byte more than the icon limit, so that the use case can refuse a larger body
+// with its detail instead of the handler cutting it silently.
+func (h *handlers) SetSoftwareCatalogIcon(ctx context.Context, req adminapi.SetSoftwareCatalogIconRequestObject) (adminapi.SetSoftwareCatalogIconResponseObject, error) {
+	icon, err := io.ReadAll(io.LimitReader(req.Body, software.MaxIconBytes+1))
+	if err != nil {
+		return nil, problem.InvalidRequest.WithDetail("unreadable body")
+	}
+	if err := h.softwareCatalog.SetIcon(ctx, req.Id, icon); err != nil {
+		return nil, err
+	}
+	return adminapi.SetSoftwareCatalogIcon204Response{}, nil
+}
+
+func (h *handlers) ListSoftwareAssignments(ctx context.Context, req adminapi.ListSoftwareAssignmentsRequestObject) (adminapi.ListSoftwareAssignmentsResponseObject, error) {
+	params, err := listing.Parse(softwareAssignmentList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	query := app.SoftwareAssignmentQuery{Page: params.ListPage(), CatalogEntryID: req.Params.CatalogEntryId, DeviceGroupID: req.Params.DeviceGroupId}
+	if req.Params.Intent != nil {
+		intent := string(*req.Params.Intent)
+		query.Intent = &intent
+	}
+	res, err := h.softwareCatalog.ListAssignments(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.SoftwareAssignment, len(res.Items))
+	for i, a := range res.Items {
+		items[i] = toSoftwareAssignment(a)
+	}
+	return adminapi.ListSoftwareAssignments200JSONResponse(listing.NewPage(items, params, res.Count)), nil
+}
+
+func (h *handlers) CreateSoftwareAssignment(ctx context.Context, req adminapi.CreateSoftwareAssignmentRequestObject) (adminapi.CreateSoftwareAssignmentResponseObject, error) {
+	b := req.Body
+	a, err := h.softwareCatalog.CreateAssignment(ctx, app.AssignmentInput{
+		CatalogEntryID: &b.CatalogEntryId, DeviceGroupID: b.DeviceGroupId, Intent: string(b.Intent),
+		UpdateRule: string(deref(b.UpdateRule, "")), Version: b.Version, Reason: deref(b.Reason, ""),
+	})
+	if err != nil {
+		return nil, err
+	}
+	loc := "/api/v1/software-assignments/" + a.ID.String()
+	return adminapi.CreateSoftwareAssignment201JSONResponse{
+		Body: toSoftwareAssignment(a), Headers: adminapi.CreateSoftwareAssignment201ResponseHeaders{Location: &loc},
+	}, nil
+}
+
+func (h *handlers) GetSoftwareAssignment(ctx context.Context, req adminapi.GetSoftwareAssignmentRequestObject) (adminapi.GetSoftwareAssignmentResponseObject, error) {
+	a, err := h.softwareCatalog.GetAssignment(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.GetSoftwareAssignment200JSONResponse(toSoftwareAssignment(a)), nil
+}
+
+func (h *handlers) UpdateSoftwareAssignment(ctx context.Context, req adminapi.UpdateSoftwareAssignmentRequestObject) (adminapi.UpdateSoftwareAssignmentResponseObject, error) {
+	b := req.Body
+	a, err := h.softwareCatalog.UpdateAssignment(ctx, req.Id, app.AssignmentInput{
+		CatalogEntryID: b.CatalogEntryId, DeviceGroupID: b.DeviceGroupId, Intent: string(b.Intent),
+		UpdateRule: string(deref(b.UpdateRule, "")), Version: b.Version, Reason: deref(b.Reason, ""),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UpdateSoftwareAssignment200JSONResponse(toSoftwareAssignment(a)), nil
+}
+
+func (h *handlers) DeleteSoftwareAssignment(ctx context.Context, req adminapi.DeleteSoftwareAssignmentRequestObject) (adminapi.DeleteSoftwareAssignmentResponseObject, error) {
+	if err := h.softwareCatalog.DeleteAssignment(ctx, req.Id); err != nil {
+		return nil, err
+	}
+	return adminapi.DeleteSoftwareAssignment204Response{}, nil
+}
+
+func fromPackageRefs(in []adminapi.PackageRef) []software.PackageRef {
+	out := make([]software.PackageRef, len(in))
+	for i, p := range in {
+		out[i] = software.PackageRef{Distribution: p.Distribution, Release: p.Release, Architecture: string(p.Architecture), Package: p.Package}
+	}
+	return out
+}
+
+func toSoftwareCatalogEntry(e app.CatalogEntry) (adminapi.SoftwareCatalogEntry, error) {
+	refs, err := software.DecodePackages(e.Packages)
+	if err != nil {
+		return adminapi.SoftwareCatalogEntry{}, err
+	}
+	packages := make([]adminapi.PackageRef, len(refs))
+	for i, p := range refs {
+		packages[i] = adminapi.PackageRef{
+			Distribution: p.Distribution, Release: p.Release, Architecture: adminapi.PackageRefArchitecture(p.Architecture), Package: p.Package,
+		}
+	}
+	var source *uuid.UUID
+	if e.SourceID.Valid {
+		source = &e.SourceID.UUID
+	}
+	return adminapi.SoftwareCatalogEntry{
+		Id: e.ID, Name: e.Name, Description: e.Description, Category: e.Category, SourceId: source, SourceSlug: e.SourceSlug,
+		Packages: packages, HasIcon: e.HasIcon, AssignmentCount: int(e.AssignmentCount), CreatedAt: e.CreatedAt.UTC(),
+		UpdatedAt: e.UpdatedAt.UTC(),
+	}, nil
+}
+
+func toSoftwareAssignment(a app.Assignment) adminapi.SoftwareAssignment {
+	var group *uuid.UUID
+	if a.DeviceGroupID.Valid {
+		group = &a.DeviceGroupID.UUID
+	}
+	return adminapi.SoftwareAssignment{
+		Id: a.ID, AppName: a.AppName, CatalogEntryId: a.CatalogEntryID, DeviceGroupId: group,
+		Intent: adminapi.SoftwareIntent(a.Intent), UpdateRule: adminapi.SoftwareUpdateRule(a.UpdateRule), Version: a.Version,
+		Reason: a.Reason, CreatedAt: a.CreatedAt.UTC(), UpdatedAt: a.UpdatedAt.UTC(),
 	}
 }

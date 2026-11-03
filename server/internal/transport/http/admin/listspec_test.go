@@ -47,6 +47,9 @@ var lists = map[string]struct {
 		"ListNotificationDestinations", `d\.id`},
 	"listPackageHolds":    {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
 	"listSoftwareSources": {softwareSourceList, "postgres/queries/software.sql", "ListSoftwareSources", "id"},
+	"listSoftwareCatalog": {softwareCatalogList, "postgres/queries/software.sql", "ListSoftwareCatalogEntries", `e\.id`},
+	"listSoftwareAssignments": {softwareAssignmentList, "postgres/queries/software.sql", "ListSoftwareAssignments",
+		`a\.id`},
 
 	"listDeviceConfigStatus": {deviceResourceStatusList, "postgres/queries/device_config_status.sql", "ListDeviceResourceStatus", "resource_id"},
 	"listDeviceBundles":      {deviceBundleList, "postgres/queries/device_config_status.sql", "ListDeviceBundles", `b\.version`},
@@ -82,6 +85,10 @@ var lists = map[string]struct {
 var sortColumns = map[string]map[string]string{
 	"listAgentReleases": {"version": "version_key"},
 	"listDeviceBundles": {"version": "b.version", "created_at": "b.created_at"},
+	"listSoftwareCatalog": {
+		"name": "e.name", "category": "e.category", "created_at": "e.created_at", "updated_at": "e.updated_at",
+	},
+	"listSoftwareAssignments": {"created_at": "a.created_at", "updated_at": "a.updated_at", "intent": "a.intent"},
 	"listFindings": {
 		"last_seen_at": "f.last_seen_at", "opened_at": "f.opened_at", "status": "f.status", "hostname": "d.hostname",
 		"code": "f.code",

@@ -267,6 +267,14 @@ const (
 	CodeSoftwareSourceCreated Code = "software_source.created"
 	CodeSoftwareSourceUpdated Code = "software_source.updated"
 	CodeSoftwareSourceDeleted Code = "software_source.deleted"
+
+	// Software catalog entries and assignments (plan M13a §6.3).
+	CodeSoftwareCatalogEntryCreated Code = "software_catalog_entry.created"
+	CodeSoftwareCatalogEntryUpdated Code = "software_catalog_entry.updated"
+	CodeSoftwareCatalogEntryDeleted Code = "software_catalog_entry.deleted"
+	CodeSoftwareAssignmentCreated   Code = "software_assignment.created"
+	CodeSoftwareAssignmentUpdated   Code = "software_assignment.updated"
+	CodeSoftwareAssignmentDeleted   Code = "software_assignment.deleted"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1614,7 +1622,47 @@ var registry = map[Code]Definition{
 		Description: "An organization administrator removed an APT package source; devices remove its source file and keyring at their next check-in.",
 		Params:      []string{"name", "slug", "fingerprint", "weak_key"},
 		Outcomes:    adminOutcomes,
-		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role.",
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry references the source.",
+	},
+	CodeSoftwareCatalogEntryCreated: {
+		Code: CodeSoftwareCatalogEntryCreated, Emitted: true,
+		Description: "An application was added to the software catalog with its package names per distribution, release and architecture.",
+		Params:      []string{"name", "category", "source_id", "source_slug", "package_count"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request for a refused name, description, category or package reference, already_exists for a duplicate name, not_found for a source of another organization. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareCatalogEntryUpdated: {
+		Code: CodeSoftwareCatalogEntryUpdated, Emitted: true,
+		Description: "A software catalog entry changed (name, description, category, source, package names or icon).",
+		Params:      []string{"name", "fields"},
+		Outcomes:    adminOutcomes,
+		Note:        "fields lists what changed; an icon change names icon. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareCatalogEntryDeleted: {
+		Code: CodeSoftwareCatalogEntryDeleted, Emitted: true,
+		Description: "A software catalog entry was removed together with its assignments; devices stop managing the application.",
+		Params:      []string{"name", "assignment_count"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeSoftwareAssignmentCreated: {
+		Code: CodeSoftwareAssignmentCreated, Emitted: true,
+		Description: "An application was assigned to the organization or a device group with an intent: required (installed and kept installed), uninstall (removed), hold (version kept) or forbid (removed and blocked for apt).",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent", "update_rule", "version", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request when the intent and version rules are violated, already_exists for a second assignment of the entry in the same scope, not_found for an unknown entry or device group. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareAssignmentUpdated: {
+		Code: CodeSoftwareAssignmentUpdated, Emitted: true,
+		Description: "The intent, update rule, version or reason of a software assignment changed.",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent", "update_rule", "version", "old_intent", "old_version", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request when the intent and version rules are violated. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareAssignmentDeleted: {
+		Code: CodeSoftwareAssignmentDeleted, Emitted: true,
+		Description: "A software assignment was removed; devices stop enforcing it (installed software stays).",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent"},
+		Outcomes:    adminOutcomes,
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

@@ -74,6 +74,8 @@ type handlers struct {
 	notifications *app.Notifications
 	// softwareSources are the APT package sources (plan M13a decisions 1–6).
 	softwareSources *app.SoftwareSources
+	// softwareCatalog are the catalog entries and their assignments (plan M13a decisions 7–11).
+	softwareCatalog *app.SoftwareCatalog
 	ipAllowlist     *app.IPAllowlist
 	overview        *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
