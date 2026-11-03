@@ -20,6 +20,8 @@ const device = (over: Partial<SoftwareCatalogDevice>): SoftwareCatalogDevice => 
   reason: '', error: '', reported_at: '2026-10-02T00:00:00Z', ...over,
 })
 const setIcon = vi.hoisted(() => vi.fn())
+const saveAssignment = vi.hoisted(() => vi.fn())
+const deviceFetch = vi.hoisted(() => vi.fn())
 const saveEntry = vi.hoisted(() => vi.fn())
 const rows = [device({ name: 'Anna laptop' }), device({ device_id: 'd2', hostname: 'lap-0500' })]
 
@@ -30,7 +32,11 @@ vi.mock('../lib/software', async (original) => ({
   saveCatalogEntry: saveEntry,
   allSoftwareSources: () => Promise.resolve([]),
   listSoftwareAssignments: () => () => Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_capped: false, sort: '-created_at' }),
-  listSoftwareCatalogDevices: () => () => Promise.resolve({ items: rows, page: 1, page_size: 25, total: 2, total_capped: false, sort: 'hostname' }),
+  saveSoftwareAssignment: saveAssignment,
+  listSoftwareCatalogDevices: () => () => {
+    deviceFetch()
+    return Promise.resolve({ items: rows, page: 1, page_size: 25, total: 2, total_capped: false, sort: 'hostname' })
+  },
 }))
 vi.mock('../lib/devices', async (original) => ({
   ...(await original<typeof import('../lib/devices')>()),
@@ -117,5 +123,19 @@ describe('SoftwareCatalogDetail devices list', () => {
     expect(saveEntry).toHaveBeenCalledTimes(1)
     release(null)
     await flushPromises()
+  })
+
+  it('reloads the devices list after an assignment is saved', async () => {
+    saveAssignment.mockReset()
+    saveAssignment.mockResolvedValue(null)
+    deviceFetch.mockReset()
+    await mountDetail('org_operator')
+    const before = deviceFetch.mock.calls.length
+    ;(document.querySelector('[data-testid="create-assignment"]') as HTMLElement).click()
+    await flushPromises()
+    ;(document.querySelector('.v-dialog form') as HTMLFormElement).dispatchEvent(new Event('submit'))
+    await flushPromises()
+    expect(saveAssignment).toHaveBeenCalledTimes(1)
+    expect(deviceFetch.mock.calls.length).toBeGreaterThan(before)
   })
 })

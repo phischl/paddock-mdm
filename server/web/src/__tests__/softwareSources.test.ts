@@ -196,4 +196,16 @@ describe('SoftwareSources', () => {
     const alerts = Array.from(document.body.querySelectorAll('.v-dialog [role="alert"]')).map((a) => a.textContent ?? '')
     expect(alerts.some((a) => a.includes('The request was not valid.'))).toBe(true)
   })
+
+  it('keeps URIs and fingerprint blocks whole and the actions on one line (layout the 1280 px table relies on)', async () => {
+    await mountSources('org_admin')
+    const uri = document.body.querySelector('[data-testid="source-uri"]') as HTMLElement
+    expect(uri.classList.contains('src-uri')).toBe(true)
+    expect(uri.textContent?.replace(/\u200b/g, '')).toBe('https://repo.example.com/apt')
+    expect(uri.textContent).toContain('/\u200b')
+    const blocks = document.body.querySelectorAll('[data-testid="source-fingerprint-cell"] .src-block')
+    expect(blocks).toHaveLength(10)
+    expect(blocks[0].textContent?.trim()).toBe('ABCD')
+    expect(document.body.querySelector('.row-actions')?.classList.contains('src-actions')).toBe(true)
+  })
 })

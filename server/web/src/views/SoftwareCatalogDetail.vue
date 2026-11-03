@@ -42,6 +42,7 @@ const assignmentOpen = ref(false)
 const assignmentProblem = ref('')
 const formKey = ref(0)
 const assignments = ref<{ reload: () => Promise<void> } | null>(null)
+const devices = ref<{ reload: () => Promise<void> } | null>(null)
 const fetchAssignments = computed(() => listSoftwareAssignments(id.value))
 const fetchDevices = computed(() => listSoftwareCatalogDevices(id.value))
 
@@ -149,7 +150,7 @@ async function submitAssignment(input: AssignmentInput): Promise<void> {
   assignmentProblem.value = (await saveSoftwareAssignment(assignmentTarget.value?.id ?? null, input)) ?? ''
   if (assignmentProblem.value) return
   assignmentOpen.value = false
-  await Promise.all([assignments.value?.reload(), load()])
+  await Promise.all([assignments.value?.reload(), devices.value?.reload(), load()])
 }
 
 async function removeAssignment(item: SoftwareAssignment): Promise<void> {
@@ -161,7 +162,7 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
   })
   if (!confirmed) return
   problem.value = (await deleteSoftwareAssignment(item.id)) ?? ''
-  await Promise.all([assignments.value?.reload(), load()])
+  await Promise.all([assignments.value?.reload(), devices.value?.reload(), load()])
 }
 </script>
 
@@ -330,6 +331,7 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
 
       <h2>{{ t('software.catalog.devices') }}</h2>
       <DataList
+        ref="devices"
         query-prefix="d"
         :columns="deviceColumns"
         :fetch="fetchDevices"

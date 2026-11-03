@@ -42,7 +42,7 @@ const columns: ListColumn[] = [
   { key: 'slug', title: 'software.sources.slug', role: 'meta' },
   { key: 'uris', title: 'software.sources.uris', role: 'meta', hideBelow: 'md' },
   { key: 'suites', title: 'software.sources.suites', role: 'meta', hideBelow: 'md' },
-  { key: 'fingerprint', title: 'software.sources.fingerprint', role: 'meta', mono: true, hideBelow: 'sm' },
+  { key: 'fingerprint', title: 'software.sources.fingerprint', role: 'meta', hideBelow: 'sm' },
   { key: 'entry_count', title: 'software.sources.entries', role: 'meta', align: 'end' },
   { key: 'updated_at', title: 'common.updatedAt', sortable: true, role: 'meta' },
   ...(session.canDelete ? [{ key: 'actions', title: 'common.actions', role: 'actions' as const }] : []),
@@ -165,20 +165,36 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
       empty-description="software.sources.empty.description"
       data-testid="source-list"
     >
+      <template #[`item.slug`]="{ item }: { item: SoftwareSourceSummary }">
+        <span class="src-slug mono">{{ item.slug }}</span>
+      </template>
       <template #[`item.uris`]="{ item }: { item: SoftwareSourceSummary }">
-        <span class="mono">{{ item.uris.join(', ') }}</span>
+        <!-- The table cell breaks anywhere; a URI breaks after its slashes instead, one URI per line. -->
+        <span
+          v-for="uri in item.uris"
+          :key="uri"
+          class="src-uri mono"
+          data-testid="source-uri"
+        >{{ uri.replace(/\//g, '/\u200b') }}</span>
       </template>
       <template #[`item.suites`]="{ item }: { item: SoftwareSourceSummary }">
         {{ item.suites.join(', ') }}
       </template>
       <template #[`item.fingerprint`]="{ item }: { item: SoftwareSourceSummary }">
-        {{ groupFingerprint(item.fingerprint) }}
+        <span
+          class="src-fingerprint"
+          data-testid="source-fingerprint-cell"
+        ><span
+          v-for="(block, i) in groupFingerprint(item.fingerprint).split(' ')"
+          :key="i"
+          class="src-block"
+        >{{ block + ' ' }}</span></span>
       </template>
       <template #[`item.updated_at`]="{ item }: { item: SoftwareSourceSummary }">
         <TimeCell :iso="item.updated_at" />
       </template>
       <template #[`item.actions`]="{ item }: { item: SoftwareSourceSummary }">
-        <div class="row-actions">
+        <div class="row-actions src-actions">
           <v-btn
             :aria-label="t('managed.editLabel', { name: item.name })"
             variant="tonal"
@@ -221,3 +237,38 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
     </v-dialog>
   </section>
 </template>
+
+<style scoped>
+/* The table cells break anywhere (overflow-wrap: anywhere); these values keep their words whole so no column collapses
+   to one character per line, and the actions always stay fully visible. */
+.src-slug,
+.src-uri,
+.src-block {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.src-slug {
+  white-space: nowrap;
+}
+
+.src-uri {
+  display: block;
+}
+
+.src-fingerprint {
+  display: inline-block;
+  min-width: 10rem;
+  font-family: var(--pd-font-mono);
+  font-size: 12px;
+}
+
+.src-block {
+  display: inline-block;
+}
+
+.src-actions {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+</style>
