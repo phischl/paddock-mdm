@@ -67,6 +67,7 @@ func (a *Agent) handleBundle(ctx context.Context, ref *protocol.BundleRef) {
 		return
 	}
 	rep := a.d.Applier.Apply(ctx, b)
+	a.refreshSoftware()
 	a.applyRevocation(b)
 	if err := fsutil.WriteFile(a.d.Layout.Bundle(), env, 0o600, 0o700); err != nil {
 		slog.ErrorContext(ctx, "caching the bundle failed", "error", err)
@@ -94,6 +95,7 @@ func (a *Agent) drift(ctx context.Context) {
 		return
 	}
 	rep := a.d.Applier.ApplyResources(ctx, a.current, ids)
+	a.refreshSoftware()
 	for _, e := range rep.Errors {
 		slog.WarnContext(ctx, "drift correction failed", "resource", e.ID, "error", e.Message)
 	}

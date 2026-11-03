@@ -246,7 +246,7 @@ func (u *Updates) Apply(ctx context.Context, r bundle.Resource) Result {
 			return errorResult(r.ID, err)
 		}
 	}
-	held, err := u.applyHolds(ctx, s)
+	held, unknown, err := u.applyHolds(ctx, s)
 	if err != nil {
 		return errorResult(r.ID, err)
 	}
@@ -264,6 +264,9 @@ func (u *Updates) Apply(ctx context.Context, r bundle.Resource) Result {
 		return errorResult(r.ID, err)
 	}
 	u.applied = bytes.Clone(r.Spec)
+	if len(unknown) > 0 {
+		return errorResult(r.ID, fmt.Errorf("apt knows no package named %s: its hold is not changed", strings.Join(unknown, ", ")))
+	}
 	if !u.Sys.PackageInstalled(UnattendedPackage) {
 		return errorResult(r.ID, errors.New("unattended-upgrades is not installed: daily security updates do not run"))
 	}
@@ -300,25 +303,45 @@ func (u *Updates) writeFiles(s bundle.UpdatesSpec, raw []byte) (changed, reload 
 	return changed, reload, restart, nil
 }
 
-// applyHolds holds and unholds packages with apt-mark and records the holds Paddock set.
-func (u *Updates) applyHolds(ctx context.Context, s bundle.UpdatesSpec) (bool, error) {
+// applyHolds holds and unholds packages with apt-mark and records the holds Paddock set. A name apt has no package of
+// exactly is never passed to apt-mark, which would read it as a pattern (KnownPackage); it is returned as unknown, an
+// unknown new hold stays out of the record and an unknown recorded one stays in it.
+func (u *Updates) applyHolds(ctx context.Context, s bundle.UpdatesSpec) (bool, []string, error) {
 	hold, unhold, record, err := u.holdChanges(ctx, s)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
+	var unknown []string
+	known := func(p string) bool {
+		if KnownPackage(ctx, u.Sys, p) {
+			return true
+		}
+		unknown = append(unknown, p)
+		return false
+	}
+	hold = slices.DeleteFunc(hold, func(p string) bool { return !known(p) })
+	unhold = slices.DeleteFunc(unhold, func(p string) bool { return !known(p) })
+	recorded := u.recorded()
+	record = slices.DeleteFunc(record, func(p string) bool { return slices.Contains(unknown, p) && !slices.Contains(recorded, p) })
+	for _, p := range unknown {
+		if slices.Contains(recorded, p) && !slices.Contains(record, p) {
+			record = append(record, p)
+		}
+	}
+	slices.Sort(record)
 	for verb, pkgs := range map[string][]string{"hold": hold, "unhold": unhold} {
 		if len(pkgs) == 0 {
 			continue
 		}
 		if out, exit, err := u.Sys.AptMark(ctx, append([]string{verb, "--"}, pkgs...)...); err != nil || exit != 0 {
-			return false, fmt.Errorf("apt-mark %s: exit %d %v %s", verb, exit, err, strings.TrimSpace(out))
+			return false, unknown, fmt.Errorf("apt-mark %s: exit %d %v %s", verb, exit, err, strings.TrimSpace(out))
 		}
 	}
-	if !slices.Equal(record, u.recorded()) {
+	if !slices.Equal(record, recorded) {
 		data := []byte(strings.Join(record, "\n") + "\n")
 		if err := u.Sys.WriteFileAtomic(heldRecord, data, 0o600, 0, 0); err != nil {
-			return false, err
+			return false, unknown, err
 		}
 	}
-	return len(hold)+len(unhold) > 0, nil
+	return len(hold)+len(unhold) > 0, unknown, nil
 }

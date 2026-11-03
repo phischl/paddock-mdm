@@ -209,6 +209,11 @@ const (
 	// The unlock path of a converted disk could not be reinstalled after a cleanup had removed it (plan M8e decision 18,
 	// amendment 2026-10-30): an initrd the disarm of a cancelled conversion neutralized cannot open the disk until then.
 	EventDiskConversionUnlockRestoreFailed = "disk.conversion_unlock_restore_failed" // data: {conversion_id, reason}
+	// Software catalog (plan M13a decision 24): what the software reconciler changed or could not apply.
+	EventSoftwareInstalled   = "software.installed"    // data: SoftwareChange{reason: first_install}
+	EventSoftwareReinstalled = "software.reinstalled"  // data: SoftwareChange{reason: locally_removed}
+	EventSoftwareRemoved     = "software.removed"      // data: SoftwareChange
+	EventSoftwareApplyFailed = "software.apply_failed" // data: SoftwareApplyFailed
 )
 
 // Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
@@ -269,6 +274,49 @@ type UpdatesRun struct {
 	Error          string    `json:"error,omitempty"`
 }
 
+// Reasons of SoftwareChange.
+const (
+	SoftwareReasonFirstInstall   = "first_install"
+	SoftwareReasonLocallyRemoved = "locally_removed"
+)
+
+// SoftwareChange is the data of software.installed, software.reinstalled and software.removed.
+type SoftwareChange struct {
+	Package        string `json:"package"`
+	Version        string `json:"version"`
+	Intent         string `json:"intent"`
+	CatalogEntryID string `json:"catalog_entry_id"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+// Stages and reasons of SoftwareApplyFailed; the reasons are also those of a failed SoftwareItem.
+const (
+	SoftwareStageSourceUpdate = "source_update"
+	SoftwareStageKeyring      = "keyring"
+	SoftwareStageSimulate     = "simulate"
+	SoftwareStageInstall      = "install"
+	SoftwareStageRemove       = "remove"
+
+	SoftwareFingerprintMismatch   = "fingerprint_mismatch"
+	SoftwareWouldRemoveDependents = "would_remove_dependents"
+	SoftwareNoCandidate           = "no_candidate"
+	SoftwareSourceUnreachable     = "source_unreachable"
+	SoftwareDpkgLocked            = "dpkg_locked"
+	SoftwareAptFailed             = "apt_failed"
+	SoftwareDeferredOffline       = "deferred_offline"
+	SoftwareNotYetApplied         = "not_yet_applied"
+)
+
+// SoftwareApplyFailed is the data of software.apply_failed: a package or a source (Source without Package) that could
+// not be applied. Error is at most 200 characters.
+type SoftwareApplyFailed struct {
+	Package string `json:"package,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Stage   string `json:"stage"`
+	Reason  string `json:"reason"`
+	Error   string `json:"error"`
+}
+
 // TamperServiceStopped is the data of tamper.service_stopped.
 type TamperServiceStopped struct {
 	Unit string `json:"unit"`
@@ -293,6 +341,7 @@ var EventTypes = []string{
 	EventAgentUninstalled,
 	EventDiskConversionPrepared, EventDiskConversionStarted, EventDiskConversionCompleted, EventDiskConversionFailed,
 	EventDiskConversionAborted, EventDiskConversionNeutralizeFailed, EventDiskConversionUnlockRestoreFailed,
+	EventSoftwareInstalled, EventSoftwareReinstalled, EventSoftwareRemoved, EventSoftwareApplyFailed,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass

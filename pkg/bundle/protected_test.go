@@ -23,6 +23,12 @@ func TestRefusedIntent(t *testing.T) {
 		{"dracut", []string{"forbid", "uninstall"}, false},
 		{"initramfs-tools", []string{"required", "hold"}, false},
 		{"nano", nil, false}, {"", nil, false},
+		// apt reads these as regexes that select protected packages (review of PDK-412, PDK-705).
+		{"himmelblau.", all, true}, {"paddock-agen.", all, true}, {"sud.", all, true}, {"paddoc+k-agent", all, true},
+		{"initramfs-tool.", all, true}, {"CRYPTSETU.", all, true},
+		{"sud++o", all, true}, {"paddock-agen++t", all, true}, {"himmelblau++", all, true}, {"paddock-agen.++", all, true},
+		// Exact names with "." or "+" that select no protected package stay valid; g++ is an exemption.
+		{"libstdc++6", nil, false}, {"python3.12", nil, false}, {"g++", nil, false},
 	} {
 		if EntryRefused(tc.pkg) != tc.entry {
 			t.Errorf("EntryRefused(%q) = %v", tc.pkg, !tc.entry)
@@ -36,6 +42,19 @@ func TestRefusedIntent(t *testing.T) {
 	for _, name := range slices.Concat(fullyProtected, removalProtected, conflictingResult) {
 		if !ValidPackage(name) {
 			t.Errorf("%s is not a valid package name", name)
+		}
+	}
+}
+
+// TestAptPatternExemptions: every exemption is an exact name that the pattern emulation would refuse without its
+// entry; an entry that is not needed must not be on the list (architect decision 2026-11-03).
+func TestAptPatternExemptions(t *testing.T) {
+	for _, name := range aptPatternExempt {
+		if !ValidPackage(name) || !aptPatternMatches(name) {
+			t.Errorf("exemption %q is not needed or not a package name", name)
+		}
+		if EntryRefused(name) {
+			t.Errorf("exemption %q is refused", name)
 		}
 	}
 }

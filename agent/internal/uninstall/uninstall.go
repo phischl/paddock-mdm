@@ -64,6 +64,7 @@ func ReadPlan(path string) (Plan, error) {
 const (
 	StepStop        = "stop_services"
 	StepUpdates     = "update_configuration"
+	StepSoftware    = "software_sources"
 	StepAccess      = "sudoers_and_notices"
 	StepQuarantine  = "quarantine_copy"
 	StepManaged     = "managed_files"
@@ -137,6 +138,7 @@ func (h *Helper) Execute(ctx context.Context, plan Plan) Summary {
 	reset := plan.Mode == command.UninstallReset
 	s.Steps[StepStop] = h.stopServices(ctx)
 	s.Steps[StepUpdates] = h.updateConfiguration(ctx)
+	s.Steps[StepSoftware] = h.softwareSources(ctx)
 	s.Steps[StepAccess] = h.sudoersAndNotices(ctx)
 	s.Steps[StepQuarantine] = h.quarantineCopy()
 	s.Steps[StepManaged] = skipUnless(reset, func() string { return h.managedFiles(ctx) })

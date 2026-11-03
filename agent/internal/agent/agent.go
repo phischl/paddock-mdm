@@ -51,6 +51,9 @@ type Deps struct {
 	Applier *apply.Applier
 	// Inventory is the fleetd reconciler of Applier; New lets the update policy gate its upgrades (plan M8d decision 23).
 	Inventory *reconcile.Inventory
+	// Software is the software reconciler of Applier; New gives it the server's reachability, and its status goes
+	// into the health report after every pass (plan M13a decisions 25 and 27). Nil: no software report.
+	Software *reconcile.Software
 	// Commands executes the commands of check-ins; nil means the handlers of this build (commands.Handlers).
 	Commands *commands.Executor
 	// Events receives the device events of the reconcilers; New connects it to the spool.
@@ -162,6 +165,11 @@ type Agent struct {
 	helperLaunched     bool
 	helperNoExecLogged bool
 	helperLimitLogged  bool
+	// lastSoftwareDigest and lastSoftwareFullAt are the software items the server has (plan M13a decision 27);
+	// softwarePending is the digest of the items the check-in in flight carries, "" when it carries none.
+	lastSoftwareDigest string
+	lastSoftwareFullAt time.Time
+	softwarePending    string
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -189,9 +197,12 @@ func Load(l paths.Layout) (Deps, error) {
 	sys := reconcile.OS{Root: l.Root}
 	events := &reconcile.Events{}
 	inventory := &reconcile.Inventory{Sys: sys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
+	software := &reconcile.Software{Sys: sys, Events: events}
 	d := Deps{
 		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys, Inventory: inventory,
-		Applier: apply.New(sys, managed, events).WithInventory(inventory).WithWatch(&reconcile.Watch{Sys: sys, Events: events}),
+		Software: software,
+		Applier: apply.New(sys, managed, events).WithInventory(inventory).WithWatch(&reconcile.Watch{Sys: sys, Events: events}).
+			WithSoftware(software),
 	}
 	if l.Root == "" || l.Root == "/" {
 		d.FollowLogins = localadmin.FollowJournal
@@ -224,6 +235,9 @@ func New(d Deps) (*Agent, error) {
 		conversionJobs: make(chan struct{}, 1), conversionCalls: make(chan func())}
 	if d.Inventory != nil {
 		d.Inventory.UpdatesAllowed = a.updatesAllowed
+	}
+	if d.Software != nil {
+		d.Software.ServerReachable = a.serverReachable
 	}
 	a.localAdmin = &localadmin.Manager{Sys: d.Accounts, Escrow: escrowClient{a}, State: &a.st.LocalAdmin, Save: a.persist,
 		Emit: a.event, Result: a.commandResult, Now: d.Now}
@@ -439,6 +453,7 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 		return d
 	}
 	a.failures = 0
+	a.softwareDelivered()
 	if err := a.checkedIn(resp); err != nil {
 		slog.ErrorContext(ctx, "storing check-in state failed", "error", err)
 		a.setError(err.Error())
@@ -468,7 +483,9 @@ func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	a.refreshRevokeCapabilities(ctx)
 	a.refreshComponents(ctx)
 	a.refreshHostname(ctx)
-	health, err := json.Marshal(a.d.Health.Report())
+	report := a.d.Health.Report()
+	a.softwareCheckin(ctx, &report)
+	health, err := json.Marshal(report)
 	if err != nil {
 		health = nil
 	}

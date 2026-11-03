@@ -154,11 +154,15 @@ var aptInstall = []string{"install", "-y", "-q", "-o", "DPkg::Lock::Timeout=600"
 // (command.InstallNowResult).
 func installPackages(ctx context.Context, sys reconcile.System, pkgs []string, rebootRequired func() bool) (string, map[string]any) {
 	r := command.InstallNowResult{Installed: []string{}, Failed: []string{}}
-	var upgrade, install []string
+	var upgrade, install, unknown []string
 	for _, p := range pkgs {
-		if sys.PackageInstalled(p) {
+		switch {
+		case !reconcile.KnownPackage(ctx, sys, p):
+			// apt-get would read the name as a pattern (architect decision 2026-11-03): it fails without an apt run.
+			unknown = append(unknown, p)
+		case sys.PackageInstalled(p):
 			upgrade = append(upgrade, p)
-		} else {
+		default:
 			install = append(install, p)
 		}
 	}
@@ -193,7 +197,7 @@ func installPackages(ctx context.Context, sys reconcile.System, pkgs []string, r
 		aptRun(append(append(append([]string{}, aptInstall...), "--"), install...)...)
 	}
 	for _, p := range pkgs {
-		if sys.PackageInstalled(p) && !slices.Contains(failed, p) {
+		if sys.PackageInstalled(p) && !slices.Contains(failed, p) && !slices.Contains(unknown, p) {
 			r.Installed = append(r.Installed, p)
 		} else {
 			r.Failed = append(r.Failed, p)

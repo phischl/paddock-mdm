@@ -276,6 +276,11 @@ const (
 	CodeSoftwareAssignmentCreated   Code = "software_assignment.created"
 	CodeSoftwareAssignmentUpdated   Code = "software_assignment.updated"
 	CodeSoftwareAssignmentDeleted   Code = "software_assignment.deleted"
+	// What devices did with their software assignments (plan M13a decision 24).
+	CodeDeviceSoftwareInstalled   Code = "device.software_installed"
+	CodeDeviceSoftwareReinstalled Code = "device.software_reinstalled"
+	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
+	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -323,6 +328,7 @@ var deviceEventParams = []string{
 	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
 	"command_id", "mode", "local_admin", "tpm", "steps",
 	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by", "state",
+	"package", "intent", "catalog_entry_id", "source",
 }
 
 var registry = map[Code]Definition{
@@ -1671,6 +1677,31 @@ var registry = map[Code]Definition{
 		Description: "A software assignment was removed; devices stop enforcing it (installed software stays).",
 		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceSoftwareInstalled: {
+		Code: CodeDeviceSoftwareInstalled, Emitted: true,
+		Description: "A device installed a required application from its software catalog assignment for the first time (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareReinstalled: {
+		Code: CodeDeviceSoftwareReinstalled, Emitted: true,
+		Description: "A device found a required application removed locally and installed it again (actor: the device); nothing blocks the local administrator.",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareRemoved: {
+		Code: CodeDeviceSoftwareRemoved, Emitted: true,
+		Description: "A device removed an application because its assignment says uninstall or forbid (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareApplyFailed: {
+		Code: CodeDeviceSoftwareApplyFailed, Emitted: true,
+		Description: "A device could not apply a software assignment or source: the key fingerprint did not match, the operation would have removed other packages, the package has no candidate, or apt failed (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "reason is fingerprint_mismatch, would_remove_dependents, no_candidate, source_unreachable, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

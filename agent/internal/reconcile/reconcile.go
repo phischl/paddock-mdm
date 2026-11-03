@@ -56,6 +56,8 @@ type System interface {
 	// AptGet runs apt-get non-interactively (DEBIAN_FRONTEND=noninteractive); it may take minutes. A run killed at
 	// PackageTimeout returns an error wrapping context.DeadlineExceeded.
 	AptGet(ctx context.Context, args ...string) (output string, exit int, err error)
+	// AptCache runs apt-cache (pkgnames <prefix>: the names of real packages that start with prefix, no regex).
+	AptCache(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// AptMark runs apt-mark (showhold, hold, unhold).
 	AptMark(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// Dpkg runs dpkg like AptGet, e.g. to finish an interrupted installation (--configure -a).
