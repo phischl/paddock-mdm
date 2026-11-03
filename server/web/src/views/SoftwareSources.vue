@@ -178,7 +178,11 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
         >{{ uri.replace(/\//g, '/\u200b') }}</span>
       </template>
       <template #[`item.suites`]="{ item }: { item: SoftwareSourceSummary }">
-        {{ item.suites.join(', ') }}
+        <span
+          v-for="suite in item.suites"
+          :key="suite"
+          class="src-suite"
+        >{{ suite }}</span>
       </template>
       <template #[`item.fingerprint`]="{ item }: { item: SoftwareSourceSummary }">
         <span
@@ -188,7 +192,7 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
           v-for="(block, i) in groupFingerprint(item.fingerprint).split(' ')"
           :key="i"
           class="src-block"
-        >{{ block + ' ' }}</span></span>
+        >{{ block }}</span></span>
       </template>
       <template #[`item.updated_at`]="{ item }: { item: SoftwareSourceSummary }">
         <TimeCell :iso="item.updated_at" />
@@ -243,13 +247,19 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
    to one character per line, and the actions always stay fully visible. */
 .src-slug,
 .src-uri,
+.src-suite,
 .src-block {
   overflow-wrap: normal;
   word-break: normal;
 }
 
-.src-slug {
+.src-slug,
+.src-suite {
   white-space: nowrap;
+}
+
+.src-suite {
+  display: block;
 }
 
 .src-uri {
@@ -258,17 +268,26 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
 
 .src-fingerprint {
   display: inline-block;
-  min-width: 10rem;
+  min-width: 9rem;
   font-family: var(--pd-font-mono);
   font-size: 12px;
 }
 
 .src-block {
   display: inline-block;
+  margin-inline-end: 0.5ch;
 }
 
 .src-actions {
   flex-wrap: nowrap;
   white-space: nowrap;
+}
+</style>
+
+<style>
+/* The ListColumn hideBelow option stops at md, which still leaves the table too wide at 1280 px: the actions got
+   clipped. The Updated column (7th; the cards layout has no cells and still shows it) goes below 1440 px. */
+@media (max-width: 1439.98px) {
+  [data-testid='source-list'] .v-table tr > :nth-child(7) { display: none; }
 }
 </style>
