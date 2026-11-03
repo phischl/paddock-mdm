@@ -42,7 +42,9 @@ them, with a certificate their system trust store accepts.
 **Changing the key** (the vendor rotated it): paste the new key with its fingerprint in the same form; both are
 required together. The step-up applies again, and `software_source.updated` records the new `fingerprint` and the
 `old_fingerprint`. Devices write the new keyring and refresh the source at their next check-in. Until then apt on the
-device reports `NO_PUBKEY` for the source if the vendor already signs with the new key.
+device refuses the source's signature if the vendor already signs with the new key: `NO_PUBKEY` where apt verifies
+with gpgv, `Missing key` or `No good signature` where it verifies with sqv (Debian 13, Ubuntu 26.04), each with a
+`W:` or `E:` line such as *The repository … is not signed*.
 
 **Removing a source** asks you to type its name. A source that a catalog entry uses cannot be removed (409 `in_use`);
 change or delete the entries first. Devices remove the source file and the keyring at their next check-in; installed
@@ -97,14 +99,17 @@ When a `required` package is also held (by a `hold` or another `required pinned`
 smallest named version; two different versions are reported as a hold conflict, as for package holds. A versionless organization
 package hold unpins a required pinned software package, while a versionless software hold does not. A `forbid` or
 `uninstall` result supersedes a package hold of the same package for that device: the hold is left out of the device's
-bundle so that the removal can run, and the device's software status names the superseded hold.
+bundle so that the removal can run, and the device's apply status of the `software` resource names the superseded
+hold.
 
 Holds and version pins of the catalog are applied by the update management, together with the organization's package
 holds (`/etc/apt/preferences.d/50paddock`, `apt-mark hold`, the unattended-upgrades blacklist); the regular update run
 reports held packages as held back.
 
 A device receives a source only while one of its packages is `required` from it: under `hold`, `uninstall` or
-`forbid` alone the source file and keyring are removed from the device.
+`forbid` alone the source file and keyring are removed from the device. A hold alone therefore drops the source: the
+held package stays at its version, and the device sees no newer version from that source until a package of it is
+required again.
 
 ## What the device does
 
@@ -197,13 +202,13 @@ On the device:
 | `apt-cache policy <package>` | the versions, the sources they come from and the pins: `1001` for a pinned version, `-1` for a forbidden package |
 | `apt-mark showhold` | the versionless holds |
 | `cat /etc/apt/preferences.d/51paddock-software` | the forbidden packages |
-| `sudo apt-get update -o Dir::Etc::sourcelist=sources.list.d/paddock-<slug>.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0` | the source alone, as the agent refreshes it: TLS, DNS and signature errors (`NO_PUBKEY`) |
+| `sudo apt-get update -o Dir::Etc::sourcelist=sources.list.d/paddock-<slug>.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0` | the source alone, as the agent refreshes it: TLS, DNS and signature errors (`NO_PUBKEY` with gpgv; `Missing key` or `No good signature` with sqv) |
 | the agent's health socket (`/run/paddock/agent.sock`, `GET /health`, field `software`) | the current state and reason of every application, before the next check-in |
 | `journalctl -u paddock-supervisor` | the agent's log, including every file the software reconciler removed |
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `failed`, `source_unreachable`, error with `NO_PUBKEY` | the vendor signs with a new key: verify the new fingerprint out of band and change the source's key |
+| `failed`, `source_unreachable`, error with `NO_PUBKEY`, `Missing key` or `No good signature` | the vendor signs with a new key: verify the new fingerprint out of band and change the source's key |
 | `failed`, `source_unreachable`, certificate error | the device does not trust the repository's TLS certificate; fix the certificate or the device's trust store |
 | `failed`, `no_candidate` for a pinned version | the repository no longer offers the version (RR-83); pin another version or switch to `latest` |
 | `failed`, `would_remove_dependents` | another installed package depends on the package (removal) or conflicts with it (install); resolve it on the device or change the assignment |
