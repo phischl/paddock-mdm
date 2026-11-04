@@ -6,11 +6,13 @@ import DangerZone from '../components/DangerZone.vue'
 import DeviceOwners from '../components/DeviceOwners.vue'
 import DeviceNameCard from '../components/DeviceNameCard.vue'
 import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
+import EnforceCard from '../components/EnforceCard.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
 import SeverityChip from '../components/SeverityChip.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import UpdatesCard from '../components/UpdatesCard.vue'
+import { isReportOnly } from '../lib/configStatus'
 import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { healthRows } from '../lib/deviceHealth'
 import { formatDateTime, formatGB, formatGiB } from '../lib/format'
@@ -457,6 +459,13 @@ async function copyId(): Promise<void> {
       </ul>
     </section>
 
+    <EnforceCard
+      v-if="session.canWrite && d.state === 'active'"
+      :device-id="d.id"
+      :hostname="d.hostname"
+      :report-only="isReportOnly(d)"
+      @changed="page.changed()"
+    />
     <DangerZone
       class="pd-device-wide"
       :device-id="d.id"

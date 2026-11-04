@@ -35,7 +35,7 @@ function deviceOf(over: Partial<DeviceDetail> = {}): DeviceDetail {
     os_release: { id: 'ubuntu', version_id: '24.04' }, enrollment_token_id: null, enrolled_at: now, state_changed_at: now, bundle_version: 3,
     last_contact_at: now, applied_bundle_version: 3, agent_version: '1.9.1', groups: [], identity_keys: [], logins_suspended: false,
     login_assignment: { users: [], groups: [] }, schema_versions: [], login_management: true, login_status: { login: null, sudo: null },
-    sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, ...over,
+    sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, config_status: { applied: 0, failed: 0, pending: 0, drift_corrected: 0, plan_errors: 0 }, ...over,
   } as DeviceDetail
 }
 const updates: DeviceUpdates = { last_security_run: null, last_regular_run: null, reboot_required: false, holds: [], conflicts: [] }
@@ -182,5 +182,22 @@ describe('device header band (plan M7c decision 29)', () => {
     settleConfirm({ reason: '' })
     await flushPromises()
     expect(w.find('[role="status"]').text()).toBe('The device already runs the offered release.')
+  })
+})
+
+describe('adoption chips (plan M11 decision 43)', () => {
+  it('shows adopted and report-only for an adopted device before enforcement', async () => {
+    const { w } = await mountHeader(deviceOf({ enrollment_method: 'adopted', config_mode: 'report_only' }))
+    expect(w.find('[data-testid="device-enrollment-method"]').text()).toBe('Adopted')
+    expect(w.find('[data-testid="device-report-only"]').text()).toBe('Report-only')
+  })
+
+  it('shows autoinstall without report-only, and no method chip for an unknown method', async () => {
+    const { w } = await mountHeader(deviceOf({ enrollment_method: 'autoinstall', config_mode: 'enforce' }))
+    expect(w.find('[data-testid="device-enrollment-method"]').text()).toBe('Autoinstall')
+    expect(w.find('[data-testid="device-report-only"]').exists()).toBe(false)
+    wrapper?.unmount()
+    const unknown = await mountHeader(deviceOf({ enrollment_method: 'unknown', config_mode: 'enforce' }))
+    expect(unknown.w.find('[data-testid="device-enrollment-method"]').exists()).toBe(false)
   })
 })

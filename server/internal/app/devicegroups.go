@@ -181,7 +181,7 @@ func (d *DeviceGroups) Create(ctx context.Context, name string, description *str
 	var g pgstore.DeviceGroup
 	spec := SpecDeviceGroupCreate
 	spec.Params = map[string]any{"name": name}
-	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		name := devicegroup.NormalizeName(name)
 		desc := ""
 		if description != nil {
@@ -211,7 +211,7 @@ func (d *DeviceGroups) Create(ctx context.Context, name string, description *str
 		rec.SetTarget(audit.Target{Type: "device_group", ID: g.ID.String(), Display: g.Name})
 		g, err = policy.store(ctx, q, g.ID)
 		return err
-	})
+	}))
 	return g, err
 }
 
@@ -221,7 +221,7 @@ func (d *DeviceGroups) Update(ctx context.Context, id uuid.UUID, name, descripti
 	var g pgstore.DeviceGroup
 	spec := SpecDeviceGroupUpdate
 	spec.Target = &audit.Target{Type: "device_group", ID: id.String()}
-	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetDeviceGroup(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -261,7 +261,7 @@ func (d *DeviceGroups) Update(ctx context.Context, id uuid.UUID, name, descripti
 			rec.StateChanged(statechange.ScopeDeviceGroup, id)
 		}
 		return nil
-	})
+	}))
 	return g, err
 }
 
@@ -269,7 +269,7 @@ func (d *DeviceGroups) Update(ctx context.Context, id uuid.UUID, name, descripti
 func (d *DeviceGroups) Delete(ctx context.Context, id uuid.UUID) error {
 	spec := SpecDeviceGroupDelete
 	spec.Target = &audit.Target{Type: "device_group", ID: id.String()}
-	return d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return d.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
 		if err := q.LockOrganizationPrivileges(ctx); err != nil {
 			return err
@@ -296,7 +296,7 @@ func (d *DeviceGroups) Delete(ctx context.Context, id uuid.UUID) error {
 		// Memberships and group-scoped definitions are gone with the group; recompile the organization.
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		return nil
-	})
+	}))
 }
 
 func validateGroup(name, description string) error {

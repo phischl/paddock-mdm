@@ -36,7 +36,8 @@ container at `/secrets`, so the symlink works there too.
 ## Both VMs in parallel
 
 The per-VM subtests of every gate (`TestAgentGates`, `TestIdentityGates`, `TestLocalAdminGates`, `TestDiskGates`,
-`TestNoticeGate`, `TestInventoryGates`, `TestWatchGate`) run in parallel, one subtest per VM (`forEachVM`, plan M4b.1 step 5), so `make system-test VM=all`
+`TestNoticeGate`, `TestInventoryGates`, `TestWatchGate`, `TestPreflight`, `TestAdoptionGates`, `TestConfigRolloutGates`,
+`TestSoftwareGates`) run in parallel, one subtest per VM (`forEachVM`, plan M4b.1 step 5), so `make system-test VM=all`
 takes about as long as the slower VM instead of both together. A VM is never used by two tests at a time: the test
 functions themselves still run one after another. Gate S5 (`TestRolloutAutoStop`) drives both VMs itself.
 
@@ -59,6 +60,52 @@ the whole organization shares is coordinated through the VMs' `vmGroup` (`parall
   rollout (S-UP3) starts it with the failure threshold 1, and a simulated device reports a failed update to halt it.
 
 A new gate that changes shared state uses one of them; anything else it creates gets the run's suffix.
+
+## Adoption and staged configuration (plan M11)
+
+`Install` enrolls with `paddockd enroll` from `/root/paddock-enroll.json`, which creates an adopted, report-only device
+(it asserts `adopted`/`report_only`), and then enforces it (`POST /api/v1/devices/{id}/enforce` with the hostname) so
+that every gate sees applied resources. `Install(..., ReportOnly())` skips the enforcement and the drift interval; the
+gate calls `Enforce` and `SetDriftInterval` itself. The autoinstall gate asserts `autoinstall`/`enforce` and the marker
+`/etc/paddock/autoinstall.marker`.
+
+| Gate | What it proves | Shared state |
+| --- | --- | --- |
+| `TestPreflight` | `paddockd preflight --json` on an unenrolled VM: `sudoers_d` and `privileged_groups` warn after a foreign sudoers file and a sudo member are seeded, nothing changes | none |
+| `TestAdoptionGates` | report-only apply leaves the seeded file and group untouched and lists `quarantine`/`remove` as pending; enforcement quarantines, removes the member, writes the managed files, audits both tamper events | none (per VM) |
+| `TestConfigRolloutGates` | waves `[1,100]` with VM A's group as canary: a staged file reaches A only until `complete`; a staged missing unit fails on A, the worker halts the rollout (one event), the revert ends it | the organization's rollout settings and its single open rollout (`Together`); needs `VM=all`; no other gate in parallel; the file is staged again under a new path (at most 3 draws, a revert in between) until the VM outside the canary group has a bucket of 1 or more for the rollout, so the split is always testable; the staged unit reaches the other VM only when its bucket is 0 |
+
+The rollout gate restores the rollout settings and completes any open rollout in its cleanup; a killed run leaves them
+in place (switch rollouts off under *Settings* and complete or revert the rollout).
+
+## Software catalog (plan M13a)
+
+`TestSoftwareGates` (SW1–SW8) builds a signed APT repository **on each VM**, so the gate's own packages come from no
+outside repository:
+a throwaway Ed25519 signing key (`gpg --quick-gen-key`, private key only on the VM), the packages `paddock-gate-app`
+1.0 and 1.1 and `paddock-gate-anchor` 1.0 (`dpkg-deb --build`), `Packages` and `Release` from `apt-ftparchive`, a
+clearsigned `InRelease`, a throwaway CA in `/usr/local/share/ca-certificates/paddock-gate.crt` with a server
+certificate for `127.0.0.1`, and a TLS `http.server` as the transient unit `paddock-gate-repo` on
+`https://127.0.0.1:8443/` (all below `/srv/paddock-gate`). The VM needs `gpg`, `openssl` and `python3` (a missing one
+fails the gate, never skips it); `apt-utils` (`apt-ftparchive`) is installed when it is missing. Each VM gets its own
+source (`gate-<run>`), catalog entry and assignment to its own device group, so the VMs share nothing; everything goes
+with the snapshot and the run's cleanup.
+
+| Gate | What it proves |
+| --- | --- |
+| SW1 | `required pinned 1.0` installs 1.0 with the rendered source file, the keyring, the 1001 pin and `device.software_installed` |
+| SW2 | a local `apt-get remove` is undone within the drift interval, `device.software_reinstalled{reason: locally_removed}` |
+| SW3 | `forbid` removes it and pins it to −1 while `paddock-gate-anchor` (required from here on) keeps the source, so `apt-get install` fails with *no installation candidate*, and a `dpkg -i` is undone with a second `device.software_removed` |
+| SW4 | a hold keeps 1.0 through the regular run (`updates.run` held back; the anchor keeps the source, which a hold alone drops); `required latest` is upgraded only by the next regular run |
+| SW5 | with the stack blocked (`iptables`) and `last-checkin` 20 minutes old, a forbidden `dpkg -i` stays `pending/deferred_offline`; removed after unblocking |
+| SW6 | a held dpkg lock (`fcntl`, transient unit `gate-lock`) gives `pending/dpkg_locked` without a failure event; installed after the lock ends |
+| SW7 | after the repository's key rotation apt refuses the signature (`NO_PUBKEY` with gpgv, `Missing key` or `No good signature` with sqv, with a `W:`/`E:` line); the key change needs a step-up (denied event without), records both fingerprints, reaches the keyring, and 1.1 installs |
+| SW8 | an edited source file and a rogue `paddock-rogue.sources` are corrected with two `device.tamper_protected_file_changed` |
+
+The VMs still need the Ubuntu archive: the setup installs `apt-utils` when `apt-ftparchive` is missing, and SW4 runs
+`paddock-updates.service` twice, two full regular runs (`apt-get update` and `dist-upgrade` against the archive). The
+first one upgrades everything the snapshot lacks and takes as long as U3's, up to an hour on an old snapshot; without
+outbound HTTPS to the archive SW4 fails.
 
 ## Throwaway VMs
 

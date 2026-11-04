@@ -7,6 +7,8 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -398,4 +400,122 @@ func TestKeysOfItemsWithSeparatorsInNamesStayDistinct(t *testing.T) {
 	if plan.Deleted != 1 || plan.Changes[0].Key != `["a:b","x.service"]` {
 		t.Fatalf("plan %+v", plan)
 	}
+}
+
+// TestBeforeItems (plan M11 decision 18): the before-state has the full item of every update and deletion, by section
+// and key, and nothing for a creation.
+func TestBeforeItems(t *testing.T) {
+	d := current()
+	d.Settings.Updates.SecurityDailyAt = "02:30"
+	d.ManagedFiles = &[]declarative.ManagedFile{
+		{Path: "/etc/motd", Mode: "0644", Owner: "root", Group: "root", Content: "hello world"},
+		{Path: "/etc/issue.net", Mode: "0644", Owner: "root", Group: "root", Content: "new"},
+	}
+	d.PackageHolds = &[]declarative.PackageHold{}
+	plan := declarative.Diff(current(), d)
+	before := declarative.BeforeItems(current(), plan)
+
+	motd, ok := before[declarative.SectionManagedFiles][`[null,"/etc/motd"]`].(declarative.ManagedFile)
+	if !ok || motd.Content != "hello" {
+		t.Errorf("updated file before-state %+v", before[declarative.SectionManagedFiles])
+	}
+	if _, ok := before[declarative.SectionManagedFiles][`[null,"/etc/issue.net"]`]; ok {
+		t.Error("a created file has a before-state")
+	}
+	if got, ok := before[declarative.SectionManagedFiles][`["laptops","/etc/laptop.conf"]`].(declarative.ManagedFile); !ok || got.Content != "x=1" {
+		t.Errorf("deleted file before-state %+v", got)
+	}
+	if hold, ok := before[declarative.SectionPackageHolds][`[null,"firefox"]`].(declarative.PackageHold); !ok || hold.Reason != "breaks kiosk" {
+		t.Errorf("deleted hold before-state %+v", before[declarative.SectionPackageHolds])
+	}
+	if u, ok := before[declarative.SectionSettingsUpdates][""].(declarative.UpdateSettings); !ok || u.SecurityDailyAt != "03:00" {
+		t.Errorf("settings before-state %+v", before[declarative.SectionSettingsUpdates])
+	}
+	if len(declarative.BeforeItems(current(), declarative.Diff(current(), current()))) != 0 {
+		t.Error("an empty plan has before-states")
+	}
+}
+
+func beforeJSON(t *testing.T, items map[string]map[string]any) map[string]map[string]json.RawMessage {
+	t.Helper()
+	out := map[string]map[string]json.RawMessage{}
+	for section, byKey := range items {
+		out[section] = map[string]json.RawMessage{}
+		for key, item := range byKey {
+			raw, err := json.Marshal(item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out[section][key] = raw
+		}
+	}
+	return out
+}
+
+// TestRevert (plan M11 decision 21.2, amendment R6.12): the revert of a plan undoes its creations, updates and
+// deletions, keeps items created since and replaces an item whose deleted key was created again since.
+func TestRevert(t *testing.T) {
+	changed := current()
+	changed.Settings.Updates.SecurityDailyAt = "02:30"
+	changed.ManagedFiles = &[]declarative.ManagedFile{
+		{Path: "/etc/motd", Mode: "0644", Owner: "root", Group: "root", Content: "hello world"},
+		{Path: "/etc/laptop.conf", DeviceGroup: ptr("laptops"), Mode: "0600", Owner: "root", Group: "root", Content: "x=1"},
+		{Path: "/etc/issue.net", Mode: "0644", Owner: "root", Group: "root", Content: "new"},
+	}
+	changed.PackageHolds = &[]declarative.PackageHold{}
+	original := declarative.Diff(current(), changed)
+	before := beforeJSON(t, declarative.BeforeItems(current(), original))
+
+	// Since the original: another file was created and the deleted hold was created again with another reason.
+	later := changed
+	files := append(slices.Clone(*changed.ManagedFiles), declarative.ManagedFile{Path: "/etc/since", Mode: "0644", Owner: "root", Group: "root", Content: "kept"})
+	later.ManagedFiles = &files
+	later.PackageHolds = &[]declarative.PackageHold{{Package: "firefox", Reason: "again"}}
+
+	desired, err := declarative.Revert(later, original, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := declarative.Diff(later, desired)
+	got := map[string]string{}
+	for _, c := range plan.Changes {
+		got[c.Section+" "+c.Key] = c.Action
+	}
+	want := map[string]string{
+		`managed_files [null,"/etc/motd"]`:      declarative.ActionUpdate,
+		`managed_files [null,"/etc/issue.net"]`: declarative.ActionDelete,
+		`package_holds [null,"firefox"]`:        declarative.ActionUpdate,
+		`settings.updates `:                     declarative.ActionUpdate,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("revert plan %v, want %v", got, want)
+	}
+	if (*desired.PackageHolds)[0].Reason != "breaks kiosk" || len(*desired.PackageHolds) != 1 {
+		t.Errorf("re-created hold not replaced: %+v", *desired.PackageHolds)
+	}
+	if desired.Settings.Updates.SecurityDailyAt != "03:00" || later.Settings.Updates.SecurityDailyAt != "02:30" {
+		t.Errorf("settings: desired %s, later %s", desired.Settings.Updates.SecurityDailyAt, later.Settings.Updates.SecurityDailyAt)
+	}
+	if len(*later.ManagedFiles) != 4 || (*later.PackageHolds)[0].Reason != "again" {
+		t.Error("Revert modified its input")
+	}
+
+	// Without changes since the original, the revert gives back exactly the configuration before it.
+	if p := declarative.Diff(current(), mustRevert(t, changed, original, before)); len(p.Changes) != 0 {
+		t.Errorf("revert without later changes differs from the configuration before the original: %+v", p)
+	}
+
+	delete(before[declarative.SectionManagedFiles], `[null,"/etc/motd"]`)
+	if _, err := declarative.Revert(later, original, before); !errors.Is(err, declarative.ErrBeforeMissing) {
+		t.Errorf("missing before-state: %v", err)
+	}
+}
+
+func mustRevert(t *testing.T, d declarative.Document, plan declarative.Plan, before map[string]map[string]json.RawMessage) declarative.Document {
+	t.Helper()
+	out, err := declarative.Revert(d, plan, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

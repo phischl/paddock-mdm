@@ -236,3 +236,43 @@ func TestAutoApproveIntoRootGrantIsPending(t *testing.T) {
 		t.Fatalf("auto-approve without a grant = %+v, %v", res, err)
 	}
 }
+
+// TestEnrollMethod (plan M11 decision 40): adopted enrolls report-only, autoinstall and no method enforce, an unknown
+// method is refused; device.enrolled carries both values. The method never changes the approval: the token decides.
+func TestEnrollMethod(t *testing.T) {
+	h := newEnrollHarness(t)
+	cases := []struct{ asserted, method, mode, state string }{
+		{"adopted", "adopted", "report_only", "active"},
+		{"autoinstall", "autoinstall", "enforce", "pending"},
+		{"", "unknown", "enforce", "active"},
+	}
+	for _, tc := range cases {
+		req := newRequest(t, h.org, h.token(t, 1, tc.state == "active", time.Now().Add(time.Hour)))
+		req.EnrollmentMethod = tc.asserted
+		res, err := h.enroll(req)
+		if err != nil || res.State != tc.state {
+			t.Fatalf("%q: %+v, %v", tc.asserted, res, err)
+		}
+		var method, mode, params string
+		var changed *time.Time
+		if err := h.super.QueryRow(context.Background(), "SELECT enrollment_method, config_mode, config_mode_changed_at FROM device WHERE id = $1",
+			res.DeviceID).Scan(&method, &mode, &changed); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.super.QueryRow(context.Background(), "SELECT (params->>'enrollment_method') || ':' || (params->>'config_mode') FROM action WHERE correlation_id = $1",
+			req.EnrollmentID.String()).Scan(&params); err != nil {
+			t.Fatal(err)
+		}
+		if method != tc.method || mode != tc.mode || changed != nil || params != tc.method+":"+tc.mode {
+			t.Errorf("%q: method %s, mode %s, changed %v, params %s", tc.asserted, method, mode, changed, params)
+		}
+	}
+	req := newRequest(t, h.org, h.token(t, 1, true, time.Now().Add(time.Hour)))
+	req.EnrollmentMethod = "unknown"
+	if _, err := h.enroll(req); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("unknown method = %v", err)
+	}
+	if got := h.events(t, req); len(got) != 1 || got[0] != "device.enrolled:failure:invalid_request:device" {
+		t.Fatalf("events %v", got)
+	}
+}

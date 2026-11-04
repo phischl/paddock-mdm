@@ -1,5 +1,5 @@
 # 0042 — Software catalog and self-service: package sources, the `software` bundle section, the local self-service channel
-Status: Proposed (architect, 2026-10-24; plan `docs/plans/M13a-software-catalog.md`; M13b and M13c outlined there)
+Status: Accepted (accepted by architect 2026-10-31; proposed 2026-10-24; plan `docs/plans/M13a-software-catalog.md`; M13b and M13c outlined there)
 
 ## Context
 

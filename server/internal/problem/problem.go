@@ -65,7 +65,12 @@ var (
 	InvalidDocument = &Error{Code: "invalid_document", Status: http.StatusUnprocessableEntity}
 	// PlanChanged: the plan of PUT /api/v1/config differs from the one the client confirmed (expected_plan); nothing
 	// is applied (plan M6c amendment 2026-10-08).
-	PlanChanged    = &Error{Code: "plan_changed", Status: http.StatusPreconditionFailed}
+	PlanChanged = &Error{Code: "plan_changed", Status: http.StatusPreconditionFailed}
+	// RolloutConflict: a configuration write touches a key the organization's open rollout stages (plan M11 decision
+	// 29); the administrator completes or reverts the rollout first.
+	RolloutConflict = &Error{Code: "rollout_conflict", Status: http.StatusConflict}
+	// RolloutRunning: a second staged change set while a rollout is open (plan M11 decision 29).
+	RolloutRunning = &Error{Code: "rollout_running", Status: http.StatusConflict}
 	TooManyDevices = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
 	// Uninstall (plan M8d decision 37): clear_tpm while a volume unlocks with the TPM; and invalid_request with 422 for
 	// a request whose values contradict the device or each other (typed hostname, reset-only options with leave).
@@ -131,6 +136,9 @@ var (
 	DayNotSealed   = &Error{Code: "day_not_sealed", Status: http.StatusUnprocessableEntity}
 	TooManyExports = &Error{Code: "too_many_exports", Status: http.StatusConflict}
 	ExportNotReady = &Error{Code: "export_not_ready", Status: http.StatusConflict}
+	// FingerprintMismatch: the fingerprint an administrator typed for a software source's signing key differs from the
+	// key's (plan M13a decision 2); the detail names both.
+	FingerprintMismatch = &Error{Code: "fingerprint_mismatch", Status: http.StatusUnprocessableEntity}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}

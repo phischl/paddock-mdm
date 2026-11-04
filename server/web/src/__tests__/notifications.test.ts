@@ -367,10 +367,10 @@ describe('notification pages', () => {
     await click('[aria-label="Send test: SIEM"]')
     expect(pendingConfirm.value?.options.title).toBe('Send a test notification')
     settleConfirm({ reason: '' })
-    await new Promise((r) => setTimeout(r, 50))
-    await flushPromises()
-    expect(test).toHaveBeenCalledWith('organization', 'd1')
-    expect(document.querySelector('[data-testid="notification-test-result"]')?.textContent).toContain('failed: http_5xx')
+    await vi.waitFor(() => {
+      expect(test).toHaveBeenCalledWith('organization', 'd1')
+      expect(document.querySelector('[data-testid="notification-test-result"]')?.textContent).toContain('failed: http_5xx')
+    }, { timeout: 5000 })
   })
 
   it('shows a specific message when a test is still pending', async () => {

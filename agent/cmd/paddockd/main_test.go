@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,5 +49,22 @@ func TestUninstallUnreadablePlanDiscards(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPreflightJSON: the subcommand prints the twelve checks as JSON and exits 1 on a device (here an empty root)
+// on which a check fails; an unknown flag is an error.
+func TestPreflightJSON(t *testing.T) {
+	var out bytes.Buffer
+	code := run([]string{"--root", t.TempDir(), "preflight", "--json"}, &out)
+	var checks []struct{ Name, Status, Detail string }
+	if err := json.Unmarshal(out.Bytes(), &checks); err != nil || len(checks) != 12 || checks[0].Name != "os" {
+		t.Fatalf("output %q: %v", out.String(), err)
+	}
+	if checks[0].Status != "fail" || code != 1 {
+		t.Errorf("os %s, exit %d; want fail, 1", checks[0].Status, code)
+	}
+	if code := run([]string{"preflight", "--bogus"}, &out); code != 1 {
+		t.Errorf("unknown flag exit %d", code)
 	}
 }

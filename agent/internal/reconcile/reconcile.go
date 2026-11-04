@@ -50,12 +50,19 @@ type System interface {
 	Timedatectl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// Hostnamectl runs hostnamectl (--json=short, hostname <name>; plan M8h decision 12).
 	Hostnamectl(ctx context.Context, args ...string) (stdout string, exit int, err error)
+	// PackageInstalled reports a package installed for any architecture.
 	PackageInstalled(name string) bool
-	// PackageVersion returns the version of an installed package, "" if it is not installed.
+	// PackageVersion returns the version of an installed package (the native architecture's build when several are
+	// installed), "" if it is not installed.
 	PackageVersion(name string) string
+	// PackageRemovalNames returns the apt-get arguments that remove every installed build of a package: the name, or
+	// the name qualified with each architecture when a build other than the native one is installed.
+	PackageRemovalNames(name string) []string
 	// AptGet runs apt-get non-interactively (DEBIAN_FRONTEND=noninteractive); it may take minutes. A run killed at
 	// PackageTimeout returns an error wrapping context.DeadlineExceeded.
 	AptGet(ctx context.Context, args ...string) (output string, exit int, err error)
+	// AptCache runs apt-cache (pkgnames <prefix>: the names of real packages that start with prefix, no regex).
+	AptCache(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// AptMark runs apt-mark (showhold, hold, unhold).
 	AptMark(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// Dpkg runs dpkg like AptGet, e.g. to finish an interrupted installation (--configure -a).

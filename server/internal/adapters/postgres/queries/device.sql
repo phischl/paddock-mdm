@@ -1,8 +1,18 @@
 -- name: InsertDevice :one
-INSERT INTO device (id, organization_id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id)
+INSERT INTO device (id, organization_id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id,
+                    enrollment_method, config_mode)
 VALUES (@id, @organization_id, @hostname, @state, sqlc.narg(hardware_uuid), sqlc.narg(machine_id), @os_release,
-        sqlc.narg(enrollment_token_id))
+        sqlc.narg(enrollment_token_id), @enrollment_method, @config_mode)
 RETURNING *;
+
+-- The os-release the device reported with a check-in (PDK-695): id and version_id replace the stored ones; the
+-- enrollment's pretty_name and version_codename described the old release and are dropped.
+-- name: UpdateDeviceOSRelease :execrows
+UPDATE device
+SET os_release = (CASE WHEN jsonb_typeof(os_release) = 'object' THEN os_release ELSE '{}'::jsonb END
+                  - 'pretty_name' - 'version_codename')
+                 || jsonb_build_object('id', @os_id::text, 'version_id', @version_id::text)
+WHERE id = @device_id;
 
 -- name: GetDevice :one
 SELECT * FROM device WHERE id = @id;
@@ -51,6 +61,8 @@ WHERE (sqlc.narg(q_pattern)::text IS NULL
         SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = sqlc.narg(owner_id)::uuid))
   AND (sqlc.narg(component_outdated)::boolean IS NULL
        OR (cardinality(device_status.components_outdated) > 0) = sqlc.narg(component_outdated)::boolean)
+  AND (sqlc.narg(enrollment_methods)::text[] IS NULL OR enrollment_method = ANY(sqlc.narg(enrollment_methods)::text[]))
+  AND (sqlc.narg(config_modes)::text[] IS NULL OR config_mode = ANY(sqlc.narg(config_modes)::text[]))
 ORDER BY
   CASE WHEN @sort::text = 'hostname' THEN hostname END ASC,
   CASE WHEN @sort::text = '-hostname' THEN hostname END DESC,
@@ -90,6 +102,8 @@ SELECT count(*) FROM (
           SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = sqlc.narg(owner_id)::uuid))
     AND (sqlc.narg(component_outdated)::boolean IS NULL
          OR (cardinality(device_status.components_outdated) > 0) = sqlc.narg(component_outdated)::boolean)
+    AND (sqlc.narg(enrollment_methods)::text[] IS NULL OR enrollment_method = ANY(sqlc.narg(enrollment_methods)::text[]))
+    AND (sqlc.narg(config_modes)::text[] IS NULL OR config_mode = ANY(sqlc.narg(config_modes)::text[]))
   LIMIT @count_limit
 ) matching;
 
@@ -107,6 +121,11 @@ SELECT id, hostname FROM device WHERE id = ANY(@ids::uuid[]);
 UPDATE device SET state = @state, state_changed_at = now()
 WHERE id = @id AND state = @from_state
 RETURNING *;
+
+-- name: EnforceDevice :one
+-- Ends report-only mode (plan M11 decision 42): the device's next bundle is enforced.
+UPDATE device SET config_mode = 'enforce', config_mode_changed_at = now()
+WHERE id = @id AND config_mode = 'report_only' RETURNING *;
 
 -- name: SetDeviceName :one
 -- The managed name of a device (plan M8h decision 4); NULL clears it.

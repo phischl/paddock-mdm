@@ -58,7 +58,12 @@ func (p pool) Close() { p.p.Close() }
 
 // inTx runs setup and fn in one transaction. fn's error is returned unchanged; the transaction is rolled back.
 func inTx(ctx context.Context, p *pgxpool.Pool, setup func(pgx.Tx) error, fn func(pgx.Tx) error) error {
-	tx, err := p.Begin(ctx)
+	return inTxWith(ctx, p, pgx.TxOptions{}, setup, fn)
+}
+
+// inTxWith is inTx with transaction options.
+func inTxWith(ctx context.Context, p *pgxpool.Pool, opts pgx.TxOptions, setup func(pgx.Tx) error, fn func(pgx.Tx) error) error {
+	tx, err := p.BeginTx(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -108,6 +113,19 @@ func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgs
 		return err
 	}
 	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// InOrgSnapshot is InOrg in a REPEATABLE READ transaction: every query of fn sees the snapshot taken at its first
+// query, so data read by several queries is consistent with itself (the compiler's definitions and its rollout
+// overlay, plan M11 decision 30). The transaction is read-only: a write fails.
+func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
 		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }

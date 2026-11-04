@@ -164,27 +164,34 @@ type AttentionCondition struct {
 }
 
 type Bundle struct {
-	DeviceID       uuid.UUID
-	Version        int64
-	OrganizationID uuid.UUID
-	ContentSha256  []byte
-	EnvelopeSha256 []byte
-	ObjectKey      string
-	CreatedAt      time.Time
-	SchemaVersion  int32
+	DeviceID        uuid.UUID
+	Version         int64
+	OrganizationID  uuid.UUID
+	ContentSha256   []byte
+	EnvelopeSha256  []byte
+	ObjectKey       string
+	CreatedAt       time.Time
+	SchemaVersion   int32
+	ConfigRolloutID uuid.NullUUID
 }
 
 type ChangeSet struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	AppliedAt      time.Time
-	Actor          json.RawMessage
-	Source         string
-	CreatedN       int32
-	UpdatedN       int32
-	DeletedN       int32
-	Sections       []string
-	Plan           json.RawMessage
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	AppliedAt          time.Time
+	Actor              json.RawMessage
+	Source             string
+	CreatedN           int32
+	UpdatedN           int32
+	DeletedN           int32
+	Sections           []string
+	Plan               json.RawMessage
+	Before             json.RawMessage
+	BeforePurgedAt     *time.Time
+	RevertsChangeSetID uuid.NullUUID
+	Rollout            string
+	UrgentReason       *string
+	Reason             *string
 }
 
 type ComponentTarget struct {
@@ -192,6 +199,27 @@ type ComponentTarget struct {
 	Version   string
 	Source    string
 	UpdatedAt time.Time
+}
+
+type ConfigRollout struct {
+	ID                      uuid.UUID
+	OrganizationID          uuid.UUID
+	ChangeSetID             uuid.UUID
+	Waves                   []int32
+	CurrentWaveIndex        int32
+	WaveStartedAt           time.Time
+	MinWaveMinutes          int32
+	FailureThresholdPercent int32
+	FailureThresholdMin     int32
+	CanaryDeviceGroupID     uuid.NullUUID
+	Status                  string
+	HaltedReason            *string
+	EvaluationSince         time.Time
+	StartedBy               string
+	StartedAt               time.Time
+	EndedAt                 *time.Time
+	EndedReason             *string
+	UpdatedAt               time.Time
 }
 
 type Device struct {
@@ -215,6 +243,12 @@ type Device struct {
 	UninstalledAt               *time.Time
 	RetiredReason               *string
 	Name                        *string
+	EnrollmentMethod            string
+	ConfigMode                  string
+	ConfigModeChangedAt         *time.Time
+	CompiledArch                string
+	CompiledOsID                string
+	CompiledOsVersionID         string
 }
 
 type DeviceAlert struct {
@@ -224,6 +258,19 @@ type DeviceAlert struct {
 	Kind           string
 	RaisedAt       time.Time
 	ClearedAt      *time.Time
+}
+
+type DeviceBundleReport struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	Version        int64
+	Outcome        string
+	Mode           string
+	Changed        int32
+	ErrorCount     int32
+	Reason         *string
+	OccurredAt     time.Time
+	RecordedAt     time.Time
 }
 
 type DeviceCommand struct {
@@ -357,6 +404,30 @@ type DeviceOwner struct {
 	AssignedBy     uuid.NullUUID
 }
 
+type DeviceResourceStatus struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	ResourceID     string
+	Status         string
+	Message        string
+	Changes        []string
+	BundleVersion  int64
+	OccurredAt     time.Time
+}
+
+type DeviceSoftwareStatus struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	Package        string
+	Intent         string
+	State          string
+	Version        string
+	Reason         string
+	Error          string
+	ReportedAt     time.Time
+}
+
 type DeviceStatus struct {
 	DeviceID             uuid.UUID
 	OrganizationID       uuid.UUID
@@ -377,6 +448,8 @@ type DeviceStatus struct {
 	EventSeqHigh         int64
 	EventSeqContiguous   int64
 	EventSeqScanned      int64
+	SoftwareDigest       string
+	SoftwareTruncated    bool
 }
 
 type DeviceUserSeen struct {
@@ -680,6 +753,18 @@ type OrganizationRoleSnapshot struct {
 	Role           string
 }
 
+type OrganizationRolloutSetting struct {
+	OrganizationID          uuid.UUID
+	Enabled                 bool
+	Waves                   []int32
+	MinWaveMinutes          int32
+	FailureThresholdPercent int32
+	FailureThresholdMin     int32
+	CanaryDeviceGroupID     uuid.NullUUID
+	UpdatedAt               time.Time
+	UpdatedBy               uuid.NullUUID
+}
+
 type OrganizationUpdateSetting struct {
 	OrganizationID        uuid.UUID
 	SecurityDailyAt       string
@@ -858,6 +943,51 @@ type RevocationRequest struct {
 	Rejection      *string
 	Result         json.RawMessage
 	Volumes        []uuid.UUID
+}
+
+type SoftwareAssignment struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Intent         string
+	UpdateRule     string
+	Version        *string
+	Reason         string
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type SoftwareCatalogEntry struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Description    string
+	Category       string
+	SourceID       uuid.NullUUID
+	Packages       json.RawMessage
+	Icon           []byte
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type SoftwareSource struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Slug           string
+	Name           string
+	Uris           []string
+	Suites         []string
+	Components     []string
+	Architectures  []string
+	SigningKey     string
+	Fingerprint    string
+	WeakKey        bool
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type UserGroup struct {

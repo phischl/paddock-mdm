@@ -427,6 +427,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Revocations:    app.NewRevocations(runner, orgPool, e.stepUps, discardCommands{}, true),
 		DMS:            app.NewDMS(runner, orgPool, discardCommands{}, true, false),
 		Inventory:      app.NewInventory(orgPool),
+		ConfigStatus:   app.NewConfigStatus(orgPool),
 		AuditLog:       app.NewAuditLog(reader, orgPool),
 		AuditIntegrity: app.NewAuditIntegrity(reader),
 		AuditExports:   app.NewAuditExports(runner, reader),
@@ -448,6 +449,9 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Static:         static,
 	}
 	d.ReleaseImports = app.NewReleaseImports(runner, platformPool, d.Releases, nil, config.ReleaseSource{})
+	d.SoftwareSources = app.NewSoftwareSources(runner, orgPool)
+	d.SoftwareCatalog = app.NewSoftwareCatalog(runner, orgPool)
+	d.SoftwareStatus = app.NewSoftwareStatus(orgPool)
 	if deps != nil {
 		deps(&d)
 	}

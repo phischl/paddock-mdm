@@ -95,6 +95,9 @@ func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool,
 			{store: app.StoreAction, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
 				return a.PurgeActions(ctx, now)
 			}, platform: a.PurgePlatformActions},
+			{store: app.StoreChangeSetBefore, purge: func(ctx context.Context, now time.Time, _ *app.RetentionRound) (int64, error) {
+				return a.PurgeChangeSetBefore(ctx, now)
+			}},
 		},
 		pool: pool, platform: platform, interval: interval, now: time.Now,
 	}

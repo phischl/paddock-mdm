@@ -1,12 +1,14 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -66,7 +68,7 @@ func (d *Declarative) Export(ctx context.Context) (declarative.Document, error) 
 
 // Plan computes the changes of raw without applying them (dry run, not audited). It executes them in a transaction
 // that is rolled back, so it refuses exactly what Apply would refuse.
-func (d *Declarative) Plan(ctx context.Context, raw []byte) (declarative.Plan, error) {
+func (d *Declarative) Plan(ctx context.Context, raw []byte, opts ...WriteOptions) (declarative.Plan, error) {
 	p, err := RequireOrg(ctx, RolesWrite)
 	if err != nil {
 		return declarative.Plan{}, err
@@ -80,12 +82,19 @@ func (d *Declarative) Plan(ctx context.Context, raw []byte) (declarative.Plan, e
 		if err := q.LockConfigApply(ctx); err != nil {
 			return err
 		}
+		w, err := startRolloutWrite(ctx, q, nil, writeOptions(opts))
+		if err != nil {
+			return err
+		}
 		st, err := loadConfig(ctx, q)
 		if err != nil {
 			return err
 		}
 		inheritOmitted(&desired, st.doc)
 		plan = declarative.Diff(st.doc, desired)
+		if _, err := w.stage(st, plan, uuid.Nil, nil); err != nil {
+			return err
+		}
 		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }}
 		if err := ex.run(ctx, plan); err != nil {
 			return err
@@ -101,8 +110,9 @@ func (d *Declarative) Plan(ctx context.Context, raw []byte) (declarative.Plan, e
 // Apply applies raw in one transaction (audited: config.applied) and records a change set unless the plan is empty.
 // It returns the change set ID (uuid.Nil without changes) and the plan. expectedPlan, when not empty, is the SHA-256 of
 // the plan the client confirmed (plan M6c amendment 2026-10-08): a different plan is refused with plan_changed and
-// nothing is applied, so a deletion that appeared after the dry run is never applied unconfirmed.
-func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string) (uuid.UUID, declarative.Plan, error) {
+// nothing is applied, so a deletion that appeared after the dry run is never applied unconfirmed. opts is the urgent
+// opt-out of a staged rollout (plan M11 decision 26).
+func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string, opts ...WriteOptions) (uuid.UUID, declarative.Plan, error) {
 	var id uuid.UUID
 	var plan declarative.Plan
 	spec := SpecConfigApply
@@ -118,6 +128,10 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 			return err
 		}
 		if err := q.LockConfigApply(ctx); err != nil {
+			return err
+		}
+		w, err := startRolloutWrite(ctx, q, rec, writeOptions(opts))
+		if err != nil {
 			return err
 		}
 		st, err := loadConfig(ctx, q)
@@ -139,6 +153,12 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 		rec.SetParam("updated", plan.Updated)
 		rec.SetParam("deleted", plan.Deleted)
 		rec.SetParam("sections", sections)
+		// Staged before the run: configExec updates st as it writes, and the rules read the configuration before the
+		// write (a deleted canary group). A declarative apply never renames a group by identity.
+		staged, err := w.stage(st, plan, uuid.Nil, nil)
+		if err != nil {
+			return err
+		}
 		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: rec.RequireStepUp}
 		if err := ex.run(ctx, plan); err != nil {
 			return err
@@ -147,13 +167,13 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 			return nil
 		}
 		id = uuid.Must(uuid.NewV7())
-		if err := insertChangeSet(ctx, q, id, p, ex.steppedUp, plan, sections); err != nil {
+		if err := insertChangeSet(ctx, q, id, p, ex.steppedUp, plan, sections, st, w.meta(staged.mode)); err != nil {
 			return err
 		}
 		rec.SetTarget(audit.Target{Type: "change_set", ID: id.String()})
 		rec.SetParam("change_set_id", id.String())
 		rec.StateChanged(statechange.ScopeOrg, p.OrganizationID)
-		return nil
+		return w.finish(ctx, q, rec, id, staged)
 	})
 	if err != nil {
 		return uuid.Nil, declarative.Plan{}, err
@@ -161,8 +181,217 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 	return id, plan, nil
 }
 
+// SpecConfigRevert is the privileged action config.reverted (plan M11 decision 21).
+var SpecConfigRevert = ActionSpec{Code: audit.CodeConfigReverted, AllowedRoles: RolesWrite}
+
+// RevertOptions are the query parameters of a revert besides expected_plan; Urgent and Reason are the urgent opt-out
+// of WriteOptions. The revert of the open rollout's change set is always immediate and ends that rollout (plan M11
+// decision 21.3).
+type RevertOptions struct {
+	DryRun bool
+	Urgent bool
+	Reason string
+}
+
+// Revert applies the inverse of change set id (plan M11 decisions 21 and 22, audited: config.reverted unless DryRun)
+// and records it as a new change set that references the original. It returns that change set's ID (uuid.Nil for dry
+// runs and empty plans) and the plan. Like Apply it executes through configExec, so every section keeps its own
+// refusal rules and step-ups. expectedPlan is required unless DryRun.
+func (d *Declarative) Revert(ctx context.Context, id uuid.UUID, expectedPlan string, opts RevertOptions) (uuid.UUID, declarative.Plan, error) {
+	if opts.DryRun {
+		plan, err := d.revertDryRun(ctx, id, opts)
+		return uuid.Nil, plan, err
+	}
+	var newID uuid.UUID
+	var plan declarative.Plan
+	spec := SpecConfigRevert
+	spec.Params = map[string]any{"change_set_id": nil, "reverts_change_set_id": id.String(), "created": 0, "updated": 0,
+		"deleted": 0, "sections": []string{}}
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		// Checked inside the action, so a malformed request is recorded like every other refused revert.
+		switch {
+		case expectedPlan == "":
+			return problem.InvalidRequest.WithDetail("expected_plan is required: run the dry run and confirm its plan_sha256")
+		case !expectedPlanPattern.MatchString(expectedPlan):
+			return problem.InvalidRequest.WithDetail("expected_plan must be 64 lowercase hex digits")
+		}
+		p, _ := principal.From(ctx)
+		// The lock of every configuration writer, taken first (plan M11 amendment R6.10): it serializes two reverts of
+		// the same change set too, so the second one sees reverted_by.
+		if err := q.LockConfigApply(ctx); err != nil {
+			return err
+		}
+		w, err := startRolloutWrite(ctx, q, rec, opts.write())
+		if err != nil {
+			return err
+		}
+		st, desired, err := revertTarget(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		plan = declarative.Diff(st.doc, desired)
+		if d.afterRead != nil {
+			if err := d.afterRead(ctx); err != nil {
+				return err
+			}
+		}
+		sections := plan.SectionsOf()
+		rec.SetParam("plan_sha256", plan.SHA256())
+		if plan.SHA256() != expectedPlan {
+			return problem.PlanChanged.WithDetail("the plan differs from the confirmed plan " + expectedPlan + "; review the new plan and revert again")
+		}
+		rec.SetParam("created", plan.Created)
+		rec.SetParam("updated", plan.Updated)
+		rec.SetParam("deleted", plan.Deleted)
+		rec.SetParam("sections", sections)
+		staged, err := w.stage(st, plan, id, nil) // before the run, as in Apply
+		if err != nil {
+			return err
+		}
+		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: rec.RequireStepUp}
+		if err := ex.run(ctx, plan); err != nil {
+			return err
+		}
+		if len(plan.Changes) == 0 {
+			return nil
+		}
+		newID = uuid.Must(uuid.NewV7())
+		meta := w.meta(staged.mode)
+		meta.RevertsID = uuid.NullUUID{UUID: id, Valid: true}
+		if err := insertChangeSet(ctx, q, newID, p, ex.steppedUp, plan, sections, st, meta); err != nil {
+			return err
+		}
+		rec.SetTarget(audit.Target{Type: "change_set", ID: newID.String()})
+		rec.SetParam("change_set_id", newID.String())
+		rec.StateChanged(statechange.ScopeOrg, p.OrganizationID)
+		return w.finish(ctx, q, rec, newID, staged)
+	})
+	if err != nil {
+		return uuid.Nil, declarative.Plan{}, err
+	}
+	return newID, plan, nil
+}
+
+// revertDryRun computes and checks the inverse plan in a transaction that is rolled back (not audited), so it refuses
+// exactly what the revert would refuse, invalid urgent and reason options included.
+func (d *Declarative) revertDryRun(ctx context.Context, id uuid.UUID, opts RevertOptions) (declarative.Plan, error) {
+	p, err := RequireOrg(ctx, RolesWrite)
+	if err != nil {
+		return declarative.Plan{}, err
+	}
+	var plan declarative.Plan
+	err = d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if err := q.LockConfigApply(ctx); err != nil {
+			return err
+		}
+		w, err := startRolloutWrite(ctx, q, nil, opts.write())
+		if err != nil {
+			return err
+		}
+		st, desired, err := revertTarget(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		plan = declarative.Diff(st.doc, desired)
+		if len(plan.Changes) > 0 {
+			if _, err := w.stage(st, plan, id, nil); err != nil {
+				return err
+			}
+		}
+		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }}
+		if err := ex.run(ctx, plan); err != nil {
+			return err
+		}
+		return errDryRun
+	})
+	if errors.Is(err, errDryRun) {
+		return plan, nil
+	}
+	return declarative.Plan{}, err
+}
+
+// revertTarget loads change set id, refuses it when it cannot be reverted, and returns the current configuration and
+// the configuration with the change set undone (plan M11 decision 21.1–21.2).
+func revertTarget(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (configState, declarative.Document, error) {
+	cs, err := q.GetChangeSetForRevert(ctx, id)
+	if err != nil {
+		return configState{}, declarative.Document{}, notFound(err)
+	}
+	switch {
+	case cs.RevertedBy != uuid.Nil:
+		return configState{}, declarative.Document{}, problem.InvalidState.WithDetail("already reverted by " + cs.RevertedBy.String())
+	case cs.Before == nil && cs.BeforePurgedAt != nil:
+		return configState{}, declarative.Document{}, problem.InvalidState.WithDetail("the before-state of this change set was purged after the retention period")
+	case cs.Before == nil:
+		return configState{}, declarative.Document{}, problem.InvalidState.WithDetail("this change set was recorded before before-states were stored")
+	}
+	var original declarative.Plan
+	if err := json.Unmarshal(cs.Plan, &original); err != nil {
+		return configState{}, declarative.Document{}, fmt.Errorf("decode the plan of change set %s: %w", id, err)
+	}
+	var before map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(cs.Before, &before); err != nil {
+		return configState{}, declarative.Document{}, fmt.Errorf("decode the before-state of change set %s: %w", id, err)
+	}
+	st, err := loadConfig(ctx, q)
+	if err != nil {
+		return configState{}, declarative.Document{}, err
+	}
+	desired, err := declarative.Revert(st.doc, original, before)
+	if errors.Is(err, declarative.ErrBeforeMissing) {
+		return configState{}, declarative.Document{}, problem.InvalidState.WithDetail("the before-state of this change set is incomplete: " + err.Error())
+	}
+	if err != nil {
+		return configState{}, declarative.Document{}, err
+	}
+	return st, desired, nil
+}
+
+// write returns the urgent opt-out of the revert.
+func (o RevertOptions) write() WriteOptions { return WriteOptions{Urgent: o.Urgent, Reason: o.Reason} }
+
+// writeMeta checks urgent and reason (plan M11 decision 26, amendment R6.12) and returns the change set columns they
+// fill: the reason, and when urgent also the urgent reason.
+func writeMeta(opts WriteOptions) (changeSetMeta, error) {
+	var meta changeSetMeta
+	if opts.Reason != "" {
+		if n := utf8.RuneCountInString(opts.Reason); n < 2 || n > 500 {
+			return meta, problem.InvalidRequest.WithDetail("reason must have 2 to 500 characters")
+		}
+		// PostgreSQL text and jsonb refuse NUL and invalid UTF-8: such a reason would fail the insert and, as
+		// urgent_reason, the audit event of the attempt itself.
+		if !reasonText(opts.Reason) {
+			return meta, problem.InvalidRequest.WithDetail("reason must be valid UTF-8 without control characters other than line breaks and tabs")
+		}
+		meta.Reason = &opts.Reason
+	}
+	if opts.Urgent {
+		if meta.Reason == nil {
+			return meta, problem.InvalidRequest.WithDetail("urgent needs a reason")
+		}
+		meta.UrgentReason = meta.Reason
+	}
+	return meta, nil
+}
+
+// reasonText reports whether s is valid UTF-8 without control characters; line breaks and tabs are allowed in a reason.
+func reasonText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool {
+		return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f
+	})
+}
+
+// changeSetMeta are the optional columns of a change set: the change set it reverts, the reasons of the write and its
+// rollout mode (immediate when empty).
+type changeSetMeta struct {
+	RevertsID    uuid.NullUUID
+	Reason       *string
+	UrgentReason *string
+	Rollout      string
+}
+
 func insertChangeSet(ctx context.Context, q *pgstore.Queries, id uuid.UUID, p principal.Principal, steppedUp bool,
-	plan declarative.Plan, sections []string) error {
+	plan declarative.Plan, sections []string, before configState, meta changeSetMeta) error {
 	a := actorOf(p)
 	a.StepUp = steppedUp
 	actor, err := json.Marshal(a)
@@ -173,6 +402,10 @@ func insertChangeSet(ctx context.Context, q *pgstore.Queries, id uuid.UUID, p pr
 	if err != nil {
 		return err
 	}
+	beforeJSON, err := beforeStates(before, plan)
+	if err != nil {
+		return err
+	}
 	source := ChangeSetSourceSession
 	if p.APITokenID != uuid.Nil {
 		source = ChangeSetSourceAPIToken
@@ -180,7 +413,8 @@ func insertChangeSet(ctx context.Context, q *pgstore.Queries, id uuid.UUID, p pr
 	return q.InsertChangeSet(ctx, pgstore.InsertChangeSetParams{
 		ID: id, OrganizationID: p.OrganizationID, Actor: actor, Source: source,
 		CreatedN: int32(plan.Created), UpdatedN: int32(plan.Updated), DeletedN: int32(plan.Deleted), //nolint:gosec // bounded by the 1 MiB document
-		Sections: sections, Plan: planJSON,
+		Sections: sections, Plan: planJSON, Before: beforeJSON, Rollout: cmp.Or(meta.Rollout, RolloutImmediate),
+		RevertsChangeSetID: meta.RevertsID, Reason: meta.Reason, UrgentReason: meta.UrgentReason,
 	})
 }
 
@@ -192,27 +426,58 @@ const (
 
 // ChangeSetQuery selects a page of change sets.
 type ChangeSetQuery struct {
-	Page    ListPage
-	Sources []string // session, api_token; nil: all
+	Page     ListPage
+	Sources  []string // session, api_token; nil: all
+	Rollouts []string // immediate, staged, urgent; nil: all
+}
+
+// ChangeSetRecord is a change set as the API shows it. Before stays empty: the before-states hold full file contents
+// and are read by the revert only; BeforeAvailable tells whether they are stored.
+type ChangeSetRecord struct {
+	pgstore.ChangeSet
+	BeforeAvailable bool
+	RevertedBy      *uuid.UUID // the newest change set that reverted this one
+	RolloutID       *uuid.UUID // the configuration rollout the change set started (plan M11 decision 31)
+}
+
+func changeSetRecord(r pgstore.GetChangeSetRow) ChangeSetRecord {
+	out := ChangeSetRecord{
+		ChangeSet: pgstore.ChangeSet{ID: r.ID, OrganizationID: r.OrganizationID, AppliedAt: r.AppliedAt, Actor: r.Actor, Source: r.Source,
+			CreatedN: r.CreatedN, UpdatedN: r.UpdatedN, DeletedN: r.DeletedN, Sections: r.Sections, Plan: r.Plan, Rollout: r.Rollout,
+			UrgentReason: r.UrgentReason, RevertsChangeSetID: r.RevertsChangeSetID},
+		BeforeAvailable: r.BeforeAvailable,
+	}
+	if r.RevertedBy != uuid.Nil {
+		out.RevertedBy = &r.RevertedBy
+	}
+	if r.RolloutID != uuid.Nil {
+		out.RolloutID = &r.RolloutID
+	}
+	return out
 }
 
 // ListChangeSets returns one page of change sets.
-func (d *Declarative) ListChangeSets(ctx context.Context, query ChangeSetQuery) (Listed[pgstore.ChangeSet], error) {
-	var out Listed[pgstore.ChangeSet]
+func (d *Declarative) ListChangeSets(ctx context.Context, query ChangeSetQuery) (Listed[ChangeSetRecord], error) {
+	var out Listed[ChangeSetRecord]
 	if _, err := RequireOrg(ctx, RolesRead); err != nil {
 		return out, err
 	}
 	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		n, err := q.CountChangeSets(ctx, pgstore.CountChangeSetsParams{QPattern: query.Page.QPattern, Sources: query.Sources, CountLimit: countLimit})
+		n, err := q.CountChangeSets(ctx, pgstore.CountChangeSetsParams{QPattern: query.Page.QPattern, Sources: query.Sources, Rollouts: query.Rollouts, CountLimit: countLimit})
 		if err != nil {
 			return fmt.Errorf("count change sets: %w", err)
 		}
 		out.Count = int(n)
-		out.Items, err = q.ListChangeSets(ctx, pgstore.ListChangeSetsParams{
-			QPattern: query.Page.QPattern, Sources: query.Sources, Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
+		rows, err := q.ListChangeSets(ctx, pgstore.ListChangeSetsParams{
+			QPattern: query.Page.QPattern, Sources: query.Sources, Rollouts: query.Rollouts, Sort: query.Page.Sort,
+			SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
 		})
 		if err != nil {
 			return fmt.Errorf("list change sets: %w", err)
+		}
+		out.Items = make([]ChangeSetRecord, len(rows))
+		for i, r := range rows {
+			out.Items[i] = changeSetRecord(pgstore.GetChangeSetRow(r))
 		}
 		return nil
 	})
@@ -220,15 +485,18 @@ func (d *Declarative) ListChangeSets(ctx context.Context, query ChangeSetQuery) 
 }
 
 // GetChangeSet returns one change set; missing and foreign change sets are both not_found.
-func (d *Declarative) GetChangeSet(ctx context.Context, id uuid.UUID) (pgstore.ChangeSet, error) {
+func (d *Declarative) GetChangeSet(ctx context.Context, id uuid.UUID) (ChangeSetRecord, error) {
 	if _, err := RequireOrg(ctx, RolesRead); err != nil {
-		return pgstore.ChangeSet{}, err
+		return ChangeSetRecord{}, err
 	}
-	var cs pgstore.ChangeSet
+	var cs ChangeSetRecord
 	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		var err error
-		cs, err = q.GetChangeSet(ctx, id)
-		return notFound(err)
+		row, err := q.GetChangeSet(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		cs = changeSetRecord(row)
+		return nil
 	})
 	return cs, err
 }

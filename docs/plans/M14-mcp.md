@@ -122,6 +122,9 @@ troubleshooting workflows to the assistant.
    line, the first paragraph of the operation `description`, then one of the fixed sentences `Read-only.` /
    `Changes data; needs your MCP write access.` and, for list operations, `Paged: page, page_size (10/25/50/100),
    sort (allow list: …), q (search over: …).` from `x-paddock-list`.
+   Amendment 2026-11-01 (architect, PDK-155): the segment list also contains `revert` and `complete`. Reverting a
+   change set (`revertChangeSet`) and completing a configuration rollout (`completeConfigRollout`) undo or end
+   something like the other listed actions; plan M11 amendment 2026-10-31 R2.2 requires both tools to be destructive.
 4. Contract tests in `server/internal/transport/http/admin/spec_test.go` MUST additionally check: every exposed
    `write` tool's pattern is a key of `privileged` (so a refusal is recorded); no exposed tool has `StepUp: true`;
    `mcpcatalog.Version` equals the SHA-256 of the generated table; `make gen` leaves no diff.

@@ -95,11 +95,11 @@ type FileInput struct {
 
 // CreateFile defines a managed file (audited: managed_file.created). A file on a sensitive path needs an organization
 // administrator with a step-up (ADR 0034 decision 2).
-func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.ManagedFile, error) {
+func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput, opts ...WriteOptions) (pgstore.ManagedFile, error) {
 	var f pgstore.ManagedFile
 	spec := SpecManagedFileCreate
 	spec.Params = map[string]any{"path": deref(in.Path, ""), "device_group_id": idParam(in.DeviceGroupID)}
-	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		roots, err := operatorRoots(ctx, q)
 		if err != nil {
 			return err
@@ -140,18 +140,18 @@ func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.M
 		rec.SetTarget(audit.Target{Type: "managed_file", ID: f.ID.String(), Display: f.Path})
 		stateChangedFor(rec, f.OrganizationID, f.DeviceGroupID)
 		return nil
-	})
+	}))
 	return f, err
 }
 
 // UpdateFile changes a managed file; its scope is fixed (audited: managed_file.updated). A file that is on a
 // sensitive path afterwards, or a change of a file that was on one, needs an organization administrator with a
 // step-up (ADR 0034 decision 2).
-func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInput) (pgstore.ManagedFile, error) {
+func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInput, opts ...WriteOptions) (pgstore.ManagedFile, error) {
 	var f pgstore.ManagedFile
 	spec := SpecManagedFileUpdate
 	spec.Target = &audit.Target{Type: "managed_file", ID: id.String()}
-	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetManagedFile(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -192,15 +192,15 @@ func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInp
 		}
 		stateChangedFor(rec, f.OrganizationID, f.DeviceGroupID)
 		return nil
-	})
+	}))
 	return f, err
 }
 
 // DeleteFile deletes a managed file definition (audited: managed_file.deleted).
-func (m *ManagedConfig) DeleteFile(ctx context.Context, id uuid.UUID) error {
+func (m *ManagedConfig) DeleteFile(ctx context.Context, id uuid.UUID, opts ...WriteOptions) error {
 	spec := SpecManagedFileDelete
 	spec.Target = &audit.Target{Type: "managed_file", ID: id.String()}
-	return m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return m.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetManagedFile(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -213,7 +213,7 @@ func (m *ManagedConfig) DeleteFile(ctx context.Context, id uuid.UUID) error {
 		}
 		stateChangedFor(rec, old.OrganizationID, old.DeviceGroupID)
 		return nil
-	})
+	}))
 }
 
 func recordFile(rec Recorder, f pgstore.ManagedFile, group *uuid.UUID, roots []string) {
@@ -350,11 +350,11 @@ type UnitInput struct {
 }
 
 // CreateUnit defines a managed systemd unit (audited: managed_unit.created).
-func (m *ManagedConfig) CreateUnit(ctx context.Context, in UnitInput) (pgstore.ManagedUnit, error) {
+func (m *ManagedConfig) CreateUnit(ctx context.Context, in UnitInput, opts ...WriteOptions) (pgstore.ManagedUnit, error) {
 	var u pgstore.ManagedUnit
 	spec := SpecManagedUnitCreate
 	spec.Params = map[string]any{"unit": deref(in.Unit, ""), "device_group_id": idParam(in.DeviceGroupID)}
-	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		next := pgstore.ManagedUnit{Unit: deref(in.Unit, ""), Enabled: deref(in.Enabled, true), Active: deref(in.Active, true)}
 		recordUnit(rec, next, in.DeviceGroupID)
 		if err := policy.ValidateUnit(next.Unit); err != nil {
@@ -380,16 +380,16 @@ func (m *ManagedConfig) CreateUnit(ctx context.Context, in UnitInput) (pgstore.M
 		rec.SetTarget(audit.Target{Type: "managed_unit", ID: u.ID.String(), Display: u.Unit})
 		stateChangedFor(rec, u.OrganizationID, u.DeviceGroupID)
 		return nil
-	})
+	}))
 	return u, err
 }
 
 // UpdateUnit changes a managed unit; its scope is fixed (audited: managed_unit.updated).
-func (m *ManagedConfig) UpdateUnit(ctx context.Context, id uuid.UUID, in UnitInput) (pgstore.ManagedUnit, error) {
+func (m *ManagedConfig) UpdateUnit(ctx context.Context, id uuid.UUID, in UnitInput, opts ...WriteOptions) (pgstore.ManagedUnit, error) {
 	var u pgstore.ManagedUnit
 	spec := SpecManagedUnitUpdate
 	spec.Target = &audit.Target{Type: "managed_unit", ID: id.String()}
-	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetManagedUnit(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -412,15 +412,15 @@ func (m *ManagedConfig) UpdateUnit(ctx context.Context, id uuid.UUID, in UnitInp
 		}
 		stateChangedFor(rec, u.OrganizationID, u.DeviceGroupID)
 		return nil
-	})
+	}))
 	return u, err
 }
 
 // DeleteUnit deletes a managed unit definition (audited: managed_unit.deleted).
-func (m *ManagedConfig) DeleteUnit(ctx context.Context, id uuid.UUID) error {
+func (m *ManagedConfig) DeleteUnit(ctx context.Context, id uuid.UUID, opts ...WriteOptions) error {
 	spec := SpecManagedUnitDelete
 	spec.Target = &audit.Target{Type: "managed_unit", ID: id.String()}
-	return m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return m.runner.RunTx(ctx, ScopeOrg, spec, withStagedChangeSet(writeOptions(opts), func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetManagedUnit(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -433,7 +433,7 @@ func (m *ManagedConfig) DeleteUnit(ctx context.Context, id uuid.UUID) error {
 		}
 		stateChangedFor(rec, old.OrganizationID, old.DeviceGroupID)
 		return nil
-	})
+	}))
 }
 
 func recordUnit(rec Recorder, u pgstore.ManagedUnit, group *uuid.UUID) {

@@ -37,34 +37,43 @@ type Deps struct {
 	Managed      *app.ManagedConfig
 	Releases     *app.AgentReleases
 	// ReleaseImports import agent releases from the configured release source (ADR 0043).
-	ReleaseImports *app.ReleaseImports
-	Users          *app.Users
-	UserGroups     *app.UserGroups
-	Logins         *app.Logins
-	LoginSettings  *app.LoginSettings
-	WatchedUnits   *app.WatchedUnits
-	LoginHistory   *app.LoginHistory
-	AgentUpdates   *app.AgentUpdates
-	Uninstalls     *app.Uninstalls
-	Conversions    *app.DiskConversions
-	Privileges     *app.Privileges
-	Commands       *app.DeviceCommands
-	LocalAdmin     *app.LocalAdmin
-	Autoinstall    *app.Autoinstall
-	Disk           *app.Disk
-	Revocations    *app.Revocations
-	DMS            *app.DMS
-	Inventory      *app.Inventory
-	Updates        *app.Updates
-	Privacy        *app.Privacy
+	ReleaseImports  *app.ReleaseImports
+	Users           *app.Users
+	UserGroups      *app.UserGroups
+	Logins          *app.Logins
+	LoginSettings   *app.LoginSettings
+	WatchedUnits    *app.WatchedUnits
+	LoginHistory    *app.LoginHistory
+	AgentUpdates    *app.AgentUpdates
+	Uninstalls      *app.Uninstalls
+	Conversions     *app.DiskConversions
+	Privileges      *app.Privileges
+	Commands        *app.DeviceCommands
+	LocalAdmin      *app.LocalAdmin
+	Autoinstall     *app.Autoinstall
+	Disk            *app.Disk
+	Revocations     *app.Revocations
+	DMS             *app.DMS
+	Inventory       *app.Inventory
+	ConfigStatus    *app.ConfigStatus
+	Updates         *app.Updates
+	RolloutSettings *app.RolloutSettings
+	ConfigRollouts  *app.ConfigRollouts
+	Privacy         *app.Privacy
 	// ReadAudit records the audit searches and inventory views the organization switched on (plan M10 decision 20).
 	ReadAudit *app.ReadAudit
 	Attention *app.Attention
 	Findings  *app.Findings
 	// Notifications are the notification destinations of organizations and the platform (plan M9 decisions 14–19).
 	Notifications *app.Notifications
-	AccountList   *app.AccountList
-	Overview      *app.Overview
+	// SoftwareSources are the APT package sources of organizations (plan M13a decisions 1–6).
+	SoftwareSources *app.SoftwareSources
+	// SoftwareCatalog are the catalog entries and assignments of organizations (plan M13a decisions 7–11).
+	SoftwareCatalog *app.SoftwareCatalog
+	// SoftwareStatus lists what devices report about the catalog's applications (plan M13a §3.4).
+	SoftwareStatus *app.SoftwareStatus
+	AccountList    *app.AccountList
+	Overview       *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
@@ -139,10 +148,12 @@ var privileged = map[string]struct {
 	"POST /api/v1/devices/{id}/reject":                                     {app.ScopeOrg, app.SpecDeviceReject},
 	"POST /api/v1/devices/{id}/release-quarantine":                         {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},
 	"POST /api/v1/devices/{id}/retire":                                     {app.ScopeOrg, app.SpecDeviceRetire},
+	"POST /api/v1/devices/{id}/enforce":                                    {app.ScopeOrg, app.SpecDeviceEnforce},
 	"POST /api/v1/enrollment-tokens/{id}/revoke":                           {app.ScopeOrg, app.SpecEnrollmentTokenRevoke},
 	"POST /api/v1/api-tokens":                                              {app.ScopeOrg, app.SpecAPITokenCreate},
 	"POST /api/v1/api-tokens/{id}/revoke":                                  {app.ScopeOrg, app.SpecAPITokenRevoke},
 	"PUT /api/v1/config":                                                   {app.ScopeOrg, app.SpecConfigApply},
+	"POST /api/v1/change-sets/{id}/revert":                                 {app.ScopeOrg, app.SpecConfigRevert},
 	"POST /api/platform/v1/agent-releases":                                 {app.ScopePlatform, app.SpecAgentReleaseCreate},
 	"POST /api/platform/v1/agent-releases/import":                          {app.ScopePlatform, app.SpecAgentReleaseImport},
 	"PUT /api/platform/v1/agent-releases/{version}/artifacts/{arch}":       {app.ScopePlatform, app.SpecAgentReleaseUpload},
@@ -195,6 +206,11 @@ var privileged = map[string]struct {
 	"PUT /api/v1/settings/watched-units":                                   {app.ScopeOrg, app.SpecWatchedUnitsChange},
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
+	"PUT /api/v1/settings/rollout":                                         {app.ScopeOrg, app.SpecRolloutSettings},
+	"POST /api/v1/config-rollouts/{id}/halt":                               {app.ScopeOrg, app.SpecConfigRolloutHalt},
+	"POST /api/v1/config-rollouts/{id}/resume":                             {app.ScopeOrg, app.SpecConfigRolloutResume},
+	"POST /api/v1/config-rollouts/{id}/advance":                            {app.ScopeOrg, app.SpecConfigRolloutAdvance},
+	"POST /api/v1/config-rollouts/{id}/complete":                           {app.ScopeOrg, app.SpecConfigRolloutComplete},
 	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
 	"GET /api/v1/audit/exports/{id}/download":                              {app.ScopeOrg, app.SpecAuditExportDownload},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
@@ -224,6 +240,16 @@ var privileged = map[string]struct {
 	"DELETE /api/platform/v1/notification-destinations/{id}":               {app.ScopePlatform, app.SpecPlatformNotificationDelete},
 	"POST /api/platform/v1/notification-destinations/{id}/rotate-secret":   {app.ScopePlatform, app.SpecPlatformNotificationRotateSecret},
 	"POST /api/platform/v1/notification-destinations/{id}/test":            {app.ScopePlatform, app.SpecPlatformNotificationTest},
+	"POST /api/v1/software-sources":                                        {app.ScopeOrg, app.SpecSoftwareSourceCreate},
+	"PATCH /api/v1/software-sources/{id}":                                  {app.ScopeOrg, app.SpecSoftwareSourceUpdate},
+	"DELETE /api/v1/software-sources/{id}":                                 {app.ScopeOrg, app.SpecSoftwareSourceDelete},
+	"POST /api/v1/software-catalog":                                        {app.ScopeOrg, app.SpecSoftwareCatalogEntryCreate},
+	"PATCH /api/v1/software-catalog/{id}":                                  {app.ScopeOrg, app.SpecSoftwareCatalogEntryUpdate},
+	"DELETE /api/v1/software-catalog/{id}":                                 {app.ScopeOrg, app.SpecSoftwareCatalogEntryDelete},
+	"PUT /api/v1/software-catalog/{id}/icon":                               {app.ScopeOrg, app.SpecSoftwareCatalogEntryUpdate},
+	"POST /api/v1/software-assignments":                                    {app.ScopeOrg, app.SpecSoftwareAssignmentCreate},
+	"PATCH /api/v1/software-assignments/{id}":                              {app.ScopeOrg, app.SpecSoftwareAssignmentUpdate},
+	"DELETE /api/v1/software-assignments/{id}":                             {app.ScopeOrg, app.SpecSoftwareAssignmentDelete},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -258,7 +284,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, updates: d.Updates, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,

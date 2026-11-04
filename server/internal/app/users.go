@@ -311,12 +311,19 @@ func (u *Users) Delete(ctx context.Context, id uuid.UUID) error {
 			if externalErr != nil {
 				return nil
 			}
-			return removeUser(ctx, q, rec, id)
+			return withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+				return removeUser(ctx, q, rec, id)
+			})(ctx, q, rec)
 		})
 }
 
 // removeUser deletes a user with its assignments and queues a recompile of the organization.
 func removeUser(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID) error {
+	// The assignments of the user are part of the declarative document: every writer of it holds the apply lock, taken
+	// first, so a change set never records another writer's change (PDK-154).
+	if err := q.LockConfigApply(ctx); err != nil {
+		return err
+	}
 	// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
 	if err := q.LockOrganizationPrivileges(ctx); err != nil {
 		return err

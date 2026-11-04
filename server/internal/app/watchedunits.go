@@ -60,7 +60,7 @@ func (w *WatchedUnits) Get(ctx context.Context) (WatchedUnitSettings, error) {
 // with policy.ValidateUnit and must be a service; at most 32, duplicates are refused.
 func (w *WatchedUnits) Set(ctx context.Context, units []string) (WatchedUnitSettings, error) {
 	var out WatchedUnitSettings
-	err := w.runner.RunTx(ctx, ScopeOrg, SpecWatchedUnitsChange, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := w.runner.RunTx(ctx, ScopeOrg, SpecWatchedUnitsChange, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		cur, err := loadWatchedUnits(ctx, q)
 		if err != nil {
 			return err
@@ -82,7 +82,7 @@ func (w *WatchedUnits) Set(ctx context.Context, units []string) (WatchedUnitSett
 		}
 		rec.StateChanged(statechange.ScopeOrg, org)
 		return nil
-	})
+	}))
 	return out, err
 }
 

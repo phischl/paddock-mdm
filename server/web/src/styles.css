@@ -71,6 +71,8 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .list-footer .page-size { flex: 0 0 9rem; }
 .list-footer .v-pagination { margin-left: auto; }
 .row-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+/* Page-header actions wrap: four buttons (German at 375 px) are wider than a phone. */
+.wrap-actions { flex-wrap: wrap; }
 
 .link-button {
   display: inline-flex; align-items: center; justify-content: center;
@@ -86,6 +88,16 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .config-text textarea { font-family: var(--pd-font-mono); }
 .conflict { margin-bottom: 1rem; }
 .timeline { margin: 0; padding-left: 1.25rem; }
+.rollout-link { margin-inline-start: 0.5rem; }
+/* The waves of a configuration rollout (plan M11 decision 36): the state is also written out, never colour alone. */
+.wave-strip { display: flex; flex-wrap: wrap; gap: 0.5rem; list-style: none; margin: 0 0 0.75rem; padding: 0; }
+.wave-step {
+  display: flex; flex-direction: column; min-width: 5.5rem; padding: 0.5rem 0.75rem;
+  border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md); background: var(--pd-surface-1);
+}
+.wave-step--current { border-width: 2px; border-color: rgb(var(--v-theme-primary)); font-weight: 600; }
+.wave-step--upcoming { color: var(--pd-text-secondary); }
+.wave-state { font-size: 12px; }
 
 /* Identity and privileges (plan M3a step 5). */
 .chip-link { margin-right: 0.75rem; }
@@ -239,6 +251,7 @@ a.pd-pill:hover { filter: brightness(0.95); }
 .pd-expanded dd { margin: 0; font-family: var(--pd-font-mono); font-size: 12px; overflow-wrap: anywhere; }
 @media (max-width: 959.98px) { .pd-hide-md { display: none !important; } }
 @media (max-width: 599.98px) { .pd-hide-sm { display: none !important; } }
+@media (max-width: 1919.98px) { .pd-hide-xl { display: none !important; } }
 .pd-cards-panel { position: relative; background: var(--pd-surface-1); border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md); overflow-x: hidden; }
 .pd-cards { list-style: none; margin: 0; padding: 0; }
 .pd-card { position: relative; padding: 10px 12px; border-bottom: 1px solid var(--pd-border-subtle); display: flex; flex-direction: column; gap: 4px; }
@@ -320,6 +333,7 @@ a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary);
 .pd-placeholder { background: var(--pd-surface-3); border-radius: var(--pd-radius-md); margin-bottom: 14px; }
 .pd-placeholder--strip { height: 76px; }
 .pd-placeholder--panel { height: 240px; }
+.pd-placeholder--inline { display: inline-block; width: 72px; height: 1em; margin: 0; vertical-align: middle; }
 .pd-table-scroll { overflow-x: auto; }
 .pd-table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .pd-table th {
@@ -336,6 +350,7 @@ a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary);
 .pd-facts > div:last-child { border-bottom: 0; }
 .pd-facts dt { color: var(--pd-text-secondary); }
 .pd-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.pd-facts dd.pd-facts-inline { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px 8px; }
 .pd-sevbar { margin-bottom: 12px; }
 .pd-sevbar-track { display: flex; height: 10px; border-radius: var(--pd-radius-xs); overflow: hidden; gap: 1px; background: var(--pd-surface-1); }
 .pd-sevbar-segment { flex: 1 1 0; min-width: 3px; }

@@ -21,10 +21,12 @@ interface Tab { name: string; label: string; testid: string }
 const tabs = computed<Tab[]>(() => [
   { name: 'device', label: 'devices.tabs.overview', testid: 'tab-overview' },
   { name: 'device-software', label: 'inventory.tabs.software', testid: 'tab-software' },
+  { name: 'device-managed-software', label: 'devices.tabs.managedSoftware', testid: 'tab-managed-software' },
   { name: 'device-vulnerabilities', label: 'inventory.tabs.vulnerabilities', testid: 'tab-vulnerabilities' },
   { name: 'device-access', label: 'devices.tabs.access', testid: 'tab-access' },
   { name: 'device-logins', label: 'devices.tabs.logins', testid: 'tab-logins' },
   { name: 'device-configuration', label: 'devices.tabs.configuration', testid: 'tab-configuration' },
+  { name: 'device-apply-status', label: 'devices.tabs.applyStatus', testid: 'tab-apply-status' },
   { name: 'device-commands', label: 'devices.tabs.commands', testid: 'tab-commands' },
   ...(session.canReadAudit ? [{ name: 'device-audit', label: 'devices.tabs.audit', testid: 'tab-audit' }] : []),
 ])

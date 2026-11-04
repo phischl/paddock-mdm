@@ -27,6 +27,7 @@ export interface NavigationGroup {
 }
 
 const orgReader = (a: NavigationAccess) => a.canReadGroups
+const orgAdmin = (a: NavigationAccess) => a.canDelete
 
 /**
  * The drawer groups in their order (PDK-017 architect decision). Each item keeps the role rule its app bar link had
@@ -59,8 +60,12 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/managed-files', label: 'nav.managedFiles', icon: 'file-text', visible: orgReader },
       { to: '/managed-units', label: 'nav.managedUnits', icon: 'cog', visible: orgReader },
       { to: '/settings/managed-files', label: 'nav.operatorRoots', icon: 'folder', visible: orgReader },
+      { to: '/software-sources', label: 'nav.softwareSources', icon: 'shield-check', visible: orgAdmin, testid: 'nav-software-sources' },
+      { to: '/software-catalog', label: 'nav.softwareCatalog', icon: 'package', visible: orgReader, testid: 'nav-software-catalog' },
       { to: '/package-holds', label: 'nav.packageHolds', icon: 'package', visible: orgReader },
       { to: '/change-sets', label: 'nav.changeSets', icon: 'diff', visible: orgReader },
+      { to: '/config-rollouts', label: 'nav.configRollouts', icon: 'rocket', visible: orgReader },
+      { to: '/config-status', label: 'nav.configStatus', icon: 'file-check', visible: orgReader },
     ],
   },
   {
@@ -92,6 +97,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/settings/notifications', label: 'nav.notifications', icon: 'bell', visible: (a) => a.canReadAudit, testid: 'nav-notifications' },
       { to: '/settings/mcp', label: 'nav.mcpSettings', icon: 'cog', visible: orgReader },
       { to: '/settings/updates', label: 'nav.updateSettings', icon: 'refresh-cw', visible: orgReader },
+      { to: '/settings/rollout', label: 'nav.rolloutSettings', icon: 'rocket', visible: orgReader },
       { to: '/settings/privacy', label: 'nav.privacySettings', icon: 'shield', visible: orgReader },
       { to: '/audit', label: 'nav.audit', icon: 'scroll-text', shortcut: 'g l', visible: (a) => a.canReadAudit },
       { to: '/audit/integrity', label: 'nav.auditIntegrity', icon: 'shield-check', visible: (a) => a.canReadAudit, testid: 'nav-audit-integrity' },

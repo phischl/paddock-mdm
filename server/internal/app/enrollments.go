@@ -95,7 +95,13 @@ func (e *Enrollments) Enroll(ctx context.Context, req ingest.Enroll) (EnrollResu
 			}
 		}
 		rec.SetParam("state", state)
-		if err := createDevice(ctx, q, req, tok, state); err != nil {
+		method, mode, err := device.Adoption(req.EnrollmentMethod)
+		if err != nil {
+			return problem.InvalidRequest.WithDetail(err.Error())
+		}
+		rec.SetParam("enrollment_method", method)
+		rec.SetParam("config_mode", mode)
+		if err := createDevice(ctx, q, req, tok, state, method, mode); err != nil {
 			return err
 		}
 		rec.StateChanged(statechange.ScopeDevice, req.EnrollmentID)
@@ -158,7 +164,7 @@ func validateEnroll(req ingest.Enroll) error {
 	return nil
 }
 
-func createDevice(ctx context.Context, q *pgstore.Queries, req ingest.Enroll, tok pgstore.EnrollmentToken, state string) error {
+func createDevice(ctx context.Context, q *pgstore.Queries, req ingest.Enroll, tok pgstore.EnrollmentToken, state, method, mode string) error {
 	if err := q.ConsumeEnrollmentTokenUse(ctx, tok.ID); err != nil {
 		return err
 	}
@@ -169,7 +175,7 @@ func createDevice(ctx context.Context, q *pgstore.Queries, req ingest.Enroll, to
 	if _, err := q.InsertDevice(ctx, pgstore.InsertDeviceParams{
 		ID: req.EnrollmentID, OrganizationID: tok.OrganizationID, Hostname: req.Hostname, State: state,
 		HardwareUuid: optional(req.HardwareUUID), MachineID: optional(req.MachineID), OsRelease: osRelease,
-		EnrollmentTokenID: uuid.NullUUID{UUID: tok.ID, Valid: true},
+		EnrollmentTokenID: uuid.NullUUID{UUID: tok.ID, Valid: true}, EnrollmentMethod: method, ConfigMode: mode,
 	}); err != nil {
 		return err
 	}

@@ -88,3 +88,52 @@ func TestLocalAdminWiring(t *testing.T) {
 		t.Fatalf("rotated events %+v", rotated)
 	}
 }
+
+// TestLocalAdminWaitsForEnforcement (plan M11 decision 9): while the current bundle is report-only the local
+// administrator is neither created nor rotated and rotate_admin_password fails with reason report_only; the first
+// enforced bundle creates it.
+func TestLocalAdminWaitsForEnforcement(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	sys.Files["/etc/passwd"] = &fakesys.File{Data: []byte("root:x:0:0:root:/root:/bin/bash\n"), Mode: 0o644}
+	sys.Files["/etc/group"] = &fakesys.File{Data: []byte("sudo:x:27:\n"), Mode: 0o644}
+	a.d.Accounts, a.localAdmin.Sys = sys, sys
+	now := time.Now().UTC()
+	a.localAdmin.Now = func() time.Time { return now }
+	a.current = localAdminBundle(t)
+	a.current.Mode = bundle.ModeReportOnly
+	ctx := context.Background()
+
+	for range 2 {
+		a.tickLocalAdmin(ctx)
+		now = now.Add(localadmin.PollInterval)
+	}
+	if calls := sys.TakeCalls(); len(calls) != 0 || len(g.Escrows) != 0 || a.st.LocalAdmin.Generation != 0 {
+		t.Fatalf("report-only: calls %v, escrows %d, state %+v", calls, len(g.Escrows), a.st.LocalAdmin)
+	}
+	// rotate_admin_password gets a final answer instead of a deferral the manager would never resolve (R6.7).
+	const commandID = "0190f000-0000-7000-8000-0000000000ca"
+	g.Mu.Lock()
+	g.Checkin.Commands = []json.RawMessage{testgw.SignedCommand(t, command.Command{CommandID: commandID,
+		DeviceID: testgw.DeviceID, OrganizationID: testgw.OrgID, Type: command.TypeRotateAdminPassword, IssuedAt: now, ExpiresAt: now.Add(time.Hour)})}
+	g.Mu.Unlock()
+	a.Cycle(ctx)
+	a.Cycle(ctx)
+	g.Mu.Lock()
+	g.Checkin.Commands = nil
+	r := g.Results[commandID]
+	g.Mu.Unlock()
+	if r.Status != protocol.CommandFailed || string(r.Result) != `{"reason":"report_only"}` {
+		t.Fatalf("command result %+v", r)
+	}
+	if calls := sys.TakeCalls(); len(calls) != 0 || len(g.Escrows) != 0 {
+		t.Fatalf("report-only rotation: calls %v, escrows %d", calls, len(g.Escrows))
+	}
+
+	a.current.Mode = bundle.ModeEnforce
+	a.tickLocalAdmin(ctx)
+	if len(sys.TakeCalls()) == 0 || len(g.Escrows) != 1 {
+		t.Fatalf("enforced: escrows %d", len(g.Escrows))
+	}
+}

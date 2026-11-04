@@ -89,12 +89,12 @@ func (p *Privacy) Get(ctx context.Context) (PrivacySettings, error) {
 // Update replaces the organization's privacy settings (audited: settings.privacy_changed with the three new values).
 func (p *Privacy) Update(ctx context.Context, in PrivacySettings) (PrivacySettings, error) {
 	var out PrivacySettings
-	err := p.runner.RunTx(ctx, ScopeOrg, privacySpec(ctx, in), func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
+	err := p.runner.RunTx(ctx, ScopeOrg, privacySpec(ctx, in), withChangeSet(func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 		var err error
 		pr, _ := principal.From(ctx)
 		out, err = upsertPrivacySettings(ctx, q, pr, in)
 		return err
-	})
+	}))
 	return out, err
 }
 

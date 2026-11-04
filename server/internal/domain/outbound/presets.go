@@ -30,15 +30,14 @@ var securityPrefixes = []string{
 }
 
 // securityExplicit are the single codes of ADR 0031 decision 7 and of the refresh of plan M9 (amendment 2026-10-31,
-// B3.3). Only registered codes belong here (TestSecurityCodesRegistered); a ticket that registers a code the ADR
-// names (config_rollout.halted) adds it in the same change.
+// B3.3). Only registered codes belong here (TestSecurityCodesRegistered).
 var securityExplicit = []audit.Code{
 	"device.clone_suspected", "device.bundle_rejected", "device.agent_events_dropped", "device.agent_rollback_failed",
 	"device.stale_critical", "device.presumed_self_locked", "device.revocation_trust_pinned_tofu",
 	"device.revocation_confirmed", "device.revocation_refused",
 	"local_admin.revealed", "local_admin.login", "disk.recovery_key_revealed", "disk.header_downloaded",
 	"user_group.member_added", "user_group.member_removed", "user.locked", "user.unlocked", "admin.login",
-	"agent_rollout.halted", "agent_release.published",
+	"agent_rollout.halted", "agent_release.published", "config_rollout.halted",
 	"platform.osv_stale", "platform.ip_allowlist_changed", "platform.ip_allowlist_disabled",
 	"platform.ip_allowlist_denied", "config.applied",
 	"device.event_gap", "device.event_seq_reset", "device.clock_drift", "audit.chain_verification_failed",

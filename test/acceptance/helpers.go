@@ -492,3 +492,16 @@ func requireSingleService(t *testing.T, ctx context.Context, service string) {
 		t.Fatalf("this gate's ordering proof assumes a single %s; found %d", service, n)
 	}
 }
+
+// currentRolloutSettings returns p's rollout settings as an update body (unchanged values).
+func currentRolloutSettings(t *testing.T, p *env.Portal) map[string]any {
+	t.Helper()
+	res := call(t, p, http.MethodGet, "/api/v1/settings/rollout", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var s map[string]any
+	if err := res.JSON(&s); err != nil {
+		t.Fatal(err)
+	}
+	delete(s, "updated_at")
+	return s
+}

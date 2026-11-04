@@ -26,6 +26,8 @@ const (
 	CodeDeviceGroupsChanged      Code = "device.groups_changed"
 	CodeDeviceOwnersChanged      Code = "device.owners_changed"
 	CodeDeviceNameChanged        Code = "device.name_changed"
+	// Adoption (plan M11 decision 42).
+	CodeDeviceEnforcementEnabled Code = "device.enforcement_enabled"
 	// Uninstall (plan M8d decisions 37, 38 and 41).
 	CodeDeviceUninstallRequested   Code = "device.uninstall_requested"
 	CodeDeviceUninstallCancelled   Code = "device.uninstall_cancelled"
@@ -172,6 +174,8 @@ const (
 
 	// Declarative configuration (plan M6c decision 16).
 	CodeConfigApplied Code = "config.applied"
+	// CodeConfigReverted is the revert of a change set (plan M11 decision 21).
+	CodeConfigReverted Code = "config.reverted"
 
 	// Restore commands of paddock-server admin (plan M6c decision 21).
 	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
@@ -205,6 +209,7 @@ const (
 	CodeDeviceEventSeqReset          Code = "device.event_seq_reset"
 	CodeDeviceClockDrift             Code = "device.clock_drift"
 	CodeDeviceClockDriftCleared      Code = "device.clock_drift_cleared"
+	CodeDeviceOSReleaseChanged       Code = "device.os_release_changed"
 	CodeAuditChainVerified           Code = "audit.chain_verified"
 	CodeAuditChainVerificationFailed Code = "audit.chain_verification_failed"
 	CodeAdminRoleGranted             Code = "admin.role_granted"
@@ -234,6 +239,16 @@ const (
 	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
 	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
 
+	// Rollout settings per organization (plan M11 decisions 23 and 24).
+	CodeSettingsRolloutChanged Code = "settings.rollout_changed"
+
+	// Staged configuration rollouts (plan M11 decisions 32 and 33). config_rollout.halted is a preset event of the
+	// notification rules (plan M9 §6.9): the code is frozen.
+	CodeConfigRolloutAdvanced  Code = "config_rollout.advanced"
+	CodeConfigRolloutHalted    Code = "config_rollout.halted"
+	CodeConfigRolloutResumed   Code = "config_rollout.resumed"
+	CodeConfigRolloutCompleted Code = "config_rollout.completed"
+
 	// Read-access recording, coalesced per actor and window (ADR 0032 §4, plan M10 §6.4).
 	CodeAuditSearched         Code = "audit.searched"
 	CodeDeviceInventoryViewed Code = "device.inventory_viewed"
@@ -248,6 +263,24 @@ const (
 	CodeNotificationDelivered          Code = "notification.delivered"
 	CodeNotificationDestinationStalled Code = "notification.destination_stalled"
 	CodeNotificationDestinationResumed Code = "notification.destination_resumed"
+
+	// Software sources (plan M13a §6.3).
+	CodeSoftwareSourceCreated Code = "software_source.created"
+	CodeSoftwareSourceUpdated Code = "software_source.updated"
+	CodeSoftwareSourceDeleted Code = "software_source.deleted"
+
+	// Software catalog entries and assignments (plan M13a §6.3).
+	CodeSoftwareCatalogEntryCreated Code = "software_catalog_entry.created"
+	CodeSoftwareCatalogEntryUpdated Code = "software_catalog_entry.updated"
+	CodeSoftwareCatalogEntryDeleted Code = "software_catalog_entry.deleted"
+	CodeSoftwareAssignmentCreated   Code = "software_assignment.created"
+	CodeSoftwareAssignmentUpdated   Code = "software_assignment.updated"
+	CodeSoftwareAssignmentDeleted   Code = "software_assignment.deleted"
+	// What devices did with their software assignments (plan M13a decision 24).
+	CodeDeviceSoftwareInstalled   Code = "device.software_installed"
+	CodeDeviceSoftwareReinstalled Code = "device.software_reinstalled"
+	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
+	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -262,6 +295,18 @@ type Definition struct {
 
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
+
+// withChangeSetParams appends the params of the audit events of configuration writes that record a change set (plan
+// M11 decisions 19, 26 and 31): rollout is immediate, staged or urgent, rollout_id names the rollout a staged change
+// set started, urgent_reason is the reason of the urgent opt-out.
+func withChangeSetParams(params []string) []string {
+	for _, p := range []string{"change_set_id", "rollout", "rollout_id", "urgent_reason"} {
+		if !slices.Contains(params, p) {
+			params = append(params, p)
+		}
+	}
+	return params
+}
 
 // notificationDestinationParams are the parameters of notification.destination_created and the first of
 // notification.destination_updated (plan M9 §6.3).
@@ -283,6 +328,7 @@ var deviceEventParams = []string{
 	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
 	"command_id", "mode", "local_admin", "tpm", "steps",
 	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by", "state",
+	"package", "intent", "catalog_entry_id", "source",
 }
 
 var registry = map[Code]Definition{
@@ -302,20 +348,20 @@ var registry = map[Code]Definition{
 	CodeDeviceGroupCreated: {
 		Code: CodeDeviceGroupCreated, Emitted: true,
 		Description: "A device group was created.",
-		Params:      []string{"name", "staleness_warning_h", "staleness_critical_h", "agent_update_policy", "disk_unlock_mode"},
+		Params:      withChangeSetParams([]string{"name", "staleness_warning_h", "staleness_critical_h", "agent_update_policy", "disk_unlock_mode"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeDeviceGroupUpdated: {
 		Code: CodeDeviceGroupUpdated, Emitted: true,
 		Description: "A device group was renamed or its description changed.",
-		Params: []string{"name", "old_name", "description_changed", "staleness_warning_h", "staleness_critical_h",
-			"agent_update_policy", "disk_unlock_mode"},
+		Params: withChangeSetParams([]string{"name", "old_name", "description_changed", "staleness_warning_h", "staleness_critical_h",
+			"agent_update_policy", "disk_unlock_mode"}),
 		Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeDeviceGroupDeleted: {
 		Code: CodeDeviceGroupDeleted, Emitted: true,
 		Description: "A device group was deleted.",
-		Params:      []string{"name"},
+		Params:      withChangeSetParams([]string{"name"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeEnrollmentTokenCreated: {
@@ -333,9 +379,9 @@ var registry = map[Code]Definition{
 	CodeDeviceEnrolled: {
 		Code: CodeDeviceEnrolled, Emitted: true,
 		Description: "A device enrolled with an enrollment token (actor: the device), or its enrollment was rejected.",
-		Params:      []string{"hostname", "state", "key_protection", "enrolled_with", "auto_approve_withheld"},
+		Params:      []string{"hostname", "state", "key_protection", "enrolled_with", "auto_approve_withheld", "enrollment_method", "config_mode"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "enrolled_with is the ID of the enrollment token. auto_approve_withheld is root_grant when an auto-approve token's device would have given someone root and the device was enrolled pending instead (plan M8s decision 7g-sexies). A failure carries the rejection reason as error_code: invalid_token, token_revoked, token_expired, token_exhausted or invalid_request.",
+		Note:        "enrollment_method is autoinstall, adopted or unknown (the agent sent none) as the device asserts it; config_mode is report_only for an adopted device and enforce otherwise (plan M11 decision 40). enrolled_with is the ID of the enrollment token. auto_approve_withheld is root_grant when an auto-approve token's device would have given someone root and the device was enrolled pending instead (plan M8s decision 7g-sexies). A failure carries the rejection reason as error_code: invalid_token, token_revoked, token_expired, token_exhausted or invalid_request.",
 	},
 	CodeDeviceApproved: {
 		Code: CodeDeviceApproved, Emitted: true,
@@ -361,6 +407,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"hostname", "from_state", "reason", "conversion_cancelled", "conversion_id", "conversion_phase"},
 		Outcomes:    adminOutcomes,
 		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system). conversion_cancelled (before_delivery) and conversion_id when the retirement withdrew an undelivered encrypt_disk command; conversion_cancelled (after_delivery) and conversion_id when it closed a prepared conversion or one with an abort on its way as cancelled, withdrawing a pending encrypt_disk_abort; conversion_id and conversion_phase (requested, prepared or encrypting) when it left an open in-place encryption alone.",
+	},
+	CodeDeviceEnforcementEnabled: {
+		Code: CodeDeviceEnforcementEnabled, Emitted: true,
+		Description: "An administrator confirmed with the device's hostname that an adopted device leaves report-only mode; its next bundle applies every managed resource.",
+		Params:      []string{"hostname", "enrollment_method", "report_only_since"},
+		Outcomes:    adminOutcomes,
+		Note:        "report_only_since is when the device entered report-only mode (its enrollment). A hostname that does not match fails with invalid_request, a device that is not active and report-only with invalid_state.",
 	},
 	CodeDeviceUninstallRequested: {
 		Code: CodeDeviceUninstallRequested, Emitted: true,
@@ -489,7 +542,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceBundleApplied: {
 		Code: CodeDeviceBundleApplied, Emitted: true,
-		Description: "A device reported that it applied a bundle (actor: the device).",
+		Description: "A device reported that it applied a bundle, with its mode enforce or report_only; the per-resource outcomes are apply status, not audit params (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 	},
@@ -617,37 +670,37 @@ var registry = map[Code]Definition{
 	CodeManagedFileCreated: {
 		Code: CodeManagedFileCreated, Emitted: true,
 		Description: "A managed file was defined for the organization or a device group.",
-		Params:      []string{"path", "device_group_id", "mode", "owner", "group", "tier"},
+		Params:      withChangeSetParams([]string{"path", "device_group_id", "mode", "owner", "group", "tier"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedFileUpdated: {
 		Code: CodeManagedFileUpdated, Emitted: true,
 		Description: "A managed file definition was changed.",
-		Params:      []string{"path", "device_group_id", "mode", "owner", "group", "tier", "content_changed", "old_path"},
+		Params:      withChangeSetParams([]string{"path", "device_group_id", "mode", "owner", "group", "tier", "content_changed", "old_path"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedFileDeleted: {
 		Code: CodeManagedFileDeleted, Emitted: true,
 		Description: "A managed file definition was deleted.",
-		Params:      []string{"path", "device_group_id"},
+		Params:      withChangeSetParams([]string{"path", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedUnitCreated: {
 		Code: CodeManagedUnitCreated, Emitted: true,
 		Description: "A managed systemd unit was defined for the organization or a device group.",
-		Params:      []string{"unit", "device_group_id", "enabled", "active"},
+		Params:      withChangeSetParams([]string{"unit", "device_group_id", "enabled", "active"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedUnitUpdated: {
 		Code: CodeManagedUnitUpdated, Emitted: true,
 		Description: "A managed systemd unit definition was changed.",
-		Params:      []string{"unit", "device_group_id", "enabled", "active", "old_unit"},
+		Params:      withChangeSetParams([]string{"unit", "device_group_id", "enabled", "active", "old_unit"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedUnitDeleted: {
 		Code: CodeManagedUnitDeleted, Emitted: true,
 		Description: "A managed systemd unit definition was deleted.",
-		Params:      []string{"unit", "device_group_id"},
+		Params:      withChangeSetParams([]string{"unit", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeAgentReleaseCreated: {
@@ -729,7 +782,7 @@ var registry = map[Code]Definition{
 	CodeUserDeleted: {
 		Code: CodeUserDeleted, Emitted: true,
 		Description: "A local user was deleted in Authentik and Paddock, with their group memberships and assignments.",
-		Params:      []string{"username"},
+		Params:      withChangeSetParams([]string{"username"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
 	},
 	CodeUserLocked: {
@@ -772,7 +825,7 @@ var registry = map[Code]Definition{
 	CodeUserGroupDeleted: {
 		Code: CodeUserGroupDeleted, Emitted: true,
 		Description: "A user group was deleted in Authentik and Paddock, with its login and profile assignments.",
-		Params:      []string{"slug", "name"},
+		Params:      withChangeSetParams([]string{"slug", "name"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
 	},
 	CodeUserGroupMemberAdded: {
@@ -790,7 +843,7 @@ var registry = map[Code]Definition{
 	CodeSettingsLoginChanged: {
 		Code: CodeSettingsLoginChanged, Emitted: true,
 		Description: "The organization's login settings were changed (Hello PIN, session action of a lock, break-glass accounts, sudoers.d allow list, sudo lecture text).",
-		Params:      []string{"changed", "login_history_enabled", "login_history_days", "login_history_deleted"},
+		Params:      withChangeSetParams([]string{"changed", "login_history_enabled", "login_history_days", "login_history_deleted"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeRetentionPurged: {
@@ -836,46 +889,46 @@ var registry = map[Code]Definition{
 	CodePermissionProfileCreated: {
 		Code: CodePermissionProfileCreated, Emitted: true,
 		Description: "A permission profile was created.",
-		Params:      []string{"name", "class", "commands", "root_equivalent", "effective_class"},
+		Params:      withChangeSetParams([]string{"name", "class", "commands", "root_equivalent", "effective_class"}),
 		Outcomes:    adminOutcomes,
 		Note:        "root_equivalent is true when a command of the profile hands out root on its own or in combination (catalog version in the effective profile).",
 	},
 	CodePermissionProfileUpdated: {
 		Code: CodePermissionProfileUpdated, Emitted: true,
 		Description: "A permission profile was changed.",
-		Params:      []string{"name", "class", "old_class", "commands", "root_equivalent", "effective_class"},
+		Params:      withChangeSetParams([]string{"name", "class", "old_class", "commands", "root_equivalent", "effective_class"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodePermissionProfileDeleted: {
 		Code: CodePermissionProfileDeleted, Emitted: true,
 		Description: "A permission profile without assignments was deleted.",
-		Params:      []string{"name", "class"},
+		Params:      withChangeSetParams([]string{"name", "class"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeProfileAssignmentCreated: {
 		Code: CodeProfileAssignmentCreated, Emitted: true,
 		Description: "A permission profile was assigned globally, to a group or to a user, optionally only on the devices of one device group.",
-		Params:      []string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id"},
+		Params:      withChangeSetParams([]string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeProfileAssignmentUpdated: {
 		Code: CodeProfileAssignmentUpdated, Emitted: true,
 		Description: "The device group scope of a profile assignment was changed.",
-		Params:      []string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id", "old_device_group_id"},
+		Params:      withChangeSetParams([]string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id", "old_device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeProfileAssignmentDeleted: {
 		Code: CodeProfileAssignmentDeleted, Emitted: true,
 		Description: "A profile assignment was removed.",
-		Params:      []string{"profile", "class", "subject_type", "subject_id", "device_group_id"},
+		Params:      withChangeSetParams([]string{"profile", "class", "subject_type", "subject_id", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceBundleRenderFailed: {
 		Code: CodeDeviceBundleRenderFailed, Emitted: true,
-		Description: "The compiler blocked a device's new bundle because a rendered sudo entry failed the visudo check; the device keeps its previous bundle (actor: system).",
+		Description: "The compiler blocked a device's new bundle because a rendered sudo entry failed the visudo check, or because the device is outside the wave of a configuration rollout whose before-state is missing; the device keeps its previous bundle (actor: system).",
 		Params:      []string{"username", "reason"},
 		Outcomes:    []Outcome{OutcomeFailure},
-		Note:        "error_code is render_failed; reason is visudo's message (at most 500 characters).",
+		Note:        "error_code is render_failed; reason is visudo's message or names the rollout (at most 500 characters); username is empty for a rollout.",
 	},
 	CodeDeviceBundleEntryOmitted: {
 		Code: CodeDeviceBundleEntryOmitted, Emitted: true,
@@ -1062,27 +1115,27 @@ var registry = map[Code]Definition{
 	CodeSettingsUpdatesChanged: {
 		Code: CodeSettingsUpdatesChanged, Emitted: true,
 		Description: "An organization administrator changed the update settings: the time of the daily security updates, the schedule of regular updates, the random delay and the staleness thresholds.",
-		Params: []string{"security_daily_at", "regular_schedule", "regular_updates_enabled", "max_random_delay_min",
-			"staleness_warning_h", "staleness_critical_h", "agent_update_policy"},
+		Params: withChangeSetParams([]string{"security_daily_at", "regular_schedule", "regular_updates_enabled", "max_random_delay_min",
+			"staleness_warning_h", "staleness_critical_h", "agent_update_policy"}),
 		Outcomes: adminOutcomes,
 		Note:     "failure with invalid_schedule for a schedule outside the accepted subset.",
 	},
 	CodePackageHoldCreated: {
 		Code: CodePackageHoldCreated, Emitted: true,
 		Description: "A package was held for the organization or a device group, optionally pinned to a version.",
-		Params:      []string{"package", "version", "device_group_id", "reason"},
+		Params:      withChangeSetParams([]string{"package", "version", "device_group_id", "reason"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodePackageHoldUpdated: {
 		Code: CodePackageHoldUpdated, Emitted: true,
 		Description: "The version or the reason of a package hold changed.",
-		Params:      []string{"package", "version", "device_group_id", "reason", "old_version"},
+		Params:      withChangeSetParams([]string{"package", "version", "device_group_id", "reason", "old_version"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodePackageHoldDeleted: {
 		Code: CodePackageHoldDeleted, Emitted: true,
 		Description: "A package hold was removed; devices may upgrade the package again.",
-		Params:      []string{"package", "version", "device_group_id"},
+		Params:      withChangeSetParams([]string{"package", "version", "device_group_id"}),
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceInstallNowRequested: {
@@ -1191,9 +1244,17 @@ var registry = map[Code]Definition{
 	CodeConfigApplied: {
 		Code: CodeConfigApplied, Emitted: true,
 		Description: "A declarative configuration (PUT /api/v1/config, paddockctl apply) was applied in one transaction; the change set lists every change.",
-		Params:      []string{"change_set_id", "created", "updated", "deleted", "sections"},
+		Params:      withChangeSetParams([]string{"change_set_id", "created", "updated", "deleted", "sections"}),
 		Outcomes:    adminOutcomes,
-		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied.",
+		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied. With rollouts enabled a change of a rollout-able section is staged (rollout staged, rollout_id) unless urgent (rollout urgent, urgent_reason); rollout_conflict and rollout_running refusals are failures.",
+	},
+	CodeConfigReverted: {
+		Code: CodeConfigReverted, Emitted: true,
+		Description: "A change set was reverted (POST /api/v1/change-sets/{id}/revert): the inverse of its changes was applied in one transaction and recorded as a new change set that references the original.",
+		Params: []string{"change_set_id", "reverts_change_set_id", "plan_sha256", "created", "updated", "deleted", "sections",
+			"rollout", "rollout_id", "rollout_status", "urgent_reason"},
+		Outcomes: adminOutcomes,
+		Note:     "Target is the new change set; an inverse plan without changes records zeros, no target and no change set, and the original stays unreverted. Dry runs are not recorded. A refusal (no before-state, already reverted, plan_changed, the refusal of a section) is a failure and nothing is applied. rollout_status reverted and rollout_id are set when the revert ends the running or halted configuration rollout of the change set it reverts; rollout_id alone when the revert itself is staged.",
 	},
 	CodePlatformOSVImported: {
 		Code: CodePlatformOSVImported, Emitted: true,
@@ -1253,14 +1314,14 @@ var registry = map[Code]Definition{
 	CodeSettingsManagedFilesChanged: {
 		Code: CodeSettingsManagedFilesChanged, Emitted: true,
 		Description: "An organization administrator changed, with a step-up, the operator roots of the managed files: the directories below which operators may manage files without a step-up.",
-		Params:      []string{"old_operator_roots", "operator_roots"},
+		Params:      withChangeSetParams([]string{"old_operator_roots", "operator_roots"}),
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up and for API tokens, forbidden for another role; failure with path_not_allowed for a root outside the rules of ADR 0034 (amendment 2026-10-16).",
 	},
 	CodeSettingsWatchedUnitsChanged: {
 		Code: CodeSettingsWatchedUnitsChanged, Emitted: true,
 		Description: "An organization administrator changed, with a step-up, the third-party systemd units of the presence policy: the units the agents report when they stop (plan M9 decision 38).",
-		Params:      []string{"added", "removed", "units"},
+		Params:      withChangeSetParams([]string{"added", "removed", "units"}),
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up and for API tokens, forbidden for another role; failure with unit_not_allowed for a reserved or non-service unit and invalid_request for more than 32 units or a duplicate.",
 	},
@@ -1317,6 +1378,13 @@ var registry = map[Code]Definition{
 		Description: "The clock of a device is back within 30 s of the server's (actor: system).",
 		Params:      []string{"offset_s", "threshold_s", "since"},
 		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceOSReleaseChanged: {
+		Code: CodeDeviceOSReleaseChanged, Emitted: true,
+		Description: "A device reported another operating system release than the one stored for it, for example after a distribution upgrade (actor: system). The device record follows and the device is recompiled.",
+		Params:      []string{"old_id", "old_version_id", "new_id", "new_version_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "The values are the ID and VERSION_ID of os-release; an old value is empty when the device enrolled without one.",
 	},
 	CodeAuditChainVerified: {
 		Code: CodeAuditChainVerified, Emitted: true,
@@ -1450,8 +1518,44 @@ var registry = map[Code]Definition{
 	CodeSettingsPrivacyChanged: {
 		Code: CodeSettingsPrivacyChanged, Emitted: true,
 		Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
-		Params:      []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"},
+		Params:      withChangeSetParams([]string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"}),
 		Outcomes:    adminOutcomes,
+	},
+	CodeSettingsRolloutChanged: {
+		Code: CodeSettingsRolloutChanged, Emitted: true,
+		Description: "An organization administrator changed the settings of staged configuration rollouts: whether they are on, the waves, the minimum wave duration, the failure threshold and the canary device group. A running rollout keeps the values it started with.",
+		Params: []string{"enabled", "waves", "min_wave_minutes", "failure_threshold_percent", "failure_threshold_min",
+			"canary_device_group_id"},
+		Outcomes: adminOutcomes,
+		Note:     "failure with invalid_request for invalid waves, a minimum wave duration below the minimum or a threshold out of range, and with not_found for an unknown or foreign canary device group.",
+	},
+	CodeConfigRolloutAdvanced: {
+		Code: CodeConfigRolloutAdvanced, Emitted: true,
+		Description: "A staged configuration rollout moved to its next wave: by the worker once the wave's minimum duration passed (actor: system, manual false), or by an administrator (manual true). The devices of the new wave receive the staged change at their next check-in.",
+		Params:      []string{"rollout_id", "change_set_id", "wave", "percent", "manual"},
+		Outcomes:    adminOutcomes,
+		Note:        "wave is the index of the new wave, percent its share of the devices. failure with invalid_state when the rollout is not running or already in its last wave, not_found for an unknown rollout or one of another organization.",
+	},
+	CodeConfigRolloutHalted: {
+		Code: CodeConfigRolloutHalted, Emitted: true,
+		Description: "A staged configuration rollout was halted: by the worker when the failed devices of the waves reached so far reached the threshold (actor: system), or by an administrator with a reason. Devices keep the state of the wave the rollout reached.",
+		Params:      []string{"rollout_id", "change_set_id", "reason", "wave", "eligible", "failed", "threshold"},
+		Outcomes:    adminOutcomes,
+		Note:        "eligible, failed and threshold are set when the worker halts. failure with invalid_request without a reason of 2 to 500 characters free of control characters (the refused reason is not recorded), invalid_state when the rollout is not running, not_found for an unknown rollout or one of another organization. A preset event of the notification rules.",
+	},
+	CodeConfigRolloutResumed: {
+		Code: CodeConfigRolloutResumed, Emitted: true,
+		Description: "An administrator resumed a halted configuration rollout in the wave where it stopped; failures reported before the resume no longer count and the wave's minimum duration starts again.",
+		Params:      []string{"rollout_id", "change_set_id", "wave"},
+		Outcomes:    adminOutcomes,
+		Note:        "failure with invalid_state when the rollout is not halted, not_found for an unknown rollout or one of another organization.",
+	},
+	CodeConfigRolloutCompleted: {
+		Code: CodeConfigRolloutCompleted, Emitted: true,
+		Description: "A staged configuration rollout completed: by the worker after its last wave (actor: system, manual false), or by an administrator from running or halted (manual true). Every device receives the staged change at its next check-in.",
+		Params:      []string{"rollout_id", "change_set_id", "wave", "manual"},
+		Outcomes:    adminOutcomes,
+		Note:        "failure with invalid_state when the rollout already completed or was reverted, not_found for an unknown rollout or one of another organization.",
 	},
 	CodeAuditSearched: {
 		Code: CodeAuditSearched, Emitted: true,
@@ -1512,6 +1616,92 @@ var registry = map[Code]Definition{
 		Params:      []string{"destination", "destination_id", "stalled_for_s", "forward_from", "forward_to"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stall. forward_from and forward_to name the batch that arrived (absent when a heartbeat ended the stall).",
+	},
+	CodeSoftwareSourceCreated: {
+		Code: CodeSoftwareSourceCreated, Emitted: true,
+		Description: "An organization administrator added an APT package source with its signing key; the key's fingerprint is recorded. Adding a source is root-equivalent: every package it signs is installed as root.",
+		Params:      []string{"name", "slug", "uris", "suites", "components", "fingerprint", "weak_key"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with fingerprint_mismatch when the typed fingerprint differs from the key's, already_exists for a duplicate slug or name. weak_key is true for an accepted RSA key of 2048 to 3071 bits.",
+	},
+	CodeSoftwareSourceUpdated: {
+		Code: CodeSoftwareSourceUpdated, Emitted: true,
+		Description: "An organization administrator changed an APT package source: its name, URIs, suites, components, architectures or its signing key; a key change records the old and the new fingerprint.",
+		Params:      []string{"name", "slug", "fields", "fingerprint", "old_fingerprint", "weak_key"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with fingerprint_mismatch when the typed fingerprint differs from the key's, already_exists for a duplicate name.",
+	},
+	CodeSoftwareSourceDeleted: {
+		Code: CodeSoftwareSourceDeleted, Emitted: true,
+		Description: "An organization administrator removed an APT package source; devices remove its source file and keyring at their next check-in.",
+		Params:      []string{"name", "slug", "fingerprint", "weak_key"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry references the source.",
+	},
+	CodeSoftwareCatalogEntryCreated: {
+		Code: CodeSoftwareCatalogEntryCreated, Emitted: true,
+		Description: "An application was added to the software catalog with its package names per distribution, release and architecture.",
+		Params:      []string{"name", "category", "source_id", "source_slug", "package_count"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request for a refused name, description, category or package reference, already_exists for a duplicate name, not_found for a source of another organization. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareCatalogEntryUpdated: {
+		Code: CodeSoftwareCatalogEntryUpdated, Emitted: true,
+		Description: "A software catalog entry changed (name, description, category, source, package names or icon).",
+		Params:      []string{"name", "fields"},
+		Outcomes:    adminOutcomes,
+		Note:        "fields lists what changed; an icon change names icon. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareCatalogEntryDeleted: {
+		Code: CodeSoftwareCatalogEntryDeleted, Emitted: true,
+		Description: "A software catalog entry was removed together with its assignments; devices stop managing the application.",
+		Params:      []string{"name", "assignment_count"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeSoftwareAssignmentCreated: {
+		Code: CodeSoftwareAssignmentCreated, Emitted: true,
+		Description: "An application was assigned to the organization or a device group with an intent: required (installed and kept installed), uninstall (removed), hold (version kept) or forbid (removed and blocked for apt).",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent", "update_rule", "version", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request when the intent and version rules are violated, already_exists for a second assignment of the entry in the same scope, not_found for an unknown entry or device group. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareAssignmentUpdated: {
+		Code: CodeSoftwareAssignmentUpdated, Emitted: true,
+		Description: "The intent, update rule, version or reason of a software assignment changed.",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent", "update_rule", "version", "old_intent", "old_version", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request when the intent and version rules are violated. Request text is clipped before it is recorded.",
+	},
+	CodeSoftwareAssignmentDeleted: {
+		Code: CodeSoftwareAssignmentDeleted, Emitted: true,
+		Description: "A software assignment was removed; devices stop enforcing it (installed software stays).",
+		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceSoftwareInstalled: {
+		Code: CodeDeviceSoftwareInstalled, Emitted: true,
+		Description: "A device installed a required application from its software catalog assignment for the first time (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareReinstalled: {
+		Code: CodeDeviceSoftwareReinstalled, Emitted: true,
+		Description: "A device found a required application removed locally and installed it again (actor: the device); nothing blocks the local administrator.",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareRemoved: {
+		Code: CodeDeviceSoftwareRemoved, Emitted: true,
+		Description: "A device removed an application because its assignment says uninstall or forbid (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSoftwareApplyFailed: {
+		Code: CodeDeviceSoftwareApplyFailed, Emitted: true,
+		Description: "A device could not apply a software assignment or source: the key fingerprint did not match, the operation would have removed other packages, the package has no candidate, or apt failed (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

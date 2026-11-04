@@ -257,6 +257,7 @@ const (
 	AttentionKindLoginApplyFailed     AttentionKind = "login_apply_failed"
 	AttentionKindPresumedLost         AttentionKind = "presumed_lost"
 	AttentionKindQuarantined          AttentionKind = "quarantined"
+	AttentionKindReportOnly           AttentionKind = "report_only"
 	AttentionKindRevocationExpired    AttentionKind = "revocation_expired"
 	AttentionKindRevocationPending    AttentionKind = "revocation_pending"
 	AttentionKindStaleCritical        AttentionKind = "stale_critical"
@@ -289,6 +290,8 @@ func (e AttentionKind) Valid() bool {
 	case AttentionKindPresumedLost:
 		return true
 	case AttentionKindQuarantined:
+		return true
+	case AttentionKindReportOnly:
 		return true
 	case AttentionKindRevocationExpired:
 		return true
@@ -481,6 +484,27 @@ func (e BundleResourceType) Valid() bool {
 	}
 }
 
+// Defines values for ChangeSetRollout.
+const (
+	Immediate ChangeSetRollout = "immediate"
+	Staged    ChangeSetRollout = "staged"
+	Urgent    ChangeSetRollout = "urgent"
+)
+
+// Valid indicates whether the value is a known member of the ChangeSetRollout enum.
+func (e ChangeSetRollout) Valid() bool {
+	switch e {
+	case Immediate:
+		return true
+	case Staged:
+		return true
+	case Urgent:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChangeSetSource.
 const (
 	ChangeSetSourceApiToken ChangeSetSource = "api_token"
@@ -547,6 +571,48 @@ func (e ConfigChangeAction) Valid() bool {
 	}
 }
 
+// Defines values for ConfigMode.
+const (
+	ConfigModeEnforce    ConfigMode = "enforce"
+	ConfigModeReportOnly ConfigMode = "report_only"
+)
+
+// Valid indicates whether the value is a known member of the ConfigMode enum.
+func (e ConfigMode) Valid() bool {
+	switch e {
+	case ConfigModeEnforce:
+		return true
+	case ConfigModeReportOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigRolloutStatus.
+const (
+	ConfigRolloutStatusCompleted ConfigRolloutStatus = "completed"
+	ConfigRolloutStatusHalted    ConfigRolloutStatus = "halted"
+	ConfigRolloutStatusReverted  ConfigRolloutStatus = "reverted"
+	ConfigRolloutStatusRunning   ConfigRolloutStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the ConfigRolloutStatus enum.
+func (e ConfigRolloutStatus) Valid() bool {
+	switch e {
+	case ConfigRolloutStatusCompleted:
+		return true
+	case ConfigRolloutStatusHalted:
+		return true
+	case ConfigRolloutStatusReverted:
+		return true
+	case ConfigRolloutStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DerivationKind.
 const (
 	DerivationKindClass   DerivationKind = "class"
@@ -589,6 +655,42 @@ func (e DeviceNameState) Valid() bool {
 	}
 }
 
+// Defines values for DeviceBundleReportMode.
+const (
+	DeviceBundleReportModeEnforce    DeviceBundleReportMode = "enforce"
+	DeviceBundleReportModeReportOnly DeviceBundleReportMode = "report_only"
+)
+
+// Valid indicates whether the value is a known member of the DeviceBundleReportMode enum.
+func (e DeviceBundleReportMode) Valid() bool {
+	switch e {
+	case DeviceBundleReportModeEnforce:
+		return true
+	case DeviceBundleReportModeReportOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceBundleReportOutcome.
+const (
+	DeviceBundleReportOutcomeApplied  DeviceBundleReportOutcome = "applied"
+	DeviceBundleReportOutcomeRejected DeviceBundleReportOutcome = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the DeviceBundleReportOutcome enum.
+func (e DeviceBundleReportOutcome) Valid() bool {
+	switch e {
+	case DeviceBundleReportOutcomeApplied:
+		return true
+	case DeviceBundleReportOutcomeRejected:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeviceCommandStatus.
 const (
 	DeviceCommandStatusCancelled DeviceCommandStatus = "cancelled"
@@ -621,28 +723,28 @@ func (e DeviceCommandStatus) Valid() bool {
 
 // Defines values for DeviceCommandType.
 const (
-	DeleteSelfLock      DeviceCommandType = "delete_self_lock"
-	EncryptDisk         DeviceCommandType = "encrypt_disk"
-	EncryptDiskAbort    DeviceCommandType = "encrypt_disk_abort"
-	InstallNow          DeviceCommandType = "install_now"
-	RotateAdminPassword DeviceCommandType = "rotate_admin_password"
-	Uninstall           DeviceCommandType = "uninstall"
+	DeviceCommandTypeDeleteSelfLock      DeviceCommandType = "delete_self_lock"
+	DeviceCommandTypeEncryptDisk         DeviceCommandType = "encrypt_disk"
+	DeviceCommandTypeEncryptDiskAbort    DeviceCommandType = "encrypt_disk_abort"
+	DeviceCommandTypeInstallNow          DeviceCommandType = "install_now"
+	DeviceCommandTypeRotateAdminPassword DeviceCommandType = "rotate_admin_password"
+	DeviceCommandTypeUninstall           DeviceCommandType = "uninstall"
 )
 
 // Valid indicates whether the value is a known member of the DeviceCommandType enum.
 func (e DeviceCommandType) Valid() bool {
 	switch e {
-	case DeleteSelfLock:
+	case DeviceCommandTypeDeleteSelfLock:
 		return true
-	case EncryptDisk:
+	case DeviceCommandTypeEncryptDisk:
 		return true
-	case EncryptDiskAbort:
+	case DeviceCommandTypeEncryptDiskAbort:
 		return true
-	case InstallNow:
+	case DeviceCommandTypeInstallNow:
 		return true
-	case RotateAdminPassword:
+	case DeviceCommandTypeRotateAdminPassword:
 		return true
-	case Uninstall:
+	case DeviceCommandTypeUninstall:
 		return true
 	default:
 		return false
@@ -853,6 +955,39 @@ func (e DeviceIdentityKeyStatus) Valid() bool {
 	}
 }
 
+// Defines values for DeviceSoftwareState.
+const (
+	DeviceSoftwareStateAbsent        DeviceSoftwareState = "absent"
+	DeviceSoftwareStateFailed        DeviceSoftwareState = "failed"
+	DeviceSoftwareStateHeld          DeviceSoftwareState = "held"
+	DeviceSoftwareStateInstalled     DeviceSoftwareState = "installed"
+	DeviceSoftwareStateNotApplicable DeviceSoftwareState = "not_applicable"
+	DeviceSoftwareStatePending       DeviceSoftwareState = "pending"
+	DeviceSoftwareStateUnknown       DeviceSoftwareState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the DeviceSoftwareState enum.
+func (e DeviceSoftwareState) Valid() bool {
+	switch e {
+	case DeviceSoftwareStateAbsent:
+		return true
+	case DeviceSoftwareStateFailed:
+		return true
+	case DeviceSoftwareStateHeld:
+		return true
+	case DeviceSoftwareStateInstalled:
+		return true
+	case DeviceSoftwareStateNotApplicable:
+		return true
+	case DeviceSoftwareStatePending:
+		return true
+	case DeviceSoftwareStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeviceState.
 const (
 	DeviceStateActive      DeviceState = "active"
@@ -1021,6 +1156,27 @@ func (e DiskUnlockMode) Valid() bool {
 	case TpmOnly:
 		return true
 	case TpmPin:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnrollmentMethod.
+const (
+	EnrollmentMethodAdopted     EnrollmentMethod = "adopted"
+	EnrollmentMethodAutoinstall EnrollmentMethod = "autoinstall"
+	EnrollmentMethodUnknown     EnrollmentMethod = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the EnrollmentMethod enum.
+func (e EnrollmentMethod) Valid() bool {
+	switch e {
+	case EnrollmentMethodAdopted:
+		return true
+	case EnrollmentMethodAutoinstall:
+		return true
+	case EnrollmentMethodUnknown:
 		return true
 	default:
 		return false
@@ -1594,6 +1750,27 @@ func (e OrganizationStatus) Valid() bool {
 	}
 }
 
+// Defines values for PackageRefArchitecture.
+const (
+	PackageRefArchitectureAmd64    PackageRefArchitecture = "amd64"
+	PackageRefArchitectureArm64    PackageRefArchitecture = "arm64"
+	PackageRefArchitectureAsterisk PackageRefArchitecture = "*"
+)
+
+// Valid indicates whether the value is a known member of the PackageRefArchitecture enum.
+func (e PackageRefArchitecture) Valid() bool {
+	switch e {
+	case PackageRefArchitectureAmd64:
+		return true
+	case PackageRefArchitectureArm64:
+		return true
+	case PackageRefArchitectureAsterisk:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PrivilegeClass.
 const (
 	Full       PrivilegeClass = "full"
@@ -1609,6 +1786,30 @@ func (e PrivilegeClass) Valid() bool {
 	case None:
 		return true
 	case Restricted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResourceState.
+const (
+	ResourceStateApplied        ResourceState = "applied"
+	ResourceStateDriftCorrected ResourceState = "drift_corrected"
+	ResourceStateFailed         ResourceState = "failed"
+	ResourceStatePending        ResourceState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the ResourceState enum.
+func (e ResourceState) Valid() bool {
+	switch e {
+	case ResourceStateApplied:
+		return true
+	case ResourceStateDriftCorrected:
+		return true
+	case ResourceStateFailed:
+		return true
+	case ResourceStatePending:
 		return true
 	default:
 		return false
@@ -1750,6 +1951,66 @@ func (e Severity) Valid() bool {
 	case SeverityMedium:
 		return true
 	case SeverityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SoftwareArchitecture.
+const (
+	SoftwareArchitectureAmd64 SoftwareArchitecture = "amd64"
+	SoftwareArchitectureArm64 SoftwareArchitecture = "arm64"
+)
+
+// Valid indicates whether the value is a known member of the SoftwareArchitecture enum.
+func (e SoftwareArchitecture) Valid() bool {
+	switch e {
+	case SoftwareArchitectureAmd64:
+		return true
+	case SoftwareArchitectureArm64:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SoftwareIntent.
+const (
+	SoftwareIntentForbid    SoftwareIntent = "forbid"
+	SoftwareIntentHold      SoftwareIntent = "hold"
+	SoftwareIntentRequired  SoftwareIntent = "required"
+	SoftwareIntentUninstall SoftwareIntent = "uninstall"
+)
+
+// Valid indicates whether the value is a known member of the SoftwareIntent enum.
+func (e SoftwareIntent) Valid() bool {
+	switch e {
+	case SoftwareIntentForbid:
+		return true
+	case SoftwareIntentHold:
+		return true
+	case SoftwareIntentRequired:
+		return true
+	case SoftwareIntentUninstall:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SoftwareUpdateRule.
+const (
+	Latest SoftwareUpdateRule = "latest"
+	Pinned SoftwareUpdateRule = "pinned"
+)
+
+// Valid indicates whether the value is a known member of the SoftwareUpdateRule enum.
+func (e SoftwareUpdateRule) Valid() bool {
+	switch e {
+	case Latest:
+		return true
+	case Pinned:
 		return true
 	default:
 		return false
@@ -2089,6 +2350,96 @@ func (e ChangeSetSort) Valid() bool {
 	}
 }
 
+// Defines values for ConfigRolloutDeviceSort.
+const (
+	ConfigRolloutDeviceSortHostname           ConfigRolloutDeviceSort = "hostname"
+	ConfigRolloutDeviceSortInWave             ConfigRolloutDeviceSort = "in_wave"
+	ConfigRolloutDeviceSortMinusHostname      ConfigRolloutDeviceSort = "-hostname"
+	ConfigRolloutDeviceSortMinusInWave        ConfigRolloutDeviceSort = "-in_wave"
+	ConfigRolloutDeviceSortMinusReportOutcome ConfigRolloutDeviceSort = "-report_outcome"
+	ConfigRolloutDeviceSortReportOutcome      ConfigRolloutDeviceSort = "report_outcome"
+)
+
+// Valid indicates whether the value is a known member of the ConfigRolloutDeviceSort enum.
+func (e ConfigRolloutDeviceSort) Valid() bool {
+	switch e {
+	case ConfigRolloutDeviceSortHostname:
+		return true
+	case ConfigRolloutDeviceSortInWave:
+		return true
+	case ConfigRolloutDeviceSortMinusHostname:
+		return true
+	case ConfigRolloutDeviceSortMinusInWave:
+		return true
+	case ConfigRolloutDeviceSortMinusReportOutcome:
+		return true
+	case ConfigRolloutDeviceSortReportOutcome:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigRolloutSort.
+const (
+	ConfigRolloutSortMinusStartedAt ConfigRolloutSort = "-started_at"
+	ConfigRolloutSortMinusStatus    ConfigRolloutSort = "-status"
+	ConfigRolloutSortStartedAt      ConfigRolloutSort = "started_at"
+	ConfigRolloutSortStatus         ConfigRolloutSort = "status"
+)
+
+// Valid indicates whether the value is a known member of the ConfigRolloutSort enum.
+func (e ConfigRolloutSort) Valid() bool {
+	switch e {
+	case ConfigRolloutSortMinusStartedAt:
+		return true
+	case ConfigRolloutSortMinusStatus:
+		return true
+	case ConfigRolloutSortStartedAt:
+		return true
+	case ConfigRolloutSortStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigStatusSort.
+const (
+	ConfigStatusSortApplied         ConfigStatusSort = "applied"
+	ConfigStatusSortFailed          ConfigStatusSort = "failed"
+	ConfigStatusSortMinusApplied    ConfigStatusSort = "-applied"
+	ConfigStatusSortMinusFailed     ConfigStatusSort = "-failed"
+	ConfigStatusSortMinusPending    ConfigStatusSort = "-pending"
+	ConfigStatusSortMinusResourceId ConfigStatusSort = "-resource_id"
+	ConfigStatusSortPending         ConfigStatusSort = "pending"
+	ConfigStatusSortResourceId      ConfigStatusSort = "resource_id"
+)
+
+// Valid indicates whether the value is a known member of the ConfigStatusSort enum.
+func (e ConfigStatusSort) Valid() bool {
+	switch e {
+	case ConfigStatusSortApplied:
+		return true
+	case ConfigStatusSortFailed:
+		return true
+	case ConfigStatusSortMinusApplied:
+		return true
+	case ConfigStatusSortMinusFailed:
+		return true
+	case ConfigStatusSortMinusPending:
+		return true
+	case ConfigStatusSortMinusResourceId:
+		return true
+	case ConfigStatusSortPending:
+		return true
+	case ConfigStatusSortResourceId:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Confirm.
 const (
 	ConfirmDisable Confirm = "disable"
@@ -2116,6 +2467,30 @@ const (
 func (e Csrf) Valid() bool {
 	switch e {
 	case CsrfN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceBundleSort.
+const (
+	DeviceBundleSortCreatedAt      DeviceBundleSort = "created_at"
+	DeviceBundleSortMinusCreatedAt DeviceBundleSort = "-created_at"
+	DeviceBundleSortMinusVersion   DeviceBundleSort = "-version"
+	DeviceBundleSortVersion        DeviceBundleSort = "version"
+)
+
+// Valid indicates whether the value is a known member of the DeviceBundleSort enum.
+func (e DeviceBundleSort) Valid() bool {
+	switch e {
+	case DeviceBundleSortCreatedAt:
+		return true
+	case DeviceBundleSortMinusCreatedAt:
+		return true
+	case DeviceBundleSortMinusVersion:
+		return true
+	case DeviceBundleSortVersion:
 		return true
 	default:
 		return false
@@ -2206,6 +2581,66 @@ func (e DeviceLoginSort) Valid() bool {
 	case DeviceLoginSortMinusUsername:
 		return true
 	case DeviceLoginSortUsername:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceManagedSoftwareSort.
+const (
+	DeviceManagedSoftwareSortMinusName       DeviceManagedSoftwareSort = "-name"
+	DeviceManagedSoftwareSortMinusReportedAt DeviceManagedSoftwareSort = "-reported_at"
+	DeviceManagedSoftwareSortMinusState      DeviceManagedSoftwareSort = "-state"
+	DeviceManagedSoftwareSortName            DeviceManagedSoftwareSort = "name"
+	DeviceManagedSoftwareSortReportedAt      DeviceManagedSoftwareSort = "reported_at"
+	DeviceManagedSoftwareSortState           DeviceManagedSoftwareSort = "state"
+)
+
+// Valid indicates whether the value is a known member of the DeviceManagedSoftwareSort enum.
+func (e DeviceManagedSoftwareSort) Valid() bool {
+	switch e {
+	case DeviceManagedSoftwareSortMinusName:
+		return true
+	case DeviceManagedSoftwareSortMinusReportedAt:
+		return true
+	case DeviceManagedSoftwareSortMinusState:
+		return true
+	case DeviceManagedSoftwareSortName:
+		return true
+	case DeviceManagedSoftwareSortReportedAt:
+		return true
+	case DeviceManagedSoftwareSortState:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceResourceStatusSort.
+const (
+	DeviceResourceStatusSortMinusOccurredAt DeviceResourceStatusSort = "-occurred_at"
+	DeviceResourceStatusSortMinusResourceId DeviceResourceStatusSort = "-resource_id"
+	DeviceResourceStatusSortMinusStatus     DeviceResourceStatusSort = "-status"
+	DeviceResourceStatusSortOccurredAt      DeviceResourceStatusSort = "occurred_at"
+	DeviceResourceStatusSortResourceId      DeviceResourceStatusSort = "resource_id"
+	DeviceResourceStatusSortStatus          DeviceResourceStatusSort = "status"
+)
+
+// Valid indicates whether the value is a known member of the DeviceResourceStatusSort enum.
+func (e DeviceResourceStatusSort) Valid() bool {
+	switch e {
+	case DeviceResourceStatusSortMinusOccurredAt:
+		return true
+	case DeviceResourceStatusSortMinusResourceId:
+		return true
+	case DeviceResourceStatusSortMinusStatus:
+		return true
+	case DeviceResourceStatusSortOccurredAt:
+		return true
+	case DeviceResourceStatusSortResourceId:
+		return true
+	case DeviceResourceStatusSortStatus:
 		return true
 	default:
 		return false
@@ -2704,6 +3139,102 @@ func (e RevocationRequestSort) Valid() bool {
 	}
 }
 
+// Defines values for SoftwareAssignmentSort.
+const (
+	SoftwareAssignmentSortCreatedAt      SoftwareAssignmentSort = "created_at"
+	SoftwareAssignmentSortIntent         SoftwareAssignmentSort = "intent"
+	SoftwareAssignmentSortMinusCreatedAt SoftwareAssignmentSort = "-created_at"
+	SoftwareAssignmentSortMinusIntent    SoftwareAssignmentSort = "-intent"
+	SoftwareAssignmentSortMinusUpdatedAt SoftwareAssignmentSort = "-updated_at"
+	SoftwareAssignmentSortUpdatedAt      SoftwareAssignmentSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the SoftwareAssignmentSort enum.
+func (e SoftwareAssignmentSort) Valid() bool {
+	switch e {
+	case SoftwareAssignmentSortCreatedAt:
+		return true
+	case SoftwareAssignmentSortIntent:
+		return true
+	case SoftwareAssignmentSortMinusCreatedAt:
+		return true
+	case SoftwareAssignmentSortMinusIntent:
+		return true
+	case SoftwareAssignmentSortMinusUpdatedAt:
+		return true
+	case SoftwareAssignmentSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SoftwareCatalogDeviceSort.
+const (
+	SoftwareCatalogDeviceSortHostname        SoftwareCatalogDeviceSort = "hostname"
+	SoftwareCatalogDeviceSortMinusHostname   SoftwareCatalogDeviceSort = "-hostname"
+	SoftwareCatalogDeviceSortMinusReportedAt SoftwareCatalogDeviceSort = "-reported_at"
+	SoftwareCatalogDeviceSortMinusState      SoftwareCatalogDeviceSort = "-state"
+	SoftwareCatalogDeviceSortReportedAt      SoftwareCatalogDeviceSort = "reported_at"
+	SoftwareCatalogDeviceSortState           SoftwareCatalogDeviceSort = "state"
+)
+
+// Valid indicates whether the value is a known member of the SoftwareCatalogDeviceSort enum.
+func (e SoftwareCatalogDeviceSort) Valid() bool {
+	switch e {
+	case SoftwareCatalogDeviceSortHostname:
+		return true
+	case SoftwareCatalogDeviceSortMinusHostname:
+		return true
+	case SoftwareCatalogDeviceSortMinusReportedAt:
+		return true
+	case SoftwareCatalogDeviceSortMinusState:
+		return true
+	case SoftwareCatalogDeviceSortReportedAt:
+		return true
+	case SoftwareCatalogDeviceSortState:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SoftwareCatalogSort.
+const (
+	SoftwareCatalogSortCategory       SoftwareCatalogSort = "category"
+	SoftwareCatalogSortCreatedAt      SoftwareCatalogSort = "created_at"
+	SoftwareCatalogSortMinusCategory  SoftwareCatalogSort = "-category"
+	SoftwareCatalogSortMinusCreatedAt SoftwareCatalogSort = "-created_at"
+	SoftwareCatalogSortMinusName      SoftwareCatalogSort = "-name"
+	SoftwareCatalogSortMinusUpdatedAt SoftwareCatalogSort = "-updated_at"
+	SoftwareCatalogSortName           SoftwareCatalogSort = "name"
+	SoftwareCatalogSortUpdatedAt      SoftwareCatalogSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the SoftwareCatalogSort enum.
+func (e SoftwareCatalogSort) Valid() bool {
+	switch e {
+	case SoftwareCatalogSortCategory:
+		return true
+	case SoftwareCatalogSortCreatedAt:
+		return true
+	case SoftwareCatalogSortMinusCategory:
+		return true
+	case SoftwareCatalogSortMinusCreatedAt:
+		return true
+	case SoftwareCatalogSortMinusName:
+		return true
+	case SoftwareCatalogSortMinusUpdatedAt:
+		return true
+	case SoftwareCatalogSortName:
+		return true
+	case SoftwareCatalogSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SoftwareSort.
 const (
 	SoftwareSortDeviceCount      SoftwareSort = "device_count"
@@ -2728,6 +3259,36 @@ func (e SoftwareSort) Valid() bool {
 	case SoftwareSortName:
 		return true
 	case SoftwareSortVersion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SoftwareSourceSort.
+const (
+	SoftwareSourceSortCreatedAt      SoftwareSourceSort = "created_at"
+	SoftwareSourceSortMinusCreatedAt SoftwareSourceSort = "-created_at"
+	SoftwareSourceSortMinusName      SoftwareSourceSort = "-name"
+	SoftwareSourceSortMinusUpdatedAt SoftwareSourceSort = "-updated_at"
+	SoftwareSourceSortName           SoftwareSourceSort = "name"
+	SoftwareSourceSortUpdatedAt      SoftwareSourceSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the SoftwareSourceSort enum.
+func (e SoftwareSourceSort) Valid() bool {
+	switch e {
+	case SoftwareSourceSortCreatedAt:
+		return true
+	case SoftwareSourceSortMinusCreatedAt:
+		return true
+	case SoftwareSourceSortMinusName:
+		return true
+	case SoftwareSourceSortMinusUpdatedAt:
+		return true
+	case SoftwareSourceSortName:
+		return true
+	case SoftwareSourceSortUpdatedAt:
 		return true
 	default:
 		return false
@@ -4021,6 +4582,21 @@ func (e ListChangeSetsParamsSort) Valid() bool {
 	}
 }
 
+// Defines values for RevertChangeSetParamsXPaddockCSRF.
+const (
+	RevertChangeSetParamsXPaddockCSRFN1 RevertChangeSetParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the RevertChangeSetParamsXPaddockCSRF enum.
+func (e RevertChangeSetParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case RevertChangeSetParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ApplyConfigParamsXPaddockCSRF.
 const (
 	ApplyConfigParamsXPaddockCSRFN1 ApplyConfigParamsXPaddockCSRF = "1"
@@ -4030,6 +4606,228 @@ const (
 func (e ApplyConfigParamsXPaddockCSRF) Valid() bool {
 	switch e {
 	case ApplyConfigParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListConfigRolloutsParamsPageSize.
+const (
+	ListConfigRolloutsParamsPageSizeN10  ListConfigRolloutsParamsPageSize = 10
+	ListConfigRolloutsParamsPageSizeN100 ListConfigRolloutsParamsPageSize = 100
+	ListConfigRolloutsParamsPageSizeN25  ListConfigRolloutsParamsPageSize = 25
+	ListConfigRolloutsParamsPageSizeN50  ListConfigRolloutsParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListConfigRolloutsParamsPageSize enum.
+func (e ListConfigRolloutsParamsPageSize) Valid() bool {
+	switch e {
+	case ListConfigRolloutsParamsPageSizeN10:
+		return true
+	case ListConfigRolloutsParamsPageSizeN100:
+		return true
+	case ListConfigRolloutsParamsPageSizeN25:
+		return true
+	case ListConfigRolloutsParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListConfigRolloutsParamsSort.
+const (
+	ListConfigRolloutsParamsSortMinusStartedAt ListConfigRolloutsParamsSort = "-started_at"
+	ListConfigRolloutsParamsSortMinusStatus    ListConfigRolloutsParamsSort = "-status"
+	ListConfigRolloutsParamsSortStartedAt      ListConfigRolloutsParamsSort = "started_at"
+	ListConfigRolloutsParamsSortStatus         ListConfigRolloutsParamsSort = "status"
+)
+
+// Valid indicates whether the value is a known member of the ListConfigRolloutsParamsSort enum.
+func (e ListConfigRolloutsParamsSort) Valid() bool {
+	switch e {
+	case ListConfigRolloutsParamsSortMinusStartedAt:
+		return true
+	case ListConfigRolloutsParamsSortMinusStatus:
+		return true
+	case ListConfigRolloutsParamsSortStartedAt:
+		return true
+	case ListConfigRolloutsParamsSortStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdvanceConfigRolloutParamsXPaddockCSRF.
+const (
+	AdvanceConfigRolloutParamsXPaddockCSRFN1 AdvanceConfigRolloutParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the AdvanceConfigRolloutParamsXPaddockCSRF enum.
+func (e AdvanceConfigRolloutParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case AdvanceConfigRolloutParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CompleteConfigRolloutParamsXPaddockCSRF.
+const (
+	CompleteConfigRolloutParamsXPaddockCSRFN1 CompleteConfigRolloutParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the CompleteConfigRolloutParamsXPaddockCSRF enum.
+func (e CompleteConfigRolloutParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case CompleteConfigRolloutParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListConfigRolloutDevicesParamsPageSize.
+const (
+	ListConfigRolloutDevicesParamsPageSizeN10  ListConfigRolloutDevicesParamsPageSize = 10
+	ListConfigRolloutDevicesParamsPageSizeN100 ListConfigRolloutDevicesParamsPageSize = 100
+	ListConfigRolloutDevicesParamsPageSizeN25  ListConfigRolloutDevicesParamsPageSize = 25
+	ListConfigRolloutDevicesParamsPageSizeN50  ListConfigRolloutDevicesParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListConfigRolloutDevicesParamsPageSize enum.
+func (e ListConfigRolloutDevicesParamsPageSize) Valid() bool {
+	switch e {
+	case ListConfigRolloutDevicesParamsPageSizeN10:
+		return true
+	case ListConfigRolloutDevicesParamsPageSizeN100:
+		return true
+	case ListConfigRolloutDevicesParamsPageSizeN25:
+		return true
+	case ListConfigRolloutDevicesParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListConfigRolloutDevicesParamsSort.
+const (
+	ListConfigRolloutDevicesParamsSortHostname           ListConfigRolloutDevicesParamsSort = "hostname"
+	ListConfigRolloutDevicesParamsSortInWave             ListConfigRolloutDevicesParamsSort = "in_wave"
+	ListConfigRolloutDevicesParamsSortMinusHostname      ListConfigRolloutDevicesParamsSort = "-hostname"
+	ListConfigRolloutDevicesParamsSortMinusInWave        ListConfigRolloutDevicesParamsSort = "-in_wave"
+	ListConfigRolloutDevicesParamsSortMinusReportOutcome ListConfigRolloutDevicesParamsSort = "-report_outcome"
+	ListConfigRolloutDevicesParamsSortReportOutcome      ListConfigRolloutDevicesParamsSort = "report_outcome"
+)
+
+// Valid indicates whether the value is a known member of the ListConfigRolloutDevicesParamsSort enum.
+func (e ListConfigRolloutDevicesParamsSort) Valid() bool {
+	switch e {
+	case ListConfigRolloutDevicesParamsSortHostname:
+		return true
+	case ListConfigRolloutDevicesParamsSortInWave:
+		return true
+	case ListConfigRolloutDevicesParamsSortMinusHostname:
+		return true
+	case ListConfigRolloutDevicesParamsSortMinusInWave:
+		return true
+	case ListConfigRolloutDevicesParamsSortMinusReportOutcome:
+		return true
+	case ListConfigRolloutDevicesParamsSortReportOutcome:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HaltConfigRolloutParamsXPaddockCSRF.
+const (
+	HaltConfigRolloutParamsXPaddockCSRFN1 HaltConfigRolloutParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the HaltConfigRolloutParamsXPaddockCSRF enum.
+func (e HaltConfigRolloutParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case HaltConfigRolloutParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResumeConfigRolloutParamsXPaddockCSRF.
+const (
+	ResumeConfigRolloutParamsXPaddockCSRFN1 ResumeConfigRolloutParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the ResumeConfigRolloutParamsXPaddockCSRF enum.
+func (e ResumeConfigRolloutParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case ResumeConfigRolloutParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListConfigStatusParamsPageSize.
+const (
+	ListConfigStatusParamsPageSizeN10  ListConfigStatusParamsPageSize = 10
+	ListConfigStatusParamsPageSizeN100 ListConfigStatusParamsPageSize = 100
+	ListConfigStatusParamsPageSizeN25  ListConfigStatusParamsPageSize = 25
+	ListConfigStatusParamsPageSizeN50  ListConfigStatusParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListConfigStatusParamsPageSize enum.
+func (e ListConfigStatusParamsPageSize) Valid() bool {
+	switch e {
+	case ListConfigStatusParamsPageSizeN10:
+		return true
+	case ListConfigStatusParamsPageSizeN100:
+		return true
+	case ListConfigStatusParamsPageSizeN25:
+		return true
+	case ListConfigStatusParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListConfigStatusParamsSort.
+const (
+	ListConfigStatusParamsSortApplied         ListConfigStatusParamsSort = "applied"
+	ListConfigStatusParamsSortFailed          ListConfigStatusParamsSort = "failed"
+	ListConfigStatusParamsSortMinusApplied    ListConfigStatusParamsSort = "-applied"
+	ListConfigStatusParamsSortMinusFailed     ListConfigStatusParamsSort = "-failed"
+	ListConfigStatusParamsSortMinusPending    ListConfigStatusParamsSort = "-pending"
+	ListConfigStatusParamsSortMinusResourceId ListConfigStatusParamsSort = "-resource_id"
+	ListConfigStatusParamsSortPending         ListConfigStatusParamsSort = "pending"
+	ListConfigStatusParamsSortResourceId      ListConfigStatusParamsSort = "resource_id"
+)
+
+// Valid indicates whether the value is a known member of the ListConfigStatusParamsSort enum.
+func (e ListConfigStatusParamsSort) Valid() bool {
+	switch e {
+	case ListConfigStatusParamsSortApplied:
+		return true
+	case ListConfigStatusParamsSortFailed:
+		return true
+	case ListConfigStatusParamsSortMinusApplied:
+		return true
+	case ListConfigStatusParamsSortMinusFailed:
+		return true
+	case ListConfigStatusParamsSortMinusPending:
+		return true
+	case ListConfigStatusParamsSortMinusResourceId:
+		return true
+	case ListConfigStatusParamsSortPending:
+		return true
+	case ListConfigStatusParamsSortResourceId:
 		return true
 	default:
 		return false
@@ -4300,6 +5098,54 @@ func (e ApproveDeviceParamsXPaddockCSRF) Valid() bool {
 	}
 }
 
+// Defines values for ListDeviceBundlesParamsPageSize.
+const (
+	ListDeviceBundlesParamsPageSizeN10  ListDeviceBundlesParamsPageSize = 10
+	ListDeviceBundlesParamsPageSizeN100 ListDeviceBundlesParamsPageSize = 100
+	ListDeviceBundlesParamsPageSizeN25  ListDeviceBundlesParamsPageSize = 25
+	ListDeviceBundlesParamsPageSizeN50  ListDeviceBundlesParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceBundlesParamsPageSize enum.
+func (e ListDeviceBundlesParamsPageSize) Valid() bool {
+	switch e {
+	case ListDeviceBundlesParamsPageSizeN10:
+		return true
+	case ListDeviceBundlesParamsPageSizeN100:
+		return true
+	case ListDeviceBundlesParamsPageSizeN25:
+		return true
+	case ListDeviceBundlesParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDeviceBundlesParamsSort.
+const (
+	ListDeviceBundlesParamsSortCreatedAt      ListDeviceBundlesParamsSort = "created_at"
+	ListDeviceBundlesParamsSortMinusCreatedAt ListDeviceBundlesParamsSort = "-created_at"
+	ListDeviceBundlesParamsSortMinusVersion   ListDeviceBundlesParamsSort = "-version"
+	ListDeviceBundlesParamsSortVersion        ListDeviceBundlesParamsSort = "version"
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceBundlesParamsSort enum.
+func (e ListDeviceBundlesParamsSort) Valid() bool {
+	switch e {
+	case ListDeviceBundlesParamsSortCreatedAt:
+		return true
+	case ListDeviceBundlesParamsSortMinusCreatedAt:
+		return true
+	case ListDeviceBundlesParamsSortMinusVersion:
+		return true
+	case ListDeviceBundlesParamsSortVersion:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListDeviceCommandsParamsPageSize.
 const (
 	ListDeviceCommandsParamsPageSizeN10  ListDeviceCommandsParamsPageSize = 10
@@ -4354,6 +5200,60 @@ func (e ListDeviceCommandsParamsSort) Valid() bool {
 	case ListDeviceCommandsParamsSortStatus:
 		return true
 	case ListDeviceCommandsParamsSortType:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDeviceConfigStatusParamsPageSize.
+const (
+	ListDeviceConfigStatusParamsPageSizeN10  ListDeviceConfigStatusParamsPageSize = 10
+	ListDeviceConfigStatusParamsPageSizeN100 ListDeviceConfigStatusParamsPageSize = 100
+	ListDeviceConfigStatusParamsPageSizeN25  ListDeviceConfigStatusParamsPageSize = 25
+	ListDeviceConfigStatusParamsPageSizeN50  ListDeviceConfigStatusParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceConfigStatusParamsPageSize enum.
+func (e ListDeviceConfigStatusParamsPageSize) Valid() bool {
+	switch e {
+	case ListDeviceConfigStatusParamsPageSizeN10:
+		return true
+	case ListDeviceConfigStatusParamsPageSizeN100:
+		return true
+	case ListDeviceConfigStatusParamsPageSizeN25:
+		return true
+	case ListDeviceConfigStatusParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDeviceConfigStatusParamsSort.
+const (
+	ListDeviceConfigStatusParamsSortMinusOccurredAt ListDeviceConfigStatusParamsSort = "-occurred_at"
+	ListDeviceConfigStatusParamsSortMinusResourceId ListDeviceConfigStatusParamsSort = "-resource_id"
+	ListDeviceConfigStatusParamsSortMinusStatus     ListDeviceConfigStatusParamsSort = "-status"
+	ListDeviceConfigStatusParamsSortOccurredAt      ListDeviceConfigStatusParamsSort = "occurred_at"
+	ListDeviceConfigStatusParamsSortResourceId      ListDeviceConfigStatusParamsSort = "resource_id"
+	ListDeviceConfigStatusParamsSortStatus          ListDeviceConfigStatusParamsSort = "status"
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceConfigStatusParamsSort enum.
+func (e ListDeviceConfigStatusParamsSort) Valid() bool {
+	switch e {
+	case ListDeviceConfigStatusParamsSortMinusOccurredAt:
+		return true
+	case ListDeviceConfigStatusParamsSortMinusResourceId:
+		return true
+	case ListDeviceConfigStatusParamsSortMinusStatus:
+		return true
+	case ListDeviceConfigStatusParamsSortOccurredAt:
+		return true
+	case ListDeviceConfigStatusParamsSortResourceId:
+		return true
+	case ListDeviceConfigStatusParamsSortStatus:
 		return true
 	default:
 		return false
@@ -4429,6 +5329,21 @@ const (
 func (e CancelDeviceEncryptionParamsXPaddockCSRF) Valid() bool {
 	switch e {
 	case CancelDeviceEncryptionParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnforceDeviceParamsXPaddockCSRF.
+const (
+	EnforceDeviceParamsXPaddockCSRFN1 EnforceDeviceParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the EnforceDeviceParamsXPaddockCSRF enum.
+func (e EnforceDeviceParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case EnforceDeviceParamsXPaddockCSRFN1:
 		return true
 	default:
 		return false
@@ -4567,6 +5482,60 @@ func (e ListDeviceLoginsParamsSort) Valid() bool {
 	case ListDeviceLoginsParamsSortMinusUsername:
 		return true
 	case ListDeviceLoginsParamsSortUsername:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDeviceManagedSoftwareParamsPageSize.
+const (
+	ListDeviceManagedSoftwareParamsPageSizeN10  ListDeviceManagedSoftwareParamsPageSize = 10
+	ListDeviceManagedSoftwareParamsPageSizeN100 ListDeviceManagedSoftwareParamsPageSize = 100
+	ListDeviceManagedSoftwareParamsPageSizeN25  ListDeviceManagedSoftwareParamsPageSize = 25
+	ListDeviceManagedSoftwareParamsPageSizeN50  ListDeviceManagedSoftwareParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceManagedSoftwareParamsPageSize enum.
+func (e ListDeviceManagedSoftwareParamsPageSize) Valid() bool {
+	switch e {
+	case ListDeviceManagedSoftwareParamsPageSizeN10:
+		return true
+	case ListDeviceManagedSoftwareParamsPageSizeN100:
+		return true
+	case ListDeviceManagedSoftwareParamsPageSizeN25:
+		return true
+	case ListDeviceManagedSoftwareParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDeviceManagedSoftwareParamsSort.
+const (
+	ListDeviceManagedSoftwareParamsSortMinusName       ListDeviceManagedSoftwareParamsSort = "-name"
+	ListDeviceManagedSoftwareParamsSortMinusReportedAt ListDeviceManagedSoftwareParamsSort = "-reported_at"
+	ListDeviceManagedSoftwareParamsSortMinusState      ListDeviceManagedSoftwareParamsSort = "-state"
+	ListDeviceManagedSoftwareParamsSortName            ListDeviceManagedSoftwareParamsSort = "name"
+	ListDeviceManagedSoftwareParamsSortReportedAt      ListDeviceManagedSoftwareParamsSort = "reported_at"
+	ListDeviceManagedSoftwareParamsSortState           ListDeviceManagedSoftwareParamsSort = "state"
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceManagedSoftwareParamsSort enum.
+func (e ListDeviceManagedSoftwareParamsSort) Valid() bool {
+	switch e {
+	case ListDeviceManagedSoftwareParamsSortMinusName:
+		return true
+	case ListDeviceManagedSoftwareParamsSortMinusReportedAt:
+		return true
+	case ListDeviceManagedSoftwareParamsSortMinusState:
+		return true
+	case ListDeviceManagedSoftwareParamsSortName:
+		return true
+	case ListDeviceManagedSoftwareParamsSortReportedAt:
+		return true
+	case ListDeviceManagedSoftwareParamsSortState:
 		return true
 	default:
 		return false
@@ -5929,6 +6898,21 @@ func (e UpdatePrivacySettingsParamsXPaddockCSRF) Valid() bool {
 	}
 }
 
+// Defines values for UpdateRolloutSettingsParamsXPaddockCSRF.
+const (
+	UpdateRolloutSettingsParamsXPaddockCSRFN1 UpdateRolloutSettingsParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the UpdateRolloutSettingsParamsXPaddockCSRF enum.
+func (e UpdateRolloutSettingsParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case UpdateRolloutSettingsParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateUpdateSettingsParamsXPaddockCSRF.
 const (
 	UpdateUpdateSettingsParamsXPaddockCSRFN1 UpdateUpdateSettingsParamsXPaddockCSRF = "1"
@@ -6007,6 +6991,378 @@ func (e ListSoftwareParamsSort) Valid() bool {
 	case ListSoftwareParamsSortName:
 		return true
 	case ListSoftwareParamsSortVersion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSoftwareAssignmentsParamsPageSize.
+const (
+	ListSoftwareAssignmentsParamsPageSizeN10  ListSoftwareAssignmentsParamsPageSize = 10
+	ListSoftwareAssignmentsParamsPageSizeN100 ListSoftwareAssignmentsParamsPageSize = 100
+	ListSoftwareAssignmentsParamsPageSizeN25  ListSoftwareAssignmentsParamsPageSize = 25
+	ListSoftwareAssignmentsParamsPageSizeN50  ListSoftwareAssignmentsParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListSoftwareAssignmentsParamsPageSize enum.
+func (e ListSoftwareAssignmentsParamsPageSize) Valid() bool {
+	switch e {
+	case ListSoftwareAssignmentsParamsPageSizeN10:
+		return true
+	case ListSoftwareAssignmentsParamsPageSizeN100:
+		return true
+	case ListSoftwareAssignmentsParamsPageSizeN25:
+		return true
+	case ListSoftwareAssignmentsParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSoftwareAssignmentsParamsSort.
+const (
+	ListSoftwareAssignmentsParamsSortCreatedAt      ListSoftwareAssignmentsParamsSort = "created_at"
+	ListSoftwareAssignmentsParamsSortIntent         ListSoftwareAssignmentsParamsSort = "intent"
+	ListSoftwareAssignmentsParamsSortMinusCreatedAt ListSoftwareAssignmentsParamsSort = "-created_at"
+	ListSoftwareAssignmentsParamsSortMinusIntent    ListSoftwareAssignmentsParamsSort = "-intent"
+	ListSoftwareAssignmentsParamsSortMinusUpdatedAt ListSoftwareAssignmentsParamsSort = "-updated_at"
+	ListSoftwareAssignmentsParamsSortUpdatedAt      ListSoftwareAssignmentsParamsSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ListSoftwareAssignmentsParamsSort enum.
+func (e ListSoftwareAssignmentsParamsSort) Valid() bool {
+	switch e {
+	case ListSoftwareAssignmentsParamsSortCreatedAt:
+		return true
+	case ListSoftwareAssignmentsParamsSortIntent:
+		return true
+	case ListSoftwareAssignmentsParamsSortMinusCreatedAt:
+		return true
+	case ListSoftwareAssignmentsParamsSortMinusIntent:
+		return true
+	case ListSoftwareAssignmentsParamsSortMinusUpdatedAt:
+		return true
+	case ListSoftwareAssignmentsParamsSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateSoftwareAssignmentParamsXPaddockCSRF.
+const (
+	CreateSoftwareAssignmentParamsXPaddockCSRFN1 CreateSoftwareAssignmentParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the CreateSoftwareAssignmentParamsXPaddockCSRF enum.
+func (e CreateSoftwareAssignmentParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case CreateSoftwareAssignmentParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeleteSoftwareAssignmentParamsXPaddockCSRF.
+const (
+	DeleteSoftwareAssignmentParamsXPaddockCSRFN1 DeleteSoftwareAssignmentParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the DeleteSoftwareAssignmentParamsXPaddockCSRF enum.
+func (e DeleteSoftwareAssignmentParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case DeleteSoftwareAssignmentParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSoftwareAssignmentParamsXPaddockCSRF.
+const (
+	UpdateSoftwareAssignmentParamsXPaddockCSRFN1 UpdateSoftwareAssignmentParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSoftwareAssignmentParamsXPaddockCSRF enum.
+func (e UpdateSoftwareAssignmentParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case UpdateSoftwareAssignmentParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSoftwareCatalogParamsPageSize.
+const (
+	ListSoftwareCatalogParamsPageSizeN10  ListSoftwareCatalogParamsPageSize = 10
+	ListSoftwareCatalogParamsPageSizeN100 ListSoftwareCatalogParamsPageSize = 100
+	ListSoftwareCatalogParamsPageSizeN25  ListSoftwareCatalogParamsPageSize = 25
+	ListSoftwareCatalogParamsPageSizeN50  ListSoftwareCatalogParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListSoftwareCatalogParamsPageSize enum.
+func (e ListSoftwareCatalogParamsPageSize) Valid() bool {
+	switch e {
+	case ListSoftwareCatalogParamsPageSizeN10:
+		return true
+	case ListSoftwareCatalogParamsPageSizeN100:
+		return true
+	case ListSoftwareCatalogParamsPageSizeN25:
+		return true
+	case ListSoftwareCatalogParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSoftwareCatalogParamsSort.
+const (
+	ListSoftwareCatalogParamsSortCategory       ListSoftwareCatalogParamsSort = "category"
+	ListSoftwareCatalogParamsSortCreatedAt      ListSoftwareCatalogParamsSort = "created_at"
+	ListSoftwareCatalogParamsSortMinusCategory  ListSoftwareCatalogParamsSort = "-category"
+	ListSoftwareCatalogParamsSortMinusCreatedAt ListSoftwareCatalogParamsSort = "-created_at"
+	ListSoftwareCatalogParamsSortMinusName      ListSoftwareCatalogParamsSort = "-name"
+	ListSoftwareCatalogParamsSortMinusUpdatedAt ListSoftwareCatalogParamsSort = "-updated_at"
+	ListSoftwareCatalogParamsSortName           ListSoftwareCatalogParamsSort = "name"
+	ListSoftwareCatalogParamsSortUpdatedAt      ListSoftwareCatalogParamsSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ListSoftwareCatalogParamsSort enum.
+func (e ListSoftwareCatalogParamsSort) Valid() bool {
+	switch e {
+	case ListSoftwareCatalogParamsSortCategory:
+		return true
+	case ListSoftwareCatalogParamsSortCreatedAt:
+		return true
+	case ListSoftwareCatalogParamsSortMinusCategory:
+		return true
+	case ListSoftwareCatalogParamsSortMinusCreatedAt:
+		return true
+	case ListSoftwareCatalogParamsSortMinusName:
+		return true
+	case ListSoftwareCatalogParamsSortMinusUpdatedAt:
+		return true
+	case ListSoftwareCatalogParamsSortName:
+		return true
+	case ListSoftwareCatalogParamsSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateSoftwareCatalogEntryParamsXPaddockCSRF.
+const (
+	CreateSoftwareCatalogEntryParamsXPaddockCSRFN1 CreateSoftwareCatalogEntryParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the CreateSoftwareCatalogEntryParamsXPaddockCSRF enum.
+func (e CreateSoftwareCatalogEntryParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case CreateSoftwareCatalogEntryParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeleteSoftwareCatalogEntryParamsXPaddockCSRF.
+const (
+	DeleteSoftwareCatalogEntryParamsXPaddockCSRFN1 DeleteSoftwareCatalogEntryParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the DeleteSoftwareCatalogEntryParamsXPaddockCSRF enum.
+func (e DeleteSoftwareCatalogEntryParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case DeleteSoftwareCatalogEntryParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSoftwareCatalogEntryParamsXPaddockCSRF.
+const (
+	UpdateSoftwareCatalogEntryParamsXPaddockCSRFN1 UpdateSoftwareCatalogEntryParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSoftwareCatalogEntryParamsXPaddockCSRF enum.
+func (e UpdateSoftwareCatalogEntryParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case UpdateSoftwareCatalogEntryParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSoftwareCatalogDevicesParamsPageSize.
+const (
+	ListSoftwareCatalogDevicesParamsPageSizeN10  ListSoftwareCatalogDevicesParamsPageSize = 10
+	ListSoftwareCatalogDevicesParamsPageSizeN100 ListSoftwareCatalogDevicesParamsPageSize = 100
+	ListSoftwareCatalogDevicesParamsPageSizeN25  ListSoftwareCatalogDevicesParamsPageSize = 25
+	ListSoftwareCatalogDevicesParamsPageSizeN50  ListSoftwareCatalogDevicesParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListSoftwareCatalogDevicesParamsPageSize enum.
+func (e ListSoftwareCatalogDevicesParamsPageSize) Valid() bool {
+	switch e {
+	case ListSoftwareCatalogDevicesParamsPageSizeN10:
+		return true
+	case ListSoftwareCatalogDevicesParamsPageSizeN100:
+		return true
+	case ListSoftwareCatalogDevicesParamsPageSizeN25:
+		return true
+	case ListSoftwareCatalogDevicesParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSoftwareCatalogDevicesParamsSort.
+const (
+	ListSoftwareCatalogDevicesParamsSortHostname        ListSoftwareCatalogDevicesParamsSort = "hostname"
+	ListSoftwareCatalogDevicesParamsSortMinusHostname   ListSoftwareCatalogDevicesParamsSort = "-hostname"
+	ListSoftwareCatalogDevicesParamsSortMinusReportedAt ListSoftwareCatalogDevicesParamsSort = "-reported_at"
+	ListSoftwareCatalogDevicesParamsSortMinusState      ListSoftwareCatalogDevicesParamsSort = "-state"
+	ListSoftwareCatalogDevicesParamsSortReportedAt      ListSoftwareCatalogDevicesParamsSort = "reported_at"
+	ListSoftwareCatalogDevicesParamsSortState           ListSoftwareCatalogDevicesParamsSort = "state"
+)
+
+// Valid indicates whether the value is a known member of the ListSoftwareCatalogDevicesParamsSort enum.
+func (e ListSoftwareCatalogDevicesParamsSort) Valid() bool {
+	switch e {
+	case ListSoftwareCatalogDevicesParamsSortHostname:
+		return true
+	case ListSoftwareCatalogDevicesParamsSortMinusHostname:
+		return true
+	case ListSoftwareCatalogDevicesParamsSortMinusReportedAt:
+		return true
+	case ListSoftwareCatalogDevicesParamsSortMinusState:
+		return true
+	case ListSoftwareCatalogDevicesParamsSortReportedAt:
+		return true
+	case ListSoftwareCatalogDevicesParamsSortState:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SetSoftwareCatalogIconParamsXPaddockCSRF.
+const (
+	SetSoftwareCatalogIconParamsXPaddockCSRFN1 SetSoftwareCatalogIconParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the SetSoftwareCatalogIconParamsXPaddockCSRF enum.
+func (e SetSoftwareCatalogIconParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case SetSoftwareCatalogIconParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSoftwareSourcesParamsPageSize.
+const (
+	ListSoftwareSourcesParamsPageSizeN10  ListSoftwareSourcesParamsPageSize = 10
+	ListSoftwareSourcesParamsPageSizeN100 ListSoftwareSourcesParamsPageSize = 100
+	ListSoftwareSourcesParamsPageSizeN25  ListSoftwareSourcesParamsPageSize = 25
+	ListSoftwareSourcesParamsPageSizeN50  ListSoftwareSourcesParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListSoftwareSourcesParamsPageSize enum.
+func (e ListSoftwareSourcesParamsPageSize) Valid() bool {
+	switch e {
+	case ListSoftwareSourcesParamsPageSizeN10:
+		return true
+	case ListSoftwareSourcesParamsPageSizeN100:
+		return true
+	case ListSoftwareSourcesParamsPageSizeN25:
+		return true
+	case ListSoftwareSourcesParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSoftwareSourcesParamsSort.
+const (
+	ListSoftwareSourcesParamsSortCreatedAt      ListSoftwareSourcesParamsSort = "created_at"
+	ListSoftwareSourcesParamsSortMinusCreatedAt ListSoftwareSourcesParamsSort = "-created_at"
+	ListSoftwareSourcesParamsSortMinusName      ListSoftwareSourcesParamsSort = "-name"
+	ListSoftwareSourcesParamsSortMinusUpdatedAt ListSoftwareSourcesParamsSort = "-updated_at"
+	ListSoftwareSourcesParamsSortName           ListSoftwareSourcesParamsSort = "name"
+	ListSoftwareSourcesParamsSortUpdatedAt      ListSoftwareSourcesParamsSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ListSoftwareSourcesParamsSort enum.
+func (e ListSoftwareSourcesParamsSort) Valid() bool {
+	switch e {
+	case ListSoftwareSourcesParamsSortCreatedAt:
+		return true
+	case ListSoftwareSourcesParamsSortMinusCreatedAt:
+		return true
+	case ListSoftwareSourcesParamsSortMinusName:
+		return true
+	case ListSoftwareSourcesParamsSortMinusUpdatedAt:
+		return true
+	case ListSoftwareSourcesParamsSortName:
+		return true
+	case ListSoftwareSourcesParamsSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateSoftwareSourceParamsXPaddockCSRF.
+const (
+	CreateSoftwareSourceParamsXPaddockCSRFN1 CreateSoftwareSourceParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the CreateSoftwareSourceParamsXPaddockCSRF enum.
+func (e CreateSoftwareSourceParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case CreateSoftwareSourceParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeleteSoftwareSourceParamsXPaddockCSRF.
+const (
+	DeleteSoftwareSourceParamsXPaddockCSRFN1 DeleteSoftwareSourceParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the DeleteSoftwareSourceParamsXPaddockCSRF enum.
+func (e DeleteSoftwareSourceParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case DeleteSoftwareSourceParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSoftwareSourceParamsXPaddockCSRF.
+const (
+	UpdateSoftwareSourceParamsXPaddockCSRFN1 UpdateSoftwareSourceParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSoftwareSourceParamsXPaddockCSRF enum.
+func (e UpdateSoftwareSourceParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case UpdateSoftwareSourceParamsXPaddockCSRFN1:
 		return true
 	default:
 		return false
@@ -6772,7 +8128,7 @@ type ApiTokenStatus string
 
 // Attention defines model for Attention.
 type Attention struct {
-	// Detail disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; otherwise empty.
+	// Detail disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; otherwise empty.
 	Detail   string             `json:"detail"`
 	DeviceId openapi_types.UUID `json:"device_id"`
 
@@ -6784,7 +8140,7 @@ type Attention struct {
 	Id   string        `json:"id"`
 	Kind AttentionKind `json:"kind"`
 
-	// Since When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported).
+	// Since When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled).
 	Since time.Time `json:"since"`
 }
 
@@ -7195,12 +8551,30 @@ type BundleResourceType string
 
 // ChangeSet defines model for ChangeSet.
 type ChangeSet struct {
-	Actor     ChangeSetActor     `json:"actor"`
-	AppliedAt time.Time          `json:"applied_at"`
-	Id        openapi_types.UUID `json:"id"`
-	Plan      ConfigPlan         `json:"plan"`
-	Source    ChangeSetSource    `json:"source"`
-	Summary   ChangeSetSummary   `json:"summary"`
+	Actor     ChangeSetActor `json:"actor"`
+	AppliedAt time.Time      `json:"applied_at"`
+
+	// BeforeAvailable Whether the before-states are stored. False for change sets recorded before they were stored and after they were purged.
+	BeforeAvailable bool               `json:"before_available"`
+	Id              openapi_types.UUID `json:"id"`
+	Plan            ConfigPlan         `json:"plan"`
+
+	// RevertedBy The newest change set that reverts this one.
+	RevertedBy *openapi_types.UUID `json:"reverted_by,omitempty"`
+
+	// RevertsChangeSetId The change set this one reverts.
+	RevertsChangeSetId *openapi_types.UUID `json:"reverts_change_set_id,omitempty"`
+
+	// Rollout immediate: every device receives the change at once. staged: the change set started a rollout. urgent: it would have been staged and skipped the rollout with a reason.
+	Rollout ChangeSetRollout `json:"rollout"`
+
+	// RolloutId The rollout this change set started; null unless staged.
+	RolloutId *openapi_types.UUID `json:"rollout_id,omitempty"`
+	Source    ChangeSetSource     `json:"source"`
+	Summary   ChangeSetSummary    `json:"summary"`
+
+	// UrgentReason Why the change skipped staging; null otherwise.
+	UrgentReason *string `json:"urgent_reason,omitempty"`
 }
 
 // ChangeSetActor defines model for ChangeSetActor.
@@ -7225,6 +8599,9 @@ type ChangeSetPage struct {
 	// TotalCapped More than 10000 items match; total is 10000.
 	TotalCapped bool `json:"total_capped"`
 }
+
+// ChangeSetRollout immediate: every device receives the change at once. staged: the change set started a rollout. urgent: it would have been staged and skipped the rollout with a reason.
+type ChangeSetRollout string
 
 // ChangeSetSource defines model for ChangeSetSource.
 type ChangeSetSource string
@@ -7259,6 +8636,12 @@ type ConfigApplyResult struct {
 
 	// PlanSha256 Hex SHA-256 of the plan's canonical JSON; send it as expected_plan to apply exactly this plan.
 	PlanSha256 string `json:"plan_sha256"`
+
+	// Rollout The rollout mode of the recorded change set; null for dry runs and empty plans.
+	Rollout *ChangeSetRollout `json:"rollout,omitempty"`
+
+	// RolloutId The rollout a staged change set started.
+	RolloutId *openapi_types.UUID `json:"rollout_id,omitempty"`
 }
 
 // ConfigChange defines model for ConfigChange.
@@ -7300,6 +8683,10 @@ type ConfigFieldChange struct {
 	Name   string      `json:"name"`
 }
 
+// ConfigMode enforce applies the configuration; report_only (an adopted device until an administrator enables enforcement)
+// only reports what it would change.
+type ConfigMode string
+
 // ConfigPlan defines model for ConfigPlan.
 type ConfigPlan struct {
 	// Changes In application order; deletions first.
@@ -7308,6 +8695,118 @@ type ConfigPlan struct {
 	Deleted int            `json:"deleted"`
 	Updated int            `json:"updated"`
 }
+
+// ConfigRollout defines model for ConfigRollout.
+type ConfigRollout struct {
+	CanaryDeviceGroupId *openapi_types.UUID `json:"canary_device_group_id"`
+	ChangeSetId         openapi_types.UUID  `json:"change_set_id"`
+
+	// Counts The counts of the rollout. After a wave action they are all zero when they could not be read once the action had been applied.
+	Counts                  ConfigRolloutCounts `json:"counts"`
+	CurrentWaveIndex        int                 `json:"current_wave_index"`
+	EndedAt                 *time.Time          `json:"ended_at"`
+	EndedReason             *string             `json:"ended_reason"`
+	FailureThresholdMin     int                 `json:"failure_threshold_min"`
+	FailureThresholdPercent int                 `json:"failure_threshold_percent"`
+	HaltedReason            *string             `json:"halted_reason"`
+	Id                      openapi_types.UUID  `json:"id"`
+	MinWaveMinutes          int                 `json:"min_wave_minutes"`
+	StartedAt               time.Time           `json:"started_at"`
+	StartedBy               string              `json:"started_by"`
+	Status                  ConfigRolloutStatus `json:"status"`
+	WaveStartedAt           time.Time           `json:"wave_started_at"`
+	Waves                   []int               `json:"waves"`
+}
+
+// ConfigRolloutCounts defines model for ConfigRolloutCounts.
+type ConfigRolloutCounts struct {
+	// Applied Eligible devices whose newest report on a bundle of the rollout applied every staged resource.
+	Applied int `json:"applied"`
+
+	// Eligible Active devices inside the wave the rollout reached.
+	Eligible int `json:"eligible"`
+
+	// Failed Eligible devices the failure threshold counts (since the start or the last resume).
+	Failed int `json:"failed"`
+
+	// Pending The other eligible devices.
+	Pending int `json:"pending"`
+}
+
+// ConfigRolloutDetail defines model for ConfigRolloutDetail.
+type ConfigRolloutDetail struct {
+	ChangeSet ChangeSet     `json:"change_set"`
+	Rollout   ConfigRollout `json:"rollout"`
+
+	// StagedResourceIds The bundle resource IDs whose failure counts against the rollout (file:<path>, unit:<name>, updates).
+	StagedResourceIds []string `json:"staged_resource_ids"`
+}
+
+// ConfigRolloutDevice defines model for ConfigRolloutDevice.
+type ConfigRolloutDevice struct {
+	// BundleVersion The device's newest bundle; null before its first.
+	BundleVersion *int64 `json:"bundle_version"`
+
+	// CarriesRollout The newest bundle contains the rollout's staged change.
+	CarriesRollout bool               `json:"carries_rollout"`
+	DeviceId       openapi_types.UUID `json:"device_id"`
+
+	// FailedResourceIds The staged resources that failed in that report and count against the rollout, and the plan errors of a
+	// report-only device. Failures received before the rollout's last resume no longer count and are not listed;
+	// the device is pending until it reports again.
+	FailedResourceIds []string `json:"failed_resource_ids"`
+	Hostname          string   `json:"hostname"`
+
+	// InWave The device is inside the wave the rollout reached (every device once it completed).
+	InWave bool `json:"in_wave"`
+
+	// ReportOutcome The device's newest report on a bundle of the rollout, the one the counts read: applied, rejected,
+	// report_only (an apply of a report-only device; its plan errors are listed in failed_resource_ids but never
+	// count) or none (no report on a bundle of the rollout, or a failure received before the rollout's last
+	// resume, which no longer counts: the device is pending).
+	ReportOutcome string `json:"report_outcome"`
+}
+
+// ConfigRolloutDevicePage defines model for ConfigRolloutDevicePage.
+type ConfigRolloutDevicePage struct {
+	Items    []ConfigRolloutDevice `json:"items"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// ConfigRolloutHalt defines model for ConfigRolloutHalt.
+type ConfigRolloutHalt struct {
+	// Reason Why the rollout is halted.
+	Reason string `json:"reason"`
+}
+
+// ConfigRolloutPage defines model for ConfigRolloutPage.
+type ConfigRolloutPage struct {
+	Items    []ConfigRollout `json:"items"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// ConfigRolloutStatus defines model for ConfigRolloutStatus.
+type ConfigRolloutStatus string
 
 // DMSSettings defines model for DMSSettings.
 type DMSSettings struct {
@@ -7367,6 +8866,13 @@ type Device struct {
 	// ComponentsOutdated The components older than their target at the last heartbeat (the list column and filter).
 	ComponentsOutdated []string `json:"components_outdated"`
 
+	// ConfigMode enforce applies the configuration; report_only (an adopted device until an administrator enables enforcement)
+	// only reports what it would change.
+	ConfigMode ConfigMode `json:"config_mode"`
+
+	// ConfigModeChangedAt When enforcement was enabled; null while the mode is the one the device enrolled with.
+	ConfigModeChangedAt *time.Time `json:"config_mode_changed_at"`
+
 	// Contact Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; unseen = no check-in for more than 15 minutes, below the staleness warning threshold; ok otherwise (a check-in within the last 15 minutes). Devices that are not active report ok or never.
 	Contact DeviceContact `json:"contact"`
 
@@ -7378,8 +8884,12 @@ type Device struct {
 	// for the other unlock mode than the device's policy, plan M8d decision 48), escrow_pending (recovery key, a
 	// header or keyslot set not yet as required), compliant (the TPM keyslot of the unlock mode and the recovery key
 	// only, escrowed with the current header of every LUKS volume, PDK-009).
-	DiskState         *DiskState          `json:"disk_state,omitempty"`
-	EnrolledAt        time.Time           `json:"enrolled_at"`
+	DiskState  *DiskState `json:"disk_state,omitempty"`
+	EnrolledAt time.Time  `json:"enrolled_at"`
+
+	// EnrollmentMethod How the device was enrolled, as the agent asserted it (plan M11 decision 40): autoinstall by the Paddock
+	// autoinstall, adopted by enrolling an installed system, unknown when the agent sent none.
+	EnrollmentMethod  EnrollmentMethod    `json:"enrollment_method"`
 	EnrollmentTokenId *openapi_types.UUID `json:"enrollment_token_id"`
 
 	// Hardware The hardware facts of the inventory (plan M8d decision 8); null while the inventory has no row for the device.
@@ -7413,6 +8923,57 @@ type Device struct {
 
 // DeviceNameState unmanaged when name is null, applied when the reported hostname equals name, pending otherwise.
 type DeviceNameState string
+
+// DeviceBundle defines model for DeviceBundle.
+type DeviceBundle struct {
+	// ConfigRolloutId The configuration rollout whose staged change the version carries; null otherwise.
+	ConfigRolloutId *openapi_types.UUID `json:"config_rollout_id"`
+	CreatedAt       time.Time           `json:"created_at"`
+
+	// Report What the device reported about the version; null until it reported.
+	Report        *DeviceBundleReport `json:"report"`
+	SchemaVersion int                 `json:"schema_version"`
+	Version       int64               `json:"version"`
+}
+
+// DeviceBundlePage defines model for DeviceBundlePage.
+type DeviceBundlePage struct {
+	Items    []DeviceBundle `json:"items"`
+	Page     int            `json:"page"`
+	PageSize int            `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// DeviceBundleReport defines model for DeviceBundleReport.
+type DeviceBundleReport struct {
+	// Changed Resources the apply changed.
+	Changed int `json:"changed"`
+
+	// ErrorCount Errors the apply reported.
+	ErrorCount int `json:"error_count"`
+
+	// Mode Mode of the apply. A rejection carries no mode: it shows the mode of the device's applied report of the highest lower version, enforce when there is none.
+	Mode       DeviceBundleReportMode    `json:"mode"`
+	OccurredAt time.Time                 `json:"occurred_at"`
+	Outcome    DeviceBundleReportOutcome `json:"outcome"`
+
+	// Reason Why the device rejected the bundle.
+	Reason *string `json:"reason"`
+}
+
+// DeviceBundleReportMode Mode of the apply. A rejection carries no mode: it shows the mode of the device's applied report of the highest lower version, enforce when there is none.
+type DeviceBundleReportMode string
+
+// DeviceBundleReportOutcome defines model for DeviceBundleReport.Outcome.
+type DeviceBundleReportOutcome string
 
 // DeviceCommand defines model for DeviceCommand.
 type DeviceCommand struct {
@@ -7476,6 +9037,15 @@ type DeviceComponentName string
 // DeviceComponentStatus unknown when the agent reported no components (agents before this release).
 type DeviceComponentStatus string
 
+// DeviceConfigStatusCounts The device's resources per apply status; zeros until the agent reported. failed counts failed applies only, plan_errors the failed resources of report-only reports (plan M11 amendment R6.15).
+type DeviceConfigStatusCounts struct {
+	Applied        int `json:"applied"`
+	DriftCorrected int `json:"drift_corrected"`
+	Failed         int `json:"failed"`
+	Pending        int `json:"pending"`
+	PlanErrors     int `json:"plan_errors"`
+}
+
 // DeviceContact Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; unseen = no check-in for more than 15 minutes, below the staleness warning threshold; ok otherwise (a check-in within the last 15 minutes). Devices that are not active report ok or never.
 type DeviceContact string
 
@@ -7497,6 +9067,16 @@ type DeviceDetail struct {
 	// ComponentsOutdated The components older than their target at the last heartbeat (the list column and filter).
 	ComponentsOutdated []string `json:"components_outdated"`
 
+	// ConfigMode enforce applies the configuration; report_only (an adopted device until an administrator enables enforcement)
+	// only reports what it would change.
+	ConfigMode ConfigMode `json:"config_mode"`
+
+	// ConfigModeChangedAt When enforcement was enabled; null while the mode is the one the device enrolled with.
+	ConfigModeChangedAt *time.Time `json:"config_mode_changed_at"`
+
+	// ConfigStatus The device's resources per apply status; zeros until the agent reported. failed counts failed applies only, plan_errors the failed resources of report-only reports (plan M11 amendment R6.15).
+	ConfigStatus DeviceConfigStatusCounts `json:"config_status"`
+
 	// Contact Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; unseen = no check-in for more than 15 minutes, below the staleness warning threshold; ok otherwise (a check-in within the last 15 minutes). Devices that are not active report ok or never.
 	Contact DeviceContact `json:"contact"`
 
@@ -7508,8 +9088,12 @@ type DeviceDetail struct {
 	// for the other unlock mode than the device's policy, plan M8d decision 48), escrow_pending (recovery key, a
 	// header or keyslot set not yet as required), compliant (the TPM keyslot of the unlock mode and the recovery key
 	// only, escrowed with the current header of every LUKS volume, PDK-009).
-	DiskState         *DiskState          `json:"disk_state,omitempty"`
-	EnrolledAt        time.Time           `json:"enrolled_at"`
+	DiskState  *DiskState `json:"disk_state,omitempty"`
+	EnrolledAt time.Time  `json:"enrolled_at"`
+
+	// EnrollmentMethod How the device was enrolled, as the agent asserted it (plan M11 decision 40): autoinstall by the Paddock
+	// autoinstall, adopted by enrolling an installed system, unknown when the agent sent none.
+	EnrollmentMethod  EnrollmentMethod    `json:"enrollment_method"`
 	EnrollmentTokenId *openapi_types.UUID `json:"enrollment_token_id"`
 	Groups            []DeviceGroupRef    `json:"groups"`
 
@@ -7654,6 +9238,12 @@ type DeviceEncryptRequest struct {
 	Reason          string `json:"reason"`
 }
 
+// DeviceEnforce defines model for DeviceEnforce.
+type DeviceEnforce struct {
+	// Hostname The device's hostname, typed by the administrator as confirmation.
+	Hostname string `json:"hostname"`
+}
+
 // DeviceGroup defines model for DeviceGroup.
 type DeviceGroup struct {
 	// AgentUpdatePolicy The group's agent update policy; null inherits the organization's (ADR 0037 decision 1).
@@ -7791,6 +9381,51 @@ type DeviceLoginStatus struct {
 	Sudo *DeviceReport `json:"sudo"`
 }
 
+// DeviceManagedSoftware defines model for DeviceManagedSoftware.
+type DeviceManagedSoftware struct {
+	CatalogEntryId openapi_types.UUID `json:"catalog_entry_id"`
+
+	// Error At most 200 characters; may name paths.
+	Error  string         `json:"error"`
+	Intent SoftwareIntent `json:"intent"`
+
+	// Name The catalog entry's name.
+	Name string `json:"name"`
+
+	// Package The package on the device; empty for not_applicable.
+	Package string `json:"package"`
+
+	// Reason pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed.
+	Reason string `json:"reason"`
+
+	// ReportedAt null for a derived state.
+	ReportedAt *time.Time `json:"reported_at"`
+
+	// State installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the
+	// device's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.
+	State   DeviceSoftwareState `json:"state"`
+	Version string              `json:"version"`
+}
+
+// DeviceManagedSoftwarePage defines model for DeviceManagedSoftwarePage.
+type DeviceManagedSoftwarePage struct {
+	Items    []DeviceManagedSoftware `json:"items"`
+	Page     int                     `json:"page"`
+	PageSize int                     `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+
+	// Truncated The device's last report left items out to keep the check-in small; an entry without a reported row may be managed all the same.
+	Truncated bool `json:"truncated"`
+}
+
 // DeviceNameUpdate defines model for DeviceNameUpdate.
 type DeviceNameUpdate struct {
 	// Name The managed name; null clears it (the device keeps its current hostname).
@@ -7828,6 +9463,55 @@ type DeviceReport struct {
 	// Type Device event type, e.g. login.apply_failed.
 	Type string `json:"type"`
 }
+
+// DeviceResourceStatus defines model for DeviceResourceStatus.
+type DeviceResourceStatus struct {
+	BundleVersion int64 `json:"bundle_version"`
+
+	// Changes What a report-only apply would change (status pending); empty otherwise.
+	Changes []string `json:"changes"`
+
+	// Message The reason of a failure; empty otherwise.
+	Message string `json:"message"`
+
+	// OccurredAt When the agent reported it.
+	OccurredAt time.Time `json:"occurred_at"`
+
+	// ReportMode The mode of the report that wrote the row (plan M11 amendment R6.15); enforce when no report of that version
+	// is stored. A failed row of a report_only report is a plan error, never a failed apply (R6.6), also after
+	// enforcement until an enforced report replaces it.
+	ReportMode ConfigMode `json:"report_mode"`
+
+	// ResourceId Resource ID such as file:/etc/foo.conf, unit:foo.service or time.
+	ResourceId string `json:"resource_id"`
+
+	// Status The apply status of one resource on one device: applied; failed (the message says why); pending (a report-only
+	// apply would change it, changes lists what); drift_corrected (the agent corrected a local change).
+	Status ResourceState `json:"status"`
+
+	// Type The part of the ID before the colon (file, unit), else the whole ID.
+	Type string `json:"type"`
+}
+
+// DeviceResourceStatusPage defines model for DeviceResourceStatusPage.
+type DeviceResourceStatusPage struct {
+	Items    []DeviceResourceStatus `json:"items"`
+	Page     int                    `json:"page"`
+	PageSize int                    `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// DeviceSoftwareState installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the
+// device's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.
+type DeviceSoftwareState string
 
 // DeviceState defines model for DeviceState.
 type DeviceState string
@@ -8069,7 +9753,14 @@ type EffectiveConfig struct {
 
 	// Resources Bundle resources, sorted by id, exactly as the compiler renders them.
 	Resources []BundleResource `json:"resources"`
-	Units     []ManagedUnit    `json:"units"`
+
+	// Rollout The organization's open configuration rollout; null without one. The configuration above is the live one;
+	// a device outside the wave (in_wave false) keeps the before-state of the rollout's staged keys.
+	Rollout *struct {
+		Id     openapi_types.UUID `json:"id"`
+		InWave bool               `json:"in_wave"`
+	} `json:"rollout,omitempty"`
+	Units []ManagedUnit `json:"units"`
 }
 
 // EffectiveProfile defines model for EffectiveProfile.
@@ -8121,6 +9812,10 @@ type EnrollmentConfig struct {
 	ServerUrl      string       `json:"server_url"`
 	Token          string       `json:"token"`
 }
+
+// EnrollmentMethod How the device was enrolled, as the agent asserted it (plan M11 decision 40): autoinstall by the Paddock
+// autoinstall, adopted by enrolling an installed system, unknown when the agent sent none.
+type EnrollmentMethod string
 
 // EnrollmentToken defines model for EnrollmentToken.
 type EnrollmentToken struct {
@@ -9041,10 +10736,13 @@ type OrganizationStatus string
 
 // Overview defines model for Overview.
 type Overview struct {
-	Attention   OverviewAttention  `json:"attention"`
-	Devices     OverviewDevices    `json:"devices"`
-	Encryption  OverviewEncryption `json:"encryption"`
-	GeneratedAt time.Time          `json:"generated_at"`
+	Attention OverviewAttention `json:"attention"`
+
+	// Configuration The configuration card. Failures do not count the plan errors of report-only reports, like GET /api/v1/config-status.
+	Configuration OverviewConfiguration `json:"configuration"`
+	Devices       OverviewDevices       `json:"devices"`
+	Encryption    OverviewEncryption    `json:"encryption"`
+	GeneratedAt   time.Time             `json:"generated_at"`
 
 	// SecurityReview The totals of GET /api/v1/security-review.
 	SecurityReview  OverviewSecurityReview  `json:"security_review"`
@@ -9091,6 +10789,30 @@ type OverviewAgent struct {
 type OverviewAttention struct {
 	Conditions int `json:"conditions"`
 	Devices    int `json:"devices"`
+}
+
+// OverviewConfigRollout defines model for OverviewConfigRollout.
+type OverviewConfigRollout struct {
+	CurrentWaveIndex int                 `json:"current_wave_index"`
+	Id               openapi_types.UUID  `json:"id"`
+	StartedAt        time.Time           `json:"started_at"`
+	Status           ConfigRolloutStatus `json:"status"`
+	Waves            []int               `json:"waves"`
+}
+
+// OverviewConfiguration The configuration card. Failures do not count the plan errors of report-only reports, like GET /api/v1/config-status.
+type OverviewConfiguration struct {
+	// FailedDevices Distinct active devices with at least one failed apply.
+	FailedDevices int `json:"failed_devices"`
+
+	// FailedResources Distinct resources with a failed apply on at least one active device.
+	FailedResources int `json:"failed_resources"`
+
+	// ReportOnlyDevices Active devices in report-only mode.
+	ReportOnlyDevices int `json:"report_only_devices"`
+
+	// Rollout The open (running or halted) configuration rollout without counts; null while none is open. The counts are those of GET /api/v1/config-rollouts/{id}.
+	Rollout *OverviewConfigRollout `json:"rollout"`
 }
 
 // OverviewDevices defines model for OverviewDevices.
@@ -9238,6 +10960,23 @@ type PackageHoldUpdate struct {
 	Version *string `json:"version"`
 }
 
+// PackageRef defines model for PackageRef.
+type PackageRef struct {
+	Architecture PackageRefArchitecture `json:"architecture"`
+
+	// Distribution The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian.
+	Distribution string `json:"distribution"`
+
+	// Package ^[a-z0-9][a-z0-9+.-]+$
+	Package string `json:"package"`
+
+	// Release * or the VERSION_ID, ^[a-z0-9][a-z0-9.-]{0,31}$, e.g. 24.04.
+	Release string `json:"release"`
+}
+
+// PackageRefArchitecture defines model for PackageRef.Architecture.
+type PackageRefArchitecture string
+
 // PermissionProfile defines model for PermissionProfile.
 type PermissionProfile struct {
 	Class          PrivilegeClass     `json:"class"`
@@ -9383,6 +11122,39 @@ type ProfileAssignmentUpdate struct {
 	DeviceGroupId *openapi_types.UUID `json:"device_group_id"`
 }
 
+// ResourceState The apply status of one resource on one device: applied; failed (the message says why); pending (a report-only
+// apply would change it, changes lists what); drift_corrected (the agent corrected a local change).
+type ResourceState string
+
+// ResourceStatus One resource ID with the number of active devices per status. A failed resource written by a report-only
+// report is a plan error, not a failed apply (plan M11 amendments R6.6, R6.15): it is counted in no status here,
+// the status filter failed does not select it, and the device's apply status shows it (report_mode).
+type ResourceStatus struct {
+	Applied        int        `json:"applied"`
+	DriftCorrected int        `json:"drift_corrected"`
+	Failed         int        `json:"failed"`
+	LastFailureAt  *time.Time `json:"last_failure_at"`
+	Pending        int        `json:"pending"`
+	ResourceId     string     `json:"resource_id"`
+	Type           string     `json:"type"`
+}
+
+// ResourceStatusPage defines model for ResourceStatusPage.
+type ResourceStatusPage struct {
+	Items    []ResourceStatus `json:"items"`
+	Page     int              `json:"page"`
+	PageSize int              `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
 // RevocationAction defines model for RevocationAction.
 type RevocationAction string
 
@@ -9467,6 +11239,35 @@ type RevocationRequestPage struct {
 // RevocationStatus defines model for RevocationStatus.
 type RevocationStatus string
 
+// RolloutSettings defines model for RolloutSettings.
+type RolloutSettings struct {
+	// CanaryDeviceGroupId Devices of this group always go first; null = none.
+	CanaryDeviceGroupId *openapi_types.UUID `json:"canary_device_group_id"`
+
+	// Enabled Staged configuration rollouts are off by default.
+	Enabled                 bool       `json:"enabled"`
+	FailureThresholdMin     int        `json:"failure_threshold_min"`
+	FailureThresholdPercent int        `json:"failure_threshold_percent"`
+	MinWaveMinutes          int        `json:"min_wave_minutes"`
+	UpdatedAt               *time.Time `json:"updated_at,omitempty"`
+	Waves                   []int      `json:"waves"`
+}
+
+// RolloutSettingsUpdate defines model for RolloutSettingsUpdate.
+type RolloutSettingsUpdate struct {
+	// CanaryDeviceGroupId Omit or null for none.
+	CanaryDeviceGroupId     *openapi_types.UUID `json:"canary_device_group_id,omitempty"`
+	Enabled                 bool                `json:"enabled"`
+	FailureThresholdMin     int                 `json:"failure_threshold_min"`
+	FailureThresholdPercent int                 `json:"failure_threshold_percent"`
+
+	// MinWaveMinutes At least 15 (1 in a development stack).
+	MinWaveMinutes int `json:"min_wave_minutes"`
+
+	// Waves Strictly increasing, ending with 100.
+	Waves []int `json:"waves"`
+}
+
 // RootEquivalence defines model for RootEquivalence.
 type RootEquivalence struct {
 	EffectiveClass PrivilegeClass `json:"effective_class"`
@@ -9532,6 +11333,288 @@ type SessionsEnded struct {
 // CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without either.
 type Severity string
 
+// SoftwareArchitecture defines model for SoftwareArchitecture.
+type SoftwareArchitecture string
+
+// SoftwareAssignment defines model for SoftwareAssignment.
+type SoftwareAssignment struct {
+	// AppName The catalog entry's name.
+	AppName        string             `json:"app_name"`
+	CatalogEntryId openapi_types.UUID `json:"catalog_entry_id"`
+	CreatedAt      time.Time          `json:"created_at"`
+
+	// DeviceGroupId null = every device of the organization.
+	DeviceGroupId *openapi_types.UUID `json:"device_group_id"`
+	Id            openapi_types.UUID  `json:"id"`
+	Intent        SoftwareIntent      `json:"intent"`
+	Reason        string              `json:"reason"`
+	UpdateRule    SoftwareUpdateRule  `json:"update_rule"`
+	UpdatedAt     time.Time           `json:"updated_at"`
+	Version       *string             `json:"version"`
+}
+
+// SoftwareAssignmentCreate defines model for SoftwareAssignmentCreate.
+type SoftwareAssignmentCreate struct {
+	CatalogEntryId openapi_types.UUID `json:"catalog_entry_id"`
+
+	// DeviceGroupId Omit or null for every device of the organization.
+	DeviceGroupId *openapi_types.UUID `json:"device_group_id,omitempty"`
+	Intent        SoftwareIntent      `json:"intent"`
+	Reason        *string             `json:"reason,omitempty"`
+	UpdateRule    *SoftwareUpdateRule `json:"update_rule,omitempty"`
+
+	// Version ^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall and forbid.
+	Version *string `json:"version,omitempty"`
+}
+
+// SoftwareAssignmentPage defines model for SoftwareAssignmentPage.
+type SoftwareAssignmentPage struct {
+	Items    []SoftwareAssignment `json:"items"`
+	Page     int                  `json:"page"`
+	PageSize int                  `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// SoftwareAssignmentUpdate defines model for SoftwareAssignmentUpdate.
+type SoftwareAssignmentUpdate struct {
+	// CatalogEntryId Fixed; any value is refused with 400 invalid_request.
+	CatalogEntryId *openapi_types.UUID `json:"catalog_entry_id,omitempty"`
+
+	// DeviceGroupId Fixed; any value is refused with 400 invalid_request.
+	DeviceGroupId *openapi_types.UUID `json:"device_group_id,omitempty"`
+	Intent        SoftwareIntent      `json:"intent"`
+	Reason        *string             `json:"reason,omitempty"`
+	UpdateRule    *SoftwareUpdateRule `json:"update_rule,omitempty"`
+	Version       *string             `json:"version,omitempty"`
+}
+
+// SoftwareCatalogDevice defines model for SoftwareCatalogDevice.
+type SoftwareCatalogDevice struct {
+	// DeviceGroupIds The device groups the device belongs to; empty when none.
+	DeviceGroupIds []openapi_types.UUID `json:"device_group_ids"`
+	DeviceId       openapi_types.UUID   `json:"device_id"`
+
+	// Error At most 200 characters; may name paths.
+	Error    string         `json:"error"`
+	Hostname string         `json:"hostname"`
+	Intent   SoftwareIntent `json:"intent"`
+
+	// Name The device's display name; empty when none is set.
+	Name string `json:"name"`
+
+	// Package The package on the device; empty for not_applicable.
+	Package string `json:"package"`
+	Reason  string `json:"reason"`
+
+	// ReportedAt null for a derived state.
+	ReportedAt *time.Time `json:"reported_at"`
+
+	// State installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the
+	// device's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.
+	State   DeviceSoftwareState `json:"state"`
+	Version string              `json:"version"`
+}
+
+// SoftwareCatalogDevicePage defines model for SoftwareCatalogDevicePage.
+type SoftwareCatalogDevicePage struct {
+	Items    []SoftwareCatalogDevice `json:"items"`
+	Page     int                     `json:"page"`
+	PageSize int                     `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// SoftwareCatalogEntry defines model for SoftwareCatalogEntry.
+type SoftwareCatalogEntry struct {
+	AssignmentCount int                 `json:"assignment_count"`
+	Category        string              `json:"category"`
+	CreatedAt       time.Time           `json:"created_at"`
+	Description     string              `json:"description"`
+	HasIcon         bool                `json:"has_icon"`
+	Id              openapi_types.UUID  `json:"id"`
+	Name            string              `json:"name"`
+	Packages        []PackageRef        `json:"packages"`
+	SourceId        *openapi_types.UUID `json:"source_id"`
+
+	// SourceSlug Empty for the distribution's own repositories.
+	SourceSlug string    `json:"source_slug"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// SoftwareCatalogEntryCreate defines model for SoftwareCatalogEntryCreate.
+type SoftwareCatalogEntryCreate struct {
+	// Category May be empty.
+	Category    *string `json:"category,omitempty"`
+	Description *string `json:"description,omitempty"`
+
+	// Name 1 to 100 characters after trimming; unique within the organization.
+	Name string `json:"name"`
+
+	// Packages Unique by distribution, release and architecture; the most specific reference wins on a device.
+	Packages []PackageRef `json:"packages"`
+
+	// SourceId Omit or null for the distribution's own repositories.
+	SourceId *openapi_types.UUID `json:"source_id,omitempty"`
+}
+
+// SoftwareCatalogEntryPage defines model for SoftwareCatalogEntryPage.
+type SoftwareCatalogEntryPage struct {
+	Items    []SoftwareCatalogEntry `json:"items"`
+	Page     int                    `json:"page"`
+	PageSize int                    `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// SoftwareCatalogEntryUpdate defines model for SoftwareCatalogEntryUpdate.
+type SoftwareCatalogEntryUpdate struct {
+	Category    *string      `json:"category,omitempty"`
+	Description *string      `json:"description,omitempty"`
+	Name        string       `json:"name"`
+	Packages    []PackageRef `json:"packages"`
+
+	// SourceId Omit or null for the distribution's own repositories.
+	SourceId *openapi_types.UUID `json:"source_id,omitempty"`
+}
+
+// SoftwareIntent defines model for SoftwareIntent.
+type SoftwareIntent string
+
+// SoftwareSource defines model for SoftwareSource.
+type SoftwareSource struct {
+	// Architectures Empty = every architecture.
+	Architectures []SoftwareArchitecture `json:"architectures"`
+	Components    []string               `json:"components"`
+	CreatedAt     time.Time              `json:"created_at"`
+
+	// EntryCount The number of catalog entries that use this source.
+	EntryCount int `json:"entry_count"`
+
+	// Fingerprint The signing key's v4 fingerprint, 40 uppercase hexadecimal characters.
+	Fingerprint string             `json:"fingerprint"`
+	Id          openapi_types.UUID `json:"id"`
+	Name        string             `json:"name"`
+
+	// SigningKey The ASCII-armored OpenPGP public key as stored, re-armored without armor headers.
+	SigningKey string `json:"signing_key"`
+
+	// Slug Immutable; names the source file and keyring on the devices.
+	Slug      string    `json:"slug"`
+	Suites    []string  `json:"suites"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Uris      []string  `json:"uris"`
+
+	// WeakKey The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030.
+	WeakKey bool `json:"weak_key"`
+}
+
+// SoftwareSourceCreate defines model for SoftwareSourceCreate.
+type SoftwareSourceCreate struct {
+	Architectures *[]SoftwareArchitecture `json:"architectures,omitempty"`
+
+	// Components ^[a-z0-9-]{1,32}$; none for a flat repository, at least one otherwise.
+	Components *[]string `json:"components,omitempty"`
+
+	// Fingerprint The key's fingerprint as published by the vendor; spaces and case are ignored.
+	Fingerprint string `json:"fingerprint"`
+
+	// Name 1 to 100 characters after trimming.
+	Name string `json:"name"`
+
+	// SigningKey One ASCII-armored OpenPGP v4 public key. It is stored re-armored with 64-character lines and no armor headers, and that form must also fit 65536 bytes (400 invalid_request otherwise).
+	SigningKey string `json:"signing_key"`
+
+	// Slug ^[a-z0-9][a-z0-9-]{1,40}$
+	Slug string `json:"slug"`
+
+	// Suites ^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /.
+	Suites []string `json:"suites"`
+
+	// Uris https only, no query, fragment or user information.
+	Uris []string `json:"uris"`
+}
+
+// SoftwareSourcePage defines model for SoftwareSourcePage.
+type SoftwareSourcePage struct {
+	Items    []SoftwareSourceSummary `json:"items"`
+	Page     int                     `json:"page"`
+	PageSize int                     `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// SoftwareSourceSummary defines model for SoftwareSourceSummary.
+type SoftwareSourceSummary struct {
+	// Architectures Empty = every architecture.
+	Architectures []SoftwareArchitecture `json:"architectures"`
+	Components    []string               `json:"components"`
+	CreatedAt     time.Time              `json:"created_at"`
+
+	// EntryCount The number of catalog entries that use this source.
+	EntryCount int `json:"entry_count"`
+
+	// Fingerprint The signing key's v4 fingerprint, 40 uppercase hexadecimal characters.
+	Fingerprint string             `json:"fingerprint"`
+	Id          openapi_types.UUID `json:"id"`
+	Name        string             `json:"name"`
+
+	// Slug Immutable; names the source file and keyring on the devices.
+	Slug      string    `json:"slug"`
+	Suites    []string  `json:"suites"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Uris      []string  `json:"uris"`
+
+	// WeakKey The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030.
+	WeakKey bool `json:"weak_key"`
+}
+
+// SoftwareSourceUpdate defines model for SoftwareSourceUpdate.
+type SoftwareSourceUpdate struct {
+	Architectures *[]SoftwareArchitecture `json:"architectures,omitempty"`
+	Components    *[]string               `json:"components,omitempty"`
+
+	// Fingerprint Only together with signing_key.
+	Fingerprint *string `json:"fingerprint,omitempty"`
+	Name        *string `json:"name,omitempty"`
+
+	// SigningKey Only together with fingerprint; the same rules as on creation.
+	SigningKey *string `json:"signing_key,omitempty"`
+
+	// Slug Immutable; any value is refused with 400 invalid_request.
+	Slug   *string   `json:"slug,omitempty"`
+	Suites *[]string `json:"suites,omitempty"`
+	Uris   *[]string `json:"uris,omitempty"`
+}
+
 // SoftwareSummary defines model for SoftwareSummary.
 type SoftwareSummary struct {
 	DeviceCount        int    `json:"device_count"`
@@ -9555,6 +11638,9 @@ type SoftwareSummaryPage struct {
 	// TotalCapped More than 10000 items match; total is 10000.
 	TotalCapped bool `json:"total_capped"`
 }
+
+// SoftwareUpdateRule defines model for SoftwareUpdateRule.
+type SoftwareUpdateRule string
 
 // SubjectType defines model for SubjectType.
 type SubjectType string
@@ -9938,11 +12024,23 @@ type AuditVerificationRunSort string
 // ChangeSetSort defines model for ChangeSetSort.
 type ChangeSetSort string
 
+// ConfigRolloutDeviceSort defines model for ConfigRolloutDeviceSort.
+type ConfigRolloutDeviceSort string
+
+// ConfigRolloutSort defines model for ConfigRolloutSort.
+type ConfigRolloutSort string
+
+// ConfigStatusSort defines model for ConfigStatusSort.
+type ConfigStatusSort string
+
 // Confirm defines model for Confirm.
 type Confirm string
 
 // Csrf defines model for Csrf.
 type Csrf string
+
+// DeviceBundleSort defines model for DeviceBundleSort.
+type DeviceBundleSort string
 
 // DeviceCommandSort defines model for DeviceCommandSort.
 type DeviceCommandSort string
@@ -9956,8 +12054,21 @@ type DeviceGroupSort string
 // DeviceLoginSort defines model for DeviceLoginSort.
 type DeviceLoginSort string
 
+// DeviceManagedSoftwareIntentFilter defines model for DeviceManagedSoftwareIntentFilter.
+type DeviceManagedSoftwareIntentFilter = SoftwareIntent
+
+// DeviceManagedSoftwareSort defines model for DeviceManagedSoftwareSort.
+type DeviceManagedSoftwareSort string
+
+// DeviceResourceStatusSort defines model for DeviceResourceStatusSort.
+type DeviceResourceStatusSort string
+
 // DeviceSoftwareSort defines model for DeviceSoftwareSort.
 type DeviceSoftwareSort string
+
+// DeviceSoftwareStateFilter installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the
+// device's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.
+type DeviceSoftwareStateFilter = DeviceSoftwareState
 
 // DeviceSort defines model for DeviceSort.
 type DeviceSort string
@@ -10010,8 +12121,17 @@ type PermissionProfileSort string
 // ProfileAssignmentSort defines model for ProfileAssignmentSort.
 type ProfileAssignmentSort string
 
+// ResourceStateFilter defines model for ResourceStateFilter.
+type ResourceStateFilter = []ResourceState
+
 // RevocationRequestSort defines model for RevocationRequestSort.
 type RevocationRequestSort string
+
+// RolloutReason defines model for RolloutReason.
+type RolloutReason = string
+
+// RolloutUrgent defines model for RolloutUrgent.
+type RolloutUrgent = bool
 
 // Search defines model for Search.
 type Search = string
@@ -10019,8 +12139,32 @@ type Search = string
 // SeverityFilter defines model for SeverityFilter.
 type SeverityFilter = []Severity
 
+// SoftwareAssignmentSort defines model for SoftwareAssignmentSort.
+type SoftwareAssignmentSort string
+
+// SoftwareCatalogDeviceSort defines model for SoftwareCatalogDeviceSort.
+type SoftwareCatalogDeviceSort string
+
+// SoftwareCatalogSort defines model for SoftwareCatalogSort.
+type SoftwareCatalogSort string
+
+// SoftwareCategoryFilter defines model for SoftwareCategoryFilter.
+type SoftwareCategoryFilter = string
+
+// SoftwareEntryFilter defines model for SoftwareEntryFilter.
+type SoftwareEntryFilter = openapi_types.UUID
+
+// SoftwareIntentFilter defines model for SoftwareIntentFilter.
+type SoftwareIntentFilter = SoftwareIntent
+
 // SoftwareSort defines model for SoftwareSort.
 type SoftwareSort string
+
+// SoftwareSourceFilter defines model for SoftwareSourceFilter.
+type SoftwareSourceFilter = openapi_types.UUID
+
+// SoftwareSourceSort defines model for SoftwareSourceSort.
+type SoftwareSourceSort string
 
 // UpstreamGroupSort defines model for UpstreamGroupSort.
 type UpstreamGroupSort string
@@ -10597,6 +12741,9 @@ type ListChangeSetsParams struct {
 
 	// Source Repeatable.
 	Source *[]ChangeSetSource `form:"source,omitempty" json:"source,omitempty"`
+
+	// Rollout Repeatable.
+	Rollout *[]ChangeSetRollout `form:"rollout,omitempty" json:"rollout,omitempty"`
 }
 
 // ListChangeSetsParamsPageSize defines parameters for ListChangeSets.
@@ -10605,8 +12752,35 @@ type ListChangeSetsParamsPageSize int
 // ListChangeSetsParamsSort defines parameters for ListChangeSets.
 type ListChangeSetsParamsSort string
 
+// RevertChangeSetParams defines parameters for RevertChangeSet.
+type RevertChangeSetParams struct {
+	// DryRun Compute and check the inverse plan without applying it.
+	DryRun *bool `form:"dry_run,omitempty" json:"dry_run,omitempty"`
+
+	// ExpectedPlan plan_sha256 of the confirmed dry run; required unless dry_run. A different plan is refused with 412 plan_changed.
+	ExpectedPlan *string `form:"expected_plan,omitempty" json:"expected_plan,omitempty"`
+
+	// Urgent Opt out of a staged rollout; needs reason, a step-up and enabled rollouts, as RolloutUrgent.
+	Urgent *bool `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change set is reverted (2 to 500 characters); with urgent also the urgent reason.
+	Reason       *string                           `form:"reason,omitempty" json:"reason,omitempty"`
+	XPaddockCSRF RevertChangeSetParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// RevertChangeSetParamsXPaddockCSRF defines parameters for RevertChangeSet.
+type RevertChangeSetParamsXPaddockCSRF string
+
 // ApplyConfigParams defines parameters for ApplyConfig.
 type ApplyConfigParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason *RolloutReason `form:"reason,omitempty" json:"reason,omitempty"`
+
 	// DryRun Compute and check the plan without applying it.
 	DryRun *bool `form:"dry_run,omitempty" json:"dry_run,omitempty"`
 
@@ -10617,6 +12791,106 @@ type ApplyConfigParams struct {
 
 // ApplyConfigParamsXPaddockCSRF defines parameters for ApplyConfig.
 type ApplyConfigParamsXPaddockCSRF string
+
+// ListConfigRolloutsParams defines parameters for ListConfigRollouts.
+type ListConfigRolloutsParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                             `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListConfigRolloutsParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListConfigRolloutsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// Status Repeatable.
+	Status *[]ConfigRolloutStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ListConfigRolloutsParamsPageSize defines parameters for ListConfigRollouts.
+type ListConfigRolloutsParamsPageSize int
+
+// ListConfigRolloutsParamsSort defines parameters for ListConfigRollouts.
+type ListConfigRolloutsParamsSort string
+
+// AdvanceConfigRolloutParams defines parameters for AdvanceConfigRollout.
+type AdvanceConfigRolloutParams struct {
+	XPaddockCSRF AdvanceConfigRolloutParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// AdvanceConfigRolloutParamsXPaddockCSRF defines parameters for AdvanceConfigRollout.
+type AdvanceConfigRolloutParamsXPaddockCSRF string
+
+// CompleteConfigRolloutParams defines parameters for CompleteConfigRollout.
+type CompleteConfigRolloutParams struct {
+	XPaddockCSRF CompleteConfigRolloutParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// CompleteConfigRolloutParamsXPaddockCSRF defines parameters for CompleteConfigRollout.
+type CompleteConfigRolloutParamsXPaddockCSRF string
+
+// ListConfigRolloutDevicesParams defines parameters for ListConfigRolloutDevices.
+type ListConfigRolloutDevicesParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                                   `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListConfigRolloutDevicesParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The hostname, then the device id is the tie-breaker.
+	Sort *ListConfigRolloutDevicesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q      *Search `form:"q,omitempty" json:"q,omitempty"`
+	InWave *bool   `form:"in_wave,omitempty" json:"in_wave,omitempty"`
+
+	// ReportOutcome Repeatable; applied, rejected, report_only or none (400 invalid_request otherwise). The values are not an
+	// OpenAPI enum, as for the outcome filter of the device's bundles.
+	ReportOutcome *[]string `form:"report_outcome,omitempty" json:"report_outcome,omitempty"`
+}
+
+// ListConfigRolloutDevicesParamsPageSize defines parameters for ListConfigRolloutDevices.
+type ListConfigRolloutDevicesParamsPageSize int
+
+// ListConfigRolloutDevicesParamsSort defines parameters for ListConfigRolloutDevices.
+type ListConfigRolloutDevicesParamsSort string
+
+// HaltConfigRolloutParams defines parameters for HaltConfigRollout.
+type HaltConfigRolloutParams struct {
+	XPaddockCSRF HaltConfigRolloutParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// HaltConfigRolloutParamsXPaddockCSRF defines parameters for HaltConfigRollout.
+type HaltConfigRolloutParamsXPaddockCSRF string
+
+// ResumeConfigRolloutParams defines parameters for ResumeConfigRollout.
+type ResumeConfigRolloutParams struct {
+	XPaddockCSRF ResumeConfigRolloutParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// ResumeConfigRolloutParamsXPaddockCSRF defines parameters for ResumeConfigRollout.
+type ResumeConfigRolloutParamsXPaddockCSRF string
+
+// ListConfigStatusParams defines parameters for ListConfigStatus.
+type ListConfigStatusParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                           `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListConfigStatusParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker.
+	Sort *ListConfigStatusParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// Status Repeatable. Keeps resources with a device in one of these statuses.
+	Status *ResourceStateFilter `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ListConfigStatusParamsPageSize defines parameters for ListConfigStatus.
+type ListConfigStatusParamsPageSize int
+
+// ListConfigStatusParamsSort defines parameters for ListConfigStatus.
+type ListConfigStatusParamsSort string
 
 // ListDeviceGroupsParams defines parameters for ListDeviceGroups.
 type ListDeviceGroupsParams struct {
@@ -10723,6 +12997,12 @@ type ListDevicesParams struct {
 
 	// ComponentOutdated true lists the devices with a component older than its target at their last heartbeat, false the others (plan M8d decision 55).
 	ComponentOutdated *bool `form:"component_outdated,omitempty" json:"component_outdated,omitempty"`
+
+	// EnrollmentMethod Repeatable. How the device was enrolled (plan M11 decision 43).
+	EnrollmentMethod *[]EnrollmentMethod `form:"enrollment_method,omitempty" json:"enrollment_method,omitempty"`
+
+	// ConfigMode Repeatable. Whether the device's configuration is enforced or only reported (plan M11 decision 43).
+	ConfigMode *[]ConfigMode `form:"config_mode,omitempty" json:"config_mode,omitempty"`
 }
 
 // ListDevicesParamsPageSize defines parameters for ListDevices.
@@ -10741,6 +13021,30 @@ type ApproveDeviceParams struct {
 
 // ApproveDeviceParamsXPaddockCSRF defines parameters for ApproveDevice.
 type ApproveDeviceParamsXPaddockCSRF string
+
+// ListDeviceBundlesParams defines parameters for ListDeviceBundles.
+type ListDeviceBundlesParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                            `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListDeviceBundlesParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The version is the tie-breaker.
+	Sort *ListDeviceBundlesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// Outcome Repeatable; applied, rejected or none (400 invalid_request otherwise). none selects versions the device has
+	// not reported. The values are not an OpenAPI enum: the generated constant None would take the name of the
+	// privilege class's.
+	Outcome *[]string `form:"outcome,omitempty" json:"outcome,omitempty"`
+}
+
+// ListDeviceBundlesParamsPageSize defines parameters for ListDeviceBundles.
+type ListDeviceBundlesParamsPageSize int
+
+// ListDeviceBundlesParamsSort defines parameters for ListDeviceBundles.
+type ListDeviceBundlesParamsSort string
 
 // ListDeviceCommandsParams defines parameters for ListDeviceCommands.
 type ListDeviceCommandsParams struct {
@@ -10766,6 +13070,28 @@ type ListDeviceCommandsParamsPageSize int
 
 // ListDeviceCommandsParamsSort defines parameters for ListDeviceCommands.
 type ListDeviceCommandsParamsSort string
+
+// ListDeviceConfigStatusParams defines parameters for ListDeviceConfigStatus.
+type ListDeviceConfigStatusParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                                 `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListDeviceConfigStatusParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker.
+	Sort *ListDeviceConfigStatusParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// Status Repeatable. Keeps resources with a device in one of these statuses.
+	Status *ResourceStateFilter `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ListDeviceConfigStatusParamsPageSize defines parameters for ListDeviceConfigStatus.
+type ListDeviceConfigStatusParamsPageSize int
+
+// ListDeviceConfigStatusParamsSort defines parameters for ListDeviceConfigStatus.
+type ListDeviceConfigStatusParamsSort string
 
 // DestroyDeviceParams defines parameters for DestroyDevice.
 type DestroyDeviceParams struct {
@@ -10806,6 +13132,14 @@ type CancelDeviceEncryptionParams struct {
 
 // CancelDeviceEncryptionParamsXPaddockCSRF defines parameters for CancelDeviceEncryption.
 type CancelDeviceEncryptionParamsXPaddockCSRF string
+
+// EnforceDeviceParams defines parameters for EnforceDevice.
+type EnforceDeviceParams struct {
+	XPaddockCSRF EnforceDeviceParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// EnforceDeviceParamsXPaddockCSRF defines parameters for EnforceDevice.
+type EnforceDeviceParamsXPaddockCSRF string
 
 // SetDeviceGroupsParams defines parameters for SetDeviceGroups.
 type SetDeviceGroupsParams struct {
@@ -10876,6 +13210,31 @@ type ListDeviceLoginsParamsPageSize int
 
 // ListDeviceLoginsParamsSort defines parameters for ListDeviceLogins.
 type ListDeviceLoginsParamsSort string
+
+// ListDeviceManagedSoftwareParams defines parameters for ListDeviceManagedSoftware.
+type ListDeviceManagedSoftwareParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                                    `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListDeviceManagedSoftwareParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers.
+	Sort *ListDeviceManagedSoftwareParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// State Only entries in this state, reported or derived.
+	State *DeviceSoftwareStateFilter `form:"state,omitempty" json:"state,omitempty"`
+
+	// Intent Only entries with this intent, reported or assigned.
+	Intent *DeviceManagedSoftwareIntentFilter `form:"intent,omitempty" json:"intent,omitempty"`
+}
+
+// ListDeviceManagedSoftwareParamsPageSize defines parameters for ListDeviceManagedSoftware.
+type ListDeviceManagedSoftwareParamsPageSize int
+
+// ListDeviceManagedSoftwareParamsSort defines parameters for ListDeviceManagedSoftware.
+type ListDeviceManagedSoftwareParamsSort string
 
 // SetDeviceNameParams defines parameters for SetDeviceName.
 type SetDeviceNameParams struct {
@@ -11115,6 +13474,13 @@ type ListManagedFilesParamsSort string
 
 // CreateManagedFileParams defines parameters for CreateManagedFile.
 type CreateManagedFileParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF CreateManagedFileParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11123,6 +13489,13 @@ type CreateManagedFileParamsXPaddockCSRF string
 
 // DeleteManagedFileParams defines parameters for DeleteManagedFile.
 type DeleteManagedFileParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF DeleteManagedFileParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11131,6 +13504,13 @@ type DeleteManagedFileParamsXPaddockCSRF string
 
 // UpdateManagedFileParams defines parameters for UpdateManagedFile.
 type UpdateManagedFileParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF UpdateManagedFileParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11169,6 +13549,13 @@ type ListManagedUnitsParamsSort string
 
 // CreateManagedUnitParams defines parameters for CreateManagedUnit.
 type CreateManagedUnitParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF CreateManagedUnitParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11177,6 +13564,13 @@ type CreateManagedUnitParamsXPaddockCSRF string
 
 // DeleteManagedUnitParams defines parameters for DeleteManagedUnit.
 type DeleteManagedUnitParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF DeleteManagedUnitParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11185,6 +13579,13 @@ type DeleteManagedUnitParamsXPaddockCSRF string
 
 // UpdateManagedUnitParams defines parameters for UpdateManagedUnit.
 type UpdateManagedUnitParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF UpdateManagedUnitParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11310,6 +13711,13 @@ type ListPackageHoldsParamsSort string
 
 // CreatePackageHoldParams defines parameters for CreatePackageHold.
 type CreatePackageHoldParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF CreatePackageHoldParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11318,6 +13726,13 @@ type CreatePackageHoldParamsXPaddockCSRF string
 
 // DeletePackageHoldParams defines parameters for DeletePackageHold.
 type DeletePackageHoldParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF DeletePackageHoldParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11326,6 +13741,13 @@ type DeletePackageHoldParamsXPaddockCSRF string
 
 // UpdatePackageHoldParams defines parameters for UpdatePackageHold.
 type UpdatePackageHoldParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                      `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF UpdatePackageHoldParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11535,8 +13957,23 @@ type UpdatePrivacySettingsParams struct {
 // UpdatePrivacySettingsParamsXPaddockCSRF defines parameters for UpdatePrivacySettings.
 type UpdatePrivacySettingsParamsXPaddockCSRF string
 
+// UpdateRolloutSettingsParams defines parameters for UpdateRolloutSettings.
+type UpdateRolloutSettingsParams struct {
+	XPaddockCSRF UpdateRolloutSettingsParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// UpdateRolloutSettingsParamsXPaddockCSRF defines parameters for UpdateRolloutSettings.
+type UpdateRolloutSettingsParamsXPaddockCSRF string
+
 // UpdateUpdateSettingsParams defines parameters for UpdateUpdateSettings.
 type UpdateUpdateSettingsParams struct {
+	// Urgent Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+	// step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+	// (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+	Urgent *RolloutUrgent `form:"urgent,omitempty" json:"urgent,omitempty"`
+
+	// Reason Why the change skips the staged rollout (2 to 500 characters); required with urgent.
+	Reason       *RolloutReason                         `form:"reason,omitempty" json:"reason,omitempty"`
 	XPaddockCSRF UpdateUpdateSettingsParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
 }
 
@@ -11572,6 +14009,183 @@ type ListSoftwareParamsPageSize int
 
 // ListSoftwareParamsSort defines parameters for ListSoftware.
 type ListSoftwareParamsSort string
+
+// ListSoftwareAssignmentsParams defines parameters for ListSoftwareAssignments.
+type ListSoftwareAssignmentsParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                                  `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListSoftwareAssignmentsParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListSoftwareAssignmentsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// CatalogEntryId Only assignments of this catalog entry.
+	CatalogEntryId *SoftwareEntryFilter `form:"catalog_entry_id,omitempty" json:"catalog_entry_id,omitempty"`
+
+	// DeviceGroupId Only definitions scoped to this device group.
+	DeviceGroupId *DeviceGroupFilter `form:"device_group_id,omitempty" json:"device_group_id,omitempty"`
+
+	// Intent Only assignments with this intent.
+	Intent *SoftwareIntentFilter `form:"intent,omitempty" json:"intent,omitempty"`
+}
+
+// ListSoftwareAssignmentsParamsPageSize defines parameters for ListSoftwareAssignments.
+type ListSoftwareAssignmentsParamsPageSize int
+
+// ListSoftwareAssignmentsParamsSort defines parameters for ListSoftwareAssignments.
+type ListSoftwareAssignmentsParamsSort string
+
+// CreateSoftwareAssignmentParams defines parameters for CreateSoftwareAssignment.
+type CreateSoftwareAssignmentParams struct {
+	XPaddockCSRF CreateSoftwareAssignmentParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// CreateSoftwareAssignmentParamsXPaddockCSRF defines parameters for CreateSoftwareAssignment.
+type CreateSoftwareAssignmentParamsXPaddockCSRF string
+
+// DeleteSoftwareAssignmentParams defines parameters for DeleteSoftwareAssignment.
+type DeleteSoftwareAssignmentParams struct {
+	XPaddockCSRF DeleteSoftwareAssignmentParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// DeleteSoftwareAssignmentParamsXPaddockCSRF defines parameters for DeleteSoftwareAssignment.
+type DeleteSoftwareAssignmentParamsXPaddockCSRF string
+
+// UpdateSoftwareAssignmentParams defines parameters for UpdateSoftwareAssignment.
+type UpdateSoftwareAssignmentParams struct {
+	XPaddockCSRF UpdateSoftwareAssignmentParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// UpdateSoftwareAssignmentParamsXPaddockCSRF defines parameters for UpdateSoftwareAssignment.
+type UpdateSoftwareAssignmentParamsXPaddockCSRF string
+
+// ListSoftwareCatalogParams defines parameters for ListSoftwareCatalog.
+type ListSoftwareCatalogParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                              `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListSoftwareCatalogParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListSoftwareCatalogParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// Category Only entries of this category.
+	Category *SoftwareCategoryFilter `form:"category,omitempty" json:"category,omitempty"`
+
+	// SourceId Only entries that use this package source.
+	SourceId *SoftwareSourceFilter `form:"source_id,omitempty" json:"source_id,omitempty"`
+}
+
+// ListSoftwareCatalogParamsPageSize defines parameters for ListSoftwareCatalog.
+type ListSoftwareCatalogParamsPageSize int
+
+// ListSoftwareCatalogParamsSort defines parameters for ListSoftwareCatalog.
+type ListSoftwareCatalogParamsSort string
+
+// CreateSoftwareCatalogEntryParams defines parameters for CreateSoftwareCatalogEntry.
+type CreateSoftwareCatalogEntryParams struct {
+	XPaddockCSRF CreateSoftwareCatalogEntryParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// CreateSoftwareCatalogEntryParamsXPaddockCSRF defines parameters for CreateSoftwareCatalogEntry.
+type CreateSoftwareCatalogEntryParamsXPaddockCSRF string
+
+// DeleteSoftwareCatalogEntryParams defines parameters for DeleteSoftwareCatalogEntry.
+type DeleteSoftwareCatalogEntryParams struct {
+	XPaddockCSRF DeleteSoftwareCatalogEntryParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// DeleteSoftwareCatalogEntryParamsXPaddockCSRF defines parameters for DeleteSoftwareCatalogEntry.
+type DeleteSoftwareCatalogEntryParamsXPaddockCSRF string
+
+// UpdateSoftwareCatalogEntryParams defines parameters for UpdateSoftwareCatalogEntry.
+type UpdateSoftwareCatalogEntryParams struct {
+	XPaddockCSRF UpdateSoftwareCatalogEntryParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// UpdateSoftwareCatalogEntryParamsXPaddockCSRF defines parameters for UpdateSoftwareCatalogEntry.
+type UpdateSoftwareCatalogEntryParamsXPaddockCSRF string
+
+// ListSoftwareCatalogDevicesParams defines parameters for ListSoftwareCatalogDevices.
+type ListSoftwareCatalogDevicesParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                                     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListSoftwareCatalogDevicesParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The hostname, then the device id, are the tie-breakers.
+	Sort *ListSoftwareCatalogDevicesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// State Only entries in this state, reported or derived.
+	State *DeviceSoftwareStateFilter `form:"state,omitempty" json:"state,omitempty"`
+
+	// DeviceGroupId Only members of this device group.
+	DeviceGroupId *openapi_types.UUID `form:"device_group_id,omitempty" json:"device_group_id,omitempty"`
+}
+
+// ListSoftwareCatalogDevicesParamsPageSize defines parameters for ListSoftwareCatalogDevices.
+type ListSoftwareCatalogDevicesParamsPageSize int
+
+// ListSoftwareCatalogDevicesParamsSort defines parameters for ListSoftwareCatalogDevices.
+type ListSoftwareCatalogDevicesParamsSort string
+
+// SetSoftwareCatalogIconParams defines parameters for SetSoftwareCatalogIcon.
+type SetSoftwareCatalogIconParams struct {
+	XPaddockCSRF SetSoftwareCatalogIconParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// SetSoftwareCatalogIconParamsXPaddockCSRF defines parameters for SetSoftwareCatalogIcon.
+type SetSoftwareCatalogIconParamsXPaddockCSRF string
+
+// ListSoftwareSourcesParams defines parameters for ListSoftwareSources.
+type ListSoftwareSourcesParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                              `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListSoftwareSourcesParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListSoftwareSourcesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+}
+
+// ListSoftwareSourcesParamsPageSize defines parameters for ListSoftwareSources.
+type ListSoftwareSourcesParamsPageSize int
+
+// ListSoftwareSourcesParamsSort defines parameters for ListSoftwareSources.
+type ListSoftwareSourcesParamsSort string
+
+// CreateSoftwareSourceParams defines parameters for CreateSoftwareSource.
+type CreateSoftwareSourceParams struct {
+	XPaddockCSRF CreateSoftwareSourceParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// CreateSoftwareSourceParamsXPaddockCSRF defines parameters for CreateSoftwareSource.
+type CreateSoftwareSourceParamsXPaddockCSRF string
+
+// DeleteSoftwareSourceParams defines parameters for DeleteSoftwareSource.
+type DeleteSoftwareSourceParams struct {
+	XPaddockCSRF DeleteSoftwareSourceParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// DeleteSoftwareSourceParamsXPaddockCSRF defines parameters for DeleteSoftwareSource.
+type DeleteSoftwareSourceParamsXPaddockCSRF string
+
+// UpdateSoftwareSourceParams defines parameters for UpdateSoftwareSource.
+type UpdateSoftwareSourceParams struct {
+	XPaddockCSRF UpdateSoftwareSourceParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// UpdateSoftwareSourceParamsXPaddockCSRF defines parameters for UpdateSoftwareSource.
+type UpdateSoftwareSourceParamsXPaddockCSRF string
 
 // ListUpstreamGroupsParams defines parameters for ListUpstreamGroups.
 type ListUpstreamGroupsParams struct {
@@ -11850,6 +14464,9 @@ type GenerateAutoinstallJSONRequestBody = AutoinstallRequest
 // ApplyConfigJSONRequestBody defines body for ApplyConfig for application/json ContentType.
 type ApplyConfigJSONRequestBody = ConfigDocument
 
+// HaltConfigRolloutJSONRequestBody defines body for HaltConfigRollout for application/json ContentType.
+type HaltConfigRolloutJSONRequestBody = ConfigRolloutHalt
+
 // CreateDeviceGroupJSONRequestBody defines body for CreateDeviceGroup for application/json ContentType.
 type CreateDeviceGroupJSONRequestBody = DeviceGroupCreate
 
@@ -11873,6 +14490,9 @@ type EncryptDeviceJSONRequestBody = DeviceEncryptRequest
 
 // CancelDeviceEncryptionJSONRequestBody defines body for CancelDeviceEncryption for application/json ContentType.
 type CancelDeviceEncryptionJSONRequestBody = DeviceEncryptCancelRequest
+
+// EnforceDeviceJSONRequestBody defines body for EnforceDevice for application/json ContentType.
+type EnforceDeviceJSONRequestBody = DeviceEnforce
 
 // SetDeviceGroupsJSONRequestBody defines body for SetDeviceGroups for application/json ContentType.
 type SetDeviceGroupsJSONRequestBody = DeviceGroupsUpdate
@@ -11976,11 +14596,32 @@ type UpdateMcpSettingsJSONRequestBody = McpSettingsInput
 // UpdatePrivacySettingsJSONRequestBody defines body for UpdatePrivacySettings for application/json ContentType.
 type UpdatePrivacySettingsJSONRequestBody = PrivacySettingsUpdate
 
+// UpdateRolloutSettingsJSONRequestBody defines body for UpdateRolloutSettings for application/json ContentType.
+type UpdateRolloutSettingsJSONRequestBody = RolloutSettingsUpdate
+
 // UpdateUpdateSettingsJSONRequestBody defines body for UpdateUpdateSettings for application/json ContentType.
 type UpdateUpdateSettingsJSONRequestBody = UpdateSettingsUpdate
 
 // UpdateWatchedUnitsJSONRequestBody defines body for UpdateWatchedUnits for application/json ContentType.
 type UpdateWatchedUnitsJSONRequestBody = WatchedUnitsUpdate
+
+// CreateSoftwareAssignmentJSONRequestBody defines body for CreateSoftwareAssignment for application/json ContentType.
+type CreateSoftwareAssignmentJSONRequestBody = SoftwareAssignmentCreate
+
+// UpdateSoftwareAssignmentJSONRequestBody defines body for UpdateSoftwareAssignment for application/json ContentType.
+type UpdateSoftwareAssignmentJSONRequestBody = SoftwareAssignmentUpdate
+
+// CreateSoftwareCatalogEntryJSONRequestBody defines body for CreateSoftwareCatalogEntry for application/json ContentType.
+type CreateSoftwareCatalogEntryJSONRequestBody = SoftwareCatalogEntryCreate
+
+// UpdateSoftwareCatalogEntryJSONRequestBody defines body for UpdateSoftwareCatalogEntry for application/json ContentType.
+type UpdateSoftwareCatalogEntryJSONRequestBody = SoftwareCatalogEntryUpdate
+
+// CreateSoftwareSourceJSONRequestBody defines body for CreateSoftwareSource for application/json ContentType.
+type CreateSoftwareSourceJSONRequestBody = SoftwareSourceCreate
+
+// UpdateSoftwareSourceJSONRequestBody defines body for UpdateSoftwareSource for application/json ContentType.
+type UpdateSoftwareSourceJSONRequestBody = SoftwareSourceUpdate
 
 // CreateUserGroupJSONRequestBody defines body for CreateUserGroup for application/json ContentType.
 type CreateUserGroupJSONRequestBody = UserGroupCreate
@@ -12165,11 +14806,38 @@ type ServerInterface interface {
 	// (GET /api/v1/change-sets/{id})
 	GetChangeSet(w http.ResponseWriter, r *http.Request, id Id)
 
+	// (POST /api/v1/change-sets/{id}/revert)
+	RevertChangeSet(w http.ResponseWriter, r *http.Request, id Id, params RevertChangeSetParams)
+
 	// (GET /api/v1/config)
 	GetConfig(w http.ResponseWriter, r *http.Request)
 
 	// (PUT /api/v1/config)
 	ApplyConfig(w http.ResponseWriter, r *http.Request, params ApplyConfigParams)
+
+	// (GET /api/v1/config-rollouts)
+	ListConfigRollouts(w http.ResponseWriter, r *http.Request, params ListConfigRolloutsParams)
+
+	// (GET /api/v1/config-rollouts/{id})
+	GetConfigRollout(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (POST /api/v1/config-rollouts/{id}/advance)
+	AdvanceConfigRollout(w http.ResponseWriter, r *http.Request, id Id, params AdvanceConfigRolloutParams)
+
+	// (POST /api/v1/config-rollouts/{id}/complete)
+	CompleteConfigRollout(w http.ResponseWriter, r *http.Request, id Id, params CompleteConfigRolloutParams)
+
+	// (GET /api/v1/config-rollouts/{id}/devices)
+	ListConfigRolloutDevices(w http.ResponseWriter, r *http.Request, id Id, params ListConfigRolloutDevicesParams)
+
+	// (POST /api/v1/config-rollouts/{id}/halt)
+	HaltConfigRollout(w http.ResponseWriter, r *http.Request, id Id, params HaltConfigRolloutParams)
+
+	// (POST /api/v1/config-rollouts/{id}/resume)
+	ResumeConfigRollout(w http.ResponseWriter, r *http.Request, id Id, params ResumeConfigRolloutParams)
+
+	// (GET /api/v1/config-status)
+	ListConfigStatus(w http.ResponseWriter, r *http.Request, params ListConfigStatusParams)
 
 	// (GET /api/v1/device-groups)
 	ListDeviceGroups(w http.ResponseWriter, r *http.Request, params ListDeviceGroupsParams)
@@ -12201,8 +14869,14 @@ type ServerInterface interface {
 	// (POST /api/v1/devices/{id}/approve)
 	ApproveDevice(w http.ResponseWriter, r *http.Request, id Id, params ApproveDeviceParams)
 
+	// (GET /api/v1/devices/{id}/bundles)
+	ListDeviceBundles(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceBundlesParams)
+
 	// (GET /api/v1/devices/{id}/commands)
 	ListDeviceCommands(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceCommandsParams)
+
+	// (GET /api/v1/devices/{id}/config-status)
+	ListDeviceConfigStatus(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceConfigStatusParams)
 
 	// (POST /api/v1/devices/{id}/destroy)
 	DestroyDevice(w http.ResponseWriter, r *http.Request, id Id, params DestroyDeviceParams)
@@ -12228,6 +14902,9 @@ type ServerInterface interface {
 	// (POST /api/v1/devices/{id}/encrypt/cancel)
 	CancelDeviceEncryption(w http.ResponseWriter, r *http.Request, id Id, params CancelDeviceEncryptionParams)
 
+	// (POST /api/v1/devices/{id}/enforce)
+	EnforceDevice(w http.ResponseWriter, r *http.Request, id Id, params EnforceDeviceParams)
+
 	// (PUT /api/v1/devices/{id}/groups)
 	SetDeviceGroups(w http.ResponseWriter, r *http.Request, id Id, params SetDeviceGroupsParams)
 
@@ -12251,6 +14928,9 @@ type ServerInterface interface {
 
 	// (GET /api/v1/devices/{id}/logins)
 	ListDeviceLogins(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceLoginsParams)
+
+	// (GET /api/v1/devices/{id}/managed-software)
+	ListDeviceManagedSoftware(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceManagedSoftwareParams)
 
 	// (PUT /api/v1/devices/{id}/name)
 	SetDeviceName(w http.ResponseWriter, r *http.Request, id Id, params SetDeviceNameParams)
@@ -12501,6 +15181,12 @@ type ServerInterface interface {
 	// (PUT /api/v1/settings/privacy)
 	UpdatePrivacySettings(w http.ResponseWriter, r *http.Request, params UpdatePrivacySettingsParams)
 
+	// (GET /api/v1/settings/rollout)
+	GetRolloutSettings(w http.ResponseWriter, r *http.Request)
+
+	// (PUT /api/v1/settings/rollout)
+	UpdateRolloutSettings(w http.ResponseWriter, r *http.Request, params UpdateRolloutSettingsParams)
+
 	// (GET /api/v1/settings/updates)
 	GetUpdateSettings(w http.ResponseWriter, r *http.Request)
 
@@ -12515,6 +15201,60 @@ type ServerInterface interface {
 
 	// (GET /api/v1/software)
 	ListSoftware(w http.ResponseWriter, r *http.Request, params ListSoftwareParams)
+
+	// (GET /api/v1/software-assignments)
+	ListSoftwareAssignments(w http.ResponseWriter, r *http.Request, params ListSoftwareAssignmentsParams)
+
+	// (POST /api/v1/software-assignments)
+	CreateSoftwareAssignment(w http.ResponseWriter, r *http.Request, params CreateSoftwareAssignmentParams)
+
+	// (DELETE /api/v1/software-assignments/{id})
+	DeleteSoftwareAssignment(w http.ResponseWriter, r *http.Request, id Id, params DeleteSoftwareAssignmentParams)
+
+	// (GET /api/v1/software-assignments/{id})
+	GetSoftwareAssignment(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (PATCH /api/v1/software-assignments/{id})
+	UpdateSoftwareAssignment(w http.ResponseWriter, r *http.Request, id Id, params UpdateSoftwareAssignmentParams)
+
+	// (GET /api/v1/software-catalog)
+	ListSoftwareCatalog(w http.ResponseWriter, r *http.Request, params ListSoftwareCatalogParams)
+
+	// (POST /api/v1/software-catalog)
+	CreateSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request, params CreateSoftwareCatalogEntryParams)
+
+	// (DELETE /api/v1/software-catalog/{id})
+	DeleteSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request, id Id, params DeleteSoftwareCatalogEntryParams)
+
+	// (GET /api/v1/software-catalog/{id})
+	GetSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (PATCH /api/v1/software-catalog/{id})
+	UpdateSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request, id Id, params UpdateSoftwareCatalogEntryParams)
+
+	// (GET /api/v1/software-catalog/{id}/devices)
+	ListSoftwareCatalogDevices(w http.ResponseWriter, r *http.Request, id Id, params ListSoftwareCatalogDevicesParams)
+
+	// (GET /api/v1/software-catalog/{id}/icon)
+	GetSoftwareCatalogIcon(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (PUT /api/v1/software-catalog/{id}/icon)
+	SetSoftwareCatalogIcon(w http.ResponseWriter, r *http.Request, id Id, params SetSoftwareCatalogIconParams)
+
+	// (GET /api/v1/software-sources)
+	ListSoftwareSources(w http.ResponseWriter, r *http.Request, params ListSoftwareSourcesParams)
+
+	// (POST /api/v1/software-sources)
+	CreateSoftwareSource(w http.ResponseWriter, r *http.Request, params CreateSoftwareSourceParams)
+
+	// (DELETE /api/v1/software-sources/{id})
+	DeleteSoftwareSource(w http.ResponseWriter, r *http.Request, id Id, params DeleteSoftwareSourceParams)
+
+	// (GET /api/v1/software-sources/{id})
+	GetSoftwareSource(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (PATCH /api/v1/software-sources/{id})
+	UpdateSoftwareSource(w http.ResponseWriter, r *http.Request, id Id, params UpdateSoftwareSourceParams)
 
 	// (GET /api/v1/upstream-groups)
 	ListUpstreamGroups(w http.ResponseWriter, r *http.Request, params ListUpstreamGroupsParams)
@@ -15578,6 +18318,19 @@ func (siw *ServerInterfaceWrapper) ListChangeSets(w http.ResponseWriter, r *http
 		return
 	}
 
+	// ------------- Optional query parameter "rollout" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "rollout", r.URL.Query(), &params.Rollout, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "rollout"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "rollout", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListChangeSets(w, r, params)
 	}))
@@ -15615,6 +18368,112 @@ func (siw *ServerInterfaceWrapper) GetChangeSet(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// RevertChangeSet operation middleware
+func (siw *ServerInterfaceWrapper) RevertChangeSet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RevertChangeSetParams
+
+	// ------------- Optional query parameter "dry_run" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "dry_run", r.URL.Query(), &params.DryRun, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "dry_run"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "dry_run", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "expected_plan" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "expected_plan", r.URL.Query(), &params.ExpectedPlan, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "expected_plan"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "expected_plan", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF RevertChangeSetParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevertChangeSet(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetConfig operation middleware
 func (siw *ServerInterfaceWrapper) GetConfig(w http.ResponseWriter, r *http.Request) {
 
@@ -15637,6 +18496,32 @@ func (siw *ServerInterfaceWrapper) ApplyConfig(w http.ResponseWriter, r *http.Re
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ApplyConfigParams
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
 
 	// ------------- Optional query parameter "dry_run" -------------
 
@@ -15691,6 +18576,525 @@ func (siw *ServerInterfaceWrapper) ApplyConfig(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ApplyConfig(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListConfigRollouts operation middleware
+func (siw *ServerInterfaceWrapper) ListConfigRollouts(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListConfigRolloutsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListConfigRollouts(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetConfigRollout operation middleware
+func (siw *ServerInterfaceWrapper) GetConfigRollout(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetConfigRollout(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdvanceConfigRollout operation middleware
+func (siw *ServerInterfaceWrapper) AdvanceConfigRollout(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params AdvanceConfigRolloutParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF AdvanceConfigRolloutParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdvanceConfigRollout(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CompleteConfigRollout operation middleware
+func (siw *ServerInterfaceWrapper) CompleteConfigRollout(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CompleteConfigRolloutParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF CompleteConfigRolloutParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompleteConfigRollout(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListConfigRolloutDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListConfigRolloutDevices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListConfigRolloutDevicesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "in_wave" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "in_wave", r.URL.Query(), &params.InWave, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "in_wave"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "in_wave", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "report_outcome" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "report_outcome", r.URL.Query(), &params.ReportOutcome, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "report_outcome"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "report_outcome", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListConfigRolloutDevices(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HaltConfigRollout operation middleware
+func (siw *ServerInterfaceWrapper) HaltConfigRollout(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params HaltConfigRolloutParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF HaltConfigRolloutParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HaltConfigRollout(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResumeConfigRollout operation middleware
+func (siw *ServerInterfaceWrapper) ResumeConfigRollout(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ResumeConfigRolloutParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF ResumeConfigRolloutParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResumeConfigRollout(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListConfigStatus operation middleware
+func (siw *ServerInterfaceWrapper) ListConfigStatus(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListConfigStatusParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListConfigStatus(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -16251,6 +19655,32 @@ func (siw *ServerInterfaceWrapper) ListDevices(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// ------------- Optional query parameter "enrollment_method" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "enrollment_method", r.URL.Query(), &params.EnrollmentMethod, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "enrollment_method"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "enrollment_method", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "config_mode" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "config_mode", r.URL.Query(), &params.ConfigMode, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "config_mode"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "config_mode", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListDevices(w, r, params)
 	}))
@@ -16333,6 +19763,100 @@ func (siw *ServerInterfaceWrapper) ApproveDevice(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ApproveDevice(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListDeviceBundles operation middleware
+func (siw *ServerInterfaceWrapper) ListDeviceBundles(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDeviceBundlesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "outcome" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "outcome", r.URL.Query(), &params.Outcome, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "outcome"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "outcome", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDeviceBundles(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -16440,6 +19964,100 @@ func (siw *ServerInterfaceWrapper) ListDeviceCommands(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListDeviceCommands(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListDeviceConfigStatus operation middleware
+func (siw *ServerInterfaceWrapper) ListDeviceConfigStatus(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDeviceConfigStatusParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDeviceConfigStatus(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -16788,6 +20406,60 @@ func (siw *ServerInterfaceWrapper) CancelDeviceEncryption(w http.ResponseWriter,
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CancelDeviceEncryption(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// EnforceDevice operation middleware
+func (siw *ServerInterfaceWrapper) EnforceDevice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params EnforceDeviceParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF EnforceDeviceParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.EnforceDevice(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -17232,6 +20904,113 @@ func (siw *ServerInterfaceWrapper) ListDeviceLogins(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListDeviceLogins(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListDeviceManagedSoftware operation middleware
+func (siw *ServerInterfaceWrapper) ListDeviceManagedSoftware(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDeviceManagedSoftwareParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "intent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "intent", r.URL.Query(), &params.Intent, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "intent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "intent", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDeviceManagedSoftware(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -18652,6 +22431,32 @@ func (siw *ServerInterfaceWrapper) CreateManagedFile(w http.ResponseWriter, r *h
 	// Parameter object where we will unmarshal all parameters from the context
 	var params CreateManagedFileParams
 
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
+
 	headers := r.Header
 
 	// ------------- Required header parameter "X-Paddock-CSRF" -------------
@@ -18705,6 +22510,32 @@ func (siw *ServerInterfaceWrapper) DeleteManagedFile(w http.ResponseWriter, r *h
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params DeleteManagedFileParams
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
 
 	headers := r.Header
 
@@ -18785,6 +22616,32 @@ func (siw *ServerInterfaceWrapper) UpdateManagedFile(w http.ResponseWriter, r *h
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params UpdateManagedFileParams
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
 
 	headers := r.Header
 
@@ -18970,6 +22827,32 @@ func (siw *ServerInterfaceWrapper) CreateManagedUnit(w http.ResponseWriter, r *h
 	// Parameter object where we will unmarshal all parameters from the context
 	var params CreateManagedUnitParams
 
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
+
 	headers := r.Header
 
 	// ------------- Required header parameter "X-Paddock-CSRF" -------------
@@ -19023,6 +22906,32 @@ func (siw *ServerInterfaceWrapper) DeleteManagedUnit(w http.ResponseWriter, r *h
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params DeleteManagedUnitParams
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
 
 	headers := r.Header
 
@@ -19103,6 +23012,32 @@ func (siw *ServerInterfaceWrapper) UpdateManagedUnit(w http.ResponseWriter, r *h
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params UpdateManagedUnitParams
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
 
 	headers := r.Header
 
@@ -19913,6 +23848,32 @@ func (siw *ServerInterfaceWrapper) CreatePackageHold(w http.ResponseWriter, r *h
 	// Parameter object where we will unmarshal all parameters from the context
 	var params CreatePackageHoldParams
 
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
+
 	headers := r.Header
 
 	// ------------- Required header parameter "X-Paddock-CSRF" -------------
@@ -19966,6 +23927,32 @@ func (siw *ServerInterfaceWrapper) DeletePackageHold(w http.ResponseWriter, r *h
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params DeletePackageHoldParams
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
 
 	headers := r.Header
 
@@ -20046,6 +24033,32 @@ func (siw *ServerInterfaceWrapper) UpdatePackageHold(w http.ResponseWriter, r *h
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params UpdatePackageHoldParams
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
 
 	headers := r.Header
 
@@ -21332,6 +25345,65 @@ func (siw *ServerInterfaceWrapper) UpdatePrivacySettings(w http.ResponseWriter, 
 	handler.ServeHTTP(w, r)
 }
 
+// GetRolloutSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetRolloutSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetRolloutSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateRolloutSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateRolloutSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateRolloutSettingsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF UpdateRolloutSettingsParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateRolloutSettings(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetUpdateSettings operation middleware
 func (siw *ServerInterfaceWrapper) GetUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
@@ -21354,6 +25426,32 @@ func (siw *ServerInterfaceWrapper) UpdateUpdateSettings(w http.ResponseWriter, r
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params UpdateUpdateSettingsParams
+
+	// ------------- Optional query parameter "urgent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "urgent", r.URL.Query(), &params.Urgent, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "urgent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "urgent", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "reason" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "reason", r.URL.Query(), &params.Reason, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "reason"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "reason", Err: err})
+		}
+		return
+	}
 
 	headers := r.Header
 
@@ -21526,6 +25624,1011 @@ func (siw *ServerInterfaceWrapper) ListSoftware(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListSoftware(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSoftwareAssignments operation middleware
+func (siw *ServerInterfaceWrapper) ListSoftwareAssignments(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSoftwareAssignmentsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "catalog_entry_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "catalog_entry_id", r.URL.Query(), &params.CatalogEntryId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "catalog_entry_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "catalog_entry_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "device_group_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "device_group_id", r.URL.Query(), &params.DeviceGroupId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "device_group_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_group_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "intent" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "intent", r.URL.Query(), &params.Intent, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "intent"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "intent", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSoftwareAssignments(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateSoftwareAssignment operation middleware
+func (siw *ServerInterfaceWrapper) CreateSoftwareAssignment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateSoftwareAssignmentParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF CreateSoftwareAssignmentParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSoftwareAssignment(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteSoftwareAssignment operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSoftwareAssignment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteSoftwareAssignmentParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF DeleteSoftwareAssignmentParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteSoftwareAssignment(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSoftwareAssignment operation middleware
+func (siw *ServerInterfaceWrapper) GetSoftwareAssignment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSoftwareAssignment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateSoftwareAssignment operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSoftwareAssignment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateSoftwareAssignmentParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF UpdateSoftwareAssignmentParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateSoftwareAssignment(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSoftwareCatalog operation middleware
+func (siw *ServerInterfaceWrapper) ListSoftwareCatalog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSoftwareCatalogParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "category" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "category", r.URL.Query(), &params.Category, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "category"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "category", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "source_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "source_id", r.URL.Query(), &params.SourceId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "source_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSoftwareCatalog(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateSoftwareCatalogEntry operation middleware
+func (siw *ServerInterfaceWrapper) CreateSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateSoftwareCatalogEntryParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF CreateSoftwareCatalogEntryParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSoftwareCatalogEntry(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteSoftwareCatalogEntry operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteSoftwareCatalogEntryParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF DeleteSoftwareCatalogEntryParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteSoftwareCatalogEntry(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSoftwareCatalogEntry operation middleware
+func (siw *ServerInterfaceWrapper) GetSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSoftwareCatalogEntry(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateSoftwareCatalogEntry operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateSoftwareCatalogEntryParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF UpdateSoftwareCatalogEntryParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateSoftwareCatalogEntry(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSoftwareCatalogDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListSoftwareCatalogDevices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSoftwareCatalogDevicesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "device_group_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "device_group_id", r.URL.Query(), &params.DeviceGroupId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "device_group_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_group_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSoftwareCatalogDevices(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSoftwareCatalogIcon operation middleware
+func (siw *ServerInterfaceWrapper) GetSoftwareCatalogIcon(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSoftwareCatalogIcon(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetSoftwareCatalogIcon operation middleware
+func (siw *ServerInterfaceWrapper) SetSoftwareCatalogIcon(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetSoftwareCatalogIconParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF SetSoftwareCatalogIconParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSoftwareCatalogIcon(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSoftwareSources operation middleware
+func (siw *ServerInterfaceWrapper) ListSoftwareSources(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSoftwareSourcesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSoftwareSources(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateSoftwareSource operation middleware
+func (siw *ServerInterfaceWrapper) CreateSoftwareSource(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateSoftwareSourceParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF CreateSoftwareSourceParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSoftwareSource(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteSoftwareSource operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSoftwareSource(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteSoftwareSourceParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF DeleteSoftwareSourceParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteSoftwareSource(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSoftwareSource operation middleware
+func (siw *ServerInterfaceWrapper) GetSoftwareSource(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSoftwareSource(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateSoftwareSource operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSoftwareSource(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateSoftwareSourceParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF UpdateSoftwareSourceParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateSoftwareSource(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -22937,6 +28040,14 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/config", wrapper.ApplyConfig)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/change-sets", wrapper.ListChangeSets)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/change-sets/{id}", wrapper.GetChangeSet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/change-sets/{id}/revert", wrapper.RevertChangeSet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/config-rollouts", wrapper.ListConfigRollouts)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/config-rollouts/{id}", wrapper.GetConfigRollout)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/config-rollouts/{id}/devices", wrapper.ListConfigRolloutDevices)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/config-rollouts/{id}/halt", wrapper.HaltConfigRollout)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/config-rollouts/{id}/resume", wrapper.ResumeConfigRollout)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/config-rollouts/{id}/advance", wrapper.AdvanceConfigRollout)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/config-rollouts/{id}/complete", wrapper.CompleteConfigRollout)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/autoinstall", wrapper.GenerateAutoinstall)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices", wrapper.ListDevices)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}", wrapper.GetDevice)
@@ -22946,6 +28057,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/reject", wrapper.RejectDevice)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/release-quarantine", wrapper.ReleaseDeviceQuarantine)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/retire", wrapper.RetireDevice)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/enforce", wrapper.EnforceDevice)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/update-agent", wrapper.UpdateDeviceAgent)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/uninstall", wrapper.UninstallDevice)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/uninstall/cancel", wrapper.CancelDeviceUninstall)
@@ -22953,6 +28065,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/encrypt/cancel", wrapper.CancelDeviceEncryption)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/devices/{id}/groups", wrapper.SetDeviceGroups)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/logins", wrapper.ListDeviceLogins)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/config-status", wrapper.ListDeviceConfigStatus)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/bundles", wrapper.ListDeviceBundles)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/devices/{id}/owners", wrapper.SetDeviceOwners)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/devices/{id}/name", wrapper.SetDeviceName)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/effective-config", wrapper.GetDeviceEffectiveConfig)
@@ -22996,6 +28110,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/settings/mcp", wrapper.UpdateMcpSettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/settings/updates", wrapper.GetUpdateSettings)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/settings/updates", wrapper.UpdateUpdateSettings)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/settings/rollout", wrapper.GetRolloutSettings)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/settings/rollout", wrapper.UpdateRolloutSettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/settings/privacy", wrapper.GetPrivacySettings)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/settings/privacy", wrapper.UpdatePrivacySettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/package-holds", wrapper.ListPackageHolds)
@@ -23003,6 +28119,24 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/package-holds/{id}", wrapper.DeletePackageHold)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/package-holds/{id}", wrapper.GetPackageHold)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/package-holds/{id}", wrapper.UpdatePackageHold)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software-sources", wrapper.ListSoftwareSources)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/software-sources", wrapper.CreateSoftwareSource)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/software-sources/{id}", wrapper.DeleteSoftwareSource)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software-sources/{id}", wrapper.GetSoftwareSource)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/software-sources/{id}", wrapper.UpdateSoftwareSource)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software-catalog", wrapper.ListSoftwareCatalog)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/software-catalog", wrapper.CreateSoftwareCatalogEntry)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/software-catalog/{id}", wrapper.DeleteSoftwareCatalogEntry)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software-catalog/{id}", wrapper.GetSoftwareCatalogEntry)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/software-catalog/{id}", wrapper.UpdateSoftwareCatalogEntry)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software-catalog/{id}/icon", wrapper.GetSoftwareCatalogIcon)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/software-catalog/{id}/icon", wrapper.SetSoftwareCatalogIcon)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software-catalog/{id}/devices", wrapper.ListSoftwareCatalogDevices)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software-assignments", wrapper.ListSoftwareAssignments)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/software-assignments", wrapper.CreateSoftwareAssignment)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/software-assignments/{id}", wrapper.DeleteSoftwareAssignment)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software-assignments/{id}", wrapper.GetSoftwareAssignment)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/software-assignments/{id}", wrapper.UpdateSoftwareAssignment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/overview", wrapper.GetOverview)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/security-review", wrapper.GetSecurityReview)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/attention/devices", wrapper.ListAttentionDevices)
@@ -23045,7 +28179,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/devices/{id}/disk/header", wrapper.DownloadDeviceHeader)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/effective-sudo", wrapper.GetDeviceEffectiveSudo)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/software", wrapper.ListDeviceSoftware)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/managed-software", wrapper.ListDeviceManagedSoftware)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/vulnerabilities", wrapper.ListDeviceVulnerabilities)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/config-status", wrapper.ListConfigStatus)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/software", wrapper.ListSoftware)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/vulnerabilities", wrapper.ListVulnerabilities)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/vulnerabilities/summary", wrapper.GetVulnerabilitySummary)
@@ -27507,6 +32643,115 @@ func (response GetChangeSet404ApplicationProblemPlusJSONResponse) VisitGetChange
 	return err
 }
 
+type RevertChangeSetRequestObject struct {
+	Id     Id `json:"id"`
+	Params RevertChangeSetParams
+}
+
+type RevertChangeSetResponseObject interface {
+	VisitRevertChangeSetResponse(w http.ResponseWriter) error
+}
+
+type RevertChangeSet200JSONResponse ConfigApplyResult
+
+func (response RevertChangeSet200JSONResponse) VisitRevertChangeSetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevertChangeSet400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RevertChangeSet400ApplicationProblemPlusJSONResponse) VisitRevertChangeSetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevertChangeSet401ApplicationProblemPlusJSONResponse Problem
+
+func (response RevertChangeSet401ApplicationProblemPlusJSONResponse) VisitRevertChangeSetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevertChangeSet403ApplicationProblemPlusJSONResponse Problem
+
+func (response RevertChangeSet403ApplicationProblemPlusJSONResponse) VisitRevertChangeSetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevertChangeSet404ApplicationProblemPlusJSONResponse Problem
+
+func (response RevertChangeSet404ApplicationProblemPlusJSONResponse) VisitRevertChangeSetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevertChangeSet409ApplicationProblemPlusJSONResponse Problem
+
+func (response RevertChangeSet409ApplicationProblemPlusJSONResponse) VisitRevertChangeSetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevertChangeSet412ApplicationProblemPlusJSONResponse Problem
+
+func (response RevertChangeSet412ApplicationProblemPlusJSONResponse) VisitRevertChangeSetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(412)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetConfigRequestObject struct {
 }
 
@@ -27663,6 +32908,680 @@ func (response ApplyConfig422ApplicationProblemPlusJSONResponse) VisitApplyConfi
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRolloutsRequestObject struct {
+	Params ListConfigRolloutsParams
+}
+
+type ListConfigRolloutsResponseObject interface {
+	VisitListConfigRolloutsResponse(w http.ResponseWriter) error
+}
+
+type ListConfigRollouts200JSONResponse ConfigRolloutPage
+
+func (response ListConfigRollouts200JSONResponse) VisitListConfigRolloutsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRollouts400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListConfigRollouts400ApplicationProblemPlusJSONResponse) VisitListConfigRolloutsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRollouts401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListConfigRollouts401ApplicationProblemPlusJSONResponse) VisitListConfigRolloutsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRollouts403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListConfigRollouts403ApplicationProblemPlusJSONResponse) VisitListConfigRolloutsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigRolloutRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetConfigRolloutResponseObject interface {
+	VisitGetConfigRolloutResponse(w http.ResponseWriter) error
+}
+
+type GetConfigRollout200JSONResponse ConfigRolloutDetail
+
+func (response GetConfigRollout200JSONResponse) VisitGetConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigRollout400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetConfigRollout400ApplicationProblemPlusJSONResponse) VisitGetConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigRollout401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetConfigRollout401ApplicationProblemPlusJSONResponse) VisitGetConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigRollout403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetConfigRollout403ApplicationProblemPlusJSONResponse) VisitGetConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigRollout404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetConfigRollout404ApplicationProblemPlusJSONResponse) VisitGetConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AdvanceConfigRolloutRequestObject struct {
+	Id     Id `json:"id"`
+	Params AdvanceConfigRolloutParams
+}
+
+type AdvanceConfigRolloutResponseObject interface {
+	VisitAdvanceConfigRolloutResponse(w http.ResponseWriter) error
+}
+
+type AdvanceConfigRollout200JSONResponse ConfigRollout
+
+func (response AdvanceConfigRollout200JSONResponse) VisitAdvanceConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AdvanceConfigRollout400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response AdvanceConfigRollout400ApplicationProblemPlusJSONResponse) VisitAdvanceConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AdvanceConfigRollout401ApplicationProblemPlusJSONResponse Problem
+
+func (response AdvanceConfigRollout401ApplicationProblemPlusJSONResponse) VisitAdvanceConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AdvanceConfigRollout403ApplicationProblemPlusJSONResponse Problem
+
+func (response AdvanceConfigRollout403ApplicationProblemPlusJSONResponse) VisitAdvanceConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AdvanceConfigRollout404ApplicationProblemPlusJSONResponse Problem
+
+func (response AdvanceConfigRollout404ApplicationProblemPlusJSONResponse) VisitAdvanceConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AdvanceConfigRollout409ApplicationProblemPlusJSONResponse Problem
+
+func (response AdvanceConfigRollout409ApplicationProblemPlusJSONResponse) VisitAdvanceConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteConfigRolloutRequestObject struct {
+	Id     Id `json:"id"`
+	Params CompleteConfigRolloutParams
+}
+
+type CompleteConfigRolloutResponseObject interface {
+	VisitCompleteConfigRolloutResponse(w http.ResponseWriter) error
+}
+
+type CompleteConfigRollout200JSONResponse ConfigRollout
+
+func (response CompleteConfigRollout200JSONResponse) VisitCompleteConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteConfigRollout400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CompleteConfigRollout400ApplicationProblemPlusJSONResponse) VisitCompleteConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteConfigRollout401ApplicationProblemPlusJSONResponse Problem
+
+func (response CompleteConfigRollout401ApplicationProblemPlusJSONResponse) VisitCompleteConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteConfigRollout403ApplicationProblemPlusJSONResponse Problem
+
+func (response CompleteConfigRollout403ApplicationProblemPlusJSONResponse) VisitCompleteConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteConfigRollout404ApplicationProblemPlusJSONResponse Problem
+
+func (response CompleteConfigRollout404ApplicationProblemPlusJSONResponse) VisitCompleteConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteConfigRollout409ApplicationProblemPlusJSONResponse Problem
+
+func (response CompleteConfigRollout409ApplicationProblemPlusJSONResponse) VisitCompleteConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRolloutDevicesRequestObject struct {
+	Id     Id `json:"id"`
+	Params ListConfigRolloutDevicesParams
+}
+
+type ListConfigRolloutDevicesResponseObject interface {
+	VisitListConfigRolloutDevicesResponse(w http.ResponseWriter) error
+}
+
+type ListConfigRolloutDevices200JSONResponse ConfigRolloutDevicePage
+
+func (response ListConfigRolloutDevices200JSONResponse) VisitListConfigRolloutDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRolloutDevices400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListConfigRolloutDevices400ApplicationProblemPlusJSONResponse) VisitListConfigRolloutDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRolloutDevices401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListConfigRolloutDevices401ApplicationProblemPlusJSONResponse) VisitListConfigRolloutDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRolloutDevices403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListConfigRolloutDevices403ApplicationProblemPlusJSONResponse) VisitListConfigRolloutDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigRolloutDevices404ApplicationProblemPlusJSONResponse Problem
+
+func (response ListConfigRolloutDevices404ApplicationProblemPlusJSONResponse) VisitListConfigRolloutDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltConfigRolloutRequestObject struct {
+	Id     Id `json:"id"`
+	Params HaltConfigRolloutParams
+	Body   *HaltConfigRolloutJSONRequestBody
+}
+
+type HaltConfigRolloutResponseObject interface {
+	VisitHaltConfigRolloutResponse(w http.ResponseWriter) error
+}
+
+type HaltConfigRollout200JSONResponse ConfigRollout
+
+func (response HaltConfigRollout200JSONResponse) VisitHaltConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltConfigRollout400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response HaltConfigRollout400ApplicationProblemPlusJSONResponse) VisitHaltConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltConfigRollout401ApplicationProblemPlusJSONResponse Problem
+
+func (response HaltConfigRollout401ApplicationProblemPlusJSONResponse) VisitHaltConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltConfigRollout403ApplicationProblemPlusJSONResponse Problem
+
+func (response HaltConfigRollout403ApplicationProblemPlusJSONResponse) VisitHaltConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltConfigRollout404ApplicationProblemPlusJSONResponse Problem
+
+func (response HaltConfigRollout404ApplicationProblemPlusJSONResponse) VisitHaltConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltConfigRollout409ApplicationProblemPlusJSONResponse Problem
+
+func (response HaltConfigRollout409ApplicationProblemPlusJSONResponse) VisitHaltConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeConfigRolloutRequestObject struct {
+	Id     Id `json:"id"`
+	Params ResumeConfigRolloutParams
+}
+
+type ResumeConfigRolloutResponseObject interface {
+	VisitResumeConfigRolloutResponse(w http.ResponseWriter) error
+}
+
+type ResumeConfigRollout200JSONResponse ConfigRollout
+
+func (response ResumeConfigRollout200JSONResponse) VisitResumeConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeConfigRollout400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ResumeConfigRollout400ApplicationProblemPlusJSONResponse) VisitResumeConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeConfigRollout401ApplicationProblemPlusJSONResponse Problem
+
+func (response ResumeConfigRollout401ApplicationProblemPlusJSONResponse) VisitResumeConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeConfigRollout403ApplicationProblemPlusJSONResponse Problem
+
+func (response ResumeConfigRollout403ApplicationProblemPlusJSONResponse) VisitResumeConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeConfigRollout404ApplicationProblemPlusJSONResponse Problem
+
+func (response ResumeConfigRollout404ApplicationProblemPlusJSONResponse) VisitResumeConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeConfigRollout409ApplicationProblemPlusJSONResponse Problem
+
+func (response ResumeConfigRollout409ApplicationProblemPlusJSONResponse) VisitResumeConfigRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigStatusRequestObject struct {
+	Params ListConfigStatusParams
+}
+
+type ListConfigStatusResponseObject interface {
+	VisitListConfigStatusResponse(w http.ResponseWriter) error
+}
+
+type ListConfigStatus200JSONResponse ResourceStatusPage
+
+func (response ListConfigStatus200JSONResponse) VisitListConfigStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigStatus400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListConfigStatus400ApplicationProblemPlusJSONResponse) VisitListConfigStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigStatus401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListConfigStatus401ApplicationProblemPlusJSONResponse) VisitListConfigStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigStatus403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListConfigStatus403ApplicationProblemPlusJSONResponse) VisitListConfigStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -27895,6 +33814,20 @@ func (response DeleteDeviceGroup404ApplicationProblemPlusJSONResponse) VisitDele
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteDeviceGroup409ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteDeviceGroup409ApplicationProblemPlusJSONResponse) VisitDeleteDeviceGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -28507,6 +34440,87 @@ func (response ApproveDevice409ApplicationProblemPlusJSONResponse) VisitApproveD
 	return err
 }
 
+type ListDeviceBundlesRequestObject struct {
+	Id     Id `json:"id"`
+	Params ListDeviceBundlesParams
+}
+
+type ListDeviceBundlesResponseObject interface {
+	VisitListDeviceBundlesResponse(w http.ResponseWriter) error
+}
+
+type ListDeviceBundles200JSONResponse DeviceBundlePage
+
+func (response ListDeviceBundles200JSONResponse) VisitListDeviceBundlesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceBundles400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListDeviceBundles400ApplicationProblemPlusJSONResponse) VisitListDeviceBundlesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceBundles401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceBundles401ApplicationProblemPlusJSONResponse) VisitListDeviceBundlesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceBundles403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceBundles403ApplicationProblemPlusJSONResponse) VisitListDeviceBundlesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceBundles404ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceBundles404ApplicationProblemPlusJSONResponse) VisitListDeviceBundlesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListDeviceCommandsRequestObject struct {
 	Id     Id `json:"id"`
 	Params ListDeviceCommandsParams
@@ -28577,6 +34591,87 @@ func (response ListDeviceCommands403ApplicationProblemPlusJSONResponse) VisitLis
 type ListDeviceCommands404ApplicationProblemPlusJSONResponse Problem
 
 func (response ListDeviceCommands404ApplicationProblemPlusJSONResponse) VisitListDeviceCommandsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceConfigStatusRequestObject struct {
+	Id     Id `json:"id"`
+	Params ListDeviceConfigStatusParams
+}
+
+type ListDeviceConfigStatusResponseObject interface {
+	VisitListDeviceConfigStatusResponse(w http.ResponseWriter) error
+}
+
+type ListDeviceConfigStatus200JSONResponse DeviceResourceStatusPage
+
+func (response ListDeviceConfigStatus200JSONResponse) VisitListDeviceConfigStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceConfigStatus400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListDeviceConfigStatus400ApplicationProblemPlusJSONResponse) VisitListDeviceConfigStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceConfigStatus401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceConfigStatus401ApplicationProblemPlusJSONResponse) VisitListDeviceConfigStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceConfigStatus403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceConfigStatus403ApplicationProblemPlusJSONResponse) VisitListDeviceConfigStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceConfigStatus404ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceConfigStatus404ApplicationProblemPlusJSONResponse) VisitListDeviceConfigStatusResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -29392,6 +35487,102 @@ func (response CancelDeviceEncryption422ApplicationProblemPlusJSONResponse) Visi
 	return err
 }
 
+type EnforceDeviceRequestObject struct {
+	Id     Id `json:"id"`
+	Params EnforceDeviceParams
+	Body   *EnforceDeviceJSONRequestBody
+}
+
+type EnforceDeviceResponseObject interface {
+	VisitEnforceDeviceResponse(w http.ResponseWriter) error
+}
+
+type EnforceDevice200JSONResponse struct{ DeviceJSONResponse }
+
+func (response EnforceDevice200JSONResponse) VisitEnforceDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnforceDevice400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response EnforceDevice400ApplicationProblemPlusJSONResponse) VisitEnforceDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnforceDevice401ApplicationProblemPlusJSONResponse Problem
+
+func (response EnforceDevice401ApplicationProblemPlusJSONResponse) VisitEnforceDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnforceDevice403ApplicationProblemPlusJSONResponse Problem
+
+func (response EnforceDevice403ApplicationProblemPlusJSONResponse) VisitEnforceDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnforceDevice404ApplicationProblemPlusJSONResponse Problem
+
+func (response EnforceDevice404ApplicationProblemPlusJSONResponse) VisitEnforceDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnforceDevice409ApplicationProblemPlusJSONResponse Problem
+
+func (response EnforceDevice409ApplicationProblemPlusJSONResponse) VisitEnforceDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SetDeviceGroupsRequestObject struct {
 	Id     Id `json:"id"`
 	Params SetDeviceGroupsParams
@@ -30131,6 +36322,87 @@ func (response ListDeviceLogins403ApplicationProblemPlusJSONResponse) VisitListD
 type ListDeviceLogins404ApplicationProblemPlusJSONResponse Problem
 
 func (response ListDeviceLogins404ApplicationProblemPlusJSONResponse) VisitListDeviceLoginsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceManagedSoftwareRequestObject struct {
+	Id     Id `json:"id"`
+	Params ListDeviceManagedSoftwareParams
+}
+
+type ListDeviceManagedSoftwareResponseObject interface {
+	VisitListDeviceManagedSoftwareResponse(w http.ResponseWriter) error
+}
+
+type ListDeviceManagedSoftware200JSONResponse DeviceManagedSoftwarePage
+
+func (response ListDeviceManagedSoftware200JSONResponse) VisitListDeviceManagedSoftwareResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceManagedSoftware400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListDeviceManagedSoftware400ApplicationProblemPlusJSONResponse) VisitListDeviceManagedSoftwareResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceManagedSoftware401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceManagedSoftware401ApplicationProblemPlusJSONResponse) VisitListDeviceManagedSoftwareResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceManagedSoftware403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceManagedSoftware403ApplicationProblemPlusJSONResponse) VisitListDeviceManagedSoftwareResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceManagedSoftware404ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceManagedSoftware404ApplicationProblemPlusJSONResponse) VisitListDeviceManagedSoftwareResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -32388,6 +38660,20 @@ func (response DeleteManagedFile404ApplicationProblemPlusJSONResponse) VisitDele
 	return err
 }
 
+type DeleteManagedFile409ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteManagedFile409ApplicationProblemPlusJSONResponse) VisitDeleteManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetManagedFileRequestObject struct {
 	Id Id `json:"id"`
 }
@@ -32915,6 +39201,20 @@ func (response DeleteManagedUnit404ApplicationProblemPlusJSONResponse) VisitDele
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedUnit409ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteManagedUnit409ApplicationProblemPlusJSONResponse) VisitDeleteManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -34556,6 +40856,20 @@ func (response DeletePackageHold404ApplicationProblemPlusJSONResponse) VisitDele
 	return err
 }
 
+type DeletePackageHold409ApplicationProblemPlusJSONResponse Problem
+
+func (response DeletePackageHold409ApplicationProblemPlusJSONResponse) VisitDeletePackageHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetPackageHoldRequestObject struct {
 	Id Id `json:"id"`
 }
@@ -34714,6 +41028,20 @@ func (response UpdatePackageHold404ApplicationProblemPlusJSONResponse) VisitUpda
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdatePackageHold409ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdatePackageHold409ApplicationProblemPlusJSONResponse) VisitUpdatePackageHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -36802,6 +43130,138 @@ func (response UpdatePrivacySettings403ApplicationProblemPlusJSONResponse) Visit
 	return err
 }
 
+type GetRolloutSettingsRequestObject struct {
+}
+
+type GetRolloutSettingsResponseObject interface {
+	VisitGetRolloutSettingsResponse(w http.ResponseWriter) error
+}
+
+type GetRolloutSettings200JSONResponse RolloutSettings
+
+func (response GetRolloutSettings200JSONResponse) VisitGetRolloutSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRolloutSettings401ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetRolloutSettings401ApplicationProblemPlusJSONResponse) VisitGetRolloutSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRolloutSettings403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetRolloutSettings403ApplicationProblemPlusJSONResponse) VisitGetRolloutSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateRolloutSettingsRequestObject struct {
+	Params UpdateRolloutSettingsParams
+	Body   *UpdateRolloutSettingsJSONRequestBody
+}
+
+type UpdateRolloutSettingsResponseObject interface {
+	VisitUpdateRolloutSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateRolloutSettings200JSONResponse RolloutSettings
+
+func (response UpdateRolloutSettings200JSONResponse) VisitUpdateRolloutSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateRolloutSettings400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response UpdateRolloutSettings400ApplicationProblemPlusJSONResponse) VisitUpdateRolloutSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateRolloutSettings401ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateRolloutSettings401ApplicationProblemPlusJSONResponse) VisitUpdateRolloutSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateRolloutSettings403ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateRolloutSettings403ApplicationProblemPlusJSONResponse) VisitUpdateRolloutSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateRolloutSettings404ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateRolloutSettings404ApplicationProblemPlusJSONResponse) VisitUpdateRolloutSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetUpdateSettingsRequestObject struct {
 }
 
@@ -36916,6 +43376,20 @@ func (response UpdateUpdateSettings403ApplicationProblemPlusJSONResponse) VisitU
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateUpdateSettings409ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateUpdateSettings409ApplicationProblemPlusJSONResponse) VisitUpdateUpdateSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -37128,6 +43602,1537 @@ func (response ListSoftware403ApplicationProblemPlusJSONResponse) VisitListSoftw
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareAssignmentsRequestObject struct {
+	Params ListSoftwareAssignmentsParams
+}
+
+type ListSoftwareAssignmentsResponseObject interface {
+	VisitListSoftwareAssignmentsResponse(w http.ResponseWriter) error
+}
+
+type ListSoftwareAssignments200JSONResponse SoftwareAssignmentPage
+
+func (response ListSoftwareAssignments200JSONResponse) VisitListSoftwareAssignmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareAssignments400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListSoftwareAssignments400ApplicationProblemPlusJSONResponse) VisitListSoftwareAssignmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareAssignments401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareAssignments401ApplicationProblemPlusJSONResponse) VisitListSoftwareAssignmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareAssignments403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareAssignments403ApplicationProblemPlusJSONResponse) VisitListSoftwareAssignmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareAssignmentRequestObject struct {
+	Params CreateSoftwareAssignmentParams
+	Body   *CreateSoftwareAssignmentJSONRequestBody
+}
+
+type CreateSoftwareAssignmentResponseObject interface {
+	VisitCreateSoftwareAssignmentResponse(w http.ResponseWriter) error
+}
+
+type CreateSoftwareAssignment201ResponseHeaders struct {
+	Location *string
+}
+
+type CreateSoftwareAssignment201JSONResponse struct {
+	Body    SoftwareAssignment
+	Headers CreateSoftwareAssignment201ResponseHeaders
+}
+
+func (response CreateSoftwareAssignment201JSONResponse) VisitCreateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareAssignment400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateSoftwareAssignment400ApplicationProblemPlusJSONResponse) VisitCreateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareAssignment401ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareAssignment401ApplicationProblemPlusJSONResponse) VisitCreateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareAssignment403ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareAssignment403ApplicationProblemPlusJSONResponse) VisitCreateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareAssignment404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareAssignment404ApplicationProblemPlusJSONResponse) VisitCreateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareAssignment409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareAssignment409ApplicationProblemPlusJSONResponse) VisitCreateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareAssignmentRequestObject struct {
+	Id     Id `json:"id"`
+	Params DeleteSoftwareAssignmentParams
+}
+
+type DeleteSoftwareAssignmentResponseObject interface {
+	VisitDeleteSoftwareAssignmentResponse(w http.ResponseWriter) error
+}
+
+type DeleteSoftwareAssignment204Response struct {
+}
+
+func (response DeleteSoftwareAssignment204Response) VisitDeleteSoftwareAssignmentResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSoftwareAssignment400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response DeleteSoftwareAssignment400ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareAssignment401ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareAssignment401ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareAssignment403ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareAssignment403ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareAssignment404ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareAssignment404ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareAssignmentRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetSoftwareAssignmentResponseObject interface {
+	VisitGetSoftwareAssignmentResponse(w http.ResponseWriter) error
+}
+
+type GetSoftwareAssignment200JSONResponse SoftwareAssignment
+
+func (response GetSoftwareAssignment200JSONResponse) VisitGetSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareAssignment400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetSoftwareAssignment400ApplicationProblemPlusJSONResponse) VisitGetSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareAssignment401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareAssignment401ApplicationProblemPlusJSONResponse) VisitGetSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareAssignment403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareAssignment403ApplicationProblemPlusJSONResponse) VisitGetSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareAssignment404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareAssignment404ApplicationProblemPlusJSONResponse) VisitGetSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareAssignmentRequestObject struct {
+	Id     Id `json:"id"`
+	Params UpdateSoftwareAssignmentParams
+	Body   *UpdateSoftwareAssignmentJSONRequestBody
+}
+
+type UpdateSoftwareAssignmentResponseObject interface {
+	VisitUpdateSoftwareAssignmentResponse(w http.ResponseWriter) error
+}
+
+type UpdateSoftwareAssignment200JSONResponse SoftwareAssignment
+
+func (response UpdateSoftwareAssignment200JSONResponse) VisitUpdateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareAssignment400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response UpdateSoftwareAssignment400ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareAssignment401ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareAssignment401ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareAssignment403ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareAssignment403ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareAssignment404ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareAssignment404ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalogRequestObject struct {
+	Params ListSoftwareCatalogParams
+}
+
+type ListSoftwareCatalogResponseObject interface {
+	VisitListSoftwareCatalogResponse(w http.ResponseWriter) error
+}
+
+type ListSoftwareCatalog200JSONResponse SoftwareCatalogEntryPage
+
+func (response ListSoftwareCatalog200JSONResponse) VisitListSoftwareCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalog400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListSoftwareCatalog400ApplicationProblemPlusJSONResponse) VisitListSoftwareCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalog401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareCatalog401ApplicationProblemPlusJSONResponse) VisitListSoftwareCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalog403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareCatalog403ApplicationProblemPlusJSONResponse) VisitListSoftwareCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareCatalogEntryRequestObject struct {
+	Params CreateSoftwareCatalogEntryParams
+	Body   *CreateSoftwareCatalogEntryJSONRequestBody
+}
+
+type CreateSoftwareCatalogEntryResponseObject interface {
+	VisitCreateSoftwareCatalogEntryResponse(w http.ResponseWriter) error
+}
+
+type CreateSoftwareCatalogEntry201ResponseHeaders struct {
+	Location *string
+}
+
+type CreateSoftwareCatalogEntry201JSONResponse struct {
+	Body    SoftwareCatalogEntry
+	Headers CreateSoftwareCatalogEntry201ResponseHeaders
+}
+
+func (response CreateSoftwareCatalogEntry201JSONResponse) VisitCreateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareCatalogEntry400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateSoftwareCatalogEntry400ApplicationProblemPlusJSONResponse) VisitCreateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareCatalogEntry401ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareCatalogEntry401ApplicationProblemPlusJSONResponse) VisitCreateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareCatalogEntry403ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareCatalogEntry403ApplicationProblemPlusJSONResponse) VisitCreateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareCatalogEntry404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareCatalogEntry404ApplicationProblemPlusJSONResponse) VisitCreateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareCatalogEntry409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareCatalogEntry409ApplicationProblemPlusJSONResponse) VisitCreateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareCatalogEntryRequestObject struct {
+	Id     Id `json:"id"`
+	Params DeleteSoftwareCatalogEntryParams
+}
+
+type DeleteSoftwareCatalogEntryResponseObject interface {
+	VisitDeleteSoftwareCatalogEntryResponse(w http.ResponseWriter) error
+}
+
+type DeleteSoftwareCatalogEntry204Response struct {
+}
+
+func (response DeleteSoftwareCatalogEntry204Response) VisitDeleteSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSoftwareCatalogEntry400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response DeleteSoftwareCatalogEntry400ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareCatalogEntry401ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareCatalogEntry401ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareCatalogEntry403ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareCatalogEntry403ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareCatalogEntry404ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareCatalogEntry404ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogEntryRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetSoftwareCatalogEntryResponseObject interface {
+	VisitGetSoftwareCatalogEntryResponse(w http.ResponseWriter) error
+}
+
+type GetSoftwareCatalogEntry200JSONResponse SoftwareCatalogEntry
+
+func (response GetSoftwareCatalogEntry200JSONResponse) VisitGetSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogEntry400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetSoftwareCatalogEntry400ApplicationProblemPlusJSONResponse) VisitGetSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogEntry401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareCatalogEntry401ApplicationProblemPlusJSONResponse) VisitGetSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogEntry403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareCatalogEntry403ApplicationProblemPlusJSONResponse) VisitGetSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogEntry404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareCatalogEntry404ApplicationProblemPlusJSONResponse) VisitGetSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareCatalogEntryRequestObject struct {
+	Id     Id `json:"id"`
+	Params UpdateSoftwareCatalogEntryParams
+	Body   *UpdateSoftwareCatalogEntryJSONRequestBody
+}
+
+type UpdateSoftwareCatalogEntryResponseObject interface {
+	VisitUpdateSoftwareCatalogEntryResponse(w http.ResponseWriter) error
+}
+
+type UpdateSoftwareCatalogEntry200JSONResponse SoftwareCatalogEntry
+
+func (response UpdateSoftwareCatalogEntry200JSONResponse) VisitUpdateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareCatalogEntry400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response UpdateSoftwareCatalogEntry400ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareCatalogEntry401ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareCatalogEntry401ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareCatalogEntry403ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareCatalogEntry403ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareCatalogEntry404ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareCatalogEntry404ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareCatalogEntry409ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareCatalogEntry409ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareCatalogEntryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalogDevicesRequestObject struct {
+	Id     Id `json:"id"`
+	Params ListSoftwareCatalogDevicesParams
+}
+
+type ListSoftwareCatalogDevicesResponseObject interface {
+	VisitListSoftwareCatalogDevicesResponse(w http.ResponseWriter) error
+}
+
+type ListSoftwareCatalogDevices200JSONResponse SoftwareCatalogDevicePage
+
+func (response ListSoftwareCatalogDevices200JSONResponse) VisitListSoftwareCatalogDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalogDevices400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListSoftwareCatalogDevices400ApplicationProblemPlusJSONResponse) VisitListSoftwareCatalogDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalogDevices401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareCatalogDevices401ApplicationProblemPlusJSONResponse) VisitListSoftwareCatalogDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalogDevices403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareCatalogDevices403ApplicationProblemPlusJSONResponse) VisitListSoftwareCatalogDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareCatalogDevices404ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareCatalogDevices404ApplicationProblemPlusJSONResponse) VisitListSoftwareCatalogDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogIconRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetSoftwareCatalogIconResponseObject interface {
+	VisitGetSoftwareCatalogIconResponse(w http.ResponseWriter) error
+}
+
+type GetSoftwareCatalogIcon200ResponseHeaders struct {
+	CacheControl *string
+}
+
+type GetSoftwareCatalogIcon200ImagepngResponse struct {
+	Body          io.Reader
+	Headers       GetSoftwareCatalogIcon200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetSoftwareCatalogIcon200ImagepngResponse) VisitGetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	if response.Headers.CacheControl != nil {
+		w.Header().Set("Cache-Control", fmt.Sprint(*response.Headers.CacheControl))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetSoftwareCatalogIcon400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetSoftwareCatalogIcon400ApplicationProblemPlusJSONResponse) VisitGetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogIcon401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareCatalogIcon401ApplicationProblemPlusJSONResponse) VisitGetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogIcon403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareCatalogIcon403ApplicationProblemPlusJSONResponse) VisitGetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareCatalogIcon404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareCatalogIcon404ApplicationProblemPlusJSONResponse) VisitGetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSoftwareCatalogIconRequestObject struct {
+	Id     Id `json:"id"`
+	Params SetSoftwareCatalogIconParams
+	Body   io.Reader
+}
+
+type SetSoftwareCatalogIconResponseObject interface {
+	VisitSetSoftwareCatalogIconResponse(w http.ResponseWriter) error
+}
+
+type SetSoftwareCatalogIcon204Response struct {
+}
+
+func (response SetSoftwareCatalogIcon204Response) VisitSetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type SetSoftwareCatalogIcon400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response SetSoftwareCatalogIcon400ApplicationProblemPlusJSONResponse) VisitSetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSoftwareCatalogIcon401ApplicationProblemPlusJSONResponse Problem
+
+func (response SetSoftwareCatalogIcon401ApplicationProblemPlusJSONResponse) VisitSetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSoftwareCatalogIcon403ApplicationProblemPlusJSONResponse Problem
+
+func (response SetSoftwareCatalogIcon403ApplicationProblemPlusJSONResponse) VisitSetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSoftwareCatalogIcon404ApplicationProblemPlusJSONResponse Problem
+
+func (response SetSoftwareCatalogIcon404ApplicationProblemPlusJSONResponse) VisitSetSoftwareCatalogIconResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareSourcesRequestObject struct {
+	Params ListSoftwareSourcesParams
+}
+
+type ListSoftwareSourcesResponseObject interface {
+	VisitListSoftwareSourcesResponse(w http.ResponseWriter) error
+}
+
+type ListSoftwareSources200JSONResponse SoftwareSourcePage
+
+func (response ListSoftwareSources200JSONResponse) VisitListSoftwareSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareSources400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListSoftwareSources400ApplicationProblemPlusJSONResponse) VisitListSoftwareSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareSources401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareSources401ApplicationProblemPlusJSONResponse) VisitListSoftwareSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSoftwareSources403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListSoftwareSources403ApplicationProblemPlusJSONResponse) VisitListSoftwareSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareSourceRequestObject struct {
+	Params CreateSoftwareSourceParams
+	Body   *CreateSoftwareSourceJSONRequestBody
+}
+
+type CreateSoftwareSourceResponseObject interface {
+	VisitCreateSoftwareSourceResponse(w http.ResponseWriter) error
+}
+
+type CreateSoftwareSource201ResponseHeaders struct {
+	Location *string
+}
+
+type CreateSoftwareSource201JSONResponse struct {
+	Body    SoftwareSource
+	Headers CreateSoftwareSource201ResponseHeaders
+}
+
+func (response CreateSoftwareSource201JSONResponse) VisitCreateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareSource400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateSoftwareSource400ApplicationProblemPlusJSONResponse) VisitCreateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareSource401ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareSource401ApplicationProblemPlusJSONResponse) VisitCreateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareSource403ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareSource403ApplicationProblemPlusJSONResponse) VisitCreateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareSource409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareSource409ApplicationProblemPlusJSONResponse) VisitCreateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSoftwareSource422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateSoftwareSource422ApplicationProblemPlusJSONResponse) VisitCreateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareSourceRequestObject struct {
+	Id     Id `json:"id"`
+	Params DeleteSoftwareSourceParams
+}
+
+type DeleteSoftwareSourceResponseObject interface {
+	VisitDeleteSoftwareSourceResponse(w http.ResponseWriter) error
+}
+
+type DeleteSoftwareSource204Response struct {
+}
+
+func (response DeleteSoftwareSource204Response) VisitDeleteSoftwareSourceResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSoftwareSource400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response DeleteSoftwareSource400ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareSource401ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareSource401ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareSource403ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareSource403ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareSource404ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareSource404ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSoftwareSource409ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteSoftwareSource409ApplicationProblemPlusJSONResponse) VisitDeleteSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareSourceRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetSoftwareSourceResponseObject interface {
+	VisitGetSoftwareSourceResponse(w http.ResponseWriter) error
+}
+
+type GetSoftwareSource200JSONResponse SoftwareSource
+
+func (response GetSoftwareSource200JSONResponse) VisitGetSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareSource400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetSoftwareSource400ApplicationProblemPlusJSONResponse) VisitGetSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareSource401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareSource401ApplicationProblemPlusJSONResponse) VisitGetSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareSource403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareSource403ApplicationProblemPlusJSONResponse) VisitGetSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSoftwareSource404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetSoftwareSource404ApplicationProblemPlusJSONResponse) VisitGetSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareSourceRequestObject struct {
+	Id     Id `json:"id"`
+	Params UpdateSoftwareSourceParams
+	Body   *UpdateSoftwareSourceJSONRequestBody
+}
+
+type UpdateSoftwareSourceResponseObject interface {
+	VisitUpdateSoftwareSourceResponse(w http.ResponseWriter) error
+}
+
+type UpdateSoftwareSource200JSONResponse SoftwareSource
+
+func (response UpdateSoftwareSource200JSONResponse) VisitUpdateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareSource400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response UpdateSoftwareSource400ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareSource401ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareSource401ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareSource403ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareSource403ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareSource404ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareSource404ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareSource409ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareSource409ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSoftwareSource422ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateSoftwareSource422ApplicationProblemPlusJSONResponse) VisitUpdateSoftwareSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -39147,11 +47152,38 @@ type StrictServerInterface interface {
 	// (GET /api/v1/change-sets/{id})
 	GetChangeSet(ctx context.Context, request GetChangeSetRequestObject) (GetChangeSetResponseObject, error)
 
+	// (POST /api/v1/change-sets/{id}/revert)
+	RevertChangeSet(ctx context.Context, request RevertChangeSetRequestObject) (RevertChangeSetResponseObject, error)
+
 	// (GET /api/v1/config)
 	GetConfig(ctx context.Context, request GetConfigRequestObject) (GetConfigResponseObject, error)
 
 	// (PUT /api/v1/config)
 	ApplyConfig(ctx context.Context, request ApplyConfigRequestObject) (ApplyConfigResponseObject, error)
+
+	// (GET /api/v1/config-rollouts)
+	ListConfigRollouts(ctx context.Context, request ListConfigRolloutsRequestObject) (ListConfigRolloutsResponseObject, error)
+
+	// (GET /api/v1/config-rollouts/{id})
+	GetConfigRollout(ctx context.Context, request GetConfigRolloutRequestObject) (GetConfigRolloutResponseObject, error)
+
+	// (POST /api/v1/config-rollouts/{id}/advance)
+	AdvanceConfigRollout(ctx context.Context, request AdvanceConfigRolloutRequestObject) (AdvanceConfigRolloutResponseObject, error)
+
+	// (POST /api/v1/config-rollouts/{id}/complete)
+	CompleteConfigRollout(ctx context.Context, request CompleteConfigRolloutRequestObject) (CompleteConfigRolloutResponseObject, error)
+
+	// (GET /api/v1/config-rollouts/{id}/devices)
+	ListConfigRolloutDevices(ctx context.Context, request ListConfigRolloutDevicesRequestObject) (ListConfigRolloutDevicesResponseObject, error)
+
+	// (POST /api/v1/config-rollouts/{id}/halt)
+	HaltConfigRollout(ctx context.Context, request HaltConfigRolloutRequestObject) (HaltConfigRolloutResponseObject, error)
+
+	// (POST /api/v1/config-rollouts/{id}/resume)
+	ResumeConfigRollout(ctx context.Context, request ResumeConfigRolloutRequestObject) (ResumeConfigRolloutResponseObject, error)
+
+	// (GET /api/v1/config-status)
+	ListConfigStatus(ctx context.Context, request ListConfigStatusRequestObject) (ListConfigStatusResponseObject, error)
 
 	// (GET /api/v1/device-groups)
 	ListDeviceGroups(ctx context.Context, request ListDeviceGroupsRequestObject) (ListDeviceGroupsResponseObject, error)
@@ -39183,8 +47215,14 @@ type StrictServerInterface interface {
 	// (POST /api/v1/devices/{id}/approve)
 	ApproveDevice(ctx context.Context, request ApproveDeviceRequestObject) (ApproveDeviceResponseObject, error)
 
+	// (GET /api/v1/devices/{id}/bundles)
+	ListDeviceBundles(ctx context.Context, request ListDeviceBundlesRequestObject) (ListDeviceBundlesResponseObject, error)
+
 	// (GET /api/v1/devices/{id}/commands)
 	ListDeviceCommands(ctx context.Context, request ListDeviceCommandsRequestObject) (ListDeviceCommandsResponseObject, error)
+
+	// (GET /api/v1/devices/{id}/config-status)
+	ListDeviceConfigStatus(ctx context.Context, request ListDeviceConfigStatusRequestObject) (ListDeviceConfigStatusResponseObject, error)
 
 	// (POST /api/v1/devices/{id}/destroy)
 	DestroyDevice(ctx context.Context, request DestroyDeviceRequestObject) (DestroyDeviceResponseObject, error)
@@ -39210,6 +47248,9 @@ type StrictServerInterface interface {
 	// (POST /api/v1/devices/{id}/encrypt/cancel)
 	CancelDeviceEncryption(ctx context.Context, request CancelDeviceEncryptionRequestObject) (CancelDeviceEncryptionResponseObject, error)
 
+	// (POST /api/v1/devices/{id}/enforce)
+	EnforceDevice(ctx context.Context, request EnforceDeviceRequestObject) (EnforceDeviceResponseObject, error)
+
 	// (PUT /api/v1/devices/{id}/groups)
 	SetDeviceGroups(ctx context.Context, request SetDeviceGroupsRequestObject) (SetDeviceGroupsResponseObject, error)
 
@@ -39233,6 +47274,9 @@ type StrictServerInterface interface {
 
 	// (GET /api/v1/devices/{id}/logins)
 	ListDeviceLogins(ctx context.Context, request ListDeviceLoginsRequestObject) (ListDeviceLoginsResponseObject, error)
+
+	// (GET /api/v1/devices/{id}/managed-software)
+	ListDeviceManagedSoftware(ctx context.Context, request ListDeviceManagedSoftwareRequestObject) (ListDeviceManagedSoftwareResponseObject, error)
 
 	// (PUT /api/v1/devices/{id}/name)
 	SetDeviceName(ctx context.Context, request SetDeviceNameRequestObject) (SetDeviceNameResponseObject, error)
@@ -39483,6 +47527,12 @@ type StrictServerInterface interface {
 	// (PUT /api/v1/settings/privacy)
 	UpdatePrivacySettings(ctx context.Context, request UpdatePrivacySettingsRequestObject) (UpdatePrivacySettingsResponseObject, error)
 
+	// (GET /api/v1/settings/rollout)
+	GetRolloutSettings(ctx context.Context, request GetRolloutSettingsRequestObject) (GetRolloutSettingsResponseObject, error)
+
+	// (PUT /api/v1/settings/rollout)
+	UpdateRolloutSettings(ctx context.Context, request UpdateRolloutSettingsRequestObject) (UpdateRolloutSettingsResponseObject, error)
+
 	// (GET /api/v1/settings/updates)
 	GetUpdateSettings(ctx context.Context, request GetUpdateSettingsRequestObject) (GetUpdateSettingsResponseObject, error)
 
@@ -39497,6 +47547,60 @@ type StrictServerInterface interface {
 
 	// (GET /api/v1/software)
 	ListSoftware(ctx context.Context, request ListSoftwareRequestObject) (ListSoftwareResponseObject, error)
+
+	// (GET /api/v1/software-assignments)
+	ListSoftwareAssignments(ctx context.Context, request ListSoftwareAssignmentsRequestObject) (ListSoftwareAssignmentsResponseObject, error)
+
+	// (POST /api/v1/software-assignments)
+	CreateSoftwareAssignment(ctx context.Context, request CreateSoftwareAssignmentRequestObject) (CreateSoftwareAssignmentResponseObject, error)
+
+	// (DELETE /api/v1/software-assignments/{id})
+	DeleteSoftwareAssignment(ctx context.Context, request DeleteSoftwareAssignmentRequestObject) (DeleteSoftwareAssignmentResponseObject, error)
+
+	// (GET /api/v1/software-assignments/{id})
+	GetSoftwareAssignment(ctx context.Context, request GetSoftwareAssignmentRequestObject) (GetSoftwareAssignmentResponseObject, error)
+
+	// (PATCH /api/v1/software-assignments/{id})
+	UpdateSoftwareAssignment(ctx context.Context, request UpdateSoftwareAssignmentRequestObject) (UpdateSoftwareAssignmentResponseObject, error)
+
+	// (GET /api/v1/software-catalog)
+	ListSoftwareCatalog(ctx context.Context, request ListSoftwareCatalogRequestObject) (ListSoftwareCatalogResponseObject, error)
+
+	// (POST /api/v1/software-catalog)
+	CreateSoftwareCatalogEntry(ctx context.Context, request CreateSoftwareCatalogEntryRequestObject) (CreateSoftwareCatalogEntryResponseObject, error)
+
+	// (DELETE /api/v1/software-catalog/{id})
+	DeleteSoftwareCatalogEntry(ctx context.Context, request DeleteSoftwareCatalogEntryRequestObject) (DeleteSoftwareCatalogEntryResponseObject, error)
+
+	// (GET /api/v1/software-catalog/{id})
+	GetSoftwareCatalogEntry(ctx context.Context, request GetSoftwareCatalogEntryRequestObject) (GetSoftwareCatalogEntryResponseObject, error)
+
+	// (PATCH /api/v1/software-catalog/{id})
+	UpdateSoftwareCatalogEntry(ctx context.Context, request UpdateSoftwareCatalogEntryRequestObject) (UpdateSoftwareCatalogEntryResponseObject, error)
+
+	// (GET /api/v1/software-catalog/{id}/devices)
+	ListSoftwareCatalogDevices(ctx context.Context, request ListSoftwareCatalogDevicesRequestObject) (ListSoftwareCatalogDevicesResponseObject, error)
+
+	// (GET /api/v1/software-catalog/{id}/icon)
+	GetSoftwareCatalogIcon(ctx context.Context, request GetSoftwareCatalogIconRequestObject) (GetSoftwareCatalogIconResponseObject, error)
+
+	// (PUT /api/v1/software-catalog/{id}/icon)
+	SetSoftwareCatalogIcon(ctx context.Context, request SetSoftwareCatalogIconRequestObject) (SetSoftwareCatalogIconResponseObject, error)
+
+	// (GET /api/v1/software-sources)
+	ListSoftwareSources(ctx context.Context, request ListSoftwareSourcesRequestObject) (ListSoftwareSourcesResponseObject, error)
+
+	// (POST /api/v1/software-sources)
+	CreateSoftwareSource(ctx context.Context, request CreateSoftwareSourceRequestObject) (CreateSoftwareSourceResponseObject, error)
+
+	// (DELETE /api/v1/software-sources/{id})
+	DeleteSoftwareSource(ctx context.Context, request DeleteSoftwareSourceRequestObject) (DeleteSoftwareSourceResponseObject, error)
+
+	// (GET /api/v1/software-sources/{id})
+	GetSoftwareSource(ctx context.Context, request GetSoftwareSourceRequestObject) (GetSoftwareSourceResponseObject, error)
+
+	// (PATCH /api/v1/software-sources/{id})
+	UpdateSoftwareSource(ctx context.Context, request UpdateSoftwareSourceRequestObject) (UpdateSoftwareSourceResponseObject, error)
 
 	// (GET /api/v1/upstream-groups)
 	ListUpstreamGroups(ctx context.Context, request ListUpstreamGroupsRequestObject) (ListUpstreamGroupsResponseObject, error)
@@ -41141,6 +49245,33 @@ func (sh *strictHandler) GetChangeSet(w http.ResponseWriter, r *http.Request, id
 	}
 }
 
+// RevertChangeSet operation middleware
+func (sh *strictHandler) RevertChangeSet(w http.ResponseWriter, r *http.Request, id Id, params RevertChangeSetParams) {
+	var request RevertChangeSetRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevertChangeSet(ctx, request.(RevertChangeSetRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevertChangeSet")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevertChangeSetResponseObject); ok {
+		if err := validResponse.VisitRevertChangeSetResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetConfig operation middleware
 func (sh *strictHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	var request GetConfigRequestObject
@@ -41191,6 +49322,226 @@ func (sh *strictHandler) ApplyConfig(w http.ResponseWriter, r *http.Request, par
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ApplyConfigResponseObject); ok {
 		if err := validResponse.VisitApplyConfigResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListConfigRollouts operation middleware
+func (sh *strictHandler) ListConfigRollouts(w http.ResponseWriter, r *http.Request, params ListConfigRolloutsParams) {
+	var request ListConfigRolloutsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListConfigRollouts(ctx, request.(ListConfigRolloutsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListConfigRollouts")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListConfigRolloutsResponseObject); ok {
+		if err := validResponse.VisitListConfigRolloutsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetConfigRollout operation middleware
+func (sh *strictHandler) GetConfigRollout(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetConfigRolloutRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetConfigRollout(ctx, request.(GetConfigRolloutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetConfigRollout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetConfigRolloutResponseObject); ok {
+		if err := validResponse.VisitGetConfigRolloutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdvanceConfigRollout operation middleware
+func (sh *strictHandler) AdvanceConfigRollout(w http.ResponseWriter, r *http.Request, id Id, params AdvanceConfigRolloutParams) {
+	var request AdvanceConfigRolloutRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdvanceConfigRollout(ctx, request.(AdvanceConfigRolloutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdvanceConfigRollout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdvanceConfigRolloutResponseObject); ok {
+		if err := validResponse.VisitAdvanceConfigRolloutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CompleteConfigRollout operation middleware
+func (sh *strictHandler) CompleteConfigRollout(w http.ResponseWriter, r *http.Request, id Id, params CompleteConfigRolloutParams) {
+	var request CompleteConfigRolloutRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CompleteConfigRollout(ctx, request.(CompleteConfigRolloutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CompleteConfigRollout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CompleteConfigRolloutResponseObject); ok {
+		if err := validResponse.VisitCompleteConfigRolloutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListConfigRolloutDevices operation middleware
+func (sh *strictHandler) ListConfigRolloutDevices(w http.ResponseWriter, r *http.Request, id Id, params ListConfigRolloutDevicesParams) {
+	var request ListConfigRolloutDevicesRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListConfigRolloutDevices(ctx, request.(ListConfigRolloutDevicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListConfigRolloutDevices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListConfigRolloutDevicesResponseObject); ok {
+		if err := validResponse.VisitListConfigRolloutDevicesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// HaltConfigRollout operation middleware
+func (sh *strictHandler) HaltConfigRollout(w http.ResponseWriter, r *http.Request, id Id, params HaltConfigRolloutParams) {
+	var request HaltConfigRolloutRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body HaltConfigRolloutJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.HaltConfigRollout(ctx, request.(HaltConfigRolloutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "HaltConfigRollout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(HaltConfigRolloutResponseObject); ok {
+		if err := validResponse.VisitHaltConfigRolloutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResumeConfigRollout operation middleware
+func (sh *strictHandler) ResumeConfigRollout(w http.ResponseWriter, r *http.Request, id Id, params ResumeConfigRolloutParams) {
+	var request ResumeConfigRolloutRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResumeConfigRollout(ctx, request.(ResumeConfigRolloutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResumeConfigRollout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResumeConfigRolloutResponseObject); ok {
+		if err := validResponse.VisitResumeConfigRolloutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListConfigStatus operation middleware
+func (sh *strictHandler) ListConfigStatus(w http.ResponseWriter, r *http.Request, params ListConfigStatusParams) {
+	var request ListConfigStatusRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListConfigStatus(ctx, request.(ListConfigStatusRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListConfigStatus")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListConfigStatusResponseObject); ok {
+		if err := validResponse.VisitListConfigStatusResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -41484,6 +49835,33 @@ func (sh *strictHandler) ApproveDevice(w http.ResponseWriter, r *http.Request, i
 	}
 }
 
+// ListDeviceBundles operation middleware
+func (sh *strictHandler) ListDeviceBundles(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceBundlesParams) {
+	var request ListDeviceBundlesRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDeviceBundles(ctx, request.(ListDeviceBundlesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDeviceBundles")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDeviceBundlesResponseObject); ok {
+		if err := validResponse.VisitListDeviceBundlesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListDeviceCommands operation middleware
 func (sh *strictHandler) ListDeviceCommands(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceCommandsParams) {
 	var request ListDeviceCommandsRequestObject
@@ -41504,6 +49882,33 @@ func (sh *strictHandler) ListDeviceCommands(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListDeviceCommandsResponseObject); ok {
 		if err := validResponse.VisitListDeviceCommandsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListDeviceConfigStatus operation middleware
+func (sh *strictHandler) ListDeviceConfigStatus(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceConfigStatusParams) {
+	var request ListDeviceConfigStatusRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDeviceConfigStatus(ctx, request.(ListDeviceConfigStatusRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDeviceConfigStatus")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDeviceConfigStatusResponseObject); ok {
+		if err := validResponse.VisitListDeviceConfigStatusResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -41759,6 +50164,40 @@ func (sh *strictHandler) CancelDeviceEncryption(w http.ResponseWriter, r *http.R
 	}
 }
 
+// EnforceDevice operation middleware
+func (sh *strictHandler) EnforceDevice(w http.ResponseWriter, r *http.Request, id Id, params EnforceDeviceParams) {
+	var request EnforceDeviceRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body EnforceDeviceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.EnforceDevice(ctx, request.(EnforceDeviceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "EnforceDevice")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(EnforceDeviceResponseObject); ok {
+		if err := validResponse.VisitEnforceDeviceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // SetDeviceGroups operation middleware
 func (sh *strictHandler) SetDeviceGroups(w http.ResponseWriter, r *http.Request, id Id, params SetDeviceGroupsParams) {
 	var request SetDeviceGroupsRequestObject
@@ -42002,6 +50441,33 @@ func (sh *strictHandler) ListDeviceLogins(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListDeviceLoginsResponseObject); ok {
 		if err := validResponse.VisitListDeviceLoginsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListDeviceManagedSoftware operation middleware
+func (sh *strictHandler) ListDeviceManagedSoftware(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceManagedSoftwareParams) {
+	var request ListDeviceManagedSoftwareRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDeviceManagedSoftware(ctx, request.(ListDeviceManagedSoftwareRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDeviceManagedSoftware")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDeviceManagedSoftwareResponseObject); ok {
+		if err := validResponse.VisitListDeviceManagedSoftwareResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -44386,6 +52852,63 @@ func (sh *strictHandler) UpdatePrivacySettings(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// GetRolloutSettings operation middleware
+func (sh *strictHandler) GetRolloutSettings(w http.ResponseWriter, r *http.Request) {
+	var request GetRolloutSettingsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetRolloutSettings(ctx, request.(GetRolloutSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetRolloutSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetRolloutSettingsResponseObject); ok {
+		if err := validResponse.VisitGetRolloutSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateRolloutSettings operation middleware
+func (sh *strictHandler) UpdateRolloutSettings(w http.ResponseWriter, r *http.Request, params UpdateRolloutSettingsParams) {
+	var request UpdateRolloutSettingsRequestObject
+
+	request.Params = params
+
+	var body UpdateRolloutSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateRolloutSettings(ctx, request.(UpdateRolloutSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateRolloutSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateRolloutSettingsResponseObject); ok {
+		if err := validResponse.VisitUpdateRolloutSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetUpdateSettings operation middleware
 func (sh *strictHandler) GetUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var request GetUpdateSettingsRequestObject
@@ -44519,6 +53042,526 @@ func (sh *strictHandler) ListSoftware(w http.ResponseWriter, r *http.Request, pa
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListSoftwareResponseObject); ok {
 		if err := validResponse.VisitListSoftwareResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSoftwareAssignments operation middleware
+func (sh *strictHandler) ListSoftwareAssignments(w http.ResponseWriter, r *http.Request, params ListSoftwareAssignmentsParams) {
+	var request ListSoftwareAssignmentsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSoftwareAssignments(ctx, request.(ListSoftwareAssignmentsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSoftwareAssignments")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSoftwareAssignmentsResponseObject); ok {
+		if err := validResponse.VisitListSoftwareAssignmentsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSoftwareAssignment operation middleware
+func (sh *strictHandler) CreateSoftwareAssignment(w http.ResponseWriter, r *http.Request, params CreateSoftwareAssignmentParams) {
+	var request CreateSoftwareAssignmentRequestObject
+
+	request.Params = params
+
+	var body CreateSoftwareAssignmentJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSoftwareAssignment(ctx, request.(CreateSoftwareAssignmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSoftwareAssignment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSoftwareAssignmentResponseObject); ok {
+		if err := validResponse.VisitCreateSoftwareAssignmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSoftwareAssignment operation middleware
+func (sh *strictHandler) DeleteSoftwareAssignment(w http.ResponseWriter, r *http.Request, id Id, params DeleteSoftwareAssignmentParams) {
+	var request DeleteSoftwareAssignmentRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSoftwareAssignment(ctx, request.(DeleteSoftwareAssignmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSoftwareAssignment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSoftwareAssignmentResponseObject); ok {
+		if err := validResponse.VisitDeleteSoftwareAssignmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSoftwareAssignment operation middleware
+func (sh *strictHandler) GetSoftwareAssignment(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetSoftwareAssignmentRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSoftwareAssignment(ctx, request.(GetSoftwareAssignmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSoftwareAssignment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSoftwareAssignmentResponseObject); ok {
+		if err := validResponse.VisitGetSoftwareAssignmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateSoftwareAssignment operation middleware
+func (sh *strictHandler) UpdateSoftwareAssignment(w http.ResponseWriter, r *http.Request, id Id, params UpdateSoftwareAssignmentParams) {
+	var request UpdateSoftwareAssignmentRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body UpdateSoftwareAssignmentJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateSoftwareAssignment(ctx, request.(UpdateSoftwareAssignmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateSoftwareAssignment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateSoftwareAssignmentResponseObject); ok {
+		if err := validResponse.VisitUpdateSoftwareAssignmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSoftwareCatalog operation middleware
+func (sh *strictHandler) ListSoftwareCatalog(w http.ResponseWriter, r *http.Request, params ListSoftwareCatalogParams) {
+	var request ListSoftwareCatalogRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSoftwareCatalog(ctx, request.(ListSoftwareCatalogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSoftwareCatalog")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSoftwareCatalogResponseObject); ok {
+		if err := validResponse.VisitListSoftwareCatalogResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSoftwareCatalogEntry operation middleware
+func (sh *strictHandler) CreateSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request, params CreateSoftwareCatalogEntryParams) {
+	var request CreateSoftwareCatalogEntryRequestObject
+
+	request.Params = params
+
+	var body CreateSoftwareCatalogEntryJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSoftwareCatalogEntry(ctx, request.(CreateSoftwareCatalogEntryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSoftwareCatalogEntry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSoftwareCatalogEntryResponseObject); ok {
+		if err := validResponse.VisitCreateSoftwareCatalogEntryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSoftwareCatalogEntry operation middleware
+func (sh *strictHandler) DeleteSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request, id Id, params DeleteSoftwareCatalogEntryParams) {
+	var request DeleteSoftwareCatalogEntryRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSoftwareCatalogEntry(ctx, request.(DeleteSoftwareCatalogEntryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSoftwareCatalogEntry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSoftwareCatalogEntryResponseObject); ok {
+		if err := validResponse.VisitDeleteSoftwareCatalogEntryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSoftwareCatalogEntry operation middleware
+func (sh *strictHandler) GetSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetSoftwareCatalogEntryRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSoftwareCatalogEntry(ctx, request.(GetSoftwareCatalogEntryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSoftwareCatalogEntry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSoftwareCatalogEntryResponseObject); ok {
+		if err := validResponse.VisitGetSoftwareCatalogEntryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateSoftwareCatalogEntry operation middleware
+func (sh *strictHandler) UpdateSoftwareCatalogEntry(w http.ResponseWriter, r *http.Request, id Id, params UpdateSoftwareCatalogEntryParams) {
+	var request UpdateSoftwareCatalogEntryRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body UpdateSoftwareCatalogEntryJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateSoftwareCatalogEntry(ctx, request.(UpdateSoftwareCatalogEntryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateSoftwareCatalogEntry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateSoftwareCatalogEntryResponseObject); ok {
+		if err := validResponse.VisitUpdateSoftwareCatalogEntryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSoftwareCatalogDevices operation middleware
+func (sh *strictHandler) ListSoftwareCatalogDevices(w http.ResponseWriter, r *http.Request, id Id, params ListSoftwareCatalogDevicesParams) {
+	var request ListSoftwareCatalogDevicesRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSoftwareCatalogDevices(ctx, request.(ListSoftwareCatalogDevicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSoftwareCatalogDevices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSoftwareCatalogDevicesResponseObject); ok {
+		if err := validResponse.VisitListSoftwareCatalogDevicesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSoftwareCatalogIcon operation middleware
+func (sh *strictHandler) GetSoftwareCatalogIcon(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetSoftwareCatalogIconRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSoftwareCatalogIcon(ctx, request.(GetSoftwareCatalogIconRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSoftwareCatalogIcon")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSoftwareCatalogIconResponseObject); ok {
+		if err := validResponse.VisitGetSoftwareCatalogIconResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSoftwareCatalogIcon operation middleware
+func (sh *strictHandler) SetSoftwareCatalogIcon(w http.ResponseWriter, r *http.Request, id Id, params SetSoftwareCatalogIconParams) {
+	var request SetSoftwareCatalogIconRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	request.Body = r.Body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSoftwareCatalogIcon(ctx, request.(SetSoftwareCatalogIconRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSoftwareCatalogIcon")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSoftwareCatalogIconResponseObject); ok {
+		if err := validResponse.VisitSetSoftwareCatalogIconResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSoftwareSources operation middleware
+func (sh *strictHandler) ListSoftwareSources(w http.ResponseWriter, r *http.Request, params ListSoftwareSourcesParams) {
+	var request ListSoftwareSourcesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSoftwareSources(ctx, request.(ListSoftwareSourcesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSoftwareSources")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSoftwareSourcesResponseObject); ok {
+		if err := validResponse.VisitListSoftwareSourcesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSoftwareSource operation middleware
+func (sh *strictHandler) CreateSoftwareSource(w http.ResponseWriter, r *http.Request, params CreateSoftwareSourceParams) {
+	var request CreateSoftwareSourceRequestObject
+
+	request.Params = params
+
+	var body CreateSoftwareSourceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSoftwareSource(ctx, request.(CreateSoftwareSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSoftwareSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSoftwareSourceResponseObject); ok {
+		if err := validResponse.VisitCreateSoftwareSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSoftwareSource operation middleware
+func (sh *strictHandler) DeleteSoftwareSource(w http.ResponseWriter, r *http.Request, id Id, params DeleteSoftwareSourceParams) {
+	var request DeleteSoftwareSourceRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSoftwareSource(ctx, request.(DeleteSoftwareSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSoftwareSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSoftwareSourceResponseObject); ok {
+		if err := validResponse.VisitDeleteSoftwareSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSoftwareSource operation middleware
+func (sh *strictHandler) GetSoftwareSource(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetSoftwareSourceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSoftwareSource(ctx, request.(GetSoftwareSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSoftwareSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSoftwareSourceResponseObject); ok {
+		if err := validResponse.VisitGetSoftwareSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateSoftwareSource operation middleware
+func (sh *strictHandler) UpdateSoftwareSource(w http.ResponseWriter, r *http.Request, id Id, params UpdateSoftwareSourceParams) {
+	var request UpdateSoftwareSourceRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body UpdateSoftwareSourceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateSoftwareSource(ctx, request.(UpdateSoftwareSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateSoftwareSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateSoftwareSourceResponseObject); ok {
+		if err := validResponse.VisitUpdateSoftwareSourceResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -45123,892 +54166,1080 @@ func (sh *strictHandler) ListVulnerabilityDevices(w http.ResponseWriter, r *http
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"dOKCGXBGBnDna9r00on2ydKIpWMkGtxg/wYA",
+	"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",
+	"n1wwjf2/AQA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

@@ -188,7 +188,7 @@ func (v *VM) powerDown(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	_, _ = v.SSH(ctx, nil, "sudo systemctl poweroff")
+	_, _ = v.SSHNoRetry(ctx, nil, "sudo systemctl poweroff")
 	// Polled here rather than with lib.sh wait_vm_state, whose state query fails now and then while the VM shuts down
 	// (VM.state retries it; hand test run 3).
 	Until(t, v.Name+" powers off", 10*time.Minute, 5*time.Second, nil, func() bool { return v.state(ctx) == "poweroff" })

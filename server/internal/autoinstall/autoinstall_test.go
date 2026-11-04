@@ -186,6 +186,9 @@ func TestRenderContent(t *testing.T) {
 			if find(cmds, `{"boot_pin_min_length":10,"unlock_mode":"tpm_pin"}`) == nil || find(cmds, "touch", "/target/var/lib/paddock/disk-setup-pending") == nil {
 				t.Error("disk setup configuration or pending marker missing")
 			}
+			if find(cmds, "install", "-m", "0600", "/dev/null", "/target/etc/paddock/autoinstall.marker") == nil {
+				t.Error("autoinstall marker missing: the device would enroll as adopted (report-only)")
+			}
 			if find(cmds, "sed", "/etc/crypttab") == nil || find(cmds, "dracut", "-f", "--regenerate-all") == nil {
 				t.Error("crypttab or initramfs rebuild missing")
 			}

@@ -15,6 +15,32 @@
     "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",
     "saved": "Die Datenschutzeinstellungen wurden gespeichert."
   },
+  "rolloutSettings": {
+    "title": "Rollout-Einstellungen",
+    "intro": "Gestufte Rollouts wenden eine Konfigurationsänderung zuerst auf einen Teil der Geräte an, Welle für Welle, und halten automatisch an, wenn zu viele Geräte fehlschlagen. Sie sind standardmäßig aus. Ein laufender Rollout behält die Werte, mit denen er gestartet wurde.",
+    "general": "Gestufte Rollouts",
+    "enabled": "Konfigurationsänderungen in Wellen ausrollen",
+    "waves": "Wellen",
+    "wavesHint": "Prozentanteile der Geräte, streng aufsteigend und mit 100 endend, höchstens 10 Wellen, durch Kommas getrennt, zum Beispiel 1, 10, 50, 100.",
+    "wavesInvalid": "Geben Sie 1 bis 10 streng aufsteigende ganze Zahlen von 1 bis 100 ein, durch Kommas getrennt und mit 100 endend.",
+    "minWaveMinutes": "Mindestdauer einer Welle",
+    "minWaveMinutesHint": "Eine Welle dauert mindestens so viele Minuten, bevor die nächste beginnt. Mindestens {min} Minuten ({devMin} in einer Entwicklungsumgebung).",
+    "minWaveInvalid": "Geben Sie eine ganze Zahl von Minuten ein, mindestens {min} ({devMin} in einer Entwicklungsumgebung).",
+    "minWaveRefused": "Die Mindestdauer einer Welle ist zu kurz: mindestens {min} Minuten ({devMin} in einer Entwicklungsumgebung).",
+    "thresholds": "Fehlerschwelle",
+    "thresholdPercent": "Fehlerrate, die einen Rollout anhält",
+    "thresholdPercentHint": "Prozent der Geräte einer Welle, die fehlgeschlagen sind (0–100).",
+    "thresholdPercentInvalid": "Geben Sie eine ganze Zahl von 0 bis 100 ein.",
+    "thresholdMin": "Mindestanzahl fehlgeschlagener Geräte",
+    "thresholdMinHint": "Ein Rollout hält nur an, wenn mindestens so viele Geräte fehlgeschlagen sind.",
+    "thresholdMinInvalid": "Geben Sie eine ganze Zahl ein, mindestens 0.",
+    "canary": "Canary-Gruppe",
+    "canaryGroup": "Canary-Gerätegruppe",
+    "canaryHint": "Die Geräte dieser Gruppe erhalten eine Änderung immer zuerst, unabhängig von den Wellen.",
+    "canaryNone": "Keine",
+    "readOnly": "Nur Organisationsadministratoren können die Rollout-Einstellungen ändern.",
+    "saved": "Die Rollout-Einstellungen wurden gespeichert."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent-Updates",
@@ -109,8 +135,10 @@
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
     "privacySettings": "Datenschutz",
+    "rolloutSettings": "Rollouts",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
+    "configStatus": "Konfigurationsstatus",
     "start": "Start",
     "groups": {
       "overview": "Übersicht",
@@ -129,7 +157,10 @@
     "watchedUnits": "Überwachte Dienste",
     "mcpSettings": "MCP",
     "notifications": "Benachrichtigungen",
-    "platformNotifications": "Plattform-Benachrichtigungen"
+    "platformNotifications": "Plattform-Benachrichtigungen",
+    "configRollouts": "Konfigurations-Rollouts",
+    "softwareSources": "Paketquellen",
+    "softwareCatalog": "Softwarekatalog"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -249,6 +280,7 @@
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
     "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
     "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
+    "fingerprint_mismatch": "Der Fingerabdruck des Schlüssels stimmt nicht mit dem eingegebenen überein.",
     "username_taken": "Dieser Benutzername ist bereits vergeben.",
     "domain_taken": "Eine dieser Domains gehört zu einer anderen Organisation.",
     "attribute_owned_upstream": "Das wird im Quellverzeichnis verwaltet und kann in Paddock nicht geändert werden.",
@@ -283,7 +315,9 @@
     "email_not_configured": "Diese Installation hat kein E-Mail-Relay, daher können E-Mail-Ziele nicht aktiviert werden.",
     "unknown_code": "Einer der Audit-Codes ist nicht registriert.",
     "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
-    "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal."
+    "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
+    "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
+    "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend."
   },
   "audit": {
     "vulnerability": {
@@ -349,7 +383,8 @@
       "revoked": "{actor} hat das Registrierungstoken {name} widerrufen"
     },
     "config": {
-      "applied": "{actor} hat eine Konfiguration angewendet ({created} erstellt, {updated} geändert, {deleted} gelöscht)"
+      "applied": "{actor} hat eine Konfiguration angewendet ({created} erstellt, {updated} geändert, {deleted} gelöscht)",
+      "reverted": "{actor} hat einen Änderungssatz rückgängig gemacht ({created} erstellt, {updated} geändert, {deleted} gelöscht)"
     },
     "api_token": {
       "created": "{actor} hat das API-Token {name} ({role}) angelegt",
@@ -366,6 +401,7 @@
       "retired": "{actor} hat das Gerät {hostname} außer Betrieb genommen",
       "groups_changed": "{actor} hat die Gerätegruppen von {hostname} geändert",
       "name_changed": "Gerätename geändert",
+      "enforcement_enabled": "{actor} hat die Durchsetzung auf dem Gerät {hostname} aktiviert",
       "clone_suspected": "Das Gerät {hostname} wurde unter Quarantäne gestellt, weil seine Identität geklont zu sein scheint",
       "bundle_applied": "Das Gerät {target} hat Bundle {bundle_version, number} angewendet",
       "bundle_rejected": "Das Gerät {target} hat ein Bundle abgelehnt",
@@ -407,6 +443,10 @@
       "presumed_self_locked": "Das Gerät {target} hat Paddock länger als die Frist des Totmannschalters nicht erreicht und hat sich vermutlich selbst gesperrt",
       "install_now_requested": "{actor} hat {target} beauftragt, {packages} sofort zu installieren",
       "updates_run": "Das Gerät {target} hat seine {kind, select, security {Sicherheitsupdates} regular {regulären Updates} other {Updates ({kind})}} abgeschlossen: {result, select, ok {{upgraded, number} Pakete aktualisiert} timeout {Zeitüberschreitung} other {fehlgeschlagen}}",
+      "software_installed": "Das Gerät {target} hat {package} {version} installiert",
+      "software_reinstalled": "Das Gerät {target} hat festgestellt, dass {package} lokal entfernt wurde, und es erneut installiert ({version})",
+      "software_removed": "Das Gerät {target} hat {package} {version} entfernt ({intent})",
+      "software_apply_failed": "Das Gerät {target} konnte ein Softwarepaket oder eine Paketquelle nicht anwenden ({stage}: {reason})",
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
       "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",
@@ -429,7 +469,8 @@
       "event_gap_filled": "Die fehlenden Ereignisse {from_seq} bis {to_seq} des Geräts {target} sind nachträglich angekommen",
       "event_seq_reset": "Die Ereignisnummerierung des Geräts {target} wurde zurückgesetzt: höchste Nummer {reported_high} nach {previous_high} (Zählerrücksetzung)",
       "clock_drift": "Die Uhr des Geräts {target} weicht um {offset_s, number} Sekunden von der des Servers ab (Schwelle {threshold_s, number} Sekunden)",
-      "clock_drift_cleared": "Die Uhr des Geräts {target} weicht wieder um höchstens {threshold_s, number} Sekunden von der des Servers ab"
+      "clock_drift_cleared": "Die Uhr des Geräts {target} weicht wieder um höchstens {threshold_s, number} Sekunden von der des Servers ab",
+      "os_release_changed": "Das Betriebssystem des Geräts {target} wechselte von {old_id} {old_version_id} zu {new_id} {new_version_id}"
     },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
@@ -474,6 +515,12 @@
       "resumed": "{actor} hat das Rollout von Agent {version} fortgesetzt",
       "completed": "Das Rollout von Agent {version} wurde abgeschlossen"
     },
+    "config_rollout": {
+      "advanced": "Das Konfigurations-Rollout hat {percent, number} % der Geräte erreicht",
+      "halted": "Das Konfigurations-Rollout wurde angehalten: {reason}",
+      "resumed": "{actor} hat das Konfigurations-Rollout fortgesetzt",
+      "completed": "Das Konfigurations-Rollout wurde abgeschlossen"
+    },
     "managed_file": {
       "created": "{actor} hat die verwaltete Datei {path} definiert",
       "updated": "{actor} hat die verwaltete Datei {path} geändert",
@@ -507,12 +554,28 @@
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
       "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
       "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert",
-      "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}"
+      "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}",
+      "rollout_changed": "{actor} hat die Rollout-Einstellungen geändert: gestufte Rollouts {enabled, select, true {ein} other {aus}}"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
       "updated": "{actor} hat das Zurückhalten des Pakets {package} geändert",
       "deleted": "{actor} hat das Paket {package} freigegeben"
+    },
+    "software_source": {
+      "created": "{actor} hat die Paketquelle {name} mit dem Schlüssel {fingerprint} hinzugefügt",
+      "updated": "{actor} hat die Paketquelle {name} geändert",
+      "deleted": "{actor} hat die Paketquelle {name} entfernt"
+    },
+    "software_catalog_entry": {
+      "created": "{actor} hat {name} zum Software-Katalog hinzugefügt",
+      "updated": "{actor} hat {name} im Software-Katalog geändert",
+      "deleted": "{actor} hat {name} mit {assignment_count, plural, one {# Zuweisung} other {# Zuweisungen}} aus dem Software-Katalog entfernt"
+    },
+    "software_assignment": {
+      "created": "{actor} hat {app} mit der Absicht {intent} zugewiesen",
+      "updated": "{actor} hat die Zuweisung von {app} von {old_intent} auf {intent} geändert",
+      "deleted": "{actor} hat die Zuweisung {intent} von {app} entfernt"
     },
     "permission_profile": {
       "created": "{actor} hat das Berechtigungsprofil {name} angelegt",
@@ -1157,8 +1220,10 @@
       "overview": "Übersicht",
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
+      "applyStatus": "Anwendungsstatus",
       "commands": "Befehle",
-      "audit": "Audit"
+      "audit": "Audit",
+      "managedSoftware": "Verwaltete Software"
     },
     "health": {
       "title": "Zustand und Konformität",
@@ -1267,7 +1332,32 @@
       "hint": "Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach.",
       "targetHint": "Ziel = letztes abgeschlossenes Release. Ein laufender Rollout verschiebt es nicht; eine Komponente, die neuer als ihr Ziel ist, gilt als aktuell."
     },
-    "componentFilter": "Komponente veraltet"
+    "componentFilter": "Komponente veraltet",
+    "reportOnly": {
+      "banner": "Dieses Gerät ist im Berichtsmodus: Es meldet, was es ändern würde, und ändert nichts. Ausstehende Zeilen nennen die geplanten Änderungen.",
+      "chip": "Berichtsmodus",
+      "enforce": {
+        "title": "Durchsetzung aktivieren",
+        "explanation": "Dieses Gerät wurde übernommen und meldet nur, was es ändern würde. Mit der Durchsetzung wendet es die Konfiguration beim nächsten Check-in an.",
+        "label": "Durchsetzung aktivieren",
+        "confirmTitle": "Durchsetzung auf {hostname} aktivieren?",
+        "confirm": "Bei der nächsten Anwendung stellt der Agent fremde sudoers-Dateien unter Quarantäne, entfernt unerwartete Mitglieder privilegierter Gruppen (nie den letzten Administrator), installiert die Anmeldekomponente und wendet jede verwaltete Ressource an. Zur Bestätigung den Hostnamen eingeben.",
+        "done": "Die Durchsetzung ist aktiviert; das Gerät wendet seine Konfiguration beim nächsten Check-in an."
+      }
+    },
+    "adoption": {
+      "method": "Registrierungsart",
+      "mode": "Konfigurationsmodus",
+      "methods": {
+        "autoinstall": "Autoinstall",
+        "adopted": "Übernommen",
+        "unknown": "Unbekannt"
+      },
+      "modes": {
+        "enforce": "Durchgesetzt",
+        "report_only": "Berichtsmodus"
+      }
+    }
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -1476,10 +1566,89 @@
     "before": "Vorher",
     "after": "Nachher",
     "close": "Schließen",
+    "planRegion": "Plan des Änderungssatzes, scrollbar",
+    "revertsLabel": "Macht den Änderungssatz rückgängig",
+    "revertedByLabel": "Rückgängig gemacht durch den Änderungssatz",
+    "revert": {
+      "action": "Rückgängig machen",
+      "label": "Änderungssatz vom {at} rückgängig machen",
+      "title": "Änderungssatz rückgängig machen",
+      "message": "Diese Änderungen machen den Änderungssatz vom {at} rückgängig und werden sofort angewendet. Seitdem angelegte Einträge bleiben erhalten.",
+      "emptyPlan": "Die Konfiguration entspricht bereits dem Stand vor diesem Änderungssatz; es gibt nichts rückgängig zu machen.",
+      "planChanged": "Die Konfiguration hat sich geändert, seit der Plan angezeigt wurde. Prüfen Sie den neuen Plan und bestätigen Sie erneut.",
+      "done": "Der Änderungssatz vom {at} wurde rückgängig gemacht.",
+      "blocked": {
+        "reverted": "Dieser Änderungssatz wurde bereits rückgängig gemacht.",
+        "noBefore": "Der vorherige Stand dieses Änderungssatzes ist nicht gespeichert (vor dessen Speicherung erfasst oder nach 90 Tagen entfernt)."
+      }
+    },
     "empty": {
       "title": "Noch keine Änderungssätze",
       "description": "Änderungssätze werden aufgezeichnet, wenn paddockctl oder die API eine Konfiguration anwendet."
-    }
+    },
+    "rollout": "Rollout",
+    "rolloutLabel": "Rollout:",
+    "rolloutLink": "Rollout öffnen",
+    "urgentReason": "Dringend, sofort auf alle Geräte angewendet. Grund: {reason}"
+  },
+  "configStatus": {
+    "title": "Konfigurationsstatus",
+    "summary": "Pro Ressource: auf wie vielen aktiven Geräten sie angewendet wurde, fehlschlug, in einer reinen Berichtsanwendung aussteht oder nach einer lokalen Änderung korrigiert wurde.",
+    "resource": "Ressource",
+    "type": "Typ",
+    "status": "Status",
+    "message": "Meldung",
+    "version": "Bundle-Version",
+    "time": "Gemeldet",
+    "lastFailure": "Letzter Fehler",
+    "states": {
+      "applied": "Angewendet",
+      "failed": "Fehlgeschlagen",
+      "pending": "Ausstehend",
+      "drift_corrected": "Abweichung korrigiert",
+      "plan_error": "Planungsfehler"
+    },
+    "count": {
+      "applied": "{count, plural, one {# angewendet} other {# angewendet}}",
+      "failed": "{count, plural, one {# fehlgeschlagen} other {# fehlgeschlagen}}",
+      "pending": "{count, plural, one {# ausstehend} other {# ausstehend}}",
+      "drift_corrected": "{count, plural, one {# Abweichung korrigiert} other {# Abweichungen korrigiert}}",
+      "plan_error": "{count, plural, one {# Planungsfehler} other {# Planungsfehler}}"
+    },
+    "changes": "Geplante Änderungen",
+    "noDetails": "Keine weiteren Details.",
+    "bundles": "Bundle-Verlauf",
+    "compiled": "Erzeugt",
+    "outcome": "Ergebnis",
+    "mode": "Modus",
+    "changed": "Geändert",
+    "errors": "Fehler",
+    "reportedAt": "Gemeldet",
+    "rollout": "Rollout",
+    "outcomes": {
+      "applied": "Angewendet",
+      "rejected": "Abgelehnt",
+      "none": "Nicht gemeldet"
+    },
+    "modes": {
+      "enforce": "Erzwingen",
+      "report_only": "Nur berichten"
+    },
+    "empty": {
+      "device": {
+        "title": "Noch kein Anwendungsstatus",
+        "description": "Das Gerät hat noch nicht gemeldet, was es angewendet hat."
+      },
+      "bundles": {
+        "title": "Keine Konfigurationsversionen",
+        "description": "Für dieses Gerät wurde noch keine Konfiguration erzeugt."
+      },
+      "fleet": {
+        "title": "Noch kein Anwendungsstatus",
+        "description": "Kein Gerät hat bisher gemeldet, was es angewendet hat."
+      }
+    },
+    "schema": "Schema"
   },
   "managed": {
     "scope": "Gilt für",
@@ -2021,7 +2190,8 @@
       "config_behind": "Konfiguration im Rückstand",
       "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen",
       "clock_drift": "Zeitabweichung",
-      "event_gap": "Ereignislücke"
+      "event_gap": "Ereignislücke",
+      "report_only": "Berichtsmodus, wartet auf Durchsetzung"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -2040,7 +2210,8 @@
       "config_behind": "Gerät öffnen",
       "disk_conversion_failed": "Gerät öffnen",
       "clock_drift": "Gerät öffnen",
-      "event_gap": "Gerät öffnen"
+      "event_gap": "Gerät öffnen",
+      "report_only": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {
@@ -2373,6 +2544,23 @@
       "osRelease": "{release}: {count}",
       "unknownRelease": "unbekannt"
     },
+    "configuration": {
+      "title": "Konfiguration",
+      "rollout": "Offener Rollout",
+      "rolloutLine": "Welle {wave} von {waves}",
+      "noRollout": "Keiner offen",
+      "status": {
+        "running": "Läuft",
+        "halted": "Angehalten"
+      },
+      "failedResources": "Fehlgeschlagene Ressourcen",
+      "failedResourcesValue": "{resources, plural, one {# Ressource} other {# Ressourcen}} auf {devices, plural, one {# Gerät} other {# Geräten}}",
+      "reportOnly": "Geräte im Report-only-Modus",
+      "rolloutFailed": "fehlgeschlagen {failed}",
+      "countsError": "Die Rollout-Zahlen konnten nicht geladen werden.",
+      "retry": "Erneut versuchen",
+      "loadingCounts": "Rollout-Zahlen werden geladen"
+    },
     "audit": {
       "title": "Letzte Audit-Ereignisse",
       "open": "Audit-Protokoll",
@@ -2606,5 +2794,263 @@
     },
     "urlRejected": "Der Server hat die URL abgelehnt: Sie muss eine https-Adresse auf Port 443 oder 1024 bis 65535 mit öffentlichem Host sein.",
     "nameTaken": "Ein Ziel mit diesem Namen existiert bereits."
+  },
+  "rollout": {
+    "urgent": {
+      "label": "Sofort auf alle Geräte anwenden (dringend)",
+      "hint": "Überspringt den gestaffelten Rollout und braucht eine aktuelle Step-up-Anmeldung. Nur das Portal bietet das an; paddockctl und API-Tokens können es nicht.",
+      "reason": "Grund für die dringende Änderung",
+      "reasonInvalid": "Geben Sie einen Grund mit 2 bis 500 Zeichen ein."
+    }
+  },
+  "configRollouts": {
+    "title": "Konfigurations-Rollouts",
+    "summary": "Gestaffelte Rollouts von Konfigurationsänderungen: Welle für Welle, mit automatischem Stopp, wenn zu viele Geräte fehlschlagen.",
+    "settingsLink": "Rollout-Einstellungen",
+    "status": "Status",
+    "statuses": {
+      "running": "Läuft",
+      "halted": "Angehalten",
+      "completed": "Abgeschlossen",
+      "reverted": "Rückgängig gemacht"
+    },
+    "modes": {
+      "immediate": "Sofort",
+      "staged": "Gestaffelt",
+      "urgent": "Dringend"
+    },
+    "wave": "Welle",
+    "waveShort": "Welle {wave, number} von {waves, number} ({percent, number} %)",
+    "counts": "Geräte",
+    "countFacts": "{eligible, number} in den bisherigen Wellen, {applied, number} angewendet, {failed, number} fehlgeschlagen, {pending, number} ausstehend",
+    "startedBy": "Gestartet von",
+    "startedAt": "Gestartet",
+    "startedFacts": "{by} am {at}",
+    "endedAt": "Beendet",
+    "haltedReason": "Grund des Anhaltens",
+    "open": "Öffnen",
+    "openLabel": "Rollout vom {at} öffnen",
+    "back": "Zurück zu den Konfigurations-Rollouts",
+    "heading": "Konfigurations-Rollout",
+    "thresholds": "Stoppregel",
+    "thresholdFacts": "Jede Welle dauert mindestens {minutes, number} Minuten; der Rollout hält an, wenn {min, number} Geräte oder {percent, number} % der Geräte in den bisherigen Wellen fehlschlagen, je nachdem, was mehr ist.",
+    "changeSet": "Änderungssatz",
+    "changeSetLink": "Änderungssatz vom {at}",
+    "waves": "Wellen",
+    "waveStates": {
+      "done": "Erreicht",
+      "current": "Aktuell",
+      "upcoming": "Folgt"
+    },
+    "canary": "Die Geräte der Gruppe {group} erhalten die Änderung immer zuerst.",
+    "plan": "Geplante Änderungen",
+    "actions": {
+      "halt": {
+        "label": "Anhalten",
+        "title": "Rollout anhalten",
+        "confirm": "Die Geräte behalten den Stand der erreichten Welle. Der Rollout bleibt offen und sperrt seine Einträge, bis er fortgesetzt und abgeschlossen, abgeschlossen oder sein Änderungssatz rückgängig gemacht wird.",
+        "reason": "Grund"
+      },
+      "resume": {
+        "label": "Fortsetzen",
+        "title": "Rollout fortsetzen",
+        "confirm": "Der Rollout läuft in der Welle weiter, in der er angehalten wurde; bis jetzt gemeldete Fehler zählen nicht mehr, und die Welle beginnt ihre Beobachtungszeit von vorn."
+      },
+      "advance": {
+        "label": "Nächste Welle",
+        "title": "Zur nächsten Welle wechseln",
+        "confirm": "Die Geräte der nächsten Welle erhalten die Änderung bei ihrem nächsten Check-in, ohne die Beobachtungszeit abzuwarten."
+      },
+      "complete": {
+        "label": "Abschließen",
+        "title": "Rollout abschließen",
+        "confirm": "Jedes Gerät erhält diese Änderung bei seinem nächsten Check-in, auch alle Geräte außerhalb der bisher erreichten Wellen."
+      },
+      "revert": {
+        "label": "Änderungssatz rückgängig machen"
+      }
+    },
+    "devices": {
+      "title": "Geräte",
+      "hostname": "Hostname",
+      "inWave": "In der Welle",
+      "inWaveYes": "Ja",
+      "inWaveNo": "Nein",
+      "bundle": "Bundle",
+      "carries": "(enthält die Änderung)",
+      "outcome": "Neuester Bericht",
+      "failed": "Fehlgeschlagene Ressourcen",
+      "outcomes": {
+        "applied": "Angewendet",
+        "rejected": "Abgelehnt",
+        "report_only": "Nur Bericht",
+        "none": "Kein Bericht"
+      },
+      "empty": {
+        "title": "Keine Geräte",
+        "description": "Kein aktives Gerät passt."
+      }
+    },
+    "empty": {
+      "title": "Noch keine Rollouts",
+      "description": "Ein Rollout startet, wenn eine Änderung eines rollout-fähigen Abschnitts angewendet wird, während gestaffelte Rollouts aktiviert sind."
+    },
+    "wavePercent": "{percent, number} %"
+  },
+  "software": {
+    "sources": {
+      "title": "Paketquellen",
+      "summary": "APT-Repositories von Drittanbietern, aus denen Ihre Geräte installieren dürfen. Jede Quelle hat einen eigenen Signaturschlüssel; sie hinzuzufügen oder zu ändern ist eine Änderung mit Root-Wirkung und verlangt einen Sicherheitsschlüssel.",
+      "create": "Quelle hinzufügen",
+      "createTitle": "Paketquelle hinzufügen",
+      "editTitle": "Paketquelle bearbeiten",
+      "name": "Name",
+      "slug": "Kürzel",
+      "slugHint": "Benennt die Quelldatei und den Schlüsselbund auf den Geräten; später nicht änderbar.",
+      "uris": "URIs",
+      "urisHint": "Eine https-Adresse pro Zeile, höchstens vier.",
+      "suites": "Suites",
+      "suitesHint": "Zum Beispiel noble oder stable. Bei einem flachen Repository endet die Suite auf /.",
+      "components": "Komponenten",
+      "componentsHint": "Zum Beispiel main. Keine bei einem flachen Repository.",
+      "architectures": "Architekturen",
+      "architecturesHint": "Ohne Auswahl gilt jede Architektur.",
+      "signingKey": "Signaturschlüssel (OpenPGP-Public-Key, ASCII-Armor)",
+      "fingerprint": "Fingerabdruck",
+      "fingerprintHint": "Geben Sie den vom Hersteller veröffentlichten Fingerabdruck ein. Er muss zum hochgeladenen Schlüssel passen.",
+      "weakKey": "Dieser Schlüssel nutzt RSA unter 3072 Bit. Er wird akzeptiert und ist bis 2030 vertretbar.",
+      "httpsOnly": "Quellen müssen https verwenden.",
+      "slugInvalid": "Verwenden Sie 2 bis 41 Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit Buchstabe oder Ziffer.",
+      "nameInvalid": "Geben Sie einen Namen mit 1 bis 100 Zeichen ein.",
+      "urisInvalid": "Geben Sie ein bis vier https-Adressen mit Host, gegebenenfalls einem Port von 1 bis 65535, ohne Query, Fragment, Benutzerangaben, Anführungszeichen und spitze Klammern ein, je höchstens 512 Zeichen.",
+      "suitesInvalid": "Geben Sie ein bis acht Suites aus Buchstaben, Ziffern, ., /, _ und - ein.",
+      "flatMixed": "Entweder endet jede Suite auf / (flaches Repository) oder keine.",
+      "flatComponents": "Ein flaches Repository hat keine Komponenten.",
+      "componentsRequired": "Geben Sie mindestens eine Komponente ein.",
+      "componentsInvalid": "Geben Sie höchstens acht Komponenten aus Kleinbuchstaben, Ziffern und - ein.",
+      "keyInvalid": "Fügen Sie einen OpenPGP-Public-Key mit höchstens 64 KiB ein.",
+      "fingerprintInvalid": "Geben Sie die 40 Hexadezimalzeichen des Fingerabdrucks ein; Leerzeichen werden ignoriert.",
+      "deleteTitle": "Paketquelle entfernen",
+      "deleteConfirm": "Die Geräte entfernen die Quelldatei und den Schlüsselbund bei ihrem nächsten Check-in. Installierte Software bleibt. Geben Sie zur Bestätigung den Namen der Quelle ein.",
+      "empty": {
+        "title": "Noch keine Paketquellen",
+        "description": "Fügen Sie ein vertrauenswürdiges APT-Repository hinzu, um Software anzubieten, die Ihre Distribution nicht mitbringt."
+      },
+      "entries": "Einträge",
+      "repeated": "Jeder Eintrag darf nur einmal vorkommen.",
+      "inUse": "Diese Quelle wird von einem Katalogeintrag verwendet."
+    },
+    "catalog": {
+      "title": "Softwarekatalog",
+      "summary": "Anwendungen, die Ihre Geräte installieren, behalten, festhalten oder blockieren, je Gerätegruppe. Erforderliche Anwendungen, die ein Benutzer entfernt, werden erneut installiert und das Ereignis wird erfasst.",
+      "create": "Anwendung hinzufügen",
+      "createTitle": "Anwendung hinzufügen",
+      "editTitle": "Anwendung bearbeiten",
+      "back": "Zurück zum Softwarekatalog",
+      "name": "Name",
+      "description": "Beschreibung",
+      "category": "Kategorie",
+      "source": "Quelle",
+      "sourceHint": "Woher die Pakete kommen.",
+      "distributionRepositories": "Repositories der Distribution",
+      "packages": "Pakete",
+      "packagesHint": "Es gilt die spezifischste Zeile für Distribution, Release und Architektur eines Geräts.",
+      "assignments": "Zuweisungen",
+      "devices": "Geräte",
+      "distribution": "Distribution",
+      "release": "Release",
+      "architecture": "Architektur",
+      "package": "Paket",
+      "anyArchitecture": "Beliebig",
+      "addRow": "Paket hinzufügen",
+      "remove": "Entfernen",
+      "removeRow": "Paketzeile {n} entfernen",
+      "nameInvalid": "Geben Sie einen Namen mit 1 bis 100 Zeichen ein.",
+      "descriptionInvalid": "Höchstens 1000 Zeichen.",
+      "categoryInvalid": "Höchstens 64 Zeichen.",
+      "packagesCount": "Geben Sie ein bis zwanzig Pakete ein.",
+      "packagesDuplicate": "Jede Kombination aus Distribution, Release und Architektur darf nur einmal vorkommen.",
+      "distributionInvalid": "Verwenden Sie die ID aus /etc/os-release, zum Beispiel ubuntu.",
+      "releaseInvalid": "Geben Sie * oder ein Release wie 24.04 ein.",
+      "packageInvalid": "Geben Sie einen Debian-Paketnamen ein: Kleinbuchstaben, Ziffern, +, . und -.",
+      "deleteTitle": "Anwendung entfernen",
+      "deleteConfirm": "{count, plural, one {Die Anwendung und ihre # Zuweisung werden entfernt.} other {Die Anwendung und ihre # Zuweisungen werden entfernt.}} Installierte Software bleibt auf den Geräten. Geben Sie zur Bestätigung den Namen ein.",
+      "empty": {
+        "title": "Noch keine Anwendungen",
+        "description": "Beschreiben Sie eine Anwendung einmal und weisen Sie sie Gerätegruppen zu."
+      },
+      "devicesEmpty": {
+        "title": "Keine Geräte",
+        "description": "Dieser Anwendung ist noch kein aktives Gerät zugewiesen."
+      }
+    },
+    "assignments": {
+      "title": "Zuweisungen",
+      "create": "Zuweisen",
+      "createTitle": "Anwendung zuweisen",
+      "editTitle": "Zuweisung ändern",
+      "intent": "Absicht",
+      "updateRule": "Aktualisierungsregel",
+      "version": "Version",
+      "reason": "Grund",
+      "versionHint": "Nur für eine festgelegte Version.",
+      "versionHintHold": "Leer lassen, um die installierte Version festzuhalten.",
+      "versionRequired": "Geben Sie die festzulegende Version ein.",
+      "versionInvalid": "Geben Sie eine Debian-Version ein: Buchstaben, Ziffern, ., +, :, ~ und -.",
+      "reasonInvalid": "Höchstens 500 Zeichen.",
+      "deleteTitle": "Zuweisung entfernen",
+      "deleteConfirm": "Die Zuweisung von {app} für {scope} entfernen? Die Geräte behalten, was installiert ist.",
+      "empty": {
+        "title": "Noch keine Zuweisungen",
+        "description": "Eine Zuweisung wendet die Anwendung auf eine Gerätegruppe oder auf alle Geräte an."
+      }
+    },
+    "intent": {
+      "label": "Absicht",
+      "required": "Erforderlich",
+      "uninstall": "Deinstallieren",
+      "hold": "Version festhalten",
+      "forbid": "Verbieten"
+    },
+    "updateRule": {
+      "latest": "Neueste",
+      "pinned": "Festgelegte Version"
+    },
+    "state": {
+      "label": "Status",
+      "installed": "Installiert",
+      "held": "Festgehalten",
+      "absent": "Nicht installiert",
+      "pending": "Ausstehend",
+      "failed": "Fehlgeschlagen",
+      "not_applicable": "Nicht anwendbar",
+      "unknown": "Noch kein Bericht"
+    },
+    "reason": {
+      "dpkg_locked": "Ein anderer Paketvorgang läuft; das Gerät versucht es erneut.",
+      "deferred_offline": "Das Gerät wartet auf eine Serververbindung, bevor es Software entfernt.",
+      "would_remove_dependents": "Der Vorgang würde andere Pakete entfernen; es wurde nichts geändert.",
+      "no_candidate": "Das Paket oder die Version ist in den Quellen des Geräts nicht verfügbar.",
+      "fingerprint_mismatch": "Der Quellenschlüssel passt nicht zu seinem Fingerabdruck; die Quelle wurde nicht geschrieben.",
+      "not_yet_applied": "Das Gerät hat dies noch nicht angewendet.",
+      "source_unreachable": "Das Gerät konnte die Quelle nicht erreichen.",
+      "conflicting_source": "Das Gerät hat bereits einen Eintrag für dieses Repository mit einem anderen Schlüssel; der Eintrag von Paddock wurde entfernt, der eigene Eintrag des Geräts bleibt.",
+      "apt_failed": "Die Paketverwaltung ist auf dem Gerät fehlgeschlagen."
+    },
+    "icon": {
+      "upload": "Symbol (PNG)",
+      "hint": "Ein PNG mit höchstens 64 KiB und 512 mal 512 Pixeln.",
+      "notPng": "Das Symbol muss eine PNG-Datei sein.",
+      "tooLarge": "Das Symbol darf höchstens 64 KiB groß sein."
+    },
+    "reportedAt": "Gemeldet",
+    "device": {
+      "summary": "Anwendungen des Softwarekatalogs, die für dieses Gerät gelten, und was das Gerät dazu gemeldet hat.",
+      "truncated": "Das Gerät hat einige Einträge in seinem letzten Bericht weggelassen, um den Check-in klein zu halten; eine Anwendung ohne Zeile kann trotzdem verwaltet werden.",
+      "empty": {
+        "title": "Keine verwaltete Software",
+        "description": "Diesem Gerät ist keine Anwendung des Katalogs zugewiesen."
+      }
+    }
   }
 }

@@ -3,12 +3,14 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ManagedUnit } from '../api/client'
 import { validateUnit, type UnitInput } from '../lib/managedConfig'
+import UrgentOptOut from './UrgentOptOut.vue'
+import { noUrgent, validUrgent } from '../lib/configRollouts'
 import { useProblemText } from '../lib/problems'
 import { hasErrors } from '../lib/validation'
 
 const props = withDefaults(
-  defineProps<{ groups: { id: string; name: string }[]; initial?: ManagedUnit | null; problem?: string; pending?: boolean }>(),
-  { initial: null, problem: '', pending: false },
+  defineProps<{ groups: { id: string; name: string }[]; rolloutsEnabled?: boolean; initial?: ManagedUnit | null; problem?: string; pending?: boolean }>(),
+  { rolloutsEnabled: false, initial: null, problem: '', pending: false },
 )
 const emit = defineEmits<{ submit: [input: UnitInput]; cancel: [] }>()
 
@@ -21,12 +23,13 @@ const form = ref<UnitInput>({
   active: props.initial?.active ?? true,
 })
 const touched = ref(false)
+const urgent = ref(noUrgent())
 const errors = computed(() => validateUnit(form.value))
 
 function submit(): void {
   touched.value = true
-  if (hasErrors(errors.value)) return
-  emit('submit', { ...form.value })
+  if (hasErrors(errors.value) || !validUrgent(urgent.value)) return
+  emit('submit', { ...form.value, urgent: urgent.value })
 }
 </script>
 
@@ -65,6 +68,11 @@ function submit(): void {
       :label="t('managed.units.active')"
       color="primary"
       inset
+    />
+    <UrgentOptOut
+      v-model="urgent"
+      :enabled="rolloutsEnabled"
+      :show-errors="touched"
     />
     <p
       v-if="problem"

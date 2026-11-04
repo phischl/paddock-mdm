@@ -62,6 +62,33 @@ func Transition(action Action, from string) (string, error) {
 // device keeps checking in but receives nothing new).
 func Compiled(state string) bool { return state == StateActive }
 
+// Enrollment methods (device.enrollment_method) and configuration modes (device.config_mode), plan M11 §3.1.
+const (
+	EnrollmentAutoinstall = "autoinstall"
+	EnrollmentAdopted     = "adopted"
+	EnrollmentUnknown     = "unknown"
+	ConfigModeEnforce     = "enforce"
+	ConfigModeReportOnly  = "report_only"
+)
+
+// ErrInvalidEnrollmentMethod means the device asserted an enrollment method other than autoinstall or adopted.
+var ErrInvalidEnrollmentMethod = errors.New("enrollment_method must be autoinstall or adopted")
+
+// Adoption returns the enrollment method and configuration mode a device is created with for the method it asserts
+// ("" for agents that send none). The method is the device's own claim, so it only selects report-only for an adopted
+// device (fail safe, plan M11 decision 40) and never grants anything.
+func Adoption(asserted string) (method, mode string, err error) {
+	switch asserted {
+	case "":
+		return EnrollmentUnknown, ConfigModeEnforce, nil
+	case EnrollmentAutoinstall:
+		return EnrollmentAutoinstall, ConfigModeEnforce, nil
+	case EnrollmentAdopted:
+		return EnrollmentAdopted, ConfigModeReportOnly, nil
+	}
+	return "", "", ErrInvalidEnrollmentMethod
+}
+
 // Limits of the device-reported enrollment fields.
 const (
 	maxHostname = 253
@@ -86,4 +113,33 @@ func ValidateReported(hostname string, fields ...string) error {
 
 func printable(s string) bool {
 	return utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
+}
+
+// maxOSReleaseValue bounds one reported os-release value; real ID and VERSION_ID values are a few characters.
+const maxOSReleaseValue = 64
+
+// ReportedOSRelease returns the ID and VERSION_ID a check-in reports when both are plain identifiers (letters, digits,
+// dot, underscore, hyphen). The values come from the device and select the software catalog entries of its release,
+// so anything else is ignored as a whole and the stored value stays (PDK-695).
+func ReportedOSRelease(in map[string]string) (id, versionID string, ok bool) {
+	id, versionID = in["id"], in["version_id"]
+	return id, versionID, plainOSReleaseValue(id) && plainOSReleaseValue(versionID)
+}
+
+// StoredOSReleaseValue returns a stored os-release value for an audit event: the value of the enrollment is not
+// validated, so one that is not a plain identifier is recorded as "".
+func StoredOSReleaseValue(s string) string {
+	if plainOSReleaseValue(s) {
+		return s
+	}
+	return ""
+}
+
+func plainOSReleaseValue(s string) bool {
+	if s == "" || len(s) > maxOSReleaseValue {
+		return false
+	}
+	return !strings.ContainsFunc(s, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-'
+	})
 }

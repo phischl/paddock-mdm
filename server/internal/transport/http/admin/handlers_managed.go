@@ -37,7 +37,7 @@ func (h *handlers) CreateManagedFile(ctx context.Context, req adminapi.CreateMan
 	f, err := h.managed.CreateFile(ctx, app.FileInput{
 		DeviceGroupID: req.Body.DeviceGroupId, Path: &req.Body.Path, Mode: req.Body.Mode, Owner: req.Body.Owner,
 		Group: req.Body.Group, Content: &req.Body.Content,
-	})
+	}, rolloutOptions(req.Params.Urgent, req.Params.Reason))
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (h *handlers) GetManagedFile(ctx context.Context, req adminapi.GetManagedFi
 func (h *handlers) UpdateManagedFile(ctx context.Context, req adminapi.UpdateManagedFileRequestObject) (adminapi.UpdateManagedFileResponseObject, error) {
 	f, err := h.managed.UpdateFile(ctx, req.Id, app.FileInput{
 		Path: req.Body.Path, Mode: req.Body.Mode, Owner: req.Body.Owner, Group: req.Body.Group, Content: req.Body.Content,
-	})
+	}, rolloutOptions(req.Params.Urgent, req.Params.Reason))
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (h *handlers) UpdateManagedFile(ctx context.Context, req adminapi.UpdateMan
 }
 
 func (h *handlers) DeleteManagedFile(ctx context.Context, req adminapi.DeleteManagedFileRequestObject) (adminapi.DeleteManagedFileResponseObject, error) {
-	if err := h.managed.DeleteFile(ctx, req.Id); err != nil {
+	if err := h.managed.DeleteFile(ctx, req.Id, rolloutOptions(req.Params.Urgent, req.Params.Reason)); err != nil {
 		return nil, err
 	}
 	return adminapi.DeleteManagedFile204Response{}, nil
@@ -128,7 +128,7 @@ func (h *handlers) ListManagedUnits(ctx context.Context, req adminapi.ListManage
 func (h *handlers) CreateManagedUnit(ctx context.Context, req adminapi.CreateManagedUnitRequestObject) (adminapi.CreateManagedUnitResponseObject, error) {
 	u, err := h.managed.CreateUnit(ctx, app.UnitInput{
 		DeviceGroupID: req.Body.DeviceGroupId, Unit: &req.Body.Unit, Enabled: req.Body.Enabled, Active: req.Body.Active,
-	})
+	}, rolloutOptions(req.Params.Urgent, req.Params.Reason))
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,8 @@ func (h *handlers) GetManagedUnit(ctx context.Context, req adminapi.GetManagedUn
 }
 
 func (h *handlers) UpdateManagedUnit(ctx context.Context, req adminapi.UpdateManagedUnitRequestObject) (adminapi.UpdateManagedUnitResponseObject, error) {
-	u, err := h.managed.UpdateUnit(ctx, req.Id, app.UnitInput{Unit: req.Body.Unit, Enabled: req.Body.Enabled, Active: req.Body.Active})
+	u, err := h.managed.UpdateUnit(ctx, req.Id, app.UnitInput{Unit: req.Body.Unit, Enabled: req.Body.Enabled, Active: req.Body.Active},
+		rolloutOptions(req.Params.Urgent, req.Params.Reason))
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +156,7 @@ func (h *handlers) UpdateManagedUnit(ctx context.Context, req adminapi.UpdateMan
 }
 
 func (h *handlers) DeleteManagedUnit(ctx context.Context, req adminapi.DeleteManagedUnitRequestObject) (adminapi.DeleteManagedUnitResponseObject, error) {
-	if err := h.managed.DeleteUnit(ctx, req.Id); err != nil {
+	if err := h.managed.DeleteUnit(ctx, req.Id, rolloutOptions(req.Params.Urgent, req.Params.Reason)); err != nil {
 		return nil, err
 	}
 	return adminapi.DeleteManagedUnit204Response{}, nil

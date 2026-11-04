@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,15 +41,19 @@ func debDir(s *Stack) string {
 	return filepath.Join(s.root, "bin", "deb")
 }
 
-// Install prepares the guest (hosts entries, Caddy CA), installs the packages from debDir and enrolls the device
-// into a new device group with managed files a and b, a unit file and the unit itself. The drift interval is set
-// to 30 s (development build). Group, files, unit and enrollment token are removed when the test ends (plan M2.2
-// decision 7).
-func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
-	t.Helper()
-	d := &Device{VM: vm, s: s, run: unique(), Files: map[string]string{}}
-	d.Unit = "systest-" + d.run + ".service"
+// InstallOption changes what Install does after the enrollment.
+type InstallOption func(*installOptions)
 
+type installOptions struct{ reportOnly bool }
+
+// ReportOnly leaves the device in report-only mode, as `paddockd enroll` creates an adopted device (plan M11 R6.9):
+// no enforcement and no drift interval, so that the gate sees the report-only apply and calls Enforce and
+// SetDriftInterval itself. Every other gate gets an enforced device.
+func ReportOnly() InstallOption { return func(o *installOptions) { o.reportOnly = true } }
+
+// prepareGuest adds the stack's hosts entries and Caddy CA to the guest and installs the packages from debDir.
+func prepareGuest(t *testing.T, s *Stack, vm *VM, debDir string) {
+	t.Helper()
 	secrets, err := filepath.Abs(filepath.Join(s.root, "deploy", "compose", ".secrets", "caddy-root.crt"))
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +72,22 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 		remote = append(remote, r)
 	}
 	vm.Must("sudo dpkg -i " + strings.Join(remote, " ") + " && systemctl is-enabled paddock-supervisor && readlink /opt/paddock/agent/current")
+}
+
+// Install prepares the guest (hosts entries, Caddy CA), installs the packages from debDir and enrolls the device
+// into a new device group with managed files a and b, a unit file and the unit itself. The harness enrolls with
+// `paddockd enroll`, so the device is adopted and report-only; Install enforces it (POST /enforce) unless
+// ReportOnly is given, so that the gates see applied resources. The drift interval is set to 30 s (development
+// build). Group, files, unit and enrollment token are removed when the test ends (plan M2.2 decision 7).
+func Install(t *testing.T, s *Stack, vm *VM, debDir string, opts ...InstallOption) *Device {
+	t.Helper()
+	var o installOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	d := &Device{VM: vm, s: s, run: unique(), Files: map[string]string{}}
+	d.Unit = "systest-" + d.run + ".service"
+	prepareGuest(t, s, vm, debDir)
 
 	// Configuration of this device, before enrollment.
 	d.Group = s.ID(t, s.Call(t, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": "systest " + vm.Name + " " + d.run}, http.StatusCreated))
@@ -107,13 +128,103 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 		t.Fatalf("enrollment token %s: %v", tok.Body, err)
 	}
 	s.RevokeOnCleanup(t, created.Token.ID)
-	vm.MustIn(created.EnrollmentConfig, "umask 077 && cat > /tmp/enroll.json")
-	vm.Must("sudo paddockd enroll --config /tmp/enroll.json --remove-config && test ! -e /tmp/enroll.json")
+	// The runbook's path (plan M11 R6.8): not /etc/paddock/enroll.json, which the daemon's autoinstall loop reads.
+	vm.MustIn(created.EnrollmentConfig, "sudo sh -c 'umask 077 && cat > /root/paddock-enroll.json'")
+	vm.Must("sudo paddockd enroll --config /root/paddock-enroll.json --remove-config && sudo test ! -e /root/paddock-enroll.json")
 	d.ID = d.State()["device_id"].(string)
+	if method, mode := d.EnrollmentMode(); method != "adopted" || mode != "report_only" {
+		t.Fatalf("%s enrolled with paddockd enroll as %s/%s, want adopted/report_only", vm.Name, method, mode)
+	}
 	d.joinGroup()
-	vm.Must("echo 'drift_interval_s: 30' | sudo tee -a /etc/paddock/agent.yml >/dev/null && sudo systemctl restart paddock-supervisor")
+	if !o.reportOnly {
+		d.Enforce()
+		d.SetDriftInterval()
+		// Every gate starts from an enforced device, not from the report-only apply of the enrollment bundle.
+		d.WaitEvent(t, "device.bundle_applied", 5*time.Minute, func(p map[string]any) bool {
+			version, _ := p["bundle_version"].(float64)
+			return p["mode"] != "report_only" && version >= d.Bundle
+		})
+	}
 	t.Logf("%s enrolled as device %s (group %s, bundle %v)", vm.Name, d.ID, d.Group, d.Bundle)
 	return d
+}
+
+// SetDriftInterval sets the agent's drift interval to 30 s (development build) and restarts the supervisor. A
+// report-only device does not drift, so a gate of report-only calls it after the enforcement.
+func (d *Device) SetDriftInterval() {
+	d.t.Helper()
+	d.Must("echo 'drift_interval_s: 30' | sudo tee -a /etc/paddock/agent.yml >/dev/null && sudo systemctl restart paddock-supervisor")
+}
+
+// EnrollmentMode is the device's enrollment method and configuration mode as the server stores them.
+func (d *Device) EnrollmentMode() (method, mode string) {
+	d.t.Helper()
+	var dev struct {
+		Method string `json:"enrollment_method"`
+		Mode   string `json:"config_mode"`
+	}
+	if err := json.Unmarshal(d.s.Call(d.t, http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev); err != nil {
+		d.t.Fatal(err)
+	}
+	return dev.Method, dev.Mode
+}
+
+// Enforce ends the device's report-only mode with its hostname as the typed confirmation (plan M11 decision 42). It
+// waits for the bundle the server compiles for the enforcement and makes it the device's Bundle, so that a wait for
+// version >= Bundle sees an enforced apply, never the earlier report-only one.
+func (d *Device) Enforce() {
+	d.t.Helper()
+	before := d.bundleVersion()
+	d.s.Call(d.t, http.MethodPost, "/api/v1/devices/"+d.ID+"/enforce", map[string]string{"hostname": d.Must("hostname")}, http.StatusOK)
+	Until(d.t, d.Name+": bundle compiled for the enforcement", 2*time.Minute, 2*time.Second, nil, func() bool {
+		d.Bundle = d.bundleVersion()
+		return d.Bundle > before
+	})
+}
+
+// ResourceStatus is one row of GET /devices/{id}/config-status.
+type ResourceStatus struct {
+	ResourceID    string   `json:"resource_id"`
+	Status        string   `json:"status"`
+	Message       string   `json:"message"`
+	Changes       []string `json:"changes"`
+	BundleVersion float64  `json:"bundle_version"`
+	ReportMode    string   `json:"report_mode"`
+}
+
+// ConfigStatus returns the device's apply status rows whose resource ID contains q ("" lists all, at most 100).
+func (d *Device) ConfigStatus(q string) []ResourceStatus {
+	d.t.Helper()
+	path := "/api/v1/devices/" + d.ID + "/config-status?page_size=100&q=" + url.QueryEscape(q)
+	var page struct {
+		Items []ResourceStatus `json:"items"`
+	}
+	if err := json.Unmarshal(d.s.Call(d.t, http.MethodGet, path, nil, http.StatusOK).Body, &page); err != nil {
+		d.t.Fatal(err)
+	}
+	return page.Items
+}
+
+// BundleMode is the version and the mode of the newest bundle the device reported on ("" when it reported none).
+func (d *Device) BundleMode() (version float64, mode string) {
+	d.t.Helper()
+	var page struct {
+		Items []struct {
+			Version float64 `json:"version"`
+			Report  *struct {
+				Mode string `json:"mode"`
+			} `json:"report"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(d.s.Call(d.t, http.MethodGet, "/api/v1/devices/"+d.ID+"/bundles?page_size=10", nil, http.StatusOK).Body, &page); err != nil {
+		d.t.Fatal(err)
+	}
+	for _, b := range page.Items {
+		if b.Report != nil {
+			return b.Version, b.Report.Mode
+		}
+	}
+	return 0, ""
 }
 
 // joinGroup makes the device a member of its group and sets Bundle. It waits for the bundle compiled at

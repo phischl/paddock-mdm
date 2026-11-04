@@ -326,11 +326,11 @@ export interface paths {
         get: operations["getDeviceGroup"];
         put?: never;
         post?: never;
-        /** @description Roles: org_admin. */
+        /** @description Roles: org_admin. While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13). */
         delete: operations["deleteDeviceGroup"];
         options?: never;
         head?: never;
-        /** @description Roles: org_admin, org_operator. */
+        /** @description Roles: org_admin, org_operator. While a configuration rollout is open, renaming a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict (plan M11 amendment R6.13). */
         patch: operations["updateDeviceGroup"];
         trace?: never;
     };
@@ -677,7 +677,12 @@ export interface paths {
          *     changes records a change set; one without changes records the event with zeros and no change set.
          *     expected_plan (plan M6c amendment 2026-10-08) is the plan_sha256 of a dry run the client confirmed: when the
          *     plan computed now differs, the apply is refused with 412 plan_changed (audited as failure) and nothing is
-         *     applied.
+         *     applied. Staged rollouts (plan M11 decisions 25-29): with rollouts enabled, an apply that changes managed
+         *     files, managed units, package holds or the update settings starts a rollout (rollout staged, rollout_id) unless
+         *     urgent is set. While a rollout is open, a change of a key it stages is refused with 409 rollout_conflict (urgent
+         *     too), any other change of a section it stages with 409 rollout_running (package holds and update settings are
+         *     one section; a mixed apply is refused as a whole), and a change of only other sections is immediate. The same
+         *     rules apply to every per-resource write and to reverts (ADR 0033 amendment 2026-11-01).
          */
         put: operations["applyConfig"];
         post?: never;
@@ -694,7 +699,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something. */
+        /** @description Roles: org_admin, org_operator, org_auditor. Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource. */
         get: operations["listChangeSets"];
         put?: never;
         post?: never;
@@ -717,6 +722,202 @@ export interface paths {
         get: operations["getChangeSet"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Applies the inverse of a change set in one transaction (plan M11 decision 21):
+         *     an item it created is deleted, an item it updated or deleted is restored from its stored before-state; items
+         *     created since are kept, and an item whose deleted key was created again since is set back to the before-state.
+         *     The rules of the per-resource endpoints apply unchanged, as for PUT /api/v1/config (organization
+         *     administrators only for device group deletions and settings, a step-up for full profiles, the managed-file
+         *     operator roots and the watched units). With dry_run=true the plan is computed and checked but nothing is
+         *     applied and nothing is audited. Otherwise expected_plan is required (400 invalid_request without it) and a
+         *     different plan is refused with 412 plan_changed. The revert is recorded as a new change set whose
+         *     reverts_change_set_id is the original. 409 invalid_state when the change set has no before-state (recorded
+         *     before before-states were stored, or purged after 90 days) or was already reverted. 404 not_found for an
+         *     unknown change set or one of another organization. The revert of the change set of the open rollout ends that
+         *     rollout (status reverted) and reaches every device at once; any other revert follows the staging and conflict
+         *     rules of PUT /api/v1/config, with urgent and reason as the opt-out.
+         */
+        post: operations["revertChangeSet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The staged configuration rollouts of the organization (plan M11
+         *     decision 34), each with its counts, which are also what the worker evaluates: eligible are the active devices
+         *     inside the wave the rollout reached (every device once it completed). Of each device the newest report on a
+         *     bundle of the rollout is read: failed when, received by the server since the rollout's start or last resume, it
+         *     is a rejection or an enforced apply with a failed staged resource; applied when it is an enforced apply without
+         *     a failed staged resource; pending otherwise, also a report-only apply. The failed resources of a report-only
+         *     device are plan errors and never count; its rejection does.
+         */
+        get: operations["listConfigRollouts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. A rollout with its counts, its change set and the bundle resource IDs it stages; 404 not_found for an unknown rollout or one of another organization. */
+        get: operations["getConfigRollout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them:
+         *     whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the
+         *     rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged
+         *     resources. Equal sort keys are ordered by hostname. 404 not_found for an unknown rollout or one of another
+         *     organization.
+         */
+        get: operations["listConfigRolloutDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/halt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. running → halted with a reason of 2 to 500 characters (400 invalid_request
+         *     otherwise). Devices keep the state of the wave the rollout reached; the rollout stays open, so its staged keys
+         *     stay blocked until it is resumed and completed, completed, or its change set reverted. 409 invalid_state when
+         *     the rollout is not running; 404 not_found for an unknown rollout or one of another organization.
+         */
+        post: operations["haltConfigRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. halted → running in the wave where it stopped; failures reported before the
+         *     resume no longer count, and the wave's minimum duration starts again. 409 invalid_state when the rollout is not halted; 404 not_found for an unknown rollout
+         *     or one of another organization.
+         */
+        post: operations["resumeConfigRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/advance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Moves a running rollout to its next wave now; its devices receive the staged
+         *     change at their next check-in. 409 invalid_state when the rollout is halted, ended or in its last wave
+         *     (complete it instead); 404 not_found for an unknown rollout or one of another organization.
+         */
+        post: operations["advanceConfigRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-rollouts/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Ends a running or halted rollout: every device receives the staged change at
+         *     its next check-in. It works also after rollouts were switched off in the settings: an open rollout keeps its
+         *     rules until it is completed or its change set reverted. 409 invalid_state when the rollout already completed
+         *     or was reverted; 404 not_found for an unknown rollout or one of another organization.
+         */
+        post: operations["completeConfigRollout"];
         delete?: never;
         options?: never;
         head?: never;
@@ -906,6 +1107,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/enforce": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Ends the report-only mode of an adopted device (plan M11 decision 42): its next
+         *     bundle quarantines foreign sudoers files, removes unexpected members of privileged groups (never the last
+         *     administrator), installs the login component and applies every managed resource. The body repeats the device's
+         *     hostname as the typed confirmation (400 invalid_request when it differs); a device that is not active and
+         *     report-only: 409 invalid_state. Not offered to the assistant: the typed confirmation is the administrator's.
+         */
+        post: operations["enforceDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/update-agent": {
         parameters: {
             query?: never;
@@ -1079,6 +1305,53 @@ export interface paths {
          *     while the history is off.
          */
         get: operations["listDeviceLogins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/config-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The apply status of the device's resources as its agent last
+         *     reported them (plan M11 decision 14): one item per resource ID with its status, the message of a failure and,
+         *     for a report-only apply, what would change (pending). A report that omits a resource removes its row; older
+         *     agents without per-resource outcomes only produce failed rows.
+         */
+        get: operations["listDeviceConfigStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/bundles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. Every configuration version compiled for the device, newest
+         *     first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. Outcome none lists
+         *     the versions without a report. config_rollout_id names the configuration rollout whose wave the device was in.
+         */
+        get: operations["listDeviceBundles"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1626,6 +1899,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/rollout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The settings of staged configuration rollouts (plan M11 decision 24); the defaults (rollouts off) until changed. */
+        get: operations["getRolloutSettings"];
+        /**
+         * @description Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1
+         *     and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent
+         *     (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first.
+         *     An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404
+         *     not_found. A rollout that is already running keeps the values it started with.
+         */
+        put: operations["updateRolloutSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/privacy": {
         parameters: {
             query?: never;
@@ -1692,6 +1989,223 @@ export interface paths {
         head?: never;
         /** @description Roles: org_admin, org_operator. Replaces version and reason; the package and the scope are fixed. */
         patch: operations["updatePackageHold"];
+        trace?: never;
+    };
+    "/api/v1/software-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's APT package sources (plan M13a decision 1);
+         *     the list never contains the signing key.
+         */
+        get: operations["listSoftwareSources"];
+        put?: never;
+        /**
+         * @description Roles: org_admin. Adds an APT package source with its signing key. A source is root-equivalent: every package
+         *     it signs is installed as root. URIs must use https (400 invalid_request "uris must use https"); they may name
+         *     internal hosts, because only the devices fetch from them, never the server. Suites are either all flat
+         *     (ending in "/", then no components) or none (then at least one component). The signing key is one
+         *     ASCII-armored OpenPGP v4 public key: RSA of at least 2048 bits (2048 to 3071 bits are accepted with
+         *     weak_key true), or Ed25519, Ed448 or NIST P-256/384/521; DSA, ElGamal, Brainpool and secp256k1 are refused
+         *     (400 invalid_request). The typed fingerprint (spaces and case ignored) must equal the key's, else 422
+         *     fingerprint_mismatch naming both. A duplicate slug or name is 409 already_exists. Needs a step-up within the
+         *     last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
+         */
+        post: operations["createSoftwareSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. One source with its signing key (a public key); 404 not_found for another organization's. */
+        get: operations["getSoftwareSource"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: org_admin. Removes the source; the devices remove its source file and keyring with their next bundle.
+         *     A source that a catalog entry still uses is 409 in_use. Needs a step-up within the last 5 minutes (403
+         *     step_up_required).
+         */
+        delete: operations["deleteSoftwareSource"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: org_admin. Changes the given fields; absent fields keep their value. The slug is immutable (400
+         *     invalid_request when given). signing_key and fingerprint come only together (400 otherwise). Every rule of
+         *     the creation is checked on the resulting source. Needs a step-up within the last 5 minutes (403
+         *     step_up_required).
+         */
+        patch: operations["updateSoftwareSource"];
+        trace?: never;
+    };
+    "/api/v1/software-catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The applications of the organization's software catalog
+         *     (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one.
+         */
+        get: operations["listSoftwareCatalog"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Adds an application with its package names per distribution, release and
+         *     architecture (1 to 20 references; release and architecture may be "*"; the tuple is unique within the
+         *     entry). source_id names one of the organization's package sources; without it the distribution's own
+         *     repositories are used. A name already in use is 409 already_exists; a source_id of another organization or
+         *     an unknown one is 404 not_found.
+         */
+        post: operations["createSoftwareCatalogEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-catalog/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's entry. */
+        get: operations["getSoftwareCatalogEntry"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Removes the entry together with its assignments (never 409); the devices stop
+         *     managing the application, installed software stays.
+         */
+        delete: operations["deleteSoftwareCatalogEntry"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Replaces the entry's name, description, category, source and package
+         *     references with the submitted values (an absent description or category becomes empty, an absent or null
+         *     source_id selects the distribution's own repositories); the icon is changed with its own operation. The
+         *     same rules as on creation apply.
+         */
+        patch: operations["updateSoftwareCatalogEntry"];
+        trace?: never;
+    };
+    "/api/v1/software-catalog/{id}/icon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The entry's icon as image/png (Cache-Control: private, max-age=300); 404 not_found without an icon or for another organization's entry. */
+        get: operations["getSoftwareCatalogIcon"];
+        /**
+         * @description Roles: org_admin, org_operator. Sets or replaces the entry's icon. The body is one PNG (Content-Type
+         *     image/png) of at most 65536 bytes and 512 by 512 pixels; anything else is 400 invalid_request. Not offered as
+         *     an MCP tool (the body is not JSON).
+         */
+        put: operations["setSoftwareCatalogIcon"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-catalog/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
+         *     of the organization or of one of their groups, with what they reported or the derived state not_applicable or
+         *     unknown (see the device's managed software). The search matches the hostname. 404 not_found for another
+         *     organization's entry.
+         */
+        get: operations["listSoftwareCatalogDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The assignments of catalog entries to the organization or device groups; the search matches the entry's name. */
+        get: operations["listSoftwareAssignments"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Assigns a catalog entry to every device of the organization (no
+         *     device_group_id) or to a device group with an intent. required keeps the application installed (update_rule
+         *     latest without a version, or pinned with one; omitted, the rule is pinned for a required assignment with a
+         *     version and latest otherwise); uninstall removes it; hold keeps the installed version (with a version it is
+         *     pinned); forbid removes it and blocks it for apt. uninstall and forbid take no version. Violations are 400
+         *     invalid_request. An entry or device group of another organization or an unknown one is 404 not_found; a
+         *     second assignment of the entry in the same scope is 409 already_exists.
+         */
+        post: operations["createSoftwareAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-assignments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's assignment. */
+        get: operations["getSoftwareAssignment"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin, org_operator. The devices stop enforcing the assignment with their next bundle; installed software stays. */
+        delete: operations["deleteSoftwareAssignment"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Replaces intent, update_rule, version and reason with the submitted values
+         *     (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the
+         *     same rules as on creation apply. The entry and the scope are fixed: giving a catalog_entry_id or a
+         *     device_group_id is 400 invalid_request.
+         */
+        patch: operations["updateSoftwareAssignment"];
         trace?: never;
     };
     "/api/v1/overview": {
@@ -2598,6 +3112,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/managed-software": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what
+         *     the device reported for each, and for an application assigned to it that it has not reported on the derived state
+         *     not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package
+         *     applies, no report yet). The state and intent filters apply to derived entries too; derived entries have no
+         *     reported_at. 404 not_found for another organization's device.
+         */
+        get: operations["listDeviceManagedSoftware"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/vulnerabilities": {
         parameters: {
             query?: never;
@@ -2613,6 +3152,27 @@ export interface paths {
          *     Ubuntu has no priority for has severity unknown.
          */
         get: operations["listDeviceVulnerabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The fleet view of the apply status (plan M11 decision 14): one
+         *     item per resource ID with the number of active devices per status and when a device last reported it failed.
+         *     Which devices fail is read on the device (listDeviceConfigStatus).
+         */
+        get: operations["listConfigStatus"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4220,9 +4780,21 @@ export interface components {
              */
             change_set_id: string | null;
             plan: components["schemas"]["ConfigPlan"];
+            /** @description The rollout mode of the recorded change set; null for dry runs and empty plans. */
+            rollout?: components["schemas"]["ChangeSetRollout"] | null;
+            /**
+             * Format: uuid
+             * @description The rollout a staged change set started.
+             */
+            rollout_id?: string | null;
         };
         /** @enum {string} */
         ChangeSetSource: "session" | "api_token";
+        /**
+         * @description immediate: every device receives the change at once. staged: the change set started a rollout. urgent: it would have been staged and skipped the rollout with a reason.
+         * @enum {string}
+         */
+        ChangeSetRollout: "immediate" | "staged" | "urgent";
         ChangeSetActor: {
             type: string;
             id?: string;
@@ -4243,6 +4815,26 @@ export interface components {
             source: components["schemas"]["ChangeSetSource"];
             summary: components["schemas"]["ChangeSetSummary"];
             plan: components["schemas"]["ConfigPlan"];
+            rollout: components["schemas"]["ChangeSetRollout"];
+            /** @description Why the change skipped staging; null otherwise. */
+            urgent_reason?: string | null;
+            /**
+             * Format: uuid
+             * @description The change set this one reverts.
+             */
+            reverts_change_set_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The newest change set that reverts this one.
+             */
+            reverted_by?: string | null;
+            /** @description Whether the before-states are stored. False for change sets recorded before they were stored and after they were purged. */
+            before_available: boolean;
+            /**
+             * Format: uuid
+             * @description The rollout this change set started; null unless staged.
+             */
+            rollout_id?: string | null;
         };
         ChangeSetPage: {
             items: components["schemas"]["ChangeSet"][];
@@ -4254,6 +4846,102 @@ export interface components {
             total_capped: boolean;
             /** @description Applied sort. */
             sort: string;
+        };
+        /** @enum {string} */
+        ConfigRolloutStatus: "running" | "halted" | "completed" | "reverted";
+        ConfigRolloutCounts: {
+            /** @description Active devices inside the wave the rollout reached. */
+            eligible: number;
+            /** @description Eligible devices whose newest report on a bundle of the rollout applied every staged resource. */
+            applied: number;
+            /** @description Eligible devices the failure threshold counts (since the start or the last resume). */
+            failed: number;
+            /** @description The other eligible devices. */
+            pending: number;
+        };
+        ConfigRollout: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            change_set_id: string;
+            waves: number[];
+            current_wave_index: number;
+            /** Format: date-time */
+            wave_started_at: string;
+            min_wave_minutes: number;
+            failure_threshold_percent: number;
+            failure_threshold_min: number;
+            /** Format: uuid */
+            canary_device_group_id: string | null;
+            status: components["schemas"]["ConfigRolloutStatus"];
+            halted_reason: string | null;
+            started_by: string;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            ended_at: string | null;
+            ended_reason: string | null;
+            /** @description The counts of the rollout. After a wave action they are all zero when they could not be read once the action had been applied. */
+            counts: components["schemas"]["ConfigRolloutCounts"];
+        };
+        ConfigRolloutPage: {
+            items: components["schemas"]["ConfigRollout"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        ConfigRolloutDetail: {
+            rollout: components["schemas"]["ConfigRollout"];
+            change_set: components["schemas"]["ChangeSet"];
+            /** @description The bundle resource IDs whose failure counts against the rollout (file:<path>, unit:<name>, updates). */
+            staged_resource_ids: string[];
+        };
+        ConfigRolloutDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /** @description The device is inside the wave the rollout reached (every device once it completed). */
+            in_wave: boolean;
+            /**
+             * Format: int64
+             * @description The device's newest bundle; null before its first.
+             */
+            bundle_version: number | null;
+            /** @description The newest bundle contains the rollout's staged change. */
+            carries_rollout: boolean;
+            /**
+             * @description The device's newest report on a bundle of the rollout, the one the counts read: applied, rejected,
+             *     report_only (an apply of a report-only device; its plan errors are listed in failed_resource_ids but never
+             *     count) or none (no report on a bundle of the rollout, or a failure received before the rollout's last
+             *     resume, which no longer counts: the device is pending).
+             */
+            report_outcome: string;
+            /**
+             * @description The staged resources that failed in that report and count against the rollout, and the plan errors of a
+             *     report-only device. Failures received before the rollout's last resume no longer count and are not listed;
+             *     the device is pending until it reports again.
+             */
+            failed_resource_ids: string[];
+        };
+        ConfigRolloutDevicePage: {
+            items: components["schemas"]["ConfigRolloutDevice"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        ConfigRolloutHalt: {
+            /** @description Why the rollout is halted. */
+            reason: string;
         };
         /** @enum {string} */
         ApiTokenRole: "org_admin" | "org_operator" | "org_auditor";
@@ -4371,6 +5059,29 @@ export interface components {
             components: components["schemas"]["DeviceComponent"][];
             /** @description The components older than their target at the last heartbeat (the list column and filter). */
             components_outdated: string[];
+            enrollment_method: components["schemas"]["EnrollmentMethod"];
+            config_mode: components["schemas"]["ConfigMode"];
+            /**
+             * Format: date-time
+             * @description When enforcement was enabled; null while the mode is the one the device enrolled with.
+             */
+            config_mode_changed_at: string | null;
+        };
+        /**
+         * @description How the device was enrolled, as the agent asserted it (plan M11 decision 40): autoinstall by the Paddock
+         *     autoinstall, adopted by enrolling an installed system, unknown when the agent sent none.
+         * @enum {string}
+         */
+        EnrollmentMethod: "autoinstall" | "adopted" | "unknown";
+        /**
+         * @description enforce applies the configuration; report_only (an adopted device until an administrator enables enforcement)
+         *     only reports what it would change.
+         * @enum {string}
+         */
+        ConfigMode: "enforce" | "report_only";
+        DeviceEnforce: {
+            /** @description The device's hostname, typed by the administrator as confirmation. */
+            hostname: string;
         };
         DeviceComponent: {
             /** @enum {string} */
@@ -4608,12 +5319,130 @@ export interface components {
              *     organization's dead man's switch period while the switch is on (plan M4c decision 17); null otherwise.
              */
             presumed_self_locked_at: string | null;
+            config_status: components["schemas"]["DeviceConfigStatusCounts"];
             /**
              * Format: date-time
              * @description Since when the device is presumed lost: it has been silent for longer than the organization's critical
              *     staleness threshold (plan M5b decision 10); null otherwise, cleared by its next contact.
              */
             presumed_lost_at: string | null;
+        };
+        /**
+         * @description The apply status of one resource on one device: applied; failed (the message says why); pending (a report-only
+         *     apply would change it, changes lists what); drift_corrected (the agent corrected a local change).
+         * @enum {string}
+         */
+        ResourceState: "applied" | "failed" | "pending" | "drift_corrected";
+        DeviceResourceStatus: {
+            /** @description Resource ID such as file:/etc/foo.conf, unit:foo.service or time. */
+            resource_id: string;
+            /** @description The part of the ID before the colon (file, unit), else the whole ID. */
+            type: string;
+            status: components["schemas"]["ResourceState"];
+            /** @description The reason of a failure; empty otherwise. */
+            message: string;
+            /** @description What a report-only apply would change (status pending); empty otherwise. */
+            changes: string[];
+            /** Format: int64 */
+            bundle_version: number;
+            /**
+             * Format: date-time
+             * @description When the agent reported it.
+             */
+            occurred_at: string;
+            /**
+             * @description The mode of the report that wrote the row (plan M11 amendment R6.15); enforce when no report of that version
+             *     is stored. A failed row of a report_only report is a plan error, never a failed apply (R6.6), also after
+             *     enforcement until an enforced report replaces it.
+             */
+            report_mode: components["schemas"]["ConfigMode"];
+        };
+        DeviceResourceStatusPage: {
+            items: components["schemas"]["DeviceResourceStatus"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        DeviceBundleReport: {
+            /** @enum {string} */
+            outcome: "applied" | "rejected";
+            /**
+             * @description Mode of the apply. A rejection carries no mode: it shows the mode of the device's applied report of the highest lower version, enforce when there is none.
+             * @enum {string}
+             */
+            mode: "enforce" | "report_only";
+            /** @description Resources the apply changed. */
+            changed: number;
+            /** @description Errors the apply reported. */
+            error_count: number;
+            /** @description Why the device rejected the bundle. */
+            reason: string | null;
+            /** Format: date-time */
+            occurred_at: string;
+        };
+        DeviceBundle: {
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            created_at: string;
+            schema_version: number;
+            /**
+             * Format: uuid
+             * @description The configuration rollout whose staged change the version carries; null otherwise.
+             */
+            config_rollout_id: string | null;
+            /** @description What the device reported about the version; null until it reported. */
+            report: components["schemas"]["DeviceBundleReport"] | null;
+        };
+        DeviceBundlePage: {
+            items: components["schemas"]["DeviceBundle"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /**
+         * @description One resource ID with the number of active devices per status. A failed resource written by a report-only
+         *     report is a plan error, not a failed apply (plan M11 amendments R6.6, R6.15): it is counted in no status here,
+         *     the status filter failed does not select it, and the device's apply status shows it (report_mode).
+         */
+        ResourceStatus: {
+            resource_id: string;
+            type: string;
+            applied: number;
+            failed: number;
+            pending: number;
+            drift_corrected: number;
+            /** Format: date-time */
+            last_failure_at: string | null;
+        };
+        ResourceStatusPage: {
+            items: components["schemas"]["ResourceStatus"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @description The device's resources per apply status; zeros until the agent reported. failed counts failed applies only, plan_errors the failed resources of report-only reports (plan M11 amendment R6.15). */
+        DeviceConfigStatusCounts: {
+            applied: number;
+            failed: number;
+            pending: number;
+            drift_corrected: number;
+            plan_errors: number;
         };
         /** @description The latest login.* and sudo.* report of the device's agent (plan M3b decision 17). */
         DeviceLoginStatus: {
@@ -4891,6 +5720,35 @@ export interface components {
             /** @description Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it. */
             agent_update_policy?: components["schemas"]["AgentUpdatePolicy"];
         };
+        RolloutSettings: {
+            /** @description Staged configuration rollouts are off by default. */
+            enabled: boolean;
+            waves: number[];
+            min_wave_minutes: number;
+            failure_threshold_percent: number;
+            failure_threshold_min: number;
+            /**
+             * Format: uuid
+             * @description Devices of this group always go first; null = none.
+             */
+            canary_device_group_id: string | null;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        RolloutSettingsUpdate: {
+            enabled: boolean;
+            /** @description Strictly increasing, ending with 100. */
+            waves: number[];
+            /** @description At least 15 (1 in a development stack). */
+            min_wave_minutes: number;
+            failure_threshold_percent: number;
+            failure_threshold_min: number;
+            /**
+             * Format: uuid
+             * @description Omit or null for none.
+             */
+            canary_device_group_id?: string | null;
+        };
         PrivacySettings: {
             retired_inventory_days: number;
             audit_search_recorded: boolean;
@@ -4959,6 +5817,277 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /** @enum {string} */
+        SoftwareArchitecture: "amd64" | "arm64";
+        SoftwareSourceSummary: {
+            /** Format: uuid */
+            id: string;
+            /** @description Immutable; names the source file and keyring on the devices. */
+            slug: string;
+            name: string;
+            uris: string[];
+            suites: string[];
+            components: string[];
+            /** @description Empty = every architecture. */
+            architectures: components["schemas"]["SoftwareArchitecture"][];
+            /** @description The signing key's v4 fingerprint, 40 uppercase hexadecimal characters. */
+            fingerprint: string;
+            /** @description The key or a subkey is RSA of 2048 to 3071 bits: accepted, acceptable until 2030. */
+            weak_key: boolean;
+            /** @description The number of catalog entries that use this source. */
+            entry_count: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SoftwareSource: components["schemas"]["SoftwareSourceSummary"] & {
+            /** @description The ASCII-armored OpenPGP public key as stored, re-armored without armor headers. */
+            signing_key: string;
+        };
+        SoftwareSourceCreate: {
+            /** @description ^[a-z0-9][a-z0-9-]{1,40}$ */
+            slug: string;
+            /** @description 1 to 100 characters after trimming. */
+            name: string;
+            /** @description https only, no query, fragment or user information. */
+            uris: string[];
+            /** @description ^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /. */
+            suites: string[];
+            /** @description ^[a-z0-9-]{1,32}$; none for a flat repository, at least one otherwise. */
+            components?: string[];
+            architectures?: components["schemas"]["SoftwareArchitecture"][];
+            /** @description One ASCII-armored OpenPGP v4 public key. It is stored re-armored with 64-character lines and no armor headers, and that form must also fit 65536 bytes (400 invalid_request otherwise). */
+            signing_key: string;
+            /** @description The key's fingerprint as published by the vendor; spaces and case are ignored. */
+            fingerprint: string;
+        };
+        SoftwareSourceUpdate: {
+            /** @description Immutable; any value is refused with 400 invalid_request. */
+            slug?: string;
+            name?: string;
+            uris?: string[];
+            suites?: string[];
+            components?: string[];
+            architectures?: components["schemas"]["SoftwareArchitecture"][];
+            /** @description Only together with fingerprint; the same rules as on creation. */
+            signing_key?: string;
+            /** @description Only together with signing_key. */
+            fingerprint?: string;
+        };
+        SoftwareSourcePage: {
+            items: components["schemas"]["SoftwareSourceSummary"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @enum {string} */
+        SoftwareIntent: "required" | "uninstall" | "hold" | "forbid";
+        /** @enum {string} */
+        SoftwareUpdateRule: "latest" | "pinned";
+        PackageRef: {
+            /** @description The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian. */
+            distribution: string;
+            /** @description * or the VERSION_ID, ^[a-z0-9][a-z0-9.-]{0,31}$, e.g. 24.04. */
+            release: string;
+            /** @enum {string} */
+            architecture: "*" | "amd64" | "arm64";
+            /** @description ^[a-z0-9][a-z0-9+.-]+$ */
+            package: string;
+        };
+        SoftwareCatalogEntryCreate: {
+            /** @description 1 to 100 characters after trimming; unique within the organization. */
+            name: string;
+            description?: string;
+            /** @description May be empty. */
+            category?: string;
+            /**
+             * Format: uuid
+             * @description Omit or null for the distribution's own repositories.
+             */
+            source_id?: string | null;
+            /** @description Unique by distribution, release and architecture; the most specific reference wins on a device. */
+            packages: components["schemas"]["PackageRef"][];
+        };
+        SoftwareCatalogEntryUpdate: {
+            name: string;
+            description?: string;
+            category?: string;
+            /**
+             * Format: uuid
+             * @description Omit or null for the distribution's own repositories.
+             */
+            source_id?: string | null;
+            packages: components["schemas"]["PackageRef"][];
+        };
+        SoftwareCatalogEntry: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description: string;
+            category: string;
+            /** Format: uuid */
+            source_id: string | null;
+            /** @description Empty for the distribution's own repositories. */
+            source_slug: string;
+            packages: components["schemas"]["PackageRef"][];
+            has_icon: boolean;
+            assignment_count: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SoftwareCatalogEntryPage: {
+            items: components["schemas"]["SoftwareCatalogEntry"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwareAssignmentCreate: {
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /**
+             * Format: uuid
+             * @description Omit or null for every device of the organization.
+             */
+            device_group_id?: string | null;
+            intent: components["schemas"]["SoftwareIntent"];
+            update_rule?: components["schemas"]["SoftwareUpdateRule"];
+            /** @description ^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall and forbid. */
+            version?: string | null;
+            reason?: string;
+        };
+        SoftwareAssignmentUpdate: {
+            /**
+             * Format: uuid
+             * @description Fixed; any value is refused with 400 invalid_request.
+             */
+            catalog_entry_id?: string;
+            /**
+             * Format: uuid
+             * @description Fixed; any value is refused with 400 invalid_request.
+             */
+            device_group_id?: string | null;
+            intent: components["schemas"]["SoftwareIntent"];
+            update_rule?: components["schemas"]["SoftwareUpdateRule"];
+            version?: string | null;
+            reason?: string;
+        };
+        SoftwareAssignment: {
+            /** Format: uuid */
+            id: string;
+            /** @description The catalog entry's name. */
+            app_name: string;
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /**
+             * Format: uuid
+             * @description null = every device of the organization.
+             */
+            device_group_id: string | null;
+            intent: components["schemas"]["SoftwareIntent"];
+            update_rule: components["schemas"]["SoftwareUpdateRule"];
+            version: string | null;
+            reason: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SoftwareAssignmentPage: {
+            items: components["schemas"]["SoftwareAssignment"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /**
+         * @description installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the
+         *     device's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.
+         * @enum {string}
+         */
+        DeviceSoftwareState: "installed" | "held" | "absent" | "pending" | "failed" | "not_applicable" | "unknown";
+        DeviceManagedSoftware: {
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /** @description The catalog entry's name. */
+            name: string;
+            /** @description The package on the device; empty for not_applicable. */
+            package: string;
+            intent: components["schemas"]["SoftwareIntent"];
+            state: components["schemas"]["DeviceSoftwareState"];
+            version: string;
+            /** @description pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed. */
+            reason: string;
+            /** @description At most 200 characters; may name paths. */
+            error: string;
+            /**
+             * Format: date-time
+             * @description null for a derived state.
+             */
+            reported_at: string | null;
+        };
+        DeviceManagedSoftwarePage: {
+            /** @description The device's last report left items out to keep the check-in small; an entry without a reported row may be managed all the same. */
+            truncated: boolean;
+            items: components["schemas"]["DeviceManagedSoftware"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwareCatalogDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /** @description The device's display name; empty when none is set. */
+            name: string;
+            /** @description The device groups the device belongs to; empty when none. */
+            device_group_ids: string[];
+            /** @description The package on the device; empty for not_applicable. */
+            package: string;
+            intent: components["schemas"]["SoftwareIntent"];
+            state: components["schemas"]["DeviceSoftwareState"];
+            version: string;
+            reason: string;
+            /** @description At most 200 characters; may name paths. */
+            error: string;
+            /**
+             * Format: date-time
+             * @description null for a derived state.
+             */
+            reported_at: string | null;
+        };
+        SoftwareCatalogDevicePage: {
+            items: components["schemas"]["SoftwareCatalogDevice"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         InstallNowRequest: {
             packages: string[];
         };
@@ -4991,7 +6120,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap" | "report_only";
         Attention: {
             /** @description The live finding of the condition (plan M9 decision 34); null until the findings round created it. */
             finding: components["schemas"]["AttentionFinding"] | null;
@@ -5003,10 +6132,10 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; otherwise empty. */
             detail: string;
         };
         /** @enum {string} */
@@ -5333,6 +6462,27 @@ export interface components {
             updates: components["schemas"]["OverviewUpdates"];
             attention: components["schemas"]["OverviewAttention"];
             security_review: components["schemas"]["OverviewSecurityReview"];
+            configuration: components["schemas"]["OverviewConfiguration"];
+        };
+        /** @description The configuration card. Failures do not count the plan errors of report-only reports, like GET /api/v1/config-status. */
+        OverviewConfiguration: {
+            /** @description The open (running or halted) configuration rollout without counts; null while none is open. The counts are those of GET /api/v1/config-rollouts/{id}. */
+            rollout: components["schemas"]["OverviewConfigRollout"] | null;
+            /** @description Distinct resources with a failed apply on at least one active device. */
+            failed_resources: number;
+            /** @description Distinct active devices with at least one failed apply. */
+            failed_devices: number;
+            /** @description Active devices in report-only mode. */
+            report_only_devices: number;
+        };
+        OverviewConfigRollout: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["ConfigRolloutStatus"];
+            waves: number[];
+            current_wave_index: number;
+            /** Format: date-time */
+            started_at: string;
         };
         /** @description The totals of GET /api/v1/security-review. */
         OverviewSecurityReview: {
@@ -5720,6 +6870,15 @@ export interface components {
             files: components["schemas"]["ManagedFile"][];
             units: components["schemas"]["ManagedUnit"][];
             conflicts: components["schemas"]["ConfigConflict"][];
+            /**
+             * @description The organization's open configuration rollout; null without one. The configuration above is the live one;
+             *     a device outside the wave (in_wave false) keeps the before-state of the rollout's staged keys.
+             */
+            rollout?: {
+                /** Format: uuid */
+                id: string;
+                in_wave: boolean;
+            } | null;
         };
         /**
          * @description Tier of the path (ADR 0034 decision 2 and amendment 2026-10-16): ordinary (below an operator root of the
@@ -6247,6 +7406,14 @@ export interface components {
         FindingListSort: "last_seen_at" | "-last_seen_at" | "opened_at" | "-opened_at" | "status" | "-status" | "hostname" | "-hostname" | "code" | "-code";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         AccountSort: "username" | "-username" | "display_name" | "-display_name" | "role" | "-role";
+        /**
+         * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+         *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+         *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+         */
+        RolloutUrgent: boolean;
+        /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+        RolloutReason: string;
         Csrf: "1";
         Id: string;
         /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
@@ -6289,6 +7456,14 @@ export interface components {
         VulnerableDeviceSort: "hostname" | "-hostname";
         /** @description Repeatable. unknown selects findings without severity (no Ubuntu priority and no score). */
         SeverityFilter: components["schemas"]["Severity"][];
+        /** @description Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker. */
+        DeviceResourceStatusSort: "resource_id" | "-resource_id" | "status" | "-status" | "occurred_at" | "-occurred_at";
+        /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+        DeviceBundleSort: "version" | "-version" | "created_at" | "-created_at";
+        /** @description Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker. */
+        ConfigStatusSort: "resource_id" | "-resource_id" | "failed" | "-failed" | "pending" | "-pending" | "applied" | "-applied";
+        /** @description Repeatable. Keeps resources with a device in one of these statuses. */
+        ResourceStateFilter: components["schemas"]["ResourceState"][];
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -6297,6 +7472,10 @@ export interface components {
         OwnedDeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        ConfigRolloutSort: "started_at" | "-started_at" | "status" | "-status";
+        /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id is the tie-breaker. */
+        ConfigRolloutDeviceSort: "hostname" | "-hostname" | "in_wave" | "-in_wave" | "report_outcome" | "-report_outcome";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         ChangeSetSort: "applied_at" | "-applied_at";
         /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
@@ -6313,6 +7492,28 @@ export interface components {
         DeviceStateFilter: components["schemas"]["DeviceState"][];
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareSourceSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareCatalogSort: "name" | "-name" | "category" | "-category" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareAssignmentSort: "created_at" | "-created_at" | "updated_at" | "-updated_at" | "intent" | "-intent";
+        /** @description Only entries of this category. */
+        SoftwareCategoryFilter: string;
+        /** @description Only entries that use this package source. */
+        SoftwareSourceFilter: string;
+        /** @description Only assignments of this catalog entry. */
+        SoftwareEntryFilter: string;
+        /** @description Only assignments with this intent. */
+        SoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
+        /** @description Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers. */
+        DeviceManagedSoftwareSort: "name" | "-name" | "state" | "-state" | "reported_at" | "-reported_at";
+        /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id, are the tie-breakers. */
+        SoftwareCatalogDeviceSort: "hostname" | "-hostname" | "state" | "-state" | "reported_at" | "-reported_at";
+        /** @description Only entries with this intent, reported or assigned. */
+        DeviceManagedSoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
+        /** @description Only entries in this state, reported or derived. */
+        DeviceSoftwareStateFilter: components["schemas"]["DeviceSoftwareState"];
         /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
         /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
@@ -6847,6 +8048,7 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updateDeviceGroup: {
@@ -7482,6 +8684,14 @@ export interface operations {
     applyConfig: {
         parameters: {
             query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
                 /** @description Compute and check the plan without applying it. */
                 dry_run?: boolean;
                 /** @description plan_sha256 of the confirmed dry run; a different plan is refused with 412 plan_changed. */
@@ -7528,6 +8738,8 @@ export interface operations {
                 q?: components["parameters"]["Search"];
                 /** @description Repeatable. */
                 source?: components["schemas"]["ChangeSetSource"][];
+                /** @description Repeatable. */
+                rollout?: components["schemas"]["ChangeSetRollout"][];
             };
             header?: never;
             path?: never;
@@ -7573,6 +8785,264 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    revertChangeSet: {
+        parameters: {
+            query?: {
+                /** @description Compute and check the inverse plan without applying it. */
+                dry_run?: boolean;
+                /** @description plan_sha256 of the confirmed dry run; required unless dry_run. A different plan is refused with 412 plan_changed. */
+                expected_plan?: string;
+                /** @description Opt out of a staged rollout; needs reason, a step-up and enabled rollouts, as RolloutUrgent. */
+                urgent?: boolean;
+                /** @description Why the change set is reverted (2 to 500 characters); with urgent also the urgent reason. */
+                reason?: string;
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The inverse plan, applied unless dry_run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigApplyResult"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
+        };
+    };
+    listConfigRollouts: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["ConfigRolloutSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["ConfigRolloutStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of rollouts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRolloutPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getConfigRollout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rollout. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRolloutDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listConfigRolloutDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id is the tie-breaker. */
+                sort?: components["parameters"]["ConfigRolloutDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                in_wave?: boolean;
+                /**
+                 * @description Repeatable; applied, rejected, report_only or none (400 invalid_request otherwise). The values are not an
+                 *     OpenAPI enum, as for the outcome filter of the device's bundles.
+                 */
+                report_outcome?: string[];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRolloutDevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    haltConfigRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigRolloutHalt"];
+            };
+        };
+        responses: {
+            /** @description Halted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    resumeConfigRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resumed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    advanceConfigRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Advanced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    completeConfigRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Completed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     generateAutoinstall: {
@@ -7631,6 +9101,10 @@ export interface operations {
                 owner_id?: string;
                 /** @description true lists the devices with a component older than its target at their last heartbeat, false the others (plan M8d decision 55). */
                 component_outdated?: boolean;
+                /** @description Repeatable. How the device was enrolled (plan M11 decision 43). */
+                enrollment_method?: components["schemas"]["EnrollmentMethod"][];
+                /** @description Repeatable. Whether the device's configuration is enforced or only reported (plan M11 decision 43). */
+                config_mode?: components["schemas"]["ConfigMode"][];
             };
             header?: never;
             path?: never;
@@ -7809,6 +9283,31 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    enforceDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceEnforce"];
+            };
+        };
         responses: {
             200: components["responses"]["Device"];
             400: components["responses"]["Problem"];
@@ -8006,6 +9505,82 @@ export interface operations {
             404: components["responses"]["Problem"];
         };
     };
+    listDeviceConfigStatus: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker. */
+                sort?: components["parameters"]["DeviceResourceStatusSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. Keeps resources with a device in one of these statuses. */
+                status?: components["parameters"]["ResourceStateFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of resource statuses. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceResourceStatusPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceBundles: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+                sort?: components["parameters"]["DeviceBundleSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /**
+                 * @description Repeatable; applied, rejected or none (400 invalid_request otherwise). none selects versions the device has
+                 *     not reported. The values are not an OpenAPI enum: the generated constant None would take the name of the
+                 *     privilege class's.
+                 */
+                outcome?: string[];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of bundle versions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceBundlePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
     setDeviceOwners: {
         parameters: {
             query?: never;
@@ -8132,7 +9707,16 @@ export interface operations {
     };
     createManagedFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8191,7 +9775,16 @@ export interface operations {
     };
     deleteManagedFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8213,11 +9806,21 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updateManagedFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8284,7 +9887,16 @@ export interface operations {
     };
     createManagedUnit: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8343,7 +9955,16 @@ export interface operations {
     };
     deleteManagedUnit: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -8365,11 +9986,21 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updateManagedUnit: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -9240,7 +10871,16 @@ export interface operations {
     };
     updateUpdateSettings: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -9265,7 +10905,60 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    getRolloutSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rollout settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolloutSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateRolloutSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RolloutSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolloutSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
         };
     };
     getPrivacySettings: {
@@ -9354,7 +11047,16 @@ export interface operations {
     };
     createPackageHold: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
             };
@@ -9411,6 +11113,327 @@ export interface operations {
     };
     deletePackageHold: {
         parameters: {
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    updatePackageHold: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Opt out of a staged rollout (plan M11 decision 26): every device receives the change at once. Needs reason, a
+                 *     step-up within the last 5 minutes (403 step_up_required; an API token never has one) and enabled rollouts
+                 *     (400 invalid_request otherwise). The change set's rollout is urgent and the reason is audited as urgent_reason.
+                 */
+                urgent?: components["parameters"]["RolloutUrgent"];
+                /** @description Why the change skips the staged rollout (2 to 500 characters); required with urgent. */
+                reason?: components["parameters"]["RolloutReason"];
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackageHoldUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageHold"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareSources: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareSourceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of software sources. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSourcePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareSourceCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The software source. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    updateSoftwareSource: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareSourceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSource"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareCatalog: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareCatalogSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only entries of this category. */
+                category?: components["parameters"]["SoftwareCategoryFilter"];
+                /** @description Only entries that use this package source. */
+                source_id?: components["parameters"]["SoftwareSourceFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of catalog entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogEntryPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createSoftwareCatalogEntry: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareCatalogEntryCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareCatalogEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwareCatalogEntry: {
+        parameters: {
             query?: never;
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
@@ -9435,7 +11458,7 @@ export interface operations {
             404: components["responses"]["Problem"];
         };
     };
-    updatePackageHold: {
+    updateSoftwareCatalogEntry: {
         parameters: {
             query?: never;
             header: {
@@ -9448,7 +11471,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PackageHoldUpdate"];
+                "application/json": components["schemas"]["SoftwareCatalogEntryUpdate"];
             };
         };
         responses: {
@@ -9458,7 +11481,256 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PackageHold"];
+                    "application/json": components["schemas"]["SoftwareCatalogEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareCatalogIcon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The icon. */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    setSoftwareCatalogIcon: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "image/png": string;
+            };
+        };
+        responses: {
+            /** @description Icon set. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareCatalogDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The hostname, then the device id, are the tie-breakers. */
+                sort?: components["parameters"]["SoftwareCatalogDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only entries in this state, reported or derived. */
+                state?: components["parameters"]["DeviceSoftwareStateFilter"];
+                /** @description Only members of this device group. */
+                device_group_id?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareCatalogDevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareAssignments: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareAssignmentSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only assignments of this catalog entry. */
+                catalog_entry_id?: components["parameters"]["SoftwareEntryFilter"];
+                /** @description Only definitions scoped to this device group. */
+                device_group_id?: components["parameters"]["DeviceGroupFilter"];
+                /** @description Only assignments with this intent. */
+                intent?: components["parameters"]["SoftwareIntentFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of software assignments. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareAssignmentPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createSoftwareAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareAssignment"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The software assignment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareAssignment"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwareAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateSoftwareAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareAssignmentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareAssignment"];
                 };
             };
             400: components["responses"]["Problem"];
@@ -10759,6 +13031,44 @@ export interface operations {
             404: components["responses"]["Problem"];
         };
     };
+    listDeviceManagedSoftware: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers. */
+                sort?: components["parameters"]["DeviceManagedSoftwareSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only entries in this state, reported or derived. */
+                state?: components["parameters"]["DeviceSoftwareStateFilter"];
+                /** @description Only entries with this intent, reported or assigned. */
+                intent?: components["parameters"]["DeviceManagedSoftwareIntentFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of managed software. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceManagedSoftwarePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
     listDeviceVulnerabilities: {
         parameters: {
             query?: {
@@ -10793,6 +13103,39 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listConfigStatus: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The resource ID is the tie-breaker. */
+                sort?: components["parameters"]["ConfigStatusSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. Keeps resources with a device in one of these statuses. */
+                status?: components["parameters"]["ResourceStateFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of resources. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceStatusPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     listSoftware: {

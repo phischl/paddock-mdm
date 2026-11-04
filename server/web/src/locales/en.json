@@ -15,6 +15,32 @@
     "readOnly": "Only organization administrators can change the privacy settings.",
     "saved": "The privacy settings were saved."
   },
+  "rolloutSettings": {
+    "title": "Rollout settings",
+    "intro": "Staged rollouts apply a configuration change to a share of the devices first, wave by wave, and stop automatically when too many devices fail. They are off by default. A running rollout keeps the values it started with.",
+    "general": "Staged rollouts",
+    "enabled": "Roll configuration changes out in waves",
+    "waves": "Waves",
+    "wavesHint": "Percentages of the devices, strictly increasing and ending with 100, at most 10 waves, separated by commas, for example 1, 10, 50, 100.",
+    "wavesInvalid": "Enter 1 to 10 strictly increasing whole numbers from 1 to 100, separated by commas, ending with 100.",
+    "minWaveMinutes": "Minimum duration of a wave",
+    "minWaveMinutesHint": "A wave lasts at least this many minutes before the next one starts. At least {min} minutes ({devMin} in a development stack).",
+    "minWaveInvalid": "Enter a whole number of minutes, at least {min} ({devMin} in a development stack).",
+    "minWaveRefused": "The minimum duration of a wave is too short: at least {min} minutes ({devMin} in a development stack).",
+    "thresholds": "Failure threshold",
+    "thresholdPercent": "Failure rate that stops a rollout",
+    "thresholdPercentHint": "Percent of the devices of a wave that failed (0–100).",
+    "thresholdPercentInvalid": "Enter a whole number from 0 to 100.",
+    "thresholdMin": "Minimum number of failed devices",
+    "thresholdMinHint": "A rollout stops only when at least this many devices failed.",
+    "thresholdMinInvalid": "Enter a whole number, at least 0.",
+    "canary": "Canary group",
+    "canaryGroup": "Canary device group",
+    "canaryHint": "The devices of this group always receive a change first, whatever the waves say.",
+    "canaryNone": "None",
+    "readOnly": "Only organization administrators can change the rollout settings.",
+    "saved": "The rollout settings were saved."
+  },
   "updateSettings": {
     "agentUpdates": {
       "title": "Agent updates",
@@ -109,8 +135,10 @@
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
     "privacySettings": "Privacy",
+    "rolloutSettings": "Rollouts",
     "apiTokens": "API tokens",
     "changeSets": "Change sets",
+    "configStatus": "Configuration status",
     "start": "Start",
     "groups": {
       "overview": "Overview",
@@ -129,7 +157,10 @@
     "watchedUnits": "Watched units",
     "mcpSettings": "MCP",
     "notifications": "Notifications",
-    "platformNotifications": "Platform notifications"
+    "platformNotifications": "Platform notifications",
+    "configRollouts": "Configuration rollouts",
+    "softwareSources": "Package sources",
+    "softwareCatalog": "Software catalog"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -249,6 +280,7 @@
     "in_use": "This item is still in use. Remove what uses it first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",
     "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected.",
+    "fingerprint_mismatch": "The key's fingerprint does not match the one you entered.",
     "username_taken": "This username is already taken.",
     "domain_taken": "One of these domains belongs to another organization.",
     "attribute_owned_upstream": "This is managed by the upstream directory and cannot be changed in Paddock.",
@@ -283,7 +315,9 @@
     "email_not_configured": "This installation has no e-mail relay, so e-mail destinations cannot be enabled.",
     "unknown_code": "One of the audit codes is not registered.",
     "notification_test_pending": "An earlier test of this destination is still waiting for its result. Try again in a moment.",
-    "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment."
+    "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
+    "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
+    "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent."
   },
   "audit": {
     "vulnerability": {
@@ -349,7 +383,8 @@
       "revoked": "{actor} revoked the enrollment token {name}"
     },
     "config": {
-      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)"
+      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)",
+      "reverted": "{actor} reverted a change set ({created} created, {updated} updated, {deleted} deleted)"
     },
     "api_token": {
       "created": "{actor} created the API token {name} ({role})",
@@ -366,6 +401,7 @@
       "retired": "{actor} retired the device {hostname}",
       "groups_changed": "{actor} changed the device groups of {hostname}",
       "name_changed": "Device name changed",
+      "enforcement_enabled": "{actor} enabled enforcement on the device {hostname}",
       "clone_suspected": "The device {hostname} was quarantined because its identity seems to be cloned",
       "bundle_applied": "The device {target} applied bundle {bundle_version, number}",
       "bundle_rejected": "The device {target} rejected a bundle",
@@ -407,6 +443,10 @@
       "presumed_self_locked": "The device {target} has not reached Paddock for longer than the dead man's switch period and presumably locked itself",
       "install_now_requested": "{actor} asked {target} to install {packages} now",
       "updates_run": "The device {target} finished its {kind} updates: {result, select, ok {{upgraded, number} packages upgraded} timeout {timed out} other {failed}}",
+      "software_installed": "The device {target} installed {package} {version}",
+      "software_reinstalled": "The device {target} found {package} removed locally and installed it again ({version})",
+      "software_removed": "The device {target} removed {package} {version} ({intent})",
+      "software_apply_failed": "The device {target} could not apply a software package or source ({stage}: {reason})",
       "stale_warning": "The device {target} has not contacted Paddock for {threshold_h, number} hours (warning)",
       "stale_critical": "The device {target} has not contacted Paddock for {threshold_h, number} hours and is presumed lost",
       "stale_cleared": "The device {target} contacted Paddock again",
@@ -429,7 +469,8 @@
       "event_gap_filled": "The missing events {from_seq} to {to_seq} of the device {target} arrived later",
       "event_seq_reset": "The event numbering of the device {target} was reset: highest number {reported_high} after {previous_high} (counter reset)",
       "clock_drift": "The clock of the device {target} differs from the server's by {offset_s, number} seconds (threshold {threshold_s, number} seconds)",
-      "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's"
+      "clock_drift_cleared": "The clock of the device {target} is back within {threshold_s, number} seconds of the server's",
+      "os_release_changed": "The operating system of the device {target} changed from {old_id} {old_version_id} to {new_id} {new_version_id}"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
@@ -474,6 +515,12 @@
       "resumed": "{actor} resumed the rollout of agent {version}",
       "completed": "The rollout of agent {version} was completed"
     },
+    "config_rollout": {
+      "advanced": "The configuration rollout moved to {percent, number} % of the devices",
+      "halted": "The configuration rollout was halted: {reason}",
+      "resumed": "{actor} resumed the configuration rollout",
+      "completed": "The configuration rollout was completed"
+    },
     "managed_file": {
       "created": "{actor} defined the managed file {path}",
       "updated": "{actor} changed the managed file {path}",
@@ -507,12 +554,28 @@
       "updates_changed": "{actor} changed the update settings",
       "managed_files_changed": "{actor} changed the operator roots of the managed files",
       "watched_units_changed": "{actor} changed the watched units of the presence policy",
-      "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}"
+      "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}",
+      "rollout_changed": "{actor} changed the rollout settings: staged rollouts {enabled, select, true {on} other {off}}"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",
       "updated": "{actor} changed the hold of the package {package}",
       "deleted": "{actor} released the package {package}"
+    },
+    "software_source": {
+      "created": "{actor} added the package source {name} with the key {fingerprint}",
+      "updated": "{actor} changed the package source {name}",
+      "deleted": "{actor} removed the package source {name}"
+    },
+    "software_catalog_entry": {
+      "created": "{actor} added {name} to the software catalog",
+      "updated": "{actor} changed {name} in the software catalog",
+      "deleted": "{actor} removed {name} from the software catalog with {assignment_count, plural, one {# assignment} other {# assignments}}"
+    },
+    "software_assignment": {
+      "created": "{actor} assigned {app} with the intent {intent}",
+      "updated": "{actor} changed the assignment of {app} from {old_intent} to {intent}",
+      "deleted": "{actor} removed the {intent} assignment of {app}"
     },
     "permission_profile": {
       "created": "{actor} created the permission profile {name}",
@@ -1157,8 +1220,10 @@
       "overview": "Overview",
       "access": "Login & sudo",
       "configuration": "Configuration",
+      "applyStatus": "Apply status",
       "commands": "Commands",
-      "audit": "Audit"
+      "audit": "Audit",
+      "managedSoftware": "Managed software"
     },
     "health": {
       "title": "Health and compliance",
@@ -1267,7 +1332,32 @@
       "hint": "Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update.",
       "targetHint": "Target = last completed release. A running rollout does not move it; a component newer than its target counts as up to date."
     },
-    "componentFilter": "Component outdated"
+    "componentFilter": "Component outdated",
+    "reportOnly": {
+      "banner": "This device is in report-only mode: it reports what it would change and changes nothing. Pending rows list the planned changes.",
+      "chip": "Report-only",
+      "enforce": {
+        "title": "Enable enforcement",
+        "explanation": "This device was adopted and only reports what it would change. Enabling enforcement applies the configuration at its next check-in.",
+        "label": "Enable enforcement",
+        "confirmTitle": "Enable enforcement on {hostname}?",
+        "confirm": "At its next apply the agent will quarantine foreign sudoers files, remove unexpected members of privileged groups (never the last administrator), install the login component and apply every managed resource. Type the hostname to confirm.",
+        "done": "Enforcement is enabled; the device applies its configuration at its next check-in."
+      }
+    },
+    "adoption": {
+      "method": "Enrollment method",
+      "mode": "Configuration mode",
+      "methods": {
+        "autoinstall": "Autoinstall",
+        "adopted": "Adopted",
+        "unknown": "Unknown"
+      },
+      "modes": {
+        "enforce": "Enforced",
+        "report_only": "Report-only"
+      }
+    }
   },
   "tokens": {
     "title": "Enrollment tokens",
@@ -1476,10 +1566,89 @@
     "before": "Before",
     "after": "After",
     "close": "Close",
+    "planRegion": "Plan of the change set, scrollable",
+    "revertsLabel": "Reverts the change set",
+    "revertedByLabel": "Reverted by the change set",
+    "revert": {
+      "action": "Revert",
+      "label": "Revert the change set of {at}",
+      "title": "Revert change set",
+      "message": "These changes undo the change set of {at} and are applied at once. Items created since then stay.",
+      "emptyPlan": "The configuration already matches the state before this change set; there is nothing to revert.",
+      "planChanged": "The configuration changed since the plan was shown. Review the new plan and confirm again.",
+      "done": "The change set of {at} was reverted.",
+      "blocked": {
+        "reverted": "This change set was already reverted.",
+        "noBefore": "The previous state of this change set is not stored (recorded before it was kept, or removed after 90 days)."
+      }
+    },
     "empty": {
       "title": "No change sets yet",
       "description": "Change sets are recorded when paddockctl or the API applies a configuration."
-    }
+    },
+    "rollout": "Rollout",
+    "rolloutLabel": "Rollout:",
+    "rolloutLink": "Open the rollout",
+    "urgentReason": "Urgent, applied to every device at once. Reason: {reason}"
+  },
+  "configStatus": {
+    "title": "Configuration status",
+    "summary": "Per resource, on how many active devices it applied, failed, is pending in a report-only apply or was corrected after a local change.",
+    "resource": "Resource",
+    "type": "Type",
+    "status": "Status",
+    "message": "Message",
+    "version": "Bundle version",
+    "time": "Reported",
+    "lastFailure": "Last failure",
+    "states": {
+      "applied": "Applied",
+      "failed": "Failed",
+      "pending": "Pending",
+      "drift_corrected": "Drift corrected",
+      "plan_error": "Plan error"
+    },
+    "count": {
+      "applied": "{count, plural, one {# applied} other {# applied}}",
+      "failed": "{count, plural, one {# failed} other {# failed}}",
+      "pending": "{count, plural, one {# pending} other {# pending}}",
+      "drift_corrected": "{count, plural, one {# drift corrected} other {# drifts corrected}}",
+      "plan_error": "{count, plural, one {# plan error} other {# plan errors}}"
+    },
+    "changes": "Planned changes",
+    "noDetails": "No further details.",
+    "bundles": "Bundle history",
+    "compiled": "Compiled",
+    "outcome": "Outcome",
+    "mode": "Mode",
+    "changed": "Changed",
+    "errors": "Errors",
+    "reportedAt": "Reported",
+    "rollout": "Rollout",
+    "outcomes": {
+      "applied": "Applied",
+      "rejected": "Rejected",
+      "none": "Not reported"
+    },
+    "modes": {
+      "enforce": "Enforce",
+      "report_only": "Report only"
+    },
+    "empty": {
+      "device": {
+        "title": "No apply status yet",
+        "description": "The device has not reported what it applied."
+      },
+      "bundles": {
+        "title": "No configuration versions",
+        "description": "No configuration was compiled for this device yet."
+      },
+      "fleet": {
+        "title": "No apply status yet",
+        "description": "No device has reported what it applied."
+      }
+    },
+    "schema": "Schema"
   },
   "managed": {
     "scope": "Applies to",
@@ -2021,7 +2190,8 @@
       "config_behind": "Configuration behind",
       "disk_conversion_failed": "In-place encryption failed",
       "clock_drift": "Clock drift",
-      "event_gap": "Event gap"
+      "event_gap": "Event gap",
+      "report_only": "Report-only, waiting for enforcement"
     },
     "action": {
       "stale_warning": "Open device",
@@ -2040,7 +2210,8 @@
       "config_behind": "Open device",
       "disk_conversion_failed": "Open device",
       "clock_drift": "Open device",
-      "event_gap": "Open device"
+      "event_gap": "Open device",
+      "report_only": "Open device"
     },
     "more": "+{count}",
     "empty": {
@@ -2373,6 +2544,23 @@
       "osRelease": "{release}: {count}",
       "unknownRelease": "unknown"
     },
+    "configuration": {
+      "title": "Configuration",
+      "rollout": "Open rollout",
+      "rolloutLine": "wave {wave} of {waves}",
+      "noRollout": "None open",
+      "status": {
+        "running": "Running",
+        "halted": "Halted"
+      },
+      "failedResources": "Failed resources",
+      "failedResourcesValue": "{resources, plural, one {# resource} other {# resources}} on {devices, plural, one {# device} other {# devices}}",
+      "reportOnly": "Devices in report-only mode",
+      "rolloutFailed": "failed {failed}",
+      "countsError": "The rollout counts could not be loaded.",
+      "retry": "Retry",
+      "loadingCounts": "Loading the rollout counts"
+    },
     "audit": {
       "title": "Recent audit activity",
       "open": "Audit log",
@@ -2606,5 +2794,263 @@
     },
     "urlRejected": "The server refused the URL: it must be an https address on port 443 or 1024 to 65535 whose host is public.",
     "nameTaken": "A destination with this name already exists."
+  },
+  "rollout": {
+    "urgent": {
+      "label": "Apply immediately to every device (urgent)",
+      "hint": "Skips the staged rollout and needs a recent step-up. Only the portal offers this; paddockctl and API tokens cannot.",
+      "reason": "Reason for the urgent change",
+      "reasonInvalid": "Enter a reason of 2 to 500 characters."
+    }
+  },
+  "configRollouts": {
+    "title": "Configuration rollouts",
+    "summary": "Staged rollouts of configuration changes: wave by wave, with an automatic stop when too many devices fail.",
+    "settingsLink": "Rollout settings",
+    "status": "Status",
+    "statuses": {
+      "running": "Running",
+      "halted": "Halted",
+      "completed": "Completed",
+      "reverted": "Reverted"
+    },
+    "modes": {
+      "immediate": "Immediate",
+      "staged": "Staged",
+      "urgent": "Urgent"
+    },
+    "wave": "Wave",
+    "waveShort": "Wave {wave, number} of {waves, number} ({percent, number} %)",
+    "counts": "Devices",
+    "countFacts": "{eligible, number} in the waves so far, {applied, number} applied, {failed, number} failed, {pending, number} pending",
+    "startedBy": "Started by",
+    "startedAt": "Started",
+    "startedFacts": "{by} on {at}",
+    "endedAt": "Ended",
+    "haltedReason": "Halt reason",
+    "open": "Open",
+    "openLabel": "Open the rollout started on {at}",
+    "back": "Back to configuration rollouts",
+    "heading": "Configuration rollout",
+    "thresholds": "Stop rule",
+    "thresholdFacts": "Each wave lasts at least {minutes, number} minutes; the rollout halts when {min, number} devices or {percent, number} % of the devices in the waves so far fail, whichever is more.",
+    "changeSet": "Change set",
+    "changeSetLink": "Change set of {at}",
+    "waves": "Waves",
+    "waveStates": {
+      "done": "Reached",
+      "current": "Current",
+      "upcoming": "Upcoming"
+    },
+    "canary": "The devices of the group {group} always receive the change first.",
+    "plan": "Planned changes",
+    "actions": {
+      "halt": {
+        "label": "Halt",
+        "title": "Halt rollout",
+        "confirm": "The devices keep the state of the wave reached. The rollout stays open and blocks its items until it is resumed and completed, completed, or its change set is reverted.",
+        "reason": "Reason"
+      },
+      "resume": {
+        "label": "Resume",
+        "title": "Resume rollout",
+        "confirm": "The rollout continues in the wave where it stopped; failures reported before now no longer count, and the wave starts its observation period again."
+      },
+      "advance": {
+        "label": "Advance wave",
+        "title": "Advance to the next wave",
+        "confirm": "The devices of the next wave receive the change at their next check-in, without waiting for the observation period."
+      },
+      "complete": {
+        "label": "Complete",
+        "title": "Complete rollout",
+        "confirm": "Every device receives this change at its next check-in, including all devices outside the waves reached so far."
+      },
+      "revert": {
+        "label": "Revert change set"
+      }
+    },
+    "devices": {
+      "title": "Devices",
+      "hostname": "Hostname",
+      "inWave": "In the wave",
+      "inWaveYes": "Yes",
+      "inWaveNo": "No",
+      "bundle": "Bundle",
+      "carries": "(carries the change)",
+      "outcome": "Newest report",
+      "failed": "Failed resources",
+      "outcomes": {
+        "applied": "Applied",
+        "rejected": "Rejected",
+        "report_only": "Report-only",
+        "none": "No report"
+      },
+      "empty": {
+        "title": "No devices",
+        "description": "No active device matches."
+      }
+    },
+    "empty": {
+      "title": "No rollouts yet",
+      "description": "A rollout starts when a change of a rollout-able section is applied while staged rollouts are enabled."
+    },
+    "wavePercent": "{percent, number} %"
+  },
+  "software": {
+    "sources": {
+      "title": "Package sources",
+      "summary": "Third-party APT repositories your devices may install from. Each source has its own signing key; adding or changing one is a root-equivalent change and asks for a security key.",
+      "create": "Add source",
+      "createTitle": "Add package source",
+      "editTitle": "Edit package source",
+      "name": "Name",
+      "slug": "Slug",
+      "slugHint": "Names the source file and keyring on the devices; cannot be changed later.",
+      "uris": "URIs",
+      "urisHint": "One https address per line, at most four.",
+      "suites": "Suites",
+      "suitesHint": "For example noble or stable. A flat repository's suite ends in /.",
+      "components": "Components",
+      "componentsHint": "For example main. None for a flat repository.",
+      "architectures": "Architectures",
+      "architecturesHint": "None selected means every architecture.",
+      "signingKey": "Signing key (ASCII-armored OpenPGP public key)",
+      "fingerprint": "Fingerprint",
+      "fingerprintHint": "Enter the fingerprint published by the vendor. It must match the uploaded key.",
+      "weakKey": "This key uses RSA below 3072 bits. It is accepted and acceptable until 2030.",
+      "httpsOnly": "Sources must use https.",
+      "slugInvalid": "Use 2 to 41 lowercase letters, digits and hyphens, starting with a letter or digit.",
+      "nameInvalid": "Enter a name of 1 to 100 characters.",
+      "urisInvalid": "Enter one to four https addresses with a host, a port from 1 to 65535 if any, no query, fragment, user information, quotes or angle brackets, at most 512 characters each.",
+      "suitesInvalid": "Enter one to eight suites of letters, digits, ., /, _ and -.",
+      "flatMixed": "Either every suite ends in / (flat repository) or none does.",
+      "flatComponents": "A flat repository has no components.",
+      "componentsRequired": "Enter at least one component.",
+      "componentsInvalid": "Enter at most eight components of lowercase letters, digits and -.",
+      "keyInvalid": "Paste one OpenPGP public key of at most 64 KiB.",
+      "fingerprintInvalid": "Enter the 40 hexadecimal characters of the fingerprint; spaces are ignored.",
+      "deleteTitle": "Remove package source",
+      "deleteConfirm": "Devices remove the source file and the keyring at their next check-in. Installed software stays. Type the source name to confirm.",
+      "empty": {
+        "title": "No package sources yet",
+        "description": "Add a trusted APT repository to offer software that your distribution does not ship."
+      },
+      "entries": "Entries",
+      "repeated": "Each entry may appear only once.",
+      "inUse": "This source is used by a catalog entry."
+    },
+    "catalog": {
+      "title": "Software catalog",
+      "summary": "Applications your devices install, keep, hold or block, by device group. Required applications a user removes are installed again and the event is recorded.",
+      "create": "Add application",
+      "createTitle": "Add application",
+      "editTitle": "Edit application",
+      "back": "Back to the software catalog",
+      "name": "Name",
+      "description": "Description",
+      "category": "Category",
+      "source": "Source",
+      "sourceHint": "Where the packages come from.",
+      "distributionRepositories": "Distribution repositories",
+      "packages": "Packages",
+      "packagesHint": "The most specific row for a device's distribution, release and architecture wins.",
+      "assignments": "Assignments",
+      "devices": "Devices",
+      "distribution": "Distribution",
+      "release": "Release",
+      "architecture": "Architecture",
+      "package": "Package",
+      "anyArchitecture": "Any",
+      "addRow": "Add package",
+      "remove": "Remove",
+      "removeRow": "Remove package row {n}",
+      "nameInvalid": "Enter a name of 1 to 100 characters.",
+      "descriptionInvalid": "At most 1000 characters.",
+      "categoryInvalid": "At most 64 characters.",
+      "packagesCount": "Enter one to twenty packages.",
+      "packagesDuplicate": "Each combination of distribution, release and architecture may appear once.",
+      "distributionInvalid": "Use the ID of /etc/os-release, for example ubuntu.",
+      "releaseInvalid": "Enter * or a release such as 24.04.",
+      "packageInvalid": "Enter a Debian package name: lowercase letters, digits, +, . and -.",
+      "deleteTitle": "Remove application",
+      "deleteConfirm": "{count, plural, one {The application and its # assignment are removed.} other {The application and its # assignments are removed.}} Installed software stays on the devices. Type the name to confirm.",
+      "empty": {
+        "title": "No applications yet",
+        "description": "Describe an application once, then assign it to device groups."
+      },
+      "devicesEmpty": {
+        "title": "No devices",
+        "description": "No active device is assigned this application yet."
+      }
+    },
+    "assignments": {
+      "title": "Assignments",
+      "create": "Assign",
+      "createTitle": "Assign the application",
+      "editTitle": "Change the assignment",
+      "intent": "Intent",
+      "updateRule": "Update rule",
+      "version": "Version",
+      "reason": "Reason",
+      "versionHint": "Only for a pinned version.",
+      "versionHintHold": "Leave empty to hold the installed version.",
+      "versionRequired": "Enter the version to pin.",
+      "versionInvalid": "Enter a Debian version: letters, digits, ., +, :, ~ and -.",
+      "reasonInvalid": "At most 500 characters.",
+      "deleteTitle": "Remove assignment",
+      "deleteConfirm": "Remove the assignment of {app} for {scope}? Devices keep what is installed.",
+      "empty": {
+        "title": "No assignments yet",
+        "description": "An assignment applies the application to a device group or to every device."
+      }
+    },
+    "intent": {
+      "label": "Intent",
+      "required": "Required",
+      "uninstall": "Uninstall",
+      "hold": "Hold version",
+      "forbid": "Forbid"
+    },
+    "updateRule": {
+      "latest": "Latest",
+      "pinned": "Pinned version"
+    },
+    "state": {
+      "label": "State",
+      "installed": "Installed",
+      "held": "Held",
+      "absent": "Not installed",
+      "pending": "Pending",
+      "failed": "Failed",
+      "not_applicable": "Not applicable",
+      "unknown": "No report yet"
+    },
+    "reason": {
+      "dpkg_locked": "Another package operation is running; the device retries.",
+      "deferred_offline": "The device waits for a server connection before it removes software.",
+      "would_remove_dependents": "The operation would remove other packages; nothing was changed.",
+      "no_candidate": "The package or version is not available from the device's sources.",
+      "fingerprint_mismatch": "The source key does not match its fingerprint; the source was not written.",
+      "not_yet_applied": "The device has not applied this yet.",
+      "source_unreachable": "The device could not reach the source.",
+      "conflicting_source": "The device already has an entry for this repository with another key; Paddock's entry was removed and the device's own entry stays.",
+      "apt_failed": "The package manager failed on the device."
+    },
+    "icon": {
+      "upload": "Icon (PNG)",
+      "hint": "A PNG of at most 64 KiB and 512 by 512 pixels.",
+      "notPng": "The icon must be a PNG file.",
+      "tooLarge": "The icon must be at most 64 KiB."
+    },
+    "reportedAt": "Reported",
+    "device": {
+      "summary": "Applications of the software catalog that apply to this device and what the device reported for each.",
+      "truncated": "The device left some entries out of its last report to keep the check-in small; an application without a row may be managed all the same.",
+      "empty": {
+        "title": "No managed software",
+        "description": "No catalog application is assigned to this device."
+      }
+    }
   }
 }

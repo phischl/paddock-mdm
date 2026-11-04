@@ -210,3 +210,23 @@ func TestInstallPackagesRecoversDpkg(t *testing.T) {
 		t.Fatalf("calls %v", calls)
 	}
 }
+
+// TestInstallNowOnlyExactNames (architect decision 2026-11-03): a name apt has no package of fails without reaching
+// apt-get, which would read it as a pattern; the other packages are installed.
+func TestInstallNowOnlyExactNames(t *testing.T) {
+	a := newAgent(t, testgw.New(t))
+	sys := withSystem(t, a)
+	sys.Unknown = map[string]bool{"paddock-agen++t": true}
+	status, result := installPackages(context.Background(), sys, []string{"htop", "paddock-agen++t"}, func() bool { return false })
+	if status != protocol.CommandFailed || !sys.Packages["htop"] {
+		t.Fatalf("%s %v", status, result)
+	}
+	for _, args := range sys.AptArgs {
+		if slices.Contains(args, "paddock-agen++t") {
+			t.Fatalf("the unknown name reached apt-get: %q", args)
+		}
+	}
+	if failed, _ := result["failed"].([]any); len(failed) != 1 || failed[0] != "paddock-agen++t" {
+		t.Fatalf("result %v", result)
+	}
+}

@@ -42,13 +42,13 @@ cannot be allow-listed. A refused request is `403 ip_not_allowed`.
 | `paddockctl whoami [-o text\|json]` | Organization, role, token name and expiry of the token. |
 | `paddockctl schema` | Prints the JSON Schema of `paddock.yml` (`api/schema/paddock.v1.json`), for editors and validators. |
 | `paddockctl get config [-o yaml\|json]` | Exports the configuration with every section, in the order of the schema. |
-| `paddockctl apply -f <file\|-> [--dry-run] [--yes] [-o text\|json]` | Reads YAML or JSON and prints the plan. With `--dry-run` it stops there. Without `--yes` a plan that deletes something is refused (exit code 3; paddockctl never asks). Otherwise it applies exactly the plan it showed: the apply carries the plan's SHA-256 (`expected_plan`), and if the configuration changed in between, the server applies nothing and paddockctl exits with code 3; run it again to review the new plan. On success it prints `Applied change set <id>`, or `No changes`. |
+| `paddockctl apply -f <file\|-> [--dry-run] [--yes] [-o text\|json]` | Reads YAML or JSON and prints the plan. With `--dry-run` it stops there. Without `--yes` a plan that deletes something is refused (exit code 3; paddockctl never asks). Otherwise it applies exactly the plan it showed: the apply carries the plan's SHA-256 (`expected_plan`), and if the configuration changed in between, the server applies nothing and paddockctl exits with code 3; run it again to review the new plan. On success it prints `Applied change set <id>`, then `Rollout: staged (rollout <id>)` when the change set started a staged rollout or `Rollout: urgent` when it skipped staging, or `No changes`. There is no flag for the urgent opt-out: it is portal-only ([Staged rollouts](#staged-rollouts-and-the-urgent-opt-out)). |
 | `paddockctl mcp login [--no-browser] [--platform]` | Signs an administrator in to the MCP through Authentik (device authorization grant, password and second factor in the browser) and writes the session file `$XDG_STATE_HOME/paddockctl/mcp-session.json` (0600). No token file: [mcp.md](mcp.md). |
 | `paddockctl mcp` | The stdio MCP server for an MCP client such as Claude Code: the admin API operations the session may call as tools, with the administrator's role ([mcp.md](mcp.md)). |
 | `paddockctl mcp tools [-o table\|json]` | Lists the tools the MCP session is offered now. |
 | `paddockctl mcp logout` | Ends the MCP session, revokes its refresh token and deletes the session file. |
 | `paddockctl audit verify-export <file> [--fingerprint <hex>] [-o text\|json]` | Verifies an audit evidence package offline: no configuration, token or network. See [Verifying an evidence package](#verifying-an-evidence-package). |
-| `paddockctl devices list [--page N] [--page-size 10\|25\|50\|100] [--sort <field>] [-q <text>] [--state <s>]… [--device-group-id <uuid>] [--disk-state <s>]… [-o table\|json]` | Lists devices with the parameters of the admin API's list contract; `-o json` prints the API's answer unchanged. |
+| `paddockctl devices list [--page N] [--page-size 10\|25\|50\|100] [--sort <field>] [-q <text>] [--state <s>]… [--device-group-id <uuid>] [--disk-state <s>]… [--enrollment-method <m>]… [--config-mode <m>]… [-o table\|json]` | Lists devices with the parameters of the admin API's list contract (`--enrollment-method autoinstall\|adopted\|unknown`, `--config-mode enforce\|report_only`); `-o json` prints the API's answer unchanged. |
 | `paddockctl audit feed [--after N] [--limit L] [--follow]` | Reads the organization's audit events from the cursor feed (`org_admin` or `org_auditor` token): one JSON event per line on stdout, the cursor on stderr as `next_after=<n>` (pass it as `--after` next time). `--limit` is 1 to 1000 (default 100). `--follow` keeps reading, polling every 30 seconds once caught up, until interrupted. A 403 exits with code 1 and the problem code. |
 | `paddockctl findings list [--page N] [--page-size 10\|25\|50\|100] [--sort <field>] [-q <text>] [--status <s>]… [--kind <k>] [--cleared] [-o table\|json]` | Lists findings with the list contract of the admin API; cleared findings only with `--cleared`. `-o json` prints the API's answer unchanged. Findings are acted on in the portal only. |
 
@@ -133,6 +133,28 @@ Split the change:
 
 Everything that needs no step-up — device groups, ordinary managed files, units, holds, settings without operator
 roots, assignments that grant no root — stays fully automated.
+
+## Staged rollouts and the urgent opt-out
+
+The complete guide, with the settings, the counts, the halt, resume, advance and complete actions and the revert, is
+[configuration rollouts](configuration-rollouts.md).
+
+With staged rollouts enabled in the portal (*Rollout settings*), an apply that changes managed files, managed units,
+package holds or the update settings does not reach every device at once: it starts a rollout that moves wave by wave,
+and `paddockctl apply` prints `Rollout: staged (rollout <id>)` after the change set. Follow it, and halt, resume,
+advance or complete it, on the *Configuration rollouts* page of the portal. While the rollout is open, a further apply
+that touches the same items is refused with 409 `rollout_conflict`, and one that touches other items of the same
+sections with 409 `rollout_running`; the whole apply is refused and nothing is applied. A change set that reaches every
+device at once prints no `Rollout:` line.
+
+`paddockctl apply` has no `--urgent` and no `--reason`. The urgent opt-out (apply immediately to every device, with a
+reason) needs a step-up, which a token never satisfies, so an apply cannot opt out of staging and an urgent change is
+made in the portal. A pipeline that must not wait for a rollout applies the change in the portal, or completes the
+running rollout there first.
+
+A revert of the open rollout's change set that created a device group which has since gained member devices is
+refused with 409 `in_use`; the rollout stays open until the members are moved to other groups or the rollout is
+completed.
 
 ## Restore commands
 

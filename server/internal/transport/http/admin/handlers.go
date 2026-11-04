@@ -53,24 +53,33 @@ type handlers struct {
 	conversions   *app.DiskConversions
 	privileges    *app.Privileges
 
-	commands    *app.DeviceCommands
-	localAdmin  *app.LocalAdmin
-	autoinstall *app.Autoinstall
-	disk        *app.Disk
-	revocations *app.Revocations
-	dms         *app.DMS
-	inventory   *app.Inventory
-	updates     *app.Updates
-	privacy     *app.Privacy
-	readAudit   *app.ReadAudit
-	attention   *app.Attention
+	commands        *app.DeviceCommands
+	localAdmin      *app.LocalAdmin
+	autoinstall     *app.Autoinstall
+	disk            *app.Disk
+	revocations     *app.Revocations
+	dms             *app.DMS
+	inventory       *app.Inventory
+	configStatus    *app.ConfigStatus
+	updates         *app.Updates
+	rolloutSettings *app.RolloutSettings
+	configRollouts  *app.ConfigRollouts
+	privacy         *app.Privacy
+	readAudit       *app.ReadAudit
+	attention       *app.Attention
 	// findings and the account list of their assignee picker (plan M9 decision 34).
 	findings    *app.Findings
 	accountList *app.AccountList
 	// notifications are the notification destinations (plan M9 decisions 14–19).
 	notifications *app.Notifications
-	ipAllowlist   *app.IPAllowlist
-	overview      *app.Overview
+	// softwareSources are the APT package sources (plan M13a decisions 1–6).
+	softwareSources *app.SoftwareSources
+	// softwareCatalog are the catalog entries and their assignments (plan M13a decisions 7–11).
+	softwareCatalog *app.SoftwareCatalog
+	// softwareStatus lists what devices report about the catalog's applications (plan M13a §3.4).
+	softwareStatus *app.SoftwareStatus
+	ipAllowlist    *app.IPAllowlist
+	overview       *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).

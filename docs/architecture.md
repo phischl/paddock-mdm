@@ -558,6 +558,14 @@ sequenceDiagram
 The enrollment request is the only device request signed with a key unknown to the server; the
 token is the authorization. Tokens are org-bound, so the device is org-bound from the first byte.
 
+> **Amendment 2026-11-02 (M11, ADR 0033):** the enrollment request may carry `enrollment_method` (`autoinstall` or `adopted`;
+> absent means `unknown`; another value is 400 `invalid_request` and consumes no token use). The agent sends
+> `autoinstall` only when the marker `/etc/paddock/autoinstall.marker` exists, which only the autoinstall template
+> writes, and `adopted` for `paddockd enroll`, so a device is report-only when in doubt. The server stores
+> `device.enrollment_method` and `device.config_mode` (`report_only` for `adopted`, otherwise `enforce`) and records
+> both in `device.enrolled`. The method decides only the configuration mode; approval stays with the token. The
+> operator path is `docs/operations/enroll-existing.md`.
+
 ### 6.7 Check-in
 
 ```mermaid
@@ -679,6 +687,21 @@ flowchart LR
   to 16 compiler replicas share the load. A Valkey lock `lock:compile:<device>` (`SET NX PX 30000`)
   guards the manual recompile path.
 
+> **Amendment 2026-11-02 (M11, ADR 0033):** a configuration change set may be **staged**. The compiler reads, once per
+> organization and round, the open `config_rollout` (status `running` or `halted`, at most one per organization), the
+> plan and before-state of its change set and the members of the canary group, in one read-only repeatable-read
+> transaction together with the definitions (ADR 0002 amendment 2026-11-01). Staged items are the keys of the
+> change set in the sections `managed_files`, `managed_units`, `package_holds` and `settings.updates`. The change set
+> is applied to the live tables at once; for a device **outside** the wave the compiler renders the staged keys with
+> their before items (a created key is left out), for a device **inside** it renders from the live tables. A device is
+> inside when it is in the canary group or its bucket is below the wave percent; the bucket is FNV-1a (32 bit) of
+> `<device id>:<rollout id>` modulo 100, so every rollout draws its waves anew. A device in report-only mode is never
+> inside. Every bundle row a device inside the wave receives carries `bundle.config_rollout_id`; the counts of the
+> rollout read it (`docs/operations/configuration-rollouts.md`). The rollout moves on in the worker (advance after the
+> wave's minimum duration, halt at the failure threshold, complete after the last wave) and by administrator action;
+> advance and complete record `StateChanged` for the organization, so the compiler renders again (halt and resume keep
+> the devices inside the wave). The rest of the flow is unchanged.
+
 ### 7.2 Bundle format
 
 The envelope is **DSSE** (Dead Simple Signing Envelope, Apache-2.0 specification), payload type
@@ -743,6 +766,12 @@ reports `bundle.rejected` with a reason code:
 > device's managed name (`device.name`, a lowercase RFC 1123 label of 1–63 characters, not `localhost`,
 > `bundle.ValidHostname`). The compiler renders it only while a name is set; a bundle without it leaves the hostname
 > alone. Agents that do not know the section ignore it. ADR [0041](adr/0041-device-hostname.md).
+
+> **Amendment 2026-11-02 (M11, ADR 0033):** the bundle gains the optional top-level field `mode`: absent means enforce,
+> `report_only` asks the agent to plan every resource and change nothing (§11.3). The schema version is unchanged; the
+> field is part of the content hash, so a change of mode publishes a new version, and `VerifyVersions` rejects any other
+> value with `ErrSchema`. An agent that does not know the field enforces, which is why the server sets
+> report-only only for devices whose agent declared `enrollment_method: adopted`.
 
 ### 7.3 Edge caching with preserved authorization
 
@@ -1332,6 +1361,26 @@ them; any change it made is reverted and reported as `config.playbook_touched_pr
 > not a tamper event. `ProtectHostname=` is never set on the Paddock units: the agent would report a stale name from
 > its own UTS namespace. ADR [0041](adr/0041-device-hostname.md).
 
+> **Amendment 2026-10-24 (M13a, ADR 0042):** the agent maps the optional `software` section to the internal resource
+> `software`, applied after `updates` (`hostname → time → file → systemd_unit → updates → software → login → sudo`). It
+> owns `/etc/apt/sources.list.d/paddock-*.sources` (deb822, per-source `Signed-By`), `/etc/apt/keyrings/paddock-*.gpg`,
+> `/etc/apt/preferences.d/51paddock-software` (forbid pins, priority −1), the installs and removals of catalog
+> packages and the record of what it installed. Holds and version pins stay with the `updates` reconciler; the
+> compiler merges the catalog's `hold` and `required pinned` results into `updates.holds`. Removals need a check-in
+> within 15 minutes; a dpkg lock is retried at the next drift pass; every operation is simulated first and refused
+> when it would remove other packages.
+
+> **Amendment 2026-11-02 (M11, ADR 0033):** a bundle with `mode: report_only` is **planned, not applied**. The applier runs
+> `Plan` for every resource of the bundle and for stale managed files, and never calls a reconciler's `Apply`, the deny
+> list or the removal of stale files. It reports `bundle.applied` with `mode: report_only`, `changed: 0` and one
+> outcome per resource: `pending` with the planned change lines (at most 50 lines of at most 256 bytes; a longer list
+> ends with `… and N more`; file names, unit names, user and group names, never contents), `applied` for an empty plan,
+> `failed` with the message for a plan error. The agent still caches the bundle and sets the applied version. While the
+> current bundle is report-only the drift loop and the local administrator manager do not run; revocation, the LUKS
+> tick, the dead man's switch, commands (`rotate_admin_password` is answered `failed` with reason `report_only`) and
+> the agent's and supervisor's own updates are unchanged. The first enforced bundle after report-only applies as any
+> bundle. The read-only `paddockd preflight` checks an installed device before adoption.
+
 ### 11.4 Commands
 
 Commands are delivered in the check-in response, signed individually (DSSE,
@@ -1390,6 +1439,7 @@ Expired commands are marked `expired` and never executed (platform outage questi
 | `paddockd` running (osquery policy `paddock_agent_running` in Fleet) | Fleet policy results | `device.tamper_agent_not_running` after 15 min without check-in |
 | Local admin login (journal, `pam_unix` for `paddock-admin`) | journal follow | `local_admin.login` (`local_admin.login`) |
 | Clock offset of each check-in: server time minus the signed request timestamp, measured by the gateway; the worker opens a drift episode above 60 s and closes it at 30 s or less | each materialized check-in (at most once per 60 s) | `device.clock_drift` (> 60 s), `device.clock_drift_cleared` (≤ 30 s); attention kind `clock_drift` |
+| Paddock-managed APT sources, keyrings and forbid pins | drift pass 5 min | `tamper.protected_file_changed` |
 
 Not watched today: `/etc/nsswitch.conf`, `/etc/security/`, `/etc/pam.d/` beyond the deny-list lines, Himmelblau's
 package version *(not scheduled)*; `/etc/himmelblau/himmelblau.conf` is re-rendered by the drift loop.
@@ -1401,12 +1451,21 @@ later as `device.event_gap_filled`; a spool overflow the agent admits
 types (N5). **Mutual watch:** an osquery policy in Fleet checks that `paddockd` runs and its binary hash
 matches the release manifest; the agent checks that `fleetd` runs. Disabling one is reported by the other.
 
+> **Amendment 2026-11-02 (M11, ADR 0033):** `bundle.applied` gains `mode` (`enforce` or `report_only`) and `resources`, one
+> entry per resource of the bundle with `id`, `status` (`applied`, `failed`, `pending`), `message` and, in
+> report-only mode, `changes`. Both are optional: older agents do not send them, and older servers ignore them (ADR 0013);
+> no event type is added. The server keeps the newest outcome per device and resource (`device_resource_status`, with
+> `drift_corrected` set by `config.drift_corrected`) and every report per bundle version (`device_bundle_report`). The
+> audit params of `device.bundle_applied` gain `mode` only; `resources` is never copied into audit params.
+
 ### 11.6 Protected areas (from the concept)
 
 1. `/etc/sudoers`, `/etc/sudoers.d/`, all files of `file` resources
 2. LUKS keyslots and header
 3. `/opt/paddock/`, `/etc/paddock/`, systemd units of agent, supervisor, fleetd, update timer
 4. `/etc/himmelblau/`, `/etc/pam.d/`, `/etc/nsswitch.conf`, `/etc/security/`, Himmelblau packages
+5. `/etc/apt/sources.list.d/paddock-*.sources`, `/etc/apt/keyrings/paddock-*.gpg`,
+   `/etc/apt/preferences.d/51paddock-software` (ADR 0042); the uninstall removes them in both modes.
 
 ---
 
@@ -1592,6 +1651,11 @@ test is replaced by the pilot feedback of the reference deployment.
   (the API returns 409 `package_on_hold`).
 - Reboot required: reported (`updates.reboot_required`); Paddock never reboots for updates in v1.
 
+Software catalog (M13a, ADR 0042): catalog entries with package names per distribution, release and architecture,
+assigned per device group with the intents required, uninstall, hold and forbid; `required latest` is installed and
+moves with the update runs, `required pinned` is installed at and held to a version; a locally removed required
+package is reinstalled and reported (`device.software_reinstalled`).
+
 ### 12.6 Dead man's switch (F14)
 
 - Contact anchor: every check-in response carries a **time ticket** `{organization_id, issued_at}`
@@ -1608,6 +1672,26 @@ test is replaced by the pilot feedback of the reference deployment.
   sequence follows, the confirmation POST is attempted once.
 - The worker marks devices silent past the period as `presumed_self_locked`.
 - A blocked connection triggers the switch like an outage; the portal says so at the setting.
+
+### 12.7 Adoption of existing devices
+
+> **Amendment 2026-11-02 (M11, ADR 0033):** a laptop that is already installed is adopted with `paddockd enroll` instead of
+> the autoinstall (`docs/operations/enroll-existing.md`). The agent asserts `enrollment_method: adopted` (§6.6) and the
+> server creates the device in **report-only** mode (`device.config_mode`): the compiler sets `mode: report_only` in
+> every bundle of the device (§7.2) and the agent reports what it would change (§11.3) without changing anything. The
+> portal shows the chips *Adopted* and *Report-only*, the *Apply status* tab lists the planned changes per resource, and
+> the attention kind `report_only` keeps the device visible until an administrator ends the mode.
+>
+> `POST /api/v1/devices/{id}/enforce` (organization administrator or operator; body `{hostname}`, which must equal the
+> device's hostname; 409 `invalid_state` unless the device is active and report-only; audited as
+> `device.enforcement_enabled`; not offered to the MCP) switches the device to `enforce`. Its next bundle quarantines
+> foreign sudoers files and removes unexpected members of privileged groups (the tamper events
+> `device.tamper_sudoers_d_file` and `device.tamper_sudo_group_member`; never the last administrator), installs the login
+> component and applies every managed resource. The step is one-way: the mode is set to report-only only when a
+> device enrolls. A report-only device is never part of a configuration rollout and never counted in one (§7.1).
+> Paddock's own updates, revocation, the LUKS tick and the dead man's switch keep running while a device is report-only
+> (design contract 8 is unchanged: the agent never locks, wipes or blocks on its own initiative).
+> The disk of an adopted device stays `unmanaged` (§12.4).
 
 ---
 
@@ -2000,6 +2084,22 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > `watched_unit` (the presence policy's third-party units). The audit index gains the per-organization `commit_seq`
 > (audit migration 00010). Retention of each table: `docs/compliance/retention.md`.
 
+> **Amendment 2026-11-02 (M11, ADR 0033):** new tables in the database `paddock`, all with RLS: `device_bundle_report` (one
+> row per device and bundle version: outcome, mode, counts, reason, the device's and the server's time),
+> `device_resource_status` (the newest outcome per device and resource: status, message, planned changes, bundle
+> version), `organization_rollout_settings` (one row per organization: enabled, waves, minimum wave duration, failure
+> threshold, canary device group) and `config_rollout` (one row per staged change set: waves, current wave, thresholds
+> copied at the start, status `running`, `halted`, `completed` or `reverted`, reasons; a unique index allows one open
+> rollout per organization). New columns: `change_set` gains `before` (the items before an update or deletion,
+> purged by the worker after 90 days, with `before_purged_at`), `reverts_change_set_id`, `rollout` (`immediate`, `staged`
+> or `urgent`), `urgent_reason` and `reason`; `bundle` gains `config_rollout_id`; `device` gains `enrollment_method`
+> (`autoinstall`, `adopted`, `unknown`), `config_mode` (`enforce`, `report_only`) and `config_mode_changed_at`. The
+> function `paddock_config_rollout_bucket` is the SQL twin of the Go bucket. The attention view gains the kind
+> `report_only`. Retention of each table: `docs/compliance/retention.md`.
+
+> **Amendment 2026-10-24 (M13a, ADR 0042):** new tables in the database `paddock`: `software_source`,
+> `software_catalog_entry`, `software_assignment`, `device_software_status`; new column `device_status.software_digest`.
+
 ### 16.2 Conventions
 
 - Primary keys UUIDv7 (time-ordered) generated in Go; timestamps `timestamptz` in UTC.
@@ -2071,6 +2171,22 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > list contract (`after`, `limit` 1–1000, response `paddock.audit.feed.v1` with `events`, `next_after`, `latest`;
 > OpenAPI extension `x-paddock-feed`, no `x-paddock-list`), because a SIEM must read every event exactly once in commit
 > order. Plan: `docs/plans/M9-notifications.md`.
+
+> **Amendment 2026-11-02 (M11, ADR 0033):** new endpoints `GET /api/v1/devices/{id}/config-status` and
+> `GET /api/v1/devices/{id}/bundles` (apply status and bundle history of a device), `GET /api/v1/config-status` (per
+> resource, across the fleet), `POST /api/v1/change-sets/{id}/revert` (`dry_run`, `expected_plan`; audited as
+> `config.reverted`; 409 `invalid_state` without a before-state or after an earlier revert, 412 `plan_changed`),
+> `GET`/`PUT /api/v1/settings/rollout`, `GET /api/v1/config-rollouts`, `GET /api/v1/config-rollouts/{id}`,
+> `GET /api/v1/config-rollouts/{id}/devices`, `POST /api/v1/config-rollouts/{id}/halt` (body `{reason}`), `…/resume`,
+> `…/advance`, `…/complete` (audited as `config_rollout.*`; 409 `invalid_state` for a wrong status) and
+> `POST /api/v1/devices/{id}/enforce` (body `{hostname}`; `x-paddock-mcp: { expose: false }`). The writes of the
+> rollout-able sections (`PUT /api/v1/config`, the managed file, unit and package hold endpoints, `PUT
+> /api/v1/settings/updates`) and the revert accept the query parameters `urgent` and `reason` (the urgent opt-out: a
+> step-up, never an API token); they answer 409 `rollout_conflict` or `rollout_running` while a rollout is open. The device
+> list gains the filters `enrollment_method` and `config_mode`, the change-set list the filter `rollout`; `Device` carries
+> `enrollment_method`, `config_mode` and `config_mode_changed_at`, `DeviceDetail` carries `config_status`, `ChangeSet`
+> carries `rollout`, `rollout_id`, `urgent_reason`, `reverts_change_set_id`, `reverted_by` and `before_available`, and
+> `EffectiveConfig` carries `rollout`. Guide: `docs/operations/configuration-rollouts.md`.
 
 ### 17.2 Device API
 

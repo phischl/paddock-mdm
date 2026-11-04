@@ -79,17 +79,18 @@ added to a group later join it without a configuration change.
   `user.locked`, `user.unlocked`, `admin.login`, `admin.role_granted`, `admin.role_revoked`,
   `admin.mcp_write_enabled`, `admin.mcp_write_disabled`, `admin.sessions_revoked`, `agent_rollout.halted`,
   `agent_release.published`, `audit.chain_verification_failed`, `audit.export_requested`,
-  `audit.export_downloaded`, `config.applied`, `managed_file.sensitive_confirmed`, `notification.pseudonym_resolved`,
-  `platform.osv_stale`, `platform.ip_allowlist_changed`, `platform.ip_allowlist_disabled`,
-  `platform.ip_allowlist_denied`, `platform.mcp_policy_changed`, `platform.sessions_ended`,
-  `platform.auto_unseal_enabled`, `platform.auto_unseal_disabled`, `vulnerability.critical_summary`.
+  `audit.export_downloaded`, `config.applied`, `config_rollout.halted`, `managed_file.sensitive_confirmed`,
+  `notification.pseudonym_resolved`, `platform.osv_stale`, `platform.ip_allowlist_changed`,
+  `platform.ip_allowlist_disabled`, `platform.ip_allowlist_denied`, `platform.mcp_policy_changed`,
+  `platform.sessions_ended`, `platform.auto_unseal_enabled`, `platform.auto_unseal_disabled`,
+  `vulnerability.critical_summary`.
 
 Not in the preset, because they end a condition or are routine: `device.event_gap_filled`, `device.clock_drift_cleared`,
 `audit.chain_verified`, `audit.export_completed`, `retention.purged`, `device.inventory_purged`,
 `device.inventory_host_kept`, `device.uninstalled`, `device.uninstall_cancelled`, the `device.disk_conversion_*` and
 `device.encrypt_*` codes, `enrollment_token.*`, `agent_rollout.*` other than `halted`, `agent_release.*` other than
-`published`, `notification.delivered`, `notification.test_requested`, `notification.test_sent`.
-`config_rollout.halted` joins the preset when the change that registers it lands.
+`published`, `config_rollout.*` other than `halted`, `notification.delivered`, `notification.test_requested`,
+`notification.test_sent`.
 
 `vulnerability.critical_summary` is one event per organization and UTC day that lists the critical vulnerabilities
 first seen since the previous summary (count, devices, up to 20 CVE IDs). A CVE that was re-rated to critical after it

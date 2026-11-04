@@ -62,7 +62,7 @@ func (g *gateway) enroll(w http.ResponseWriter, r *http.Request) {
 	msg := ingest.Enroll{
 		EnrollmentID: id, OrganizationID: tok.OrganizationID, TokenSHA256: hash, KeyID: s.headers.KeyID, PublicKey: spki,
 		KeyProtection: req.KeyProtection, Hostname: req.Hostname, HardwareUUID: req.HardwareUUID, MachineID: req.MachineID,
-		OSRelease: req.OSRelease, AgentVersion: req.AgentVersion, ReceivedAt: g.d.Now().UTC(),
+		OSRelease: req.OSRelease, AgentVersion: req.AgentVersion, EnrollmentMethod: req.EnrollmentMethod, ReceivedAt: g.d.Now().UTC(),
 	}
 	body, err := json.Marshal(msg)
 	if err != nil {
@@ -88,6 +88,9 @@ func validateEnroll(req protocol.EnrollRequest) error {
 		return errInvalidRequest.with("key_protection must be tpm or file")
 	}
 	if err := domaindevice.ValidateReported(req.Hostname, req.HardwareUUID, req.MachineID, req.AgentVersion); err != nil {
+		return errInvalidRequest.with(err.Error())
+	}
+	if _, _, err := domaindevice.Adoption(req.EnrollmentMethod); err != nil {
 		return errInvalidRequest.with(err.Error())
 	}
 	return nil
@@ -142,7 +145,7 @@ func (g *gateway) enrollStatus(w http.ResponseWriter, r *http.Request) {
 // decision 11); it carries the device's pending commands (plan M4a decision 3). A quarantined device gets neither
 // a bundle URL nor commands.
 func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
-	dev, err := g.authenticateDevice(w, r, maxBody)
+	dev, err := g.authenticateDevice(w, r, maxCheckinBody)
 	if err != nil {
 		g.fail(w, r, err)
 		return
@@ -195,6 +198,7 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	hb := ingest.Heartbeat{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: received,
 		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion, Arch: boundedArch(req.Arch),
+		OSRelease:      boundedOSRelease(req.OSRelease),
 		SchemaVersions: boundedSchemaVersions(req.SchemaVersions), Health: req.Health,
 		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq, ExpectedSeq: expected,
 		// Without a cached delivery (upgrade, Valkey loss) nothing is flagged: a counter restored from last_seq can
@@ -458,6 +462,16 @@ func boundedArch(arch string) string {
 		return arch
 	}
 	return ""
+}
+
+// boundedOSRelease keeps the id and version_id of a check-in when both are plain identifiers; anything else is dropped
+// so that the check-in still succeeds and the stored value stays (PDK-695).
+func boundedOSRelease(in map[string]string) map[string]string {
+	id, versionID, ok := domaindevice.ReportedOSRelease(in)
+	if !ok {
+		return nil
+	}
+	return map[string]string{"id": id, "version_id": versionID}
 }
 
 func boundedSchemaVersions(in []int) []int {

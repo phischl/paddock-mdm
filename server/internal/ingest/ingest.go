@@ -25,7 +25,10 @@ type Enroll struct {
 	MachineID      string            `json:"machine_id,omitempty"`
 	OSRelease      map[string]string `json:"os_release,omitempty"`
 	AgentVersion   string            `json:"agent_version"`
-	ReceivedAt     time.Time         `json:"received_at"`
+	// EnrollmentMethod is "", autoinstall or adopted, as the device asserts it (plan M11 decision 40): it only selects
+	// enforce or report-only, never more trust.
+	EnrollmentMethod string    `json:"enrollment_method,omitempty"`
+	ReceivedAt       time.Time `json:"received_at"`
 }
 
 // Heartbeat is one check-in (routing key ingest.heartbeat.<org>, message_id random). Seq is the sequence number the
@@ -40,13 +43,15 @@ type Heartbeat struct {
 	AgentVersion         string    `json:"agent_version"`
 	SchemaVersions       []int     `json:"schema_versions,omitempty"`
 	// Arch is the architecture the agent reported (plan M8d decision 25).
-	Arch           string          `json:"arch,omitempty"`
-	Health         json.RawMessage `json:"health,omitempty"`
-	EventSeqHigh   int64           `json:"event_seq_high"`
-	Seq            int64           `json:"seq"`
-	ReportedSeq    int64           `json:"reported_seq"`
-	ExpectedSeq    int64           `json:"expected_seq"`
-	CloneSuspected bool            `json:"clone_suspected"`
+	Arch string `json:"arch,omitempty"`
+	// OSRelease is the validated id and version_id the agent reported (PDK-695); nil when it sent none or garbage.
+	OSRelease      map[string]string `json:"os_release,omitempty"`
+	Health         json.RawMessage   `json:"health,omitempty"`
+	EventSeqHigh   int64             `json:"event_seq_high"`
+	Seq            int64             `json:"seq"`
+	ReportedSeq    int64             `json:"reported_seq"`
+	ExpectedSeq    int64             `json:"expected_seq"`
+	CloneSuspected bool              `json:"clone_suspected"`
 	// ClockOffsetS is server time minus the device's signed timestamp in seconds (plan M8b decision 11).
 	ClockOffsetS int64 `json:"clock_offset_s"`
 	// DeliveredCommands are the commands the check-in response carried (plan M4a decision 3).

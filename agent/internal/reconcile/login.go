@@ -279,11 +279,15 @@ func (l *Login) checkPAM(id string) (Result, bool) {
 // DenyListID is the plan and report ID of the deny list on a device without a login resource (plan M4a step 0c).
 const DenyListID = "login:deny_list"
 
-// DenyListMissing reports whether the deny-list PAM profile is enabled (either of its lines is present) while
-// /etc/paddock/login-deny does not exist.
+// DenyListManaged reports whether the deny-list PAM profile is enabled (either of its lines is present), so that the
+// agent keeps /etc/paddock/login-deny in place.
+func (l *Login) DenyListManaged() bool {
+	return slices.Contains(pamLines(l.read(commonAuth)), DenyAuthLine) || slices.Contains(pamLines(l.read(commonAccount)), DenyAccountLine)
+}
+
+// DenyListMissing reports whether the deny list is managed while /etc/paddock/login-deny does not exist.
 func (l *Login) DenyListMissing() bool {
-	enabled := slices.Contains(pamLines(l.read(commonAuth)), DenyAuthLine) || slices.Contains(pamLines(l.read(commonAccount)), DenyAccountLine)
-	if !enabled {
+	if !l.DenyListManaged() {
 		return false
 	}
 	_, _, err := l.Sys.ReadFile(DenyList)
@@ -469,22 +473,9 @@ func dependencyFailure(out string) bool {
 // ubuntuVersion returns VERSION_ID of an Ubuntu system; the repository has one tree per release. /etc/os-release is
 // usually a symlink to /usr/lib/os-release, which os-release(5) names as the fallback.
 func (l *Login) ubuntuVersion() (string, error) {
-	data, _, err := l.Sys.ReadFile("/etc/os-release")
-	if data == nil {
-		data, _, err = l.Sys.ReadFile("/usr/lib/os-release")
-	}
+	vars, err := ReadOSRelease(l.Sys)
 	if err != nil {
-		return "", fmt.Errorf("read os-release: %w", err)
-	}
-	vars := map[string]string{}
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	for sc.Scan() {
-		if k, v, ok := strings.Cut(sc.Text(), "="); ok {
-			if u, err := strconv.Unquote(v); err == nil {
-				v = u
-			}
-			vars[k] = v
-		}
+		return "", err
 	}
 	if vars["ID"] != "ubuntu" || !plainValue(vars["VERSION_ID"]) {
 		return "", fmt.Errorf("unsupported distribution %q %q", vars["ID"], vars["VERSION_ID"])

@@ -40,6 +40,7 @@ func TestSecurityCodesContent(t *testing.T) {
 		"platform.auto_unseal_disabled", "device.retired", "device.uninstall_requested", "device.escrow_destroyed",
 		"managed_file.sensitive_confirmed", "vulnerability.critical_summary", "notification.pseudonym_resolved",
 		"audit.export_requested", "audit.export_downloaded", "notification.destination_created", "notification.destination_secret_rotated",
+		"config_rollout.halted",
 	} {
 		if !slices.Contains(codes, c) {
 			t.Errorf("%s missing from the preset", c)
@@ -51,7 +52,7 @@ func TestSecurityCodesContent(t *testing.T) {
 	for _, c := range []audit.Code{
 		"device.event_gap_filled", "device.clock_drift_cleared", "audit.chain_verified", "retention.purged",
 		"action.finalized_unknown", "device.uninstalled", "device.uninstall_cancelled", "enrollment_token.created",
-		"agent_rollout.started", "agent_release.created", "device.encrypt_requested", "config_rollout.halted",
+		"agent_rollout.started", "agent_release.created", "device.encrypt_requested", "config_rollout.advanced",
 	} {
 		if slices.Contains(codes, c) || outbound.IsSecurityCode(c) {
 			t.Errorf("%s must not be in the preset", c)

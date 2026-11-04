@@ -42,9 +42,12 @@ commands:
   schema                        print the JSON Schema of paddock.yml (paddock.v1)
   get config [-o yaml|json]     export the organization's configuration
   apply -f <file|-> [--dry-run] [--yes] [-o text|json]
-                                show the plan of a configuration and apply it; deletions need --yes
+                                show the plan of a configuration and apply it; deletions need --yes. With staged
+                                rollouts enabled a rollout-able change starts a rollout (printed as "Rollout: staged");
+                                the urgent opt-out is portal-only: an API token never satisfies the step-up it needs
   devices list [--page N] [--page-size 10|25|50|100] [--sort <field>] [-q <text>] [--state <s>]...
-               [--device-group-id <uuid>] [--disk-state <s>]... [-o table|json]
+               [--device-group-id <uuid>] [--disk-state <s>]... [--enrollment-method <m>]...
+               [--config-mode <m>]... [-o table|json]
   audit feed [--after N] [--limit L] [--follow]
                                 print audit events as JSON lines and the cursor (next_after=N) on stderr
   audit verify-export <file> [--fingerprint <hex>] [-o text|json]
