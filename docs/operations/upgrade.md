@@ -161,35 +161,18 @@ Then the audit host, the same way without step 3.
 
 ## Notifications on a cluster initialized before them
 
-A control-plane cluster creates its database roles once, at initialization (`postgres/init/10-roles.sh`). A cluster
-initialized before the notifications (plan M9) lacks the role `paddock_notifier`, and the migration 00085 that
-creates the notification tables refuses to run without it. A fresh installation (the move to 0.1.0-alpha.7 is one)
-creates the role itself; this section is for clusters that already run a build without it. On the control plane,
-in B's directory, in this order:
+The database roles need no manual step: the one-shot service `db-provision` creates every control-plane role whose
+password file is mounted (`paddock_notifier` among them) and sets every password again on each `./paddock up`, before
+`paddock-migrate` runs (`postgres/provision-roles.sh`; plan M16 decision 8). A cluster initialized before the
+notifications (plan M9) therefore only needs the files and the OpenBao bootstrap. On the control plane, in B's
+directory, in this order:
 
 1. Right after `./paddock migrate-from` (step 2), run `./paddock secrets`. It adds the notifier's files to the copied
    `.secrets/`: `db_paddock_notifier_password`, `db_paddock_notifier_url`, an empty `smtp_password` and empty
-   `approle/paddock-notifier/role_id` and `secret_id`. Until the next two steps are done, `./paddock check` of step 2
+   `approle/paddock-notifier/role_id` and `secret_id`. Until the next step is done, `./paddock check` of step 2
    fails on `approle_notifier_role_id` and `approle_notifier_secret_id` (empty); that is expected.
-2. Create the database role (below).
-3. Run `./paddock bootstrap openbao` (below); it fills the AppRole files.
-4. Run `./paddock check` again: every item PASS. Only then continue with step 3 of the upgrade.
-
-The database role, with A's stack still running:
-
-```sh
-./paddock compose up -d postgres
-NOTIFIER_PASSWORD="$(cat .secrets/db_paddock_notifier_password)" ./paddock compose exec -T -e NOTIFIER_PASSWORD \
-  postgres psql -v ON_ERROR_STOP=1 -q -U postgres -d paddock <<'SQL'
-\set pw `printf '%s' "$NOTIFIER_PASSWORD"`
-SELECT format('CREATE ROLE paddock_notifier LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD %L', :'pw')
-  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'paddock_notifier') \gexec
-GRANT CONNECT ON DATABASE paddock TO paddock_notifier;
-GRANT USAGE ON SCHEMA public TO paddock_notifier;
-SQL
-```
-
-The password reaches `psql` through the container's environment, never a command line. The step is idempotent.
+2. Run `./paddock bootstrap openbao` (below); it fills the AppRole files.
+3. Run `./paddock check` again: every item PASS. Only then continue with step 3 of the upgrade.
 
 The OpenBao bootstrap, with A's stack running and OpenBao unsealed: run `./paddock bootstrap openbao` once in B's
 directory with a root token (`docs/operations/openbao.md` section 1; revoke the token afterwards). It adds the Transit

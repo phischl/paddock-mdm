@@ -828,3 +828,28 @@ func TestNotifierCompose(t *testing.T) {
 		})
 	}
 }
+
+// TestSuperuserPasswordOnlyWhereRolesAreProvisioned requires that the PostgreSQL superuser passwords reach only the
+// database itself and its one-shot provisioning service, never a migration or a role (plan M16 decision 8: the owner
+// stays NOCREATEROLE).
+func TestSuperuserPasswordOnlyWhereRolesAreProvisioned(t *testing.T) {
+	allowed := map[string]bool{
+		"postgres": true, "db-provision": true, "audit-postgres": true, "audit-db-provision": true,
+	}
+	for name, files := range map[string][]string{
+		"production control plane": prodFiles(t, "controlplane"),
+		"production audit host":    prodFiles(t, "audit"),
+	} {
+		cfg := renderConfig(t, files, "prod.env.example")
+		for svc, s := range cfg.Services {
+			for _, ref := range s.Secrets {
+				if (ref.Source == "postgres_superuser_password" || ref.Source == "audit_postgres_superuser_password") && !allowed[svc] {
+					t.Errorf("%s: %s mounts %s", name, svc, ref.Source)
+				}
+			}
+		}
+		if _, ok := cfg.Services["db-provision"]; !ok && name == "production control plane" {
+			t.Errorf("%s: no service db-provision", name)
+		}
+	}
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Creates the PostgreSQL role paddock_unsealer of the automatic unseal of OpenBao (ADR 0035, plan M8u decision 17),
-# idempotently: every other role is created once at cluster initialization (postgres/init/10-roles.sh), this one may
+# idempotently: every other role is provisioned by postgres/provision-roles.sh (initdb hook and db-provision), this one may
 # be added to a cluster initialized before it existed. Sets the password of .secrets/db_paddock_unsealer_password and
 # grants SELECT and the UPDATE of the report columns on openbao_auto_unseal when the table exists; migration 00050
 # grants the same when it runs after the role exists. Run by `make up` and `./paddock auto-unseal enable`.
