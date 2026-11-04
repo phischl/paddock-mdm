@@ -603,9 +603,9 @@ PDK-747/748/749/750, PDK-751/752/753 and PDK-754/755 are three independent chain
 
 ## 12. Risks and open points
 
-- **R1 — Privacy sign-off.** The content list and the notice text need the maintainer's approval before PDK-750
-  merges `privacy.md`. Default: as ADR 0048 decision 2 and 6 state (without the administrator's name).
-- **R2 — Step-up on every download** is friction for operators. Default: kept (the bundle is reveal-class data).
+- **R1 — Privacy sign-off.** Resolved: the maintainer signed off the content list (incl. the apt history log)
+  and the notice text without the administrator's name on 2026-11-04; PDK-750 merges `privacy.md` with it.
+- **R2 — Step-up on every download** is friction for operators. Kept (the bundle is reveal-class data).
 - **R3 — Syslog receivers differ** in framing tolerance. Default: octet-counting (RFC 6587 §3.4.1), the only
   framing safe for JSON with newlines; the runbook shows rsyslog and Wazuh settings.
 - **R4 — Checkpoint ordering** relies on `recorded_at` of the cursor's event (decision 20): a day whose events
