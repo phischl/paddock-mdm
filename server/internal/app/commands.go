@@ -79,7 +79,14 @@ func nilIfEmpty(s []string) []string {
 // (plan M4a decision 17).
 func issueCommand(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceID uuid.UUID, typ string,
 	params map[string]any, now time.Time, notBefore *time.Time) (pgstore.DeviceCommand, error) {
-	c, err := queueCommand(ctx, q, rec, deviceID, typ, params, now, notBefore)
+	return issueCommandID(ctx, q, rec, uuid.Must(uuid.NewV7()), deviceID, typ, params, now, notBefore)
+}
+
+// issueCommandID is issueCommand with the command's ID chosen by the caller, for a command whose params or rows name
+// its own ID (collect_status, ADR 0048 decision 1).
+func issueCommandID(ctx context.Context, q *pgstore.Queries, rec Recorder, id, deviceID uuid.UUID, typ string,
+	params map[string]any, now time.Time, notBefore *time.Time) (pgstore.DeviceCommand, error) {
+	c, err := queueCommandID(ctx, q, rec, id, deviceID, typ, params, now, notBefore)
 	if err == nil {
 		rec.SetParam("command_id", c.ID.String())
 	}
@@ -88,6 +95,11 @@ func issueCommand(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceI
 
 // queueCommand is issueCommand without the audit param, for actions that issue a command to many devices.
 func queueCommand(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceID uuid.UUID, typ string,
+	params map[string]any, now time.Time, notBefore *time.Time) (pgstore.DeviceCommand, error) {
+	return queueCommandID(ctx, q, rec, uuid.Must(uuid.NewV7()), deviceID, typ, params, now, notBefore)
+}
+
+func queueCommandID(ctx context.Context, q *pgstore.Queries, rec Recorder, id, deviceID uuid.UUID, typ string,
 	params map[string]any, now time.Time, notBefore *time.Time) (pgstore.DeviceCommand, error) {
 	lifetime, ok := command.Lifetime(typ)
 	if !ok {
@@ -114,7 +126,7 @@ func queueCommand(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceI
 		start = notBefore.UTC().Truncate(time.Second)
 	}
 	c, err := q.InsertDeviceCommand(ctx, pgstore.InsertDeviceCommandParams{
-		ID: uuid.Must(uuid.NewV7()), OrganizationID: org, DeviceID: deviceID, Type: typ, Params: raw, IssuedBy: issuedBy,
+		ID: id, OrganizationID: org, DeviceID: deviceID, Type: typ, Params: raw, IssuedBy: issuedBy,
 		IssuedAt: issued, ExpiresAt: start.Add(lifetime), NotBefore: notBefore,
 	})
 	if err != nil {
@@ -162,12 +174,21 @@ func (d *DeviceCommands) Due(ctx context.Context, now time.Time) ([]pgstore.Devi
 }
 
 // Expire marks the open commands of the context's organization whose lifetime ended at now as expired and returns
-// them (worker).
+// them (worker); a diagnostics request whose collect_status command expired unanswered expires with it.
 func (d *DeviceCommands) Expire(ctx context.Context, now time.Time) ([]pgstore.ExpireDeviceCommandsRow, error) {
 	var out []pgstore.ExpireDeviceCommandsRow
 	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
-		out, err = q.ExpireDeviceCommands(ctx, now)
+		if out, err = q.ExpireDeviceCommands(ctx, now); err != nil {
+			return err
+		}
+		ids := make([]uuid.UUID, len(out))
+		for i, e := range out {
+			ids[i] = e.ID
+		}
+		_, err = q.ExpireRequestedDeviceDiagnostics(ctx, pgstore.ExpireRequestedDeviceDiagnosticsParams{
+			ObjectsUntil: now.Add(DiagnosticsUploadWindow), Ids: ids,
+		})
 		return err
 	})
 	return out, err
@@ -205,7 +226,8 @@ func (d *DeviceCommands) MarkDelivered(ctx context.Context, hb ingest.Heartbeat)
 
 // Finish records the result of a command; only the first result of an open command counts (worker). The result of
 // an in-place encryption command also moves its conversion (recordConversionResult); an uninstall the device refused
-// for good also ends its request (endRefusedUninstall).
+// for good also ends its request (endRefusedUninstall); a collect_status result moves its diagnostics bundle
+// (finishDiagnostics, failDiagnostics).
 func (d *DeviceCommands) Finish(ctx context.Context, r ingest.CommandResult) error {
 	result := r.Result
 	if len(result) == 0 {
@@ -227,12 +249,17 @@ func (d *DeviceCommands) Finish(ctx context.Context, r ingest.CommandResult) err
 			return endRefusedUninstall(ctx, d.runner, r, result, reason)
 		}
 	}
-	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	var failure *diagnosticsFailure
+	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		cmd, err := q.GetDeviceCommand(ctx, r.CommandID)
 		if db.IsNoRows(err) {
 			return nil
 		}
 		if err != nil {
+			return err
+		}
+		if cmd.Type == command.TypeCollectStatus && cmd.DeviceID == r.DeviceID {
+			failure, err = finishDiagnostics(ctx, q, r, result)
 			return err
 		}
 		// An in-place encryption result moves its conversion: the lock order of lockConversion, the device first.
@@ -250,4 +277,8 @@ func (d *DeviceCommands) Finish(ctx context.Context, r ingest.CommandResult) err
 		}
 		return recordConversionResult(ctx, q, r.DeviceID, cmd, result)
 	})
+	if err != nil || failure == nil {
+		return err
+	}
+	return failDiagnostics(ctx, d.runner, r, result, *failure)
 }

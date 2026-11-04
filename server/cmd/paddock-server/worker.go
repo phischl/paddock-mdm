@@ -34,7 +34,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	authentikToken := l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")
 	syncEvery := l.Duration("PADDOCK_IDENTITY_SYNC_INTERVAL", worker.DefaultIdentitySyncInterval)
 	reconcileEvery := l.Duration("PADDOCK_IDENTITY_RECONCILE_INTERVAL", worker.DefaultReconcileInterval)
-	// Verifies uploaded LUKS headers with a read-only credential of paddock-escrow (plan M4b decision 13).
+	// Verifies uploaded LUKS headers and diagnostics bundles with a credential of paddock-escrow that reads every object
+	// and deletes diagnostics bundles only (plan M4b decision 13, plan M12 decision 7).
 	escrowObjects := objectstore.New(l.Required("PADDOCK_ESCROW_S3_ENDPOINT"), l.SecretFile("PADDOCK_ESCROW_S3_ACCESS_KEY_FILE"),
 		l.SecretFile("PADDOCK_ESCROW_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ESCROW_S3_BUCKET", "paddock-escrow"))
 	// Inventory (plan M5a decisions 2 and 6): Fleet's internal API with the API-only user's token.
@@ -113,7 +114,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	deviceCommands := app.NewDeviceCommands(runner, pool)
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache)
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
-	escrowStore := worker.NewEscrow(app.NewEscrow(runner, pool, escrowObjects), cache, pool, platformPool)
+	diagnostics := worker.NewDiagnostics(app.NewDiagnostics(runner, pool, escrowObjects, retentionDay), pool, platformPool)
+	escrowStore := worker.NewEscrow(app.NewEscrow(runner, pool, escrowObjects), cache, pool, platformPool).WithDiagnostics(diagnostics)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
 	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
@@ -127,7 +129,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), app.NewRoleMembership(runner, pool, platformPool, ak),
 		ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
-	retention := worker.NewRetention(app.NewRetention(runner, pool, platformPool, fleetClient, retentionDay, indexRetention),
+	retention := worker.NewRetention(app.NewRetention(runner, pool, platformPool, fleetClient, retentionDay, indexRetention).WithDiagnosticsObjects(escrowObjects),
 		app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, retentionEvery)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool),
 		app.NewVulnerabilitySummary(runner), pool, platformPool, inventoryEvery)
@@ -161,6 +163,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		func(ctx context.Context) error { return escrowQueue.Run(ctx, escrowStore.Handle) },
 		commands.Run,
 		escrowStore.Run,
+		diagnostics.Run,
 		cacheSync.Run,
 		dms.Run,
 		staleness.Run,

@@ -3,8 +3,9 @@
 # decision 3) and paddock-agent-artifacts (plan M2b decision 19; public-read below packages/, plan M4b decision 1), both
 # without versioning and without Object Lock, and paddock-escrow (plan M4b decision 13, versioning on, no Object Lock); a
 # user for the compiler with read/write on bundles, a user for the api with read/write on artifacts and read on
-# escrow, a user for the worker with read on escrow, and a user for the gateway with read-only access to bundles and
-# artifacts and write access to escrowed headers only (the gateway only computes presigned URLs with it), and a user
+# escrow, a user for the worker with read on escrow and delete on diagnostics bundles (ADR 0048), and a user for the
+# gateway with read-only access to bundles and artifacts and write access to escrowed headers and diagnostics bundles
+# only (the gateway only computes presigned URLs with it), and a user
 # for the revocation-issuer that may list and delete header versions only (plan M4c decision 9). Idempotent.
 set -euo pipefail
 
@@ -87,7 +88,7 @@ policy paddock-bundles-compiler "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::$BUCKET\"]}]"
 policy paddock-bundles-gateway "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$BUCKET/*\",\"arn:aws:s3:::$ARTIFACTS_BUCKET/*\"]},
-  {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\"]}]"
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\",\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
 policy paddock-artifacts-api "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\",\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ARTIFACTS_BUCKET/*\"]}]"
 # Escrowed headers keep every version (an overwritten generation stays recoverable); no Object Lock, so a Destroy can
@@ -106,7 +107,13 @@ user GATEWAY_ACCESS_KEY paddock-bundles-gateway
 policy paddock-escrow-read "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/*\"]}]"
 user ARTIFACTS_ACCESS_KEY paddock-artifacts-api
-user ESCROW_WORKER_ACCESS_KEY paddock-escrow-read
+# The worker verifies headers and diagnostics bundles and deletes every version of a diagnostics bundle whose retention
+# ended (ADR 0048 decision 5); it deletes nothing else.
+policy paddock-escrow-worker "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/*\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
+user ESCROW_WORKER_ACCESS_KEY paddock-escrow-worker
 user ESCROW_API_ACCESS_KEY paddock-escrow-read
 # The revocation-issuer deletes every version of the headers of a destroyed device (plan M4c decision 9).
 policy paddock-escrow-destroy "[
