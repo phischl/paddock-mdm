@@ -74,7 +74,7 @@ func fixtureKey(release, purpose string) ed25519.PrivateKey {
 // audit writer of the release runs (auditInsert). The output is deterministic, so a regeneration changes files only
 // when the wire format changed.
 func Generate(dir, release, auditInsert string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	bundleKey, commandKey := fixtureKey(release, "bundle"), fixtureKey(release, "command")
@@ -103,7 +103,7 @@ func Generate(dir, release, auditInsert string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(dir, BundleFile(schema)), append(env, '\n'), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, BundleFile(schema)), append(env, '\n'), 0o600); err != nil {
 			return err
 		}
 	}
@@ -131,7 +131,7 @@ func Generate(dir, release, auditInsert string) error {
 	if err := writeJSON(filepath.Join(dir, CommandsFile), commands); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, AuditInsertFile), []byte(auditInsert), 0o644)
+	return os.WriteFile(filepath.Join(dir, AuditInsertFile), []byte(auditInsert), 0o600)
 }
 
 func writeJSON(path string, v any) error {
@@ -139,7 +139,7 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
 func sampleCommands(key ed25519.PrivateKey, keyID string) ([]CommandFixture, error) {
@@ -231,7 +231,7 @@ func sampleBundle(schema int, commandKey ed25519.PrivateKey) (bundle.Bundle, err
 		b.Keys = &bundle.Keys{CommandSigning: []bundle.SigningKey{{KeyID: "command-signing:fixture", PublicKey: pub}},
 			TimeTicket: []bundle.SigningKey{{KeyID: "time-ticket:fixture", PublicKey: pub}}}
 		b.Revocation = &bundle.Revocation{Enabled: false, Keys: []bundle.SigningKey{{KeyID: "revocation:fixture", PublicKey: pub}}}
-		b.Inventory = &bundle.Inventory{FleetURL: "https://fleet.example.org", EnrollSecret: "fixture-not-a-secret",
+		b.Inventory = &bundle.Inventory{FleetURL: "https://fleet.example.org", EnrollSecret: "fixture-not-a-secret", //nolint:gosec // G101: a literal placeholder in a fixture, not a credential
 			Package: bundle.InventoryPackage{Version: "1.48.0", URLPath: "packages/1.48.0/fleet-osquery_1.48.0_amd64.deb",
 				SHA256: "0000000000000000000000000000000000000000000000000000000000000000"}}
 	}

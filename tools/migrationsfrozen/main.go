@@ -115,7 +115,7 @@ func frozenViolations(ctx context.Context, repo, tag string, dirs []string) (cha
 	sort.Strings(paths)
 	var present []string
 	for _, p := range paths {
-		if _, statErr := os.Stat(path.Join(repo, p)); statErr != nil {
+		if _, statErr := os.Stat(path.Join(repo, p)); statErr != nil { //nolint:gosec // G703: p is a path from the frozen list, below the repo
 			changed = append(changed, p+" (deleted)")
 			continue
 		}
@@ -141,7 +141,7 @@ func frozenViolations(ctx context.Context, repo, tag string, dirs []string) (cha
 }
 
 func git(ctx context.Context, repo string, stdin io.Reader, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...) //nolint:gosec // G204: fixed binary, arguments from this tool only
 	cmd.Stdin = stdin
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

@@ -585,6 +585,7 @@ logs-dump: ## Write the full logs of every service to LOGS_DIR/<service>.log (to
 # Everything lands in dist/release/<version>/. DRY_RUN=1 prints the docker, syft and cosign commands instead.
 RELEASE_VERSION         ?=
 RELEASE_CHANNEL         ?= stable
+RELEASE_CHANGELOG       ?= CHANGELOG.md
 RELEASE_PLATFORMS       ?= linux/amd64,linux/arm64
 RELEASE_REGISTRY        ?= ghcr.io/phischl
 RELEASE_SERVER_REPO     ?= $(RELEASE_REGISTRY)/paddock-server
@@ -635,7 +636,7 @@ release-check:
 			{ echo "usage: RELEASE_VERSION=edge-YYYYMMDD-sha7 RELEASE_CHANNEL=edge"; exit 2; } ;; \
 		*) echo "usage: RELEASE_CHANNEL=stable|edge"; exit 2 ;; \
 	esac
-	@if [ "$(RELEASE_CHANNEL)" = stable ]; then bash scripts/release-notes-check.sh '$(RELEASE_VERSION)'; fi
+	@if [ "$(RELEASE_CHANNEL)" = stable ]; then bash scripts/release-notes-check.sh '$(RELEASE_VERSION)' --changelog '$(RELEASE_CHANGELOG)'; fi
 
 # The supervisor compiles in the release public key (line 2 of the minisign file): a release must name the production
 # key explicitly, line 2 must be a minisign Ed25519 public key (42 bytes, "Ed"), and it must not be the development
