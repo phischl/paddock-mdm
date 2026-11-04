@@ -164,6 +164,94 @@ type AttentionCondition struct {
 	ID       string
 }
 
+type BackupKey struct {
+	KeyID              string
+	State              string
+	Ciphertext         string
+	Fingerprint        string
+	ChallengePositions []int32
+	ChallengeSha256    []byte
+	Attempts           int32
+	Legacy             bool
+	CreatedBy          string
+	CreatedAt          time.Time
+	ConfirmedBy        *string
+	ConfirmedAt        *time.Time
+	RetiredAt          *time.Time
+}
+
+type BackupRestorePlan struct {
+	ID             uuid.UUID
+	Kind           string
+	SourceTargetID uuid.NullUUID
+	Source         string
+	At             *time.Time
+	Components     []string
+	State          string
+	CreatedBy      string
+	CreatedAt      time.Time
+	ExpiresAt      *time.Time
+	StartedAt      *time.Time
+	FinishedAt     *time.Time
+	OutcomeDetail  *string
+}
+
+type BackupRun struct {
+	ID          uuid.UUID
+	Kind        string
+	Label       string
+	State       string
+	Outcome     *string
+	RequestedBy *string
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+	Bytes       int64
+	ErrorClass  *string
+	Targets     json.RawMessage
+	CreatedAt   time.Time
+}
+
+type BackupSchedule struct {
+	Singleton            bool
+	FullIntervalHours    int32
+	OpenbaoIntervalHours int32
+	FleetIntervalHours   int32
+	EscrowIntervalHours  int32
+	RetentionFull        int32
+	OpenbaoKeepDays      int32
+	FleetKeepDays        int32
+	UpdatedBy            *string
+	UpdatedAt            time.Time
+}
+
+type BackupTarget struct {
+	ID                    uuid.UUID
+	Name                  string
+	Type                  string
+	Enabled               bool
+	Settings              json.RawMessage
+	CredentialsCiphertext *string
+	HostState             string
+	HostRevision          int32
+	TestRequestedAt       *time.Time
+	LastTestAt            *time.Time
+	LastTestOk            *bool
+	LastTestError         *string
+	CreatedBy             string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	DeletedAt             *time.Time
+}
+
+type BackupTargetStatus struct {
+	TargetID      uuid.UUID
+	Kind          string
+	LastSuccessAt *time.Time
+	LastError     *string
+	LastErrorAt   *time.Time
+	Bytes         int64
+}
+
 type Bundle struct {
 	DeviceID        uuid.UUID
 	Version         int64

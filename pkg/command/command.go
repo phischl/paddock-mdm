@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
@@ -110,6 +112,11 @@ var lifetimes = map[string]time.Duration{
 func Lifetime(typ string) (d time.Duration, ok bool) {
 	d, ok = lifetimes[typ]
 	return d, ok
+}
+
+// Types returns the registered command types in sorted order.
+func Types() []string {
+	return slices.Sorted(maps.Keys(lifetimes))
 }
 
 // ClockTolerance is the device clock skew Verify accepts around issued_at and expires_at.

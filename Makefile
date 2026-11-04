@@ -83,13 +83,30 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
-lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
 .PHONY: lint-supervisor-budget
 lint-supervisor-budget:
 	bash test/supervisor-budget.sh
+
+# A migration of an earlier release never changes (ADR 0047 decision 2, plan M16 decision 1): the lint compares
+# server/migrations/ with the nearest `v*` tag before HEAD (PADDOCK_PREVIOUS_TAG overrides it) and fails with the
+# names of the files that differ or are gone. New migrations pass. CI checks out with fetch-depth: 0 so the tags exist (without them the lint fails there).
+# The baseline is the nearest tag reachable from HEAD: a branch forked before the latest release commit keeps the older
+# baseline until main is merged in.
+.PHONY: lint-migrations-frozen
+lint-migrations-frozen:
+	go run ./tools/migrationsfrozen
+
+# Regenerates pkg/compat/testdata/<RELEASE>/ (bundles, check-in, events, commands, the audit insert) from the current
+# tree and removes the directories older than two releases (plan M16 decision 2). Run at release time on the release
+# candidate; the release checklist is in docs/operations/testing-strategy.md.
+.PHONY: compat-fixtures
+compat-fixtures:
+	@if [ -z "$(RELEASE)" ]; then echo 'usage: make compat-fixtures RELEASE=<version without v>' >&2; exit 2; fi
+	go run ./pkg/compat/cmd/compatfixtures --release '$(RELEASE)'
 
 # The dracut module of the in-place encryption (plan M8e PDK-244): the init script runs in the initrd under whatever
 # /bin/sh dracut installs, so it is checked as POSIX sh; module-setup.sh is sourced by dracut's bash. shellcheck comes
@@ -101,6 +118,7 @@ lint-shell:
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
 	shellcheck -s bash test/stack-preflight.sh test/stack-preflight_test.sh
 	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
+	shellcheck -s bash scripts/release-notes-check.sh scripts/release-notes-check_test.sh
 	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 
 # Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
@@ -222,8 +240,10 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
+	bash $(COMPOSE_DIR)/scripts/openbao-configure_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
+	bash $(COMPOSE_DIR)/scripts/provision-roles_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
 	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
 	bash test/vms/virtualbox/lib_test.sh
@@ -237,6 +257,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash test/stack-preflight_test.sh
 	bash test/skill_test.sh
 	bash scripts/changelog-assemble_test.sh
+	bash scripts/release-notes-check_test.sh
 	bash scripts/acceptance-scope_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
@@ -566,6 +587,7 @@ logs-dump: ## Write the full logs of every service to LOGS_DIR/<service>.log (to
 # Everything lands in dist/release/<version>/. DRY_RUN=1 prints the docker, syft and cosign commands instead.
 RELEASE_VERSION         ?=
 RELEASE_CHANNEL         ?= stable
+RELEASE_CHANGELOG       ?= CHANGELOG.md
 RELEASE_PLATFORMS       ?= linux/amd64,linux/arm64
 RELEASE_REGISTRY        ?= ghcr.io/phischl
 RELEASE_SERVER_REPO     ?= $(RELEASE_REGISTRY)/paddock-server
@@ -616,6 +638,7 @@ release-check:
 			{ echo "usage: RELEASE_VERSION=edge-YYYYMMDD-sha7 RELEASE_CHANNEL=edge"; exit 2; } ;; \
 		*) echo "usage: RELEASE_CHANNEL=stable|edge"; exit 2 ;; \
 	esac
+	@if [ "$(RELEASE_CHANNEL)" = stable ]; then bash scripts/release-notes-check.sh '$(RELEASE_VERSION)' --changelog '$(RELEASE_CHANGELOG)'; fi
 
 # The supervisor compiles in the release public key (line 2 of the minisign file): a release must name the production
 # key explicitly, line 2 must be a minisign Ed25519 public key (42 bytes, "Ed"), and it must not be the development

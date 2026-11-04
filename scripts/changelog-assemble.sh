@@ -7,12 +7,17 @@
 #   changelog-assemble.sh --preview [--version V]                print the would-be section, change nothing
 #   changelog-assemble.sh --version V --schema TEXT [--date D]   release: write CHANGELOG.md, git rm the fragments
 #
+# changelog.d/_release.md (PDK-740) is the one per-release fragment, written by the maintainer: the lines `Upgrade:
+# from <previous>: automatic` (or `steps: <text>`) and `Agents: supports <N-2>, <N-1>, <N>`. A release needs it and
+# copies both lines under the Schema line; `make release-check` requires all three lines in the section.
+#
 # --changelog FILE and --dir DIR override the defaults (CHANGELOG.md and changelog.d/ of the repository) for tests.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 changelog="$root/CHANGELOG.md"
 dir="$root/changelog.d"
+release_name=_release.md
 mode=release
 version=""
 schema=""
@@ -48,7 +53,7 @@ title() { printf '%s%s' "$(tr '[:lower:]' '[:upper:]' <<<"${1:0:1}")" "${1:1}"; 
 # numerically (version sort orders PDK-99 before PDK-518); slugs without a ticket id sort after them.
 fragments() {
   [[ -d "$dir" ]] || return 0
-  find "$dir" -mindepth 1 -maxdepth 1 ! -name README.md -printf '%f\n' | LC_ALL=C sort -V
+  find "$dir" -mindepth 1 -maxdepth 1 ! -name README.md ! -name "$release_name" -printf '%f\n' | LC_ALL=C sort -V
 }
 
 check() {
@@ -96,6 +101,33 @@ check() {
   fi
 }
 
+# release_lines prints the Upgrade and Agents lines of _release.md; it returns 1 with the reason on stderr when the
+# file is missing or one of the two lines is absent or malformed. The patterns are those of release-notes-check.sh.
+release_lines() {
+  local f="$dir/$release_name" v up ag extra
+  v='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?'
+  if [[ ! -f "$f" ]]; then
+    echo "changelog.d/$release_name: missing (Upgrade: and Agents: lines of the release)" >&2
+    return 1
+  fi
+  up="$(grep -E '^Upgrade:' "$f" || true)"
+  ag="$(grep -E '^Agents:' "$f" || true)"
+  extra="$(grep -vE '^(Upgrade:|Agents:|[[:space:]]*$)' "$f" || true)"
+  if [[ "$(wc -l <<<"$up")" -ne 1 || ! "$up" =~ ^Upgrade:\ from\ $v:\ (automatic|steps:\ [^[:space:]].*)$ ]]; then
+    echo "changelog.d/$release_name: needs exactly one 'Upgrade: from <version>: automatic' or '... steps: <text>' line" >&2
+    return 1
+  fi
+  if [[ "$(wc -l <<<"$ag")" -ne 1 || ! "$ag" =~ ^Agents:\ supports\ $v,\ $v,\ $v$ ]]; then
+    echo "changelog.d/$release_name: needs exactly one 'Agents: supports <N-2>, <N-1>, <N>' line" >&2
+    return 1
+  fi
+  if [[ -n "$extra" ]]; then
+    echo "changelog.d/$release_name: only the Upgrade: and Agents: lines are allowed" >&2
+    return 1
+  fi
+  printf '%s\n%s\n' "$up" "$ag"
+}
+
 # trim: drops leading and trailing blank lines of stdin.
 trim() { awk 'NF { for (; blank > 0; blank--) print ""; print; seen = 1; next } seen { blank++ }'; }
 
@@ -117,6 +149,7 @@ total="$(wc -l <"$changelog")"
 [[ -n "$next" ]] || next=$((total + 1))
 
 if [[ "$mode" == check ]]; then
+  [[ ! -f "$dir/$release_name" ]] || release_lines >/dev/null || exit 1
   exit 0
 fi
 # The rule of `make release-check` for the stable channel.
@@ -132,6 +165,12 @@ if [[ "$mode" == release ]]; then
     echo "$changelog already has a section for $version" >&2
     exit 1
   fi
+fi
+
+release_text=""
+# A _release.md that exists is validated in every mode; the release itself requires it.
+if [[ -f "$dir/$release_name" || "$mode" == release ]]; then
+  release_text="$(release_lines)" || exit 1
 fi
 
 work="$(mktemp -d)"
@@ -191,7 +230,7 @@ fi
   fi
   if [[ "$mode" == release ]]; then
     echo "Schema: ${schema%.}."
-    echo
+    printf '%s\n\n' "$release_text"
   fi
   for name in "${order[@]}"; do
     touch "$work/sec.$name" "$work/frag.$name"
@@ -236,5 +275,5 @@ while IFS= read -r f; do
   else
     rm -f -- "$dir/$f"
   fi
-done < <(fragments)
+done < <(fragments; [[ ! -f "$dir/$release_name" ]] || echo "$release_name")
 echo "CHANGELOG.md: section [$version] - $date assembled; add the release summary under its heading" >&2

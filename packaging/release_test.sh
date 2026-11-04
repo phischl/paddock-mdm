@@ -24,10 +24,20 @@ value() {
   make -s -C "$root" --no-print-directory --eval "print-value: ; @echo \$($var)" print-value "$@"
 }
 
-for v in 0.1.0 1.20.3 0.1.0-alpha.1 0.1.0-alpha.12 0.1.0-beta.1 0.1.0-rc.1 0.1.0-rc.0; do
+notes_dir="$(mktemp -d)"
+notes="$notes_dir/CHANGELOG.md"
+accepted=(0.1.0 1.20.3 0.1.0-alpha.1 0.1.0-alpha.12 0.1.0-beta.1 0.1.0-rc.1 0.1.0-rc.0)
+for v in "${accepted[@]}"; do
+  printf '## [%s] - 2026-11-04\nSchema: unchanged\nUpgrade: from 0.0.1: automatic\nAgents: supports 0.1.0, 0.1.0, 0.1.0\n\n' "$v"
+done >"$notes"
+# The release targets depend on release-check, which now also requires the release notes of the version.
+export RELEASE_CHANGELOG="$notes"
+for v in "${accepted[@]}"; do
   if make -s -C "$root" --no-print-directory release-check RELEASE_VERSION="$v" >/dev/null 2>&1; then got=0; else got=1; fi
   check "release-check accepts $v" "$got" 0
 done
+if make -s -C "$root" --no-print-directory release-check RELEASE_VERSION=2.0.0 >/dev/null 2>&1; then got=0; else got=1; fi
+check "release-check rejects a release without release notes" "$got" 1
 for v in "" 0.1 v0.1.0 0.1.0-foo 0.1.0-alpha 0.1.0-alpha.01 0.1.0-alpha.1.2 0.1.0-ALPHA.1 0.1.0-dev 0.1.0+build.1 \
   0.1.0-rc.1+build.1 01.0.0 "0.1.0 " 0.1.0-alpha.-1; do
   if make -s -C "$root" --no-print-directory release-check RELEASE_VERSION="$v" >/dev/null 2>&1; then got=0; else got=1; fi
@@ -107,7 +117,7 @@ fi
 # Release assets: GitHub renames names with characters outside [A-Za-z0-9._+-] (such as ~), which would no longer
 # match SHA256SUMS, so the packages are published under the release version.
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work" "$notes_dir"' EXIT
 mkdir -p "$work/deb" "$work/out"
 for pkg in paddock-agent paddock-supervisor paddock-revoke; do : >"$work/deb/${pkg}_0.1.0~alpha.1_amd64.deb"; done
 make -s -C "$root" --no-print-directory release-debs RELEASE_VERSION=0.1.0-alpha.1 RELEASE_DEB_DIR="$work/deb" \

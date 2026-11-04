@@ -14,3 +14,7 @@ section. The release manager assembles the fragments into the release section wi
 
 `make changelog-check` (part of `make lint`) validates the fragments; `make changelog-preview` prints the section the
 next release would get.
+
+**Release fragment (PDK-740):** `changelog.d/_release.md` is not an entry. The maintainer writes it once per release
+with the two lines `Upgrade: from <previous release>: automatic` (or `... steps: <text>`) and `Agents: supports <N-2>,
+<N-1>, <N>`; `make changelog` requires it and writes both lines under the `Schema:` line of the release section.

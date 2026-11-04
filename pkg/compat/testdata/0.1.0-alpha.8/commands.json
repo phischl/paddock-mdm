@@ -1,0 +1,80 @@
+[
+  {
+    "type": "delete_self_lock",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGMxIiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTItMDRUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnt9LCJ0eXBlIjoiZGVsZXRlX3NlbGZfbG9jayJ9",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "I/8qFt9Xs44XDjPp39jAgB6w+c0yCH5Z6yryip7SeNauTWEuI+h8xd/Fm9/r58EPK7tiI6fYkHoTEAo2OApVDA=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "encrypt_disk",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGMyIiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMTFUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsiY29udmVyc2lvbl9pZCI6IjAxOTBmMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwYzBjMCJ9LCJ0eXBlIjoiZW5jcnlwdF9kaXNrIn0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "NO6YZKhotMww6BSxntd5caxEyHTbGNsYoYCk51/KRgdvEqcGMjmofzHogTSnsAc6h7MPR2qmklmYrf9OEbbQAA=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "encrypt_disk_abort",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGMzIiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMTFUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsiY29udmVyc2lvbl9pZCI6IjAxOTBmMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwYzBjMCJ9LCJ0eXBlIjoiZW5jcnlwdF9kaXNrX2Fib3J0In0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "4pcQkHGG4sZzdB5heBP0jTYZfyWuTVLcnLkEfvQq5nC4O1jYKqoWCdmQZTm+pG/F+6c+GPjE/uzegGNlD+IAAQ=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "install_now",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGM0IiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMDVUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsicGFja2FnZXMiOlsiaHRvcCJdfSwidHlwZSI6Imluc3RhbGxfbm93In0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "mOpiX++f8CXCfUAz9ZIOGWcn8HFk2omvw6D+tkLY394GvyzKZldm5NWb+MAGq3RQVd3qe6mwsJquL681mwd9BA=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "rotate_admin_password",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGM1IiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMTFUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnt9LCJ0eXBlIjoicm90YXRlX2FkbWluX3Bhc3N3b3JkIn0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "daWqtw5lCi+7zQ6aPIp/n7lorq5jATeIjSjHk1qSfILdc6sZ+PAQ0ymjL6Bv7bpgdZPBXGe7WdoptJF7JZoRBg=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "uninstall",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGM2IiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMTFUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsibW9kZSI6ImxlYXZlIn0sInR5cGUiOiJ1bmluc3RhbGwifQ==",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "3KBDbOhQPTHsCQq/Rk2cRoTlin6zPBoFccgux2uSNhZJdlF/YVyMK6MqCOrlj216vxT2HzcKxVvqiFF+b4qOBQ=="
+        }
+      ]
+    }
+  }
+]

@@ -227,6 +227,12 @@ supervisors order the versions by SemVer precedence (`0.1.0-alpha.1 < 0.1.0-alph
 NNNNN–NNNNN` (the migrations of both databases since the previous release). The release manager checks it before
 tagging; `docs/operations/upgrade.md` decides the rollback by it.
 
+**Upgrade and Agents lines.** Next to `Schema:` the section states `Upgrade: from <previous release>: automatic` (or
+`Upgrade: from <previous release>: steps: <text>`) and `Agents: supports <N-2>, <N-1>, <N>` (ADR 0047). The maintainer
+writes both lines into `changelog.d/_release.md` before `make changelog`; the target copies them under the Schema line
+and removes the file. `make release-check` fails for a stable release whose `CHANGELOG.md` section lacks one of the
+three lines.
+
 **Changelog.** Merged changes keep their entries as fragment files in `changelog.d/` (`changelog.d/README.md`), not in
 `CHANGELOG.md`. Before tagging, the release manager assembles them in a release commit:
 
@@ -236,7 +242,8 @@ tagging; `docs/operations/upgrade.md` decides the rollback by it.
    `migrations NNNNN–NNNNN …`: merges the fragments and the entries already under `[Unreleased]` into the
    sections `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`, renames the heading to
    `## [<version>] - <today>` with the line `Schema: <text>.`, adds a new empty `## [Unreleased]` and removes the
-   fragments with `git rm`. It refuses a missing `RELEASE_VERSION` or `SCHEMA` and a version that already has a section.
+   fragments with `git rm`. It refuses a missing `RELEASE_VERSION` or `SCHEMA`, a version that already has a section
+   and a missing or malformed `changelog.d/_release.md`.
 3. Write the release summary under the new heading (upgrade order, Fleet version, the schema details), review the
    section and commit it together with the removed fragments; then tag the commit.
 
