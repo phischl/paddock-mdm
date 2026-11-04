@@ -71,7 +71,7 @@ func Image(t testing.TB, name string) string {
 	return ""
 }
 
-// StartPaddock starts PostgreSQL with deploy/compose/postgres/init/10-roles.sh and migrates database paddock.
+// StartPaddock starts PostgreSQL with deploy/compose/postgres/provision-roles.sh and migrates database paddock.
 func StartPaddock(t testing.TB) Paddock {
 	t.Helper()
 	pw := map[string]string{
@@ -86,7 +86,7 @@ func StartPaddock(t testing.TB) Paddock {
 		"PADDOCK_NOTIFIER_PASSWORD":      "notifier-pw",
 		"PADDOCK_BACKUP_PASSWORD":        "backup-pw",
 	}
-	host := start(t, "paddock", filepath.Join("deploy", "compose", "postgres", "init", "10-roles.sh"), pw)
+	host := start(t, "paddock", filepath.Join("deploy", "compose", "postgres", "provision-roles.sh"), pw)
 	p := Paddock{
 		Super:        dsn(host, "postgres", superPassword, "paddock"),
 		Owner:        dsn(host, "paddock_owner", pw["PADDOCK_OWNER_PASSWORD"], "paddock"),
@@ -106,7 +106,7 @@ func StartPaddock(t testing.TB) Paddock {
 	return p
 }
 
-// StartAudit starts PostgreSQL with deploy/compose/audit-postgres/init/10-roles.sh and migrates paddock_audit.
+// StartAudit starts PostgreSQL with deploy/compose/postgres/provision-roles.sh and migrates paddock_audit.
 func StartAudit(t testing.TB) Audit {
 	t.Helper()
 	pw := map[string]string{
@@ -114,7 +114,7 @@ func StartAudit(t testing.TB) Audit {
 		"AUDIT_WRITER_PASSWORD": "writer-pw",
 		"AUDIT_READER_PASSWORD": "reader-pw",
 	}
-	host := start(t, "paddock_audit", filepath.Join("deploy", "compose", "audit-postgres", "init", "10-roles.sh"), pw)
+	host := start(t, "paddock_audit", filepath.Join("deploy", "compose", "postgres", "provision-roles.sh"), pw)
 	a := Audit{
 		Super:  dsn(host, "postgres", superPassword, "paddock_audit"),
 		Owner:  dsn(host, "audit_owner", pw["AUDIT_OWNER_PASSWORD"], "paddock_audit"),

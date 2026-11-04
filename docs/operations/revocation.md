@@ -206,14 +206,10 @@ Run the issuer as one container without published ports; no other role needs to 
 
 ### Database role
 
-New clusters create `paddock_revocation` at initialization (`deploy/compose/postgres/init/10-roles.sh`). An existing
-cluster needs it before the database migration `00020` runs; as the PostgreSQL superuser:
-
-```sql
-CREATE ROLE paddock_revocation LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD '<password>';
-GRANT CONNECT ON DATABASE paddock TO paddock_revocation;
-GRANT USAGE ON SCHEMA public TO paddock_revocation;
-```
+The one-shot service `db-provision` creates `paddock_revocation` from
+`.secrets/db_paddock_revocation_password` and sets the
+password on every `./paddock up` (`deploy/compose/postgres/provision-roles.sh`), on a new and on an existing cluster, before the database
+migration `00020` runs. No manual step.
 
 The migration grants access to the revocation tables, `device` and `admin_account` (read), `escrow_secret` (read and
 delete) and its own audit events, with row-level security on the organization.
