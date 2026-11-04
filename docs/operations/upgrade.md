@@ -95,6 +95,11 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   (`docs/operations/uninstall.md`), then publish this release's agent release on the new server
   (`docs/operations/agent-releases.md`) and enrol the devices with its packages, never with an older agent. The
   revocation tool `paddock-revoke` is unchanged and stays unsigned; revocation stays disabled.
+- From 0.1.0-alpha.9: OpenBao moves to 2.7.2. `./paddock up` recreates OpenBao and it starts **sealed**: have three
+  custodians ready as step 4 describes. Devices install Himmelblau 4.0.8 with their current agent at the next login
+  drift pass. That release does not contain the upstream fix for the Hello PIN loss
+  (himmelblau-idm/himmelblau#1886), so the agent's `cache_timeout` setting and residual risk RR-40 stay unchanged. It
+  offers the password change at the console login of an enrolled device whose Entra ID password has expired.
 
 ## Upgrade (each host)
 
