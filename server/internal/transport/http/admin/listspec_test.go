@@ -63,6 +63,8 @@ var lists = map[string]struct {
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
 	"listIpAllowlist":   {ipAllowlistList, "postgres/queries/ip_allowlist.sql", "ListIPAllowlistEntries", "id"},
+	"listBackupTargets": {backupTargetList, "postgres/queries/backup.sql", "ListBackupTargets", "id"},
+	"listBackupRuns":    {backupRunList, "postgres/queries/backup.sql", "ListBackupRuns", "id"},
 
 	"listDeviceSoftware":        {deviceSoftwareList, "postgres/queries/inventory.sql", "ListDeviceSoftware", "name, version, source"},
 	"listDeviceVulnerabilities": {findingList, "postgres/queries/inventory.sql", "ListDeviceVulnerabilities", "cve, software_name, software_version"},

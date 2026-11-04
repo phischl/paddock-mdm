@@ -281,6 +281,14 @@ const (
 	CodeDeviceSoftwareReinstalled Code = "device.software_reinstalled"
 	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
 	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
+
+	// Backup targets, schedule and runs (plan M15 §6.4).
+	CodePlatformBackupTargetCreated   Code = "platform.backup_target_created"
+	CodePlatformBackupTargetUpdated   Code = "platform.backup_target_updated"
+	CodePlatformBackupTargetDeleted   Code = "platform.backup_target_deleted"
+	CodePlatformBackupTargetTested    Code = "platform.backup_target_tested"
+	CodePlatformBackupScheduleChanged Code = "platform.backup_schedule_changed"
+	CodePlatformBackupRunRequested    Code = "platform.backup_run_requested"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -292,6 +300,9 @@ type Definition struct {
 	Emitted     bool // false for registry entries that are never emitted as events
 	Note        string
 }
+
+// backupTargetParams are the params of the backup target events (plan M15 §6.4): never a credential.
+var backupTargetParams = []string{"target_id", "name", "type", "enabled", "host_revision"}
 
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
@@ -1702,6 +1713,49 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
+	},
+	CodePlatformBackupTargetCreated: {
+		Code: CodePlatformBackupTargetCreated, Emitted: true,
+		Description: "A platform administrator added a backup target (local directory, SMB or NFS share, S3 bucket) after a step-up; its credentials are stored encrypted and never recorded.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the backup target (type backup_target, display the name). A local, SMB or NFS target waits for ./paddock backup-target apply on the host (host_revision 1). Failure with invalid_request naming the field, already_exists for a duplicate name. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetUpdated: {
+		Code: CodePlatformBackupTargetUpdated, Emitted: true,
+		Description: "A platform administrator changed, enabled or disabled a backup target after a step-up.",
+		Params:      append(slices.Clone(backupTargetParams), "change"),
+		Outcomes:    adminOutcomes,
+		Note:        "change is updated, enabled or disabled. A change of a local, SMB or NFS target's settings or credentials raises host_revision and needs the host step again. Failure with invalid_request naming the field, already_exists for a duplicate name, invalid_state when the target already is enabled or disabled, not_found. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetDeleted: {
+		Code: CodePlatformBackupTargetDeleted, Emitted: true,
+		Description: "A platform administrator deleted a backup target after a step-up; a local, SMB or NFS target is removed from the host by the next ./paddock backup-target apply.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "The backup sets already written to the target are not deleted. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetTested: {
+		Code: CodePlatformBackupTargetTested, Emitted: true,
+		Description: "A platform administrator requested a connection test of a backup target after a step-up; the backup role runs it in its next round and stores the result on the target.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Success means requested, not that the test passed: the result is state of the target (last_test_ok, last_test_error), not an audit event. Platform pseudo-organization.",
+	},
+	CodePlatformBackupScheduleChanged: {
+		Code: CodePlatformBackupScheduleChanged, Emitted: true,
+		Description: "A platform administrator changed the backup schedule and retention after a step-up.",
+		Params: []string{"full_interval_hours", "openbao_interval_hours", "fleet_interval_hours", "escrow_interval_hours",
+			"retention_full", "openbao_keep_days", "fleet_keep_days"},
+		Outcomes: adminOutcomes,
+		Note:     "The params are the new values. Target is the setting backup_schedule. Failure with invalid_request naming the field out of range. Platform pseudo-organization.",
+	},
+	CodePlatformBackupRunRequested: {
+		Code: CodePlatformBackupRunRequested, Emitted: true,
+		Description: "A platform administrator requested a backup now after a step-up; the backup role runs the requested kinds in its next round.",
+		Params:      []string{"kinds", "label"},
+		Outcomes:    adminOutcomes,
+		Note:        "kinds lists postgres, authentik, openbao, fleet and escrow, or the requested subset. Failure with invalid_state while no backup key is confirmed, invalid_request for an unknown kind or a label longer than 64 characters. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

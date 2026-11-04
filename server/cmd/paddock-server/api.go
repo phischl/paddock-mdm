@@ -19,6 +19,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/bundlesign"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
 	"github.com/phischl/paddock-mdm/server/internal/domain/outbound"
 	"github.com/phischl/paddock-mdm/server/internal/escrowreader"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
@@ -252,8 +253,12 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		StepUpAccounts:  accounts,
 		EndSessions:     app.NewSessions(runner, sessionStore, app.NewPortalUsers(platformPool, ak), ak),
 		AutoUnseal:      app.NewAutoUnseal(runner, platformPool, baoClient),
-		PublicURL:       publicURL,
-		Static:          static,
+		// Backup targets follow the outbound policy: S3 endpoints on private addresses only on the development stack.
+		BackupTargets:  app.NewBackupTargets(runner, platformPool, baoClient, backupset.Policy{AllowPrivate: outboundPolicy.AllowPrivate}),
+		BackupSchedule: app.NewBackupSchedule(runner, platformPool),
+		BackupRuns:     app.NewBackupRuns(runner, platformPool),
+		PublicURL:      publicURL,
+		Static:         static,
 		// Development only: LoadDevStepUp refuses the variables in production.
 		StepUpMaxAuthAge: devStepUp.MaxAuthAge,
 		StepUpMFAClass:   devStepUp.MFAClass,
