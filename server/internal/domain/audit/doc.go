@@ -32,6 +32,14 @@ func RenderMarkdown() string {
 		}
 		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", d.Code, desc, params, outcomes)
 	}
+	b.WriteString("\n## Syslog MSGID aliases\n\n")
+	fmt.Fprintf(&b, "A syslog message carries the code as `MSGID` (ADR 0031). RFC 5424 limits `MSGID` to %d characters, so the\n", MaxMsgIDLen)
+	b.WriteString("longer codes use the fixed alias below. The table is add-only: an alias never changes and is never reused.\n")
+	b.WriteString("The message body always carries the full code in `event.code`.\n\n")
+	b.WriteString("| Code | MSGID |\n| --- | --- |\n")
+	for _, a := range MsgIDAliases() {
+		fmt.Fprintf(&b, "| `%s` | `%s` |\n", a.Code, a.MsgID)
+	}
 	return b.String()
 }
 

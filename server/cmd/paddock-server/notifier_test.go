@@ -127,3 +127,16 @@ func TestSMTPSettings(t *testing.T) {
 		}
 	}
 }
+
+// TestPortalHost: the HOSTNAME of syslog messages is the host of PADDOCK_PUBLIC_ADMIN_URL, without scheme and port.
+func TestPortalHost(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://admin.paddock.example.org":      "admin.paddock.example.org",
+		"https://admin.paddock.example.org:8443": "admin.paddock.example.org",
+		"://bad":                                 "",
+	} {
+		if got := portalHost(in); got != want {
+			t.Errorf("portalHost(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

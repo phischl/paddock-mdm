@@ -100,5 +100,10 @@ expiry, and revoke it in the portal when the collector is retired.
 
 A webhook destination with the filter *All events* pushes the same events as they are committed, signed, in batches
 of up to 100 ([notifications.md](notifications.md)); it carries each event's `commit_seq`, so a push and a pull can be
-reconciled. A later release (M12) adds forwarding to syslog on the same engine and a daily checkpoint message that a
-receiver can compare with the WORM hash chain. The feed's format `paddock.audit.feed.v1` does not change with it.
+reconciled. A syslog destination pushes the same events over TLS as RFC 5424 messages
+([notifications.md](notifications.md#syslog)); its `MSGID` is the audit code, or a fixed alias for the few codes
+longer than 32 characters ([Syslog MSGID aliases](../compliance/audit-codes.md#syslog-msgid-aliases)), and
+`event.code` in the message body is always the full code. Syslog confirms delivery at TCP level only: a receiver that
+acknowledges a batch and then drops part of it unread is not detected by Paddock (RR-113), so check `forward_seq` for
+gaps on the receiver and reconcile with the checkpoint message (sent from a later alpha.9 change), which a receiver can compare with the WORM hash
+chain. The feed's format `paddock.audit.feed.v1` does not change with it.
