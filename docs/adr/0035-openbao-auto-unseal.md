@@ -162,3 +162,13 @@ Facts that bound the design (verified 2026-10-17, OpenBao 2.7.1 per `deploy/comp
   by Paddock itself (`sys/seal`) for incident response is a separate decision.
 - Amended documents: architecture §13.2 and §25.2 (automatic unseal is the bundled, acknowledged option), ADR 0006
   (amendment pointing here), `docs/compliance/residual-risks.md` (RR-43).
+
+## Amendment 2026-11-04 — roles are provisioned on every start
+
+The context line "every PostgreSQL role is created once at cluster initialization" no longer holds. Since plan M16
+decision 8 (amended 2026-11-04), one idempotent script, `deploy/compose/postgres/provision-roles.sh`, creates the roles
+on a fresh cluster and runs again on every `./paddock up` and `upgrade` in the one-shot `db-provision` service: it
+creates missing roles, re-applies every role password from its secret file and keeps the role-level grants.
+`paddock_owner` stays `NOCREATEROLE`; only `db-provision` holds the superuser password, and statement logging is off in
+its session so no role password reaches the server log. The script for `paddock_unsealer`
+(`deploy/compose/scripts/postgres-unsealer-role.sh`) is unaffected. The decision of this ADR is unchanged.
