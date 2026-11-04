@@ -116,6 +116,7 @@ services:
       PADDOCK_ESCROW_READER_PASSWORD_FILE: /run/secrets/db_paddock_escrow_reader_password
       PADDOCK_REVOCATION_PASSWORD_FILE: /run/secrets/db_paddock_revocation_password
       PADDOCK_NOTIFIER_PASSWORD_FILE: /run/secrets/db_paddock_notifier_password
+      PADDOCK_BACKUP_PASSWORD_FILE: /run/secrets/db_paddock_backup_password
     secrets:
       - postgres_superuser_password
       - db_paddock_owner_password
@@ -127,6 +128,7 @@ services:
       - db_paddock_escrow_reader_password
       - db_paddock_revocation_password
       - db_paddock_notifier_password
+      - db_paddock_backup_password
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
       - postgres-data:/var/lib/postgresql
@@ -829,6 +831,7 @@ secrets:
   db_paddock_escrow_reader_password: { file: ./.secrets/db_paddock_escrow_reader_password }
   db_paddock_revocation_password: { file: ./.secrets/db_paddock_revocation_password }
   db_paddock_notifier_password: { file: ./.secrets/db_paddock_notifier_password }
+  db_paddock_backup_password: { file: ./.secrets/db_paddock_backup_password }
   db_paddock_owner_url: { file: ./.secrets/db_paddock_owner_url }
   db_paddock_api_url: { file: ./.secrets/db_paddock_api_url }
   db_paddock_platform_url: { file: ./.secrets/db_paddock_platform_url }

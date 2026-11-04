@@ -37,6 +37,10 @@ func TestRLSLint(t *testing.T) {
 		"platform_role_member": true, "platform_role_snapshot": true,
 		// MCP policy of the platform (plan M14 §6.5), role paddock_platform only.
 		"platform_mcp_settings": true,
+		// Backup key, targets, schedule, runs and restore plans (plan M15 decision 3), roles paddock_platform and
+		// paddock_backup only.
+		"backup_key": true, "backup_target": true, "backup_target_status": true, "backup_schedule": true,
+		"backup_run": true, "backup_restore_plan": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
