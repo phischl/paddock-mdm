@@ -74,7 +74,7 @@ shipped=(
   openbao/config.hcl openbao/prod.hcl
   rabbitmq/rabbitmq.conf rabbitmq/enabled_plugins rabbitmq/tls.conf rabbitmq/definitions.json.tmpl
   valkey/valkey.conf
-  postgres/init/10-roles.sh audit-postgres/init/10-roles.sh
+  postgres/provision-roles.sh
   authentik/entrypoint.sh
   fleet/entrypoint.sh fleet/backup.sh fleet/backup-upload.sh
   prometheus/prometheus.yml prometheus/alerts.yml prometheus/scrape/controlplane.yml prometheus/scrape/audit.yml

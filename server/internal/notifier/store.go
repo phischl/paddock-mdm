@@ -132,6 +132,18 @@ func toRow(r pgstore.ListNotifierDestinationsRow) Row {
 	if r.PendingForwardFrom != nil {
 		row.State.PendingFrom = *r.PendingForwardFrom
 	}
+	if r.SyslogHost != nil {
+		row.Destination.SyslogHost = *r.SyslogHost
+	}
+	if r.SyslogPort != nil {
+		row.Destination.SyslogPort = int(*r.SyslogPort)
+	}
+	if r.SyslogCaPem != nil {
+		row.Destination.SyslogCAPEM = *r.SyslogCaPem
+	}
+	if r.SyslogServerName != nil {
+		row.Destination.SyslogServerName = *r.SyslogServerName
+	}
 	if r.UrlCiphertext != nil {
 		row.URLCiphertext = *r.UrlCiphertext
 	}

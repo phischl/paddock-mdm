@@ -75,7 +75,8 @@ func NewNotifications(runner *ActionRunner, org *db.OrgPool, platform *db.Platfo
 }
 
 // NotificationDestinationInput are the writable fields of a destination. URL is the plaintext webhook URL; on an
-// update nil keeps the stored URL. Cursor is required when an update enables a disabled destination.
+// update nil keeps the stored URL. SyslogPort 0 is the default port; SyslogCAPEM nil keeps the stored CA bundle on an
+// update and "" removes it. Cursor is required when an update enables a disabled destination.
 type NotificationDestinationInput struct {
 	Type               outbound.Type
 	Name               string
@@ -88,6 +89,11 @@ type NotificationDestinationInput struct {
 	HeartbeatIntervalS int
 	Recipients         []string
 	EmailMinIntervalS  int
+	SyslogHost         string
+	SyslogPort         int
+	SyslogCAPEM        *string
+	SyslogServerName   string
+	Checkpoints        bool
 	Cursor             string
 }
 
@@ -105,6 +111,11 @@ type NotificationDestination struct {
 	HeartbeatIntervalS int
 	Recipients         []string
 	EmailMinIntervalS  int
+	SyslogHost         *string
+	SyslogPort         *int
+	SyslogServerName   *string
+	SyslogCAPEMSet     bool
+	Checkpoints        bool
 	CreatedBy          string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -230,7 +241,11 @@ func (n *Notifications) Create(ctx context.Context, scope Scope, in Notification
 			FilterMode: string(in.FilterMode), Codes: customCodes(in), PseudonymizeUsers: in.PseudonymizeUsers,
 			IncludeParams: in.IncludeParams, HeartbeatIntervalS: int32(in.HeartbeatIntervalS), //nolint:gosec // validated 0 or 60–3600
 			Recipients: nonNil(in.Recipients), EmailMinIntervalS: int32(emailInterval(in)), //nolint:gosec // validated 60–3600
-			CreatedBy: actorDisplay(ctx),
+			Checkpoints: in.Checkpoints, CreatedBy: actorDisplay(ctx),
+		}
+		params.SyslogHost, params.SyslogPort, params.SyslogServerName = syslogColumns(in)
+		if in.Type == outbound.TypeSyslog && in.SyslogCAPEM != nil && *in.SyslogCAPEM != "" {
+			params.SyslogCaPem = in.SyslogCAPEM
 		}
 		if in.Type == outbound.TypeWebhook {
 			plain, err := outbound.NewSecret()
@@ -318,7 +333,12 @@ func (n *Notifications) Update(ctx context.Context, scope Scope, id uuid.UUID, i
 		}
 		in.Type = outbound.Type(cur.Type)
 		enabling := in.Enabled && !cur.Enabled
-		if err := n.validate(ctx, scope, in, in.URL != nil, enabling); err != nil {
+		checkAddress := in.URL != nil
+		if in.Type == outbound.TypeSyslog {
+			// Pausing or renaming must work while the receiver does not resolve; the notifier checks it on every dial.
+			checkAddress = enabling || cur.SyslogHost == nil || *cur.SyslogHost != in.SyslogHost
+		}
+		if err := n.validate(ctx, scope, in, checkAddress, enabling); err != nil {
 			return err
 		}
 		switch {
@@ -334,6 +354,12 @@ func (n *Notifications) Update(ctx context.Context, scope Scope, id uuid.UUID, i
 			HeartbeatIntervalS: int32(in.HeartbeatIntervalS), //nolint:gosec // validated 0 or 60–3600
 			Recipients:         nonNil(in.Recipients),
 			EmailMinIntervalS:  int32(emailInterval(in)), //nolint:gosec // validated 60–3600
+			Checkpoints:        in.Checkpoints,
+			KeepSyslogCaPem:    in.Type == outbound.TypeSyslog && in.SyslogCAPEM == nil,
+		}
+		params.SyslogHost, params.SyslogPort, params.SyslogServerName = syslogColumns(in)
+		if in.Type == outbound.TypeSyslog && in.SyslogCAPEM != nil && *in.SyslogCAPEM != "" {
+			params.SyslogCaPem = in.SyslogCAPEM
 		}
 		if in.URL != nil {
 			ct, err := n.keys.Encrypt(ctx, NotificationWrapKey, org, bao.FieldURL, []byte(*in.URL))
@@ -401,7 +427,7 @@ func (n *Notifications) RotateSecret(ctx context.Context, scope Scope, id uuid.U
 		rec.SetTarget(destinationTarget(id, cur.Name))
 		rec.SetParam("name", cur.Name)
 		if cur.Type != string(outbound.TypeWebhook) {
-			return problem.InvalidState.WithDetail("an e-mail destination has no signing secret")
+			return problem.InvalidState.WithDetail("only a webhook destination has a signing secret")
 		}
 		plain, err := outbound.NewSecret()
 		if err != nil {
@@ -538,13 +564,14 @@ func (n *Notifications) PseudonymLookup(ctx context.Context, id, lookupID uuid.U
 }
 
 // validate checks a destination: type, custom codes against the registry, the remaining rules of plan M9 decision 9,
-// the URL when checkURL is set, and the SMTP relay when requireEmail is set (creating or enabling an e-mail
+// the receiver address when checkAddress is set (a webhook URL; a syslog host on create, when it changes or when the
+// destination is enabled), and the SMTP relay when requireEmail is set (creating or enabling an e-mail
 // destination; disabling or renaming one works without a relay). Platform destinations never pseudonymize
 // (decision 18).
-func (n *Notifications) validate(ctx context.Context, scope Scope, in NotificationDestinationInput, checkURL, requireEmail bool) error {
+func (n *Notifications) validate(ctx context.Context, scope Scope, in NotificationDestinationInput, checkAddress, requireEmail bool) error {
 	switch in.Type {
 	case outbound.TypeWebhook:
-		if checkURL && in.URL == nil {
+		if checkAddress && in.URL == nil {
 			return problem.InvalidRequest.WithDetail("a webhook destination requires url")
 		}
 	case outbound.TypeEmail:
@@ -553,6 +580,10 @@ func (n *Notifications) validate(ctx context.Context, scope Scope, in Notificati
 		}
 		if requireEmail && !n.emailEnabled {
 			return problem.EmailNotConfigured.WithDetail("this installation has no SMTP relay (PADDOCK_SMTP_ENABLED)")
+		}
+	case outbound.TypeSyslog:
+		if in.URL != nil {
+			return problem.InvalidRequest.WithDetail("a syslog destination has no url")
 		}
 	default:
 		return problem.InvalidRequest.WithDetail(outbound.ErrInvalidType.Error())
@@ -572,12 +603,20 @@ func (n *Notifications) validate(ctx context.Context, scope Scope, in Notificati
 	d := outbound.Destination{
 		Type: in.Type, Name: in.Name, FilterMode: in.FilterMode, Codes: auditCodes(in.Codes),
 		HeartbeatIntervalS: in.HeartbeatIntervalS, Recipients: in.Recipients, EmailMinIntervalS: emailInterval(in),
+		SyslogHost: in.SyslogHost, SyslogPort: in.SyslogPort, SyslogServerName: in.SyslogServerName,
+		Checkpoints: in.Checkpoints,
+	}
+	if in.SyslogCAPEM != nil {
+		d.SyslogCAPEM = *in.SyslogCAPEM
 	}
 	var err error
-	if checkURL && in.Type == outbound.TypeWebhook {
+	switch {
+	case checkAddress && in.Type == outbound.TypeWebhook:
 		d.URL = *in.URL
 		err = n.urls.ValidateDestination(ctx, d)
-	} else {
+	case checkAddress && in.Type == outbound.TypeSyslog:
+		err = n.urls.ValidateDestination(ctx, d)
+	default:
 		err = outbound.ValidateSettings(d)
 	}
 	if err != nil {
@@ -631,8 +670,13 @@ func (n *Notifications) destination(r pgstore.GetNotificationDestinationRow) Not
 		ID: r.ID, Type: r.Type, Name: r.Name, Enabled: r.Enabled, FilterMode: r.FilterMode, Codes: nonNil(r.Codes),
 		PseudonymizeUsers: r.PseudonymizeUsers, IncludeParams: r.IncludeParams, URLDisplay: r.UrlDisplay,
 		HeartbeatIntervalS: int(r.HeartbeatIntervalS), Recipients: nonNil(r.Recipients),
-		EmailMinIntervalS: int(r.EmailMinIntervalS), CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-		State: NotificationDestinationState{Status: "active"},
+		EmailMinIntervalS: int(r.EmailMinIntervalS), SyslogHost: r.SyslogHost, SyslogServerName: r.SyslogServerName,
+		SyslogCAPEMSet: r.SyslogCaPemSet, Checkpoints: r.Checkpoints, CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt,
+		UpdatedAt: r.UpdatedAt, State: NotificationDestinationState{Status: "active"},
+	}
+	if r.SyslogPort != nil {
+		port := int(*r.SyslogPort)
+		out.SyslogPort = &port
 	}
 	s := &out.State
 	if r.Status != nil {
@@ -725,6 +769,24 @@ func emailInterval(in NotificationDestinationInput) int {
 // defaultEmailMinIntervalS is the column default of notification_destination.email_min_interval_s.
 const defaultEmailMinIntervalS = 300
 
+// syslogColumns are the stored receiver columns: host, port (the default when 0) and server name of a syslog
+// destination, NULL for the other types.
+func syslogColumns(in NotificationDestinationInput) (host *string, port *int32, serverName *string) {
+	if in.Type != outbound.TypeSyslog {
+		return nil, nil, nil
+	}
+	p := int32(outbound.DefaultSyslogPort)
+	if in.SyslogPort != 0 {
+		p = int32(in.SyslogPort) //nolint:gosec // validated 1–65535
+	}
+	h := in.SyslogHost
+	if in.SyslogServerName != "" {
+		sn := in.SyslogServerName
+		serverName = &sn
+	}
+	return &h, &p, serverName
+}
+
 // customCodes are the stored codes: the custom list, none for the other modes.
 func customCodes(in NotificationDestinationInput) []string {
 	if in.FilterMode != outbound.FilterCustom {
@@ -760,6 +822,12 @@ func changedFields(cur pgstore.GetNotificationDestinationRow, in NotificationDes
 	add("heartbeat_interval_s", int(cur.HeartbeatIntervalS) != in.HeartbeatIntervalS)
 	add("recipients", !slices.Equal(nonNil(cur.Recipients), nonNil(in.Recipients)))
 	add("email_min_interval_s", int(cur.EmailMinIntervalS) != emailInterval(in))
+	host, port, serverName := syslogColumns(in)
+	add("syslog_host", !equalPtr(cur.SyslogHost, host))
+	add("syslog_port", (cur.SyslogPort == nil) != (port == nil) || (port != nil && *cur.SyslogPort != *port))
+	add("syslog_server_name", !equalPtr(cur.SyslogServerName, serverName))
+	add("syslog_ca_pem", in.SyslogCAPEM != nil)
+	add("checkpoints", cur.Checkpoints != in.Checkpoints)
 	slices.Sort(out)
 	return nonNil(out)
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Action struct {
@@ -725,6 +726,11 @@ type NotificationDestination struct {
 	CreatedBy          string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	SyslogHost         *string
+	SyslogPort         *int32
+	SyslogCaPem        *string
+	SyslogServerName   *string
+	Checkpoints        bool
 }
 
 type NotificationDestinationState struct {
@@ -746,6 +752,8 @@ type NotificationDestinationState struct {
 	LastTestAt          *time.Time
 	LastTestOk          *bool
 	LastTestError       *string
+	LastCheckpointDay   pgtype.Date
+	ReplayFrom          *int64
 }
 
 type NotificationPseudonymKey struct {

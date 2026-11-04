@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/mail"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -125,6 +126,16 @@ func smtpRootCAs(l *config.Loader, path string) *x509.CertPool {
 	return pool
 }
 
+// portalHost is the HOSTNAME of syslog messages: the host of PADDOCK_PUBLIC_ADMIN_URL (ADR 0031 amendment 2026-11-04
+// item 2), empty (the nil value) when it does not parse.
+func portalHost(publicAdminURL string) string {
+	u, err := url.Parse(publicAdminURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
 // serveNotifier runs the notifier role (plan M9 decisions 20–26): the only holder of the AppRole paddock-notifier,
 // which may decrypt the notification secrets and nothing else, delivering through the database role paddock_notifier.
 func serveNotifier(ctx context.Context, l *config.Loader, common config.Common) error {
@@ -158,8 +169,11 @@ func serveNotifier(ctx context.Context, l *config.Loader, common config.Common) 
 	}
 	runner := app.NewActionRunner(&pool.OrgPool, platformPool, httpx.RequestID, app.WithPlatformScope(pool.InPlatformScope))
 	store := notifier.NewPGStore(pool, reader, runner)
+	syslog := notifier.NewSyslog(settings.allowPrivate)
+	syslog.Hostname = portalHost(settings.engine.PublicAdminURL)
 	transports := map[outbound.Type]notifier.Transport{
 		outbound.TypeWebhook: notifier.NewWebhook(settings.allowPrivate, buildinfo.Version),
+		outbound.TypeSyslog:  syslog,
 	}
 	if settings.smtp != nil {
 		transports[outbound.TypeEmail] = notifier.NewEmail(*settings.smtp)

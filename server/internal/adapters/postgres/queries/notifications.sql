@@ -6,11 +6,13 @@
 -- name: InsertNotificationDestination :exec
 INSERT INTO notification_destination (
   id, organization_id, type, name, enabled, filter_mode, codes, pseudonymize_users, include_params, url_ciphertext,
-  url_display, secret_ciphertext, heartbeat_interval_s, recipients, email_min_interval_s, created_by
+  url_display, secret_ciphertext, heartbeat_interval_s, recipients, email_min_interval_s, syslog_host, syslog_port,
+  syslog_ca_pem, syslog_server_name, checkpoints, created_by
 ) VALUES (
   @id, @organization_id, @type, @name, @enabled, @filter_mode, @codes, @pseudonymize_users, @include_params,
   sqlc.narg(url_ciphertext), sqlc.narg(url_display), sqlc.narg(secret_ciphertext), @heartbeat_interval_s, @recipients,
-  @email_min_interval_s, @created_by
+  @email_min_interval_s, sqlc.narg(syslog_host), sqlc.narg(syslog_port), sqlc.narg(syslog_ca_pem),
+  sqlc.narg(syslog_server_name), @checkpoints, @created_by
 );
 
 -- name: InsertNotificationDestinationState :exec
@@ -18,8 +20,9 @@ INSERT INTO notification_destination_state (destination_id, organization_id) VAL
 
 -- name: GetNotificationDestination :one
 SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.codes, d.pseudonymize_users,
-       d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.created_by,
-       d.created_at, d.updated_at,
+       d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.syslog_host,
+       d.syslog_port, d.syslog_server_name, (d.syslog_ca_pem IS NOT NULL)::boolean AS syslog_ca_pem_set,
+       d.checkpoints, d.created_by, d.created_at, d.updated_at,
        s.status, s.cursor_commit_seq, s.forward_seq, s.last_success_at, s.last_attempt_at, s.next_attempt_at,
        s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error
 FROM notification_destination d
@@ -34,8 +37,9 @@ SELECT id, type, name, enabled FROM notification_destination WHERE id = @id FOR 
 
 -- name: ListNotificationDestinations :many
 SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.codes, d.pseudonymize_users,
-       d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.created_by,
-       d.created_at, d.updated_at,
+       d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.syslog_host,
+       d.syslog_port, d.syslog_server_name, (d.syslog_ca_pem IS NOT NULL)::boolean AS syslog_ca_pem_set,
+       d.checkpoints, d.created_by, d.created_at, d.updated_at,
        s.status, s.cursor_commit_seq, s.forward_seq, s.last_success_at, s.last_attempt_at, s.next_attempt_at,
        s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error
 FROM notification_destination d
@@ -63,14 +67,18 @@ SELECT count(*) FROM (
 ) matching;
 
 -- name: UpdateNotificationDestination :exec
--- A NULL url_ciphertext keeps the stored URL and its display (an update without url).
+-- A NULL url_ciphertext keeps the stored URL and its display (an update without url); keep_syslog_ca_pem keeps the
+-- stored CA bundle (an update without syslog_ca_pem).
 UPDATE notification_destination SET
   name = @name, enabled = @enabled, filter_mode = @filter_mode, codes = @codes,
   pseudonymize_users = @pseudonymize_users, include_params = @include_params,
   url_ciphertext = coalesce(sqlc.narg(url_ciphertext), url_ciphertext),
   url_display = coalesce(sqlc.narg(url_display), url_display),
   heartbeat_interval_s = @heartbeat_interval_s, recipients = @recipients,
-  email_min_interval_s = @email_min_interval_s, updated_at = now()
+  email_min_interval_s = @email_min_interval_s, syslog_host = sqlc.narg(syslog_host),
+  syslog_port = sqlc.narg(syslog_port), syslog_server_name = sqlc.narg(syslog_server_name),
+  syslog_ca_pem = CASE WHEN @keep_syslog_ca_pem::boolean THEN syslog_ca_pem ELSE sqlc.narg(syslog_ca_pem) END,
+  checkpoints = @checkpoints, updated_at = now()
 WHERE id = @id;
 
 -- name: UpdateNotificationDestinationSecret :exec

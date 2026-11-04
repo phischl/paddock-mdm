@@ -654,6 +654,31 @@ touches its surfaces (network segmentation, rate limits) before self-service ope
 - **Carried from alpha.9:** the SMB client library (rejected for M15; reconsidered only if operators object to
   the host step) and the revocation acceptance records (roadmap decision 4) stay open for the alpha.10 plans.
 
+## Amendment 2026-11-04 — syslog transport (PDK-751)
+
+Architect decisions of 2026-11-04, taken after the PDK-751 reviews:
+
+1. **MSGID aliases.** Decision 17 (through ADR 0031 amendment item 2) and the tests of §9 read "`MSGID` = the audit
+   code". RFC 5424 limits `MSGID` to 32 characters; a code of 32 characters or fewer stays its own `MSGID`, a longer
+   code is sent under a fixed, add-only alias from the table next to the code registry (`audit.Code.MsgID`, published in
+   `docs/compliance/audit-codes.md`), and `MSG` always carries the full code. See ADR 0031 amendment 2026-11-04
+   "syslog MSGID aliases".
+2. **Close wait and delivery confirmation (decision 18).** "Waits for the server to close or for the write
+   deadline" becomes: after the last message the notifier sends the TLS close, waits until the receiver's TCP stack
+   has acknowledged every sent byte (the send queue via `SIOCOUTQ` on Linux, standard library only), then waits up
+   to **5 seconds**, never past the 30-second delivery deadline, for the receiver to close. Bytes not acknowledged
+   within the deadline fail the delivery as `timeout`; a reset while data is still unread fails it as `io`; EOF or
+   a quiet receiver until the 5 seconds end is success. Delivery is confirmed at TCP level only: syslog over TLS
+   has no application-level acknowledgement.
+3. **Residual risk RR-113** (in addition to §6.6): a receiver whose TCP stack acknowledges the whole batch, which
+   reads only part of it and half-closes, counts as delivered. Accepted; `forward_seq` gap detection and the
+   checkpoints of PDK-752 cover it. Recorded in `docs/compliance/residual-risks.md`, `docs/operations/siem.md` and
+   `docs/operations/notifications.md`.
+4. **Migration numbers by landing order.** Migrations are numbered in the order they land, not by the labels of
+   §3 and §5: the syslog migration is `00101_syslog_destinations.sql` (decision 16, not `00102`), the diagnostics
+   migration `00103_device_diagnostics.sql` (decision 3, not `00101`) and the access review grants
+   `00104_access_review_grants.sql` (decision 24, not `00103`).
+
 ## Amendment 2026-11-04 — diagnostics deviations signed off (PDK-747)
 
 Decisions taken by the architect lead on 2026-11-04 after Review 1 of PDK-747; they bind the implementation and
