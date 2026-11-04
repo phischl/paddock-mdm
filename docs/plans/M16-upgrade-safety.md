@@ -1,7 +1,8 @@
 # Implementierungsplan: M16 — Upgrade safety (tested upgrade path, pre-upgrade checks, restore drill)
 
 Status: Ready for implementation · 2026-11-04 · Author: architect
-Basis: ADR 0047 (upgrade guarantee; **Proposed** — the maintainer accepts it with the first merged ticket);
+Basis: ADR 0047 (upgrade guarantee; **Accepted 2026-11-04**, the maintainer set the first guaranteed pair to
+0.1.0-alpha.8 → alpha.9);
 ADR 0013 with the amendment of 2026-11-04 (support window per release until 0.1.0); ADR 0022 (bundle, images,
 keyless signing); ADR 0005 / 0024 (additive bundle and event formats); ADR 0046 and plan M15 (`./paddock backup
 now`, `./paddock restore`, the local target); plan M7b decisions 16, 25, 27–28 (host script, smoke test, upgrade
@@ -355,13 +356,21 @@ PDK-740, PDK-741 and PDK-745 MAY run in parallel.
 - **R2 — Previous devicesim build** needs the previous tag's Go toolchain; `GOTOOLCHAIN=auto` handles it.
 - **R3 — alpha.8 → alpha.9 runs the new binary's check against the old database** (decision 5 item 8): read-only
   queries on tables that exist in both; the item is `n/a` for anything newer.
-- **Open question 1:** should `./paddock upgrade` refuse when the platform administrator has an open restore plan
-  or a running agent rollout? Default: WARN only (the operator decides).
-- **Open question 2:** keep the pre-upgrade set forever or expire it with the schedule's retention? Default:
-  labelled sets are exempt from expire until the next `pre-upgrade-*` label replaces them (the latest two kept).
-- **Open question 3:** the first guaranteed pair. Default (ADR 0047): alpha.8 → alpha.9; if the maintainer prefers
-  alpha.9 → alpha.10, PDK-744 runs with a disabled `sign` dependency for alpha.9 and the fixture directory starts
-  at alpha.9.
+Decisions taken on 2026-11-04 (binding for this plan):
+
+- **Open restore plan or running rollout at upgrade time**: `./paddock upgrade` prints a **WARN only**; the
+  operator decides (architect lead).
+- **Pre-upgrade sets**: labelled `pre-upgrade-*` sets are exempt from the schedule's expire; the **latest two**
+  are kept, older ones expire with the next label (architect lead; PDK-732 implements the exemption in the
+  backup role's expire step).
+- **First guaranteed pair**: **0.1.0-alpha.8 → alpha.9** (maintainer). PDK-744's job runs with alpha.8 as the
+  previous release and `sign` depends on it from the alpha.9 release on; `pkg/compat/testdata/` starts at alpha.8.
+- **Maintenance bundle of alpha.9 checked against ADR 0047 decision 2** (2026-11-04): OpenBao 2.7.1 → 2.7.2
+  (patch, Raft data compatible), Himmelblau 4.0.8 (device package rolled out by the compiler, no server data),
+  Fleet v4.93.2 → v4.94.0 (minor; Fleet migrates its MySQL at start — the rollback restores the Fleet dump when
+  `FLEET_IMAGE` differs, decision 7, and the release's `Upgrade:` line stays `automatic`), aws-cli 2.39.3 (the
+  sidecar M15 removes), Node 26.13.0 and the Go/npm patches (build-time only), NVD data (development stacks
+  only): none of them breaks the guarantee.
 
 ## 12. Freedoms
 

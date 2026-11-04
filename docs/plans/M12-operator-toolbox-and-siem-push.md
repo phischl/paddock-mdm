@@ -1,8 +1,8 @@
 # Implementierungsplan: M12 — Operator toolbox and SIEM push (diagnostics bundle, syslog forward, checkpoints, access review)
 
 Status: Ready for implementation · 2026-11-04 · Author: architect
-Basis: ADR 0048 (diagnostics bundle; **Proposed**, privacy amendment pending the maintainer's sign-off — roadmap
-decision 3); ADR 0031 with the amendment of 2026-11-04 (syslog transport, checkpoints, replay); ADR 0010 (audit
+Basis: ADR 0048 (diagnostics bundle; **Accepted 2026-11-04** — the maintainer signed off the content list and the
+notice text, roadmap decision 3 taken); ADR 0031 with the amendment of 2026-11-04 (syslog transport, checkpoints, replay); ADR 0010 (audit
 pipeline), ADR 0030 (manifests, signatures), ADR 0032 (retention; read-access recording), ADR 0034 (step-up),
 ADR 0018 (lists and dialogs), ADR 0024 (no event type an older server could receive from a newer agent — see
 decision 6); plans M4a (commands), M4b (header escrow and the escrow-reader), M8b (role membership snapshots),
@@ -452,7 +452,7 @@ paddock-diagnostics-<hostname>-<id>.tar.gz
   journal/paddock-supervisor.log, paddockd.log, paddock-encrypt.log, paddock-uninstall.log, himmelblaud.log, himmelblaud-tasks.log
   systemd/status.txt, failed-units.txt
   etc/sudoers, sudoers.d/<file>…, pam.d/common-*, nsswitch.conf, himmelblau/himmelblau.conf (redacted), apt/sources.list.d/paddock-*, apt/preferences.d/5*paddock*, crypttab, fstab
-  system/os-release, uname.txt, timedatectl.txt, df.txt, uptime.txt, lsblk.txt, luksDump-<uuid>.txt, tpm.txt, dpkg.txt, ip-link.txt, resolvectl.txt, server-healthz.txt
+  system/os-release, uname.txt, timedatectl.txt, df.txt, uptime.txt, lsblk.txt, luksDump-<uuid>.txt, tpm.txt, dpkg.txt, ip-link.txt, resolvectl.txt, apt-history.log, server-healthz.txt
 ```
 
 ### 6.6 Residual risks (RR-108 to RR-112)
@@ -497,8 +497,9 @@ paddock-diagnostics-<hostname>-<id>.tar.gz
    13–14, 7. Depends on PDK-747. Verify: the privileged route table, the list contract, the auditor negative
    tests; `make e2e T=diagnostics`.
 4. **PDK-750 — Diagnostics: privacy amendment, runbook, gates, residual risks.** Decision 15; §9 D1–D3, DS1.
-   Depends on PDK-748, PDK-749. **Pending the maintainer's sign-off of the privacy amendment** (the ticket stops
-   before merging the `privacy.md` change until the orchestrator confirms).
+   Depends on PDK-748, PDK-749. The privacy amendment has the maintainer's sign-off of 2026-11-04 (orchestrator
+   relay): the content list of ADR 0048 decision 2 including `/var/log/apt/history.log`, the notice text without
+   the administrator's name.
 5. **PDK-751 — Syslog/TLS destination type.** Decisions 16–19. Independent of 1–4. Verify: the sink of §9 S1;
    `go test ./server/internal/notifier/ ./server/internal/domain/outbound/`.
 6. **PDK-752 — Checkpoints and replay.** Decisions 20–21. Depends on PDK-751 (state columns). Verify: §9 S2–S3.
@@ -612,13 +613,15 @@ PDK-747/748/749/750, PDK-751/752/753 and PDK-754/755 are three independent chain
   (ADR 0010 recording-day amendment: sealing happens by recording day, so no event is recorded on a sealed day).
 - **R5 — Access review size** for large organizations: lists capped at 1 000 with totals; the export carries the
   same cap (documented); a paged export is F-24's.
-- **Open question 1:** include `requested_by` (the administrator's display name) in the device notice? Default: no.
-- **Open question 2:** should `org_operator` be allowed to download, or only `org_admin`? Default: both (the
-  operator troubleshoots), each download with a step-up.
-- **Open question 3:** add `/var/log/apt/history.log` (package names, no users) to the list? Default: yes if the
-  maintainer agrees; listed in ADR 0048 decision 2 as absent today.
-- **Open question 4:** the access review for the auditor under the organization's `read_audit` switch (default)
-  or always recorded? Default: the switch, as every other read.
+Decisions taken on 2026-11-04 (binding for this plan):
+
+- **The device notice shows no administrator name** (maintainer).
+- **`org_admin` and `org_operator` may download**, each download with a step-up (maintainer).
+- **`/var/log/apt/history.log` is in the content list** (package names and versions, no users; maintainer);
+  ADR 0048 decision 2 and §6.5 list it.
+- **The access review is recorded for the auditor under the organization's `read_audit` switch**, as every
+  other read (maintainer).
+- **Syslog: TLS server authentication only, optional pinned CA**; no mutual TLS, no UDP or plain TCP (architect lead).
 
 ## 13. Outline for 0.1.0-alpha.10 (ordering, dependencies, open decisions; no tickets yet)
 
@@ -648,6 +651,5 @@ touches its surfaces (network segmentation, rate limits) before self-service ope
   false`, `npm ci --ignore-scripts`, image update watch; SC-1, SC-2, CI-1, SC-4, SC-5 — open decision 6: new CI
   tools need approval). Each half gets its own plan; the threat-model review of every plan (`roadmap-appsec.md`
   §3) applies to M13b and M13c as well.
-- **Carried from alpha.9:** M15 open question 1 (SMB client library) and M16 open question 2 (labelled set
-  retention) are decided before the alpha.10 plans; the revocation acceptance records (roadmap decision 4) stay
-  open.
+- **Carried from alpha.9:** the SMB client library (rejected for M15; reconsidered only if operators object to
+  the host step) and the revocation acceptance records (roadmap decision 4) stay open for the alpha.10 plans.

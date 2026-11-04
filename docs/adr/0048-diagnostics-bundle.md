@@ -1,5 +1,7 @@
 # 0048 — Diagnostics bundle (`collect_status`): a closed content list, sealed upload, gated download
-Status: Proposed (architect, 2026-11-04; privacy amendment pending the maintainer's sign-off, roadmap decision 3)
+Status: Accepted (2026-11-04 — the maintainer: the content list including `/var/log/apt/history.log`, the notice
+text without the administrator's name, download by `org_admin` and `org_operator` with step-up; roadmap decision 3
+is thereby taken)
 
 ## Context
 
@@ -62,7 +64,8 @@ step-up through the escrow-reader, which alone can unwrap the object key. The co
    `/etc/fstab`; the system facts `os-release`, `uname -a`, `timedatectl show`, `df -h / /boot /boot/efi`,
    `uptime -p`, `lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT`, `cryptsetup luksDump` of every LUKS volume the agent
    manages, the presence of `/dev/tpm0` and `/dev/tpmrm0`, `dpkg -l 'paddock*' 'himmelblau*' 'fleet*'`, `ip -brief
-   link` (link state, no addresses), `resolvectl status` (resolver configuration), and the result of one `GET
+   link` (link state, no addresses), `resolvectl status` (resolver configuration), `/var/log/apt/history.log`
+   (package operations: names and versions, no users), and the result of one `GET
    <server_url>/healthz`. Never: process lists, `auth.log`, other units' journals, home directories, shell history,
    network connections, addresses, user files. Every entry is a file in a tar.gz with a `manifest.json` (entry,
    bytes, SHA-256, `truncated`), the archive is cut at 32 MiB sealed.
@@ -88,7 +91,7 @@ step-up through the escrow-reader, which alone can unwrap the object key. The co
    list-sessions`, `Type` `wayland` or `x11`, `State` `active`) the notification *"Paddock collected diagnostic
    data from this device for your administrator. Reason: <reason>. What was collected: Paddock's own logs and
    configuration, no personal files."* (localized by the device's `LANG` for `de` and `en`); the count of sessions
-   reached is reported. The administrator's name is not shown (works-council default; open question).
+   reached is reported. The administrator's name is not shown (maintainer decision 2026-11-04).
 7. **Privacy document.** `docs/compliance/privacy.md` gains the section *Diagnostics bundle (on request only)*
    listing decision 2 verbatim, the retention, who can request and download it and that auditors cannot read it;
    the row "free disk space, uptime" of the Fleet table gains "on request also in a diagnostics bundle".

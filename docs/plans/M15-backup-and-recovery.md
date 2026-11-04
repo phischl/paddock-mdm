@@ -1,8 +1,7 @@
 # Implementierungsplan: M15 — Platform backup and recovery (targets, one confirmed key, backup sets, restore plans)
 
 Status: Ready for implementation · 2026-11-04 · Author: architect
-Basis: ADR 0046 (platform backup and recovery; **Proposed** — this plan builds on it, the maintainer accepts it
-with the first merged ticket); ADR 0016 (pgBackRest, OpenBao snapshots, audit store excluded); ADR 0018 (lists and
+Basis: ADR 0046 (platform backup and recovery; **Accepted 2026-11-04**); ADR 0016 (pgBackRest, OpenBao snapshots, audit store excluded); ADR 0018 (lists and
 dialogs); ADR 0032 (retention classes); ADR 0034 (step-up; API tokens never satisfy one); ADR 0035 (auto-unseal,
 the pattern of a platform setting with a typed acknowledgement); plan M6a §2.2 (the existing backup), M6c decisions
 20–22 (restore commands), M8u (platform page with step-up), M9 §3.3 (Transit-wrapped secrets entered in the portal);
@@ -792,7 +791,7 @@ PDK-736 MAY start its targets and key tabs after PDK-731.
 Residual risks: §6.9. Risks with countermeasures:
 
 - **R1 — Two-step target setup confuses operators.** Countermeasure: the inline alert with the exact commands,
-  the host state chip, `backup status` on the host; open question 1 offers the SMB library alternative.
+  the host state chip, `backup status` on the host; the SMB library alternative was rejected (§12, decision 1).
 - **R2 — Key rotation and pgBackRest paths.** Countermeasure: `pgbackrest_test.sh` covers the path switch; the
   expire of the old path waits for retention; the manifest names the current path.
 - **R3 — Legacy installations without a confirmed key stop backing up after the upgrade.** Countermeasure: the
@@ -801,19 +800,21 @@ Residual risks: §6.9. Risks with countermeasures:
   checksummed by pgBackRest's own `verify` after a restore; `manifest.json` is compared by SHA-256; OpenBao and
   Fleet files are AEAD-sealed (a corrupt copy fails to open, never silently restores).
 
-Open questions (default chosen; the maintainer may overrule; reported to the orchestrator):
+Decisions taken on 2026-11-04 (architect lead, per the architect's recommendation; binding for this plan):
 
-1. **SMB without a host step** through a Go SMB2 client library (`github.com/hirochachacha/go-smb2`,
-   BSD-2-Clause) in the backup role. Default: no (Docker volumes for all three mount types, no new dependency);
-   candidate for alpha.10 if operators object to the host step.
-2. **Portal upload of a backup set** as the maintainer phrased decision 4a. Default: the set reaches the host by
-   `scp` or a share and `./paddock restore --from` reads it; a portal cannot exist before identity is restored.
-3. **Per-organization restore.** Default: not offered (ADR 0046); the plan states the reason in `restore.md`.
-4. **Step-up for `backup now` and the schedule.** Default: yes for every platform backup action (uniform rule).
-5. **Challenge size.** Default: six characters of 44; alternative: the full key typed back (too long) or a
-   checksum word list (new dependency for a word list — rejected).
-6. **Where the `legacy` key file is read.** Default: by the api once (`PADDOCK_BACKUP_LEGACY_KEY_FILE`), because
-   only the api holds `transit/encrypt`; alternative: give the backup role encrypt as well (wider policy).
+1. **SMB without a host step** through a Go SMB2 client library: **no**. Docker volumes for all three mount types,
+   no new dependency; the host step `./paddock backup-target apply` is the design.
+2. **Portal upload of a backup set**: **no**. The set reaches the host by `scp` or a share and `./paddock restore
+   --from` reads it; a portal cannot exist before identity is restored.
+3. **Per-organization restore**: **not offered** (ADR 0046); `restore.md` states the reason.
+4. **Step-up for `backup now` and the schedule**: **yes**, for every platform backup action (uniform rule).
+5. **Challenge size**: **six characters** of the 44, three strikes discard the key.
+6. **Where the `legacy` key file is read**: **by the api once** (`PADDOCK_BACKUP_LEGACY_KEY_FILE`); backups pause
+   until the imported key is confirmed in the portal.
+7. **Local `backup-repo` disk cost**: **accepted** (the reference host has about 260 GB free); PDK-739 documents
+   the sizing in `docs/operations/capacity.md` (a full set ≈ `retention_full` × one full backup of both databases
+   plus 30 days of snapshots and dumps plus the escrow objects) and PDK-733's `./paddock check` item warns below
+   `PADDOCK_BACKUP_REPO_VOLUME_MIN_GB` (default 20).
 
 ## 13. Freedoms (what the implementer decides)
 

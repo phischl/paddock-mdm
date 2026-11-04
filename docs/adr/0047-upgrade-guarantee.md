@@ -1,5 +1,6 @@
 # 0047 — Upgrade guarantee between consecutive releases
-Status: Proposed (architect, 2026-11-04; the maintainer accepts it with the first merged ticket of plan M16)
+Status: Accepted (2026-11-04 — the maintainer: the guarantee starts with 0.1.0-alpha.8 → alpha.9; architect lead:
+the ADR 0013 amendment, WARN-only on open plans and rollouts, the latest two pre-upgrade sets kept)
 
 ## Context
 

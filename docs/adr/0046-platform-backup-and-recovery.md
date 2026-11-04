@@ -1,5 +1,6 @@
 # 0046 — Platform backup and recovery: targets, one key, backup sets, restore plans
-Status: Proposed (architect, 2026-11-04; the maintainer accepts it with the first merged ticket of plan M15)
+Status: Accepted (2026-11-04 — architect lead for the design options 1–7 of plan M15 §12; the maintainer's
+binding decisions of 2026-10-28 in PDK-474 stand)
 
 ## Context
 
@@ -42,7 +43,8 @@ Facts about the code that bound the design (checked on `main` 80984bde):
   the escrow objects join the same tree. − A full set lives on the control-plane host too (disk); a mirror is a
   copy step with its own state and metrics.
 - **A userspace SMB client library in the backup role.** + No host step for SMB. − A new Go dependency; NFS has no
-  usable userspace client; two code paths for one target class. Kept as a later option (open question).
+  usable userspace client; two code paths for one target class. Rejected for M15 (architect lead, 2026-11-04);
+  a candidate for alpha.10 only if operators object to the host step.
 
 ### How a share reaches the backup role
 - **The operator mounts on the host and points a local target at the path.** − Not a portal flow; mount units are
