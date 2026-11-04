@@ -158,7 +158,9 @@
     "mcpSettings": "MCP",
     "notifications": "Benachrichtigungen",
     "platformNotifications": "Plattform-Benachrichtigungen",
-    "configRollouts": "Konfigurations-Rollouts"
+    "configRollouts": "Konfigurations-Rollouts",
+    "softwareSources": "Paketquellen",
+    "softwareCatalog": "Softwarekatalog"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -1220,7 +1222,8 @@
       "configuration": "Konfiguration",
       "applyStatus": "Anwendungsstatus",
       "commands": "Befehle",
-      "audit": "Audit"
+      "audit": "Audit",
+      "managedSoftware": "Verwaltete Software"
     },
     "health": {
       "title": "Zustand und Konformität",
@@ -2893,5 +2896,161 @@
       "description": "Ein Rollout startet, wenn eine Änderung eines rollout-fähigen Abschnitts angewendet wird, während gestaffelte Rollouts aktiviert sind."
     },
     "wavePercent": "{percent, number} %"
+  },
+  "software": {
+    "sources": {
+      "title": "Paketquellen",
+      "summary": "APT-Repositories von Drittanbietern, aus denen Ihre Geräte installieren dürfen. Jede Quelle hat einen eigenen Signaturschlüssel; sie hinzuzufügen oder zu ändern ist eine Änderung mit Root-Wirkung und verlangt einen Sicherheitsschlüssel.",
+      "create": "Quelle hinzufügen",
+      "createTitle": "Paketquelle hinzufügen",
+      "editTitle": "Paketquelle bearbeiten",
+      "name": "Name",
+      "slug": "Kürzel",
+      "slugHint": "Benennt die Quelldatei und den Schlüsselbund auf den Geräten; später nicht änderbar.",
+      "uris": "URIs",
+      "urisHint": "Eine https-Adresse pro Zeile, höchstens vier.",
+      "suites": "Suites",
+      "suitesHint": "Zum Beispiel noble oder stable. Bei einem flachen Repository endet die Suite auf /.",
+      "components": "Komponenten",
+      "componentsHint": "Zum Beispiel main. Keine bei einem flachen Repository.",
+      "architectures": "Architekturen",
+      "architecturesHint": "Ohne Auswahl gilt jede Architektur.",
+      "signingKey": "Signaturschlüssel (OpenPGP-Public-Key, ASCII-Armor)",
+      "fingerprint": "Fingerabdruck",
+      "fingerprintHint": "Geben Sie den vom Hersteller veröffentlichten Fingerabdruck ein. Er muss zum hochgeladenen Schlüssel passen.",
+      "weakKey": "Dieser Schlüssel nutzt RSA unter 3072 Bit. Er wird akzeptiert und ist bis 2030 vertretbar.",
+      "httpsOnly": "Quellen müssen https verwenden.",
+      "slugInvalid": "Verwenden Sie 2 bis 41 Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit Buchstabe oder Ziffer.",
+      "nameInvalid": "Geben Sie einen Namen mit 1 bis 100 Zeichen ein.",
+      "urisInvalid": "Geben Sie ein bis vier https-Adressen mit Host, gegebenenfalls einem Port von 1 bis 65535, ohne Query, Fragment, Benutzerangaben, Anführungszeichen und spitze Klammern ein, je höchstens 512 Zeichen.",
+      "suitesInvalid": "Geben Sie ein bis acht Suites aus Buchstaben, Ziffern, ., /, _ und - ein.",
+      "flatMixed": "Entweder endet jede Suite auf / (flaches Repository) oder keine.",
+      "flatComponents": "Ein flaches Repository hat keine Komponenten.",
+      "componentsRequired": "Geben Sie mindestens eine Komponente ein.",
+      "componentsInvalid": "Geben Sie höchstens acht Komponenten aus Kleinbuchstaben, Ziffern und - ein.",
+      "keyInvalid": "Fügen Sie einen OpenPGP-Public-Key mit höchstens 64 KiB ein.",
+      "fingerprintInvalid": "Geben Sie die 40 Hexadezimalzeichen des Fingerabdrucks ein; Leerzeichen werden ignoriert.",
+      "deleteTitle": "Paketquelle entfernen",
+      "deleteConfirm": "Die Geräte entfernen die Quelldatei und den Schlüsselbund bei ihrem nächsten Check-in. Installierte Software bleibt. Geben Sie zur Bestätigung den Namen der Quelle ein.",
+      "empty": {
+        "title": "Noch keine Paketquellen",
+        "description": "Fügen Sie ein vertrauenswürdiges APT-Repository hinzu, um Software anzubieten, die Ihre Distribution nicht mitbringt."
+      },
+      "entries": "Einträge",
+      "repeated": "Jeder Eintrag darf nur einmal vorkommen.",
+      "inUse": "Diese Quelle wird von einem Katalogeintrag verwendet."
+    },
+    "catalog": {
+      "title": "Softwarekatalog",
+      "summary": "Anwendungen, die Ihre Geräte installieren, behalten, festhalten oder blockieren, je Gerätegruppe. Erforderliche Anwendungen, die ein Benutzer entfernt, werden erneut installiert und das Ereignis wird erfasst.",
+      "create": "Anwendung hinzufügen",
+      "createTitle": "Anwendung hinzufügen",
+      "editTitle": "Anwendung bearbeiten",
+      "back": "Zurück zum Softwarekatalog",
+      "name": "Name",
+      "description": "Beschreibung",
+      "category": "Kategorie",
+      "source": "Quelle",
+      "sourceHint": "Woher die Pakete kommen.",
+      "distributionRepositories": "Repositories der Distribution",
+      "packages": "Pakete",
+      "packagesHint": "Es gilt die spezifischste Zeile für Distribution, Release und Architektur eines Geräts.",
+      "assignments": "Zuweisungen",
+      "devices": "Geräte",
+      "distribution": "Distribution",
+      "release": "Release",
+      "architecture": "Architektur",
+      "package": "Paket",
+      "anyArchitecture": "Beliebig",
+      "addRow": "Paket hinzufügen",
+      "remove": "Entfernen",
+      "removeRow": "Paketzeile {n} entfernen",
+      "nameInvalid": "Geben Sie einen Namen mit 1 bis 100 Zeichen ein.",
+      "descriptionInvalid": "Höchstens 1000 Zeichen.",
+      "categoryInvalid": "Höchstens 64 Zeichen.",
+      "packagesCount": "Geben Sie ein bis zwanzig Pakete ein.",
+      "packagesDuplicate": "Jede Kombination aus Distribution, Release und Architektur darf nur einmal vorkommen.",
+      "distributionInvalid": "Verwenden Sie die ID aus /etc/os-release, zum Beispiel ubuntu.",
+      "releaseInvalid": "Geben Sie * oder ein Release wie 24.04 ein.",
+      "packageInvalid": "Geben Sie einen Debian-Paketnamen ein: Kleinbuchstaben, Ziffern, +, . und -.",
+      "deleteTitle": "Anwendung entfernen",
+      "deleteConfirm": "{count, plural, one {Die Anwendung und ihre # Zuweisung werden entfernt.} other {Die Anwendung und ihre # Zuweisungen werden entfernt.}} Installierte Software bleibt auf den Geräten. Geben Sie zur Bestätigung den Namen ein.",
+      "empty": {
+        "title": "Noch keine Anwendungen",
+        "description": "Beschreiben Sie eine Anwendung einmal und weisen Sie sie Gerätegruppen zu."
+      },
+      "devicesEmpty": {
+        "title": "Keine Geräte",
+        "description": "Dieser Anwendung ist noch kein aktives Gerät zugewiesen."
+      }
+    },
+    "assignments": {
+      "title": "Zuweisungen",
+      "create": "Zuweisen",
+      "createTitle": "Anwendung zuweisen",
+      "editTitle": "Zuweisung ändern",
+      "intent": "Absicht",
+      "updateRule": "Aktualisierungsregel",
+      "version": "Version",
+      "reason": "Grund",
+      "versionHint": "Nur für eine festgelegte Version.",
+      "versionHintHold": "Leer lassen, um die installierte Version festzuhalten.",
+      "versionRequired": "Geben Sie die festzulegende Version ein.",
+      "versionInvalid": "Geben Sie eine Debian-Version ein: Buchstaben, Ziffern, ., +, :, ~ und -.",
+      "reasonInvalid": "Höchstens 500 Zeichen.",
+      "deleteTitle": "Zuweisung entfernen",
+      "deleteConfirm": "Die Zuweisung von {app} für {scope} entfernen? Die Geräte behalten, was installiert ist.",
+      "empty": {
+        "title": "Noch keine Zuweisungen",
+        "description": "Eine Zuweisung wendet die Anwendung auf eine Gerätegruppe oder auf alle Geräte an."
+      }
+    },
+    "intent": {
+      "label": "Absicht",
+      "required": "Erforderlich",
+      "uninstall": "Deinstallieren",
+      "hold": "Version festhalten",
+      "forbid": "Verbieten"
+    },
+    "updateRule": {
+      "latest": "Neueste",
+      "pinned": "Festgelegte Version"
+    },
+    "state": {
+      "label": "Status",
+      "installed": "Installiert",
+      "held": "Festgehalten",
+      "absent": "Nicht installiert",
+      "pending": "Ausstehend",
+      "failed": "Fehlgeschlagen",
+      "not_applicable": "Nicht anwendbar",
+      "unknown": "Noch kein Bericht"
+    },
+    "reason": {
+      "dpkg_locked": "Ein anderer Paketvorgang läuft; das Gerät versucht es erneut.",
+      "deferred_offline": "Das Gerät wartet auf eine Serververbindung, bevor es Software entfernt.",
+      "would_remove_dependents": "Der Vorgang würde andere Pakete entfernen; es wurde nichts geändert.",
+      "no_candidate": "Das Paket oder die Version ist in den Quellen des Geräts nicht verfügbar.",
+      "fingerprint_mismatch": "Der Quellenschlüssel passt nicht zu seinem Fingerabdruck; die Quelle wurde nicht geschrieben.",
+      "not_yet_applied": "Das Gerät hat dies noch nicht angewendet.",
+      "source_unreachable": "Das Gerät konnte die Quelle nicht erreichen.",
+      "conflicting_source": "Das Gerät hat bereits einen Eintrag für dieses Repository mit einem anderen Schlüssel; der Eintrag von Paddock wurde entfernt, der eigene Eintrag des Geräts bleibt.",
+      "apt_failed": "Die Paketverwaltung ist auf dem Gerät fehlgeschlagen."
+    },
+    "icon": {
+      "upload": "Symbol (PNG)",
+      "hint": "Ein PNG mit höchstens 64 KiB und 512 mal 512 Pixeln.",
+      "notPng": "Das Symbol muss eine PNG-Datei sein.",
+      "tooLarge": "Das Symbol darf höchstens 64 KiB groß sein."
+    },
+    "reportedAt": "Gemeldet",
+    "device": {
+      "summary": "Anwendungen des Softwarekatalogs, die für dieses Gerät gelten, und was das Gerät dazu gemeldet hat.",
+      "truncated": "Das Gerät hat einige Einträge in seinem letzten Bericht weggelassen, um den Check-in klein zu halten; eine Anwendung ohne Zeile kann trotzdem verwaltet werden.",
+      "empty": {
+        "title": "Keine verwaltete Software",
+        "description": "Diesem Gerät ist keine Anwendung des Katalogs zugewiesen."
+      }
+    }
   }
 }

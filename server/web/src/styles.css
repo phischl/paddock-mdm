@@ -251,6 +251,7 @@ a.pd-pill:hover { filter: brightness(0.95); }
 .pd-expanded dd { margin: 0; font-family: var(--pd-font-mono); font-size: 12px; overflow-wrap: anywhere; }
 @media (max-width: 959.98px) { .pd-hide-md { display: none !important; } }
 @media (max-width: 599.98px) { .pd-hide-sm { display: none !important; } }
+@media (max-width: 1919.98px) { .pd-hide-xl { display: none !important; } }
 .pd-cards-panel { position: relative; background: var(--pd-surface-1); border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md); overflow-x: hidden; }
 .pd-cards { list-style: none; margin: 0; padding: 0; }
 .pd-card { position: relative; padding: 10px 12px; border-bottom: 1px solid var(--pd-border-subtle); display: flex; flex-direction: column; gap: 4px; }

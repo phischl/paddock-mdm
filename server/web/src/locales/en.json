@@ -158,7 +158,9 @@
     "mcpSettings": "MCP",
     "notifications": "Notifications",
     "platformNotifications": "Platform notifications",
-    "configRollouts": "Configuration rollouts"
+    "configRollouts": "Configuration rollouts",
+    "softwareSources": "Package sources",
+    "softwareCatalog": "Software catalog"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -1220,7 +1222,8 @@
       "configuration": "Configuration",
       "applyStatus": "Apply status",
       "commands": "Commands",
-      "audit": "Audit"
+      "audit": "Audit",
+      "managedSoftware": "Managed software"
     },
     "health": {
       "title": "Health and compliance",
@@ -2893,5 +2896,161 @@
       "description": "A rollout starts when a change of a rollout-able section is applied while staged rollouts are enabled."
     },
     "wavePercent": "{percent, number} %"
+  },
+  "software": {
+    "sources": {
+      "title": "Package sources",
+      "summary": "Third-party APT repositories your devices may install from. Each source has its own signing key; adding or changing one is a root-equivalent change and asks for a security key.",
+      "create": "Add source",
+      "createTitle": "Add package source",
+      "editTitle": "Edit package source",
+      "name": "Name",
+      "slug": "Slug",
+      "slugHint": "Names the source file and keyring on the devices; cannot be changed later.",
+      "uris": "URIs",
+      "urisHint": "One https address per line, at most four.",
+      "suites": "Suites",
+      "suitesHint": "For example noble or stable. A flat repository's suite ends in /.",
+      "components": "Components",
+      "componentsHint": "For example main. None for a flat repository.",
+      "architectures": "Architectures",
+      "architecturesHint": "None selected means every architecture.",
+      "signingKey": "Signing key (ASCII-armored OpenPGP public key)",
+      "fingerprint": "Fingerprint",
+      "fingerprintHint": "Enter the fingerprint published by the vendor. It must match the uploaded key.",
+      "weakKey": "This key uses RSA below 3072 bits. It is accepted and acceptable until 2030.",
+      "httpsOnly": "Sources must use https.",
+      "slugInvalid": "Use 2 to 41 lowercase letters, digits and hyphens, starting with a letter or digit.",
+      "nameInvalid": "Enter a name of 1 to 100 characters.",
+      "urisInvalid": "Enter one to four https addresses with a host, a port from 1 to 65535 if any, no query, fragment, user information, quotes or angle brackets, at most 512 characters each.",
+      "suitesInvalid": "Enter one to eight suites of letters, digits, ., /, _ and -.",
+      "flatMixed": "Either every suite ends in / (flat repository) or none does.",
+      "flatComponents": "A flat repository has no components.",
+      "componentsRequired": "Enter at least one component.",
+      "componentsInvalid": "Enter at most eight components of lowercase letters, digits and -.",
+      "keyInvalid": "Paste one OpenPGP public key of at most 64 KiB.",
+      "fingerprintInvalid": "Enter the 40 hexadecimal characters of the fingerprint; spaces are ignored.",
+      "deleteTitle": "Remove package source",
+      "deleteConfirm": "Devices remove the source file and the keyring at their next check-in. Installed software stays. Type the source name to confirm.",
+      "empty": {
+        "title": "No package sources yet",
+        "description": "Add a trusted APT repository to offer software that your distribution does not ship."
+      },
+      "entries": "Entries",
+      "repeated": "Each entry may appear only once.",
+      "inUse": "This source is used by a catalog entry."
+    },
+    "catalog": {
+      "title": "Software catalog",
+      "summary": "Applications your devices install, keep, hold or block, by device group. Required applications a user removes are installed again and the event is recorded.",
+      "create": "Add application",
+      "createTitle": "Add application",
+      "editTitle": "Edit application",
+      "back": "Back to the software catalog",
+      "name": "Name",
+      "description": "Description",
+      "category": "Category",
+      "source": "Source",
+      "sourceHint": "Where the packages come from.",
+      "distributionRepositories": "Distribution repositories",
+      "packages": "Packages",
+      "packagesHint": "The most specific row for a device's distribution, release and architecture wins.",
+      "assignments": "Assignments",
+      "devices": "Devices",
+      "distribution": "Distribution",
+      "release": "Release",
+      "architecture": "Architecture",
+      "package": "Package",
+      "anyArchitecture": "Any",
+      "addRow": "Add package",
+      "remove": "Remove",
+      "removeRow": "Remove package row {n}",
+      "nameInvalid": "Enter a name of 1 to 100 characters.",
+      "descriptionInvalid": "At most 1000 characters.",
+      "categoryInvalid": "At most 64 characters.",
+      "packagesCount": "Enter one to twenty packages.",
+      "packagesDuplicate": "Each combination of distribution, release and architecture may appear once.",
+      "distributionInvalid": "Use the ID of /etc/os-release, for example ubuntu.",
+      "releaseInvalid": "Enter * or a release such as 24.04.",
+      "packageInvalid": "Enter a Debian package name: lowercase letters, digits, +, . and -.",
+      "deleteTitle": "Remove application",
+      "deleteConfirm": "{count, plural, one {The application and its # assignment are removed.} other {The application and its # assignments are removed.}} Installed software stays on the devices. Type the name to confirm.",
+      "empty": {
+        "title": "No applications yet",
+        "description": "Describe an application once, then assign it to device groups."
+      },
+      "devicesEmpty": {
+        "title": "No devices",
+        "description": "No active device is assigned this application yet."
+      }
+    },
+    "assignments": {
+      "title": "Assignments",
+      "create": "Assign",
+      "createTitle": "Assign the application",
+      "editTitle": "Change the assignment",
+      "intent": "Intent",
+      "updateRule": "Update rule",
+      "version": "Version",
+      "reason": "Reason",
+      "versionHint": "Only for a pinned version.",
+      "versionHintHold": "Leave empty to hold the installed version.",
+      "versionRequired": "Enter the version to pin.",
+      "versionInvalid": "Enter a Debian version: letters, digits, ., +, :, ~ and -.",
+      "reasonInvalid": "At most 500 characters.",
+      "deleteTitle": "Remove assignment",
+      "deleteConfirm": "Remove the assignment of {app} for {scope}? Devices keep what is installed.",
+      "empty": {
+        "title": "No assignments yet",
+        "description": "An assignment applies the application to a device group or to every device."
+      }
+    },
+    "intent": {
+      "label": "Intent",
+      "required": "Required",
+      "uninstall": "Uninstall",
+      "hold": "Hold version",
+      "forbid": "Forbid"
+    },
+    "updateRule": {
+      "latest": "Latest",
+      "pinned": "Pinned version"
+    },
+    "state": {
+      "label": "State",
+      "installed": "Installed",
+      "held": "Held",
+      "absent": "Not installed",
+      "pending": "Pending",
+      "failed": "Failed",
+      "not_applicable": "Not applicable",
+      "unknown": "No report yet"
+    },
+    "reason": {
+      "dpkg_locked": "Another package operation is running; the device retries.",
+      "deferred_offline": "The device waits for a server connection before it removes software.",
+      "would_remove_dependents": "The operation would remove other packages; nothing was changed.",
+      "no_candidate": "The package or version is not available from the device's sources.",
+      "fingerprint_mismatch": "The source key does not match its fingerprint; the source was not written.",
+      "not_yet_applied": "The device has not applied this yet.",
+      "source_unreachable": "The device could not reach the source.",
+      "conflicting_source": "The device already has an entry for this repository with another key; Paddock's entry was removed and the device's own entry stays.",
+      "apt_failed": "The package manager failed on the device."
+    },
+    "icon": {
+      "upload": "Icon (PNG)",
+      "hint": "A PNG of at most 64 KiB and 512 by 512 pixels.",
+      "notPng": "The icon must be a PNG file.",
+      "tooLarge": "The icon must be at most 64 KiB."
+    },
+    "reportedAt": "Reported",
+    "device": {
+      "summary": "Applications of the software catalog that apply to this device and what the device reported for each.",
+      "truncated": "The device left some entries out of its last report to keep the check-in small; an application without a row may be managed all the same.",
+      "empty": {
+        "title": "No managed software",
+        "description": "No catalog application is assigned to this device."
+      }
+    }
   }
 }

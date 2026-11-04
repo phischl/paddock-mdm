@@ -97,7 +97,7 @@ export function toRouteQuery(p: ListParams, defaults: ListParams): LocationQuery
 /**
  * A list column; title is a message key. role places the cell in the cards layout (plan M7c decision 21): the
  * primary identifier and the status chips on the first line, meta cells as "label: value" on the second, the
- * actions at the end. hideBelow hides the column in the table layout on narrow viewports.
+ * actions at the end. hideBelow hides the column in the table layout below the given Vuetify breakpoint (sm 600, md 960, xl 1920 px); the cards layout keeps it.
  */
 export interface ListColumn {
   key: string
@@ -106,7 +106,7 @@ export interface ListColumn {
   role?: 'primary' | 'status' | 'meta' | 'actions'
   mono?: boolean
   align?: 'start' | 'end'
-  hideBelow?: 'sm' | 'md'
+  hideBelow?: 'sm' | 'md' | 'xl'
 }
 
 /** The query keys a list owns, prefixed when the list shares the page with another (plan M7c decision 21). */
