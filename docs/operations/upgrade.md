@@ -100,6 +100,8 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   drift pass. That release does not contain the upstream fix for the Hello PIN loss
   (himmelblau-idm/himmelblau#1886), so the agent's `cache_timeout` setting and residual risk RR-40 stay unchanged. It
   offers the password change at the console login of an enrolled device whose Entra ID password has expired.
+  The AWS CLI image used by the backup and upload scripts moves to 2.39.3; `./paddock pull` fetches it, and nothing
+  else changes for the operator.
 
 ## Upgrade (each host)
 
