@@ -463,7 +463,12 @@ A device group can override the organization's policy; a device in several group
 so, and `automatic` when a group says so on a `manual` organization. The bundle carries the result
 (`agent.update_policy`, absent for automatic). An agent on `manual` logs `agent update offer ignored by the
 organization's policy` once per offered version. Devices left on an old agent appear on the attention page as
-`agent_outdated` and leave the support window after N-2 minor releases (426 `agent_unsupported`, residual risk RR-51).
+`agent_outdated` and leave the support window after N-2 minor releases (residual risk RR-51). A device outside the
+window keeps checking in but receives only the agent update offer; no configuration bundle and no commands reach it,
+except Lock, Destroy and dead man's switch tokens and the command that disarms the dead man's switch (ADR 0013
+amendment 2026-11-04 (2)). A Lock or Destroy takes effect there only if the last configuration the device applied
+enabled revocation; otherwise the device refuses it (`revocation.refused`, reason `disabled`). An old agent therefore
+stays lockable only if revocation was enabled before it left the window.
 
 ## Update now
 

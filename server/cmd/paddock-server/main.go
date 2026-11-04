@@ -43,6 +43,7 @@ commands:
         [--failure-threshold-percent P] [--failure-threshold-min M]
   admin agent-rollout-halt --version <x.y.z>
   admin agent-rollout-resume --version <x.y.z>
+  admin upgrade-check --target-version <x.y.z> [--json]
   backup openbao
   backup decrypt <in> <out|->
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
@@ -173,7 +174,7 @@ func exitCode(err error) int {
 	case errors.Is(err, errUsage):
 		fmt.Fprint(os.Stderr, usage)
 		return 2
-	case errors.Is(err, errProdCheckFailed), errors.Is(err, errAutoUnsealNotEnabled):
+	case errors.Is(err, errProdCheckFailed), errors.Is(err, errAutoUnsealNotEnabled), errors.Is(err, errUpgradeCheckFailed):
 		return 1
 	case errors.As(err, &missing):
 		slog.Error("configuration incomplete", "missing", missing.Names)

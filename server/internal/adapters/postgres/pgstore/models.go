@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Action struct {
@@ -515,6 +516,13 @@ type Finding struct {
 	ExternalRef       *string
 	ClearedAt         *time.Time
 	UpdatedAt         time.Time
+}
+
+type GooseDbVersion struct {
+	ID        int32
+	VersionID int64
+	IsApplied bool
+	Tstamp    pgtype.Timestamp
 }
 
 type InstalledSoftware struct {

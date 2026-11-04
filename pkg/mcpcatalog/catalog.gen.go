@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "08fedf5613f8d3e6399d2cfdf9f4e1357307c2f7f95abec83f3a18042dfa1238"
+const Version = "e27d1029c7c87f49ce94914b3b7ae7e28f735f92c27c9065df2b9c9bca09af65"
 
 var tools = []Tool{
 	{
@@ -1915,6 +1915,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. The update settings (plan M5b decisions 1 and 9); the defaults until changed.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getUpgradeCheck",
+		Method:      "GET",
+		Path:        "/api/platform/v1/upgrade-check",
+		Pattern:     "GET /api/platform/v1/upgrade-check",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: platform_admin. The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead of this release), agents (active devices whose agent is a release older than the target's support window: FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not audited. 400 invalid_request when target_version is no release this server knows.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{\"target_version\":{\"description\":\"The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9).\",\"maxLength\":64,\"type\":\"string\"}},\"required\":[\"target_version\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "getUser",

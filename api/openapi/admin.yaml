@@ -5506,6 +5506,32 @@ paths:
                     items: { $ref: "#/components/schemas/ComponentTarget" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/upgrade-check:
+    get:
+      operationId: getUpgradeCheck
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan
+        M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead
+        of this release), agents (active devices whose agent is a release older than the target's support window:
+        FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending
+        (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not
+        audited. 400 invalid_request when target_version is no release this server knows.
+      parameters:
+        - name: target_version
+          in: query
+          required: true
+          schema: { type: string, maxLength: 64 }
+          description: The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9).
+      responses:
+        "200":
+          description: The report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpgradeCheck" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases:
     get:
       operationId: listAgentReleases
@@ -7927,6 +7953,38 @@ components:
         version: { type: string }
         source: { type: string, description: "agent_release (the current release) or PADDOCK_HIMMELBLAU_VERSION (the compiler's setting)." }
         updated_at: { type: string, format: date-time }
+    UpgradeCheck:
+      type: object
+      required: [generated_at, target_version, window, items, agents_outside]
+      properties:
+        generated_at: { type: string, format: date-time }
+        target_version: { type: string }
+        window:
+          type: array
+          description: The releases whose agents target_version supports, oldest first (its own and the two previous).
+          items: { type: string }
+        items:
+          type: array
+          description: "In this order: migrations, agents, backups, openbao, pending, sessions."
+          items: { $ref: "#/components/schemas/UpgradeCheckItem" }
+        agents_outside:
+          type: array
+          description: The active devices whose agent is outside the window, at most 100; the agents item counts all.
+          items: { $ref: "#/components/schemas/UpgradeCheckAgent" }
+    UpgradeCheckItem:
+      type: object
+      required: [name, status, detail]
+      properties:
+        name: { type: string, enum: [migrations, agents, backups, openbao, pending, sessions] }
+        status: { type: string, enum: [PASS, WARN, FAIL, INFO] }
+        detail: { type: string }
+    UpgradeCheckAgent:
+      type: object
+      required: [device_id, hostname, agent_version]
+      properties:
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        agent_version: { type: string }
     DeviceUninstall:
       type: object
       required: [mode, requested_at, command_id, command_status, uninstalled_at, local_admin, tpm, report_overdue, refused_reason]
