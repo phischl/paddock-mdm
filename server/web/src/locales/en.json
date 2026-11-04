@@ -2696,7 +2696,8 @@
     "type": "Type",
     "types": {
       "webhook": "Webhook",
-      "email": "E-mail"
+      "email": "E-mail",
+      "syslog": "Syslog (TLS)"
     },
     "enabled": "Enabled",
     "on": "On",
@@ -2799,7 +2800,23 @@
       "description": "Add a webhook or an e-mail list to receive security events outside the portal."
     },
     "urlRejected": "The server refused the URL: it must be an https address on port 443 or 1024 to 65535 whose host is public.",
-    "nameTaken": "A destination with this name already exists."
+    "nameTaken": "A destination with this name already exists.",
+    "syslogHost": "Syslog host",
+    "syslogHostHint": "The receiver's DNS name or public IP address. Paddock connects over TLS only.",
+    "syslogHostInvalid": "Enter a DNS name or an IP address without scheme or port.",
+    "syslogHostRejected": "The host was refused: it must resolve to a public address.",
+    "syslogPort": "Port",
+    "syslogPortHint": "6514 is the port of syslog over TLS.",
+    "syslogPortInvalid": "Enter a port from 1 to 65535.",
+    "syslogCa": "CA certificate (PEM, optional)",
+    "syslogCaHint": "The certificate of a private CA the receiver's certificate chains to; then only this CA is trusted. Empty uses the public CAs.",
+    "syslogCaCurrent": "A CA certificate is stored. Leave empty to keep it, or paste a new one to replace it.",
+    "syslogCaInvalid": "Paste one or more PEM certificates (-----BEGIN CERTIFICATE-----), at most 16 KiB.",
+    "syslogServerName": "TLS server name (optional)",
+    "syslogServerNameHint": "The name in the receiver's certificate when it differs from the host.",
+    "syslogServerNameInvalid": "Enter a DNS name.",
+    "checkpoints": "Send daily checkpoints",
+    "checkpointsHint": "After each sealed day, a message with the day's event count and the signed manifest hash lets the receiver prove it has every event."
   },
   "rollout": {
     "urgent": {

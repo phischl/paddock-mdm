@@ -180,35 +180,9 @@ func SafeTransport(allowPrivate bool) *http.Transport {
 // AllowPrivate), and dials a checked address; the request keeps the host name for SNI and the Host header, so a
 // second resolution cannot rebind it. No proxy, TLS 1.2 minimum, 10 s to connect.
 func (p Policy) Transport() *http.Transport {
-	dialer := &net.Dialer{Timeout: ConnectTimeout}
 	return &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, portText, err := net.SplitHostPort(address)
-			if err != nil {
-				return nil, err
-			}
-			port, err := strconv.ParseUint(portText, 10, 16)
-			if err != nil {
-				return nil, fmt.Errorf("outbound: port %q: %w", portText, err)
-			}
-			addrs, err := p.lookup(ctx, host)
-			if err != nil {
-				return nil, fmt.Errorf("outbound: resolve: %w", err)
-			}
-			if !p.AllowPrivate && anyDenied(addrs) {
-				return nil, ErrDeniedAddress
-			}
-			var last error
-			for _, a := range addrs {
-				conn, err := dialer.DialContext(ctx, network, netip.AddrPortFrom(a, uint16(port)).String())
-				if err == nil {
-					return conn, nil
-				}
-				last = err
-			}
-			return nil, last
-		},
+		Proxy:                 nil,
+		DialContext:           p.DialContext,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout:   ConnectTimeout,
 		ResponseHeaderTimeout: TotalTimeout,
@@ -216,6 +190,38 @@ func (p Policy) Transport() *http.Transport {
 		MaxIdleConns:          10,
 		IdleConnTimeout:       90 * time.Second,
 	}
+}
+
+// DialContext connects to address (host:port) the way every outbound call does: it resolves the host itself, refuses
+// it when any address is denied (unless AllowPrivate) and dials a checked address, 10 s to connect. The caller keeps
+// the host name for TLS, so a second resolution cannot rebind it (the webhook transport and the syslog transport of
+// plan M12 decision 18).
+func (p Policy) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("outbound: port %q: %w", portText, err)
+	}
+	addrs, err := p.lookup(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("outbound: resolve: %w", err)
+	}
+	if !p.AllowPrivate && anyDenied(addrs) {
+		return nil, ErrDeniedAddress
+	}
+	dialer := &net.Dialer{Timeout: ConnectTimeout}
+	var last error
+	for _, a := range addrs {
+		conn, err := dialer.DialContext(ctx, network, netip.AddrPortFrom(a, uint16(port)).String())
+		if err == nil {
+			return conn, nil
+		}
+		last = err
+	}
+	return nil, last
 }
 
 // ErrRedirect is returned by the client of Client for every redirect: a redirect is a failed delivery.

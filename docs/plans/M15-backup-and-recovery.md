@@ -97,6 +97,11 @@ audit event. The escrow objects of the lab (LUKS headers) are part of every back
    `db_paddock_backup_url` exactly as `paddock_notifier` (plan M9 decision 11); `paddock-server migrate` MUST create
    a missing role from the secret file (the mechanism plan M16 PDK-745 generalizes; PDK-729 ships it for this role
    only, as `CREATE ROLE IF NOT EXISTS … LOGIN PASSWORD` inside the migration step).
+   *Amendment 2026-11-04 (PDK-745):* the creation of a missing role does not run inside `paddock-server migrate`:
+   `paddock_owner` stays `NOCREATEROLE` and the migration holds no superuser credential. The one-shot service
+   `db-provision` (compose.yaml, postgres image already in the stack, superuser password mounted there only) runs
+   `postgres/provision-roles.sh` before `paddock-migrate`; the same script is the initdb hook. It creates `paddock_backup`
+   when absent and sets its password from the secret file on every run.
 5. `openbao-configure.sh` MUST create the Transit key `backup-wrap` (`type=aes256-gcm96`, `exportable=false`,
    `allow_plaintext_backup=false`), add `transit/encrypt/backup-wrap` (`update`) to the policy `paddock-api`, and
    extend the policy `paddock-backup` (today: `read` on `sys/storage/raft/snapshot`) with `transit/decrypt/backup-wrap`

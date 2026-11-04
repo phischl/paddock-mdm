@@ -2696,7 +2696,8 @@
     "type": "Typ",
     "types": {
       "webhook": "Webhook",
-      "email": "E-Mail"
+      "email": "E-Mail",
+      "syslog": "Syslog (TLS)"
     },
     "enabled": "Aktiv",
     "on": "An",
@@ -2799,7 +2800,23 @@
       "description": "Fügen Sie einen Webhook oder eine E-Mail-Liste hinzu, um Sicherheitsereignisse außerhalb des Portals zu erhalten."
     },
     "urlRejected": "Der Server hat die URL abgelehnt: Sie muss eine https-Adresse auf Port 443 oder 1024 bis 65535 mit öffentlichem Host sein.",
-    "nameTaken": "Ein Ziel mit diesem Namen existiert bereits."
+    "nameTaken": "Ein Ziel mit diesem Namen existiert bereits.",
+    "syslogHost": "Syslog-Host",
+    "syslogHostHint": "DNS-Name oder öffentliche IP-Adresse des Empfängers. Paddock verbindet sich nur über TLS.",
+    "syslogHostInvalid": "Geben Sie einen DNS-Namen oder eine IP-Adresse ohne Schema und Port ein.",
+    "syslogHostRejected": "Der Host wurde abgelehnt: Er muss auf eine öffentliche Adresse auflösen.",
+    "syslogPort": "Port",
+    "syslogPortHint": "6514 ist der Port für Syslog über TLS.",
+    "syslogPortInvalid": "Geben Sie einen Port von 1 bis 65535 ein.",
+    "syslogCa": "CA-Zertifikat (PEM, optional)",
+    "syslogCaHint": "Das Zertifikat einer privaten CA, auf die das Zertifikat des Empfängers zurückgeht; dann wird nur dieser CA vertraut. Leer bedeutet: öffentliche CAs.",
+    "syslogCaCurrent": "Ein CA-Zertifikat ist gespeichert. Leer lassen, um es zu behalten, oder ein neues einfügen, um es zu ersetzen.",
+    "syslogCaInvalid": "Fügen Sie ein oder mehrere PEM-Zertifikate ein (-----BEGIN CERTIFICATE-----), höchstens 16 KiB.",
+    "syslogServerName": "TLS-Servername (optional)",
+    "syslogServerNameHint": "Der Name im Zertifikat des Empfängers, wenn er vom Host abweicht.",
+    "syslogServerNameInvalid": "Geben Sie einen DNS-Namen ein.",
+    "checkpoints": "Tägliche Checkpoints senden",
+    "checkpointsHint": "Nach jedem versiegelten Tag belegt eine Nachricht mit der Zahl der Ereignisse und dem signierten Manifest-Hash, dass der Empfänger jedes Ereignis hat."
   },
   "rollout": {
     "urgent": {

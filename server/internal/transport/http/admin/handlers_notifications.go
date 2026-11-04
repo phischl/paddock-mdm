@@ -19,8 +19,9 @@ func toNotificationDestination(d app.NotificationDestination) adminapi.Notificat
 		Id: d.ID, Type: adminapi.NotificationDestinationType(d.Type), Name: d.Name, Enabled: d.Enabled,
 		FilterMode: adminapi.NotificationFilterMode(d.FilterMode), Codes: d.Codes, PseudonymizeUsers: d.PseudonymizeUsers,
 		IncludeParams: d.IncludeParams, UrlDisplay: d.URLDisplay, HeartbeatIntervalS: d.HeartbeatIntervalS,
-		Recipients: d.Recipients, EmailMinIntervalS: d.EmailMinIntervalS, CreatedBy: d.CreatedBy,
-		CreatedAt: d.CreatedAt.UTC(), UpdatedAt: d.UpdatedAt.UTC(),
+		Recipients: d.Recipients, EmailMinIntervalS: d.EmailMinIntervalS, SyslogHost: d.SyslogHost,
+		SyslogPort: d.SyslogPort, SyslogServerName: d.SyslogServerName, SyslogCaPemSet: d.SyslogCAPEMSet,
+		Checkpoints: d.Checkpoints, CreatedBy: d.CreatedBy, CreatedAt: d.CreatedAt.UTC(), UpdatedAt: d.UpdatedAt.UTC(),
 		State: adminapi.NotificationDestinationState{
 			Status: adminapi.NotificationDestinationStateStatus(s.Status), CursorCommitSeq: s.CursorCommitSeq,
 			ForwardSeq: s.ForwardSeq, LastSuccessAt: utcPtr(s.LastSuccessAt), LastAttemptAt: utcPtr(s.LastAttemptAt),
@@ -44,7 +45,8 @@ func toNotificationCreated(d app.NotificationDestination, secret string) adminap
 		Id: v.Id, Type: v.Type, Name: v.Name, Enabled: v.Enabled, FilterMode: v.FilterMode, Codes: v.Codes,
 		PseudonymizeUsers: v.PseudonymizeUsers, IncludeParams: v.IncludeParams, UrlDisplay: v.UrlDisplay,
 		HeartbeatIntervalS: v.HeartbeatIntervalS, Recipients: v.Recipients, EmailMinIntervalS: v.EmailMinIntervalS,
-		CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, State: v.State,
+		SyslogHost: v.SyslogHost, SyslogPort: v.SyslogPort, SyslogServerName: v.SyslogServerName,
+		SyslogCaPemSet: v.SyslogCaPemSet, Checkpoints: v.Checkpoints, CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, State: v.State,
 	}
 	if secret != "" {
 		out.Secret = &secret
@@ -57,7 +59,9 @@ func notificationCreateInput(b *adminapi.NotificationDestinationCreate) app.Noti
 		Type: outbound.Type(b.Type), Name: b.Name, Enabled: b.Enabled, FilterMode: outbound.FilterMode(b.FilterMode),
 		Codes: deref(b.Codes, nil), PseudonymizeUsers: deref(b.PseudonymizeUsers, false), IncludeParams: deref(b.IncludeParams, false),
 		URL: b.Url, HeartbeatIntervalS: deref(b.HeartbeatIntervalS, 0), Recipients: deref(b.Recipients, nil),
-		EmailMinIntervalS: deref(b.EmailMinIntervalS, 0),
+		EmailMinIntervalS: deref(b.EmailMinIntervalS, 0), SyslogHost: deref(b.SyslogHost, ""),
+		SyslogPort: deref(b.SyslogPort, 0), SyslogCAPEM: b.SyslogCaPem, SyslogServerName: deref(b.SyslogServerName, ""),
+		Checkpoints: deref(b.Checkpoints, false),
 	}
 }
 
@@ -66,7 +70,9 @@ func notificationUpdateInput(b *adminapi.NotificationDestinationUpdate) app.Noti
 		Name: b.Name, Enabled: b.Enabled, FilterMode: outbound.FilterMode(b.FilterMode), Codes: deref(b.Codes, nil),
 		PseudonymizeUsers: deref(b.PseudonymizeUsers, false), IncludeParams: deref(b.IncludeParams, false), URL: b.Url,
 		HeartbeatIntervalS: deref(b.HeartbeatIntervalS, 0), Recipients: deref(b.Recipients, nil),
-		EmailMinIntervalS: deref(b.EmailMinIntervalS, 0),
+		EmailMinIntervalS: deref(b.EmailMinIntervalS, 0), SyslogHost: deref(b.SyslogHost, ""),
+		SyslogPort: deref(b.SyslogPort, 0), SyslogCAPEM: b.SyslogCaPem, SyslogServerName: deref(b.SyslogServerName, ""),
+		Checkpoints: deref(b.Checkpoints, false),
 	}
 	if b.Type != nil {
 		in.Type = outbound.Type(*b.Type)

@@ -60,6 +60,8 @@ type notificationWorld struct {
 	other uuid.UUID
 	// with builds the use cases on the same pools with another SMTP setting.
 	with func(emailEnabled bool) *app.Notifications
+	// dns is the resolver of the outbound policy; a test may drop a name to simulate a receiver that stopped resolving.
+	dns stubResolver
 }
 
 func newNotificationWorld(t *testing.T, emailEnabled bool) notificationWorld {
@@ -78,14 +80,16 @@ func newNotificationWorld(t *testing.T, emailEnabled bool) notificationWorld {
 	}
 	t.Cleanup(platformPool.Close)
 	keys := &fakeKeys{}
-	policy := outbound.Policy{Resolver: stubResolver{
+	dns := stubResolver{
 		"hooks.example.org":    {netip.MustParseAddr("93.184.215.14")},
 		"intranet.example.org": {netip.MustParseAddr("10.1.2.3")},
-	}}
+		"siem.example.org":     {netip.MustParseAddr("93.184.215.15")},
+	}
+	policy := outbound.Policy{Resolver: dns}
 	with := func(emailEnabled bool) *app.Notifications {
 		return app.NewNotifications(h.runner, orgPool, platformPool, keys, policy, emailEnabled)
 	}
-	w := notificationWorld{harness: h, keys: keys, other: uuid.Must(uuid.NewV7()), n: with(emailEnabled), with: with}
+	w := notificationWorld{harness: h, keys: keys, dns: dns, other: uuid.Must(uuid.NewV7()), n: with(emailEnabled), with: with}
 	if _, err := h.super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Other', 'active')",
 		w.other, "o"+w.other.String()[24:]); err != nil {
 		t.Fatal(err)

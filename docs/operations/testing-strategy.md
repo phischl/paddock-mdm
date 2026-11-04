@@ -88,6 +88,12 @@ Everything of a cluster, on the release candidate, plus:
   bundle, checksums, keyless signatures), `smoke` (installs the release bundle on both hosts and checks them, without
   a registry login, which proves the images are publicly pullable), `sign` (agent release key, after the
   maintainer's approval) and `publish`;
+- the compatibility fixtures of the release candidate (ADR 0047 decision 2): `make compat-fixtures
+  RELEASE=<version>` writes `pkg/compat/testdata/<version>/` (bundles per schema version, check-in, events, commands,
+  the audit writer's insert) and deletes the directories older than two releases; commit the result with the release
+  commit. `TestPreviousReleaseFixtures` (`pkg/compat`) and `TestPreviousReleaseAuditInsert`
+  (`server/internal/auditwriter`) then prove that every later tree still reads what this release produced. `make lint`
+  (`lint-migrations-frozen`) fails when a migration of the previous release tag is edited or deleted;
 - an installation of the release bundle on a lab host (`docs/operations/lab-install.md`) with real devices.
 
 ## 2. Flake policy

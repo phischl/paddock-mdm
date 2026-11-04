@@ -27,7 +27,7 @@ services:
       - db_paddock_audit_writer_password
       - db_paddock_audit_reader_password
     volumes:
-      - ./audit-postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/provision-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
       - audit-postgres-data:/var/lib/postgresql
     networks: [audit-index]
     healthcheck:
@@ -35,6 +35,37 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # Counterpart of db-provision of compose.yaml for the audit database (plan M16 decision 8): a role a release adds
+  # exists before paddock-audit-migrate runs, whose owner stays NOCREATEROLE.
+  audit-db-provision:
+    logging: *paddock-logging
+    image: ${POSTGRES_IMAGE}
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    read_only: true
+    tmpfs: [/tmp]
+    entrypoint: ["bash", "/provision-roles.sh"]
+    environment:
+      POSTGRES_DB: paddock_audit
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/audit_postgres_superuser_password
+      PGHOST: audit-postgres
+      AUDIT_OWNER_PASSWORD_FILE: /run/secrets/db_audit_owner_password
+      AUDIT_WRITER_PASSWORD_FILE: /run/secrets/db_paddock_audit_writer_password
+      AUDIT_READER_PASSWORD_FILE: /run/secrets/db_paddock_audit_reader_password
+    secrets:
+      - audit_postgres_superuser_password
+      - db_audit_owner_password
+      - db_paddock_audit_writer_password
+      - db_paddock_audit_reader_password
+    volumes:
+      - ./postgres/provision-roles.sh:/provision-roles.sh:ro
+    networks: [audit-index]
+    depends_on:
+      audit-postgres:
+        condition: service_healthy
 
   audit-rustfs:
     logging: *paddock-logging
@@ -78,6 +109,8 @@ services:
     depends_on:
       audit-postgres:
         condition: service_healthy
+      audit-db-provision:
+        condition: service_completed_successfully
 
   paddock-audit-writer:
     logging: *paddock-logging
