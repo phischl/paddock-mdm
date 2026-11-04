@@ -222,6 +222,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
+	bash $(COMPOSE_DIR)/scripts/openbao-configure_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh

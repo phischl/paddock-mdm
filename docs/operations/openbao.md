@@ -53,11 +53,13 @@ read -rs BAO_TOKEN && export BAO_TOKEN   # the decrypted root token, typed witho
 
 It enables `transit`, `secret` (kv-v2) and `approle`, creates the transit keys `audit-chain`, `bundle-signing`,
 `command-signing`, `revocation-signing`, `time-ticket` (Ed25519), `escrow-wrap` (RSA-4096), `notification-wrap` and
-`notification-pseudonym` (AES-256-GCM, derived), the KV secret `secret/paddock/session`, the eight policies and
-AppRoles of `deploy/compose/scripts/openbao-configure.sh` (the same as in development: each role reads or signs only
-with its own keys; `paddock-revocation-issuer` is the only role that signs revocations, `paddock-backup` may only read
-Raft snapshots, `paddock-notifier` may only decrypt with the two notification keys, with which `paddock-api` may only
-encrypt and obtain wrapped data keys), and writes each AppRole's role ID and secret ID to `.secrets/approle/<role>/`.
+`notification-pseudonym` (AES-256-GCM, derived), `backup-wrap` (AES-256-GCM, not exportable, no plaintext backup; the
+backup encryption key and the backup targets' credentials, ADR 0046), the KV secret `secret/paddock/session`, the eight
+policies and AppRoles of `deploy/compose/scripts/openbao-configure.sh` (the same as in development: each role reads or
+signs only with its own keys; `paddock-revocation-issuer` is the only role that signs revocations, `paddock-backup` may
+only read Raft snapshots and decrypt with `backup-wrap` (`transit/decrypt/backup-wrap`), with which `paddock-api` may
+only encrypt (`transit/encrypt/backup-wrap`), `paddock-notifier` may only decrypt with the two notification keys, with
+which `paddock-api` may only encrypt and obtain wrapped data keys), and writes each AppRole's role ID and secret ID to `.secrets/approle/<role>/`.
 It is idempotent: a stored secret ID is kept. The roles read them as files referenced by
 `PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`: `paddock-escrow-reader` reaches the escrow-reader
 and never the api, `paddock-revocation-issuer` the revocation-issuer and no other role, `paddock-backup` the worker,
