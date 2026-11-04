@@ -333,3 +333,55 @@ together with superseded bundles is a follow-up. Legal basis unchanged: Art. 6(1
 
 (architect, 2026-11-01) An open (running or halted) configuration rollout pins the before-state of its change set
 until it is completed or reverted: the purge of `change_set.before` after 90 days skips that change set.
+
+## Amendment 2026-11-04 (architect, M11/M13a stores)
+
+Authorised for the architect role on 2026-11-04 (PDK-723). Plan M11 (migrations `00090`–`00094`) and plan M13a
+(`00095`–`00099`) added stores and columns the matrix of decision 1 does not name; plan M13a amendment 2026-10-31
+(R5.2, R6.2) waits for this amendment. The rows state what the code does, not what the plans intended: every retention,
+cascade and event below was read from the migrations, the queries and the audit registry. A purge that does not exist
+is a residual risk with the ticket that will add it; this amendment invents none. "Kept while referenced" means the
+rows live and die with the named parent and no job deletes them on its own. Column meanings as in decision 1.
+
+| Store | Data class | Content (personal data) | Retention | Legal basis (GDPR) | Purge (role, event) | Configurable |
+| --- | --- | --- | --- | --- | --- | --- |
+| `change_set` columns `reverts_change_set_id`, `rollout`, `urgent_reason`, `reason` (M11, `00091`) | Operational history | Rollout kind, the reverted change set, free-text reasons an administrator typed (may name people) | As the row "`change_set` (metadata and plan)" of decision 1: WORM retention; `reverts_change_set_id` references `change_set` without a cascade | Art. 6(1)(f) (A.8.9, A.8.32) | None: no code deletes `change_set` rows; follow-up PDK-725 (with `config_rollout`) | — |
+| `change_set.before`, `before_purged_at` (M11, `00091`) | Configuration history | Full managed file contents | Unchanged: 90 days after `applied_at` (`app.ChangeSetBeforeDays`); the change set of an open rollout (running or halted) keeps it (amendment 2026-11-01) | Art. 6(1)(f) (A.8.32 revert) | Implemented: worker retention round, every 6 h, batches of 1 000, `before` set to NULL and `before_purged_at` stamped (`app.Retention.PurgeChangeSetBefore`); `retention.purged` (store `change_set_before`, per organization, only when rows were cleared) | Fixed by code |
+| `organization_rollout_settings` (M11, `00092`) | Configuration | Waves, wave duration, failure threshold, canary group, `updated_by` (administrator account) | Lifetime of the organization: one row per organization, overwritten by every change; deleting the canary group sets `canary_device_group_id` to NULL (`ON DELETE SET NULL`) | Art. 6(1)(f) | None; every change is `settings.rollout_changed` | — |
+| `config_rollout` (M11, `00093`) | Operational history | `started_by` (actor), `halted_reason` and `ended_reason` (free text), waves, wave times, status | Kept while referenced: parent `change_set` (`change_set_id`, unique, no cascade); `bundle.config_rollout_id` points at it with `ON DELETE SET NULL` as a safety net only, because no code deletes a rollout. Lives and dies with its change set: WORM retention | Art. 6(1)(f) (A.8.9, A.8.32) | None; the transitions are proven by `config_rollout.advanced`, `config_rollout.halted`, `config_rollout.resumed`, `config_rollout.completed` and by `config.applied` / `config.reverted` with `rollout_id`; follow-up PDK-725 (with `change_set`) | — |
+| `bundle.config_rollout_id` (M11, `00093`) | Device data | Which rollout a compiled bundle belongs to; no personal data | As the `bundle` row (device record: lifetime of the organization) | Art. 6(1)(c)/(f) | None | — |
+| `device.enrollment_method`, `config_mode`, `config_mode_changed_at` (M11, `00094`) | Device data | How the device enrolled and whether its configuration is enforced or report-only; no personal data | As the `device` row (device record) | Art. 6(1)(c)/(f) | None; `device.enrolled` records `enrollment_method` and `config_mode`, `device.enforcement_enabled` the switch to enforce | — |
+| `device_bundle_report`, `device_resource_status` (M11, `00090`) | Apply status per device | As decision 1 | Unchanged: decision 1 and amendment 2026-11-01 (PDK-151). `device_resource_status`: a device's report deletes the rows of resources that left the bundle and upserts the rest (rows of a newer report stay); `device_bundle_report`: one row per bundle version the server compiled, kept with the `bundle` row | Art. 6(1)(f) (A.8.9) | None (overwritten or kept with the device record). Residual risk: the history of superseded bundle versions grows without bound, PDK-673 (existing) | — |
+| `software_source` (M13a, `00095`) | Configuration | Repository URIs, the vendor's public signing key and its fingerprint, `created_by` (administrator account); no data of employees | Until an administrator deletes it; the deletion is refused with `in_use` while a catalog entry references the source (`ON DELETE RESTRICT`) | Art. 6(1)(f) | The administrator (step-up); `software_source.deleted` | — |
+| `software_catalog_entry` with `icon` (M13a, `00096`) | Configuration | Application name, description, package names, icon (≤ 64 KiB), `created_by` | Until an administrator deletes it; the deletion cascades to the entry's `software_assignment` rows and to its `device_software_status` rows on every device | Art. 6(1)(f) | The administrator; `software_catalog_entry.deleted` (param `assignment_count`; the cascaded status rows are not counted). A replaced or removed icon is `software_catalog_entry.updated` (`fields` names `icon`) | — |
+| `software_assignment` (M13a, `00096`) | Configuration | Intent, update rule, version, free-text `reason`, `created_by` | Kept while referenced: parent `software_catalog_entry` and, for a group assignment, parent `device_group` (both `ON DELETE CASCADE`); otherwise until an administrator deletes it | Art. 6(1)(f) | The administrator: `software_assignment.deleted`; with its entry: `software_catalog_entry.deleted`; with its group: `device_group.deleted` (the event does not count the assignments) | — |
+| `device_software_status` (M13a, `00098`) | Device data of a person's laptop (as the inventory) | Per device and catalog entry: package name, intent, state, installed version, reason, error text (≤ 200 characters, may name paths), `reported_at` | Current state only while the device is active: the next check-in that carries items deletes the rows of entries it no longer names and upserts the rest (rows a newer report wrote stay). Kept while referenced: parent `software_catalog_entry` (`ON DELETE CASCADE`) and parent `device` (no cascade; device rows are never deleted). **Rows of a retired device freeze**: the ingest ignores a device that is not active, and the retired-inventory purge deletes `installed_software`, `vulnerability_finding`, `inventory_policy_result` and `device_inventory_ref` only | Art. 6(1)(f), Art. 5(1)(c) | None of its own; with the entry: `software_catalog_entry.deleted`. **Residual risk**: the software status of a retired device outlives `retired_inventory_days`; PDK-724 adds the table to the retired-inventory purge (`device.inventory_purged`) | — (PDK-724: with `retired_inventory_days`) |
+| `device_status.software_digest` (`00098`), `software_truncated` (`00099`) (M13a) | Device data | Digest of the last stored software report and whether it left items out; no personal data | As the `device_status` row (device record); replaced by every check-in that changes them | Art. 6(1)(c)/(f) | None | — |
+| `device.compiled_arch`, `compiled_os_id`, `compiled_os_version_id` (M13a, `00097`) | Device data | Architecture and os-release the device's last compile saw; no personal data | As the `device` row (device record); the compiler overwrites them with every recompile that saw other values | Art. 6(1)(c)/(f) | None | — |
+| `device.os_release` (since `00003`; refreshed on check-in by M13a, PDK-695) | Device data | Distribution `id` and `version_id` as last reported; `pretty_name` and `version_codename` of the enrollment are dropped at the first refresh; no personal data | As the `device` row (device record): the current value only; the check-in of an active device replaces it | Art. 6(1)(c)/(f) | None; every change is `device.os_release_changed` (old and new values), so the history lives in the audit trail under the WORM retention | — |
+
+**Cascades.** Three deletions remove rows of other stores through foreign keys, and the proving event is the parent's:
+deleting a catalog entry removes its assignments (counted in `software_catalog_entry.deleted` as `assignment_count`)
+and its `device_software_status` rows on every device (not counted); deleting a device group removes the group's
+assignments (`device_group.deleted` carries the group's name only) and clears the canary group of the rollout settings
+and of every rollout that named it; deleting a software source is refused while an entry uses it. No cascade reaches
+`change_set`, `config_rollout`, `bundle` or the device record.
+
+**Residual risks and follow-ups.** No job purges the following; nothing here invents one:
+
+- PDK-724 — `device_software_status` of retired devices stays after `retired_inventory_days`, frozen at the last
+  report before retirement. Decided: it joins the retired-inventory purge of decision 3 (same job, same event
+  `device.inventory_purged`, a new count parameter); PDK-724 also checks whether `device_resource_status` of retired
+  devices, "with the device record" in decision 1, joins the same pass.
+- PDK-725 — `change_set` (metadata, plan and the M11 columns) and `config_rollout` have no purge. Decision 1 named a
+  follow-up ticket for `change_set`; amendment 2026-10-18 left it out. The period is the audit index retention after
+  `applied_at` with the cutoff rule of amendment 2026-10-31, never a change set that an open rollout, a later change
+  set (`reverts_change_set_id`) or a `bundle` still references; the rollout goes with its change set. PDK-725 decides
+  the details with the architect.
+- PDK-673 (existing) — `device_bundle_report` with superseded `bundle` rows (amendment 2026-11-01).
+- PDK-726 — the description of `retention.purged` in the audit registry (`server/internal/domain/audit/codes.go`,
+  rendered into `docs/compliance/audit-codes.md`) does not list the store `change_set_before` the worker emits. The
+  event is recorded and valid; the registry text is incomplete.
+
+`docs/compliance/retention.md` carries the rows above; `docs/compliance/privacy.md` already describes the software
+status (plan M13a amendment 2026-10-31, PDK-414).
