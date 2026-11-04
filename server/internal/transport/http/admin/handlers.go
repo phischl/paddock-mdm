@@ -82,6 +82,8 @@ type handlers struct {
 	overview       *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
+	// accessReview is the access review report (plan M12 decisions 25 and 26).
+	accessReview *app.AccessReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).
 	mcpSettings *app.MCPSettings
 	mcpAccess   *app.MCPAccessService

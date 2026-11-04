@@ -3605,6 +3605,56 @@ paths:
               schema: { $ref: "#/components/schemas/SecurityReview" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/access-review:
+    get:
+      operationId: getAccessReview
+      x-paddock-mcp: { expose: false }
+      tags: [overview]
+      description: |
+        Roles: org_admin, org_auditor. The access review of the organization: role members, role changes, accounts, API tokens, reveals of secrets, step-ups, ended sessions and destructive actions in the period. One report object, not a collection: every list holds at most 1000
+        items and states its total. from and to are RFC 3339; to defaults to now and from to 90 days before to; the
+        period spans at most 400 days (400 invalid_request beyond or when from is not before to). Role members are the
+        worker's snapshot of the identity provider (at most one 5-minute round old). The view is recorded as access_review.viewed once per actor and UTC day, only while the organization's audit_search_recorded privacy setting is on.
+      parameters:
+        - $ref: "#/components/parameters/AccessReviewFrom"
+        - $ref: "#/components/parameters/AccessReviewTo"
+      responses:
+        "200":
+          description: The access review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessReviewReport" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/access-review/export:
+    get:
+      operationId: exportAccessReview
+      x-paddock-mcp: { expose: false }
+      tags: [overview]
+      description: |
+        Roles: org_admin, org_auditor. The access review as a download: format json (the same object as the view) or csv (one file for
+        every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a
+        leading apostrophe). Content-Disposition names the file paddock-access-review-<organization slug>-<from>-<to>.<json|csv>. Period as for the view.
+        Every export is recorded as access_review.exported, whatever the privacy settings.
+      x-paddock-audit: access_review.exported
+      parameters:
+        - $ref: "#/components/parameters/AccessReviewFrom"
+        - $ref: "#/components/parameters/AccessReviewTo"
+        - $ref: "#/components/parameters/AccessReviewFormat"
+      responses:
+        "200":
+          description: The exported report.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessReviewReport" }
+            text/csv:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/attention/devices:
     get:
       operationId: listAttentionDevices
@@ -5845,6 +5895,61 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/access-review:
+    get:
+      operationId: getPlatformAccessReview
+      x-paddock-mcp: { expose: false }
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin. The access review of the platform: platform role members, platform administrators, privileged platform events and the organizations created in the period. One report object, not a collection: every list holds at most 1000
+        items and states its total. from and to are RFC 3339; to defaults to now and from to 90 days before to; the
+        period spans at most 400 days (400 invalid_request beyond or when from is not before to). Role members are the
+        worker's snapshot of the identity provider (at most one 5-minute round old). Every view is recorded as platform.access_review_viewed (platform reads are not under an organization's privacy switch).
+      x-paddock-audit: platform.access_review_viewed
+      parameters:
+        - $ref: "#/components/parameters/AccessReviewFrom"
+        - $ref: "#/components/parameters/AccessReviewTo"
+      responses:
+        "200":
+          description: The access review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformAccessReviewReport" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/access-review/export:
+    get:
+      operationId: exportPlatformAccessReview
+      x-paddock-mcp: { expose: false }
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin. The access review as a download: format json (the same object as the view) or csv (one file for
+        every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a
+        leading apostrophe). Content-Disposition names the file paddock-access-review-platform-<from>-<to>.<json|csv>. Period as for the view.
+        Every export is recorded as platform.access_review_exported, whatever the privacy settings.
+      x-paddock-audit: platform.access_review_exported
+      parameters:
+        - $ref: "#/components/parameters/AccessReviewFrom"
+        - $ref: "#/components/parameters/AccessReviewTo"
+        - $ref: "#/components/parameters/AccessReviewFormat"
+      responses:
+        "200":
+          description: The exported report.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformAccessReviewReport" }
+            text/csv:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/openbao/auto-unseal:
     get:
       operationId: getAutoUnseal
@@ -6190,6 +6295,21 @@ components:
         Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
         printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
       schema: { type: string }
+    AccessReviewFrom:
+      name: from
+      in: query
+      description: RFC 3339; the start of the period, default 90 days before to.
+      schema: { type: string, format: date-time }
+    AccessReviewTo:
+      name: to
+      in: query
+      description: RFC 3339; the end of the period, default now.
+      schema: { type: string, format: date-time }
+    AccessReviewFormat:
+      name: format
+      in: query
+      required: true
+      schema: { type: string, enum: [json, csv] }
     NotificationDestinationSort:
       name: sort
       in: query
@@ -9335,6 +9455,250 @@ components:
           items: { type: integer }
         current_wave_index: { type: integer }
         started_at: { type: string, format: date-time }
+    AccessReviewPeriod:
+      type: object
+      required: [from, to]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+    AccessReviewRoleMembers:
+      type: object
+      description: The members of one role as of the worker's last snapshot.
+      required: [role, total, members]
+      properties:
+        role: { type: string }
+        snapshot_taken_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the role's first comparison was taken; null while it had none.
+        total: { type: integer }
+        members:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewRoleMember" }
+    AccessReviewRoleMember:
+      type: object
+      required: [username, authentik_pk, first_seen_at]
+      properties:
+        username: { type: string }
+        authentik_pk: { type: string }
+        first_seen_at: { type: string, format: date-time }
+    AccessReviewRoleChange:
+      type: object
+      required: [at, code, username, role, actor]
+      properties:
+        at: { type: string, format: date-time }
+        code: { type: string, description: admin.role_granted or admin.role_revoked. }
+        username: { type: string }
+        role: { type: string }
+        actor: { type: string }
+    AccessReviewAccount:
+      type: object
+      required: [username, display_name, role, last_login_at, disabled]
+      properties:
+        username: { type: string }
+        display_name: { type: string }
+        role: { type: string }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        disabled: { type: boolean }
+    AccessReviewToken:
+      type: object
+      description: An API token that existed at some time in the period; never its secret.
+      required: [name, role, prefix, created_by, created_at, expires_at, last_used_at, revoked_at, revoked_by]
+      properties:
+        name: { type: string }
+        role: { type: string }
+        prefix: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        revoked_by: { type: string, nullable: true }
+    AccessReviewReveal:
+      type: object
+      required: [at, code, actor, device_hostname, params]
+      properties:
+        at: { type: string, format: date-time }
+        code: { type: string }
+        actor: { type: string }
+        device_hostname: { type: string }
+        params:
+          type: object
+          description: The identifying parameters of the event (generation, volume); never a secret.
+          additionalProperties: true
+    AccessReviewStepUp:
+      type: object
+      description: Successful actions of step-up sessions and refusals for a missing step-up in the period.
+      required: [succeeded, failed]
+      properties:
+        succeeded: { type: integer }
+        failed: { type: integer }
+    AccessReviewSessionRevocation:
+      type: object
+      required: [at, username, reason]
+      properties:
+        at: { type: string, format: date-time }
+        username: { type: string }
+        reason: { type: string }
+    AccessReviewDestructiveAction:
+      type: object
+      required: [at, code, actor, target]
+      properties:
+        at: { type: string, format: date-time }
+        code: { type: string }
+        actor: { type: string }
+        target: { type: string }
+    AccessReviewRoleChanges:
+      type: object
+      description: Role changes in the period, baseline members excluded.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewRoleChange" }
+    AccessReviewAccounts:
+      type: object
+      description: Administrator accounts of the organization.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewAccount" }
+    AccessReviewTokens:
+      type: object
+      description: API tokens that existed in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewToken" }
+    AccessReviewReveals:
+      type: object
+      description: Reveals and downloads of secrets in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewReveal" }
+    AccessReviewSessionRevocations:
+      type: object
+      description: Sessions the server ended in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewSessionRevocation" }
+    AccessReviewDestructiveActions:
+      type: object
+      description: Destructive and locking actions in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewDestructiveAction" }
+    AccessReviewReport:
+      type: object
+      description: The access review of an organization; every list holds at most row_cap items and states its total.
+      required: [generated_at, period, row_cap, roles, role_changes, accounts, api_tokens, token_denials, reveals, step_up, sessions_revoked, break_glass_accounts, destructive]
+      properties:
+        generated_at: { type: string, format: date-time }
+        period: { $ref: "#/components/schemas/AccessReviewPeriod" }
+        row_cap: { type: integer }
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/AccessReviewRoleMembers" }
+        role_changes: { $ref: "#/components/schemas/AccessReviewRoleChanges" }
+        accounts: { $ref: "#/components/schemas/AccessReviewAccounts" }
+        api_tokens: { $ref: "#/components/schemas/AccessReviewTokens" }
+        token_denials: { type: integer, description: Requests refused for a revoked or expired token or an inactive creator in the period. }
+        reveals: { $ref: "#/components/schemas/AccessReviewReveals" }
+        step_up: { $ref: "#/components/schemas/AccessReviewStepUp" }
+        sessions_revoked: { $ref: "#/components/schemas/AccessReviewSessionRevocations" }
+        break_glass_accounts:
+          type: array
+          items: { type: string }
+        destructive: { $ref: "#/components/schemas/AccessReviewDestructiveActions" }
+    AccessReviewPlatformAdministrator:
+      type: object
+      required: [username, display_name, last_login_at]
+      properties:
+        username: { type: string }
+        display_name: { type: string }
+        last_login_at: { type: string, format: date-time, nullable: true }
+    AccessReviewPlatformEvent:
+      type: object
+      required: [at, code, actor, target]
+      properties:
+        at: { type: string, format: date-time }
+        code: { type: string }
+        actor: { type: string }
+        target: { type: string }
+    AccessReviewCreatedOrganization:
+      type: object
+      required: [slug, name, created_at]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+    AccessReviewPlatformAdministrators:
+      type: object
+      description: Platform administrators that signed in at least once.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewPlatformAdministrator" }
+    AccessReviewPlatformEvents:
+      type: object
+      description: Privileged platform events in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewPlatformEvent" }
+    AccessReviewCreatedOrganizations:
+      type: object
+      description: Organizations created in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewCreatedOrganization" }
+    PlatformAccessReviewReport:
+      type: object
+      description: The access review of the platform; every list holds at most row_cap items and states its total.
+      required: [generated_at, period, row_cap, roles, administrators, role_changes, events, organizations_created]
+      properties:
+        generated_at: { type: string, format: date-time }
+        period: { $ref: "#/components/schemas/AccessReviewPeriod" }
+        row_cap: { type: integer }
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/AccessReviewRoleMembers" }
+        administrators: { $ref: "#/components/schemas/AccessReviewPlatformAdministrators" }
+        role_changes: { $ref: "#/components/schemas/AccessReviewRoleChanges" }
+        events: { $ref: "#/components/schemas/AccessReviewPlatformEvents" }
+        organizations_created: { $ref: "#/components/schemas/AccessReviewCreatedOrganizations" }
     OverviewSecurityReview:
       type: object
       description: The totals of GET /api/v1/security-review.

@@ -2,6 +2,8 @@
 
 /** The codes of the closed audit registry that are emitted as events, sorted. */
 export const auditCodes = [
+  'access_review.exported',
+  'access_review.viewed',
   'admin.login',
   'admin.mcp_write_disabled',
   'admin.mcp_write_enabled',
@@ -157,6 +159,8 @@ export const auditCodes = [
   'permission_profile.deleted',
   'permission_profile.root_grant_confirmed',
   'permission_profile.updated',
+  'platform.access_review_exported',
+  'platform.access_review_viewed',
   'platform.auto_unseal_disabled',
   'platform.auto_unseal_enabled',
   'platform.bundle_seq_bumped',

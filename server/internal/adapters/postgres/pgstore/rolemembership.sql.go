@@ -7,6 +7,7 @@ package pgstore
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -132,6 +133,36 @@ func (q *Queries) ListOrganizationRoleMembers(ctx context.Context) ([]Organizati
 	return items, nil
 }
 
+const listOrganizationRoleSnapshotTimes = `-- name: ListOrganizationRoleSnapshotTimes :many
+SELECT role, taken_at FROM organization_role_snapshot ORDER BY role
+`
+
+type ListOrganizationRoleSnapshotTimesRow struct {
+	Role    string
+	TakenAt time.Time
+}
+
+// The first comparison of every role of the caller's organization, for the access review (plan M12 decision 25).
+func (q *Queries) ListOrganizationRoleSnapshotTimes(ctx context.Context) ([]ListOrganizationRoleSnapshotTimesRow, error) {
+	rows, err := q.db.Query(ctx, listOrganizationRoleSnapshotTimes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrganizationRoleSnapshotTimesRow{}
+	for rows.Next() {
+		var i ListOrganizationRoleSnapshotTimesRow
+		if err := rows.Scan(&i.Role, &i.TakenAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrganizationRoleSnapshots = `-- name: ListOrganizationRoleSnapshots :many
 SELECT role FROM organization_role_snapshot ORDER BY role
 `
@@ -177,6 +208,35 @@ func (q *Queries) ListPlatformRoleMembers(ctx context.Context) ([]PlatformRoleMe
 			&i.FirstSeenAt,
 			&i.MissingSince,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPlatformRoleSnapshotTimes = `-- name: ListPlatformRoleSnapshotTimes :many
+SELECT role, taken_at FROM platform_role_snapshot ORDER BY role
+`
+
+type ListPlatformRoleSnapshotTimesRow struct {
+	Role    string
+	TakenAt time.Time
+}
+
+func (q *Queries) ListPlatformRoleSnapshotTimes(ctx context.Context) ([]ListPlatformRoleSnapshotTimesRow, error) {
+	rows, err := q.db.Query(ctx, listPlatformRoleSnapshotTimes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPlatformRoleSnapshotTimesRow{}
+	for rows.Next() {
+		var i ListPlatformRoleSnapshotTimesRow
+		if err := rows.Scan(&i.Role, &i.TakenAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

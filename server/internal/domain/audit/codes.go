@@ -255,6 +255,13 @@ const (
 
 	CodeVulnerabilityDevicesViewed Code = "vulnerability.devices_viewed"
 
+	// Access review report (plan M12 decision 26): the view is a read recorded once per actor and UTC day, the export
+	// is always recorded.
+	CodeAccessReviewViewed           Code = "access_review.viewed"
+	CodeAccessReviewExported         Code = "access_review.exported"
+	CodePlatformAccessReviewViewed   Code = "platform.access_review_viewed"
+	CodePlatformAccessReviewExported Code = "platform.access_review_exported"
+
 	// Evidence export (ADR 0032 §5, plan M10 §6.4).
 	CodeAuditExportRequested  Code = "audit.export_requested"
 	CodeAuditExportCompleted  Code = "audit.export_completed"
@@ -1577,6 +1584,34 @@ var registry = map[Code]Definition{
 		Params:      []string{"cve", "device_count", "window_start"},
 		Outcomes:    adminOutcomes,
 		Note:        "While the setting is on, failure with the reason of a refused view (not_found for a CVE without finding in the organization, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a count or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails.",
+	},
+	CodeAccessReviewViewed: {
+		Code: CodeAccessReviewViewed, Emitted: true,
+		Description: "An administrator, auditor or API token opened the access review report of the organization; recorded once per actor and UTC day and only while audit_search_recorded is on. from and to are the effective period of the first view of the day.",
+		Params:      []string{"from", "to", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators whatever the setting. While the setting is on, failure with the reason of a refused view (invalid_request for a period that is empty, reversed or longer than 400 days), or internal for a window that could not be claimed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails. Target is the organization.",
+	},
+	CodeAccessReviewExported: {
+		Code: CodeAccessReviewExported, Emitted: true,
+		Description: "An administrator, auditor or API token exported the access review report of the organization as JSON or CSV; every export is recorded, whatever the privacy settings.",
+		Params:      []string{"from", "to", "format"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators. failure with invalid_request for an unknown format or a period that is empty, reversed or longer than 400 days. Target is the organization.",
+	},
+	CodePlatformAccessReviewViewed: {
+		Code: CodePlatformAccessReviewViewed, Emitted: true,
+		Description: "A platform administrator opened the platform access review report; every view is recorded, because platform reads are not under an organization's privacy settings.",
+		Params:      []string{"from", "to"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for a principal that is not a platform administrator. failure with invalid_request for a period that is empty, reversed or longer than 400 days. Platform pseudo-organization.",
+	},
+	CodePlatformAccessReviewExported: {
+		Code: CodePlatformAccessReviewExported, Emitted: true,
+		Description: "A platform administrator exported the platform access review report as JSON or CSV.",
+		Params:      []string{"from", "to", "format"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for a principal that is not a platform administrator. failure with invalid_request for an unknown format or a period that is empty, reversed or longer than 400 days. Platform pseudo-organization.",
 	},
 	CodeAuditExportRequested: {
 		Code: CodeAuditExportRequested, Emitted: true,

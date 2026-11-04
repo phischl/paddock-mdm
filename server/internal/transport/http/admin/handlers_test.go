@@ -436,6 +436,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		AccountList:    app.NewAccountList(orgPool),
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),
+		AccessReview:   app.NewAccessReview(runner, orgPool, reader),
 		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),
 		MCPAccess:      app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
 		Runner:         runner,

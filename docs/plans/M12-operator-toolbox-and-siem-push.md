@@ -653,3 +653,32 @@ touches its surfaces (network segmentation, rate limits) before self-service ope
   §3) applies to M13b and M13c as well.
 - **Carried from alpha.9:** the SMB client library (rejected for M15; reconsidered only if operators object to
   the host step) and the revocation acceptance records (roadmap decision 4) stay open for the alpha.10 plans.
+
+## Amendment 2026-11-04 — access review deviations signed off (PDK-754)
+
+Decisions taken by the architect lead on 2026-11-04 after Review 1 of PDK-754 (decisions 24–26 of §3.7 and gates
+A1/A2 are read with these changes):
+
+1. **Who may read the report.** The organization's access review is read by **role**, the same rule as the audit
+   log (`org_admin`, `org_auditor`; operators get 403 `forbidden`), with **no organization switch**. The maintainer's
+   rule is "the auditor sees the access review under the same rule as the audit log". The platform report is for
+   `platform_admin`.
+2. **`audit_search_recorded` controls recording, not access.** The plan's `read_audit` switch does not exist.
+   While `audit_search_recorded` is on, opening the organization report is recorded as `access_review.viewed`,
+   coalesced to one event per actor and UTC day (the first view of the day, with its effective period). With the
+   switch off nothing is recorded and the report is still readable. A role that may not read it is recorded as
+   `denied` whatever the setting. Exports are always recorded (`access_review.exported`,
+   `platform.access_review_exported`), and so is every view of the platform report
+   (`platform.access_review_viewed`).
+3. **Step-up counting.** `admin.login` events carry no `step_up` param, so the plan's source does not exist. The
+   section counts, per actor, the **successful events of a step-up actor** as succeeded and the **denied events
+   with `step_up_required`** as failed; it exposes aggregate counts only.
+4. **Destructive actions follow the plan list.** The section lists `revocation.approved`,
+   `device.escrow_destroyed`, `device.retired` and `user.locked` (`device.destroy_*` does not exist in the
+   registry). `revocation.requested` was added in the first implementation and **removed again in Fix Round 1**, so
+   the implementation matches decision 25; the widening accepted in principle is not in the code.
+5. **Docs.** `access_review.viewed`, `access_review.exported` and the `platform.access_review_*` codes are in
+   `docs/compliance/audit-codes.md` (generated from the registry) and in the privacy documents
+   (`privacy.md`, and the privacy pack: record of processing, DPIA input, works-council annex).
+6. **Migration label**: `00104_access_review_grants.sql` (the plan's `00103` follows landing order; the grants are
+   a read-only `tenant_api_read` policy on `organization_role_member` and `organization_role_snapshot`).
