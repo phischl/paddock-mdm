@@ -1305,3 +1305,18 @@ of 2026-10-31 differ, this amendment wins.
   packages move only through the signed A/B update path, the login stack only through its own reconciler.
   Removal-protected packages may be upgraded by a simulation but never removed (`would_remove_dependents`). Holding a
   lock across simulation and real run stays out of scope.
+
+## Amendment 2026-11-03 (architect via main) — gate text of §9 (PDK-414 review 1)
+
+Where this amendment and §9 differ, this amendment wins.
+
+- **SW4, the source under a hold.** Decision **14** stands: a bundle carries a source only for `required` packages,
+  so a `hold` alone drops the source from the device and the regular run's `apt-get update` drops its package lists;
+  no newer version would exist to hold back. The gate keeps the source alive with a second package of the same
+  repository, `paddock-gate-anchor`, assigned `required` from the same source (from SW3 on, so that SW3's refused
+  `apt-get install` proves the −1 forbid pin and not a missing source). The runbook (`docs/operations/software.md`)
+  states that a hold alone drops the source.
+- **SW6, the dpkg lock.** The gate holds `/var/lib/dpkg/lock-frontend` with an fcntl (POSIX record) lock taken by
+  `python3` (`fcntl.lockf`) in a transient unit, not with `flock(1)`: a flock(2) lock is independent of fcntl locks on
+  Linux and blocks neither apt nor dpkg. The gate first proves that the lock blocks (`dpkg --configure -a` fails on the
+  lock) before it assigns the package.

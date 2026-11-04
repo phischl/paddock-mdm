@@ -1361,6 +1361,15 @@ them; any change it made is reverted and reported as `config.playbook_touched_pr
 > not a tamper event. `ProtectHostname=` is never set on the Paddock units: the agent would report a stale name from
 > its own UTS namespace. ADR [0041](adr/0041-device-hostname.md).
 
+> **Amendment 2026-10-24 (M13a, ADR 0042):** the agent maps the optional `software` section to the internal resource
+> `software`, applied after `updates` (`hostname → time → file → systemd_unit → updates → software → login → sudo`). It
+> owns `/etc/apt/sources.list.d/paddock-*.sources` (deb822, per-source `Signed-By`), `/etc/apt/keyrings/paddock-*.gpg`,
+> `/etc/apt/preferences.d/51paddock-software` (forbid pins, priority −1), the installs and removals of catalog
+> packages and the record of what it installed. Holds and version pins stay with the `updates` reconciler; the
+> compiler merges the catalog's `hold` and `required pinned` results into `updates.holds`. Removals need a check-in
+> within 15 minutes; a dpkg lock is retried at the next drift pass; every operation is simulated first and refused
+> when it would remove other packages.
+
 > **Amendment 2026-11-02 (M11, ADR 0033):** a bundle with `mode: report_only` is **planned, not applied**. The applier runs
 > `Plan` for every resource of the bundle and for stale managed files, and never calls a reconciler's `Apply`, the deny
 > list or the removal of stale files. It reports `bundle.applied` with `mode: report_only`, `changed: 0` and one
@@ -1430,6 +1439,7 @@ Expired commands are marked `expired` and never executed (platform outage questi
 | `paddockd` running (osquery policy `paddock_agent_running` in Fleet) | Fleet policy results | `device.tamper_agent_not_running` after 15 min without check-in |
 | Local admin login (journal, `pam_unix` for `paddock-admin`) | journal follow | `local_admin.login` (`local_admin.login`) |
 | Clock offset of each check-in: server time minus the signed request timestamp, measured by the gateway; the worker opens a drift episode above 60 s and closes it at 30 s or less | each materialized check-in (at most once per 60 s) | `device.clock_drift` (> 60 s), `device.clock_drift_cleared` (≤ 30 s); attention kind `clock_drift` |
+| Paddock-managed APT sources, keyrings and forbid pins | drift pass 5 min | `tamper.protected_file_changed` |
 
 Not watched today: `/etc/nsswitch.conf`, `/etc/security/`, `/etc/pam.d/` beyond the deny-list lines, Himmelblau's
 package version *(not scheduled)*; `/etc/himmelblau/himmelblau.conf` is re-rendered by the drift loop.
@@ -1454,6 +1464,8 @@ matches the release manifest; the agent checks that `fleetd` runs. Disabling one
 2. LUKS keyslots and header
 3. `/opt/paddock/`, `/etc/paddock/`, systemd units of agent, supervisor, fleetd, update timer
 4. `/etc/himmelblau/`, `/etc/pam.d/`, `/etc/nsswitch.conf`, `/etc/security/`, Himmelblau packages
+5. `/etc/apt/sources.list.d/paddock-*.sources`, `/etc/apt/keyrings/paddock-*.gpg`,
+   `/etc/apt/preferences.d/51paddock-software` (ADR 0042); the uninstall removes them in both modes.
 
 ---
 
@@ -1638,6 +1650,11 @@ test is replaced by the pilot feedback of the reference deployment.
 - Immediate install: command `install_now`; holds win over immediate install for the same package
   (the API returns 409 `package_on_hold`).
 - Reboot required: reported (`updates.reboot_required`); Paddock never reboots for updates in v1.
+
+Software catalog (M13a, ADR 0042): catalog entries with package names per distribution, release and architecture,
+assigned per device group with the intents required, uninstall, hold and forbid; `required latest` is installed and
+moves with the update runs, `required pinned` is installed at and held to a version; a locally removed required
+package is reinstalled and reported (`device.software_reinstalled`).
 
 ### 12.6 Dead man's switch (F14)
 
@@ -2079,6 +2096,9 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > (`autoinstall`, `adopted`, `unknown`), `config_mode` (`enforce`, `report_only`) and `config_mode_changed_at`. The
 > function `paddock_config_rollout_bucket` is the SQL twin of the Go bucket. The attention view gains the kind
 > `report_only`. Retention of each table: `docs/compliance/retention.md`.
+
+> **Amendment 2026-10-24 (M13a, ADR 0042):** new tables in the database `paddock`: `software_source`,
+> `software_catalog_entry`, `software_assignment`, `device_software_status`; new column `device_status.software_digest`.
 
 ### 16.2 Conventions
 
