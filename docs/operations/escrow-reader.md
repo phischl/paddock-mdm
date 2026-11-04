@@ -53,14 +53,10 @@ the api host, and deliver the `paddock-escrow-reader` AppRole credentials to the
 
 ### Database role
 
-New clusters create `paddock_escrow_reader` at initialization (`deploy/compose/postgres/init/10-roles.sh`). An
-existing cluster needs it before the database migration `00019` runs; as the PostgreSQL superuser:
-
-```sql
-CREATE ROLE paddock_escrow_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD '<password>';
-GRANT CONNECT ON DATABASE paddock TO paddock_escrow_reader;
-GRANT USAGE ON SCHEMA public TO paddock_escrow_reader;
-```
+The one-shot service `db-provision` creates `paddock_escrow_reader` from
+`.secrets/db_paddock_escrow_reader_password` and sets the
+password on every `./paddock up` (`deploy/compose/postgres/provision-roles.sh`), on a new and on an existing cluster, before the database
+migration `00019` runs. No manual step.
 
 The migration grants the `SELECT`s and creates the row-level security policies.
 

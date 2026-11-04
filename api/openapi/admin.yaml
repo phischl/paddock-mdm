@@ -3783,7 +3783,11 @@ paths:
         20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
         GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
         unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
-        duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history.
+        duplicate name is 409 already_exists. A syslog destination needs syslog_host, a DNS name or public IP address
+        (the webhook address rules apply), and takes syslog_port (default 6514), syslog_ca_pem (one or more PEM
+        certificates, at most 16 KiB) and syslog_server_name (the TLS server name); it is delivered over TLS 1.2 or
+        newer, one RFC 5424 message per event. checkpoints is allowed for webhook and syslog destinations (400 for
+        e-mail). A new destination starts at the newest event; it never replays history.
         Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
       x-paddock-audit: notification.destination_created
       parameters:
@@ -3828,6 +3832,7 @@ paths:
       description: |
         Roles: org_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
         secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+        syslog_ca_pem works alike: absent keeps the stored CA bundle, an empty string removes it.
         Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
         resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
         is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
@@ -6135,7 +6140,11 @@ paths:
         20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
         GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
         unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
-        duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
+        duplicate name is 409 already_exists. A syslog destination needs syslog_host, a DNS name or public IP address
+        (the webhook address rules apply), and takes syslog_port (default 6514), syslog_ca_pem (one or more PEM
+        certificates, at most 16 KiB) and syslog_server_name (the TLS server name); it is delivered over TLS 1.2 or
+        newer, one RFC 5424 message per event. checkpoints is allowed for webhook and syslog destinations (400 for
+        e-mail). A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
         Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
       x-paddock-audit: notification.destination_created
       parameters:
@@ -6180,6 +6189,7 @@ paths:
       description: |
         Roles: platform_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
         secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+        syslog_ca_pem works alike: absent keeps the stored CA bundle, an empty string removes it.
         Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
         resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
         is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
@@ -9175,7 +9185,7 @@ components:
         cleared_at: { type: string, format: date-time, nullable: true, description: When the condition of an attention finding was gone. }
     NotificationDestinationType:
       type: string
-      enum: [webhook, email]
+      enum: [webhook, email, syslog]
     NotificationFilterMode:
       type: string
       enum: [security, all, custom]
@@ -9183,7 +9193,8 @@ components:
     NotificationDestination:
       type: object
       required: [id, type, name, enabled, filter_mode, codes, pseudonymize_users, include_params, url_display,
-        heartbeat_interval_s, recipients, email_min_interval_s, created_by, created_at, updated_at, state]
+        heartbeat_interval_s, recipients, email_min_interval_s, syslog_host, syslog_port, syslog_server_name,
+        syslog_ca_pem_set, checkpoints, created_by, created_at, updated_at, state]
       properties:
         id: { type: string, format: uuid }
         type: { $ref: "#/components/schemas/NotificationDestinationType" }
@@ -9193,10 +9204,15 @@ components:
         codes: { type: array, items: { type: string }, description: The codes of filter_mode custom; empty otherwise. }
         pseudonymize_users: { type: boolean }
         include_params: { type: boolean }
-        url_display: { type: string, nullable: true, description: "Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail." }
+        url_display: { type: string, nullable: true, description: "Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail and syslog." }
         heartbeat_interval_s: { type: integer }
         recipients: { type: array, items: { type: string } }
         email_min_interval_s: { type: integer }
+        syslog_host: { type: string, nullable: true, description: Syslog only; null otherwise. }
+        syslog_port: { type: integer, nullable: true, description: Syslog only; null otherwise. }
+        syslog_server_name: { type: string, nullable: true, description: "Syslog only: the TLS server name when it differs from syslog_host." }
+        syslog_ca_pem_set: { type: boolean, description: "Syslog: whether a CA bundle is stored; the bundle itself is never returned." }
+        checkpoints: { type: boolean, description: Whether the destination receives the daily checkpoints of ADR 0031 (webhook and syslog). }
         created_by: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -9236,9 +9252,14 @@ components:
         pseudonymize_users: { type: boolean, default: false }
         include_params: { type: boolean, default: false }
         url: { type: string, writeOnly: true, description: "Webhook only; required for a webhook. Stored encrypted, never returned." }
-        heartbeat_interval_s: { type: integer, default: 0, description: Webhook; 0 (off) or 60–3600. }
+        heartbeat_interval_s: { type: integer, default: 0, description: Webhook and syslog; 0 (off) or 60–3600. }
         recipients: { type: array, maxItems: 20, items: { type: string }, description: E-mail only; 1–20 plain addresses. }
         email_min_interval_s: { type: integer, default: 300, description: E-mail only; 60–3600. }
+        syslog_host: { type: string, maxLength: 253, description: "Syslog only; required for syslog. A DNS name or a public IP address." }
+        syslog_port: { type: integer, minimum: 1, maximum: 65535, description: Syslog only; default 6514. }
+        syslog_ca_pem: { type: string, writeOnly: true, maxLength: 16384, description: "Syslog only: PEM certificates of a private CA the receiver's certificate chains to; without it the system roots apply." }
+        syslog_server_name: { type: string, maxLength: 253, description: "Syslog only: the TLS server name (SNI and verification) when it differs from syslog_host." }
+        checkpoints: { type: boolean, default: false, description: Webhook and syslog only. }
     NotificationDestinationUpdate:
       type: object
       additionalProperties: false
@@ -9255,6 +9276,11 @@ components:
         heartbeat_interval_s: { type: integer, default: 0 }
         recipients: { type: array, maxItems: 20, items: { type: string } }
         email_min_interval_s: { type: integer, default: 300 }
+        syslog_host: { type: string, maxLength: 253, description: "Syslog only; required for syslog. A DNS name or a public IP address." }
+        syslog_port: { type: integer, minimum: 1, maximum: 65535, description: Syslog only; default 6514. }
+        syslog_ca_pem: { type: string, writeOnly: true, maxLength: 16384, description: "Syslog only: PEM certificates of a private CA the receiver's certificate chains to; without it the system roots apply. Absent keeps the stored bundle; an empty string removes it." }
+        syslog_server_name: { type: string, maxLength: 253, description: "Syslog only: the TLS server name (SNI and verification) when it differs from syslog_host." }
+        checkpoints: { type: boolean, default: false, description: Webhook and syslog only. }
         cursor: { type: string, enum: [continue, skip], description: Required when the update enables a disabled destination. }
     NotificationDestinationCreated:
       allOf:
