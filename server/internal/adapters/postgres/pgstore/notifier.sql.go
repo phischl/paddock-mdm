@@ -182,6 +182,7 @@ const listNotifierDestinations = `-- name: ListNotifierDestinations :many
 
 SELECT d.id, d.organization_id, d.type, d.name, d.filter_mode, d.codes, d.pseudonymize_users, d.include_params,
        d.url_ciphertext, d.secret_ciphertext, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s,
+       d.syslog_host, d.syslog_port, d.syslog_ca_pem, d.syslog_server_name,
        s.cursor_commit_seq, s.start_at_latest, s.forward_seq, s.status, s.pending_delivery_id,
        s.consecutive_failures, s.first_failure_at, s.stalled_since, s.last_success_at, s.next_attempt_at,
        s.last_heartbeat_at, p.forward_from AS pending_forward_from
@@ -206,6 +207,10 @@ type ListNotifierDestinationsRow struct {
 	HeartbeatIntervalS  int32
 	Recipients          []string
 	EmailMinIntervalS   int32
+	SyslogHost          *string
+	SyslogPort          *int32
+	SyslogCaPem         *string
+	SyslogServerName    *string
 	CursorCommitSeq     int64
 	StartAtLatest       bool
 	ForwardSeq          int64
@@ -246,6 +251,10 @@ func (q *Queries) ListNotifierDestinations(ctx context.Context) ([]ListNotifierD
 			&i.HeartbeatIntervalS,
 			&i.Recipients,
 			&i.EmailMinIntervalS,
+			&i.SyslogHost,
+			&i.SyslogPort,
+			&i.SyslogCaPem,
+			&i.SyslogServerName,
 			&i.CursorCommitSeq,
 			&i.StartAtLatest,
 			&i.ForwardSeq,

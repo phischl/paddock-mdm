@@ -397,6 +397,11 @@ const dialogTitle = computed(() => (dialog.value?.editing ? t('notifications.edi
           class="mono pd-muted"
           data-testid="notification-url-display"
         >{{ item.url_display }}</span>
+        <span
+          v-if="item.syslog_host"
+          class="mono pd-muted"
+          data-testid="notification-syslog-display"
+        >{{ item.syslog_host }}:{{ item.syslog_port }}</span>
       </template>
       <template #[`item.filter_mode`]="{ item }: { item: NotificationDestination }">
         {{ t('notifications.modes.' + item.filter_mode) }}

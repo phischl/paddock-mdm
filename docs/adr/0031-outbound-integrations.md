@@ -268,3 +268,20 @@ Decisions 1, 4, 6 and 11 are implemented by plan M12 with these details:
    the API verb replaces it.
 5. **Detection content.** Wazuh decoders and rules and Sigma rules for `paddock.audit.v1` ship in
    `integrations/` and are tested against the sample events of `docs/compliance/audit-codes.md`.
+
+## Amendment 2026-11-04 — syslog MSGID aliases (PDK-751)
+
+Item 2 of the amendment above set `MSGID` = the audit code. RFC 5424 limits `MSGID` to 32 characters, and nine
+registered codes are longer; cutting them maps `device.disk_conversion_completed_after_cancel` onto the registered
+code `device.disk_conversion_completed`, so a SIEM rule on `MSGID` would match the wrong event. This replaces
+"`MSGID` = the audit code":
+
+1. A code of 32 characters or fewer is its own `MSGID`, unchanged.
+2. A longer code has a fixed alias, a short stable English identifier, in a table next to the code registry
+   (`server/internal/domain/audit/msgid.go`, published in `docs/compliance/audit-codes.md`). The table is
+   add-only: an alias never changes and is never reused.
+3. `MSG` always carries the full code in `event.code`.
+4. Tests guard the rule: every registered code's `MSGID` is at most 32 printable US-ASCII characters, all are
+   unique, no alias equals a registered code, a code longer than 32 characters without an alias fails the tests,
+   the published aliases are frozen, and no `MSGID` collides with `paddock.test`, `paddock.heartbeat` or
+   `paddock.checkpoint`.

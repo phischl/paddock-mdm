@@ -45,6 +45,8 @@ const serverMessage = computed(() => {
 const fieldMessages: Record<NotificationField, string> = {
   name: 'notifications.nameInvalid', type: 'problems.invalid_request', url: 'notifications.urlRejected', codes: 'notifications.codesCount',
   recipients: 'notifications.recipientsInvalid', heartbeat: 'notifications.heartbeatInvalid', interval: 'notifications.intervalInvalid',
+  syslogHost: 'notifications.syslogHostRejected', syslogPort: 'notifications.syslogPortInvalid',
+  syslogCaPem: 'notifications.syslogCaInvalid', syslogServerName: 'notifications.syslogServerNameInvalid',
 }
 
 /** The messages of a field: its own validation first, else the server's problem when it belongs to the field. */
@@ -57,6 +59,7 @@ function errorsOf(field: NotificationField): string[] {
 const typeOptions = computed(() => [
   { value: 'webhook', title: t('notifications.types.webhook') },
   ...(props.emailAvailable || form.type === 'email' ? [{ value: 'email', title: t('notifications.types.email') }] : []),
+  { value: 'syslog', title: t('notifications.types.syslog') },
 ])
 const modeOptions = computed(() =>
   (['security', 'all', 'custom'] as const).map((value) => ({ value, title: t('notifications.modes.' + value) })),
@@ -114,6 +117,51 @@ function submit(): void {
       spellcheck="false"
       :error-messages="errorsOf('url')"
     />
+    <template v-else-if="form.type === 'syslog'">
+      <v-text-field
+        id="notification-syslog-host"
+        v-model="form.syslogHost"
+        :label="t('notifications.syslogHost')"
+        :hint="t('notifications.syslogHostHint')"
+        persistent-hint
+        autocomplete="off"
+        spellcheck="false"
+        :error-messages="errorsOf('syslogHost')"
+      />
+      <v-text-field
+        id="notification-syslog-port"
+        v-model.number="form.syslogPort"
+        :label="t('notifications.syslogPort')"
+        :hint="t('notifications.syslogPortHint')"
+        persistent-hint
+        type="number"
+        :error-messages="errorsOf('syslogPort')"
+      />
+      <v-textarea
+        id="notification-syslog-ca"
+        v-model="form.syslogCaPem"
+        :label="t('notifications.syslogCa')"
+        :placeholder="editing && initial?.syslog_ca_pem_set ? t('notifications.urlUnchanged') : '-----BEGIN CERTIFICATE-----'"
+        :hint="editing && initial?.syslog_ca_pem_set ? t('notifications.syslogCaCurrent') : t('notifications.syslogCaHint')"
+        persistent-hint
+        rows="3"
+        auto-grow
+        autocomplete="off"
+        spellcheck="false"
+        class="mono"
+        :error-messages="errorsOf('syslogCaPem')"
+      />
+      <v-text-field
+        id="notification-syslog-server-name"
+        v-model="form.syslogServerName"
+        :label="t('notifications.syslogServerName')"
+        :hint="t('notifications.syslogServerNameHint')"
+        persistent-hint
+        autocomplete="off"
+        spellcheck="false"
+        :error-messages="errorsOf('syslogServerName')"
+      />
+    </template>
     <v-textarea
       v-else
       id="notification-recipients"
@@ -168,7 +216,7 @@ function submit(): void {
       data-testid="notification-include-params"
     />
     <v-text-field
-      v-if="form.type === 'webhook'"
+      v-if="form.type !== 'email'"
       id="notification-heartbeat"
       v-model.number="form.heartbeatIntervalS"
       :label="t('notifications.heartbeat')"
@@ -186,6 +234,16 @@ function submit(): void {
       persistent-hint
       type="number"
       :error-messages="errorsOf('interval')"
+    />
+    <v-switch
+      v-if="form.type !== 'email'"
+      v-model="form.checkpoints"
+      :label="t('notifications.checkpoints')"
+      :hint="t('notifications.checkpointsHint')"
+      persistent-hint
+      color="primary"
+      inset
+      data-testid="notification-checkpoints"
     />
     <v-switch
       v-model="form.enabled"

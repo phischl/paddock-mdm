@@ -27,7 +27,7 @@ const (
 )
 
 // Destination is what a transport needs to deliver: the configuration and, for a webhook, the decrypted URL and
-// signing secret, which never leave the process.
+// signing secret, which never leave the process; for a syslog destination its receiver.
 type Destination struct {
 	ID                uuid.UUID
 	Org               uuid.UUID
@@ -42,6 +42,11 @@ type Destination struct {
 	EmailMinInterval  time.Duration
 	URL               string
 	Secret            []byte
+	// SyslogHost, SyslogPort, SyslogCAPEM and SyslogServerName name the TLS receiver of a syslog destination.
+	SyslogHost       string
+	SyslogPort       int
+	SyslogCAPEM      string
+	SyslogServerName string
 	// ScopeName is ScopeData.Name of the destination's scope.
 	ScopeName string
 }
@@ -202,7 +207,7 @@ type Index interface {
 	After(ctx context.Context, sc Scope, after int64, max int) ([]IndexedEvent, error)
 }
 
-// Transport delivers a message to a destination: webhook, e-mail, and syslog (M12) later. Its errors
+// Transport delivers a message to a destination: webhook, e-mail or syslog (plan M12 decision 18). Its errors
 // carry the class of plan M9 decision 22 (ErrorClass).
 type Transport interface {
 	Deliver(ctx context.Context, d Destination, m outbound.Message) error

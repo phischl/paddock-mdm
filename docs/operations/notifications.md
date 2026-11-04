@@ -1,7 +1,7 @@
 # Notifications
 
-Paddock tells a person outside the portal when something security-relevant happens: a signed HTTPS webhook or an
-e-mail to a list of addresses (ADR 0031, plan M9). A destination receives audit events from the organization's own
+Paddock tells a person outside the portal when something security-relevant happens: a signed HTTPS webhook, an
+e-mail to a list of addresses (ADR 0031, plan M9) or syslog over TLS to a SIEM (plan M12). A destination receives audit events from the organization's own
 audit log; the platform has destinations of its own for platform events. For a SIEM that pulls instead, see
 [siem.md](siem.md). What leaves the server and who receives it: [privacy.md](../compliance/privacy.md), "What leaves
 the server".
@@ -26,15 +26,17 @@ factor first (step-up, valid for 5 minutes).
 
 | Field | Meaning |
 | --- | --- |
-| *Type* | *Webhook* or *E-mail*. *E-mail* is offered only when the installation has an SMTP relay ([E-mail](#e-mail)). |
+| *Type* | *Webhook*, *E-mail* or *Syslog (TLS)*. *E-mail* is offered only when the installation has an SMTP relay ([E-mail](#e-mail)). |
 | *Name* | 1 to 64 characters: letters, digits, spaces, `.`, `_`, `-`; starts with a letter or digit; unique per scope. |
 | *Webhook URL* | an `https` address, see [Webhook URLs](#urls). Stored encrypted; the portal and the API show only `url_display` (scheme, host and `/…`), never the URL. |
 | *Recipients* | e-mail only: 1 to 20 plain addresses, no display names. |
+| *Syslog host*, *Port*, *CA certificate*, *TLS server name* | syslog only, see [Syslog](#syslog). |
 | *Events* | the filter, see [Which events](#which-events). |
 | *Replace user names with pseudonyms* | organization destinations only, see [Privacy options](#privacy-options). |
 | *Include event parameters* | e-mail only: add each event's parameters to the message body. |
-| *Heartbeat interval (seconds)* | webhook only: 0 (off, the default) or 60 to 3600. |
+| *Heartbeat interval (seconds)* | webhook and syslog: 0 (off, the default) or 60 to 3600. |
 | *Minimum interval between e-mails (seconds)* | e-mail only: 60 to 3600, default 300. |
+| *Send daily checkpoints* | webhook and syslog: after each sealed day a checkpoint message (plan M12; sent from a later alpha.9 change). Refused for e-mail. |
 | *Enabled* | a disabled destination receives nothing. |
 
 A webhook's signing secret is shown **once**, after the create and after *Replace secret*; copy it into the receiver
@@ -261,6 +263,57 @@ The notifier container reaches the host as `acceptance-host` (`extra_hosts: acce
 `receiver.py` with it, and press *Send test*: the receiver prints `signature OK` within a poll interval (5 s on the
 development stack).
 
+## Syslog
+
+A syslog destination sends every matching event to a SIEM's syslog receiver over TLS (RFC 5425), one RFC 5424 message
+per event (ADR 0031, amendment 2026-11-04). There is no plain TCP, no UDP and no client certificate.
+
+| Field | Meaning |
+| --- | --- |
+| *Syslog host* | the receiver's DNS name or IP address. The address rules of [webhooks](#urls) apply: a name whose every address, or an IP literal, is public; checked when you create the destination, change the host or enable it (so pausing or renaming works while the name does not resolve) and again at every connection, and the connection goes to the checked address. |
+| *Port* | 1 to 65535, default 6514. |
+| *CA certificate* | optional: one or more PEM certificates (at most 16 KiB) of a private CA the receiver's certificate chains to. With it, **only** this CA is trusted; without it, the public CAs of the control-plane image. The certificate is stored in plain text (it is public) and never shown again; the form says whether one is stored. Leave the field empty to keep it; through the API, `syslog_ca_pem: ""` removes it. |
+| *TLS server name* | optional: the name the receiver's certificate carries, when it differs from the host (sent as SNI and verified). |
+
+A delivery opens one TLS connection (TLS 1.2 or newer, the certificate verified, 10 seconds to connect, 30 seconds in
+total), writes every message of the batch, closes its side, waits until the receiver's TCP stack has acknowledged every
+byte and then waits up to 5 seconds for the receiver to close. When the connection fails before the last message was
+written, the receiver does not acknowledge every byte within the 30 seconds, or it resets the connection while data is
+still unread, the whole batch counts as failed and is retried with the same `forward_seq` numbers
+([Delivery, retry and stalling](#delivery-retry-and-stalling)). Delivery is therefore **at least once**: after a retry
+the receiver can see an event twice, so deduplicate by `event.event_id` or `forward_seq`. Failure classes in
+`last_error`: `dns`, `dial`, `tls`, `timeout`, `denied_address`, `io`.
+
+Syslog over TLS (RFC 5425) has no acknowledgement of its own: delivery is confirmed at TCP level only. A receiver
+whose TCP stack acknowledges the whole batch, which then reads only part of it and closes its side, counts as
+delivered, and Paddock does not notice the loss (residual risk RR-113 in
+[residual-risks.md](../compliance/residual-risks.md)). Detect such gaps on the receiver: `forward_seq` has no gaps per
+destination, and the daily checkpoints let the SIEM copy be reconciled with the audit log.
+
+### Message format
+
+Each message uses octet-counting framing (RFC 6587 section 3.4.1: the length in bytes, a space, the message), which is
+safe for JSON that contains line breaks. The receiver must accept TLS and octet-counting framing (rsyslog's `imtcp`
+with a TLS stream driver detects the framing itself).
+
+```text
+<length> <132>1 2026-11-04T08:29:58.123456Z admin.paddock.example.org paddock acme device.wipe_requested - \xEF\xBB\xBF{"schema":"paddock.audit.v1","forward_seq":41,"commit_seq":1207,"delivery_id":"…","event":{…}}
+```
+
+| Field | Value |
+| --- | --- |
+| `PRI` | facility `local0`: `132` (warning) for outcome `failure` or `denied`, `133` (notice) otherwise |
+| `TIMESTAMP` | the event's `occurred_at` in UTC; for control messages the send time |
+| `HOSTNAME` | the host of `PADDOCK_PUBLIC_ADMIN_URL` |
+| `APP-NAME` | `paddock` |
+| `PROCID` | the organization's slug; `platform` for platform destinations |
+| `MSGID` | the audit code; `paddock.test`, `paddock.heartbeat` or `paddock.checkpoint` for control messages. RFC 5424 limits `MSGID` to 32 characters: the few longer codes are sent under a fixed alias that never changes ([Syslog MSGID aliases](../compliance/audit-codes.md#syslog-msgid-aliases)); `event.code` in the message body is always the full code |
+| `STRUCTURED-DATA` | `-` |
+| `MSG` | the UTF-8 byte order mark, then JSON: `schema` (`paddock.audit.v1`), `forward_seq`, `commit_seq`, `delivery_id` and `event` (the audit event, as in the webhook envelope; with *Replace user names with pseudonyms*, pseudonymized) |
+
+*Send test* and heartbeats send one control message whose `MSG` is the webhook envelope (`schema:
+paddock.notification.v1`, `kind: test` or `heartbeat`).
+
 ## E-mail
 
 An e-mail destination sends through **your** SMTP relay; Paddock has no mail server. The relay is platform
@@ -327,7 +380,8 @@ What a destination receives is audit events, which name administrators, devices 
   removed. Host names, device names and the other parameters stay. The same name gives the same pseudonym for the
   whole organization, so a receiver can still correlate events of one person. Platform destinations do not offer it
   (platform events carry no end-user names).
-- *Include event parameters* decides whether an e-mail lists the parameters (file names, units, counts).
+- *Include event parameters* decides whether an e-mail lists the parameters (file names, units, counts). Webhook and
+  syslog messages always carry the whole event.
 
 An organization administrator turns a pseudonym back into a name with *Resolve pseudonym* on the notifications page
 (select the destination, enter `u_` and 24 hex characters, confirm with the step-up). The notifier computes the

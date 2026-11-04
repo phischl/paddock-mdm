@@ -22,7 +22,8 @@ function destination(over: Partial<NotificationDestination> = {}): NotificationD
   return {
     id: 'd1', type: 'webhook', name: 'SIEM', enabled: true, filter_mode: 'security', codes: [], pseudonymize_users: false,
     include_params: false, url_display: 'https://siem.example/…', heartbeat_interval_s: 0, recipients: [],
-    email_min_interval_s: 300, created_by: 'alice', created_at: '2026-10-30T10:00:00Z', updated_at: '2026-10-30T10:00:00Z',
+    email_min_interval_s: 300, syslog_host: null, syslog_port: null, syslog_server_name: null, syslog_ca_pem_set: false,
+    checkpoints: false, created_by: 'alice', created_at: '2026-10-30T10:00:00Z', updated_at: '2026-10-30T10:00:00Z',
     state: {
       status: 'active', cursor_commit_seq: 90, forward_seq: 90, last_success_at: '2026-10-31T09:00:00Z', last_attempt_at: null,
       next_attempt_at: null, stalled_since: null, last_error: null, lag_seconds: 0, last_test: null,
@@ -53,6 +54,25 @@ describe('notification rules', () => {
     expect(validateNotification({ ...valid, filterMode: 'custom' }, false, codes).codes).toBe('notifications.codesCount')
     expect(validateNotification({ ...valid, filterMode: 'custom', codes: ['nope'] }, false, codes).codes).toBe('notifications.codesUnknown')
     expect(validateNotification({ ...valid, filterMode: 'custom', codes: ['finding.closed'] }, false, codes)).toEqual({})
+  })
+
+  it('checks a syslog destination: host, port, CA bundle, server name and heartbeat', () => {
+    const sys: NotificationInput = { ...emptyInput(), type: 'syslog', name: 'SIEM', syslogHost: 'siem.example.org' }
+    const pem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----'
+    expect(sys.syslogPort).toBe(6514)
+    expect(validateNotification(sys, false, codes)).toEqual({})
+    expect(validateNotification({ ...sys, syslogHost: '93.184.215.14', syslogCaPem: pem + '\n' + pem, syslogServerName: 'collector.example.org', checkpoints: true }, false, codes)).toEqual({})
+    expect(validateNotification({ ...sys, syslogHost: '' }, false, codes).syslogHost).toBe('notifications.syslogHostInvalid')
+    expect(validateNotification({ ...sys, syslogHost: 'tls://siem.example.org' }, false, codes).syslogHost).toBe('notifications.syslogHostInvalid')
+    expect(validateNotification({ ...sys, syslogPort: 0 }, false, codes).syslogPort).toBe('notifications.syslogPortInvalid')
+    expect(validateNotification({ ...sys, syslogPort: 65536 }, false, codes).syslogPort).toBe('notifications.syslogPortInvalid')
+    expect(validateNotification({ ...sys, syslogCaPem: 'not a certificate' }, false, codes).syslogCaPem).toBe('notifications.syslogCaInvalid')
+    expect(validateNotification({ ...sys, syslogCaPem: pem + ' junk' }, false, codes).syslogCaPem).toBe('notifications.syslogCaInvalid')
+    expect(validateNotification({ ...sys, syslogCaPem: pem + 'x'.repeat(17000) }, false, codes).syslogCaPem).toBe('notifications.syslogCaInvalid')
+    expect(validateNotification({ ...sys, syslogServerName: 'bad name' }, false, codes).syslogServerName).toBe('notifications.syslogServerNameInvalid')
+    expect(validateNotification({ ...sys, heartbeatIntervalS: 30 }, false, codes).heartbeat).toBe('notifications.heartbeatInvalid')
+    expect(fieldOfProblem({ code: 'invalid_request', detail: 'syslog_host is not a public address' })).toBe('syslogHost')
+    expect(fieldOfProblem({ code: 'invalid_request', detail: 'syslog_ca_pem must hold one or more PEM certificates and at most 16 KiB' })).toBe('syslogCaPem')
   })
 
   it('maps server problems to fields', () => {
@@ -132,6 +152,47 @@ describe('NotificationDestinationForm', () => {
     const w = mountForm({ problem: { code: 'invalid_request', detail: 'invalid webhook URL: the port must be 443 or 1024–65535' } })
     expect(w.text()).toContain('invalid webhook URL: the port must be 443')
     expect(w.find('[data-testid="notification-problem"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('submits a syslog destination with its receiver and checkpoints', async () => {
+    const w = mountForm()
+    await w.find('[data-testid="notification-type-syslog"] input').setValue(true)
+    expect(w.find('#notification-url').exists()).toBe(false)
+    expect(w.find('#notification-recipients').exists()).toBe(false)
+    await w.find('#notification-name').setValue('SIEM')
+    await w.find('#notification-syslog-host').setValue('siem.example.org')
+    await w.find('#notification-syslog-server-name').setValue('collector.example.org')
+    await w.find('[data-testid="notification-checkpoints"] input').setValue(true)
+    await w.find('form').trigger('submit')
+    const sent = w.emitted('submit')?.[0][0] as NotificationInput
+    expect(sent).toMatchObject({
+      type: 'syslog', name: 'SIEM', syslogHost: 'siem.example.org', syslogPort: 6514, syslogServerName: 'collector.example.org',
+      syslogCaPem: '', checkpoints: true,
+    })
+    w.unmount()
+  })
+
+  it('shows a syslog host error and keeps the stored CA write-only when editing', async () => {
+    const w = mountForm({
+      initial: destination({ type: 'syslog', url_display: null, syslog_host: 'siem.example.org', syslog_port: 6514, syslog_ca_pem_set: true }),
+    })
+    const ca = w.find('#notification-syslog-ca')
+    expect((ca.element as HTMLTextAreaElement).value).toBe('')
+    expect(w.text()).toContain('A CA certificate is stored. Leave empty to keep it')
+    expect((w.find('#notification-syslog-host').element as HTMLInputElement).value).toBe('siem.example.org')
+    await w.find('#notification-syslog-host').setValue('siem.example.org:6514')
+    await w.find('form').trigger('submit')
+    expect(w.emitted('submit')).toBeUndefined()
+    expect(w.text()).toContain('Enter a DNS name or an IP address without scheme or port.')
+    w.unmount()
+  })
+
+  it('offers checkpoints for webhooks but not for e-mail', async () => {
+    const w = mountForm()
+    expect(w.find('[data-testid="notification-checkpoints"]').exists()).toBe(true)
+    await w.find('[data-testid="notification-type-email"] input').setValue(true)
+    expect(w.find('[data-testid="notification-checkpoints"]').exists()).toBe(false)
     w.unmount()
   })
 

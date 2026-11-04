@@ -216,3 +216,21 @@ The portal renders them through the message key `audit.<code>`.
 | `user_group.updated` | A user group was renamed (the slug and the Authentik group name stay). | `slug`, `name`, `old_name` | success, failure, denied |
 | `vulnerability.critical_summary` | New critical vulnerabilities were found on the organization's devices since the previous summary (actor: system; the worker's inventory round). Recorded at most once per UTC day and only when there are new findings; the first summary covers 24 hours. cves lists at most 20 distinct CVE ids sorted, cves_truncated is true when there are more. | `new_critical`, `devices`, `cves`, `cves_truncated`, `since`, `until` | success |
 | `vulnerability.devices_viewed` | An organization member listed the devices affected by a CVE; recorded once per actor, CVE and clock hour and only while inventory_view_recorded is on. device_count is the number of the organization's devices with a finding of the CVE when the window opened; the search text of the list is never recorded. While the setting is on, failure with the reason of a refused view (not_found for a CVE without finding in the organization, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a count or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails. | `cve`, `device_count`, `window_start` | success, failure, denied |
+
+## Syslog MSGID aliases
+
+A syslog message carries the code as `MSGID` (ADR 0031). RFC 5424 limits `MSGID` to 32 characters, so the
+longer codes use the fixed alias below. The table is add-only: an alias never changes and is never reused.
+The message body always carries the full code in `event.code`.
+
+| Code | MSGID |
+| --- | --- |
+| `device.disk_conversion_completed_after_cancel` | `device.conversion_after_cancel` |
+| `device.disk_conversion_neutralize_failed` | `device.disk_neutralize_failed` |
+| `device.disk_conversion_unlock_restore_failed` | `device.unlock_restore_failed` |
+| `device.revocation_trust_pinned_tofu` | `device.revoke_trust_tofu` |
+| `device.tamper_local_admin_changed` | `device.tamper_admin_changed` |
+| `device.tamper_protected_file_changed` | `device.tamper_file_changed` |
+| `notification.destination_secret_rotated` | `notification.dest_secret_rotated` |
+| `organization.security_review_required` | `organization.sec_review_required` |
+| `permission_profile.root_grant_confirmed` | `permission_profile.root_grant_ok` |
