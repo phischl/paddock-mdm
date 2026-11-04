@@ -86,7 +86,7 @@ fi
 # Control-plane PostgreSQL
 secret postgres_superuser_password
 for role in paddock_owner paddock_api paddock_platform paddock_relay paddock_worker paddock_compiler paddock_escrow_reader \
-  paddock_revocation paddock_unsealer paddock_notifier; do
+  paddock_revocation paddock_unsealer paddock_notifier paddock_backup; do
   secret "db_${role}_password"
   secret "db_${role}_url" "postgres://${role}:$(read_secret "db_${role}_password")@postgres:5432/paddock?sslmode=disable"
 done

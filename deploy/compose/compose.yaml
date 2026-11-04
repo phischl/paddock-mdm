@@ -18,6 +18,18 @@ x-paddock: &paddock
     retries: 6
     start_period: 20s
 
+x-paddock-db-role-env: &paddock-db-role-env
+  PADDOCK_OWNER_PASSWORD_FILE: /run/secrets/db_paddock_owner_password
+  PADDOCK_API_PASSWORD_FILE: /run/secrets/db_paddock_api_password
+  PADDOCK_PLATFORM_PASSWORD_FILE: /run/secrets/db_paddock_platform_password
+  PADDOCK_RELAY_PASSWORD_FILE: /run/secrets/db_paddock_relay_password
+  PADDOCK_WORKER_PASSWORD_FILE: /run/secrets/db_paddock_worker_password
+  PADDOCK_COMPILER_PASSWORD_FILE: /run/secrets/db_paddock_compiler_password
+  PADDOCK_ESCROW_READER_PASSWORD_FILE: /run/secrets/db_paddock_escrow_reader_password
+  PADDOCK_REVOCATION_PASSWORD_FILE: /run/secrets/db_paddock_revocation_password
+  PADDOCK_NOTIFIER_PASSWORD_FILE: /run/secrets/db_paddock_notifier_password
+  PADDOCK_BACKUP_PASSWORD_FILE: /run/secrets/db_paddock_backup_password
+
 x-paddock-env: &paddock-env
   PADDOCK_ENV: ${PADDOCK_ENV:-production}
   PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
@@ -107,15 +119,7 @@ services:
       POSTGRES_DB: paddock
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_superuser_password
-      PADDOCK_OWNER_PASSWORD_FILE: /run/secrets/db_paddock_owner_password
-      PADDOCK_API_PASSWORD_FILE: /run/secrets/db_paddock_api_password
-      PADDOCK_PLATFORM_PASSWORD_FILE: /run/secrets/db_paddock_platform_password
-      PADDOCK_RELAY_PASSWORD_FILE: /run/secrets/db_paddock_relay_password
-      PADDOCK_WORKER_PASSWORD_FILE: /run/secrets/db_paddock_worker_password
-      PADDOCK_COMPILER_PASSWORD_FILE: /run/secrets/db_paddock_compiler_password
-      PADDOCK_ESCROW_READER_PASSWORD_FILE: /run/secrets/db_paddock_escrow_reader_password
-      PADDOCK_REVOCATION_PASSWORD_FILE: /run/secrets/db_paddock_revocation_password
-      PADDOCK_NOTIFIER_PASSWORD_FILE: /run/secrets/db_paddock_notifier_password
+      <<: *paddock-db-role-env
     secrets:
       - postgres_superuser_password
       - db_paddock_owner_password
@@ -127,8 +131,9 @@ services:
       - db_paddock_escrow_reader_password
       - db_paddock_revocation_password
       - db_paddock_notifier_password
+      - db_paddock_backup_password
     volumes:
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/provision-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
       - postgres-data:/var/lib/postgresql
     networks: [cp]
     healthcheck:
@@ -136,6 +141,43 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # Creates the roles a release adds and sets every password again from the secrets, on every up (plan M16 decision 8):
+  # the initdb hook runs only on a new cluster. The superuser password is mounted here and nowhere else a migration
+  # runs, so paddock-migrate keeps its NOCREATEROLE owner.
+  db-provision:
+    logging: *paddock-logging
+    image: ${POSTGRES_IMAGE}
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    read_only: true
+    tmpfs: [/tmp]
+    entrypoint: ["bash", "/provision-roles.sh"]
+    environment:
+      <<: *paddock-db-role-env
+      POSTGRES_DB: paddock
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_superuser_password
+      PGHOST: postgres
+    secrets:
+      - postgres_superuser_password
+      - db_paddock_owner_password
+      - db_paddock_api_password
+      - db_paddock_platform_password
+      - db_paddock_relay_password
+      - db_paddock_worker_password
+      - db_paddock_compiler_password
+      - db_paddock_escrow_reader_password
+      - db_paddock_revocation_password
+      - db_paddock_notifier_password
+      - db_paddock_backup_password
+    volumes:
+      - ./postgres/provision-roles.sh:/provision-roles.sh:ro
+    networks: [cp]
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   rabbitmq:
     logging: *paddock-logging
@@ -403,6 +445,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-provision:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
 
@@ -829,6 +873,7 @@ secrets:
   db_paddock_escrow_reader_password: { file: ./.secrets/db_paddock_escrow_reader_password }
   db_paddock_revocation_password: { file: ./.secrets/db_paddock_revocation_password }
   db_paddock_notifier_password: { file: ./.secrets/db_paddock_notifier_password }
+  db_paddock_backup_password: { file: ./.secrets/db_paddock_backup_password }
   db_paddock_owner_url: { file: ./.secrets/db_paddock_owner_url }
   db_paddock_api_url: { file: ./.secrets/db_paddock_api_url }
   db_paddock_platform_url: { file: ./.secrets/db_paddock_platform_url }

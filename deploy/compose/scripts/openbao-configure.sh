@@ -2,11 +2,12 @@
 # Configures an initialized and unsealed OpenBao (plan M7b decision 17; content of plan M0 §6.8, M2a decision 15, M4a
 # decisions 2 and 9, M4c decisions 2 and 14, M6a decision 5, M9 decision 12): the engines transit, secret (kv-v2) and
 # approle, the transit keys audit-chain, bundle-signing, command-signing, revocation-signing, time-ticket (ed25519),
-# escrow-wrap (rsa-4096), notification-wrap and notification-pseudonym (aes256-gcm96, derived), the KV secret
-# secret/paddock/session, the policies and the AppRoles, whose role_id and secret_id are written to
-# .secrets/approle/<role>/ (paddock-audit-writer's directory is copied to the audit host). Idempotent: a stored
-# non-empty secret_id is kept. Needs the root token in BAO_TOKEN. Development: openbao-bootstrap.sh calls it;
-# production: `./paddock bootstrap openbao` after the manual init and unseal (docs/operations/openbao.md).
+# escrow-wrap (rsa-4096), notification-wrap and notification-pseudonym (aes256-gcm96, derived), backup-wrap
+# (aes256-gcm96, plan M15 decision 5), the KV secret secret/paddock/session, the policies and the AppRoles, whose
+# role_id and secret_id are written to .secrets/approle/<role>/ (paddock-audit-writer's directory is copied to the
+# audit host). Idempotent: a stored non-empty secret_id is kept. Needs the root token in BAO_TOKEN. Development:
+# openbao-bootstrap.sh calls it; production: `./paddock bootstrap openbao` after the manual init and unseal
+# (docs/operations/openbao.md).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,6 +83,13 @@ MSG
   fi
 done
 
+# The backup key and the target credentials (plan M15 decision 5, ADR 0046): the api encrypts, the backup role alone
+# decrypts. Not derived: the ciphertexts belong to the platform, not to an organization.
+if ! bao read transit/keys/backup-wrap >/dev/null 2>&1; then
+  bao write transit/keys/backup-wrap type=aes256-gcm96 exportable=false allow_plaintext_backup=false >/dev/null
+  echo "created transit key backup-wrap"
+fi
+
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
   printf '{"current":"%s","previous":"%s"}' "$(head -c 32 /dev/urandom | base64 -w0)" \
     "$(head -c 32 /dev/urandom | base64 -w0)" | bao kv put secret/paddock/session - >/dev/null
@@ -102,6 +110,9 @@ path "transit/encrypt/notification-wrap" {
   capabilities = ["update"]
 }
 path "transit/datakey/wrapped/notification-pseudonym" {
+  capabilities = ["update"]
+}
+path "transit/encrypt/backup-wrap" {
   capabilities = ["update"]
 }
 EOF
@@ -171,10 +182,14 @@ path "transit/keys/audit-chain" {
 }
 EOF
 
-# Raft snapshots for the backup (plan M6a decision 5); nothing else.
+# Raft snapshots for the backup (plan M6a decision 5) and the backup key and target credentials (plan M15 decision 5);
+# nothing else.
 bao policy write paddock-backup - >/dev/null <<'EOF'
 path "sys/storage/raft/snapshot" {
   capabilities = ["read"]
+}
+path "transit/decrypt/backup-wrap" {
+  capabilities = ["update"]
 }
 EOF
 

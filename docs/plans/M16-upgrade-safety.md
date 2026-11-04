@@ -169,6 +169,15 @@ would strand more.
    always `ALTER ROLE … PASSWORD` (idempotent, cheap, no comparison needed); the password travels as a bound
    parameter, never in a logged statement. Grants stay in the migrations. `compose.yaml` mounts the password
    secrets into `paddock-migrate`. The manual `CREATE ROLE` steps leave `upgrade.md`.
+   *Amendment 2026-11-04 (PDK-745):* the mechanism is not `provision roles` inside `paddock-server migrate`
+   (`paddock_owner` stays `NOCREATEROLE`, `paddock-migrate` gets no superuser credential). The one-shot service
+   `db-provision` (`audit-db-provision` for the audit database) uses the postgres image already in the stack, mounts the
+   superuser password file read-only into that service only, and runs the single idempotent script
+   `deploy/compose/postgres/provision-roles.sh` (also the initdb hook, one source of truth): `CREATE ROLE` guarded by
+   an existence check, `ALTER ROLE … PASSWORD` from the `*_FILE` secrets on every run, role-level grants
+   (CONNECT/USAGE); a role without a mounted secret file is skipped with a message. `paddock-migrate` and
+   `paddock-audit-migrate` depend on it with `service_completed_successfully`. The role names are those of the
+   existing roles (`paddock_revocation`, `paddock_relay`), not the list above.
 9. `openbao-configure.sh` MUST stay idempotent for every key, policy and AppRole it creates (it is today); `./paddock
    upgrade` calls it when `BAO_TOKEN` is set. `gen-prod-secrets.sh` MUST print the names of the files it created
    (it does) and `./paddock upgrade` shows them.
