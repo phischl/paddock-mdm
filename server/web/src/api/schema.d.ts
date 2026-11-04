@@ -2311,7 +2311,11 @@ export interface paths {
          *     20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
          *     GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
          *     unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
-         *     duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history.
+         *     duplicate name is 409 already_exists. A syslog destination needs syslog_host, a DNS name or public IP address
+         *     (the webhook address rules apply), and takes syslog_port (default 6514), syslog_ca_pem (one or more PEM
+         *     certificates, at most 16 KiB) and syslog_server_name (the TLS server name); it is delivered over TLS 1.2 or
+         *     newer, one RFC 5424 message per event. checkpoints is allowed for webhook and syslog destinations (400 for
+         *     e-mail). A new destination starts at the newest event; it never replays history.
          *     Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
          */
         post: operations["createNotificationDestination"];
@@ -2335,6 +2339,7 @@ export interface paths {
         /**
          * @description Roles: org_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
          *     secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+         *     syslog_ca_pem works alike: absent keeps the stored CA bundle, an empty string removes it.
          *     Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
          *     resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
          *     is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
@@ -3886,7 +3891,11 @@ export interface paths {
          *     20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
          *     GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
          *     unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
-         *     duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
+         *     duplicate name is 409 already_exists. A syslog destination needs syslog_host, a DNS name or public IP address
+         *     (the webhook address rules apply), and takes syslog_port (default 6514), syslog_ca_pem (one or more PEM
+         *     certificates, at most 16 KiB) and syslog_server_name (the TLS server name); it is delivered over TLS 1.2 or
+         *     newer, one RFC 5424 message per event. checkpoints is allowed for webhook and syslog destinations (400 for
+         *     e-mail). A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
          *     Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
          */
         post: operations["createPlatformNotificationDestination"];
@@ -3910,6 +3919,7 @@ export interface paths {
         /**
          * @description Roles: platform_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
          *     secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+         *     syslog_ca_pem works alike: absent keeps the stored CA bundle, an empty string removes it.
          *     Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
          *     resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
          *     is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
@@ -6244,7 +6254,7 @@ export interface components {
             cleared_at: string | null;
         };
         /** @enum {string} */
-        NotificationDestinationType: "webhook" | "email";
+        NotificationDestinationType: "webhook" | "email" | "syslog";
         /**
          * @description security forwards the security preset of ADR 0031, all every event, custom the listed codes.
          * @enum {string}
@@ -6261,11 +6271,21 @@ export interface components {
             codes: string[];
             pseudonymize_users: boolean;
             include_params: boolean;
-            /** @description Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail. */
+            /** @description Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail and syslog. */
             url_display: string | null;
             heartbeat_interval_s: number;
             recipients: string[];
             email_min_interval_s: number;
+            /** @description Syslog only; null otherwise. */
+            syslog_host: string | null;
+            /** @description Syslog only; null otherwise. */
+            syslog_port: number | null;
+            /** @description Syslog only: the TLS server name when it differs from syslog_host. */
+            syslog_server_name: string | null;
+            /** @description Syslog: whether a CA bundle is stored; the bundle itself is never returned. */
+            syslog_ca_pem_set: boolean;
+            /** @description Whether the destination receives the daily checkpoints of ADR 0031 (webhook and syslog). */
+            checkpoints: boolean;
             created_by: string;
             /** Format: date-time */
             created_at: string;
@@ -6321,7 +6341,7 @@ export interface components {
             /** @description Webhook only; required for a webhook. Stored encrypted, never returned. */
             url?: string;
             /**
-             * @description Webhook; 0 (off) or 60–3600.
+             * @description Webhook and syslog; 0 (off) or 60–3600.
              * @default 0
              */
             heartbeat_interval_s: number;
@@ -6332,6 +6352,19 @@ export interface components {
              * @default 300
              */
             email_min_interval_s: number;
+            /** @description Syslog only; required for syslog. A DNS name or a public IP address. */
+            syslog_host?: string;
+            /** @description Syslog only; default 6514. */
+            syslog_port?: number;
+            /** @description Syslog only: PEM certificates of a private CA the receiver's certificate chains to; without it the system roots apply. */
+            syslog_ca_pem?: string;
+            /** @description Syslog only: the TLS server name (SNI and verification) when it differs from syslog_host. */
+            syslog_server_name?: string;
+            /**
+             * @description Webhook and syslog only.
+             * @default false
+             */
+            checkpoints: boolean;
         };
         NotificationDestinationUpdate: {
             type?: components["schemas"]["NotificationDestinationType"];
@@ -6350,6 +6383,19 @@ export interface components {
             recipients?: string[];
             /** @default 300 */
             email_min_interval_s: number;
+            /** @description Syslog only; required for syslog. A DNS name or a public IP address. */
+            syslog_host?: string;
+            /** @description Syslog only; default 6514. */
+            syslog_port?: number;
+            /** @description Syslog only: PEM certificates of a private CA the receiver's certificate chains to; without it the system roots apply. Absent keeps the stored bundle; an empty string removes it. */
+            syslog_ca_pem?: string;
+            /** @description Syslog only: the TLS server name (SNI and verification) when it differs from syslog_host. */
+            syslog_server_name?: string;
+            /**
+             * @description Webhook and syslog only.
+             * @default false
+             */
+            checkpoints: boolean;
             /**
              * @description Required when the update enables a disabled destination.
              * @enum {string}

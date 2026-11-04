@@ -385,3 +385,29 @@ func TestPGStoreExactlyOnce(t *testing.T) {
 		t.Errorf("stale failure applied: %+v", st)
 	}
 }
+
+// TestPGStoreLoadsSyslog: the notifier reads a syslog destination's receiver (host, port, CA bundle, server name)
+// under its own role (plan M12 decision 18).
+func TestPGStoreLoadsSyslog(t *testing.T) {
+	w := newWorld(t)
+	id := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO notification_destination (id, organization_id, type, name, filter_mode, syslog_host, syslog_port,
+		syslog_ca_pem, syslog_server_name, created_by) VALUES ($1, $2, 'syslog', 'siem', 'security', 'siem.example.org',
+		10514, 'PEM', 'collector.example.org', 'alice')`, id, w.org)
+	w.exec(`INSERT INTO notification_destination_state (destination_id, organization_id) VALUES ($1, $2)`, id, w.org)
+	data, err := w.e.store.Load(context.Background(), Scope{Org: w.org})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range data.Rows {
+		if r.Destination.ID != id {
+			continue
+		}
+		if d := r.Destination; d.Type != outbound.TypeSyslog || d.SyslogHost != "siem.example.org" || d.SyslogPort != 10514 ||
+			d.SyslogCAPEM != "PEM" || d.SyslogServerName != "collector.example.org" {
+			t.Fatalf("loaded %+v", d)
+		}
+		return
+	}
+	t.Fatal("the syslog destination was not loaded")
+}

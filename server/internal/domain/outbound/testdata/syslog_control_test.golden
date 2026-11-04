@@ -1,0 +1,1 @@
+368 <133>1 2026-11-04T09:30:00Z admin.paddock.example.org paddock acme paddock.test - ﻿{"schema":"paddock.notification.v1","kind":"test","delivery_id":"0193a1b2-0000-7000-8000-000000000001","destination_id":"0193a1b2-0000-7000-8000-000000000002","organization_id":"0193a1b2-0000-7000-8000-000000000003","organization":"acme","sent_at":"2026-11-04T09:30:00Z","events":[]}
