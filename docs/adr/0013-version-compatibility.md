@@ -33,3 +33,14 @@ upgrade order is therefore binding and reverses the usual order: **agents first,
 is uploaded to the running server of the same minor version and rolled out to every device before the control plane
 is upgraded). Devices that are offline during the rollout and return with an older agent after the server upgrade are
 residual risk RR-36.
+
+## Amendment 2026-11-04 — the support window until 0.1.0 (ADR 0047)
+Every alpha release is `0.1.0-alpha.N`: the minor version of the decision never changes, so "current and two
+previous minors" is undefined. Until 0.1.0 is cut, the window is **the server's own release and the two previous
+releases** (alpha.N, N−1, N−2). The "server upgrade tooling" of the decision is `./paddock upgrade-check` (ADR 0047
+decision 2): it refuses an upgrade that would leave more than 1 % of active devices (or more than 5, whichever is
+larger) outside the window, unless the operator overrides it. With 0.1.0 the minor-version rule applies again.
+The 426 `agent_unsupported` answer of the decision was never built and is replaced: the gateway accepts the
+check-in of an agent outside the window and answers it with the `agent_update` pointer only — no bundle pointer,
+no commands — and the portal shows the device as `agent_outdated` (plan M16 decision 4a). An agent that cannot
+check in at all could never learn of the update; the last applied state stays in force either way.
