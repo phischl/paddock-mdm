@@ -21,6 +21,7 @@ interface Tab { name: string; label: string; testid: string }
 const tabs = computed<Tab[]>(() => [
   { name: 'device', label: 'devices.tabs.overview', testid: 'tab-overview' },
   { name: 'device-software', label: 'inventory.tabs.software', testid: 'tab-software' },
+  { name: 'device-managed-software', label: 'devices.tabs.managedSoftware', testid: 'tab-managed-software' },
   { name: 'device-vulnerabilities', label: 'inventory.tabs.vulnerabilities', testid: 'tab-vulnerabilities' },
   { name: 'device-access', label: 'devices.tabs.access', testid: 'tab-access' },
   { name: 'device-logins', label: 'devices.tabs.logins', testid: 'tab-logins' },
