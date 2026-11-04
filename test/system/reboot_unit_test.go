@@ -69,3 +69,53 @@ func TestSSHExitCode(t *testing.T) {
 		t.Fatalf("exit 3: %d", got)
 	}
 }
+
+func TestSSHHandshakeFailedUnit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		out  string
+		want bool
+	}{
+		"kex reset":          {"kex_exchange_identification: read: Connection reset by peer\n", true},
+		"kex reset by host":  {"Connection reset by 127.0.0.1 port 2222\n", true},
+		"connection refused": {"ssh: connect to host 127.0.0.1 port 2222: Connection refused\n", true},
+		"connect timeout":    {"ssh: connect to host 127.0.0.1 port 2222: Connection timed out\n", true},
+		"banner timeout":     {"Connection timed out during banner exchange\n", true},
+		"closed by remote":   {"Connection to 127.0.0.1 closed by remote host.\n", false},
+		"drop mid-command":   {"client_loop: send disconnect: Connection reset by peer\n", false},
+		"output then drop":   {"Removing obsolete files\nConnection to 127.0.0.1 closed by remote host.\n", false},
+		"output then reset":  {"unpacking\nkex_exchange_identification: read: Connection reset by peer\n", false},
+		"empty":              {"", true},
+		"whitespace only":    {" \n", true},
+		"closed by host":     {"Connection closed by 127.0.0.1 port 2222\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := sshHandshakeFailed(tc.out); got != tc.want {
+				t.Fatalf("sshHandshakeFailed(%q) = %v, want %v", tc.out, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestShouldRetrySSHUnit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		noRetry bool
+		exit    int
+		out     string
+		want    bool
+	}{
+		"handshake":             {false, 255, "kex_exchange_identification: read: Connection reset by peer\n", true},
+		"empty drop":            {false, 255, "", true},
+		"no retry, handshake":   {true, 255, "kex_exchange_identification: read: Connection reset by peer\n", false},
+		"no retry, empty drop":  {true, 255, "", false},
+		"closed by remote host": {false, 255, "Connection to 127.0.0.1 closed by remote host.\n", false},
+		"command failed, empty": {false, 1, "", false},
+		"command succeeded":     {false, 0, "", false},
+		"ssh not started":       {false, -1, "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := shouldRetrySSH(tc.noRetry, tc.exit, tc.out); got != tc.want {
+				t.Fatalf("shouldRetrySSH(%v, %d, %q) = %v, want %v", tc.noRetry, tc.exit, tc.out, got, tc.want)
+			}
+		})
+	}
+}

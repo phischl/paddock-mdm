@@ -99,7 +99,7 @@ func (v *VM) requestReboot(t *testing.T) string {
 	deadline := time.Now().Add(rebootInhibitTimeout)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		out, err := v.SSH(ctx, nil, "sudo systemctl reboot")
+		out, err := v.SSHNoRetry(ctx, nil, "sudo systemctl reboot")
 		var blockers []string
 		code := sshExitCode(err)
 		if code > 0 && code != 255 {

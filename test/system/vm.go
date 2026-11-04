@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -184,19 +185,59 @@ func (v *VM) sshArgs() []string {
 	}
 }
 
-// SSH runs a shell command in the guest as user paddock (passwordless sudo) with optional stdin.
+// SSH runs a shell command in the guest as user paddock (passwordless sudo) with optional stdin. It repeats the
+// command once when ssh failed before the command started; a command that cuts its own connection (reboot, poweroff,
+// an sshd restart) must use SSHNoRetry, because a drop that leaves no text is indistinguishable from a handshake
+// failure and the repeat would run the command twice (PDK-720).
 func (v *VM) SSH(ctx context.Context, stdin []byte, command string) (string, error) {
+	return v.sshRetrying(ctx, stdin, command, false)
+}
+
+// SSHNoRetry runs the command exactly once. State-changing commands that end the session use it.
+func (v *VM) SSHNoRetry(ctx context.Context, stdin []byte, command string) (string, error) {
+	return v.sshRetrying(ctx, stdin, command, true)
+}
+
+func (v *VM) sshRetrying(ctx context.Context, stdin []byte, command string, noRetry bool) (string, error) {
 	out, err := v.ssh(ctx, stdin, command)
-	var exit *exec.ExitError
 	// Transport resilience, not a test retry: package upgrades in a gate restart sshd and drop a connection that was
-	// open or being opened. ssh itself exits 255 then; a command's own failure never does, so it is not repeated.
-	if errors.As(err, &exit) && exit.ExitCode() == 255 && ctx.Err() == nil {
+	// being opened.
+	if shouldRetrySSH(noRetry, sshExitCode(err), out) && ctx.Err() == nil {
 		if v.t != nil {
 			v.t.Logf("%s: ssh exited 255 (%s); retrying once: %s", v.Name, strings.TrimSpace(out), command)
 		}
 		out, err = v.ssh(ctx, stdin, command)
 	}
 	return out, err
+}
+
+// shouldRetrySSH decides whether a command is run again: never when the caller opted out, otherwise only for an ssh
+// exit 255 whose output shows a failure before the command started.
+func shouldRetrySSH(noRetry bool, exitCode int, out string) bool {
+	return !noRetry && exitCode == 255 && sshHandshakeFailed(out)
+}
+
+// sshHandshakeFailed reports whether out, the combined output of an ssh that exited 255, shows only a failure to
+// establish the session, so the remote command never ran. Any other line, such as the command's own output or
+// "Connection to ... closed by remote host." or "client_loop: send disconnect", means it may have started.
+// Empty output is a handshake failure too: sshArgs sets LogLevel=ERROR, which suppresses ssh's INFO-level
+// "Connection closed/reset by <host> port N", so a peer that drops after the TCP connect leaves nothing. A drop after
+// the command started prints "Connection to ... closed by remote host." and stays false.
+func sshHandshakeFailed(out string) bool {
+	prefixes := []string{
+		"kex_exchange_identification", "ssh_exchange_identification", "ssh: connect to host ",
+		"Connection reset by ", "Connection closed by ", "Connection timed out during banner exchange",
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(line, p) }) {
+			return false
+		}
+	}
+	return true
 }
 
 func (v *VM) ssh(ctx context.Context, stdin []byte, command string) (string, error) {
