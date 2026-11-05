@@ -500,7 +500,7 @@ var informational = map[audit.Code]bool{
 }
 
 // mustBeHigh are the words that mark a code as security relevant: such a code must never end up below level 10.
-var mustBeHigh = regexp.MustCompile(`tamper|revoc|reveal|root_grant|chain_verification_failed|header_downloaded`)
+var mustBeHigh = regexp.MustCompile(`tamper|revoc|reveal|root_grant|chain_verification_failed|header_downloaded|restore_started`)
 
 var outcomes = []audit.Outcome{audit.OutcomeSuccess, audit.OutcomeFailure, audit.OutcomeDenied}
 
@@ -585,6 +585,9 @@ func TestRuleLevels(t *testing.T) {
 		{audit.CodeAdminLogin, audit.OutcomeDenied, 100920, 7, "paddock_identity"},
 		{audit.CodeAdminLogin, audit.OutcomeSuccess, 100922, 5, "paddock_identity"},
 		{audit.CodeAPITokenUseDenied, audit.OutcomeDenied, 100940, 7, "paddock"},
+		{audit.CodePlatformRestoreStarted, audit.OutcomeSuccess, 100932, 10, "paddock_platform"},
+		{audit.CodePlatformRestoreStarted, audit.OutcomeFailure, 100932, 10, "paddock_platform"},
+		{audit.CodePlatformRestoreCompleted, audit.OutcomeSuccess, 100931, 5, "paddock_platform"},
 		{audit.CodeConfigApplied, audit.OutcomeSuccess, 100950, 5, "paddock"},
 		{audit.CodeSettingsLoginChanged, audit.OutcomeSuccess, 100950, 5, "paddock"},
 	}

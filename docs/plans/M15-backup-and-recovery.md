@@ -511,6 +511,7 @@ func NewDirTarget(root string) Target
 | `platform.backup_run_requested` | platform admin / operator (host) | backup | `kinds`, `label` |
 | `platform.backup_completed` / `platform.backup_failed` | system `paddock-backup` | backup_run | `run_id`, `kind`, `label`, `bytes`, `duration_s`, `targets_ok`, `targets_failed`, `error_class` (outcomes success / failure) |
 | `platform.restore_planned` / `platform.restore_cancelled` | platform admin | backup_restore_plan | `plan_id`, `kind`, `source`, `at`, `components` |
+| `platform.restore_started` | operator (host) | backup_restore_plan | `plan_id`, `source`, `source_target_id`, `components` (once per attempt, refusals included; note 2026-11-05 on PDK-735) |
 | `platform.restore_completed` / `platform.restore_failed` | operator (host) | backup_restore_plan | `plan_id`, `source`, `at`, `components`, `duration_s`, `detail` |
 
 ### 6.5 Backup set (`paddock.backup-set.v1`)
@@ -1111,3 +1112,18 @@ and every target as soon as it left the bucket for any other reason. This note n
   the keep window still leave), `TestEscrowIndexRecordsObjectTime` (manifest records `LastModified`; a manifest
   without times holds); A6 L7 gains "copy as old as the Destroy" (deleted), "copy newer than the Destroy" and "copy
   without a recorded time" (held); the invariants oracle draws the copy times as well.
+
+### Note 2026-11-05 — restore plans: the start is audited, the target must exist (PDK-735; decisions-alpha9 items 37 and 39)
+
+- **Start audited.** `backup restore-report --outcome running` is the moment the host starts overwriting data. It
+  goes through the ActionRunner and records exactly one `platform.restore_started` per attempt, a refused one
+  included (actor system with the operator as display, `host` when the name is no login name; params `plan_id`,
+  `source`, `source_target_id`, `components` of the stored plan; failure `invalid_request`, `not_found` or
+  `invalid_state`). §6.4 lists it. Wazuh rule 100932 (level 10, Sigma `high`) classifies it.
+- **Target gone.** A plan with `source = target` whose `source_target_id` became NULL (`ON DELETE SET NULL`) is
+  refused on the host: `backup plan <id>` exits 1 and `running` fails with `invalid_state`. It is never run from the
+  local repository.
+- **`at` only for point_in_time.** A `components` plan with `at` is 400 `invalid_request`, so a plan the restored
+  database lost is re-inserted with an unambiguous kind.
+- **Additive param.** `source_target_id` is part of every restore event (§6.4 lists only `source`).
+- The CLI flags of `backup plan` and `backup restore-report` (PDK-734's contract) are unchanged.

@@ -193,6 +193,7 @@ Decline, say why in one sentence, and name the portal page:
 | Change the MCP policy or your own write access | `updateMcpSettings`, `updatePlatformMcpSettings`, `enableMcpWrite` | *Settings › MCP*, *Platform › MCP policy*, account menu *AI assistant (MCP)* |
 | Create, change, enable, disable, test or delete a backup target, change the backup schedule, start a backup run | `createBackupTarget`, `updateBackupTarget`, `enableBackupTarget`, `disableBackupTarget`, `testBackupTarget`, `deleteBackupTarget`, `putBackupSchedule`, `requestBackupRun` | *Platform › Backups* |
 | Generate, confirm or discard a backup key (a new key while one is active is a rotation) | `generateBackupKey`, `confirmBackupKey`, `discardBackupKey` | *Platform › Backups* |
+| Approve or cancel a restore plan (approving needs the typed word `restore`; the host executes it) | `createBackupRestorePlan`, `cancelBackupRestorePlan` | *Platform › Backups* |
 
 The complete, generated list is in [`references/tools.md`](references/tools.md) under *Step-up operations*. A change
 that needs a step-up only in some cases (an effectively Full profile, a file on a sensitive path) answers
