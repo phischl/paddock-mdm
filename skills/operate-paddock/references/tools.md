@@ -62,16 +62,21 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getDeviceEffectiveConfig` | read | no | The resources the compiler renders for this device and the definitions they come from; conflicts between device groups are listed, never merged. |
 | `getDeviceLocalAdmin` | read | no | The managed local administrator of the device (plan M4a decision 17): the active and a pending password generation (stored by the server, not yet confirmed by the device), the last rotation and the last failed one. |
 | `getDeviceUpdates` | read | no | The update state of the device (plan M5b decision 12): its last security and regular update runs, whether a reboot is pending, the holds that apply to it and the packages held with different versions (the smallest version wins). |
+| `getDiagnostics` | read | no | One diagnostics bundle; org_auditor: 403. |
 | `listAttention` | read | no | The conditions that need an administrator, one row per open condition of a device (plan M5b decision 11): staleness warning and critical (the organization's thresholds), presumed lost, quarantined (clone suspected), disk encryption not compliant, agent not the current release, the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days, an agent release whose rollback failed and is still pending on the device (ADR 0024), a device clock more than 60 s off the server's, measured at check-in and cleared once it is back within 30 s (clock_drift, plan M8b decision 15), a hole in a device's event numbering still open after two further check-ins (event_gap, plan M8b decision 23). |
 | `listAttentionDevices` | read | no | The attention list grouped by device: one item per device with an open condition, its conditions most severe first. |
 | `listConfigStatus` | read | no | The fleet view of the apply status (plan M11 decision 14): one item per resource ID with the number of active devices per status and when a device last reported it failed. |
 | `listDeviceBundles` | read | no | Every configuration version compiled for the device, newest first, with what the device reported about it (ISO 27001 A.8.9): null until it reported. |
 | `listDeviceCommands` | read | no | The commands issued to the device (plan M4a decision 1). |
 | `listDeviceConfigStatus` | read | no | The apply status of the device's resources as its agent last reported them (plan M11 decision 14): one item per resource ID with its status, the message of a failure and, for a report-only apply, what would change (pending). |
+| `listDeviceDiagnostics` | read | no | The diagnostics bundles of the device (ADR 0048 decision 4); org_auditor: 403. |
 | `listDeviceLogins` | read | no | The login history of the device (plan M8d decision 18): every session start of a directory user while the organization's login history is on, for login_history_days. |
 | `listDevices` | read | no | GET /api/v1/devices |
+| `listDiagnostics` | read | no | Every diagnostics bundle of the organization (ADR 0048 decision 4); org_auditor: 403. |
+| `purgeDiagnostics` | write | no | Deletes the stored bundle's object (every version) and its key material at once (ADR 0048 decision 5); the metadata (who, when, hash, downloads) stays. |
 | `rejectDevice` | write | yes | POST /api/v1/devices/{id}/reject |
 | `releaseDeviceQuarantine` | write | no | POST /api/v1/devices/{id}/release-quarantine |
+| `requestDeviceDiagnostics` | write | no | Asks an active device for a diagnostics bundle: Paddock's own logs and configuration of the closed content list, sealed to escrow-wrap. |
 | `resumeDeviceLogins` | write | no | Allows directory logins on the device again. |
 | `retireDevice` | write | yes | POST /api/v1/devices/{id}/retire |
 | `rotateDeviceLocalAdmin` | write | no | Issues the command rotate_admin_password (valid 7 days) to an active device; another state is 409 invalid_state. |
@@ -303,6 +308,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `disableBackupTarget` | platform | Disables an enabled target: the backup role no longer writes to it. |
 | `discardBackupKey` | platform | Discards a key that is not confirmed, e.g. |
 | `downloadDeviceHeader` | devices | Returns a stored LUKS header backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup luksHeaderRestore; confirm_hostname must equal the device's hostname. |
+| `downloadDiagnostics` | devices | The escrow-reader unwraps the bundle's key for purpose diagnostics; the response is the decrypted archive (paddock-diagnostics-<hostname>-<id>.tar.gz). |
 | `enableAutoUnseal` | platform | Records the typed acknowledgement of the current disclaimer and enables the setting; the unsealer on the host acts only while it is enabled. |
 | `enableBackupTarget` | platform | Enables a disabled target; 409 invalid_state when it is enabled. |
 | `enableMcpWrite` | mcp | Enables MCP write access for the caller's own account (ADR 0044 amendment 2026-10-25): their MCP sessions may change data where the scope's MCP policy allows it. |

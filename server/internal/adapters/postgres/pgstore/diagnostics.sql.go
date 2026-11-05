@@ -14,8 +14,8 @@ import (
 
 const announceDeviceDiagnostics = `-- name: AnnounceDeviceDiagnostics :execrows
 UPDATE device_diagnostics SET object_key = $1, size = $2, sha256 = $3, nonce = $4,
-  wrapped_dek = $5
-WHERE id = $6 AND device_id = $7 AND state IN ('requested','uploaded') AND object_key IS NULL
+  wrapped_dek = $5, key_version = $6
+WHERE id = $7 AND device_id = $8 AND state IN ('requested','uploaded') AND object_key IS NULL
 `
 
 type AnnounceDeviceDiagnosticsParams struct {
@@ -24,6 +24,7 @@ type AnnounceDeviceDiagnosticsParams struct {
 	Sha256     *string
 	Nonce      []byte
 	WrappedDek []byte
+	KeyVersion *int32
 	ID         uuid.UUID
 	DeviceID   uuid.UUID
 }
@@ -37,6 +38,7 @@ func (q *Queries) AnnounceDeviceDiagnostics(ctx context.Context, arg AnnounceDev
 		arg.Sha256,
 		arg.Nonce,
 		arg.WrappedDek,
+		arg.KeyVersion,
 		arg.ID,
 		arg.DeviceID,
 	)
@@ -48,7 +50,8 @@ func (q *Queries) AnnounceDeviceDiagnostics(ctx context.Context, arg AnnounceDev
 
 const clearEndedDeviceDiagnostics = `-- name: ClearEndedDeviceDiagnostics :execrows
 UPDATE device_diagnostics SET expires_at = NULL, object_key = NULL, nonce = NULL, wrapped_dek = NULL
-WHERE id = $1 AND state IN ('failed','expired') AND stored_at IS NULL AND expires_at <= $2::timestamptz
+WHERE id = $1 AND (state = 'purged' OR (state IN ('failed','expired') AND stored_at IS NULL))
+  AND expires_at <= $2::timestamptz
 `
 
 type ClearEndedDeviceDiagnosticsParams struct {
@@ -56,10 +59,74 @@ type ClearEndedDeviceDiagnosticsParams struct {
 	Now time.Time
 }
 
-// A failed or expired bundle whose object the retention round deleted; an announcement that re-armed it since (a later
-// expires_at) keeps it due.
+// A failed, expired or purged bundle whose object the retention round deleted; an announcement that re-armed it since (a
+// later expires_at) keeps it due.
 func (q *Queries) ClearEndedDeviceDiagnostics(ctx context.Context, arg ClearEndedDeviceDiagnosticsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, clearEndedDeviceDiagnostics, arg.ID, arg.Now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const countAllDeviceDiagnostics = `-- name: CountAllDeviceDiagnostics :one
+SELECT count(*) FROM (
+  SELECT 1 FROM device_diagnostics dd JOIN device d ON d.id = dd.device_id
+  WHERE ($1::text IS NULL OR d.hostname ILIKE $1::text ESCAPE '\'
+      OR dd.requested_by ILIKE $1::text ESCAPE '\')
+    AND ($2::text[] IS NULL OR dd.state = ANY($2::text[]))
+  LIMIT $3
+) c
+`
+
+type CountAllDeviceDiagnosticsParams struct {
+	QPattern   *string
+	States     []string
+	CountLimit int32
+}
+
+func (q *Queries) CountAllDeviceDiagnostics(ctx context.Context, arg CountAllDeviceDiagnosticsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAllDeviceDiagnostics, arg.QPattern, arg.States, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countDeviceDiagnostics = `-- name: CountDeviceDiagnostics :one
+SELECT count(*) FROM (
+  SELECT 1 FROM device_diagnostics
+  WHERE device_id = $1
+    AND ($2::text[] IS NULL OR state = ANY($2::text[]))
+  LIMIT $3
+) c
+`
+
+type CountDeviceDiagnosticsParams struct {
+	DeviceID   uuid.UUID
+	States     []string
+	CountLimit int32
+}
+
+func (q *Queries) CountDeviceDiagnostics(ctx context.Context, arg CountDeviceDiagnosticsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countDeviceDiagnostics, arg.DeviceID, arg.States, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countDeviceDiagnosticsDownload = `-- name: CountDeviceDiagnosticsDownload :execrows
+UPDATE device_diagnostics SET download_count = download_count + 1, last_downloaded_at = $1::timestamptz
+WHERE id = $2 AND state = 'stored'
+`
+
+type CountDeviceDiagnosticsDownloadParams struct {
+	DownloadedAt time.Time
+	ID           uuid.UUID
+}
+
+// A download served (plan M12 decision 4); only a stored bundle is served.
+func (q *Queries) CountDeviceDiagnosticsDownload(ctx context.Context, arg CountDeviceDiagnosticsDownloadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, countDeviceDiagnosticsDownload, arg.DownloadedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -69,7 +136,7 @@ func (q *Queries) ClearEndedDeviceDiagnostics(ctx context.Context, arg ClearEnde
 const deleteExpiredDeviceDiagnosticsRows = `-- name: DeleteExpiredDeviceDiagnosticsRows :execrows
 DELETE FROM device_diagnostics WHERE id IN (
   SELECT id FROM device_diagnostics WHERE state IN ('failed','expired','purged') AND requested_at < $1::timestamptz
-    AND NOT (stored_at IS NULL AND expires_at IS NOT NULL)
+    AND NOT (expires_at IS NOT NULL AND (stored_at IS NULL OR state = 'purged'))
   ORDER BY requested_at LIMIT 1000)
 `
 
@@ -179,7 +246,7 @@ func (q *Queries) FailUploadedDeviceDiagnostics(ctx context.Context, arg FailUpl
 }
 
 const getDeviceDiagnostics = `-- name: GetDeviceDiagnostics :one
-SELECT id, organization_id, device_id, requested_by, requested_at, reason, state, object_key, size, sha256, nonce, wrapped_dek, files, truncated_entries, notified_sessions, uploaded_at, stored_at, expires_at, failed_reason, download_count, last_downloaded_at, purged_at FROM device_diagnostics WHERE id = $1
+SELECT id, organization_id, device_id, requested_by, requested_at, reason, state, object_key, size, sha256, nonce, wrapped_dek, files, truncated_entries, notified_sessions, uploaded_at, stored_at, expires_at, failed_reason, download_count, last_downloaded_at, purged_at, key_version FROM device_diagnostics WHERE id = $1
 `
 
 func (q *Queries) GetDeviceDiagnostics(ctx context.Context, id uuid.UUID) (DeviceDiagnostic, error) {
@@ -208,6 +275,48 @@ func (q *Queries) GetDeviceDiagnostics(ctx context.Context, id uuid.UUID) (Devic
 		&i.DownloadCount,
 		&i.LastDownloadedAt,
 		&i.PurgedAt,
+		&i.KeyVersion,
+	)
+	return i, err
+}
+
+const getDeviceDiagnosticsWithHost = `-- name: GetDeviceDiagnosticsWithHost :one
+SELECT dd.id, dd.organization_id, dd.device_id, dd.requested_by, dd.requested_at, dd.reason, dd.state, dd.object_key, dd.size, dd.sha256, dd.nonce, dd.wrapped_dek, dd.files, dd.truncated_entries, dd.notified_sessions, dd.uploaded_at, dd.stored_at, dd.expires_at, dd.failed_reason, dd.download_count, dd.last_downloaded_at, dd.purged_at, dd.key_version, d.hostname FROM device_diagnostics dd JOIN device d ON d.id = dd.device_id WHERE dd.id = $1
+`
+
+type GetDeviceDiagnosticsWithHostRow struct {
+	DeviceDiagnostic DeviceDiagnostic
+	Hostname         string
+}
+
+func (q *Queries) GetDeviceDiagnosticsWithHost(ctx context.Context, id uuid.UUID) (GetDeviceDiagnosticsWithHostRow, error) {
+	row := q.db.QueryRow(ctx, getDeviceDiagnosticsWithHost, id)
+	var i GetDeviceDiagnosticsWithHostRow
+	err := row.Scan(
+		&i.DeviceDiagnostic.ID,
+		&i.DeviceDiagnostic.OrganizationID,
+		&i.DeviceDiagnostic.DeviceID,
+		&i.DeviceDiagnostic.RequestedBy,
+		&i.DeviceDiagnostic.RequestedAt,
+		&i.DeviceDiagnostic.Reason,
+		&i.DeviceDiagnostic.State,
+		&i.DeviceDiagnostic.ObjectKey,
+		&i.DeviceDiagnostic.Size,
+		&i.DeviceDiagnostic.Sha256,
+		&i.DeviceDiagnostic.Nonce,
+		&i.DeviceDiagnostic.WrappedDek,
+		&i.DeviceDiagnostic.Files,
+		&i.DeviceDiagnostic.TruncatedEntries,
+		&i.DeviceDiagnostic.NotifiedSessions,
+		&i.DeviceDiagnostic.UploadedAt,
+		&i.DeviceDiagnostic.StoredAt,
+		&i.DeviceDiagnostic.ExpiresAt,
+		&i.DeviceDiagnostic.FailedReason,
+		&i.DeviceDiagnostic.DownloadCount,
+		&i.DeviceDiagnostic.LastDownloadedAt,
+		&i.DeviceDiagnostic.PurgedAt,
+		&i.DeviceDiagnostic.KeyVersion,
+		&i.Hostname,
 	)
 	return i, err
 }
@@ -215,7 +324,7 @@ func (q *Queries) GetDeviceDiagnostics(ctx context.Context, id uuid.UUID) (Devic
 const hasExpiredDeviceDiagnosticsRows = `-- name: HasExpiredDeviceDiagnosticsRows :one
 SELECT EXISTS (
   SELECT 1 FROM device_diagnostics WHERE state IN ('failed','expired','purged') AND requested_at < $1::timestamptz
-    AND NOT (stored_at IS NULL AND expires_at IS NOT NULL)
+    AND NOT (expires_at IS NOT NULL AND (stored_at IS NULL OR state = 'purged'))
 )
 `
 
@@ -232,7 +341,7 @@ const insertDeviceDiagnostics = `-- name: InsertDeviceDiagnostics :one
 
 INSERT INTO device_diagnostics (id, organization_id, device_id, requested_by, requested_at, reason, state)
 VALUES ($1, $2, $3, $4, $5, $6, 'requested')
-RETURNING id, organization_id, device_id, requested_by, requested_at, reason, state, object_key, size, sha256, nonce, wrapped_dek, files, truncated_entries, notified_sessions, uploaded_at, stored_at, expires_at, failed_reason, download_count, last_downloaded_at, purged_at
+RETURNING id, organization_id, device_id, requested_by, requested_at, reason, state, object_key, size, sha256, nonce, wrapped_dek, files, truncated_entries, notified_sessions, uploaded_at, stored_at, expires_at, failed_reason, download_count, last_downloaded_at, purged_at, key_version
 `
 
 type InsertDeviceDiagnosticsParams struct {
@@ -278,13 +387,174 @@ func (q *Queries) InsertDeviceDiagnostics(ctx context.Context, arg InsertDeviceD
 		&i.DownloadCount,
 		&i.LastDownloadedAt,
 		&i.PurgedAt,
+		&i.KeyVersion,
 	)
 	return i, err
 }
 
+const listAllDeviceDiagnostics = `-- name: ListAllDeviceDiagnostics :many
+SELECT dd.id, dd.organization_id, dd.device_id, dd.requested_by, dd.requested_at, dd.reason, dd.state, dd.object_key, dd.size, dd.sha256, dd.nonce, dd.wrapped_dek, dd.files, dd.truncated_entries, dd.notified_sessions, dd.uploaded_at, dd.stored_at, dd.expires_at, dd.failed_reason, dd.download_count, dd.last_downloaded_at, dd.purged_at, dd.key_version, d.hostname FROM device_diagnostics dd JOIN device d ON d.id = dd.device_id
+WHERE ($1::text IS NULL OR d.hostname ILIKE $1::text ESCAPE '\'
+    OR dd.requested_by ILIKE $1::text ESCAPE '\')
+  AND ($2::text[] IS NULL OR dd.state = ANY($2::text[]))
+ORDER BY
+  CASE WHEN $3::text = 'requested_at' THEN dd.requested_at END ASC,
+  CASE WHEN $3::text = '-requested_at' THEN dd.requested_at END DESC,
+  CASE WHEN $3::text = 'hostname' THEN d.hostname END ASC,
+  CASE WHEN $3::text = '-hostname' THEN d.hostname END DESC,
+  CASE WHEN $3::text = 'state' THEN dd.state END ASC,
+  CASE WHEN $3::text = '-state' THEN dd.state END DESC,
+  dd.id
+LIMIT $5 OFFSET $4
+`
+
+type ListAllDeviceDiagnosticsParams struct {
+	QPattern *string
+	States   []string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListAllDeviceDiagnosticsRow struct {
+	DeviceDiagnostic DeviceDiagnostic
+	Hostname         string
+}
+
+// Every bundle of the organization (plan M12 decision 13); q searches the hostname and the requester.
+func (q *Queries) ListAllDeviceDiagnostics(ctx context.Context, arg ListAllDeviceDiagnosticsParams) ([]ListAllDeviceDiagnosticsRow, error) {
+	rows, err := q.db.Query(ctx, listAllDeviceDiagnostics,
+		arg.QPattern,
+		arg.States,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllDeviceDiagnosticsRow{}
+	for rows.Next() {
+		var i ListAllDeviceDiagnosticsRow
+		if err := rows.Scan(
+			&i.DeviceDiagnostic.ID,
+			&i.DeviceDiagnostic.OrganizationID,
+			&i.DeviceDiagnostic.DeviceID,
+			&i.DeviceDiagnostic.RequestedBy,
+			&i.DeviceDiagnostic.RequestedAt,
+			&i.DeviceDiagnostic.Reason,
+			&i.DeviceDiagnostic.State,
+			&i.DeviceDiagnostic.ObjectKey,
+			&i.DeviceDiagnostic.Size,
+			&i.DeviceDiagnostic.Sha256,
+			&i.DeviceDiagnostic.Nonce,
+			&i.DeviceDiagnostic.WrappedDek,
+			&i.DeviceDiagnostic.Files,
+			&i.DeviceDiagnostic.TruncatedEntries,
+			&i.DeviceDiagnostic.NotifiedSessions,
+			&i.DeviceDiagnostic.UploadedAt,
+			&i.DeviceDiagnostic.StoredAt,
+			&i.DeviceDiagnostic.ExpiresAt,
+			&i.DeviceDiagnostic.FailedReason,
+			&i.DeviceDiagnostic.DownloadCount,
+			&i.DeviceDiagnostic.LastDownloadedAt,
+			&i.DeviceDiagnostic.PurgedAt,
+			&i.DeviceDiagnostic.KeyVersion,
+			&i.Hostname,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeviceDiagnostics = `-- name: ListDeviceDiagnostics :many
+SELECT dd.id, dd.organization_id, dd.device_id, dd.requested_by, dd.requested_at, dd.reason, dd.state, dd.object_key, dd.size, dd.sha256, dd.nonce, dd.wrapped_dek, dd.files, dd.truncated_entries, dd.notified_sessions, dd.uploaded_at, dd.stored_at, dd.expires_at, dd.failed_reason, dd.download_count, dd.last_downloaded_at, dd.purged_at, dd.key_version, d.hostname FROM device_diagnostics dd JOIN device d ON d.id = dd.device_id
+WHERE dd.device_id = $1
+  AND ($2::text[] IS NULL OR dd.state = ANY($2::text[]))
+ORDER BY
+  CASE WHEN $3::text = 'requested_at' THEN dd.requested_at END ASC,
+  CASE WHEN $3::text = '-requested_at' THEN dd.requested_at END DESC,
+  CASE WHEN $3::text = 'state' THEN dd.state END ASC,
+  CASE WHEN $3::text = '-state' THEN dd.state END DESC,
+  dd.id
+LIMIT $5 OFFSET $4
+`
+
+type ListDeviceDiagnosticsParams struct {
+	DeviceID uuid.UUID
+	States   []string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListDeviceDiagnosticsRow struct {
+	DeviceDiagnostic DeviceDiagnostic
+	Hostname         string
+}
+
+// The bundles of one device (plan M12 decision 13).
+func (q *Queries) ListDeviceDiagnostics(ctx context.Context, arg ListDeviceDiagnosticsParams) ([]ListDeviceDiagnosticsRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceDiagnostics,
+		arg.DeviceID,
+		arg.States,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceDiagnosticsRow{}
+	for rows.Next() {
+		var i ListDeviceDiagnosticsRow
+		if err := rows.Scan(
+			&i.DeviceDiagnostic.ID,
+			&i.DeviceDiagnostic.OrganizationID,
+			&i.DeviceDiagnostic.DeviceID,
+			&i.DeviceDiagnostic.RequestedBy,
+			&i.DeviceDiagnostic.RequestedAt,
+			&i.DeviceDiagnostic.Reason,
+			&i.DeviceDiagnostic.State,
+			&i.DeviceDiagnostic.ObjectKey,
+			&i.DeviceDiagnostic.Size,
+			&i.DeviceDiagnostic.Sha256,
+			&i.DeviceDiagnostic.Nonce,
+			&i.DeviceDiagnostic.WrappedDek,
+			&i.DeviceDiagnostic.Files,
+			&i.DeviceDiagnostic.TruncatedEntries,
+			&i.DeviceDiagnostic.NotifiedSessions,
+			&i.DeviceDiagnostic.UploadedAt,
+			&i.DeviceDiagnostic.StoredAt,
+			&i.DeviceDiagnostic.ExpiresAt,
+			&i.DeviceDiagnostic.FailedReason,
+			&i.DeviceDiagnostic.DownloadCount,
+			&i.DeviceDiagnostic.LastDownloadedAt,
+			&i.DeviceDiagnostic.PurgedAt,
+			&i.DeviceDiagnostic.KeyVersion,
+			&i.Hostname,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listExpiredDeviceDiagnostics = `-- name: ListExpiredDeviceDiagnostics :many
 SELECT id, organization_id, device_id, state FROM device_diagnostics
-WHERE state IN ('stored','failed','expired') AND expires_at <= $1::timestamptz AND (state = 'stored' OR stored_at IS NULL)
+WHERE state IN ('stored','failed','expired','purged') AND expires_at <= $1::timestamptz
+  AND (state IN ('stored','purged') OR stored_at IS NULL)
 ORDER BY expires_at, id
 LIMIT $2
 `
@@ -302,8 +572,8 @@ type ListExpiredDeviceDiagnosticsRow struct {
 }
 
 // One batch of bundles whose objects are due for deletion: stored bundles whose retention ended (plan M12 decision 7),
-// and failed or expired bundles never stored whose upload window ended (their objects are found by the derived key:
-// a late or mismatching upload is not referenced by the row).
+// failed or expired bundles never stored, and purged bundles, whose upload window ended (their objects are found by the
+// derived key: a late or mismatching upload is not referenced by the row).
 func (q *Queries) ListExpiredDeviceDiagnostics(ctx context.Context, arg ListExpiredDeviceDiagnosticsParams) ([]ListExpiredDeviceDiagnosticsRow, error) {
 	rows, err := q.db.Query(ctx, listExpiredDeviceDiagnostics, arg.Now, arg.MaxRows)
 	if err != nil {
@@ -330,7 +600,7 @@ func (q *Queries) ListExpiredDeviceDiagnostics(ctx context.Context, arg ListExpi
 }
 
 const listUploadedDeviceDiagnostics = `-- name: ListUploadedDeviceDiagnostics :many
-SELECT id, organization_id, device_id, requested_by, requested_at, reason, state, object_key, size, sha256, nonce, wrapped_dek, files, truncated_entries, notified_sessions, uploaded_at, stored_at, expires_at, failed_reason, download_count, last_downloaded_at, purged_at FROM device_diagnostics WHERE state = 'uploaded' AND uploaded_at <= $1::timestamptz
+SELECT id, organization_id, device_id, requested_by, requested_at, reason, state, object_key, size, sha256, nonce, wrapped_dek, files, truncated_entries, notified_sessions, uploaded_at, stored_at, expires_at, failed_reason, download_count, last_downloaded_at, purged_at, key_version FROM device_diagnostics WHERE state = 'uploaded' AND uploaded_at <= $1::timestamptz
 ORDER BY uploaded_at, id
 `
 
@@ -367,6 +637,7 @@ func (q *Queries) ListUploadedDeviceDiagnostics(ctx context.Context, before time
 			&i.DownloadCount,
 			&i.LastDownloadedAt,
 			&i.PurgedAt,
+			&i.KeyVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -376,6 +647,50 @@ func (q *Queries) ListUploadedDeviceDiagnostics(ctx context.Context, before time
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockDeviceDiagnosticsWithHost = `-- name: LockDeviceDiagnosticsWithHost :one
+SELECT dd.id, dd.organization_id, dd.device_id, dd.requested_by, dd.requested_at, dd.reason, dd.state, dd.object_key, dd.size, dd.sha256, dd.nonce, dd.wrapped_dek, dd.files, dd.truncated_entries, dd.notified_sessions, dd.uploaded_at, dd.stored_at, dd.expires_at, dd.failed_reason, dd.download_count, dd.last_downloaded_at, dd.purged_at, dd.key_version, d.hostname FROM device_diagnostics dd JOIN device d ON d.id = dd.device_id WHERE dd.id = $1
+FOR UPDATE OF dd
+`
+
+type LockDeviceDiagnosticsWithHostRow struct {
+	DeviceDiagnostic DeviceDiagnostic
+	Hostname         string
+}
+
+// A download or purge holds the bundle's row, so a purge or the retention round waits instead of ending the bundle
+// while the escrow-reader unwraps its key (that would be refused as step_up_required instead of invalid_state).
+func (q *Queries) LockDeviceDiagnosticsWithHost(ctx context.Context, id uuid.UUID) (LockDeviceDiagnosticsWithHostRow, error) {
+	row := q.db.QueryRow(ctx, lockDeviceDiagnosticsWithHost, id)
+	var i LockDeviceDiagnosticsWithHostRow
+	err := row.Scan(
+		&i.DeviceDiagnostic.ID,
+		&i.DeviceDiagnostic.OrganizationID,
+		&i.DeviceDiagnostic.DeviceID,
+		&i.DeviceDiagnostic.RequestedBy,
+		&i.DeviceDiagnostic.RequestedAt,
+		&i.DeviceDiagnostic.Reason,
+		&i.DeviceDiagnostic.State,
+		&i.DeviceDiagnostic.ObjectKey,
+		&i.DeviceDiagnostic.Size,
+		&i.DeviceDiagnostic.Sha256,
+		&i.DeviceDiagnostic.Nonce,
+		&i.DeviceDiagnostic.WrappedDek,
+		&i.DeviceDiagnostic.Files,
+		&i.DeviceDiagnostic.TruncatedEntries,
+		&i.DeviceDiagnostic.NotifiedSessions,
+		&i.DeviceDiagnostic.UploadedAt,
+		&i.DeviceDiagnostic.StoredAt,
+		&i.DeviceDiagnostic.ExpiresAt,
+		&i.DeviceDiagnostic.FailedReason,
+		&i.DeviceDiagnostic.DownloadCount,
+		&i.DeviceDiagnostic.LastDownloadedAt,
+		&i.DeviceDiagnostic.PurgedAt,
+		&i.DeviceDiagnostic.KeyVersion,
+		&i.Hostname,
+	)
+	return i, err
 }
 
 const markDeviceDiagnosticsUploaded = `-- name: MarkDeviceDiagnosticsUploaded :execrows
@@ -403,6 +718,29 @@ func (q *Queries) MarkDeviceDiagnosticsUploaded(ctx context.Context, arg MarkDev
 		arg.ID,
 		arg.DeviceID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const purgeDeviceDiagnostics = `-- name: PurgeDeviceDiagnostics :execrows
+UPDATE device_diagnostics SET state = 'purged', purged_at = $1::timestamptz, expires_at = $2::timestamptz,
+  object_key = NULL, nonce = NULL, wrapped_dek = NULL
+WHERE id = $3 AND state = 'stored'
+`
+
+type PurgeDeviceDiagnosticsParams struct {
+	PurgedAt     time.Time
+	ObjectsUntil time.Time
+	ID           uuid.UUID
+}
+
+// An administrator's purge (ADR 0048 decision 5): the key material and the object key go at once, the metadata stays;
+// the caller deletes every version of the object in the same transaction. A device may still PUT with a presigned URL
+// issued before the purge, so the retention round deletes the object again at @objects_until.
+func (q *Queries) PurgeDeviceDiagnostics(ctx context.Context, arg PurgeDeviceDiagnosticsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeDeviceDiagnostics, arg.PurgedAt, arg.ObjectsUntil, arg.ID)
 	if err != nil {
 		return 0, err
 	}

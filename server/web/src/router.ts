@@ -13,6 +13,7 @@ export const router = createRouter({
     { path: '/device-groups', name: 'device-groups', component: () => import('./views/DeviceGroups.vue') },
     { path: '/device-groups/:id', name: 'device-group', component: () => import('./views/DeviceGroupDetail.vue') },
     { path: '/devices', name: 'devices', component: () => import('./views/Devices.vue') },
+    { path: '/diagnostics', name: 'diagnostics', component: () => import('./views/Diagnostics.vue'), meta: { writers: true } },
     {
       // The device frame (pane, header band, tabs) loads the device once; the tabs are its children (plan M7c decision 29).
       path: '/devices/:id', component: () => import('./views/DeviceDetail.vue'),
@@ -25,6 +26,7 @@ export const router = createRouter({
         { path: 'logins', name: 'device-logins', component: () => import('./views/DeviceLogins.vue') },
         { path: 'configuration', name: 'device-configuration', component: () => import('./views/DeviceConfiguration.vue') },
         { path: 'apply-status', name: 'device-apply-status', component: () => import('./views/DeviceApplyStatus.vue') },
+        { path: 'diagnostics', name: 'device-diagnostics', component: () => import('./views/DeviceDiagnostics.vue'), meta: { writers: true } },
         { path: 'commands', name: 'device-commands', component: () => import('./views/DeviceCommands.vue') },
         { path: 'audit', name: 'device-audit', component: () => import('./views/DeviceAudit.vue') },
       ],
@@ -101,5 +103,7 @@ router.beforeEach(async (to) => {
   const me = await session.load()
   if (!me) return false // the API client redirects to the login
   if (to.name === 'home' && (me.role === 'platform_admin' || me.role === 'org_auditor')) return homeFor(me.role)
+  // Pages for administrators and operators only (diagnostics bundles, ADR 0048 decision 4); the API refuses the rest.
+  if (to.meta.writers && me.role !== 'org_admin' && me.role !== 'org_operator') return homeFor(me.role)
   return true
 })

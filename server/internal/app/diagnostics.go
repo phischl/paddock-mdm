@@ -82,6 +82,9 @@ type Diagnostics struct {
 	runner  *ActionRunner
 	org     *db.OrgPool
 	objects DiagnosticsObjects
+	// escrow and bundles (api) download and purge bundles (WithDownload).
+	escrow  *EscrowAccess
+	bundles DiagnosticsBundles
 	// unit is the length of a retention day: 24 hours, a second in development (PADDOCK_RETENTION_UNIT).
 	unit time.Duration
 	now  func() time.Time
@@ -95,11 +98,11 @@ func NewDiagnostics(runner *ActionRunner, org *db.OrgPool, objects DiagnosticsOb
 // Request asks an active device for a diagnostics bundle (audited: device.diagnostics_requested): it inserts the
 // bundle in state requested and issues collect_status with {request_id, reason}; the bundle's ID is the command's.
 // A device that is not active, or that has a collection pending, is refused with invalid_state.
-func (d *Diagnostics) Request(ctx context.Context, deviceID uuid.UUID, reason string) (pgstore.DeviceDiagnostic, error) {
+func (d *Diagnostics) Request(ctx context.Context, deviceID uuid.UUID, reason string) (DiagnosticsRow, error) {
 	spec := SpecDiagnosticsRequest
 	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
 	spec.Params = map[string]any{"reason": truncateRunes(reason, maxDiagnosticsReason)}
-	var out pgstore.DeviceDiagnostic
+	var out DiagnosticsRow
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		dev, err := q.LockDevice(ctx, deviceID)
 		if err != nil {
@@ -127,9 +130,10 @@ func (d *Diagnostics) Request(ctx context.Context, deviceID uuid.UUID, reason st
 			map[string]any{"request_id": id.String(), "reason": reason}, now, nil); err != nil {
 			return err
 		}
-		out, err = q.InsertDeviceDiagnostics(ctx, pgstore.InsertDeviceDiagnosticsParams{ID: id,
+		row, err := q.InsertDeviceDiagnostics(ctx, pgstore.InsertDeviceDiagnosticsParams{ID: id,
 			OrganizationID: dev.OrganizationID, DeviceID: deviceID, RequestedBy: actorDisplay(ctx),
 			RequestedAt: now.Truncate(time.Second), Reason: reason})
+		out = DiagnosticsRow{DeviceDiagnostic: row, Hostname: dev.Hostname}
 		return err
 	})
 	return out, err
@@ -156,7 +160,7 @@ func (d *Diagnostics) Announce(ctx context.Context, m ingest.DiagnosticsAnnounce
 		var err error
 		n, err = q.AnnounceDeviceDiagnostics(ctx, pgstore.AnnounceDeviceDiagnosticsParams{
 			ObjectKey: &m.ObjectKey, Size: &m.Size, Sha256: &m.SHA256, Nonce: m.Nonce, WrappedDek: m.WrappedDEK,
-			ID: m.DiagnosticsID, DeviceID: m.DeviceID,
+			KeyVersion: announcedKeyVersion(m.KeyVersion), ID: m.DiagnosticsID, DeviceID: m.DeviceID,
 		})
 		if err != nil || n == 1 {
 			return err
@@ -167,6 +171,15 @@ func (d *Diagnostics) Announce(ctx context.Context, m ingest.DiagnosticsAnnounce
 		return err
 	})
 	return n == 1, err
+}
+
+// announcedKeyVersion is the escrow-wrap version an announcement reported; nil when the agent did not (before PDK-749).
+func announcedKeyVersion(v int) *int32 {
+	if v < 1 || v > 1<<31-1 {
+		return nil
+	}
+	k := int32(v) //nolint:gosec // bounded above
+	return &k
 }
 
 // diagnosticsFailure is a collect_status result that failed the bundle.

@@ -127,3 +127,40 @@ PDK-750:
    nor a known secret, and asserts that no secret field and no managed-file content survives the rendering.
 4. **Follow-ups.** PDK-749 (download) and PDK-750 (privacy document) describe the entry as
    `paddock/bundle-redacted.json`; `docs/compliance/privacy.md` lists it in place of `bundle.dsse`.
+
+## Amendment 2026-11-05 — diagnostics download (PDK-749)
+
+Decisions of the architect lead on 2026-11-05 (PDK-749 and PDK-779); they refine decisions 4 and 5:
+
+1. **Key version.** A bundle whose agent reported no `key_version` (the column stays NULL) is unwrapped with version 1
+   of `escrow-wrap`, its version until the first rotation. The escrow-reader does not try other versions.
+2. **Role table of the escrow-reader, per purpose.** Every purpose needs a fresh step-up ID token of a subject that
+   holds one of the listed roles in the owning organization; an auditor and a platform administrator are refused for
+   every purpose.
+
+   | Purpose | Roles |
+   |---------|-------|
+   | `local_admin_reveal`, `disk_recovery_key`, `disk_header` | `org_admin` (unchanged) |
+   | `diagnostics` | `org_admin`, `org_operator` |
+
+3. **Escrow-bucket credential of the api (`paddock-escrow-api`).** For diagnostics bundles the api lists object
+   versions (`ListBucket`, `ListBucketVersions` with the condition `s3:prefix` like `org/*/devices/*/diagnostics/*`,
+   which RustFS evaluates), reads objects and deletes object versions, all only below `org/*/devices/*/diagnostics/`.
+   It never deletes a header and lists no other prefix. Presigned uploads stay with the gateway's credential. Because
+   the prefix condition holds, no residual risk is recorded for a bucket-wide list.
+
+   The policy also keeps `GetObject` below `org/*/devices/*/luks-header/`. That is not a grant of this amendment: it
+   is the pre-existing scope of the header recovery (plan M4b decision 14), which reads escrowed headers with this
+   credential since M4b (`app.Disk`, audited as `disk.header_downloaded`). This ticket leaves it unchanged except that
+   it narrows it from the whole bucket to the header prefix; removing it would break the header recovery. Within the
+   diagnostics scope the api still never reads outside `diagnostics/`.
+
+   The bootstrap detaches the former bucket-wide read policy `paddock-escrow-read` from the api user and removes it. It
+   fails closed: only rc's definite "policy not found" counts as absent, and any other error aborts the bootstrap, so
+   an upgraded installation cannot keep the bucket-wide read silently. A rerun completes an interrupted removal. The
+   acceptance gate `TestEscrowAPICredentialScope` checks the denials.
+4. **A purge stays due for the upload window.** A device may still PUT with a presigned URL issued before the purge.
+   The purge therefore sets `expires_at` to the end of the upload window, and the retention round deletes every version
+   of the object once more at that time, as it does for a failed or expired bundle. The key material is gone at once,
+   so such an object is never readable; the second deletion keeps decision 5's promise that a purged bundle leaves
+   nothing in the bucket.

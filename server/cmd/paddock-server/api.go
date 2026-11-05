@@ -207,6 +207,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 			slog.WarnContext(ctx, "ip allow list not reloaded after a change", "error", err)
 		}
 	})
+	// The api never verifies or stores a bundle, so it needs neither the worker's object reader nor its retention unit.
+	diagnostics := app.NewDiagnostics(runner, orgPool, nil, 24*time.Hour).WithDownload(escrowAccess, escrowObjects)
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:    app.NewDeviceGroups(runner, orgPool),
 		Tokens:          app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
@@ -243,6 +245,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Overview:        app.NewOverview(orgPool),
 		SecurityReview:  app.NewSecurityReview(orgPool),
 		AccessReview:    app.NewAccessReview(runner, orgPool, auditReader),
+		Diagnostics:     diagnostics,
 		MCPSettings:     app.NewMCPSettings(runner, orgPool, platformPool),
 		MCPAccess:       app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
 		Inventory:       app.NewInventory(orgPool),

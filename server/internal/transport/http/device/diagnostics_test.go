@@ -38,7 +38,7 @@ func commandEnvelope(t *testing.T, id, device uuid.UUID, typ string) json.RawMes
 func diagnosticsBody(cmd uuid.UUID) map[string]any {
 	return map[string]any{"command_id": cmd.String(), "sha256": strings.Repeat("cd", 32), "size": 2345678,
 		"nonce":       base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 12)),
-		"wrapped_dek": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 512))}
+		"wrapped_dek": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 512)), "key_version": 3}
 }
 
 // TestDiagnosticsAnnounce (plan M12 decisions 2 and 5): a collect_status command held for the device is answered with
@@ -98,6 +98,7 @@ func TestDiagnosticsAnnounce(t *testing.T) {
 		"nonce":       func(b map[string]any) { b["nonce"] = base64.StdEncoding.EncodeToString(make([]byte, 16)) },
 		"wrapped_dek": func(b map[string]any) { b["wrapped_dek"] = "%%%" },
 		"no dek":      func(b map[string]any) { delete(b, "wrapped_dek") },
+		"key_version": func(b map[string]any) { b["key_version"] = -1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := diagnosticsBody(cmd)
@@ -118,7 +119,7 @@ func TestDiagnosticsAnnounce(t *testing.T) {
 	if err := json.Unmarshal(msg.Body, &in); err != nil || msg.RoutingKey != "ingest.escrow."+e.org.String() ||
 		msg.MessageID != "diagnostics:"+cmd.String() || in.DiagnosticsID != cmd || in.DeviceID != id || in.OrganizationID != e.org ||
 		in.ObjectKey != key || in.SHA256 != strings.Repeat("cd", 32) || in.Size != 2345678 || len(in.Nonce) != 12 ||
-		len(in.WrappedDEK) != 512 || !in.ReceivedAt.Equal(e.now) {
+		len(in.WrappedDEK) != 512 || in.KeyVersion != 3 || !in.ReceivedAt.Equal(e.now) {
 		t.Fatalf("published %s %s %+v", msg.RoutingKey, msg.MessageID, in)
 	}
 	published := len(e.pub.msgs["paddock.ingest"])
@@ -126,6 +127,20 @@ func TestDiagnosticsAnnounce(t *testing.T) {
 	if len(e.pub.msgs["paddock.ingest"]) != published {
 		t.Fatal("a second announcement was published")
 	}
+
+	t.Run("agent without key_version", func(t *testing.T) {
+		older := uuid.Must(uuid.NewV7())
+		put(id, older, command.TypeCollectStatus)
+		body := diagnosticsBody(older)
+		delete(body, "key_version")
+		if r := announce(c, id, body, false); r.status != http.StatusAccepted {
+			t.Fatalf("announce: %d %s", r.status, r.body)
+		}
+		var in ingest.DiagnosticsAnnounced
+		if err := json.Unmarshal(e.pub.last(t).Body, &in); err != nil || in.DiagnosticsID != older || in.KeyVersion != 0 {
+			t.Fatalf("published %+v", in)
+		}
+	})
 }
 
 // TestDiagnosticsAnnounceRetryAfterFailedPublish: an announcement the broker refused (503) is not remembered, so the
