@@ -106,6 +106,9 @@ func (u *UpgradeCheck) Report(ctx context.Context, target string) (UpgradeCheckR
 	if _, err := RequirePlatform(ctx); err != nil {
 		return UpgradeCheckReport{}, err
 	}
+	if target == "" {
+		return UpgradeCheckReport{}, problem.InvalidRequest.WithDetail("target_version is required")
+	}
 	return u.report(ctx, target)
 }
 

@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "b9cfba6655b3c5582cf35101eb8ad476741af9ce393829df2bb31d1ce29f4f50"
+const Version = "eb6db59a34a3220cae74a903365225c379fc6186fada670a23ae6aff39e8bffb"
 
 var tools = []Tool{
 	{
@@ -2201,8 +2201,8 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: platform_admin. The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead of this release), agents (active devices whose agent is a release older than the target's support window: FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not audited. 400 invalid_request when target_version is no release this server knows.\n\nRead-only.",
-		InputSchema: json.RawMessage("{\"properties\":{\"target_version\":{\"description\":\"The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9).\",\"maxLength\":64,\"type\":\"string\"}},\"required\":[\"target_version\"],\"type\":\"object\"}"),
+		Description: "Roles: platform_admin. The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead of this release), agents (active devices whose agent is a release older than the target's support window: FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not audited. 400 invalid_request when target_version is missing or no release this server knows.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{\"target_version\":{\"description\":\"The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9). Required in effect, but checked after the role, so that other roles get 403 and not 400.\",\"maxLength\":64,\"type\":\"string\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "getUser",
@@ -2579,8 +2579,8 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: platform_admin. The backup runs, one per kind and attempt, with the mirror result per target. Requested runs have no started_at yet and come first in the default order.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: started_at, kind, outcome).",
-		InputSchema: json.RawMessage("{\"properties\":{\"kind\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"postgres\",\"authentik\",\"openbao\",\"fleet\",\"escrow\"],\"type\":\"string\"},\"type\":\"array\"},\"outcome\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"succeeded\",\"failed\"],\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"sort\":{\"default\":\"-started_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"started_at\",\"-started_at\",\"kind\",\"-kind\",\"outcome\",\"-outcome\"],\"type\":\"string\"},\"target_id\":{\"description\":\"Runs that mirrored to this target.\",\"format\":\"uuid\",\"type\":\"string\"}},\"type\":\"object\"}"),
+		Description: "Roles: platform_admin. The backup runs, one per kind and attempt, with the mirror result per target. Requested runs have no started_at yet and come first in the default order.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: started_at, kind, outcome), q (search over: kind, label).",
+		InputSchema: json.RawMessage("{\"properties\":{\"kind\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"postgres\",\"authentik\",\"openbao\",\"fleet\",\"escrow\"],\"type\":\"string\"},\"type\":\"array\"},\"outcome\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"succeeded\",\"failed\"],\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-started_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"started_at\",\"-started_at\",\"kind\",\"-kind\",\"outcome\",\"-outcome\"],\"type\":\"string\"},\"target_id\":{\"description\":\"Runs that mirrored to this target.\",\"format\":\"uuid\",\"type\":\"string\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listBackupTargets",

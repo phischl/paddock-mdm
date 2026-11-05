@@ -115,11 +115,12 @@ func verifySignature(t *testing.T, r sink.Request, secret, destination string) {
 
 type destinationState struct {
 	State struct {
-		Status    string  `json:"status"`
-		Cursor    int64   `json:"cursor_commit_seq"`
-		Forward   int64   `json:"forward_seq"`
-		LastError *string `json:"last_error"`
-		LastTest  *struct {
+		Status        string  `json:"status"`
+		Cursor        int64   `json:"cursor_commit_seq"`
+		Forward       int64   `json:"forward_seq"`
+		LastError     *string `json:"last_error"`
+		LastSuccessAt *string `json:"last_success_at"`
+		LastTest      *struct {
 			OK    bool    `json:"ok"`
 			Error *string `json:"error"`
 		} `json:"last_test"`
