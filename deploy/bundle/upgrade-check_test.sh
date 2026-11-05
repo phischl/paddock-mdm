@@ -46,6 +46,8 @@ old_bundle() {
 tree_sum() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum); }
 
 new_bundle "$work/new"
+# Compose files far beyond the pipe buffer: a reader that stops at the first match must still find every missing key.
+for f in "$work"/new/compose*.yaml; do awk 'BEGIN { for (i = 0; i < 20000; i++) print "# padding after the last reference of a setting" }' >>"$f"; done
 export FIXTURE_REPORT=$'upgrade check for 0.1.0-alpha.9 (agent window: 0.1.0-alpha.7, 0.1.0-alpha.8)\nPASS  migrations  ok\nWARN  agents  2 agents outside the window\nINFO  openbao  unsealed'
 
 # run <expected exit> <name> <args…>: runs in the new directory, keeps the output in $out.

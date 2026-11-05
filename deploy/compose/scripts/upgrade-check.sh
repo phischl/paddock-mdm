@@ -134,7 +134,8 @@ uc_item_env() {
     [[ -n "$key" ]] || continue
     grep -q "^$key=" "$env" && continue
     # A key with a default (:- or -) in every reference needs no entry; ${KEY:?…}, ${KEY?…} and a bare ${KEY} do.
-    if cat "${compose_paths[@]}" | grep -qE "\\\$\\{$key(:\\?|\\?|\\})|\\\$$key([^A-Za-z0-9_{]|\$)"; then
+    # grep reads the files itself: a pipe from cat dies of SIGPIPE once grep -q stops early, and pipefail turns that into a miss.
+    if grep -qE "\\\$\\{$key(:\\?|\\?|\\})|\\\$$key([^A-Za-z0-9_{]|\$)" "${compose_paths[@]}"; then
       missing+=("$key ($(uc_comment_of "$example" "$key"))")
     fi
   done < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$example")
