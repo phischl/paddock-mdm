@@ -73,6 +73,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     label: 'nav.groups.security',
     items: [
       { to: '/security-review', label: 'nav.securityReview', icon: 'triangle-alert', visible: orgReader },
+      { to: '/access-review', label: 'nav.accessReview', icon: 'users', visible: (a) => a.canReadAudit, testid: 'nav-access-review' },
       { to: '/revocations', label: 'nav.revocations', icon: 'lock', visible: (a) => a.canDelete },
       { to: '/settings/dms', label: 'nav.dms', icon: 'timer', visible: orgReader },
       { to: '/settings/watched-units', label: 'nav.watchedUnits', icon: 'shield-check', visible: orgReader },
@@ -114,6 +115,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/platform/sessions', label: 'nav.sessions', icon: 'log-in', visible: (a) => a.isPlatform },
       { to: '/platform/openbao', label: 'nav.openbao', icon: 'shield-check', visible: (a) => a.isPlatform },
       { to: '/platform/notifications', label: 'nav.platformNotifications', icon: 'bell', visible: (a) => a.isPlatform, testid: 'nav-platform-notifications' },
+      { to: '/platform/access-review', label: 'nav.platformAccessReview', icon: 'users', visible: (a) => a.isPlatform, testid: 'nav-platform-access-review' },
       { to: '/platform/mcp', label: 'nav.platformMcp', icon: 'cog', visible: (a) => a.isPlatform },
     ],
   },
