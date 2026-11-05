@@ -315,6 +315,7 @@
     "email_not_configured": "Diese Installation hat kein E-Mail-Relay, daher können E-Mail-Ziele nicht aktiviert werden.",
     "unknown_code": "Einer der Audit-Codes ist nicht registriert.",
     "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
+    "notification_replay_pending": "Das Ziel wiederholt gerade einen Stapel, oder ein früheres erneutes Senden läuft noch. Warten Sie, bis es abgeschlossen ist, oder deaktivieren Sie das Ziel, und senden Sie dann erneut.",
     "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
     "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
     "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend."
@@ -641,6 +642,9 @@
       "pseudonym_resolved": "{actor} hat das Pseudonym {pseudonym} aufgelöst",
       "delivered": "{count} Ereignisse an {destination} zugestellt",
       "destination_stalled": "Zustellungen an {destination} stocken ({last_error})",
+      "replay_requested": "{actor} hat erneutes Senden an {name} ab Sequenznummer {from_forward_seq} angefordert",
+      "replayed": "Stapel {forward_from}–{forward_to} erneut an {target} gesendet",
+      "checkpoint_sent": "Prüfpunkt für {day} ({event_count} Ereignisse) an {target} gesendet",
       "destination_resumed": "Zustellungen an {destination} laufen nach {stalled_for_s} s wieder"
     },
     "access_review": {
@@ -2785,6 +2789,17 @@
     "testError": "Die Testzustellung an {name} ist fehlgeschlagen: {error}",
     "testUnknown": "unbekannter Fehler",
     "testTimeout": "Noch kein Ergebnis für den Test an {name}. Prüfen Sie den Zustand des Ziels gleich noch einmal.",
+    "replayLabel": "Erneut senden ab…: {name}",
+    "replayAction": "Erneut senden ab…",
+    "replay": {
+      "title": "Ab einer Sequenznummer erneut senden",
+      "message": "Jeden Stapel ab Sequenznummer {from} erneut senden. Der Empfänger sieht dieselben Nummern noch einmal; er muss Duplikate erkennen.",
+      "number": "Sequenznummer",
+      "hint": "1 bis {last}, die letzte an {name} gesendete Nummer.",
+      "invalid": "Geben Sie eine ganze Zahl von 1 bis {last} ein.",
+      "confirm": "Erneut senden",
+      "requested": "Erneutes Senden an {name} ab Sequenznummer {from} angefordert. Der Notifier sendet die Stapel in seinen nächsten Runden erneut."
+    },
     "cursor": {
       "title": "Ziel aktivieren",
       "message": "{name} war deaktiviert. Wo soll die Zustellung fortgesetzt werden?",

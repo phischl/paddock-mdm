@@ -81,3 +81,28 @@ func TestMsgIDAliasTableIsAddOnly(t *testing.T) {
 		t.Errorf("MsgIDAliases() = %v", got)
 	}
 }
+
+// TestControlMsgIDsReserved: the MSGIDs of the syslog control messages (package outbound: heartbeat, checkpoint, test,
+// and paddock.missing for a replayed event the index retention purged, alpha.9 decision 14d) fit RFC 5424 and never
+// equal a code or an alias, so a receiver tells them from events by MSGID alone. They are literals here because
+// outbound imports this package; its TestSyslogMsgIDsDistinct checks the frames.
+func TestControlMsgIDsReserved(t *testing.T) {
+	ids := map[string]Code{}
+	for _, d := range Definitions() {
+		ids[d.Code.MsgID()] = d.Code
+		ids[string(d.Code)] = d.Code
+	}
+	for _, id := range []string{"paddock.heartbeat", "paddock.checkpoint", "paddock.test", "paddock.missing"} {
+		if len(id) > MaxMsgIDLen {
+			t.Errorf("control MSGID %q is longer than %d characters", id, MaxMsgIDLen)
+		}
+		for _, r := range id {
+			if r < 33 || r > 126 {
+				t.Errorf("control MSGID %q has a non-printable character", id)
+			}
+		}
+		if c, ok := ids[id]; ok {
+			t.Errorf("control MSGID %q collides with %s", id, c)
+		}
+	}
+}

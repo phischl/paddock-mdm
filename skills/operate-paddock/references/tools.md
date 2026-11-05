@@ -313,6 +313,8 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `lockDevice` | revocation | POST /api/v1/devices/{id}/lock |
 | `putBackupSchedule` | platform | Replaces the schedule; every field is required and checked against its range (400 invalid_request naming the field). |
 | `rejectRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/reject |
+| `replayNotificationDestination` | notifications | Asks the notifier to send the destination's stored batches and checkpoints again from from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the cursor; the receiver sees the same numbers again and must deduplicate. |
+| `replayPlatformNotificationDestination` | platform | Asks the notifier to send the destination's stored batches and checkpoints again from from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the cursor; the receiver sees the same numbers again and must deduplicate. |
 | `requestBackupRun` | platform | Backs up now: one run in state requested per kind (kinds absent, null or empty: every kind), which the backup role runs in its next round. |
 | `resolveNotificationPseudonym` | notifications | Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's notifications stands for. |
 | `revealDeviceLocalAdmin` | devices | Returns the active password and a pending one; confirm_hostname must equal the device's hostname. |

@@ -27,12 +27,14 @@ var (
 	SpecNotificationRotateSecret     = ActionSpec{Code: audit.CodeNotificationDestinationSecretRotated, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 	SpecNotificationTest             = ActionSpec{Code: audit.CodeNotificationTestRequested, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 	SpecNotificationResolvePseudonym = ActionSpec{Code: audit.CodeNotificationPseudonymResolved, AllowedRoles: RolesAdmin, RequiresStepUp: true}
+	SpecNotificationReplay           = ActionSpec{Code: audit.CodeNotificationReplayRequested, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 
 	SpecPlatformNotificationCreate       = ActionSpec{Code: audit.CodeNotificationDestinationCreated, AllowedRoles: RolesPlatform, RequiresStepUp: true}
 	SpecPlatformNotificationUpdate       = ActionSpec{Code: audit.CodeNotificationDestinationUpdated, AllowedRoles: RolesPlatform, RequiresStepUp: true}
 	SpecPlatformNotificationDelete       = ActionSpec{Code: audit.CodeNotificationDestinationDeleted, AllowedRoles: RolesPlatform, RequiresStepUp: true}
 	SpecPlatformNotificationRotateSecret = ActionSpec{Code: audit.CodeNotificationDestinationSecretRotated, AllowedRoles: RolesPlatform, RequiresStepUp: true}
 	SpecPlatformNotificationTest         = ActionSpec{Code: audit.CodeNotificationTestRequested, AllowedRoles: RolesPlatform, RequiresStepUp: true}
+	SpecPlatformNotificationReplay       = ActionSpec{Code: audit.CodeNotificationReplayRequested, AllowedRoles: RolesPlatform, RequiresStepUp: true}
 )
 
 // Transit keys of the notification secrets (plan M9 amendment section E): notification-wrap encrypts the webhook URL
@@ -135,6 +137,10 @@ type NotificationDestinationState struct {
 	LastError       *string
 	LagSeconds      int64
 	LastTest        *NotificationTestResult
+	// LastCheckpointDay is the last sealed day whose checkpoint was delivered (plan M12 decision 20).
+	LastCheckpointDay *time.Time
+	// ReplayFrom is where a requested replay continues, nil without one (plan M12 decision 21).
+	ReplayFrom *int64
 }
 
 // NotificationTestResult is the outcome of the last test delivery.
@@ -484,6 +490,51 @@ func (n *Notifications) Test(ctx context.Context, scope Scope, id uuid.UUID) (uu
 	return deliveryID, nil
 }
 
+// Replay asks the notifier to re-send the destination's stored batches and checkpoints from the forward sequence
+// number from on, with their original delivery IDs and numbers, before it continues at the cursor (plan M12 decision
+// 21; audited: notification.replay_requested). from must lie in 1..forward_seq (400), and no batch may be pending
+// (409): its retry would interleave with the replay. A running replay is not redirected (409): the notifier records
+// notification.replayed only while replay_from still holds the number it replayed from.
+func (n *Notifications) Replay(ctx context.Context, scope Scope, id uuid.UUID, from int64) error {
+	spec := scopedSpec(scope, SpecNotificationReplay, SpecPlatformNotificationReplay)
+	spec.Params = map[string]any{"destination_id": id.String(), "from_forward_seq": from}
+	return n.runner.RunTx(ctx, scope, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		cur, err := q.LockNotificationDestination(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		rec.SetTarget(destinationTarget(id, cur.Name))
+		rec.SetParam("destination", cur.Name)
+		st, err := q.GetNotificationDestinationReplayState(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		rec.SetParam("to_forward_seq", st.ForwardSeq)
+		if from < 1 || from > st.ForwardSeq {
+			return problem.InvalidRequest.WithDetail(fmt.Sprintf("from_forward_seq must be between 1 and %d", st.ForwardSeq))
+		}
+		if st.PendingDeliveryID.Valid {
+			return problem.InvalidState.WithDetail("the destination is retrying a batch; wait or disable it")
+		}
+		if st.ReplayFrom != nil {
+			return problem.InvalidState.WithDetail("a replay of the destination is running; wait until it ends, or disable the destination and enable it with skip")
+		}
+		if st.StartAtLatest {
+			return problem.InvalidState.WithDetail("a skip request is pending; retry after the next delivery round")
+		}
+		applied, err := q.ReplayNotificationDestination(ctx, pgstore.ReplayNotificationDestinationParams{
+			DestinationID: id, FromForwardSeq: from,
+		})
+		if err != nil {
+			return err
+		}
+		if applied == 0 {
+			return problem.InvalidState.WithDetail("the destination is retrying a batch, replaying or resolving a skip request; wait or disable it")
+		}
+		return nil
+	})
+}
+
 // ResolvePseudonym requests the user name behind a pseudonym of the organization's notifications (audited:
 // notification.pseudonym_resolved, target the organization). The api never decrypts the pseudonym key: the notifier
 // resolves the lookup in its next round (plan M9 decision 18). Organization scope only.
@@ -693,6 +744,11 @@ func (n *Notifications) destination(r pgstore.GetNotificationDestinationRow) Not
 	if r.FirstFailureAt != nil {
 		s.LagSeconds = max(0, int64(n.now().Sub(*r.FirstFailureAt)/time.Second))
 	}
+	if r.LastCheckpointDay.Valid {
+		day := r.LastCheckpointDay.Time
+		s.LastCheckpointDay = &day
+	}
+	s.ReplayFrom = r.ReplayFrom
 	if r.LastTestAt != nil {
 		s.LastTest = &NotificationTestResult{At: *r.LastTestAt, OK: r.LastTestOk != nil && *r.LastTestOk, Error: r.LastTestError}
 	}

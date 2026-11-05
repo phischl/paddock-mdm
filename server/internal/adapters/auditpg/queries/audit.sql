@@ -27,6 +27,23 @@ UPDATE audit_org_seq SET last_seq = @last_seq WHERE organization_id = @organizat
 -- Commit-order read of the index (plan M9 decision 4); RLS supplies the organization.
 SELECT * FROM audit_event WHERE commit_seq > @after ORDER BY commit_seq LIMIT @max_rows;
 
+-- name: GetEventByCommitSeq :one
+-- The event at a notification destination's cursor (plan M12 decision 20); RLS supplies the organization.
+SELECT * FROM audit_event WHERE commit_seq = @commit_seq LIMIT 1;
+
+-- name: CountEventsRecordedOn :one
+-- The index rows recorded on a day, the event_count of its checkpoint (plan M12 decision 20): day_start is 00:00 UTC of
+-- the day, day_end of the next.
+SELECT count(*)::bigint AS events FROM audit_event
+WHERE recorded_at >= @day_start::timestamptz AND recorded_at < @day_end::timestamptz;
+
+-- name: ListManifestsAfter :many
+-- The sealed days of the scope after a day, in day order (plan M12 decision 20); RLS supplies the organization.
+SELECT day, sha256, signature, key_version FROM audit_manifest
+WHERE day > @after_day::date
+ORDER BY day
+LIMIT @max_rows;
+
 -- name: LatestCommitSeq :one
 -- max(commit_seq), not audit_org_seq: the reader has no grant on it, and the maximum stays valid after the index
 -- retention dropped old partitions (amendment B1.3).
