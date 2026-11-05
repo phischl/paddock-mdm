@@ -514,6 +514,8 @@
       "backup_key_generated": "{legacy, select, true {The backup key of the host file was imported and waits for its confirmation} other {{actor} generated the backup key {key_id} (fingerprint {fingerprint})}}",
       "backup_key_confirmed": "{actor} confirmed the backup key {key_id} (fingerprint {fingerprint})",
       "backup_key_discarded": "{actor} discarded the backup key {key_id}",
+      "access_review_viewed": "{actor} opened the platform access review",
+      "access_review_exported": "{actor} exported the platform access review of {from} to {to} as {format}",
       "backup_target_created": "{actor} added the backup target {name} ({type})",
       "backup_target_updated": "{change, select, enabled {{actor} enabled the backup target {name}} disabled {{actor} disabled the backup target {name}} other {{actor} changed the backup target {name} (host revision {host_revision})}}",
       "backup_target_deleted": "{actor} deleted the backup target {name} ({type})",
@@ -640,6 +642,10 @@
       "delivered": "{count} events delivered to {destination}",
       "destination_stalled": "Deliveries to {destination} are stalled ({last_error})",
       "destination_resumed": "Deliveries to {destination} resumed after {stalled_for_s} s"
+    },
+    "access_review": {
+      "viewed": "{actor} opened the access review",
+      "exported": "{actor} exported the access review of {from} to {to} as {format}"
     }
   },
   "organizations": {

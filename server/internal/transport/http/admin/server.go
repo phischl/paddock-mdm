@@ -76,6 +76,8 @@ type Deps struct {
 	Overview       *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
+	// AccessReview is the access review report (plan M12 decisions 25 and 26).
+	AccessReview *app.AccessReview
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
 	ServerVersion string
 	// IPAllowlist and IPGuard are the IP allow list of the administrative surfaces (plan M7a decisions 12 and 17);
@@ -225,6 +227,9 @@ var privileged = map[string]struct {
 	"POST /api/v1/config-rollouts/{id}/complete":                           {app.ScopeOrg, app.SpecConfigRolloutComplete},
 	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
 	"GET /api/v1/audit/exports/{id}/download":                              {app.ScopeOrg, app.SpecAuditExportDownload},
+	"GET /api/v1/access-review/export":                                     {app.ScopeOrg, app.SpecAccessReviewExported},
+	"GET /api/platform/v1/access-review":                                   {app.ScopePlatform, app.SpecPlatformAccessReviewViewed},
+	"GET /api/platform/v1/access-review/export":                            {app.ScopePlatform, app.SpecPlatformAccessReviewExported},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
 	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
 	"DELETE /api/v1/package-holds/{id}":                                    {app.ScopeOrg, app.SpecPackageHoldDelete},
@@ -306,6 +311,7 @@ func NewHandler(d Deps) http.Handler {
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns,
 		securityReview: d.SecurityReview,
+		accessReview:   d.AccessReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
 		backupKeys:   d.BackupKeys,

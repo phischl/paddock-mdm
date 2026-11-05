@@ -2247,6 +2247,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/access-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_auditor. The access review of the organization: role members, role changes, accounts, API tokens, reveals of secrets, step-ups, ended sessions and destructive actions in the period. One report object, not a collection: every list holds at most 1000
+         *     items and states its total. from and to are RFC 3339; to defaults to now and from to 90 days before to; the
+         *     period spans at most 400 days (400 invalid_request beyond or when from is not before to). Role members are the
+         *     worker's snapshot of the identity provider (at most one 5-minute round old). The view is recorded as access_review.viewed once per actor and UTC day, only while the organization's audit_search_recorded privacy setting is on.
+         */
+        get: operations["getAccessReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access-review/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_auditor. The access review as a download: format json (the same object as the view) or csv (one file for
+         *     every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a
+         *     leading apostrophe). Content-Disposition names the file paddock-access-review-<organization slug>-<from>-<to>.<json|csv>. Period as for the view.
+         *     Every export is recorded as access_review.exported, whatever the privacy settings.
+         */
+        get: operations["exportAccessReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attention/devices": {
         parameters: {
             query?: never;
@@ -3754,6 +3798,50 @@ export interface paths {
         put?: never;
         /** @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal session and every identity-provider browser session of every portal user (platform administrators and organization role members); device logins and API tokens are not affected. The caller's own session ends with its next request; every administrator signs in again. 503 session_store_unavailable while the session store is unreachable; 502 upstream_unavailable when the identity provider's sessions could not be ended (the portal sessions are ended already; end all sessions again). */
         post: operations["endAllSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/access-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The access review of the platform: platform role members, platform administrators, privileged platform events and the organizations created in the period. One report object, not a collection: every list holds at most 1000
+         *     items and states its total. from and to are RFC 3339; to defaults to now and from to 90 days before to; the
+         *     period spans at most 400 days (400 invalid_request beyond or when from is not before to). Role members are the
+         *     worker's snapshot of the identity provider (at most one 5-minute round old). Every view is recorded as platform.access_review_viewed (platform reads are not under an organization's privacy switch).
+         */
+        get: operations["getPlatformAccessReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/access-review/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The access review as a download: format json (the same object as the view) or csv (one file for
+         *     every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a
+         *     leading apostrophe). Content-Disposition names the file paddock-access-review-platform-<from>-<to>.<json|csv>. Period as for the view.
+         *     Every export is recorded as platform.access_review_exported, whatever the privacy settings.
+         */
+        get: operations["exportPlatformAccessReview"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7164,6 +7252,185 @@ export interface components {
             /** Format: date-time */
             started_at: string;
         };
+        AccessReviewPeriod: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+        };
+        /** @description The members of one role as of the worker's last snapshot. */
+        AccessReviewRoleMembers: {
+            role: string;
+            /**
+             * Format: date-time
+             * @description When the role's first comparison was taken; null while it had none.
+             */
+            snapshot_taken_at?: string | null;
+            total: number;
+            members: components["schemas"]["AccessReviewRoleMember"][];
+        };
+        AccessReviewRoleMember: {
+            username: string;
+            authentik_pk: string;
+            /** Format: date-time */
+            first_seen_at: string;
+        };
+        AccessReviewRoleChange: {
+            /** Format: date-time */
+            at: string;
+            /** @description admin.role_granted or admin.role_revoked. */
+            code: string;
+            username: string;
+            role: string;
+            actor: string;
+        };
+        AccessReviewAccount: {
+            username: string;
+            display_name: string;
+            role: string;
+            /** Format: date-time */
+            last_login_at: string | null;
+            disabled: boolean;
+        };
+        /** @description An API token that existed at some time in the period; never its secret. */
+        AccessReviewToken: {
+            name: string;
+            role: string;
+            prefix: string;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            last_used_at: string | null;
+            /** Format: date-time */
+            revoked_at: string | null;
+            revoked_by: string | null;
+        };
+        AccessReviewReveal: {
+            /** Format: date-time */
+            at: string;
+            code: string;
+            actor: string;
+            device_hostname: string;
+            /** @description The identifying parameters of the event (generation, volume); never a secret. */
+            params: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description Successful actions of step-up sessions and refusals for a missing step-up in the period. */
+        AccessReviewStepUp: {
+            succeeded: number;
+            failed: number;
+        };
+        AccessReviewSessionRevocation: {
+            /** Format: date-time */
+            at: string;
+            username: string;
+            reason: string;
+        };
+        AccessReviewDestructiveAction: {
+            /** Format: date-time */
+            at: string;
+            code: string;
+            actor: string;
+            target: string;
+        };
+        /** @description Role changes in the period, baseline members excluded. */
+        AccessReviewRoleChanges: {
+            total: number;
+            items: components["schemas"]["AccessReviewRoleChange"][];
+        };
+        /** @description Administrator accounts of the organization. */
+        AccessReviewAccounts: {
+            total: number;
+            items: components["schemas"]["AccessReviewAccount"][];
+        };
+        /** @description API tokens that existed in the period. */
+        AccessReviewTokens: {
+            total: number;
+            items: components["schemas"]["AccessReviewToken"][];
+        };
+        /** @description Reveals and downloads of secrets in the period. */
+        AccessReviewReveals: {
+            total: number;
+            items: components["schemas"]["AccessReviewReveal"][];
+        };
+        /** @description Sessions the server ended in the period. */
+        AccessReviewSessionRevocations: {
+            total: number;
+            items: components["schemas"]["AccessReviewSessionRevocation"][];
+        };
+        /** @description Destructive and locking actions in the period. */
+        AccessReviewDestructiveActions: {
+            total: number;
+            items: components["schemas"]["AccessReviewDestructiveAction"][];
+        };
+        /** @description The access review of an organization; every list holds at most row_cap items and states its total. */
+        AccessReviewReport: {
+            /** Format: date-time */
+            generated_at: string;
+            period: components["schemas"]["AccessReviewPeriod"];
+            row_cap: number;
+            roles: components["schemas"]["AccessReviewRoleMembers"][];
+            role_changes: components["schemas"]["AccessReviewRoleChanges"];
+            accounts: components["schemas"]["AccessReviewAccounts"];
+            api_tokens: components["schemas"]["AccessReviewTokens"];
+            /** @description Requests refused for a revoked or expired token or an inactive creator in the period. */
+            token_denials: number;
+            reveals: components["schemas"]["AccessReviewReveals"];
+            step_up: components["schemas"]["AccessReviewStepUp"];
+            sessions_revoked: components["schemas"]["AccessReviewSessionRevocations"];
+            break_glass_accounts: string[];
+            destructive: components["schemas"]["AccessReviewDestructiveActions"];
+        };
+        AccessReviewPlatformAdministrator: {
+            username: string;
+            display_name: string;
+            /** Format: date-time */
+            last_login_at: string | null;
+        };
+        AccessReviewPlatformEvent: {
+            /** Format: date-time */
+            at: string;
+            code: string;
+            actor: string;
+            target: string;
+        };
+        AccessReviewCreatedOrganization: {
+            slug: string;
+            name: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description Platform administrators that signed in at least once. */
+        AccessReviewPlatformAdministrators: {
+            total: number;
+            items: components["schemas"]["AccessReviewPlatformAdministrator"][];
+        };
+        /** @description Privileged platform events in the period. */
+        AccessReviewPlatformEvents: {
+            total: number;
+            items: components["schemas"]["AccessReviewPlatformEvent"][];
+        };
+        /** @description Organizations created in the period. */
+        AccessReviewCreatedOrganizations: {
+            total: number;
+            items: components["schemas"]["AccessReviewCreatedOrganization"][];
+        };
+        /** @description The access review of the platform; every list holds at most row_cap items and states its total. */
+        PlatformAccessReviewReport: {
+            /** Format: date-time */
+            generated_at: string;
+            period: components["schemas"]["AccessReviewPeriod"];
+            row_cap: number;
+            roles: components["schemas"]["AccessReviewRoleMembers"][];
+            administrators: components["schemas"]["AccessReviewPlatformAdministrators"];
+            role_changes: components["schemas"]["AccessReviewRoleChanges"];
+            events: components["schemas"]["AccessReviewPlatformEvents"];
+            organizations_created: components["schemas"]["AccessReviewCreatedOrganizations"];
+        };
         /** @description The totals of GET /api/v1/security-review. */
         OverviewSecurityReview: {
             root_grants: number;
@@ -8080,6 +8347,11 @@ export interface components {
          *     printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
          */
         McpClient: string;
+        /** @description RFC 3339; the start of the period, default 90 days before to. */
+        AccessReviewFrom: string;
+        /** @description RFC 3339; the end of the period, default now. */
+        AccessReviewTo: string;
+        AccessReviewFormat: "json" | "csv";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         BackupTargetSort: "name" | "-name" | "type" | "-type" | "created_at" | "-created_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -12469,6 +12741,65 @@ export interface operations {
             403: components["responses"]["Problem"];
         };
     };
+    getAccessReview: {
+        parameters: {
+            query?: {
+                /** @description RFC 3339; the start of the period, default 90 days before to. */
+                from?: components["parameters"]["AccessReviewFrom"];
+                /** @description RFC 3339; the end of the period, default now. */
+                to?: components["parameters"]["AccessReviewTo"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The access review. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessReviewReport"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    exportAccessReview: {
+        parameters: {
+            query: {
+                /** @description RFC 3339; the start of the period, default 90 days before to. */
+                from?: components["parameters"]["AccessReviewFrom"];
+                /** @description RFC 3339; the end of the period, default now. */
+                to?: components["parameters"]["AccessReviewTo"];
+                format: components["parameters"]["AccessReviewFormat"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The exported report. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessReviewReport"];
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
     listAttentionDevices: {
         parameters: {
             query?: {
@@ -15000,6 +15331,65 @@ export interface operations {
             403: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
+        };
+    };
+    getPlatformAccessReview: {
+        parameters: {
+            query?: {
+                /** @description RFC 3339; the start of the period, default 90 days before to. */
+                from?: components["parameters"]["AccessReviewFrom"];
+                /** @description RFC 3339; the end of the period, default now. */
+                to?: components["parameters"]["AccessReviewTo"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The access review. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformAccessReviewReport"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    exportPlatformAccessReview: {
+        parameters: {
+            query: {
+                /** @description RFC 3339; the start of the period, default 90 days before to. */
+                from?: components["parameters"]["AccessReviewFrom"];
+                /** @description RFC 3339; the end of the period, default now. */
+                to?: components["parameters"]["AccessReviewTo"];
+                format: components["parameters"]["AccessReviewFormat"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The exported report. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformAccessReviewReport"];
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     getAutoUnseal: {

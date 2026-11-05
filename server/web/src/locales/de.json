@@ -514,6 +514,8 @@
       "backup_key_generated": "{legacy, select, true {Der Sicherungsschlüssel aus der Host-Datei wurde importiert und wartet auf seine Bestätigung} other {{actor} hat den Sicherungsschlüssel {key_id} erzeugt (Fingerabdruck {fingerprint})}}",
       "backup_key_confirmed": "{actor} hat den Sicherungsschlüssel {key_id} bestätigt (Fingerabdruck {fingerprint})",
       "backup_key_discarded": "{actor} hat den Sicherungsschlüssel {key_id} verworfen",
+      "access_review_viewed": "{actor} hat den Plattform-Zugriffsreview geöffnet",
+      "access_review_exported": "{actor} hat den Plattform-Zugriffsreview vom {from} bis {to} als {format} exportiert",
       "backup_target_created": "{actor} hat das Sicherungsziel {name} ({type}) hinzugefügt",
       "backup_target_updated": "{change, select, enabled {{actor} hat das Sicherungsziel {name} aktiviert} disabled {{actor} hat das Sicherungsziel {name} deaktiviert} other {{actor} hat das Sicherungsziel {name} geändert (Host-Revision {host_revision})}}",
       "backup_target_deleted": "{actor} hat das Sicherungsziel {name} ({type}) gelöscht",
@@ -640,6 +642,10 @@
       "delivered": "{count} Ereignisse an {destination} zugestellt",
       "destination_stalled": "Zustellungen an {destination} stocken ({last_error})",
       "destination_resumed": "Zustellungen an {destination} laufen nach {stalled_for_s} s wieder"
+    },
+    "access_review": {
+      "viewed": "{actor} hat den Zugriffsreview geöffnet",
+      "exported": "{actor} hat den Zugriffsreview vom {from} bis {to} als {format} exportiert"
     }
   },
   "organizations": {

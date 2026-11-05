@@ -118,8 +118,10 @@ Paddock stores of its administrators the account (user name, display name, organ
 and in every audit event of their actions the actor's name, the client IP address and whether the action had a
 step-up. API tokens (`paddockctl`) are stored only as hashes, with their name, creator and expiry. Audit events are kept for
 the retention of the WORM store (at least 400 days) and cannot be deleted earlier. Searches of the audit log are
-recorded as `audit.searched` when the organization switches it on; evidence exports are always recorded
-(`audit.export_requested`, `audit.export_downloaded`). How long each store is kept: `docs/compliance/retention.md`.
+recorded as `audit.searched` when the organization switches it on; opening the access review report is recorded as `access_review.viewed` (once per actor and day) under the same
+switch; evidence exports are always recorded (`audit.export_requested`, `audit.export_downloaded`), and so is every
+export of the access review (`access_review.exported`, `platform.access_review_exported`; the platform administrators'
+view is `platform.access_review_viewed`, always recorded). How long each store is kept: `docs/compliance/retention.md`.
 
 Paddock snapshots the membership of its portal role groups (`paddock.<slug>.admins`, `.operators`, `.auditors`,
 `paddock.platform.admins`) and the set of Authentik superusers every 5 minutes: user name and Authentik ID per role,
